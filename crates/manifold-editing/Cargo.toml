@@ -1,0 +1,10 @@
+[package]
+name = "manifold-editing"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+manifold-core = { path = "../manifold-core" }
+
+[dev-dependencies]
+manifold-io = { path = "../manifold-io" }

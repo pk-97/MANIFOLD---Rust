@@ -1,0 +1,12 @@
+[package]
+name = "manifold-io"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+manifold-core = { path = "../manifold-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

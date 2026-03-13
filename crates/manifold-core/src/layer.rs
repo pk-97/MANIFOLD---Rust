@@ -1,0 +1,213 @@
+use serde::{Deserialize, Serialize};
+use crate::types::{BlendMode, ClipDurationMode, GeneratorType, LayerType};
+use crate::clip::TimelineClip;
+use crate::color::Color;
+use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope};
+use crate::generator::GeneratorParamState;
+
+/// A single layer in the timeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Layer {
+    #[serde(default)]
+    pub layer_id: String,
+    #[serde(default)]
+    pub index: i32,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub layer_type: LayerType,
+    #[serde(default)]
+    pub parent_layer_id: Option<String>,
+    #[serde(default)]
+    pub is_collapsed: bool,
+
+    #[serde(default)]
+    pub clips: Vec<TimelineClip>,
+
+    #[serde(default)]
+    pub is_solo: bool,
+    #[serde(default)]
+    pub is_muted: bool,
+    #[serde(default)]
+    pub default_blend_mode: BlendMode,
+    #[serde(default)]
+    pub layer_color: Color,
+
+    // ── Effects ──
+    #[serde(default = "default_one")]
+    pub opacity: f32,
+    #[serde(default)]
+    pub effects: Option<Vec<EffectInstance>>,
+    #[serde(default)]
+    pub effect_groups: Option<Vec<EffectGroup>>,
+    #[serde(default)]
+    pub envelopes: Option<Vec<ParamEnvelope>>,
+
+    // ── Generator params (V1.1.0+, nested) ──
+    #[serde(default)]
+    pub gen_params: Option<GeneratorParamState>,
+
+    // ── Video/MIDI assignment ──
+    #[serde(default)]
+    pub video_folder_path: Option<String>,
+    #[serde(default)]
+    pub midi_note: i32,
+    #[serde(default = "default_neg_one")]
+    pub midi_channel: i32,
+    #[serde(default)]
+    pub duration_mode: Option<ClipDurationMode>,
+    #[serde(default)]
+    pub source_clip_ids: Vec<String>,
+
+    // ── Legacy flat generator fields (V1.0.0 format) ──
+    #[serde(default, rename = "generatorType")]
+    pub legacy_generator_type: Option<GeneratorType>,
+    #[serde(default, rename = "genParamValues")]
+    pub legacy_gen_param_values: Option<Vec<f32>>,
+    #[serde(default, rename = "genDrivers")]
+    pub legacy_gen_drivers: Option<serde_json::Value>,
+    #[serde(default, rename = "genParamVersion")]
+    pub legacy_gen_param_version: Option<i32>,
+    #[serde(default, rename = "genAnimSpeed")]
+    pub legacy_gen_anim_speed: Option<f32>,
+    #[serde(default, rename = "genAnimateEdges")]
+    pub legacy_gen_animate_edges: Option<serde_json::Value>,
+    #[serde(default, rename = "genLineThickness")]
+    pub legacy_gen_line_thickness: Option<f32>,
+    #[serde(default, rename = "genProjDistance")]
+    pub legacy_gen_proj_distance: Option<f32>,
+    #[serde(default, rename = "genRotSpeedXY")]
+    pub legacy_gen_rot_speed_xy: Option<f32>,
+    #[serde(default, rename = "genRotSpeedZW")]
+    pub legacy_gen_rot_speed_zw: Option<f32>,
+    #[serde(default, rename = "genRotSpeedXW")]
+    pub legacy_gen_rot_speed_xw: Option<f32>,
+    #[serde(default, rename = "genShowVertices")]
+    pub legacy_gen_show_vertices: Option<serde_json::Value>,
+    #[serde(default, rename = "genVertexSize")]
+    pub legacy_gen_vertex_size: Option<f32>,
+    #[serde(default, rename = "genWindowSize")]
+    pub legacy_gen_window_size: Option<f32>,
+
+    // ── Runtime caches (not serialized) ──
+    #[serde(skip)]
+    clips_sorted: bool,
+}
+
+impl Layer {
+    pub fn new(name: String, layer_type: LayerType, index: i32) -> Self {
+        Self {
+            layer_id: crate::short_id(),
+            index,
+            name,
+            layer_type,
+            clips: Vec::new(),
+            ..Default::default()
+        }
+    }
+
+    pub fn is_group(&self) -> bool {
+        self.layer_type == LayerType::Group
+    }
+
+    /// Get the generator type for this layer (from genParams or legacy field).
+    pub fn generator_type(&self) -> GeneratorType {
+        if let Some(gp) = &self.gen_params {
+            gp.generator_type
+        } else {
+            self.legacy_generator_type.unwrap_or(GeneratorType::None)
+        }
+    }
+
+    pub fn ensure_clips_sorted(&mut self) {
+        if !self.clips_sorted {
+            self.clips.sort_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal));
+            self.clips_sorted = true;
+        }
+    }
+
+    pub fn mark_clips_unsorted(&mut self) {
+        self.clips_sorted = false;
+    }
+
+    /// Collect clips active at a given beat.
+    pub fn collect_active_clips_at_beat(&mut self, beat: f32, results: &mut Vec<usize>) {
+        self.ensure_clips_sorted();
+        for (i, clip) in self.clips.iter().enumerate() {
+            if clip.start_beat > beat {
+                break; // Sorted, so no more can be active
+            }
+            if clip.is_active_at_beat(beat) {
+                results.push(i);
+            }
+        }
+    }
+
+    pub fn add_clip(&mut self, clip: TimelineClip) {
+        self.clips.push(clip);
+        self.clips_sorted = false;
+    }
+
+    pub fn remove_clip(&mut self, clip_id: &str) -> Option<TimelineClip> {
+        if let Some(idx) = self.clips.iter().position(|c| c.id == clip_id) {
+            Some(self.clips.remove(idx))
+        } else {
+            None
+        }
+    }
+
+    pub fn find_clip(&self, clip_id: &str) -> Option<&TimelineClip> {
+        self.clips.iter().find(|c| c.id == clip_id)
+    }
+
+    pub fn find_clip_mut(&mut self, clip_id: &str) -> Option<&mut TimelineClip> {
+        self.clips.iter_mut().find(|c| c.id == clip_id)
+    }
+}
+
+impl Default for Layer {
+    fn default() -> Self {
+        Self {
+            layer_id: String::new(),
+            index: 0,
+            name: String::new(),
+            layer_type: LayerType::Video,
+            parent_layer_id: None,
+            is_collapsed: false,
+            clips: Vec::new(),
+            is_solo: false,
+            is_muted: false,
+            default_blend_mode: BlendMode::Normal,
+            layer_color: Color::WHITE,
+            opacity: 1.0,
+            effects: None,
+            effect_groups: None,
+            envelopes: None,
+            gen_params: None,
+            video_folder_path: None,
+            midi_note: -1,
+            midi_channel: -1,
+            duration_mode: None,
+            source_clip_ids: Vec::new(),
+            legacy_generator_type: None,
+            legacy_gen_param_values: None,
+            legacy_gen_drivers: None,
+            legacy_gen_param_version: None,
+            legacy_gen_anim_speed: None,
+            legacy_gen_animate_edges: None,
+            legacy_gen_line_thickness: None,
+            legacy_gen_proj_distance: None,
+            legacy_gen_rot_speed_xy: None,
+            legacy_gen_rot_speed_zw: None,
+            legacy_gen_rot_speed_xw: None,
+            legacy_gen_show_vertices: None,
+            legacy_gen_vertex_size: None,
+            legacy_gen_window_size: None,
+            clips_sorted: false,
+        }
+    }
+}
+
+fn default_one() -> f32 { 1.0 }
+fn default_neg_one() -> i32 { -1 }
