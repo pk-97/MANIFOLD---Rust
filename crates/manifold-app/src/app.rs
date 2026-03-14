@@ -20,6 +20,7 @@ use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu::GpuContext;
 use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
 use manifold_renderer::surface::SurfaceWrapper;
+use manifold_renderer::ui_renderer::UIRenderer;
 
 use crate::frame_timer::FrameTimer;
 use crate::window_registry::{WindowRegistry, WindowRole, WindowState};
@@ -39,6 +40,8 @@ pub struct Application {
     generator_renderer: Option<GeneratorRenderer>,
     compositor: Option<Box<dyn Compositor>>,
     blit_pipeline: Option<BlitPipeline>,
+    ui_renderer: Option<UIRenderer>,
+    surface_format: wgpu::TextureFormat,
 
     // Frame timing
     frame_timer: FrameTimer,
@@ -73,6 +76,8 @@ impl Application {
             generator_renderer: None,
             compositor: None,
             blit_pipeline: None,
+            ui_renderer: None,
+            surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
             frame_timer: FrameTimer::new(60.0),
             frame_count: 0,
             prev_active_clip_ids: HashSet::with_capacity(16),
@@ -313,6 +318,8 @@ impl Application {
         let window_ids: Vec<WindowId> = self.window_registry.iter().map(|(id, _)| *id).collect();
 
         for window_id in window_ids {
+            let is_workspace = Some(window_id) == self.primary_window_id;
+
             let ws = match self.window_registry.get_mut(&window_id) {
                 Some(ws) => ws,
                 None => continue,
@@ -339,6 +346,9 @@ impl Application {
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
 
+            let surface_w = ws.surface.width;
+            let surface_h = ws.surface.height;
+
             let mut encoder =
                 gpu.device
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -346,6 +356,46 @@ impl Application {
                     });
 
             blit.blit(&gpu.device, &mut encoder, compositor_output, &surface_view);
+
+            // Draw UI overlay on workspace window
+            if is_workspace {
+                if let Some(ui) = &mut self.ui_renderer {
+                    let w = surface_w as f32;
+
+                    // Header bar
+                    ui.draw_rect(0.0, 0.0, w, 40.0, [0.12, 0.12, 0.14, 0.95]);
+
+                    // "MANIFOLD" title text
+                    ui.draw_text(12.0, 10.0, "MANIFOLD", 18.0, [255, 255, 255, 255]);
+
+                    // Rounded button
+                    ui.draw_rounded_rect(
+                        w - 120.0, 6.0, 100.0, 28.0,
+                        [0.2, 0.6, 1.0, 1.0],
+                        6.0,
+                    );
+                    ui.draw_text(w - 104.0, 12.0, "Hello UI", 14.0, [255, 255, 255, 255]);
+
+                    // Status bar at bottom
+                    ui.draw_rect(0.0, surface_h as f32 - 24.0, w, 24.0, [0.1, 0.1, 0.12, 0.9]);
+                    ui.draw_text(
+                        12.0,
+                        surface_h as f32 - 20.0,
+                        "wgpu + glyphon | Phase 4 Hello World",
+                        12.0,
+                        [180, 180, 180, 255],
+                    );
+
+                    ui.render(
+                        &gpu.device,
+                        &gpu.queue,
+                        &mut encoder,
+                        &surface_view,
+                        surface_w,
+                        surface_h,
+                    );
+                }
+            }
 
             gpu.queue.submit(std::iter::once(encoder.finish()));
             surface_texture.present();
@@ -407,8 +457,9 @@ impl ApplicationHandler for Application {
                             required_features: wgpu::Features::empty(),
                             required_limits: wgpu::Limits::default(),
                             memory_hints: wgpu::MemoryHints::Performance,
+                            trace: wgpu::Trace::Off,
+                            ..Default::default()
                         },
-                        None,
                     )
                     .await
                     .expect("Failed to create device");
@@ -466,8 +517,14 @@ impl ApplicationHandler for Application {
                 },
             );
 
+            // Store surface format for UI renderer
+            self.surface_format = format;
+
             // Create blit pipeline
             self.blit_pipeline = Some(BlitPipeline::new(&device, format));
+
+            // Create UI renderer (renders directly to surface in surface format)
+            self.ui_renderer = Some(UIRenderer::new(&device, &queue, format));
 
             // Create generator renderer and compositor
             let output_w = 1920u32;

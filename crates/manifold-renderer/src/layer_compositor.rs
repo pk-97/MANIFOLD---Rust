@@ -103,7 +103,7 @@ impl LayerCompositor {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Blend Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
 
         let blend_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -131,7 +131,7 @@ impl LayerCompositor {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
@@ -179,6 +179,7 @@ impl LayerCompositor {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: self.source_view(),
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                     store: wgpu::StoreOp::Store,
@@ -187,6 +188,7 @@ impl LayerCompositor {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
     }
 
@@ -245,6 +247,7 @@ impl LayerCompositor {
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: self.target_view(),
                         resolve_target: None,
+                        depth_slice: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                             store: wgpu::StoreOp::Store,
@@ -253,6 +256,7 @@ impl LayerCompositor {
                     depth_stencil_attachment: None,
                     timestamp_writes: None,
                     occlusion_query_set: None,
+                    multiview_mask: None,
                 });
                 pass.set_pipeline(&self.blend_pipeline);
                 pass.set_bind_group(0, &bind_group, &[]);

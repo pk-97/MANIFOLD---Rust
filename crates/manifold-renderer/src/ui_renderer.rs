@@ -1,0 +1,507 @@
+use wgpu::util::DeviceExt;
+
+use glyphon::{
+    Attrs, Buffer as TextBuffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics,
+    Resolution, Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+};
+
+/// Vertex for UI quad rendering.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct UIVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+    color: [f32; 4],
+    /// [rect_w, rect_h, corner_radius, border_width]
+    rect_params: [f32; 4],
+    border_color: [f32; 4],
+}
+
+const UI_SHADER: &str = r#"
+struct VertexInput {
+    @location(0) position: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) color: vec4<f32>,
+    @location(3) rect_params: vec4<f32>,
+    @location(4) border_color: vec4<f32>,
+};
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) rect_params: vec4<f32>,
+    @location(3) border_color: vec4<f32>,
+};
+
+struct Globals {
+    screen_size: vec2<f32>,
+};
+
+@group(0) @binding(0) var<uniform> globals: Globals;
+
+@vertex
+fn vs_main(in: VertexInput) -> VertexOutput {
+    var out: VertexOutput;
+    // Convert pixel coordinates to NDC: (0,0) top-left, (w,h) bottom-right
+    let ndc_x = (in.position.x / globals.screen_size.x) * 2.0 - 1.0;
+    let ndc_y = 1.0 - (in.position.y / globals.screen_size.y) * 2.0;
+    out.position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
+    out.uv = in.uv;
+    out.color = in.color;
+    out.rect_params = in.rect_params;
+    out.border_color = in.border_color;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let rect_w = in.rect_params.x;
+    let rect_h = in.rect_params.y;
+    let radius = in.rect_params.z;
+    let border_w = in.rect_params.w;
+
+    // If no corner radius, just output solid color (fast path)
+    if radius <= 0.0 && border_w <= 0.0 {
+        return in.color;
+    }
+
+    // SDF rounded rectangle
+    let pixel = in.uv * vec2<f32>(rect_w, rect_h);
+    let center = vec2<f32>(rect_w, rect_h) * 0.5;
+    let half_size = center - vec2<f32>(radius);
+    let d = length(max(abs(pixel - center) - half_size, vec2<f32>(0.0))) - radius;
+
+    // Antialiased edge
+    let aa = 1.0;
+    let alpha = 1.0 - smoothstep(-aa, aa, d);
+
+    if alpha <= 0.0 {
+        discard;
+    }
+
+    // Border
+    if border_w > 0.0 {
+        let inner_d = d + border_w;
+        if inner_d > 0.0 {
+            // In border region
+            return vec4<f32>(in.border_color.rgb, in.border_color.a * alpha);
+        }
+    }
+
+    return vec4<f32>(in.color.rgb, in.color.a * alpha);
+}
+"#;
+
+/// Queued draw command.
+struct RectCommand {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    color: [f32; 4],
+    corner_radius: f32,
+    border_width: f32,
+    border_color: [f32; 4],
+}
+
+/// Queued text command.
+struct TextCommand {
+    x: f32,
+    y: f32,
+    text: String,
+    font_size: f32,
+    color: [u8; 4],
+}
+
+/// Simple batched 2D UI renderer for wgpu.
+pub struct UIRenderer {
+    pipeline: wgpu::RenderPipeline,
+    globals_buffer: wgpu::Buffer,
+    globals_bind_group_layout: wgpu::BindGroupLayout,
+
+    // Text rendering
+    font_system: FontSystem,
+    swash_cache: SwashCache,
+    #[allow(dead_code)]
+    text_cache: Cache,
+    text_atlas: TextAtlas,
+    text_renderer: TextRenderer,
+    viewport: Viewport,
+    text_buffers: Vec<TextBuffer>,
+
+    // Draw queues
+    rect_commands: Vec<RectCommand>,
+    text_commands: Vec<TextCommand>,
+
+    // Per-frame vertex buffer
+    vertices: Vec<UIVertex>,
+    indices: Vec<u32>,
+}
+
+impl UIRenderer {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target_format: wgpu::TextureFormat,
+    ) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("UI Shader"),
+            source: wgpu::ShaderSource::Wgsl(UI_SHADER.into()),
+        });
+
+        let globals_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("UI Globals BGL"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("UI Pipeline Layout"),
+            bind_group_layouts: &[&globals_bind_group_layout],
+            immediate_size: 0,
+        });
+
+        let vertex_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<UIVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                // position
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                // uv
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 8,
+                    shader_location: 1,
+                },
+                // color
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 16,
+                    shader_location: 2,
+                },
+                // rect_params
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 32,
+                    shader_location: 3,
+                },
+                // border_color
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 48,
+                    shader_location: 4,
+                },
+            ],
+        };
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("UI Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[vertex_layout],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("UI Globals"),
+            size: 16, // vec2<f32> + padding
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Text rendering setup
+        let mut font_system = FontSystem::new();
+
+        // Load Inter font if available, otherwise use system default
+        let font_data = include_bytes!("../assets/fonts/Inter-Regular.ttf");
+        font_system.db_mut().load_font_data(font_data.to_vec());
+
+        let swash_cache = SwashCache::new();
+        let cache = Cache::new(device);
+        let mut text_atlas = TextAtlas::new(device, queue, &cache, target_format);
+        let text_renderer =
+            TextRenderer::new(&mut text_atlas, device, wgpu::MultisampleState::default(), None);
+        let viewport = Viewport::new(device, &cache);
+
+        Self {
+            pipeline,
+            globals_buffer,
+            globals_bind_group_layout,
+            font_system,
+            swash_cache,
+            text_cache: cache,
+            text_atlas,
+            text_renderer,
+            viewport,
+            text_buffers: Vec::new(),
+            rect_commands: Vec::with_capacity(64),
+            text_commands: Vec::with_capacity(32),
+            vertices: Vec::with_capacity(256),
+            indices: Vec::with_capacity(384),
+        }
+    }
+
+    /// Queue a filled rectangle.
+    pub fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
+        self.rect_commands.push(RectCommand {
+            x, y, w, h, color,
+            corner_radius: 0.0,
+            border_width: 0.0,
+            border_color: [0.0; 4],
+        });
+    }
+
+    /// Queue a rounded rectangle.
+    pub fn draw_rounded_rect(
+        &mut self,
+        x: f32, y: f32, w: f32, h: f32,
+        color: [f32; 4],
+        corner_radius: f32,
+    ) {
+        self.rect_commands.push(RectCommand {
+            x, y, w, h, color, corner_radius,
+            border_width: 0.0,
+            border_color: [0.0; 4],
+        });
+    }
+
+    /// Queue a rounded rectangle with border.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_bordered_rect(
+        &mut self,
+        x: f32, y: f32, w: f32, h: f32,
+        color: [f32; 4],
+        corner_radius: f32,
+        border_width: f32,
+        border_color: [f32; 4],
+    ) {
+        self.rect_commands.push(RectCommand {
+            x, y, w, h, color, corner_radius, border_width, border_color,
+        });
+    }
+
+    /// Queue text.
+    pub fn draw_text(
+        &mut self,
+        x: f32, y: f32,
+        text: &str,
+        font_size: f32,
+        color: [u8; 4],
+    ) {
+        self.text_commands.push(TextCommand {
+            x, y,
+            text: text.to_string(),
+            font_size,
+            color,
+        });
+    }
+
+    /// Render all queued commands to the target view.
+    pub fn render(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) {
+        // Update globals
+        let globals_data: [f32; 4] = [width as f32, height as f32, 0.0, 0.0];
+        queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals_data));
+
+        let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("UI Globals BG"),
+            layout: &self.globals_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.globals_buffer.as_entire_binding(),
+            }],
+        });
+
+        // Build vertex/index buffers from rect commands
+        self.vertices.clear();
+        self.indices.clear();
+
+        for cmd in &self.rect_commands {
+            let base = self.vertices.len() as u32;
+
+            let (x0, y0) = (cmd.x, cmd.y);
+            let (x1, y1) = (cmd.x + cmd.w, cmd.y + cmd.h);
+
+            // Four corners, UV maps to [0,0]-[1,1] within the rect
+            self.vertices.push(UIVertex {
+                position: [x0, y0], uv: [0.0, 0.0],
+                color: cmd.color,
+                rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
+                border_color: cmd.border_color,
+            });
+            self.vertices.push(UIVertex {
+                position: [x1, y0], uv: [1.0, 0.0],
+                color: cmd.color,
+                rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
+                border_color: cmd.border_color,
+            });
+            self.vertices.push(UIVertex {
+                position: [x1, y1], uv: [1.0, 1.0],
+                color: cmd.color,
+                rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
+                border_color: cmd.border_color,
+            });
+            self.vertices.push(UIVertex {
+                position: [x0, y1], uv: [0.0, 1.0],
+                color: cmd.color,
+                rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
+                border_color: cmd.border_color,
+            });
+
+            self.indices.extend_from_slice(&[
+                base, base + 1, base + 2,
+                base, base + 2, base + 3,
+            ]);
+        }
+
+        // Prepare text buffers for glyphon
+        self.text_buffers.clear();
+        let mut text_areas = Vec::new();
+
+        for cmd in &self.text_commands {
+            let mut buffer = TextBuffer::new(
+                &mut self.font_system,
+                Metrics::new(cmd.font_size, cmd.font_size * 1.2),
+            );
+            buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+            buffer.set_text(
+                &mut self.font_system,
+                &cmd.text,
+                &Attrs::new().family(Family::SansSerif),
+                Shaping::Advanced,
+                None,
+            );
+            buffer.shape_until_scroll(&mut self.font_system, false);
+            self.text_buffers.push(buffer);
+        }
+
+        for (i, cmd) in self.text_commands.iter().enumerate() {
+            text_areas.push(TextArea {
+                buffer: &self.text_buffers[i],
+                left: cmd.x,
+                top: cmd.y,
+                scale: 1.0,
+                bounds: TextBounds {
+                    left: 0,
+                    top: 0,
+                    right: width as i32,
+                    bottom: height as i32,
+                },
+                default_color: GlyphonColor::rgba(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]),
+                custom_glyphs: &[],
+            });
+        }
+
+        // Update viewport and prepare text renderer
+        self.viewport.update(queue, Resolution { width, height });
+
+        self.text_renderer
+            .prepare(
+                device,
+                queue,
+                &mut self.font_system,
+                &mut self.text_atlas,
+                &self.viewport,
+                text_areas,
+                &mut self.swash_cache,
+            )
+            .expect("Failed to prepare text renderer");
+
+        // Create GPU buffers
+        if self.vertices.is_empty() && self.text_commands.is_empty() {
+            self.rect_commands.clear();
+            self.text_commands.clear();
+            return;
+        }
+
+        // Render pass — rects then text, both to the same target
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("UI Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load, // preserve existing content (compositor output)
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+
+            // Draw rects
+            if !self.vertices.is_empty() {
+                let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("UI Vertices"),
+                    contents: bytemuck::cast_slice(&self.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("UI Indices"),
+                    contents: bytemuck::cast_slice(&self.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &globals_bind_group, &[]);
+                pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
+            }
+
+            // Draw text
+            self.text_renderer
+                .render(&self.text_atlas, &self.viewport, &mut pass)
+                .expect("Failed to render text");
+        }
+
+        self.rect_commands.clear();
+        self.text_commands.clear();
+    }
+}

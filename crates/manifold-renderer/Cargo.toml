@@ -8,3 +8,4 @@ manifold-core = { path = "../manifold-core" }
 wgpu = { workspace = true }
 log = { workspace = true }
 bytemuck = { version = "1", features = ["derive"] }
+glyphon = "0.10"

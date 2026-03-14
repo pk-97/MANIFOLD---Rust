@@ -9,3 +9,4 @@ pub mod generator_renderer;
 pub mod generators;
 pub mod layer_compositor;
 pub mod effect;
+pub mod ui_renderer;

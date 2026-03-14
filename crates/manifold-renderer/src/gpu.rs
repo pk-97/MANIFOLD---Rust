@@ -32,7 +32,9 @@ impl GpuContext {
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::Performance,
-            }, None)
+                trace: wgpu::Trace::Off,
+                ..Default::default()
+            })
             .await
             .expect("Failed to create GPU device");
 

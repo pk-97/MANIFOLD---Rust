@@ -69,6 +69,7 @@ impl Compositor for ClearColorCompositor {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &target.view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
                         r: color.r as f64,
@@ -82,6 +83,7 @@ impl Compositor for ClearColorCompositor {
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
+            multiview_mask: None,
         });
 
         self.use_ping = !self.use_ping;
