@@ -148,6 +148,35 @@ impl Default for ProjectSettings {
     }
 }
 
+impl ProjectSettings {
+    /// Get the quantize interval in beats based on current quantize mode and time signature.
+    pub fn get_quantize_interval_beats(&self) -> f32 {
+        match self.quantize_mode {
+            QuantizeMode::Off => 0.0,
+            QuantizeMode::QuarterBeat => 0.25,
+            QuantizeMode::Beat => 1.0,
+            QuantizeMode::Bar => self.time_signature_numerator as f32,
+        }
+    }
+
+    /// Quantize a beat position to the current quantize grid.
+    pub fn quantize_beat(&self, beat: f32) -> f32 {
+        let interval = self.get_quantize_interval_beats();
+        if interval <= 0.0 {
+            return beat;
+        }
+        (beat / interval).round() * interval
+    }
+
+    /// Get effects list mutably, creating if None on master.
+    pub fn master_effect_groups_mut(&mut self) -> &mut Vec<EffectGroup> {
+        if self.master_effect_groups.is_none() {
+            self.master_effect_groups = Some(Vec::new());
+        }
+        self.master_effect_groups.as_mut().unwrap()
+    }
+}
+
 fn default_1920() -> i32 { 1920 }
 fn default_1080() -> i32 { 1080 }
 fn default_60() -> f32 { 60.0 }

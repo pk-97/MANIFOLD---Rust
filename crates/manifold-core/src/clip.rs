@@ -128,6 +128,56 @@ impl TimelineClip {
         }
         cloned
     }
+
+    /// Create a new video clip.
+    pub fn new_video(
+        video_clip_id: String,
+        layer_index: i32,
+        start_beat: f32,
+        duration_beats: f32,
+        in_point: f32,
+    ) -> Self {
+        Self {
+            video_clip_id,
+            layer_index,
+            start_beat,
+            duration_beats,
+            in_point,
+            ..Default::default()
+        }
+    }
+
+    /// Create a new generator clip.
+    pub fn new_generator(
+        gen_type: GeneratorType,
+        layer_index: i32,
+        start_beat: f32,
+        duration_beats: f32,
+    ) -> Self {
+        Self {
+            generator_type: gen_type,
+            layer_index,
+            start_beat,
+            duration_beats,
+            ..Default::default()
+        }
+    }
+
+    /// Get the effect groups list, creating it if None.
+    pub fn effect_groups_mut(&mut self) -> &mut Vec<EffectGroup> {
+        if self.effect_groups.is_none() {
+            self.effect_groups = Some(Vec::new());
+        }
+        self.effect_groups.as_mut().unwrap()
+    }
+
+    /// Get the envelopes list, creating it if None.
+    pub fn envelopes_mut(&mut self) -> &mut Vec<ParamEnvelope> {
+        if self.envelopes.is_none() {
+            self.envelopes = Some(Vec::new());
+        }
+        self.envelopes.as_mut().unwrap()
+    }
 }
 
 impl Default for TimelineClip {

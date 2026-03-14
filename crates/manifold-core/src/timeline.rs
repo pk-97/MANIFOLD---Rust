@@ -110,6 +110,62 @@ impl Timeline {
         self.layers.iter().map(|l| l.clips.len()).sum()
     }
 
+    /// Insert a new layer at the given index, reindexing all layers.
+    pub fn insert_layer(&mut self, index: usize, mut layer: Layer) {
+        let idx = index.min(self.layers.len());
+        layer.index = idx as i32;
+        self.layers.insert(idx, layer);
+        self.reindex_layers();
+    }
+
+    /// Remove a layer at the given index, reindexing remaining layers.
+    pub fn remove_layer(&mut self, index: usize) -> Option<Layer> {
+        if index >= self.layers.len() {
+            return None;
+        }
+        let layer = self.layers.remove(index);
+        self.reindex_layers();
+        self.mark_clip_lookup_dirty();
+        Some(layer)
+    }
+
+    /// Atomically replace the entire layer order.
+    pub fn replace_layer_order(&mut self, new_order: Vec<Layer>) {
+        self.layers = new_order;
+        self.reindex_layers();
+        self.mark_clip_lookup_dirty();
+    }
+
+    /// Add a default video layer, returning its index.
+    pub fn add_layer_default(&mut self) -> usize {
+        let idx = self.layers.len();
+        let layer = Layer::new(
+            format!("Layer {}", idx + 1),
+            crate::types::LayerType::Video,
+            idx as i32,
+        );
+        self.layers.push(layer);
+        idx
+    }
+
+    /// Ensure at least `count` layers exist (used by LiveClipManager).
+    pub fn ensure_layer_count(&mut self, count: usize) {
+        while self.layers.len() < count {
+            self.add_layer_default();
+        }
+    }
+
+    /// Reindex all layers and their clips after structural changes.
+    fn reindex_layers(&mut self) {
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            layer.index = i as i32;
+            for clip in &mut layer.clips {
+                clip.layer_index = i as i32;
+            }
+        }
+        self.mark_clip_lookup_dirty();
+    }
+
     /// Get active clips at a given beat (respecting mute/solo).
     pub fn get_active_clips_at_beat(&mut self, beat: f32) -> Vec<(usize, usize)> {
         let has_solo = self.layers.iter().any(|l| l.is_solo);

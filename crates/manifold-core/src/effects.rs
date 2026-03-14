@@ -77,6 +77,29 @@ impl EffectInstance {
             self.base_param_values = Some(self.param_values.clone());
         }
     }
+
+    /// Set a base param value at index, ensuring capacity.
+    pub fn set_base_param(&mut self, index: usize, value: f32) {
+        self.ensure_base_values();
+        if let Some(base) = &mut self.base_param_values {
+            while base.len() <= index {
+                base.push(0.0);
+            }
+            base[index] = value;
+        }
+        while self.param_values.len() <= index {
+            self.param_values.push(0.0);
+        }
+        self.param_values[index] = value;
+    }
+
+    /// Get the drivers list, creating it if None.
+    pub fn drivers_mut(&mut self) -> &mut Vec<ParameterDriver> {
+        if self.drivers.is_none() {
+            self.drivers = Some(Vec::new());
+        }
+        self.drivers.as_mut().unwrap()
+    }
 }
 
 // ─── Effect Group ───

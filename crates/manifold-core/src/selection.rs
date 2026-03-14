@@ -32,4 +32,29 @@ impl SelectionRegion {
     pub fn duration_beats(&self) -> f32 {
         self.end_beat - self.start_beat
     }
+
+    /// Set the selection region.
+    pub fn set(&mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32) {
+        self.start_beat = start_beat;
+        self.end_beat = end_beat;
+        self.start_layer_index = start_layer;
+        self.end_layer_index = end_layer;
+        self.is_active = true;
+    }
+
+    /// Clear the selection region.
+    pub fn clear(&mut self) {
+        self.start_beat = 0.0;
+        self.end_beat = 0.0;
+        self.start_layer_index = 0;
+        self.end_layer_index = 0;
+        self.is_active = false;
+    }
+
+    /// Get normalized layer range (min, max).
+    pub fn layer_range(&self) -> (i32, i32) {
+        let min = self.start_layer_index.min(self.end_layer_index);
+        let max = self.start_layer_index.max(self.end_layer_index);
+        (min, max)
+    }
 }

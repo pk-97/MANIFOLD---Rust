@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
+manifold-editing = { path = "../manifold-editing" }
 
 [dev-dependencies]
 manifold-io = { path = "../manifold-io" }

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::{BlendMode, ClipDurationMode, GeneratorType, LayerType};
 use crate::clip::TimelineClip;
 use crate::color::Color;
-use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope};
+use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope, ParameterDriver};
 use crate::generator::GeneratorParamState;
 
 /// A single layer in the timeline.
@@ -163,6 +163,96 @@ impl Layer {
 
     pub fn find_clip_mut(&mut self, clip_id: &str) -> Option<&mut TimelineClip> {
         self.clips.iter_mut().find(|c| c.id == clip_id)
+    }
+
+    /// Find clip index by ID.
+    pub fn find_clip_index(&self, clip_id: &str) -> Option<usize> {
+        self.clips.iter().position(|c| c.id == clip_id)
+    }
+
+    /// Insert a clip at a specific index.
+    pub fn insert_clip_at(&mut self, index: usize, clip: TimelineClip) {
+        let idx = index.min(self.clips.len());
+        self.clips.insert(idx, clip);
+        self.clips_sorted = false;
+    }
+
+    /// Get the effects list, creating it if None.
+    pub fn effects_mut(&mut self) -> &mut Vec<EffectInstance> {
+        if self.effects.is_none() {
+            self.effects = Some(Vec::new());
+        }
+        self.effects.as_mut().unwrap()
+    }
+
+    /// Get the effect groups list, creating it if None.
+    pub fn effect_groups_mut(&mut self) -> &mut Vec<EffectGroup> {
+        if self.effect_groups.is_none() {
+            self.effect_groups = Some(Vec::new());
+        }
+        self.effect_groups.as_mut().unwrap()
+    }
+
+    /// Get the envelopes list, creating it if None.
+    pub fn envelopes_mut(&mut self) -> &mut Vec<ParamEnvelope> {
+        if self.envelopes.is_none() {
+            self.envelopes = Some(Vec::new());
+        }
+        self.envelopes.as_mut().unwrap()
+    }
+
+    /// Snapshot current generator param values.
+    pub fn snapshot_gen_params(&self) -> Vec<f32> {
+        self.gen_params.as_ref().map_or_else(Vec::new, |gp| gp.param_values.clone())
+    }
+
+    /// Snapshot current generator drivers.
+    pub fn snapshot_gen_drivers(&self) -> Option<Vec<ParameterDriver>> {
+        self.gen_params.as_ref().and_then(|gp| gp.drivers.clone())
+    }
+
+    /// Snapshot current generator envelopes.
+    pub fn snapshot_gen_envelopes(&self) -> Option<Vec<ParamEnvelope>> {
+        self.gen_params.as_ref().and_then(|gp| gp.envelopes.clone())
+    }
+
+    /// Change generator type, clearing params/drivers/envelopes.
+    pub fn change_generator_type(&mut self, new_type: GeneratorType) {
+        let gp = self.gen_params.get_or_insert_with(GeneratorParamState::default);
+        gp.change_type(new_type);
+    }
+
+    /// Restore generator state from snapshot.
+    pub fn restore_generator_state(
+        &mut self,
+        old_type: GeneratorType,
+        params: Vec<f32>,
+        drivers: Option<Vec<ParameterDriver>>,
+        envelopes: Option<Vec<ParamEnvelope>>,
+    ) {
+        let gp = self.gen_params.get_or_insert_with(GeneratorParamState::default);
+        gp.generator_type = old_type;
+        gp.param_values = params.clone();
+        gp.base_param_values = Some(params);
+        gp.drivers = drivers;
+        gp.envelopes = envelopes;
+    }
+
+    /// Set a generator param base value at index.
+    pub fn set_gen_param_base(&mut self, index: usize, value: f32) {
+        if let Some(gp) = &mut self.gen_params {
+            gp.ensure_base_values();
+            if let Some(base) = &mut gp.base_param_values {
+                while base.len() <= index {
+                    base.push(0.0);
+                }
+                base[index] = value;
+            }
+            while gp.param_values.len() <= index {
+                gp.param_values.push(0.0);
+            }
+            gp.param_values[index] = value;
+        }
     }
 }
 

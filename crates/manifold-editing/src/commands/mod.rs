@@ -2,3 +2,8 @@ pub mod clip;
 pub mod layer;
 pub mod settings;
 pub mod effects;
+pub mod effect_target;
+pub mod effect_groups;
+pub mod drivers;
+pub mod envelopes;
+pub mod selection;
