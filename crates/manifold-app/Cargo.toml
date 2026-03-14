@@ -1,0 +1,18 @@
+[package]
+name = "manifold-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "manifold"
+path = "src/main.rs"
+
+[dependencies]
+manifold-core = { path = "../manifold-core" }
+manifold-playback = { path = "../manifold-playback" }
+manifold-renderer = { path = "../manifold-renderer" }
+winit = { workspace = true }
+wgpu = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+pollster = { workspace = true }

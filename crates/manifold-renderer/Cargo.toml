@@ -1,0 +1,9 @@
+[package]
+name = "manifold-renderer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+manifold-core = { path = "../manifold-core" }
+wgpu = { workspace = true }
+log = { workspace = true }
