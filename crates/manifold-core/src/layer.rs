@@ -201,6 +201,14 @@ impl Layer {
         self.envelopes.as_mut().unwrap()
     }
 
+    /// Read a generator param value at index (returns 0.0 if out of range or no gen_params).
+    pub fn get_gen_param(&self, index: usize) -> f32 {
+        self.gen_params
+            .as_ref()
+            .and_then(|gp| gp.param_values.get(index).copied())
+            .unwrap_or(0.0)
+    }
+
     /// Snapshot current generator param values.
     pub fn snapshot_gen_params(&self) -> Vec<f32> {
         self.gen_params.as_ref().map_or_else(Vec::new, |gp| gp.param_values.clone())

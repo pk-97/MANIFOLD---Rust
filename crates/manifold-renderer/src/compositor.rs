@@ -1,13 +1,15 @@
+use crate::layer_compositor::CompositeClipDescriptor;
 use crate::render_target::RenderTarget;
 use manifold_core::color::Color;
 
 /// Frame context passed to the compositor each tick.
-pub struct CompositorFrame {
+pub struct CompositorFrame<'a> {
     pub time: f32,
     pub beat: f32,
     pub dt: f32,
     pub frame_count: u64,
     pub compositor_dirty: bool,
+    pub clips: &'a [CompositeClipDescriptor<'a>],
 }
 
 /// Trait for compositing layers into a final output.
@@ -30,6 +32,7 @@ pub trait Compositor {
 }
 
 /// Phase 3 stub: clears to a color that cycles based on beat position.
+/// Kept for testing/fallback.
 pub struct ClearColorCompositor {
     ping: RenderTarget,
     pong: RenderTarget,
@@ -80,11 +83,9 @@ impl Compositor for ClearColorCompositor {
             timestamp_writes: None,
             occlusion_query_set: None,
         });
-        // pass dropped immediately — just clears
 
         self.use_ping = !self.use_ping;
 
-        // Return the view we just rendered to
         if !self.use_ping { &self.ping.view } else { &self.pong.view }
     }
 
