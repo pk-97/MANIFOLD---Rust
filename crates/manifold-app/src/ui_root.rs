@@ -8,6 +8,17 @@ use manifold_ui::*;
 use manifold_ui::input::{Key, Modifiers, PointerAction};
 use manifold_ui::node::Vec2;
 
+/// What the currently-open dropdown is selecting for.
+#[derive(Debug, Clone)]
+pub enum DropdownContext {
+    BlendMode(usize),
+    MidiNote(usize),
+    MidiChannel(usize),
+    Resolution,
+    AddEffect(InspectorTab),
+    GenType(usize),
+}
+
 /// Owns all UI state for one window.
 pub struct UIRoot {
     // Core
@@ -29,6 +40,9 @@ pub struct UIRoot {
     screen_width: f32,
     screen_height: f32,
     time_accumulator: f32,
+
+    /// Context for the currently-open dropdown (set before open, read on selection).
+    dropdown_context: Option<DropdownContext>,
 }
 
 impl UIRoot {
@@ -48,6 +62,7 @@ impl UIRoot {
             screen_width: 1280.0,
             screen_height: 720.0,
             time_accumulator: 0.0,
+            dropdown_context: None,
         }
     }
 
@@ -96,6 +111,12 @@ impl UIRoot {
         self.input.process_key(key, modifiers);
     }
 
+    /// Open a dropdown with a context that determines what the selection means.
+    pub fn open_dropdown(&mut self, context: DropdownContext, items: Vec<DropdownItem>, trigger: manifold_ui::node::Rect) {
+        self.dropdown_context = Some(context);
+        self.dropdown.open(items, trigger, 120.0, &mut self.tree);
+    }
+
     /// Drain events from the input system and route to panels.
     /// Returns all panel actions for the app layer to dispatch.
     pub fn process_events(&mut self) -> Vec<PanelAction> {
@@ -112,10 +133,15 @@ impl UIRoot {
                 if let Some(dd_action) = self.dropdown.handle_event(event, &mut self.tree) {
                     match dd_action {
                         DropdownAction::Selected(index) => {
-                            log::debug!("Dropdown selected: {}", index);
-                            // App layer can wire this to specific panel context.
+                            if let Some(ctx) = self.dropdown_context.take() {
+                                if let Some(action) = Self::dropdown_to_action(ctx, index) {
+                                    actions.push(action);
+                                }
+                            }
                         }
-                        DropdownAction::Dismissed => {}
+                        DropdownAction::Dismissed => {
+                            self.dropdown_context = None;
+                        }
                     }
                     continue; // Event consumed by dropdown.
                 }
@@ -144,6 +170,32 @@ impl UIRoot {
         }
 
         actions
+    }
+
+    /// Convert a dropdown selection into the appropriate PanelAction based on context.
+    fn dropdown_to_action(ctx: DropdownContext, index: usize) -> Option<PanelAction> {
+        match ctx {
+            DropdownContext::BlendMode(layer_idx) => {
+                use manifold_core::types::BlendMode;
+                let mode = BlendMode::from_index(index);
+                Some(PanelAction::SetBlendMode(layer_idx, format!("{:?}", mode)))
+            }
+            DropdownContext::MidiNote(_layer_idx) => {
+                Some(PanelAction::DropdownSelected(index))
+            }
+            DropdownContext::MidiChannel(_layer_idx) => {
+                Some(PanelAction::DropdownSelected(index))
+            }
+            DropdownContext::Resolution => {
+                Some(PanelAction::DropdownSelected(index))
+            }
+            DropdownContext::AddEffect(_tab) => {
+                Some(PanelAction::DropdownSelected(index))
+            }
+            DropdownContext::GenType(_layer_idx) => {
+                Some(PanelAction::DropdownSelected(index))
+            }
+        }
     }
 
     /// Per-frame update — push state changes to panels.

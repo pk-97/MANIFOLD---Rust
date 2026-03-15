@@ -412,6 +412,7 @@ pub struct LayerHeaderPanel {
     drag_source: i32,
     drag_target: i32,
     insert_indicator_id: i32,
+    add_layer_btn: i32,
 
     // Cached state for dirty-checking
     cached_mute: Vec<bool>,
@@ -431,6 +432,7 @@ impl LayerHeaderPanel {
             drag_source: -1,
             drag_target: -1,
             insert_indicator_id: -1,
+            add_layer_btn: -1,
             cached_mute: Vec::new(),
             cached_solo: Vec::new(),
             cached_selected: Vec::new(),
@@ -897,6 +899,10 @@ impl LayerHeaderPanel {
 
     fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
+        // Add Layer button
+        if id == self.add_layer_btn && id >= 0 {
+            return vec![PanelAction::AddLayerClicked];
+        }
         for (i, row) in self.rows.iter().enumerate() {
             if id == row.mute { return vec![PanelAction::ToggleMute(i)]; }
             if id == row.solo { return vec![PanelAction::ToggleSolo(i)]; }
@@ -982,6 +988,23 @@ impl Panel for LayerHeaderPanel {
         self.insert_indicator_id = tree.add_panel(
             -1, lc.x, lc.y - 10.0, lc.width, INSERT_LINE_H,
             UIStyle { bg_color: Color32::TRANSPARENT, ..UIStyle::default() },
+        ) as i32;
+
+        // "+ Add Layer" button at bottom of layer list
+        let total_h: f32 = self.layers.iter().map(|l| l.height).sum();
+        let btn_y = lc.y + total_h + 4.0;
+        self.add_layer_btn = tree.add_button(
+            -1, lc.x + 4.0, btn_y, lc.width - 8.0, 24.0,
+            UIStyle {
+                bg_color: Color32::new(40, 45, 50, 255),
+                hover_bg_color: Color32::new(55, 65, 75, 255),
+                text_color: Color32::new(130, 170, 210, 255),
+                corner_radius: 4.0,
+                text_align: TextAlign::Center,
+                font_size: 11,
+                ..UIStyle::default()
+            },
+            "+ Add Layer",
         ) as i32;
     }
 

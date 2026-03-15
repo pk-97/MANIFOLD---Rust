@@ -21,6 +21,11 @@ const SCROLLBAR_TRACK_COLOR: Color32 = Color32::new(30, 30, 32, 180);
 const SCROLLBAR_THUMB_COLOR: Color32 = Color32::new(90, 90, 95, 200);
 const SCROLLBAR_THUMB_HOVER: Color32 = Color32::new(110, 110, 115, 220);
 
+const ADD_EFFECT_BTN_H: f32 = 26.0;
+const ADD_EFFECT_BTN_BG: Color32 = Color32::new(40, 45, 50, 255);
+const ADD_EFFECT_BTN_HOVER: Color32 = Color32::new(55, 65, 75, 255);
+const ADD_EFFECT_BTN_TEXT: Color32 = Color32::new(130, 170, 210, 255);
+
 // ── Pressed target (for drag routing) ───────────────────────────
 
 #[derive(Debug, Clone, Copy)]
@@ -66,6 +71,11 @@ pub struct InspectorCompositePanel {
     layer_visible: bool,
     clip_visible: bool,
 
+    // Add Effect button node IDs
+    add_master_effect_btn: i32,
+    add_layer_effect_btn: i32,
+    add_clip_effect_btn: i32,
+
     // Scroll state
     scroll_offset: f32,
     max_scroll: f32,
@@ -97,6 +107,9 @@ impl InspectorCompositePanel {
             master_visible: true,
             layer_visible: true,
             clip_visible: true,
+            add_master_effect_btn: -1,
+            add_layer_effect_btn: -1,
+            add_clip_effect_btn: -1,
             scroll_offset: 0.0,
             max_scroll: 0.0,
             content_height: 0.0,
@@ -207,6 +220,7 @@ impl InspectorCompositePanel {
             for card in &self.master_effects {
                 h += card.compute_height() + SECTION_GAP;
             }
+            h += ADD_EFFECT_BTN_H + SECTION_GAP; // add effect button
             h += SECTION_GAP;
         }
 
@@ -215,6 +229,7 @@ impl InspectorCompositePanel {
             for card in &self.layer_effects {
                 h += card.compute_height() + SECTION_GAP;
             }
+            h += ADD_EFFECT_BTN_H + SECTION_GAP; // add effect button
             h += SECTION_GAP;
         }
 
@@ -226,6 +241,7 @@ impl InspectorCompositePanel {
             for card in &self.clip_effects {
                 h += card.compute_height() + SECTION_GAP;
             }
+            h += ADD_EFFECT_BTN_H + SECTION_GAP; // add effect button
             h += SECTION_GAP;
         }
 
@@ -420,6 +436,18 @@ impl InspectorCompositePanel {
     // ── Internal event routing ───────────────────────────────────
 
     fn route_click(&mut self, node_id: u32) -> Vec<PanelAction> {
+        let id = node_id as i32;
+        // Add Effect buttons
+        if id == self.add_master_effect_btn && id >= 0 {
+            return vec![PanelAction::AddEffectClicked(InspectorTab::Master)];
+        }
+        if id == self.add_layer_effect_btn && id >= 0 {
+            return vec![PanelAction::AddEffectClicked(InspectorTab::Layer)];
+        }
+        if id == self.add_clip_effect_btn && id >= 0 {
+            return vec![PanelAction::AddEffectClicked(InspectorTab::Clip)];
+        }
+
         if let Some(target) = self.find_target_for_node(node_id) {
             match target {
                 PressedTarget::MasterChrome => self.master_chrome.handle_click(node_id),
@@ -554,6 +582,21 @@ impl Panel for InspectorCompositePanel {
                 card.build(tree, Rect::new(rect.x, cy, content_w, card_h));
                 cy += card_h + SECTION_GAP;
             }
+            // "+ Add Effect" button for master
+            self.add_master_effect_btn = tree.add_button(
+                -1, rect.x + 4.0, cy, content_w - 8.0, ADD_EFFECT_BTN_H,
+                UIStyle {
+                    bg_color: ADD_EFFECT_BTN_BG,
+                    hover_bg_color: ADD_EFFECT_BTN_HOVER,
+                    text_color: ADD_EFFECT_BTN_TEXT,
+                    corner_radius: 4.0,
+                    text_align: TextAlign::Center,
+                    font_size: 11,
+                    ..UIStyle::default()
+                },
+                "+ Add Effect",
+            ) as i32;
+            cy += ADD_EFFECT_BTN_H + SECTION_GAP;
             cy += SECTION_GAP;
         }
 
@@ -568,6 +611,21 @@ impl Panel for InspectorCompositePanel {
                 card.build(tree, Rect::new(rect.x, cy, content_w, card_h));
                 cy += card_h + SECTION_GAP;
             }
+            // "+ Add Effect" button for layer
+            self.add_layer_effect_btn = tree.add_button(
+                -1, rect.x + 4.0, cy, content_w - 8.0, ADD_EFFECT_BTN_H,
+                UIStyle {
+                    bg_color: ADD_EFFECT_BTN_BG,
+                    hover_bg_color: ADD_EFFECT_BTN_HOVER,
+                    text_color: ADD_EFFECT_BTN_TEXT,
+                    corner_radius: 4.0,
+                    text_align: TextAlign::Center,
+                    font_size: 11,
+                    ..UIStyle::default()
+                },
+                "+ Add Effect",
+            ) as i32;
+            cy += ADD_EFFECT_BTN_H + SECTION_GAP;
             cy += SECTION_GAP;
         }
 
@@ -588,6 +646,21 @@ impl Panel for InspectorCompositePanel {
                 card.build(tree, Rect::new(rect.x, cy, content_w, card_h));
                 cy += card_h + SECTION_GAP;
             }
+            // "+ Add Effect" button for clip
+            self.add_clip_effect_btn = tree.add_button(
+                -1, rect.x + 4.0, cy, content_w - 8.0, ADD_EFFECT_BTN_H,
+                UIStyle {
+                    bg_color: ADD_EFFECT_BTN_BG,
+                    hover_bg_color: ADD_EFFECT_BTN_HOVER,
+                    text_color: ADD_EFFECT_BTN_TEXT,
+                    corner_radius: 4.0,
+                    text_align: TextAlign::Center,
+                    font_size: 11,
+                    ..UIStyle::default()
+                },
+                "+ Add Effect",
+            ) as i32;
+            cy += ADD_EFFECT_BTN_H + SECTION_GAP;
         }
 
         // Scrollbar track + thumb

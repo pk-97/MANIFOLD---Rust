@@ -221,6 +221,7 @@ impl Application {
                 action,
                 &mut self.engine,
                 &mut self.editing_service,
+                &mut self.ui_root,
                 &mut self.active_layer_index,
                 &mut self.drag_snapshot,
             );
@@ -858,6 +859,51 @@ impl ApplicationHandler for Application {
                         }
                         Key::Character(ref c) if c.as_str() == "y" && self.modifiers.command => {
                             crate::ui_bridge::redo(&mut self.engine, &mut self.editing_service);
+                            consumed = true;
+                        }
+                        Key::Character(ref c) if c.as_str() == "s" && self.modifiers.command => {
+                            log::info!("Save project (Cmd+S) — not yet implemented");
+                            consumed = true;
+                        }
+                        Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace)
+                            if !self.modifiers.command =>
+                        {
+                            log::info!("Delete selected (not yet implemented)");
+                            consumed = true;
+                        }
+                        Key::Named(NamedKey::ArrowLeft) if !self.modifiers.command => {
+                            let step = if self.modifiers.shift { 0.0625 } else { 0.25 };
+                            let beat = (self.engine.current_beat() - step).max(0.0);
+                            if let Some(p) = self.engine.project() {
+                                let time = beat * (60.0 / p.settings.bpm);
+                                self.engine.seek_to(time);
+                            }
+                            consumed = true;
+                        }
+                        Key::Named(NamedKey::ArrowRight) if !self.modifiers.command => {
+                            let step = if self.modifiers.shift { 0.0625 } else { 0.25 };
+                            let beat = self.engine.current_beat() + step;
+                            if let Some(p) = self.engine.project() {
+                                let time = beat * (60.0 / p.settings.bpm);
+                                self.engine.seek_to(time);
+                            }
+                            consumed = true;
+                        }
+                        Key::Named(NamedKey::ArrowUp) if !self.modifiers.command => {
+                            if let Some(idx) = self.active_layer_index {
+                                if idx > 0 {
+                                    self.active_layer_index = Some(idx - 1);
+                                }
+                            }
+                            consumed = true;
+                        }
+                        Key::Named(NamedKey::ArrowDown) if !self.modifiers.command => {
+                            if let Some(idx) = self.active_layer_index {
+                                let count = self.engine.project().map_or(0, |p| p.timeline.layers.len());
+                                if idx + 1 < count {
+                                    self.active_layer_index = Some(idx + 1);
+                                }
+                            }
                             consumed = true;
                         }
                         _ => {}

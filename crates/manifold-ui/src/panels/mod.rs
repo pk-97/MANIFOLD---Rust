@@ -162,6 +162,17 @@ pub enum PanelAction {
     // Timeline
     Seek(f32),
     SetInsertCursor(f32),
+
+    // Layer management
+    AddLayerClicked,
+    DeleteLayerClicked(usize),
+
+    // Effect management
+    AddEffectClicked(InspectorTab),
+    RemoveEffect(usize),
+
+    // Dropdown result (context-routed)
+    DropdownSelected(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

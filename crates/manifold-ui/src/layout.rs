@@ -125,6 +125,23 @@ impl ScreenLayout {
         Rect::new(0.0, top, self.effect_browser_width, self.screen_height - top)
     }
 
+    // ── Convenience accessors for dropdown anchoring ──────────────
+
+    /// Y position of the footer bar.
+    pub fn footer_y(&self) -> f32 {
+        self.footer().y
+    }
+
+    /// X position of the inspector sidebar.
+    pub fn inspector_x(&self) -> f32 {
+        self.inspector().x
+    }
+
+    /// Y position of the inspector sidebar.
+    pub fn inspector_y(&self) -> f32 {
+        self.inspector().y
+    }
+
     /// Layer controls region: right side of timeline body.
     pub fn layer_controls(&self) -> Rect {
         let body = self.timeline_body();

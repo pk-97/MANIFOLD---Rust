@@ -22,6 +22,38 @@ pub enum BlendMode {
     Darken = 12,
 }
 
+impl BlendMode {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Normal => "Normal",
+            Self::Additive => "Additive",
+            Self::Multiply => "Multiply",
+            Self::Screen => "Screen",
+            Self::Overlay => "Overlay",
+            Self::Stencil => "Stencil",
+            Self::Opaque => "Opaque",
+            Self::Difference => "Difference",
+            Self::Exclusion => "Exclusion",
+            Self::Subtract => "Subtract",
+            Self::ColorDodge => "Color Dodge",
+            Self::Lighten => "Lighten",
+            Self::Darken => "Darken",
+        }
+    }
+
+    pub const ALL: &'static [BlendMode] = &[
+        BlendMode::Normal, BlendMode::Additive, BlendMode::Multiply,
+        BlendMode::Screen, BlendMode::Overlay, BlendMode::Stencil,
+        BlendMode::Opaque, BlendMode::Difference, BlendMode::Exclusion,
+        BlendMode::Subtract, BlendMode::ColorDodge, BlendMode::Lighten,
+        BlendMode::Darken,
+    ];
+
+    pub fn from_index(i: usize) -> Self {
+        Self::ALL.get(i).copied().unwrap_or(Self::Normal)
+    }
+}
+
 impl Serialize for BlendMode {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_i32(*self as i32)
@@ -179,6 +211,25 @@ impl EffectType {
             _ => &[],
         }
     }
+
+    /// All effect types available for the "Add Effect" dropdown.
+    pub const ALL: &'static [EffectType] = &[
+        EffectType::InvertColors, EffectType::ColorGrade, EffectType::Mirror,
+        EffectType::Feedback, EffectType::Bloom, EffectType::Transform,
+        EffectType::Kaleidoscope, EffectType::EdgeStretch, EffectType::PixelSort,
+        EffectType::Strobe, EffectType::ChromaticAberration, EffectType::FilmGrain,
+        EffectType::Glitch, EffectType::Dither, EffectType::CRT,
+        EffectType::Halation, EffectType::InfiniteZoom, EffectType::VoronoiPrism,
+        EffectType::QuadMirror, EffectType::StylizedFeedback, EffectType::BlobTracking,
+        EffectType::FluidDistortion, EffectType::EdgeGlow, EffectType::Datamosh,
+        EffectType::SlitScan, EffectType::WireframeDepth, EffectType::GradientMap,
+        EffectType::Microscope, EffectType::Corruption, EffectType::Infrared,
+        EffectType::Surveillance, EffectType::Redaction,
+    ];
+
+    pub fn from_index(i: usize) -> Option<Self> {
+        Self::ALL.get(i).copied()
+    }
 }
 
 impl Serialize for EffectType {
@@ -326,6 +377,20 @@ impl GeneratorType {
             _ => &[],
         }
     }
+
+    pub const ALL: &[Self] = &[
+        Self::Plasma, Self::ConcentricTunnel, Self::Lissajous,
+        Self::FractalZoom, Self::Flowfield, Self::ReactionDiffusion,
+        Self::FluidSimulation, Self::FluidSimulation3D,
+        Self::BasicShapesSnap, Self::Duocylinder, Self::Tesseract,
+        Self::OscilloscopeXY, Self::WireframeZoo, Self::ParametricSurface,
+        Self::StrangeAttractor, Self::ComputeStrangeAttractor,
+        Self::NumberStation, Self::Mycelium,
+    ];
+
+    pub fn from_index(i: usize) -> Option<Self> {
+        Self::ALL.get(i).copied()
+    }
 }
 
 // GeneratorType serializes as integer in JSON
@@ -402,6 +467,26 @@ pub enum ClockAuthority {
     Osc = 3,
 }
 
+impl ClockAuthority {
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Internal => Self::Link,
+            Self::Link => Self::MidiClock,
+            Self::MidiClock => Self::Osc,
+            Self::Osc => Self::Internal,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Internal => "INT",
+            Self::Link => "LINK",
+            Self::MidiClock => "MIDI",
+            Self::Osc => "OSC",
+        }
+    }
+}
+
 impl Serialize for ClockAuthority {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_i32(*self as i32)
@@ -430,6 +515,26 @@ pub enum QuantizeMode {
     QuarterBeat = 1,
     Beat = 2,
     Bar = 3,
+}
+
+impl QuantizeMode {
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Off => Self::QuarterBeat,
+            Self::QuarterBeat => Self::Beat,
+            Self::Beat => Self::Bar,
+            Self::Bar => Self::Off,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Off => "OFF",
+            Self::QuarterBeat => "1/4",
+            Self::Beat => "BEAT",
+            Self::Bar => "BAR",
+        }
+    }
 }
 
 impl Serialize for QuantizeMode {
@@ -490,6 +595,11 @@ impl<'de> Deserialize<'de> for ResolutionPreset {
 }
 
 impl ResolutionPreset {
+    pub const ALL: &[Self] = &[
+        Self::HD720p, Self::FHD1080p, Self::QHD1440p, Self::UHD4K,
+        Self::Square1080, Self::Portrait720, Self::Portrait1080, Self::Portrait1440,
+    ];
+
     pub fn dimensions(&self) -> (i32, i32) {
         match self {
             ResolutionPreset::HD720p => (1280, 720),
@@ -501,6 +611,23 @@ impl ResolutionPreset {
             ResolutionPreset::Portrait1080 => (1080, 1920),
             ResolutionPreset::Portrait1440 => (1440, 2560),
         }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::HD720p => "720p",
+            Self::FHD1080p => "1080p",
+            Self::QHD1440p => "1440p",
+            Self::UHD4K => "4K",
+            Self::Square1080 => "1080×1080",
+            Self::Portrait720 => "720×1280",
+            Self::Portrait1080 => "1080×1920",
+            Self::Portrait1440 => "1440×2560",
+        }
+    }
+
+    pub fn from_index(i: usize) -> Option<Self> {
+        Self::ALL.get(i).copied()
     }
 }
 

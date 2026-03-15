@@ -4,25 +4,29 @@
 //! mutations. The app layer calls `dispatch()` after collecting actions
 //! from all panels, and `push_state()` to sync engine state back to panels.
 
-use manifold_core::types::{EffectType, GeneratorType, LayerType, PlaybackState};
+use manifold_core::types::{
+    BlendMode, EffectType, GeneratorType, LayerType, PlaybackState, ResolutionPreset,
+};
 use manifold_core::effects::EffectInstance;
 use manifold_editing::commands::settings::{
     ChangeMasterOpacityCommand, ChangeLayerOpacityCommand, ChangeGeneratorParamsCommand,
+    ChangeQuantizeModeCommand, ChangeLayerBlendModeCommand,
 };
 use manifold_editing::commands::effects::{
-    ToggleEffectCommand, ChangeEffectParamCommand,
+    ToggleEffectCommand, ChangeEffectParamCommand, RemoveEffectCommand,
 };
 use manifold_editing::commands::effect_target::EffectTarget;
+use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
 use manifold_playback::engine::PlaybackEngine;
-use manifold_ui::PanelAction;
-use manifold_ui::node::Color32;
+use manifold_ui::{PanelAction, DropdownItem};
+use manifold_ui::node::{Color32, Rect};
 use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::viewport::TrackInfo;
 use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
 use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo};
 
-use crate::ui_root::UIRoot;
+use crate::ui_root::{UIRoot, DropdownContext};
 
 /// Result of dispatching a panel action.
 pub struct DispatchResult {
@@ -43,6 +47,7 @@ pub fn dispatch(
     action: &PanelAction,
     engine: &mut PlaybackEngine,
     editing: &mut EditingService,
+    ui: &mut UIRoot,
     active_layer: &mut Option<usize>,
     drag_snapshot: &mut Option<f32>,
 ) -> DispatchResult {
@@ -61,6 +66,27 @@ pub fn dispatch(
             engine.seek_to(0.0);
             DispatchResult::handled()
         }
+        PanelAction::Record => {
+            log::info!("Record toggled (MIDI recording not yet implemented)");
+            DispatchResult::handled()
+        }
+        PanelAction::ResetBpm => {
+            log::info!("Reset BPM (tempo lane restore not yet implemented)");
+            DispatchResult::handled()
+        }
+        PanelAction::ClearBpm => {
+            if let Some(project) = engine.project_mut() {
+                let old_points = project.tempo_map.clone_points();
+                let bpm = project.settings.bpm;
+                let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(old_points, bpm);
+                editing.execute(Box::new(cmd), project);
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::BpmFieldClicked => {
+            log::debug!("BPM field clicked (text input not yet implemented)");
+            DispatchResult::handled()
+        }
         PanelAction::Seek(beat) => {
             if let Some(p) = engine.project() {
                 let time = *beat * (60.0 / p.settings.bpm);
@@ -68,10 +94,92 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
+        PanelAction::SetInsertCursor(_beat) => {
+            DispatchResult::handled()
+        }
+
+        // ── Clock/Sync ─────────────────────────────────────────────
+        PanelAction::CycleClockAuthority => {
+            if let Some(project) = engine.project_mut() {
+                project.settings.clock_authority = project.settings.clock_authority.next();
+                log::info!("Clock authority → {}", project.settings.clock_authority.display_name());
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::ToggleLink => {
+            log::info!("Toggle Link (not yet implemented)");
+            DispatchResult::handled()
+        }
+        PanelAction::ToggleMidiClock => {
+            log::info!("Toggle MIDI Clock (not yet implemented)");
+            DispatchResult::handled()
+        }
+        PanelAction::SelectClkDevice => {
+            log::info!("Select clock device (not yet implemented)");
+            DispatchResult::handled()
+        }
+        PanelAction::ToggleSyncOutput => {
+            log::info!("Toggle sync output (not yet implemented)");
+            DispatchResult::handled()
+        }
+
+        // ── Export/Header/Footer ───────────────────────────────────
+        PanelAction::ToggleHdr => {
+            if let Some(project) = engine.project_mut() {
+                project.settings.export_hdr = !project.settings.export_hdr;
+                log::info!("HDR export → {}", project.settings.export_hdr);
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::TogglePercussion => {
+            log::info!("Toggle percussion (not yet implemented)");
+            DispatchResult::handled()
+        }
+        PanelAction::ToggleMonitor => {
+            log::info!("Toggle monitor (not yet implemented)");
+            DispatchResult::handled()
+        }
+        PanelAction::CycleQuantize => {
+            if let Some(project) = engine.project_mut() {
+                let old = project.settings.quantize_mode;
+                let new = old.next();
+                let cmd = ChangeQuantizeModeCommand::new(old, new);
+                editing.execute(Box::new(cmd), project);
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::ResolutionClicked => {
+            // Open resolution dropdown
+            let items: Vec<DropdownItem> = ResolutionPreset::ALL.iter().map(|r| {
+                DropdownItem::new(r.display_name())
+            }).collect();
+            // Anchor at a reasonable position (footer area)
+            let trigger = Rect::new(200.0, ui.layout.footer_y(), 100.0, 24.0);
+            ui.open_dropdown(DropdownContext::Resolution, items, trigger);
+            DispatchResult::handled()
+        }
+        PanelAction::FpsFieldClicked => {
+            log::debug!("FPS field clicked (text input not yet implemented)");
+            DispatchResult::handled()
+        }
 
         // ── Zoom ───────────────────────────────────────────────────
         PanelAction::ZoomIn | PanelAction::ZoomOut => {
             // Zoom is UI-only state, handled in UIRoot.
+            DispatchResult::handled()
+        }
+
+        // ── Inspector navigation ───────────────────────────────────
+        PanelAction::SelectInspectorTab(tab) => {
+            log::debug!("Inspector tab: {:?}", tab);
+            DispatchResult::handled()
+        }
+        PanelAction::InspectorScrolled(delta) => {
+            ui.inspector.handle_scroll(*delta);
+            DispatchResult::handled()
+        }
+        PanelAction::InspectorSectionClicked(idx) => {
+            log::debug!("Inspector section clicked: {}", idx);
             DispatchResult::handled()
         }
 
@@ -96,10 +204,136 @@ pub fn dispatch(
             *active_layer = Some(*idx);
             DispatchResult::handled()
         }
+        PanelAction::LayerDoubleClicked(_idx) => {
+            log::debug!("Layer double-clicked (rename not yet implemented)");
+            DispatchResult::handled()
+        }
         PanelAction::ChevronClicked(idx) => {
             if let Some(project) = engine.project_mut() {
                 if let Some(layer) = project.timeline.layers.get_mut(*idx) {
                     layer.is_collapsed = !layer.is_collapsed;
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::BlendModeClicked(idx) => {
+            // Open blend mode dropdown
+            let items: Vec<DropdownItem> = BlendMode::ALL.iter().map(|m| {
+                DropdownItem::new(m.display_name())
+            }).collect();
+            let trigger = Rect::new(0.0, *idx as f32 * 48.0, 80.0, 24.0);
+            ui.open_dropdown(DropdownContext::BlendMode(*idx), items, trigger);
+            DispatchResult::handled()
+        }
+        PanelAction::SetBlendMode(idx, mode_str) => {
+            if let Some(project) = engine.project_mut() {
+                if let Some(layer) = project.timeline.layers.get(*idx) {
+                    let old_mode = layer.default_blend_mode;
+                    // Parse mode from string (format is Debug repr like "Normal", "Add", etc.)
+                    if let Some(new_mode) = BlendMode::ALL.iter().find(|m| format!("{:?}", m) == *mode_str) {
+                        let cmd = ChangeLayerBlendModeCommand::new(*idx, old_mode, *new_mode);
+                        editing.execute(Box::new(cmd), project);
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::ExpandLayer(idx) => {
+            if let Some(project) = engine.project_mut() {
+                if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+                    layer.is_collapsed = false;
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::CollapseLayer(idx) => {
+            if let Some(project) = engine.project_mut() {
+                if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+                    layer.is_collapsed = true;
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::FolderClicked(_idx) => {
+            log::info!("Folder clicked (file picker not yet implemented)");
+            DispatchResult::handled()
+        }
+        PanelAction::NewClipClicked(idx) => {
+            let beat = engine.current_beat();
+            if let Some(project) = engine.project_mut() {
+                let cmd = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
+                editing.execute(cmd, project);
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::AddGenClipClicked(idx) => {
+            let beat = engine.current_beat();
+            if let Some(project) = engine.project_mut() {
+                let cmd = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
+                editing.execute(cmd, project);
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::MidiInputClicked(idx) => {
+            // Open MIDI note dropdown (0-127)
+            let items: Vec<DropdownItem> = (0..128).map(|n| {
+                DropdownItem::new(&format!("{}", n))
+            }).collect();
+            let trigger = Rect::new(0.0, *idx as f32 * 48.0, 60.0, 24.0);
+            ui.open_dropdown(DropdownContext::MidiNote(*idx), items, trigger);
+            DispatchResult::handled()
+        }
+        PanelAction::MidiChannelClicked(idx) => {
+            // Open MIDI channel dropdown (1-16)
+            let items: Vec<DropdownItem> = (1..=16).map(|ch| {
+                DropdownItem::new(&format!("Ch {}", ch))
+            }).collect();
+            let trigger = Rect::new(0.0, *idx as f32 * 48.0, 60.0, 24.0);
+            ui.open_dropdown(DropdownContext::MidiChannel(*idx), items, trigger);
+            DispatchResult::handled()
+        }
+        PanelAction::LayerDragStarted(_idx) => {
+            log::debug!("Layer drag started");
+            DispatchResult::handled()
+        }
+        PanelAction::LayerDragMoved(_from, _to) => {
+            DispatchResult::handled()
+        }
+        PanelAction::LayerDragEnded(_from, _to) => {
+            log::debug!("Layer drag ended (reorder not yet implemented via drag)");
+            DispatchResult::handled()
+        }
+
+        // ── Layer management ───────────────────────────────────────
+        PanelAction::AddLayerClicked => {
+            if let Some(project) = engine.project_mut() {
+                let count = project.timeline.layers.len();
+                let name = format!("Layer {}", count + 1);
+                let cmd = AddLayerCommand::new(
+                    name,
+                    LayerType::Video,
+                    GeneratorType::None,
+                    count,
+                    None,
+                );
+                editing.execute(Box::new(cmd), project);
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::DeleteLayerClicked(idx) => {
+            if let Some(project) = engine.project_mut() {
+                if project.timeline.layers.len() > 1 {
+                    if let Some(layer) = project.timeline.layers.get(*idx) {
+                        let layer_clone = layer.clone();
+                        let cmd = DeleteLayerCommand::new(layer_clone, *idx);
+                        editing.execute(Box::new(cmd), project);
+                        // Fix active_layer if needed
+                        if let Some(al) = active_layer {
+                            if *al >= project.timeline.layers.len() {
+                                *active_layer = Some(project.timeline.layers.len().saturating_sub(1));
+                            }
+                        }
+                    }
                 }
             }
             DispatchResult::structural()
@@ -132,7 +366,6 @@ pub fn dispatch(
         }
         PanelAction::MasterCollapseToggle | PanelAction::MasterExitPathClicked
         | PanelAction::MasterOpacityRightClick => {
-            // UI-only state (collapse) or unimplemented
             DispatchResult::handled()
         }
 
@@ -177,9 +410,39 @@ pub fn dispatch(
             DispatchResult::handled()
         }
 
+        // ── Clip chrome ────────────────────────────────────────────
+        PanelAction::ClipChromeCollapseToggle => {
+            DispatchResult::handled()
+        }
+        PanelAction::ClipBpmClicked => {
+            log::debug!("Clip BPM clicked (text input not yet implemented)");
+            DispatchResult::handled()
+        }
+        PanelAction::ClipLoopToggle => {
+            log::debug!("Clip loop toggle (clip selection not yet implemented)");
+            DispatchResult::handled()
+        }
+        PanelAction::ClipSlipSnapshot => {
+            DispatchResult::handled()
+        }
+        PanelAction::ClipSlipChanged(_val) => {
+            DispatchResult::handled()
+        }
+        PanelAction::ClipSlipCommit => {
+            DispatchResult::handled()
+        }
+        PanelAction::ClipLoopSnapshot => {
+            DispatchResult::handled()
+        }
+        PanelAction::ClipLoopChanged(_val) => {
+            DispatchResult::handled()
+        }
+        PanelAction::ClipLoopCommit => {
+            DispatchResult::handled()
+        }
+
         // ── Effect operations ──────────────────────────────────────
         PanelAction::EffectToggle(fx_idx) => {
-            // Toggle on the active layer's effects (for now, layer scope)
             if let Some(layer_idx) = *active_layer {
                 if let Some(project) = engine.project_mut() {
                     let target = EffectTarget::Layer { layer_index: layer_idx };
@@ -196,6 +459,10 @@ pub fn dispatch(
                     }
                 }
             }
+            DispatchResult::handled()
+        }
+        PanelAction::EffectCollapseToggle(_) | PanelAction::EffectCardClicked(_)
+        | PanelAction::EffectParamRightClick(_, _) => {
             DispatchResult::handled()
         }
         PanelAction::EffectParamSnapshot(fx_idx, param_idx) => {
@@ -254,13 +521,76 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectCollapseToggle(_) | PanelAction::EffectCardClicked(_)
-        | PanelAction::EffectParamRightClick(_, _) => {
-            // UI-only state
+
+        // ── Effect modulation ──────────────────────────────────────
+        PanelAction::EffectDriverToggle(_ei, _pi) => {
+            log::debug!("Effect driver toggle (modulation not yet wired)");
+            DispatchResult::handled()
+        }
+        PanelAction::EffectEnvelopeToggle(_ei, _pi) => {
+            log::debug!("Effect envelope toggle (modulation not yet wired)");
+            DispatchResult::handled()
+        }
+        PanelAction::EffectDriverConfig(_ei, _pi, _cfg) => {
+            log::debug!("Effect driver config (modulation not yet wired)");
+            DispatchResult::handled()
+        }
+        PanelAction::EffectEnvParamChanged(_ei, _pi, _param, _val) => {
+            DispatchResult::handled()
+        }
+        PanelAction::EffectTrimChanged(_ei, _pi, _min, _max) => {
+            DispatchResult::handled()
+        }
+        PanelAction::EffectTargetChanged(_ei, _pi, _norm) => {
             DispatchResult::handled()
         }
 
+        // ── Effect management ──────────────────────────────────────
+        PanelAction::AddEffectClicked(tab) => {
+            // Open effect type dropdown
+            let items: Vec<DropdownItem> = EffectType::ALL.iter().map(|e| {
+                DropdownItem::new(e.display_name())
+            }).collect();
+            let trigger = Rect::new(
+                ui.layout.inspector_x(),
+                ui.layout.inspector_y() + 100.0,
+                140.0, 24.0,
+            );
+            ui.open_dropdown(DropdownContext::AddEffect(*tab), items, trigger);
+            DispatchResult::handled()
+        }
+        PanelAction::RemoveEffect(fx_idx) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    let target = EffectTarget::Layer { layer_index: layer_idx };
+                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                        if let Some(effects) = &layer.effects {
+                            if let Some(fx) = effects.get(*fx_idx) {
+                                let cmd = RemoveEffectCommand::new(target, fx.clone(), *fx_idx);
+                                editing.execute(Box::new(cmd), project);
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+
         // ── Generator params ───────────────────────────────────────
+        PanelAction::GenTypeClicked => {
+            // Open generator type dropdown
+            let items: Vec<DropdownItem> = GeneratorType::ALL.iter().map(|g| {
+                DropdownItem::new(g.display_name())
+            }).collect();
+            let trigger = Rect::new(
+                ui.layout.inspector_x(),
+                ui.layout.inspector_y() + 50.0,
+                140.0, 24.0,
+            );
+            let layer_idx = active_layer.unwrap_or(0);
+            ui.open_dropdown(DropdownContext::GenType(layer_idx), items, trigger);
+            DispatchResult::handled()
+        }
         PanelAction::GenParamSnapshot(param_idx) => {
             if let Some(layer_idx) = *active_layer {
                 if let Some(project) = engine.project() {
@@ -300,11 +630,10 @@ pub fn dispatch(
                                     .copied().unwrap_or(0.0);
                                 if (old_val - new_val).abs() > f32::EPSILON {
                                     let mut old_params = gp.param_values.clone();
-                                    let mut new_params = gp.param_values.clone();
-                                    // Restore old value in old_params
                                     if *param_idx < old_params.len() {
                                         old_params[*param_idx] = old_val;
                                     }
+                                    let new_params = gp.param_values.clone();
                                     let cmd = ChangeGeneratorParamsCommand::new(
                                         layer_idx, old_params, new_params,
                                     );
@@ -333,8 +662,29 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenParamRightClick(_) | PanelAction::GenTypeClicked => {
-            // Unimplemented (would need dropdown)
+        PanelAction::GenParamRightClick(_) => {
+            DispatchResult::handled()
+        }
+
+        // ── Gen modulation ─────────────────────────────────────────
+        PanelAction::GenDriverToggle(_pi) => {
+            log::debug!("Gen driver toggle (modulation not yet wired)");
+            DispatchResult::handled()
+        }
+        PanelAction::GenEnvelopeToggle(_pi) => {
+            log::debug!("Gen envelope toggle (modulation not yet wired)");
+            DispatchResult::handled()
+        }
+        PanelAction::GenDriverConfig(_pi, _cfg) => {
+            DispatchResult::handled()
+        }
+        PanelAction::GenEnvParamChanged(_pi, _param, _val) => {
+            DispatchResult::handled()
+        }
+        PanelAction::GenTrimChanged(_pi, _min, _max) => {
+            DispatchResult::handled()
+        }
+        PanelAction::GenTargetChanged(_pi, _norm) => {
             DispatchResult::handled()
         }
 
@@ -350,10 +700,12 @@ pub fn dispatch(
             DispatchResult::handled()
         }
 
-        // ── All other actions ──────────────────────────────────────
-        _ => {
-            log::debug!("Unhandled panel action: {:?}", action);
-            DispatchResult::unhandled()
+        // ── Dropdown selection (context-routed) ────────────────────
+        PanelAction::DropdownSelected(index) => {
+            // Already handled by UIRoot dropdown_to_action routing.
+            // This catches any that need engine-level dispatch.
+            log::debug!("Dropdown selected: {} (no context)", index);
+            DispatchResult::handled()
         }
     }
 }
