@@ -15,7 +15,7 @@ use manifold_core::generator::GeneratorParamState;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::renderer::StubRenderer;
 use manifold_renderer::blit::BlitPipeline;
-use manifold_renderer::compositor::{Compositor, CompositorFrame};
+use manifold_renderer::compositor::{Compositor, CompositeLayerDescriptor, CompositorFrame};
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu::GpuContext;
 use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
@@ -301,7 +301,18 @@ impl Application {
             }
         }
 
-        // 7. Composite
+        // 7. Build layer descriptors for compositor
+        let layer_descs: Vec<CompositeLayerDescriptor> = layers.iter().map(|layer| {
+            CompositeLayerDescriptor {
+                layer_index: layer.index,
+                blend_mode: layer.default_blend_mode,
+                opacity: layer.opacity,
+                is_muted: layer.is_muted,
+                is_solo: layer.is_solo,
+            }
+        }).collect();
+
+        // 8. Composite
         let compositor = match &mut self.compositor {
             Some(c) => c,
             None => return,
@@ -314,6 +325,7 @@ impl Application {
             frame_count: self.frame_count,
             compositor_dirty: tick_result.compositor_dirty,
             clips: &clip_descs,
+            layers: &layer_descs,
         };
 
         let output_view = compositor.render(&gpu.device, &gpu.queue, &mut encoder, &frame);

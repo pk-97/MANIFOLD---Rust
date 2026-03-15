@@ -29,23 +29,18 @@ struct BlendUniforms {
     invert_colors: f32,
 }
 
-/// Real compositor with ping-pong blending. Replaces ClearColorCompositor.
-pub struct LayerCompositor {
-    ping: RenderTarget,
-    pong: RenderTarget,
-    use_ping_as_source: bool,
-    blend_pipeline: wgpu::RenderPipeline,
-    blend_bind_group_layout: wgpu::BindGroupLayout,
+/// Shared GPU resources for blend operations. Extracted from the compositor
+/// so they can be borrowed independently from ping-pong buffers.
+struct BlendResources {
+    pipeline: wgpu::RenderPipeline,
+    bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     uniform_buffer: wgpu::Buffer,
 }
 
-impl LayerCompositor {
-    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+impl BlendResources {
+    fn new(device: &wgpu::Device) -> Self {
         let format = wgpu::TextureFormat::Rgba16Float;
-
-        let ping = RenderTarget::new(device, width, height, format, "Compositor Ping");
-        let pong = RenderTarget::new(device, width, height, format, "Compositor Pong");
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Compositor Blend"),
@@ -57,7 +52,6 @@ impl LayerCompositor {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Blend BGL"),
             entries: &[
-                // Uniforms
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -68,7 +62,6 @@ impl LayerCompositor {
                     },
                     count: None,
                 },
-                // Base texture (accumulator)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -79,7 +72,6 @@ impl LayerCompositor {
                     },
                     count: None,
                 },
-                // Blend texture (incoming clip)
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -90,7 +82,6 @@ impl LayerCompositor {
                     },
                     count: None,
                 },
-                // Sampler
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -106,7 +97,7 @@ impl LayerCompositor {
             immediate_size: 0,
         });
 
-        let blend_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Blend Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
@@ -149,14 +140,84 @@ impl LayerCompositor {
             mapped_at_creation: false,
         });
 
+        Self { pipeline, bind_group_layout, sampler, uniform_buffer }
+    }
+
+    /// Execute a blend pass: reads source + blend textures, writes to target.
+    fn blend_pass(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source_view: &wgpu::TextureView,
+        blend_view: &wgpu::TextureView,
+        target_view: &wgpu::TextureView,
+        uniforms: &BlendUniforms,
+    ) {
+        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Blend BG"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(blend_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Blend Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+    }
+}
+
+/// Standalone ping-pong buffer pair. Can be borrowed independently
+/// from other compositor state (avoids borrow conflicts).
+struct PingPong {
+    ping: RenderTarget,
+    pong: RenderTarget,
+    use_ping_as_source: bool,
+}
+
+impl PingPong {
+    fn new(device: &wgpu::Device, width: u32, height: u32, label_prefix: &str) -> Self {
+        let format = wgpu::TextureFormat::Rgba16Float;
         Self {
-            ping,
-            pong,
+            ping: RenderTarget::new(device, width, height, format, &format!("{label_prefix} Ping")),
+            pong: RenderTarget::new(device, width, height, format, &format!("{label_prefix} Pong")),
             use_ping_as_source: true,
-            blend_pipeline,
-            blend_bind_group_layout: bind_group_layout,
-            sampler,
-            uniform_buffer,
         }
     }
 
@@ -172,16 +233,30 @@ impl LayerCompositor {
         self.use_ping_as_source = !self.use_ping_as_source;
     }
 
-    /// Clear the source buffer to black (start of compositing pass).
-    fn clear_source(&self, encoder: &mut wgpu::CommandEncoder) {
+    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        self.ping.resize(device, width, height);
+        self.pong.resize(device, width, height);
+    }
+
+    fn width(&self) -> u32 { self.ping.width }
+    fn height(&self) -> u32 { self.ping.height }
+
+    /// Clear source buffer. `opaque` = true clears to opaque black (a=1),
+    /// false clears to transparent black (a=0).
+    fn clear_source(&self, encoder: &mut wgpu::CommandEncoder, opaque: bool) {
+        let color = if opaque {
+            wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+        } else {
+            wgpu::Color::TRANSPARENT
+        };
         let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Clear Source"),
+            label: Some("Clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: self.source_view(),
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    load: wgpu::LoadOp::Clear(color),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -191,79 +266,166 @@ impl LayerCompositor {
             multiview_mask: None,
         });
     }
+}
 
-    /// Composite clips into the output buffer.
+/// Layer-aware compositor with per-layer ping-pong blending.
+///
+/// Compositing flow:
+/// 1. Clear main buffer to opaque black
+/// 2. Group clips by layer_index (sorted descending by engine)
+/// 3. For each layer:
+///    - Single clip: blit directly into main with layer blend mode
+///    - Multi-clip: composite clips into layer buffer (Normal blend), then
+///      blit layer result into main with layer blend mode
+/// 4. Return final accumulated main buffer
+pub struct LayerCompositor {
+    /// Main accumulation ping-pong (opaque black init).
+    main: PingPong,
+    /// Shared per-layer scratch buffers (lazy, transparent black init).
+    layer_buf: Option<PingPong>,
+    /// GPU resources for blend operations (pipeline, sampler, uniforms).
+    blend: BlendResources,
+}
+
+impl LayerCompositor {
+    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+        Self {
+            main: PingPong::new(device, width, height, "Compositor"),
+            layer_buf: None,
+            blend: BlendResources::new(device),
+        }
+    }
+
+    /// Ensure lazy layer scratch buffers exist.
+    fn ensure_layer_buffers(&mut self, device: &wgpu::Device) {
+        if self.layer_buf.is_none() {
+            let w = self.main.width();
+            let h = self.main.height();
+            self.layer_buf = Some(PingPong::new(device, w, h, "Layer Scratch"));
+        }
+    }
+
+    /// Composite all clips into main buffer, grouping by layer.
     fn composite(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        clips: &[CompositeClipDescriptor],
+        frame: &CompositorFrame,
     ) {
-        // Start with clear source
-        self.clear_source(encoder);
+        let clips = frame.clips;
+        let aspect = self.main.width() as f32 / self.main.height() as f32;
 
-        let aspect = self.ping.width as f32 / self.ping.height as f32;
+        // Clear main to opaque black
+        self.main.clear_source(encoder, true);
 
-        for clip in clips {
-            let uniforms = BlendUniforms {
-                blend_mode: clip.blend_mode as u32,
-                opacity: clip.opacity,
-                translate_x: clip.translate_x,
-                translate_y: clip.translate_y,
-                scale_val: clip.scale,
-                rotation: clip.rotation,
-                aspect_ratio: aspect,
-                invert_colors: if clip.invert_colors { 1.0 } else { 0.0 },
-            };
-            queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        // Check for any solo layer
+        let any_solo = frame.layers.iter().any(|l| l.is_solo);
 
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Blend BG"),
-                layout: &self.blend_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.uniform_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(self.source_view()),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(clip.texture_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-            });
+        // Group clips by layer_index. Clips are sorted by layer_index descending
+        // (higher index = bottom of timeline = rendered first as base).
+        let mut i = 0;
+        while i < clips.len() {
+            let layer_idx = clips[i].layer_index;
 
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Blend Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: self.target_view(),
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                pass.set_pipeline(&self.blend_pipeline);
-                pass.set_bind_group(0, &bind_group, &[]);
-                pass.draw(0..3, 0..1);
+            // Find layer descriptor
+            let layer_desc = frame.layers.iter().find(|l| l.layer_index == layer_idx);
+
+            // Check mute/solo
+            if let Some(ld) = layer_desc {
+                if ld.is_muted || (any_solo && !ld.is_solo) {
+                    while i < clips.len() && clips[i].layer_index == layer_idx {
+                        i += 1;
+                    }
+                    continue;
+                }
             }
 
-            self.swap();
+            // Count clips in this layer group
+            let group_start = i;
+            while i < clips.len() && clips[i].layer_index == layer_idx {
+                i += 1;
+            }
+            let group = &clips[group_start..i];
+
+            // Get layer blend mode and opacity
+            let layer_blend = layer_desc.map_or(BlendMode::Normal, |l| l.blend_mode);
+            let layer_opacity = layer_desc.map_or(1.0, |l| l.opacity);
+
+            if group.len() == 1 {
+                // Single clip: blit directly into main with layer blend mode
+                let clip = &group[0];
+                let uniforms = BlendUniforms {
+                    blend_mode: layer_blend as u32,
+                    opacity: layer_opacity * clip.opacity,
+                    translate_x: clip.translate_x,
+                    translate_y: clip.translate_y,
+                    scale_val: clip.scale,
+                    rotation: clip.rotation,
+                    aspect_ratio: aspect,
+                    invert_colors: if clip.invert_colors { 1.0 } else { 0.0 },
+                };
+
+                self.blend.blend_pass(
+                    device, queue, encoder,
+                    self.main.source_view(),
+                    clip.texture_view,
+                    self.main.target_view(),
+                    &uniforms,
+                );
+                self.main.swap();
+            } else {
+                // Multi-clip: composite into layer buffer, then into main
+                self.ensure_layer_buffers(device);
+                let layer_buf = self.layer_buf.as_mut().unwrap();
+
+                // Clear layer buffer to transparent
+                layer_buf.clear_source(encoder, false);
+
+                // Composite each clip into layer buffer with Normal blend
+                for clip in group {
+                    let uniforms = BlendUniforms {
+                        blend_mode: BlendMode::Normal as u32,
+                        opacity: clip.opacity,
+                        translate_x: clip.translate_x,
+                        translate_y: clip.translate_y,
+                        scale_val: clip.scale,
+                        rotation: clip.rotation,
+                        aspect_ratio: aspect,
+                        invert_colors: if clip.invert_colors { 1.0 } else { 0.0 },
+                    };
+
+                    self.blend.blend_pass(
+                        device, queue, encoder,
+                        layer_buf.source_view(),
+                        clip.texture_view,
+                        layer_buf.target_view(),
+                        &uniforms,
+                    );
+                    layer_buf.swap();
+                }
+
+                // Blit layer result into main with layer blend mode (no transforms)
+                let uniforms = BlendUniforms {
+                    blend_mode: layer_blend as u32,
+                    opacity: layer_opacity,
+                    translate_x: 0.0,
+                    translate_y: 0.0,
+                    scale_val: 1.0,
+                    rotation: 0.0,
+                    aspect_ratio: aspect,
+                    invert_colors: 0.0,
+                };
+
+                self.blend.blend_pass(
+                    device, queue, encoder,
+                    self.main.source_view(),
+                    layer_buf.source_view(),
+                    self.main.target_view(),
+                    &uniforms,
+                );
+                self.main.swap();
+            }
         }
     }
 }
@@ -277,21 +439,22 @@ impl Compositor for LayerCompositor {
         frame: &CompositorFrame,
     ) -> &wgpu::TextureView {
         if frame.clips.is_empty() {
-            // No clips — clear to black
-            self.clear_source(encoder);
-            return self.source_view();
+            self.main.clear_source(encoder, true);
+            return self.main.source_view();
         }
 
-        self.composite(device, queue, encoder, frame.clips);
-        self.source_view()
+        self.composite(device, queue, encoder, frame);
+        self.main.source_view()
     }
 
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        self.ping.resize(device, width, height);
-        self.pong.resize(device, width, height);
+        self.main.resize(device, width, height);
+        if let Some(lb) = &mut self.layer_buf {
+            lb.resize(device, width, height);
+        }
     }
 
     fn dimensions(&self) -> (u32, u32) {
-        (self.ping.width, self.ping.height)
+        (self.main.width(), self.main.height())
     }
 }

@@ -1,6 +1,16 @@
 use crate::layer_compositor::CompositeClipDescriptor;
 use crate::render_target::RenderTarget;
 use manifold_core::color::Color;
+use manifold_core::BlendMode;
+
+/// Per-layer metadata passed to the compositor.
+pub struct CompositeLayerDescriptor {
+    pub layer_index: i32,
+    pub blend_mode: BlendMode,
+    pub opacity: f32,
+    pub is_muted: bool,
+    pub is_solo: bool,
+}
 
 /// Frame context passed to the compositor each tick.
 pub struct CompositorFrame<'a> {
@@ -10,6 +20,7 @@ pub struct CompositorFrame<'a> {
     pub frame_count: u64,
     pub compositor_dirty: bool,
     pub clips: &'a [CompositeClipDescriptor<'a>],
+    pub layers: &'a [CompositeLayerDescriptor],
 }
 
 /// Trait for compositing layers into a final output.
