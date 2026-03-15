@@ -11,9 +11,10 @@ pub mod inspector;
 pub mod viewport;
 pub mod dropdown;
 
-use crate::input::UIEvent;
+use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
 use crate::tree::UITree;
+pub use viewport::HitRegion;
 
 /// Actions for driver configuration sub-panels.
 #[derive(Debug, Clone)]
@@ -162,6 +163,19 @@ pub enum PanelAction {
     // Timeline
     Seek(f32),
     SetInsertCursor(f32),
+
+    // Viewport clip interaction
+    ClipClicked(String, Modifiers),                // clip_id, modifiers (for Ctrl detection)
+    ClipDoubleClicked(String),                     // clip_id
+    ClipDragStarted(String, HitRegion, f32),       // clip_id, region, anchor_beat
+    ClipDragMoved(f32, Option<usize>),             // current_beat, target_layer
+    ClipDragEnded,
+    RegionDragStarted(f32, usize),                 // anchor_beat, anchor_layer
+    RegionDragMoved(f32, usize),                   // current_beat, current_layer
+    RegionDragEnded,
+    TrackClicked(f32, usize, Modifiers),           // beat, layer, modifiers
+    TrackDoubleClicked(f32, usize),                // beat, layer (create clip)
+    ViewportHoverChanged(Option<String>),           // clip_id or None
 
     // Layer management
     AddLayerClicked,

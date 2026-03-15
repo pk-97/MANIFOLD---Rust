@@ -488,6 +488,7 @@ mod tests {
         let event = UIEvent::Click {
             node_id: copy_id,
             pos: Vec2::new(110.0, 230.0),
+            modifiers: crate::input::Modifiers::default(),
         };
         let result = dd.handle_event(&event, &mut tree);
         assert_eq!(result, Some(DropdownAction::Selected(1)));
@@ -507,6 +508,7 @@ mod tests {
         let event = UIEvent::Click {
             node_id: 999,
             pos: Vec2::new(500.0, 500.0),
+            modifiers: crate::input::Modifiers::default(),
         };
         let result = dd.handle_event(&event, &mut tree);
         assert_eq!(result, Some(DropdownAction::Dismissed));
@@ -574,6 +576,7 @@ mod tests {
         let event = UIEvent::Click {
             node_id: disabled_id,
             pos: Vec2::new(110.0, 240.0),
+            modifiers: crate::input::Modifiers::default(),
         };
         let result = dd.handle_event(&event, &mut tree);
         // Clicking disabled item dismisses but doesn't select.
@@ -632,6 +635,7 @@ mod tests {
         let event = UIEvent::Click {
             node_id: 0,
             pos: Vec2::new(10.0, 10.0),
+            modifiers: crate::input::Modifiers::default(),
         };
         let result = dd.handle_event(&event, &mut tree);
         assert_eq!(result, None);

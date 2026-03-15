@@ -1225,6 +1225,7 @@ mod tests {
         let event = UIEvent::DoubleClick {
             node_id: panel.rows[0].name as u32,
             pos: Vec2::ZERO,
+            modifiers: crate::input::Modifiers::default(),
         };
         let a = panel.handle_event(&event, &tree);
         assert_eq!(a.len(), 1);

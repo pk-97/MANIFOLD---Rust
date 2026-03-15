@@ -26,6 +26,7 @@ use manifold_ui::panels::viewport::TrackInfo;
 use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
 use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo};
 
+use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
 
 /// Result of dispatching a panel action.
@@ -48,6 +49,7 @@ pub fn dispatch(
     engine: &mut PlaybackEngine,
     editing: &mut EditingService,
     ui: &mut UIRoot,
+    selection: &mut SelectionState,
     active_layer: &mut Option<usize>,
     drag_snapshot: &mut Option<f32>,
 ) -> DispatchResult {
@@ -94,7 +96,81 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::SetInsertCursor(_beat) => {
+        PanelAction::SetInsertCursor(beat) => {
+            // Legacy path — when no layer context available
+            selection.insert_cursor_beat = Some(*beat);
+            DispatchResult::handled()
+        }
+
+        // ── Viewport clip interaction ─────────────────────────────
+        PanelAction::ClipClicked(clip_id, modifiers) => {
+            if modifiers.command || modifiers.ctrl {
+                selection.toggle(clip_id.clone());
+            } else {
+                selection.select_single(clip_id.clone());
+            }
+            // Find the clip's layer to set active layer
+            if let Some(project) = engine.project() {
+                for (i, layer) in project.timeline.layers.iter().enumerate() {
+                    if layer.clips.iter().any(|c| c.id == *clip_id) {
+                        *active_layer = Some(i);
+                        break;
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::ClipDoubleClicked(_clip_id) => {
+            // Future: open clip properties or enter clip editing mode
+            DispatchResult::handled()
+        }
+        PanelAction::TrackClicked(beat, layer, _modifiers) => {
+            selection.clear();
+            selection.set_insert_cursor(*beat, *layer);
+            *active_layer = Some(*layer);
+            DispatchResult::handled()
+        }
+        PanelAction::TrackDoubleClicked(beat, layer) => {
+            let snapped = ui.viewport.snap_to_grid(*beat);
+            if let Some(project) = engine.project_mut() {
+                let cmd = EditingService::create_clip_at_position(project, snapped, *layer, 4.0);
+                editing.execute(cmd, project);
+                // Select the newly created clip
+                if let Some(new_layer) = project.timeline.layers.get(*layer) {
+                    if let Some(new_clip) = new_layer.clips.last() {
+                        selection.select_single(new_clip.id.clone());
+                    }
+                }
+            }
+            *active_layer = Some(*layer);
+            DispatchResult::structural()
+        }
+        PanelAction::ClipDragStarted(_clip_id, _region, _anchor_beat) => {
+            // Phase 2 will implement full drag logic
+            DispatchResult::handled()
+        }
+        PanelAction::ClipDragMoved(_beat, _layer) => {
+            // Phase 2 will implement full drag logic
+            DispatchResult::handled()
+        }
+        PanelAction::ClipDragEnded => {
+            // Phase 2 will implement full drag logic
+            DispatchResult::handled()
+        }
+        PanelAction::RegionDragStarted(_beat, _layer) => {
+            // Phase 2 will implement region selection
+            DispatchResult::handled()
+        }
+        PanelAction::RegionDragMoved(_beat, _layer) => {
+            // Phase 2 will implement region selection
+            DispatchResult::handled()
+        }
+        PanelAction::RegionDragEnded => {
+            // Phase 2 will implement region selection
+            DispatchResult::handled()
+        }
+        PanelAction::ViewportHoverChanged(_clip_id) => {
+            // Hover state is already tracked on viewport panel
             DispatchResult::handled()
         }
 
@@ -800,7 +876,7 @@ const PLAY_GREEN: Color32 = Color32::new(56, 115, 66, 255);
 const PLAY_ACTIVE: Color32 = Color32::new(64, 184, 82, 255);
 
 /// Push engine state into UI panels (called once per frame).
-pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option<usize>) {
+pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option<usize>, selection: &SelectionState) {
     let tree = &mut ui.tree;
 
     // Transport state
@@ -842,6 +918,14 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
     // Playhead + playing state
     ui.viewport.set_playhead(engine.current_beat());
     ui.viewport.set_playing(engine.is_playing());
+
+    // Selection → viewport
+    ui.viewport.set_selected_clip_ids(
+        selection.selected_clip_ids.iter().cloned().collect()
+    );
+    if let Some(beat) = selection.insert_cursor_beat {
+        ui.viewport.set_insert_cursor(beat);
+    }
 
     // Layer mute/solo state sync
     if let Some(project) = engine.project() {
@@ -906,6 +990,43 @@ pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine) {
             }
         }).collect();
         ui.viewport.set_tracks(tracks);
+
+        // Clip data → TimelineViewportPanel
+        let mut viewport_clips = Vec::new();
+        for (i, layer) in project.timeline.layers.iter().enumerate() {
+            for clip in &layer.clips {
+                let is_gen = layer.layer_type == LayerType::Generator;
+                let name = if is_gen {
+                    layer.gen_params.as_ref()
+                        .map(|gp| gp.generator_type.display_name().to_string())
+                        .unwrap_or_else(|| "Gen".to_string())
+                } else if !clip.video_clip_id.is_empty() {
+                    clip.video_clip_id.clone()
+                } else {
+                    "Clip".to_string()
+                };
+                use manifold_ui::panels::viewport::ViewportClip;
+                viewport_clips.push(ViewportClip {
+                    clip_id: clip.id.clone(),
+                    layer_index: i,
+                    start_beat: clip.start_beat,
+                    duration_beats: clip.duration_beats,
+                    name,
+                    color: if is_gen {
+                        manifold_ui::color::CLIP_GEN_NORMAL
+                    } else {
+                        manifold_ui::color::CLIP_NORMAL
+                    },
+                    is_muted: clip.is_muted,
+                    is_locked: false,
+                    is_generator: is_gen,
+                });
+            }
+        }
+        ui.viewport.set_clips(viewport_clips);
+
+        // Beats per bar
+        ui.viewport.set_beats_per_bar(project.settings.time_signature_numerator as u32);
     }
 
     // Rebuild UI tree with the new data

@@ -697,7 +697,7 @@ impl Panel for InspectorCompositePanel {
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
         match event {
-            UIEvent::Click { node_id, pos } => {
+            UIEvent::Click { node_id, pos, .. } => {
                 if !self.viewport_rect.contains(*pos) { return Vec::new(); }
                 self.route_click(*node_id)
             }

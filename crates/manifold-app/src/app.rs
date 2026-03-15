@@ -30,6 +30,63 @@ use crate::frame_timer::FrameTimer;
 use crate::ui_root::UIRoot;
 use crate::window_registry::{WindowRegistry, WindowRole, WindowState};
 
+/// Selection state for the timeline viewport.
+pub struct SelectionState {
+    pub selected_clip_ids: HashSet<String>,
+    pub primary_clip_id: Option<String>,
+    pub insert_cursor_beat: Option<f32>,
+    pub insert_cursor_layer: Option<usize>,
+    pub version: u64,
+}
+
+impl SelectionState {
+    pub fn new() -> Self {
+        Self {
+            selected_clip_ids: HashSet::new(),
+            primary_clip_id: None,
+            insert_cursor_beat: None,
+            insert_cursor_layer: None,
+            version: 0,
+        }
+    }
+
+    /// Clear all selection state, bump version.
+    pub fn clear(&mut self) {
+        self.selected_clip_ids.clear();
+        self.primary_clip_id = None;
+        self.version += 1;
+    }
+
+    /// Select a single clip (replaces existing selection).
+    pub fn select_single(&mut self, clip_id: String) {
+        self.selected_clip_ids.clear();
+        self.selected_clip_ids.insert(clip_id.clone());
+        self.primary_clip_id = Some(clip_id);
+        self.version += 1;
+    }
+
+    /// Toggle a clip in the selection (Ctrl+Click).
+    pub fn toggle(&mut self, clip_id: String) {
+        if self.selected_clip_ids.contains(&clip_id) {
+            self.selected_clip_ids.remove(&clip_id);
+            if self.primary_clip_id.as_ref() == Some(&clip_id) {
+                self.primary_clip_id = self.selected_clip_ids.iter().next().cloned();
+            }
+        } else {
+            self.selected_clip_ids.insert(clip_id.clone());
+            self.primary_clip_id = Some(clip_id);
+        }
+        self.version += 1;
+    }
+
+    /// Set insert cursor position.
+    pub fn set_insert_cursor(&mut self, beat: f32, layer: usize) {
+        self.insert_cursor_beat = Some(beat);
+        self.insert_cursor_layer = Some(layer);
+        self.version += 1;
+    }
+}
+
 pub struct Application {
     // GPU
     gpu: Option<GpuContext>,
@@ -43,6 +100,7 @@ pub struct Application {
     editing_service: EditingService,
 
     // Selection state
+    selection: SelectionState,
     active_layer_index: Option<usize>,
     drag_snapshot: Option<f32>,
 
@@ -93,6 +151,7 @@ impl Application {
             primary_window_id: None,
             engine,
             editing_service: EditingService::new(),
+            selection: SelectionState::new(),
             active_layer_index: None,
             drag_snapshot: None,
             generator_renderer: None,
@@ -222,6 +281,7 @@ impl Application {
                 &mut self.engine,
                 &mut self.editing_service,
                 &mut self.ui_root,
+                &mut self.selection,
                 &mut self.active_layer_index,
                 &mut self.drag_snapshot,
             );
@@ -237,7 +297,7 @@ impl Application {
         }
 
         // 2. Push engine state to UI panels
-        crate::ui_bridge::push_state(&mut self.ui_root, &self.engine, self.active_layer_index);
+        crate::ui_bridge::push_state(&mut self.ui_root, &self.engine, self.active_layer_index, &self.selection);
         self.ui_root.update();
 
         // 3. Tick the engine
@@ -820,6 +880,7 @@ impl ApplicationHandler for Application {
                     alt: state.alt_key(),
                     command: state.super_key(),
                 };
+                self.ui_root.input.set_modifiers(self.modifiers);
             }
 
             // ── Keyboard input ─────────────────────────────────────

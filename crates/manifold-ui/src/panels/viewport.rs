@@ -1,5 +1,5 @@
 use crate::color;
-use crate::input::UIEvent;
+use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::tree::UITree;
@@ -34,7 +34,7 @@ const MAX_VISIBLE_CLIPS: usize = 500;
 /// A clip to be rendered in the timeline viewport.
 #[derive(Debug, Clone)]
 pub struct ViewportClip {
-    pub clip_id: u32,
+    pub clip_id: String,
     pub layer_index: usize,
     pub start_beat: f32,
     pub duration_beats: f32,
@@ -43,6 +43,22 @@ pub struct ViewportClip {
     pub is_muted: bool,
     pub is_locked: bool,
     pub is_generator: bool,
+}
+
+/// Which part of a clip was hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HitRegion {
+    Body,
+    TrimLeft,
+    TrimRight,
+}
+
+/// Result of a clip hit-test in the viewport.
+#[derive(Debug, Clone)]
+pub struct ClipHitResult {
+    pub clip_id: String,
+    pub layer_index: usize,
+    pub region: HitRegion,
 }
 
 /// Region-based selection in the timeline.
@@ -96,8 +112,8 @@ pub struct TimelineViewportPanel {
     insert_cursor_beat: f32,
     is_playing: bool,
     selection_region: Option<SelectionRegion>,
-    selected_clip_ids: Vec<u32>,
-    hovered_clip_id: Option<u32>,
+    selected_clip_ids: Vec<String>,
+    hovered_clip_id: Option<String>,
 
     // Viewport rects
     viewport_rect: Rect,
@@ -125,6 +141,16 @@ pub struct TimelineViewportPanel {
     // Node range
     first_node: usize,
     node_count: usize,
+
+    // Drag interaction state
+    drag_mode: ViewportDragMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewportDragMode {
+    None,
+    ClipDrag,
+    RegionDrag,
 }
 
 impl TimelineViewportPanel {
@@ -163,6 +189,7 @@ impl TimelineViewportPanel {
             clip_border_ids: Vec::new(),
             first_node: 0,
             node_count: 0,
+            drag_mode: ViewportDragMode::None,
         }
     }
 
@@ -212,11 +239,11 @@ impl TimelineViewportPanel {
         self.selection_region = region;
     }
 
-    pub fn set_selected_clip_ids(&mut self, ids: Vec<u32>) {
+    pub fn set_selected_clip_ids(&mut self, ids: Vec<String>) {
         self.selected_clip_ids = ids;
     }
 
-    pub fn set_hovered_clip_id(&mut self, id: Option<u32>) {
+    pub fn set_hovered_clip_id(&mut self, id: Option<String>) {
         self.hovered_clip_id = id;
     }
 
@@ -266,6 +293,88 @@ impl TimelineViewportPanel {
         let min_beat = self.scroll_x_beats;
         let max_beat = min_beat + self.tracks_rect.width / self.pixels_per_beat;
         (min_beat, max_beat)
+    }
+
+    // ── Hit-testing ───────────────────────────────────────────────
+
+    /// Hit-test a screen position against all clips.
+    /// Returns the topmost clip hit and which region was hit (body, trim left, trim right).
+    pub fn hit_test_clip(&self, pos: Vec2) -> Option<ClipHitResult> {
+        if !self.tracks_rect.contains(pos) {
+            return None;
+        }
+
+        let layer_index = self.layer_at_y(pos.y)?;
+        let beat = self.pixel_to_beat(pos.x);
+
+        // Iterate clips on this layer in reverse order (topmost/last wins)
+        for clip in self.clips.iter().rev() {
+            if clip.layer_index != layer_index {
+                continue;
+            }
+
+            let clip_end = clip.start_beat + clip.duration_beats;
+            if beat < clip.start_beat || beat >= clip_end {
+                continue;
+            }
+
+            let clip_width_px = clip.duration_beats * self.pixels_per_beat;
+            let local_px = (beat - clip.start_beat) * self.pixels_per_beat;
+
+            let region = if clip_width_px > 24.0 && local_px < 8.0 {
+                HitRegion::TrimLeft
+            } else if clip_width_px > 24.0 && local_px > clip_width_px - 8.0 {
+                HitRegion::TrimRight
+            } else {
+                HitRegion::Body
+            };
+
+            return Some(ClipHitResult {
+                clip_id: clip.clip_id.clone(),
+                layer_index,
+                region,
+            });
+        }
+
+        None
+    }
+
+    /// Determine which layer a Y coordinate falls in.
+    pub fn layer_at_y(&self, y: f32) -> Option<usize> {
+        if y < self.tracks_rect.y || y > self.tracks_rect.y_max() {
+            return None;
+        }
+
+        for (i, &offset) in self.track_y_offsets.iter().enumerate() {
+            let track_y = offset + self.tracks_rect.y - self.scroll_y_px;
+            let track_h = self.tracks.get(i).map(|t| t.height).unwrap_or(0.0);
+            if y >= track_y && y < track_y + track_h {
+                return Some(i);
+            }
+        }
+
+        None
+    }
+
+    /// Snap a beat position to the current grid subdivision.
+    pub fn snap_to_grid(&self, beat: f32) -> f32 {
+        let step = match self.grid_subdivision() {
+            GridSubdivision::Bar => self.beats_per_bar as f32,
+            GridSubdivision::Beat => 1.0,
+            GridSubdivision::Eighth => 0.5,
+            GridSubdivision::Sixteenth => 0.25,
+        };
+        (beat / step).round() * step
+    }
+
+    /// Current grid step size in beats.
+    pub fn grid_step(&self) -> f32 {
+        match self.grid_subdivision() {
+            GridSubdivision::Bar => self.beats_per_bar as f32,
+            GridSubdivision::Beat => 1.0,
+            GridSubdivision::Eighth => 0.5,
+            GridSubdivision::Sixteenth => 0.25,
+        }
     }
 
     // ── Track layout ──────────────────────────────────────────────
@@ -436,14 +545,83 @@ impl Panel for TimelineViewportPanel {
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
         match event {
-            UIEvent::Click { pos, .. } => {
-                if self.tracks_rect.contains(*pos) {
-                    let beat = self.pixel_to_beat(pos.x);
-                    return vec![PanelAction::SetInsertCursor(beat)];
-                }
+            UIEvent::Click { pos, modifiers, .. } => {
                 if self.ruler_rect.contains(*pos) {
                     let beat = self.pixel_to_beat(pos.x);
                     return vec![PanelAction::Seek(beat)];
+                }
+                if self.tracks_rect.contains(*pos) {
+                    if let Some(hit) = self.hit_test_clip(*pos) {
+                        return vec![PanelAction::ClipClicked(hit.clip_id, *modifiers)];
+                    } else {
+                        let beat = self.pixel_to_beat(pos.x);
+                        if let Some(layer) = self.layer_at_y(pos.y) {
+                            return vec![PanelAction::TrackClicked(beat, layer, *modifiers)];
+                        }
+                        return vec![PanelAction::SetInsertCursor(beat)];
+                    }
+                }
+            }
+            UIEvent::DoubleClick { pos, .. } => {
+                if self.tracks_rect.contains(*pos) {
+                    if let Some(hit) = self.hit_test_clip(*pos) {
+                        return vec![PanelAction::ClipDoubleClicked(hit.clip_id)];
+                    } else {
+                        let beat = self.pixel_to_beat(pos.x);
+                        if let Some(layer) = self.layer_at_y(pos.y) {
+                            return vec![PanelAction::TrackDoubleClicked(beat, layer)];
+                        }
+                    }
+                }
+            }
+            UIEvent::DragBegin { pos, .. } => {
+                if self.tracks_rect.contains(*pos) {
+                    let beat = self.pixel_to_beat(pos.x);
+                    if let Some(hit) = self.hit_test_clip(*pos) {
+                        self.drag_mode = ViewportDragMode::ClipDrag;
+                        return vec![PanelAction::ClipDragStarted(hit.clip_id, hit.region, beat)];
+                    } else if let Some(layer) = self.layer_at_y(pos.y) {
+                        self.drag_mode = ViewportDragMode::RegionDrag;
+                        return vec![PanelAction::RegionDragStarted(beat, layer)];
+                    }
+                }
+            }
+            UIEvent::Drag { pos, .. } => {
+                let beat = self.pixel_to_beat(pos.x);
+                let layer = self.layer_at_y(pos.y);
+                match self.drag_mode {
+                    ViewportDragMode::ClipDrag => {
+                        return vec![PanelAction::ClipDragMoved(beat, layer)];
+                    }
+                    ViewportDragMode::RegionDrag => {
+                        if let Some(layer) = layer {
+                            return vec![PanelAction::RegionDragMoved(beat, layer)];
+                        }
+                    }
+                    ViewportDragMode::None => {}
+                }
+            }
+            UIEvent::DragEnd { .. } => {
+                let was_dragging = self.drag_mode;
+                self.drag_mode = ViewportDragMode::None;
+                match was_dragging {
+                    ViewportDragMode::ClipDrag => {
+                        return vec![PanelAction::ClipDragEnded];
+                    }
+                    ViewportDragMode::RegionDrag => {
+                        return vec![PanelAction::RegionDragEnded];
+                    }
+                    ViewportDragMode::None => {}
+                }
+            }
+            UIEvent::HoverEnter { pos, .. } | UIEvent::PointerDown { pos, .. } => {
+                if self.tracks_rect.contains(*pos) {
+                    let hit = self.hit_test_clip(*pos);
+                    let new_id = hit.map(|h| h.clip_id);
+                    if new_id != self.hovered_clip_id {
+                        self.hovered_clip_id = new_id.clone();
+                        return vec![PanelAction::ViewportHoverChanged(new_id)];
+                    }
                 }
             }
             _ => {}
@@ -674,7 +852,7 @@ impl TimelineViewportPanel {
 
             // Determine clip color
             let is_selected = self.selected_clip_ids.contains(&clip.clip_id);
-            let is_hovered = self.hovered_clip_id == Some(clip.clip_id);
+            let is_hovered = self.hovered_clip_id.as_ref() == Some(&clip.clip_id);
             let clip_color = get_clip_color(clip, is_selected, is_hovered);
 
             // Clip background
@@ -872,7 +1050,7 @@ mod tests {
     fn test_clips() -> Vec<ViewportClip> {
         vec![
             ViewportClip {
-                clip_id: 1,
+                clip_id: "clip_001".into(),
                 layer_index: 0,
                 start_beat: 0.0,
                 duration_beats: 4.0,
@@ -883,7 +1061,7 @@ mod tests {
                 is_generator: false,
             },
             ViewportClip {
-                clip_id: 2,
+                clip_id: "clip_002".into(),
                 layer_index: 1,
                 start_beat: 4.0,
                 duration_beats: 8.0,
@@ -987,7 +1165,7 @@ mod tests {
             panel.ruler_rect.y + 5.0,
         );
         let actions = panel.handle_event(
-            &UIEvent::Click { node_id: 0, pos: ruler_pos },
+            &UIEvent::Click { node_id: 0, pos: ruler_pos, modifiers: Modifiers::default() },
             &tree,
         );
         assert_eq!(actions.len(), 1);
@@ -995,24 +1173,24 @@ mod tests {
     }
 
     #[test]
-    fn click_tracks_sets_cursor() {
+    fn click_tracks_emits_track_clicked() {
         let mut tree = UITree::new();
         let mut panel = TimelineViewportPanel::new();
         let layout = test_layout();
         panel.set_tracks(test_tracks());
         panel.build(&mut tree, &layout);
 
-        // Click in tracks area
+        // Click in tracks area (no clips, so should be TrackClicked)
         let tracks_pos = Vec2::new(
             panel.tracks_rect.x + 100.0,
             panel.tracks_rect.y + 50.0,
         );
         let actions = panel.handle_event(
-            &UIEvent::Click { node_id: 0, pos: tracks_pos },
+            &UIEvent::Click { node_id: 0, pos: tracks_pos, modifiers: Modifiers::default() },
             &tree,
         );
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::SetInsertCursor(_)));
+        assert!(matches!(actions[0], PanelAction::TrackClicked(_, _, _)));
     }
 
     #[test]
@@ -1042,7 +1220,7 @@ mod tests {
         // Put clips far off-screen
         panel.set_clips(vec![
             ViewportClip {
-                clip_id: 99,
+                clip_id: "clip_099".into(),
                 layer_index: 0,
                 start_beat: 1000.0,
                 duration_beats: 4.0,
@@ -1079,7 +1257,7 @@ mod tests {
     #[test]
     fn clip_color_states() {
         let clip = ViewportClip {
-            clip_id: 1, layer_index: 0, start_beat: 0.0, duration_beats: 1.0,
+            clip_id: "test".into(), layer_index: 0, start_beat: 0.0, duration_beats: 1.0,
             name: "Test".into(), color: color::CLIP_NORMAL,
             is_muted: false, is_locked: false, is_generator: false,
         };
