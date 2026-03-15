@@ -1,6 +1,4 @@
 use crate::layer_compositor::CompositeClipDescriptor;
-use crate::render_target::RenderTarget;
-use manifold_core::color::Color;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::BlendMode;
 
@@ -47,72 +45,3 @@ pub trait Compositor {
     fn dimensions(&self) -> (u32, u32);
 }
 
-/// Phase 3 stub: clears to a color that cycles based on beat position.
-/// Kept for testing/fallback.
-pub struct ClearColorCompositor {
-    ping: RenderTarget,
-    pong: RenderTarget,
-    use_ping: bool,
-}
-
-impl ClearColorCompositor {
-    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
-        let format = wgpu::TextureFormat::Rgba16Float;
-        Self {
-            ping: RenderTarget::new(device, width, height, format, "Compositor Ping"),
-            pong: RenderTarget::new(device, width, height, format, "Compositor Pong"),
-            use_ping: true,
-        }
-    }
-}
-
-impl Compositor for ClearColorCompositor {
-    fn render(
-        &mut self,
-        _device: &wgpu::Device,
-        _queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        frame: &CompositorFrame,
-    ) -> &wgpu::TextureView {
-        let target = if self.use_ping { &self.ping } else { &self.pong };
-
-        // Cycle hue based on beat position — proves engine is ticking
-        let hue = (frame.beat * 0.05) % 1.0;
-        let color = Color::hsv_to_rgb(hue, 0.7, 0.9);
-
-        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("ClearColor Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &target.view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: color.r as f64,
-                        g: color.g as f64,
-                        b: color.b as f64,
-                        a: 1.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-
-        self.use_ping = !self.use_ping;
-
-        if !self.use_ping { &self.ping.view } else { &self.pong.view }
-    }
-
-    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        self.ping.resize(device, width, height);
-        self.pong.resize(device, width, height);
-    }
-
-    fn dimensions(&self) -> (u32, u32) {
-        (self.ping.width, self.ping.height)
-    }
-}

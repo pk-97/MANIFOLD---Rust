@@ -12,4 +12,5 @@ pub mod effect;
 pub mod effect_registry;
 pub mod effect_chain;
 pub mod effects;
+pub mod wet_dry_lerp;
 pub mod ui_renderer;
