@@ -43,6 +43,11 @@ pub struct UIRoot {
 
     /// Context for the currently-open dropdown (set before open, read on selection).
     dropdown_context: Option<DropdownContext>,
+
+    // Inspector resize state
+    pub inspector_resize_dragging: bool,
+    inspector_drag_start_x: f32,
+    inspector_drag_start_width: f32,
 }
 
 impl UIRoot {
@@ -63,6 +68,9 @@ impl UIRoot {
             screen_height: 720.0,
             time_accumulator: 0.0,
             dropdown_context: None,
+            inspector_resize_dragging: false,
+            inspector_drag_start_x: 0.0,
+            inspector_drag_start_width: 0.0,
         }
     }
 
@@ -274,6 +282,46 @@ impl UIRoot {
                 Some(PanelAction::SetGenType(layer_idx, index))
             }
         }
+    }
+
+    // ── Inspector resize ──────────────────────────────────────────
+
+    const RESIZE_EDGE_PX: f32 = 4.0;
+    const INSPECTOR_MIN_W: f32 = 200.0;
+    const INSPECTOR_MAX_W: f32 = 500.0;
+
+    /// Returns true if pos is near the inspector right edge (resize handle).
+    pub fn is_near_inspector_edge(&self, pos: Vec2) -> bool {
+        let edge_x = self.layout.content_left();
+        (pos.x - edge_x).abs() < Self::RESIZE_EDGE_PX
+            && pos.y >= self.layout.inspector().y
+    }
+
+    /// Begin an inspector resize drag.
+    pub fn begin_inspector_resize(&mut self, x: f32) {
+        self.inspector_resize_dragging = true;
+        self.inspector_drag_start_x = x;
+        self.inspector_drag_start_width = self.layout.inspector_width;
+    }
+
+    /// Update inspector width during resize drag. Returns true if width changed.
+    pub fn update_inspector_resize(&mut self, x: f32) -> bool {
+        if !self.inspector_resize_dragging { return false; }
+        let delta = x - self.inspector_drag_start_x;
+        let new_width = (self.inspector_drag_start_width + delta)
+            .clamp(Self::INSPECTOR_MIN_W, Self::INSPECTOR_MAX_W);
+        if (new_width - self.layout.inspector_width).abs() > 1.0 {
+            self.layout.inspector_width = new_width;
+            self.build();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// End inspector resize drag.
+    pub fn end_inspector_resize(&mut self) {
+        self.inspector_resize_dragging = false;
     }
 
     /// Per-frame update — push state changes to panels.

@@ -892,11 +892,17 @@ impl ApplicationHandler for Application {
                         position.x as f32 / scale as f32,
                         position.y as f32 / scale as f32,
                     );
-                    self.ui_root.pointer_event(
-                        self.cursor_pos,
-                        PointerAction::Move,
-                        self.time_since_start,
-                    );
+
+                    // Inspector resize drag takes priority
+                    if self.ui_root.inspector_resize_dragging {
+                        self.ui_root.update_inspector_resize(self.cursor_pos.x);
+                    } else {
+                        self.ui_root.pointer_event(
+                            self.cursor_pos,
+                            PointerAction::Move,
+                            self.time_since_start,
+                        );
+                    }
                 }
             }
 
@@ -907,19 +913,28 @@ impl ApplicationHandler for Application {
                             match state {
                                 ElementState::Pressed => {
                                     self.mouse_pressed = true;
-                                    self.ui_root.pointer_event(
-                                        self.cursor_pos,
-                                        PointerAction::Down,
-                                        self.time_since_start,
-                                    );
+                                    // Check if clicking on inspector resize edge
+                                    if self.ui_root.is_near_inspector_edge(self.cursor_pos) {
+                                        self.ui_root.begin_inspector_resize(self.cursor_pos.x);
+                                    } else {
+                                        self.ui_root.pointer_event(
+                                            self.cursor_pos,
+                                            PointerAction::Down,
+                                            self.time_since_start,
+                                        );
+                                    }
                                 }
                                 ElementState::Released => {
                                     self.mouse_pressed = false;
-                                    self.ui_root.pointer_event(
-                                        self.cursor_pos,
-                                        PointerAction::Up,
-                                        self.time_since_start,
-                                    );
+                                    if self.ui_root.inspector_resize_dragging {
+                                        self.ui_root.end_inspector_resize();
+                                    } else {
+                                        self.ui_root.pointer_event(
+                                            self.cursor_pos,
+                                            PointerAction::Up,
+                                            self.time_since_start,
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -936,7 +951,7 @@ impl ApplicationHandler for Application {
             // ── Mouse wheel (scroll / zoom) ──────────────────────────
             WindowEvent::MouseWheel { delta, .. } => {
                 if is_primary {
-                    let (dx, dy) = match delta {
+                    let (_dx, dy) = match delta {
                         winit::event::MouseScrollDelta::LineDelta(x, y) => (x * 20.0, y * 20.0),
                         winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
                     };
