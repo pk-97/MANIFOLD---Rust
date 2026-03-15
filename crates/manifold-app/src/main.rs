@@ -1,6 +1,8 @@
 mod app;
 mod window_registry;
 mod frame_timer;
+mod ui_root;
+mod ui_bridge;
 
 fn main() {
     env_logger::init();

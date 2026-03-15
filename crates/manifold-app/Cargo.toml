@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
+manifold-ui = { path = "../manifold-ui" }
 manifold-playback = { path = "../manifold-playback" }
 manifold-renderer = { path = "../manifold-renderer" }
 winit = { workspace = true }

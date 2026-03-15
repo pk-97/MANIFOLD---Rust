@@ -1043,6 +1043,7 @@ dependencies = [
  "manifold-core",
  "manifold-playback",
  "manifold-renderer",
+ "manifold-ui",
  "pollster",
  "wgpu",
  "winit",
@@ -1091,7 +1092,15 @@ dependencies = [
  "glyphon",
  "log",
  "manifold-core",
+ "manifold-ui",
  "wgpu",
+]
+
+[[package]]
+name = "manifold-ui"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.11.0",
 ]
 
 [[package]]

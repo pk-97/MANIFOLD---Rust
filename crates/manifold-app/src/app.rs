@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, KeyEvent, WindowEvent};
+use winit::event::{ElementState, KeyEvent, MouseButton, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
@@ -22,7 +22,11 @@ use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerComposit
 use manifold_renderer::surface::SurfaceWrapper;
 use manifold_renderer::ui_renderer::UIRenderer;
 
+use manifold_ui::input::{Modifiers, PointerAction};
+use manifold_ui::node::Vec2;
+
 use crate::frame_timer::FrameTimer;
+use crate::ui_root::UIRoot;
 use crate::window_registry::{WindowRegistry, WindowRole, WindowState};
 
 pub struct Application {
@@ -43,12 +47,21 @@ pub struct Application {
     ui_renderer: Option<UIRenderer>,
     surface_format: wgpu::TextureFormat,
 
+    // UI
+    ui_root: UIRoot,
+
     // Frame timing
     frame_timer: FrameTimer,
     frame_count: u64,
 
     // Lifecycle tracking for generator renderer sync
     prev_active_clip_ids: HashSet<String>,
+
+    // Input state for winit → UIInputSystem translation
+    cursor_pos: Vec2,
+    mouse_pressed: bool,
+    modifiers: Modifiers,
+    time_since_start: f32,
 
     // State
     initialized: bool,
@@ -78,9 +91,19 @@ impl Application {
             blit_pipeline: None,
             ui_renderer: None,
             surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            ui_root: UIRoot::new(),
             frame_timer: FrameTimer::new(60.0),
             frame_count: 0,
             prev_active_clip_ids: HashSet::with_capacity(16),
+            cursor_pos: Vec2::ZERO,
+            mouse_pressed: false,
+            modifiers: Modifiers {
+                shift: false,
+                ctrl: false,
+                alt: false,
+                command: false,
+            },
+            time_since_start: 0.0,
             initialized: false,
         }
     }
@@ -178,8 +201,19 @@ impl Application {
     fn tick_and_render(&mut self) {
         let dt = self.frame_timer.consume_tick();
         let realtime = self.frame_timer.realtime_since_start();
+        self.time_since_start = realtime as f32;
 
-        // 1. Tick the engine
+        // 1. Process UI events and dispatch actions
+        let actions = self.ui_root.process_events();
+        for action in &actions {
+            crate::ui_bridge::dispatch(action, &mut self.engine);
+        }
+
+        // 2. Push engine state to UI panels
+        crate::ui_bridge::push_state(&mut self.ui_root, &self.engine);
+        self.ui_root.update();
+
+        // 3. Tick the engine
         let ctx = TickContext {
             dt_seconds: dt,
             realtime_now: realtime,
@@ -198,14 +232,12 @@ impl Application {
             None => return,
         };
 
-        // 2. Sync generator renderer lifecycle with engine
-        // Build current active set from ready_clips
+        // 4. Sync generator renderer lifecycle with engine
         let mut current_active: HashSet<String> = HashSet::with_capacity(tick_result.ready_clips.len());
         for clip in &tick_result.ready_clips {
             if clip.is_generator() {
                 current_active.insert(clip.id.clone());
 
-                // Start new clips
                 if !gen_renderer.is_active(&clip.id) {
                     gen_renderer.start_clip(
                         &gpu.device,
@@ -217,7 +249,6 @@ impl Application {
             }
         }
 
-        // Stop clips that are no longer active
         for old_id in &self.prev_active_clip_ids {
             if !current_active.contains(old_id) {
                 gen_renderer.stop_clip(old_id);
@@ -225,7 +256,7 @@ impl Application {
         }
         self.prev_active_clip_ids = current_active;
 
-        // 3. Render all generators
+        // 5. Render all generators
         let layers = self
             .engine
             .project()
@@ -248,7 +279,7 @@ impl Application {
             layers,
         );
 
-        // 4. Build clip descriptors for compositor
+        // 6. Build clip descriptors for compositor
         let mut clip_descs: Vec<CompositeClipDescriptor> =
             Vec::with_capacity(tick_result.ready_clips.len());
 
@@ -270,7 +301,7 @@ impl Application {
             }
         }
 
-        // 5. Composite
+        // 7. Composite
         let compositor = match &mut self.compositor {
             Some(c) => c,
             None => return,
@@ -287,16 +318,11 @@ impl Application {
 
         let output_view = compositor.render(&gpu.device, &gpu.queue, &mut encoder, &frame);
 
-        // 6. Submit generator + compositor work
-        // We need to get the output view pointer before submitting, but the borrow
-        // from compositor.render() returns a reference into the compositor.
-        // We must submit, then blit in separate encoders per window.
-        // Actually — we can get a raw pointer to avoid the borrow issue.
-        // Safer approach: submit this encoder, then blit in present_all_windows.
+        // 8. Submit generator + compositor work
         let output_view_ptr: *const wgpu::TextureView = output_view;
         gpu.queue.submit(std::iter::once(encoder.finish()));
 
-        // 7. Present to all windows via blit
+        // 9. Present to all windows via blit + UI overlay
         // SAFETY: output_view points into self.compositor's RenderTarget which
         // is not modified between here and the blit calls.
         let output_view_ref = unsafe { &*output_view_ptr };
@@ -357,35 +383,10 @@ impl Application {
 
             blit.blit(&gpu.device, &mut encoder, compositor_output, &surface_view);
 
-            // Draw UI overlay on workspace window
+            // Draw UI overlay on workspace window using the UITree
             if is_workspace {
                 if let Some(ui) = &mut self.ui_renderer {
-                    let w = surface_w as f32;
-
-                    // Header bar
-                    ui.draw_rect(0.0, 0.0, w, 40.0, [0.12, 0.12, 0.14, 0.95]);
-
-                    // "MANIFOLD" title text
-                    ui.draw_text(12.0, 10.0, "MANIFOLD", 18.0, [255, 255, 255, 255]);
-
-                    // Rounded button
-                    ui.draw_rounded_rect(
-                        w - 120.0, 6.0, 100.0, 28.0,
-                        [0.2, 0.6, 1.0, 1.0],
-                        6.0,
-                    );
-                    ui.draw_text(w - 104.0, 12.0, "Hello UI", 14.0, [255, 255, 255, 255]);
-
-                    // Status bar at bottom
-                    ui.draw_rect(0.0, surface_h as f32 - 24.0, w, 24.0, [0.1, 0.1, 0.12, 0.9]);
-                    ui.draw_text(
-                        12.0,
-                        surface_h as f32 - 20.0,
-                        "wgpu + glyphon | Phase 4 Hello World",
-                        12.0,
-                        [180, 180, 180, 255],
-                    );
-
+                    ui.render_tree(&self.ui_root.tree);
                     ui.render(
                         &gpu.device,
                         &gpu.queue,
@@ -399,6 +400,87 @@ impl Application {
 
             gpu.queue.submit(std::iter::once(encoder.finish()));
             surface_texture.present();
+        }
+    }
+
+    /// Convert a winit key to a manifold_ui Key.
+    fn convert_key(logical_key: &Key) -> Option<manifold_ui::input::Key> {
+        match logical_key {
+            Key::Named(named) => match named {
+                NamedKey::Space => Some(manifold_ui::input::Key::Space),
+                NamedKey::Enter => Some(manifold_ui::input::Key::Enter),
+                NamedKey::Escape => Some(manifold_ui::input::Key::Escape),
+                NamedKey::Backspace => Some(manifold_ui::input::Key::Backspace),
+                NamedKey::Delete => Some(manifold_ui::input::Key::Delete),
+                NamedKey::Tab => Some(manifold_ui::input::Key::Tab),
+                NamedKey::ArrowLeft => Some(manifold_ui::input::Key::Left),
+                NamedKey::ArrowRight => Some(manifold_ui::input::Key::Right),
+                NamedKey::ArrowUp => Some(manifold_ui::input::Key::Up),
+                NamedKey::ArrowDown => Some(manifold_ui::input::Key::Down),
+                NamedKey::Home => Some(manifold_ui::input::Key::Home),
+                NamedKey::End => Some(manifold_ui::input::Key::End),
+                NamedKey::F1 => Some(manifold_ui::input::Key::F1),
+                NamedKey::F2 => Some(manifold_ui::input::Key::F2),
+                NamedKey::F3 => Some(manifold_ui::input::Key::F3),
+                NamedKey::F4 => Some(manifold_ui::input::Key::F4),
+                NamedKey::F5 => Some(manifold_ui::input::Key::F5),
+                NamedKey::F6 => Some(manifold_ui::input::Key::F6),
+                NamedKey::F7 => Some(manifold_ui::input::Key::F7),
+                NamedKey::F8 => Some(manifold_ui::input::Key::F8),
+                NamedKey::F9 => Some(manifold_ui::input::Key::F9),
+                NamedKey::F10 => Some(manifold_ui::input::Key::F10),
+                NamedKey::F11 => Some(manifold_ui::input::Key::F11),
+                NamedKey::F12 => Some(manifold_ui::input::Key::F12),
+                _ => None,
+            },
+            Key::Character(c) => {
+                let ch = c.chars().next()?;
+                match ch.to_ascii_lowercase() {
+                    'a' => Some(manifold_ui::input::Key::A),
+                    'b' => Some(manifold_ui::input::Key::B),
+                    'c' => Some(manifold_ui::input::Key::C),
+                    'd' => Some(manifold_ui::input::Key::D),
+                    'e' => Some(manifold_ui::input::Key::E),
+                    'f' => Some(manifold_ui::input::Key::F),
+                    'g' => Some(manifold_ui::input::Key::G),
+                    'h' => Some(manifold_ui::input::Key::H),
+                    'i' => Some(manifold_ui::input::Key::I),
+                    'j' => Some(manifold_ui::input::Key::J),
+                    'k' => Some(manifold_ui::input::Key::K),
+                    'l' => Some(manifold_ui::input::Key::L),
+                    'm' => Some(manifold_ui::input::Key::M),
+                    'n' => Some(manifold_ui::input::Key::N),
+                    'o' => Some(manifold_ui::input::Key::O),
+                    'p' => Some(manifold_ui::input::Key::P),
+                    'q' => Some(manifold_ui::input::Key::Q),
+                    'r' => Some(manifold_ui::input::Key::R),
+                    's' => Some(manifold_ui::input::Key::S),
+                    't' => Some(manifold_ui::input::Key::T),
+                    'u' => Some(manifold_ui::input::Key::U),
+                    'v' => Some(manifold_ui::input::Key::V),
+                    'w' => Some(manifold_ui::input::Key::W),
+                    'x' => Some(manifold_ui::input::Key::X),
+                    'y' => Some(manifold_ui::input::Key::Y),
+                    'z' => Some(manifold_ui::input::Key::Z),
+                    '0' => Some(manifold_ui::input::Key::Num0),
+                    '1' => Some(manifold_ui::input::Key::Num1),
+                    '2' => Some(manifold_ui::input::Key::Num2),
+                    '3' => Some(manifold_ui::input::Key::Num3),
+                    '4' => Some(manifold_ui::input::Key::Num4),
+                    '5' => Some(manifold_ui::input::Key::Num5),
+                    '6' => Some(manifold_ui::input::Key::Num6),
+                    '7' => Some(manifold_ui::input::Key::Num7),
+                    '8' => Some(manifold_ui::input::Key::Num8),
+                    '9' => Some(manifold_ui::input::Key::Num9),
+                    '-' => Some(manifold_ui::input::Key::Minus),
+                    '+' | '=' => Some(manifold_ui::input::Key::Plus),
+                    '.' => Some(manifold_ui::input::Key::Period),
+                    ',' => Some(manifold_ui::input::Key::Comma),
+                    '/' => Some(manifold_ui::input::Key::Slash),
+                    _ => None,
+                }
+            }
+            _ => None,
         }
     }
 }
@@ -550,10 +632,18 @@ impl ApplicationHandler for Application {
         };
 
         self.gpu = Some(gpu);
+
+        // Build UI at initial window size (logical pixels)
+        let logical_w = size.width as f32 / scale as f32;
+        let logical_h = size.height as f32 / scale as f32;
+        self.ui_root.resize(logical_w, logical_h);
+
         self.initialized = true;
 
         log::info!(
-            "Initialized. Press Space=play/pause, O=output window, Escape=close output"
+            "Initialized. UI built at {:.0}x{:.0}. Press Space=play/pause, O=output window",
+            logical_w,
+            logical_h,
         );
     }
 
@@ -563,9 +653,11 @@ impl ApplicationHandler for Application {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        let is_primary = Some(window_id) == self.primary_window_id;
+
         match event {
             WindowEvent::CloseRequested => {
-                if Some(window_id) == self.primary_window_id {
+                if is_primary {
                     event_loop.exit();
                 } else {
                     self.window_registry.remove(&window_id);
@@ -577,8 +669,14 @@ impl ApplicationHandler for Application {
                 if let Some(gpu) = &self.gpu {
                     if let Some(ws) = self.window_registry.get_mut(&window_id) {
                         let scale = ws.window.scale_factor();
-                        ws.surface
-                            .resize(&gpu.device, size.width, size.height, scale);
+                        ws.surface.resize(&gpu.device, size.width, size.height, scale);
+
+                        // Rebuild UI on primary window resize
+                        if is_primary {
+                            let logical_w = size.width as f32 / scale as f32;
+                            let logical_h = size.height as f32 / scale as f32;
+                            self.ui_root.resize(logical_w, logical_h);
+                        }
                     }
                 }
             }
@@ -589,10 +687,80 @@ impl ApplicationHandler for Application {
                         let size = ws.window.inner_size();
                         ws.surface
                             .resize(&gpu.device, size.width, size.height, scale_factor);
+
+                        if is_primary {
+                            let logical_w = size.width as f32 / scale_factor as f32;
+                            let logical_h = size.height as f32 / scale_factor as f32;
+                            self.ui_root.resize(logical_w, logical_h);
+                        }
                     }
                 }
             }
 
+            // ── Pointer input → UIInputSystem ──────────────────────
+            WindowEvent::CursorMoved { position, .. } => {
+                if is_primary {
+                    // Convert to logical pixels
+                    let scale = self.window_registry.get(&window_id)
+                        .map(|ws| ws.window.scale_factor())
+                        .unwrap_or(1.0);
+                    self.cursor_pos = Vec2::new(
+                        position.x as f32 / scale as f32,
+                        position.y as f32 / scale as f32,
+                    );
+                    self.ui_root.pointer_event(
+                        self.cursor_pos,
+                        PointerAction::Move,
+                        self.time_since_start,
+                    );
+                }
+            }
+
+            WindowEvent::MouseInput { button, state, .. } => {
+                if is_primary {
+                    match button {
+                        MouseButton::Left => {
+                            match state {
+                                ElementState::Pressed => {
+                                    self.mouse_pressed = true;
+                                    self.ui_root.pointer_event(
+                                        self.cursor_pos,
+                                        PointerAction::Down,
+                                        self.time_since_start,
+                                    );
+                                }
+                                ElementState::Released => {
+                                    self.mouse_pressed = false;
+                                    self.ui_root.pointer_event(
+                                        self.cursor_pos,
+                                        PointerAction::Up,
+                                        self.time_since_start,
+                                    );
+                                }
+                            }
+                        }
+                        MouseButton::Right => {
+                            if state == ElementState::Pressed {
+                                self.ui_root.right_click(self.cursor_pos);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            // ── Modifier tracking ──────────────────────────────────
+            WindowEvent::ModifiersChanged(mods) => {
+                let state = mods.state();
+                self.modifiers = Modifiers {
+                    shift: state.shift_key(),
+                    ctrl: state.control_key(),
+                    alt: state.alt_key(),
+                    command: state.super_key(),
+                };
+            }
+
+            // ── Keyboard input ─────────────────────────────────────
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -601,28 +769,29 @@ impl ApplicationHandler for Application {
                         ..
                     },
                 ..
-            } => match logical_key {
-                Key::Named(NamedKey::Space) => {
-                    if self.engine.is_playing() {
-                        self.engine.set_state(PlaybackState::Paused);
-                        log::info!("Paused");
-                    } else {
-                        self.engine.set_state(PlaybackState::Playing);
-                        log::info!("Playing");
+            } => {
+                // Forward to UI input system
+                if is_primary {
+                    if let Some(ui_key) = Self::convert_key(&logical_key) {
+                        self.ui_root.key_event(ui_key, self.modifiers);
                     }
                 }
-                Key::Character(ref c) if c.as_str() == "o" || c.as_str() == "O" => {
-                    let count = self.window_registry.len();
-                    self.open_output_window(event_loop, &format!("Output {}", count), None);
-                }
-                Key::Named(NamedKey::Escape) => {
-                    if Some(window_id) != self.primary_window_id {
-                        self.window_registry.remove(&window_id);
-                        log::info!("Closed output window");
+
+                // App-level shortcuts (output window management)
+                match &logical_key {
+                    Key::Character(ref c) if c.as_str() == "o" || c.as_str() == "O" => {
+                        let count = self.window_registry.len();
+                        self.open_output_window(event_loop, &format!("Output {}", count), None);
                     }
+                    Key::Named(NamedKey::Escape) => {
+                        if !is_primary {
+                            self.window_registry.remove(&window_id);
+                            log::info!("Closed output window");
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
 
             _ => {}
         }

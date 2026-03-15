@@ -5,6 +5,10 @@ use glyphon::{
     Resolution, Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 
+use manifold_ui::node::*;
+use manifold_ui::text::TextMeasure;
+use manifold_ui::tree::{TraversalEvent, UITree};
+
 /// Vertex for UI quad rendering.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -112,6 +116,8 @@ struct TextCommand {
     text: String,
     font_size: f32,
     color: [u8; 4],
+    /// Clip bounds for this text (None = full viewport).
+    clip_bounds: Option<[f32; 4]>,
 }
 
 /// Simple batched 2D UI renderer for wgpu.
@@ -137,6 +143,9 @@ pub struct UIRenderer {
     // Per-frame vertex buffer
     vertices: Vec<UIVertex>,
     indices: Vec<u32>,
+
+    // Clip stack for render_tree (mathematical clipping)
+    clip_stack: Vec<Rect>,
 }
 
 impl UIRenderer {
@@ -175,31 +184,26 @@ impl UIRenderer {
             array_stride: std::mem::size_of::<UIVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
-                // position
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x2,
                     offset: 0,
                     shader_location: 0,
                 },
-                // uv
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x2,
                     offset: 8,
                     shader_location: 1,
                 },
-                // color
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x4,
                     offset: 16,
                     shader_location: 2,
                 },
-                // rect_params
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x4,
                     offset: 32,
                     shader_location: 3,
                 },
-                // border_color
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x4,
                     offset: 48,
@@ -239,15 +243,12 @@ impl UIRenderer {
 
         let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("UI Globals"),
-            size: 16, // vec2<f32> + padding
+            size: 16,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        // Text rendering setup
         let mut font_system = FontSystem::new();
-
-        // Load Inter font if available, otherwise use system default
         let font_data = include_bytes!("../assets/fonts/Inter-Regular.ttf");
         font_system.db_mut().load_font_data(font_data.to_vec());
 
@@ -269,12 +270,15 @@ impl UIRenderer {
             text_renderer,
             viewport,
             text_buffers: Vec::new(),
-            rect_commands: Vec::with_capacity(64),
-            text_commands: Vec::with_capacity(32),
-            vertices: Vec::with_capacity(256),
-            indices: Vec::with_capacity(384),
+            rect_commands: Vec::with_capacity(256),
+            text_commands: Vec::with_capacity(128),
+            vertices: Vec::with_capacity(1024),
+            indices: Vec::with_capacity(1536),
+            clip_stack: Vec::with_capacity(8),
         }
     }
+
+    // ── Immediate-mode draw API ─────────────────────────────────────
 
     /// Queue a filled rectangle.
     pub fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
@@ -315,7 +319,7 @@ impl UIRenderer {
         });
     }
 
-    /// Queue text.
+    /// Queue text at a position.
     pub fn draw_text(
         &mut self,
         x: f32, y: f32,
@@ -328,8 +332,161 @@ impl UIRenderer {
             text: text.to_string(),
             font_size,
             color,
+            clip_bounds: None,
         });
     }
+
+    // ── UITree rendering ────────────────────────────────────────────
+
+    /// Render a UITree by walking it in DFS order, resolving styles, and
+    /// emitting draw commands. Handles clipping mathematically (clamping
+    /// child geometry to clip ancestors).
+    pub fn render_tree(&mut self, tree: &UITree) {
+        self.clip_stack.clear();
+
+        tree.traverse(|event| match event {
+            TraversalEvent::Node(node) => {
+                self.draw_node(node);
+            }
+            TraversalEvent::PushClip(rect) => {
+                // Intersect with current clip if nested
+                let clipped = if let Some(current) = self.clip_stack.last() {
+                    intersect_rects(*current, rect)
+                } else {
+                    rect
+                };
+                self.clip_stack.push(clipped);
+            }
+            TraversalEvent::PopClip => {
+                self.clip_stack.pop();
+            }
+        });
+    }
+
+    /// Draw a single UI node — resolves effective colors and emits commands.
+    fn draw_node(&mut self, node: &UINode) {
+        let style = &node.style;
+        let bounds = if let Some(clip) = self.clip_stack.last() {
+            clamp_rect_to_clip(node.bounds, *clip)
+        } else {
+            node.bounds
+        };
+
+        // Skip zero-area rects
+        if bounds.width <= 0.0 || bounds.height <= 0.0 {
+            return;
+        }
+
+        // Resolve effective background color from interaction flags
+        let mut bg_color = style.bg_color;
+        if node.flags.contains(UIFlags::PRESSED) && style.pressed_bg_color.a > 0 {
+            bg_color = style.pressed_bg_color;
+        } else if node.flags.contains(UIFlags::HOVERED) && style.hover_bg_color.a > 0 {
+            bg_color = style.hover_bg_color;
+        }
+
+        // Background
+        if bg_color.a > 0 {
+            let color = bg_color.to_f32();
+            if style.border_width > 0.0 && style.border_color.a > 0 {
+                self.rect_commands.push(RectCommand {
+                    x: bounds.x,
+                    y: bounds.y,
+                    w: bounds.width,
+                    h: bounds.height,
+                    color,
+                    corner_radius: style.corner_radius,
+                    border_width: style.border_width,
+                    border_color: style.border_color.to_f32(),
+                });
+            } else if style.corner_radius > 0.0 {
+                self.rect_commands.push(RectCommand {
+                    x: bounds.x,
+                    y: bounds.y,
+                    w: bounds.width,
+                    h: bounds.height,
+                    color,
+                    corner_radius: style.corner_radius,
+                    border_width: 0.0,
+                    border_color: [0.0; 4],
+                });
+            } else {
+                self.rect_commands.push(RectCommand {
+                    x: bounds.x,
+                    y: bounds.y,
+                    w: bounds.width,
+                    h: bounds.height,
+                    color,
+                    corner_radius: 0.0,
+                    border_width: 0.0,
+                    border_color: [0.0; 4],
+                });
+            }
+        } else if style.border_width > 0.0 && style.border_color.a > 0 {
+            // Border-only (transparent bg)
+            self.rect_commands.push(RectCommand {
+                x: bounds.x,
+                y: bounds.y,
+                w: bounds.width,
+                h: bounds.height,
+                color: [0.0, 0.0, 0.0, 0.0],
+                corner_radius: style.corner_radius,
+                border_width: style.border_width,
+                border_color: style.border_color.to_f32(),
+            });
+        }
+
+        // Text
+        if let Some(text) = &node.text {
+            if !text.is_empty() {
+                let text_size = self.measure_text_internal(text, style.font_size, style.font_weight);
+                let text_y = bounds.y + (bounds.height - text_size.y) * 0.5;
+
+                let text_x = match style.text_align {
+                    TextAlign::Center => bounds.x + (bounds.width - text_size.x) * 0.5,
+                    TextAlign::Right => bounds.x + bounds.width - text_size.x,
+                    TextAlign::Left => bounds.x,
+                };
+
+                let clip_bounds = self.clip_stack.last().map(|c| [c.x, c.y, c.x_max(), c.y_max()]);
+
+                self.text_commands.push(TextCommand {
+                    x: text_x,
+                    y: text_y,
+                    text: text.clone(),
+                    font_size: style.font_size as f32,
+                    color: [style.text_color.r, style.text_color.g, style.text_color.b, style.text_color.a],
+                    clip_bounds,
+                });
+            }
+        }
+    }
+
+    /// Internal text measurement using glyphon/cosmic-text.
+    fn measure_text_internal(&mut self, text: &str, font_size: u16, _font_weight: FontWeight) -> Vec2 {
+        let metrics = Metrics::new(font_size as f32, font_size as f32 * 1.2);
+        let mut buffer = TextBuffer::new(&mut self.font_system, metrics);
+        buffer.set_size(&mut self.font_system, Some(10000.0), Some(font_size as f32 * 2.0));
+        buffer.set_text(
+            &mut self.font_system,
+            text,
+            &Attrs::new().family(Family::SansSerif),
+            Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(&mut self.font_system, false);
+
+        let mut width = 0.0f32;
+        let mut height = 0.0f32;
+        for run in buffer.layout_runs() {
+            width = width.max(run.line_w);
+            height = height.max(run.line_y + font_size as f32 * 0.2);
+        }
+
+        Vec2::new(width, height.max(font_size as f32))
+    }
+
+    // ── Render pass ─────────────────────────────────────────────────
 
     /// Render all queued commands to the target view.
     pub fn render(
@@ -364,7 +521,6 @@ impl UIRenderer {
             let (x0, y0) = (cmd.x, cmd.y);
             let (x1, y1) = (cmd.x + cmd.w, cmd.y + cmd.h);
 
-            // Four corners, UV maps to [0,0]-[1,1] within the rect
             self.vertices.push(UIVertex {
                 position: [x0, y0], uv: [0.0, 0.0],
                 color: cmd.color,
@@ -418,17 +574,28 @@ impl UIRenderer {
         }
 
         for (i, cmd) in self.text_commands.iter().enumerate() {
+            let bounds = if let Some(clip) = cmd.clip_bounds {
+                TextBounds {
+                    left: clip[0] as i32,
+                    top: clip[1] as i32,
+                    right: clip[2] as i32,
+                    bottom: clip[3] as i32,
+                }
+            } else {
+                TextBounds {
+                    left: 0,
+                    top: 0,
+                    right: width as i32,
+                    bottom: height as i32,
+                }
+            };
+
             text_areas.push(TextArea {
                 buffer: &self.text_buffers[i],
                 left: cmd.x,
                 top: cmd.y,
                 scale: 1.0,
-                bounds: TextBounds {
-                    left: 0,
-                    top: 0,
-                    right: width as i32,
-                    bottom: height as i32,
-                },
+                bounds,
                 default_color: GlyphonColor::rgba(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]),
                 custom_glyphs: &[],
             });
@@ -449,14 +616,13 @@ impl UIRenderer {
             )
             .expect("Failed to prepare text renderer");
 
-        // Create GPU buffers
         if self.vertices.is_empty() && self.text_commands.is_empty() {
             self.rect_commands.clear();
             self.text_commands.clear();
             return;
         }
 
-        // Render pass — rects then text, both to the same target
+        // Render pass — rects then text
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("UI Render Pass"),
@@ -465,7 +631,7 @@ impl UIRenderer {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // preserve existing content (compositor output)
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -475,7 +641,6 @@ impl UIRenderer {
                 multiview_mask: None,
             });
 
-            // Draw rects
             if !self.vertices.is_empty() {
                 let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("UI Vertices"),
@@ -495,7 +660,6 @@ impl UIRenderer {
                 pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
             }
 
-            // Draw text
             self.text_renderer
                 .render(&self.text_atlas, &self.viewport, &mut pass)
                 .expect("Failed to render text");
@@ -504,4 +668,36 @@ impl UIRenderer {
         self.rect_commands.clear();
         self.text_commands.clear();
     }
+}
+
+/// Implement TextMeasure for UIRenderer so panels can compute layout.
+impl TextMeasure for UIRenderer {
+    fn measure_text(&self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
+        // TextMeasure requires &self, but glyphon needs &mut FontSystem.
+        // Use an approximate measurement: Inter is ~0.5em per character on average.
+        // This is good enough for layout; exact measurement happens in draw_node.
+        let _ = font_weight;
+        let em = font_size as f32;
+        let avg_char_width = em * 0.52; // Inter average glyph width
+        let width = text.len() as f32 * avg_char_width;
+        Vec2::new(width, em)
+    }
+}
+
+// ── Geometry helpers ────────────────────────────────────────────────
+
+/// Intersect two rects (for nested clipping).
+fn intersect_rects(a: Rect, b: Rect) -> Rect {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = a.x_max().min(b.x_max());
+    let y1 = a.y_max().min(b.y_max());
+    Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+}
+
+/// Clamp a rect to a clip region (mathematical clipping).
+/// Fixes the Unity "ClipsChildren broken" bug by clamping geometry instead
+/// of relying on a flat-loop push/pop.
+fn clamp_rect_to_clip(rect: Rect, clip: Rect) -> Rect {
+    intersect_rects(rect, clip)
 }

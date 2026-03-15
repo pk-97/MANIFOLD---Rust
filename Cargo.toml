@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/manifold-core",
+    "crates/manifold-ui",
     "crates/manifold-playback",
     "crates/manifold-editing",
     "crates/manifold-io",

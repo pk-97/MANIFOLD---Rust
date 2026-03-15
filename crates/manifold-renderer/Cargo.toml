@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
+manifold-ui = { path = "../manifold-ui" }
 wgpu = { workspace = true }
 log = { workspace = true }
 bytemuck = { version = "1", features = ["derive"] }
