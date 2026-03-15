@@ -6,6 +6,9 @@ pub mod text;
 pub mod layout;
 pub mod slider;
 pub mod panels;
+pub mod snap;
+pub mod trim;
+pub mod cursor_nav;
 
 pub use node::*;
 pub use tree::UITree;
