@@ -6,8 +6,9 @@
 
 use manifold_core::types::{
     BlendMode, GeneratorType, LayerType, PlaybackState,
+    BeatDivision, DriverWaveform,
 };
-use manifold_core::effects::EffectInstance;
+use manifold_core::effects::{EffectInstance, ParameterDriver, ParamEnvelope};
 use manifold_editing::commands::settings::{
     ChangeMasterOpacityCommand, ChangeLayerOpacityCommand, ChangeGeneratorParamsCommand,
     ChangeQuantizeModeCommand, ChangeLayerBlendModeCommand,
@@ -15,12 +16,17 @@ use manifold_editing::commands::settings::{
 use manifold_editing::commands::effects::{
     ToggleEffectCommand, ChangeEffectParamCommand, RemoveEffectCommand,
 };
-use manifold_editing::commands::effect_target::EffectTarget;
+use manifold_editing::commands::effect_target::{EffectTarget, DriverTarget};
+use manifold_editing::commands::drivers::{
+    AddDriverCommand, ToggleDriverEnabledCommand,
+    ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand,
+    ToggleDriverReversedCommand,
+};
 use manifold_editing::commands::clip::{MoveClipCommand, TrimClipCommand};
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
 use manifold_playback::engine::PlaybackEngine;
-use manifold_ui::{PanelAction, InspectorTab};
+use manifold_ui::{PanelAction, InspectorTab, DriverConfigAction};
 use manifold_ui::node::Color32;
 use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::viewport::{TrackInfo, HitRegion};
@@ -752,25 +758,207 @@ pub fn dispatch(
         }
 
         // ── Effect modulation ──────────────────────────────────────
-        PanelAction::EffectDriverToggle(_ei, _pi) => {
-            log::debug!("Effect driver toggle (modulation not yet wired)");
+        PanelAction::EffectDriverToggle(ei, pi) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    let target = DriverTarget::Effect {
+                        effect_target: EffectTarget::Layer { layer_index: layer_idx },
+                        effect_index: *ei,
+                    };
+                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                        if let Some(effects) = &layer.effects {
+                            if let Some(fx) = effects.get(*ei) {
+                                let driver_idx = fx.drivers.as_ref()
+                                    .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32));
+                                if let Some(di) = driver_idx {
+                                    let old = fx.drivers.as_ref().unwrap()[di].enabled;
+                                    let cmd = ToggleDriverEnabledCommand::new(
+                                        target, di, old, !old,
+                                    );
+                                    editing.execute(Box::new(cmd), project);
+                                } else {
+                                    let driver = ParameterDriver {
+                                        param_index: *pi as i32,
+                                        beat_division: BeatDivision::Quarter,
+                                        waveform: DriverWaveform::Sine,
+                                        enabled: true,
+                                        phase: 0.0,
+                                        base_value: fx.param_values.get(*pi).copied().unwrap_or(0.0),
+                                        trim_min: 0.0,
+                                        trim_max: 1.0,
+                                        reversed: false,
+                                    };
+                                    let cmd = AddDriverCommand::new(target, driver);
+                                    editing.execute(Box::new(cmd), project);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::EffectEnvelopeToggle(ei, pi) => {
+            // Envelopes live on the layer, not on the effect instance.
+            // Toggle enabled if one exists for this effect+param, otherwise add.
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        let effect_type = layer.effects.as_ref()
+                            .and_then(|fx| fx.get(*ei))
+                            .map(|fx| fx.effect_type);
+                        if let Some(et) = effect_type {
+                            let envs = layer.envelopes_mut();
+                            let env_idx = envs.iter().position(|e|
+                                e.target_effect_type == et && e.param_index == *pi as i32
+                            );
+                            if let Some(idx) = env_idx {
+                                envs[idx].enabled = !envs[idx].enabled;
+                            } else {
+                                envs.push(ParamEnvelope {
+                                    target_effect_type: et,
+                                    param_index: *pi as i32,
+                                    enabled: true,
+                                    attack_beats: 0.25,
+                                    decay_beats: 0.25,
+                                    sustain_level: 1.0,
+                                    release_beats: 0.25,
+                                    target_normalized: 1.0,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::EffectDriverConfig(ei, pi, cfg) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    let target = DriverTarget::Effect {
+                        effect_target: EffectTarget::Layer { layer_index: layer_idx },
+                        effect_index: *ei,
+                    };
+                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                        if let Some(effects) = &layer.effects {
+                            if let Some(fx) = effects.get(*ei) {
+                                if let Some(di) = fx.drivers.as_ref()
+                                    .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32))
+                                {
+                                    let driver = &fx.drivers.as_ref().unwrap()[di];
+                                    match cfg {
+                                        DriverConfigAction::BeatDiv(idx) => {
+                                            if let Some(new_div) = BeatDivision::from_button_index(*idx) {
+                                                let cmd = ChangeDriverBeatDivCommand::new(
+                                                    target, di, driver.beat_division, new_div,
+                                                );
+                                                editing.execute(Box::new(cmd), project);
+                                            }
+                                        }
+                                        DriverConfigAction::Wave(idx) => {
+                                            if let Some(new_wave) = DriverWaveform::from_index(*idx) {
+                                                let cmd = ChangeDriverWaveformCommand::new(
+                                                    target, di, driver.waveform, new_wave,
+                                                );
+                                                editing.execute(Box::new(cmd), project);
+                                            }
+                                        }
+                                        DriverConfigAction::Dot => {
+                                            if let Some(new_div) = driver.beat_division.toggle_dotted() {
+                                                let cmd = ChangeDriverBeatDivCommand::new(
+                                                    target, di, driver.beat_division, new_div,
+                                                );
+                                                editing.execute(Box::new(cmd), project);
+                                            }
+                                        }
+                                        DriverConfigAction::Triplet => {
+                                            if let Some(new_div) = driver.beat_division.toggle_triplet() {
+                                                let cmd = ChangeDriverBeatDivCommand::new(
+                                                    target, di, driver.beat_division, new_div,
+                                                );
+                                                editing.execute(Box::new(cmd), project);
+                                            }
+                                        }
+                                        DriverConfigAction::Reverse => {
+                                            let cmd = ToggleDriverReversedCommand::new(
+                                                target, di, driver.reversed, !driver.reversed,
+                                            );
+                                            editing.execute(Box::new(cmd), project);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::EffectEnvParamChanged(ei, pi, param, val) => {
+            // Live ADSR mutation during drag (no undo — commit-less slider).
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        let effect_type = layer.effects.as_ref()
+                            .and_then(|fx| fx.get(*ei))
+                            .map(|fx| fx.effect_type);
+                        if let Some(et) = effect_type {
+                            let envs = layer.envelopes_mut();
+                            if let Some(env) = envs.iter_mut().find(|e|
+                                e.target_effect_type == et && e.param_index == *pi as i32
+                            ) {
+                                match param {
+                                    manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
+                                    manifold_ui::EnvelopeParam::Decay => env.decay_beats = *val,
+                                    manifold_ui::EnvelopeParam::Sustain => env.sustain_level = *val,
+                                    manifold_ui::EnvelopeParam::Release => env.release_beats = *val,
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
-        PanelAction::EffectEnvelopeToggle(_ei, _pi) => {
-            log::debug!("Effect envelope toggle (modulation not yet wired)");
+        PanelAction::EffectTrimChanged(ei, pi, min, max) => {
+            // Live trim mutation during drag.
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        if let Some(effects) = &mut layer.effects {
+                            if let Some(fx) = effects.get_mut(*ei) {
+                                if let Some(driver) = fx.drivers_mut().iter_mut()
+                                    .find(|d| d.param_index == *pi as i32)
+                                {
+                                    driver.trim_min = *min;
+                                    driver.trim_max = *max;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
-        PanelAction::EffectDriverConfig(_ei, _pi, _cfg) => {
-            log::debug!("Effect driver config (modulation not yet wired)");
-            DispatchResult::handled()
-        }
-        PanelAction::EffectEnvParamChanged(_ei, _pi, _param, _val) => {
-            DispatchResult::handled()
-        }
-        PanelAction::EffectTrimChanged(_ei, _pi, _min, _max) => {
-            DispatchResult::handled()
-        }
-        PanelAction::EffectTargetChanged(_ei, _pi, _norm) => {
+        PanelAction::EffectTargetChanged(ei, pi, norm) => {
+            // Live target normalized mutation during drag.
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        let effect_type = layer.effects.as_ref()
+                            .and_then(|fx| fx.get(*ei))
+                            .map(|fx| fx.effect_type);
+                        if let Some(et) = effect_type {
+                            let envs = layer.envelopes_mut();
+                            if let Some(env) = envs.iter_mut().find(|e|
+                                e.target_effect_type == et && e.param_index == *pi as i32
+                            ) {
+                                env.target_normalized = *norm;
+                            }
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
 
@@ -877,24 +1065,187 @@ pub fn dispatch(
         }
 
         // ── Gen modulation ─────────────────────────────────────────
-        PanelAction::GenDriverToggle(_pi) => {
-            log::debug!("Gen driver toggle (modulation not yet wired)");
+        PanelAction::GenDriverToggle(pi) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    let target = DriverTarget::GeneratorParam { layer_index: layer_idx };
+                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                        if let Some(gp) = &layer.gen_params {
+                            let driver_idx = gp.drivers.as_ref()
+                                .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32));
+                            if let Some(di) = driver_idx {
+                                let old = gp.drivers.as_ref().unwrap()[di].enabled;
+                                let cmd = ToggleDriverEnabledCommand::new(
+                                    target, di, old, !old,
+                                );
+                                editing.execute(Box::new(cmd), project);
+                            } else {
+                                let driver = ParameterDriver {
+                                    param_index: *pi as i32,
+                                    beat_division: BeatDivision::Quarter,
+                                    waveform: DriverWaveform::Sine,
+                                    enabled: true,
+                                    phase: 0.0,
+                                    base_value: gp.param_values.get(*pi).copied().unwrap_or(0.0),
+                                    trim_min: 0.0,
+                                    trim_max: 1.0,
+                                    reversed: false,
+                                };
+                                let cmd = AddDriverCommand::new(target, driver);
+                                editing.execute(Box::new(cmd), project);
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::GenEnvelopeToggle(pi) => {
+            // Gen param envelopes live on GeneratorParamState.envelopes.
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        if let Some(gp) = &mut layer.gen_params {
+                            let envs = gp.envelopes.get_or_insert_with(Vec::new);
+                            let env_idx = envs.iter().position(|e| e.param_index == *pi as i32);
+                            if let Some(idx) = env_idx {
+                                envs[idx].enabled = !envs[idx].enabled;
+                            } else {
+                                envs.push(ParamEnvelope {
+                                    target_effect_type: Default::default(),
+                                    param_index: *pi as i32,
+                                    enabled: true,
+                                    attack_beats: 0.25,
+                                    decay_beats: 0.25,
+                                    sustain_level: 1.0,
+                                    release_beats: 0.25,
+                                    target_normalized: 1.0,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::GenDriverConfig(pi, cfg) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    let target = DriverTarget::GeneratorParam { layer_index: layer_idx };
+                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                        if let Some(gp) = &layer.gen_params {
+                            if let Some(di) = gp.drivers.as_ref()
+                                .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32))
+                            {
+                                let driver = &gp.drivers.as_ref().unwrap()[di];
+                                match cfg {
+                                    DriverConfigAction::BeatDiv(idx) => {
+                                        if let Some(new_div) = BeatDivision::from_button_index(*idx) {
+                                            let cmd = ChangeDriverBeatDivCommand::new(
+                                                target, di, driver.beat_division, new_div,
+                                            );
+                                            editing.execute(Box::new(cmd), project);
+                                        }
+                                    }
+                                    DriverConfigAction::Wave(idx) => {
+                                        if let Some(new_wave) = DriverWaveform::from_index(*idx) {
+                                            let cmd = ChangeDriverWaveformCommand::new(
+                                                target, di, driver.waveform, new_wave,
+                                            );
+                                            editing.execute(Box::new(cmd), project);
+                                        }
+                                    }
+                                    DriverConfigAction::Dot => {
+                                        if let Some(new_div) = driver.beat_division.toggle_dotted() {
+                                            let cmd = ChangeDriverBeatDivCommand::new(
+                                                target, di, driver.beat_division, new_div,
+                                            );
+                                            editing.execute(Box::new(cmd), project);
+                                        }
+                                    }
+                                    DriverConfigAction::Triplet => {
+                                        if let Some(new_div) = driver.beat_division.toggle_triplet() {
+                                            let cmd = ChangeDriverBeatDivCommand::new(
+                                                target, di, driver.beat_division, new_div,
+                                            );
+                                            editing.execute(Box::new(cmd), project);
+                                        }
+                                    }
+                                    DriverConfigAction::Reverse => {
+                                        let cmd = ToggleDriverReversedCommand::new(
+                                            target, di, driver.reversed, !driver.reversed,
+                                        );
+                                        editing.execute(Box::new(cmd), project);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::GenEnvParamChanged(pi, param, val) => {
+            // Live ADSR mutation during drag.
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        if let Some(gp) = &mut layer.gen_params {
+                            if let Some(envs) = &mut gp.envelopes {
+                                if let Some(env) = envs.iter_mut()
+                                    .find(|e| e.param_index == *pi as i32)
+                                {
+                                    match param {
+                                        manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
+                                        manifold_ui::EnvelopeParam::Decay => env.decay_beats = *val,
+                                        manifold_ui::EnvelopeParam::Sustain => env.sustain_level = *val,
+                                        manifold_ui::EnvelopeParam::Release => env.release_beats = *val,
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
-        PanelAction::GenEnvelopeToggle(_pi) => {
-            log::debug!("Gen envelope toggle (modulation not yet wired)");
+        PanelAction::GenTrimChanged(pi, min, max) => {
+            // Live trim mutation during drag.
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        if let Some(gp) = &mut layer.gen_params {
+                            if let Some(drivers) = &mut gp.drivers {
+                                if let Some(driver) = drivers.iter_mut()
+                                    .find(|d| d.param_index == *pi as i32)
+                                {
+                                    driver.trim_min = *min;
+                                    driver.trim_max = *max;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
-        PanelAction::GenDriverConfig(_pi, _cfg) => {
-            DispatchResult::handled()
-        }
-        PanelAction::GenEnvParamChanged(_pi, _param, _val) => {
-            DispatchResult::handled()
-        }
-        PanelAction::GenTrimChanged(_pi, _min, _max) => {
-            DispatchResult::handled()
-        }
-        PanelAction::GenTargetChanged(_pi, _norm) => {
+        PanelAction::GenTargetChanged(pi, norm) => {
+            // Live target normalized mutation during drag.
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        if let Some(gp) = &mut layer.gen_params {
+                            if let Some(envs) = &mut gp.envelopes {
+                                if let Some(env) = envs.iter_mut()
+                                    .find(|e| e.param_index == *pi as i32)
+                                {
+                                    env.target_normalized = *norm;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
 

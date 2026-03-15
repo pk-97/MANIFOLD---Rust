@@ -761,6 +761,80 @@ impl BeatDivision {
             BeatDivision::WholeTriplet => 8.0 / 3.0,
         }
     }
+
+    /// Map UI button index (0..=10) to a base BeatDivision.
+    /// Button labels: "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8", "16", "32", "64"
+    pub fn from_button_index(idx: usize) -> Option<Self> {
+        const MAP: [BeatDivision; 11] = [
+            BeatDivision::Sixteenth,
+            BeatDivision::Eighth,
+            BeatDivision::Quarter,
+            BeatDivision::Half,
+            BeatDivision::Whole,
+            BeatDivision::TwoWhole,
+            BeatDivision::FourWhole,
+            BeatDivision::EightWhole,
+            BeatDivision::SixteenWhole,
+            BeatDivision::ThirtyTwoWhole,
+            BeatDivision::ThirtyTwoWhole, // "64" — clamp to max
+        ];
+        MAP.get(idx).copied()
+    }
+
+    /// Strip dotted/triplet modifier, returning the base division.
+    pub fn base_division(self) -> Self {
+        match self {
+            Self::EighthDotted | Self::EighthTriplet => Self::Eighth,
+            Self::QuarterDotted | Self::QuarterTriplet => Self::Quarter,
+            Self::HalfDotted | Self::HalfTriplet => Self::Half,
+            Self::WholeDotted | Self::WholeTriplet => Self::Whole,
+            Self::TwoWholeDotted => Self::TwoWhole,
+            other => other,
+        }
+    }
+
+    pub fn is_dotted(self) -> bool {
+        matches!(self,
+            Self::EighthDotted | Self::QuarterDotted | Self::HalfDotted
+            | Self::WholeDotted | Self::TwoWholeDotted)
+    }
+
+    pub fn is_triplet(self) -> bool {
+        matches!(self,
+            Self::EighthTriplet | Self::QuarterTriplet
+            | Self::HalfTriplet | Self::WholeTriplet)
+    }
+
+    /// Toggle dotted modifier. Returns None if no dotted variant exists for this base.
+    pub fn toggle_dotted(self) -> Option<Self> {
+        if self.is_dotted() {
+            return Some(self.base_division());
+        }
+        let base = self.base_division();
+        match base {
+            Self::Eighth => Some(Self::EighthDotted),
+            Self::Quarter => Some(Self::QuarterDotted),
+            Self::Half => Some(Self::HalfDotted),
+            Self::Whole => Some(Self::WholeDotted),
+            Self::TwoWhole => Some(Self::TwoWholeDotted),
+            _ => None,
+        }
+    }
+
+    /// Toggle triplet modifier. Returns None if no triplet variant exists for this base.
+    pub fn toggle_triplet(self) -> Option<Self> {
+        if self.is_triplet() {
+            return Some(self.base_division());
+        }
+        let base = self.base_division();
+        match base {
+            Self::Eighth => Some(Self::EighthTriplet),
+            Self::Quarter => Some(Self::QuarterTriplet),
+            Self::Half => Some(Self::HalfTriplet),
+            Self::Whole => Some(Self::WholeTriplet),
+            _ => None,
+        }
+    }
 }
 
 // ─── Driver Waveform ───
@@ -792,6 +866,19 @@ impl<'de> Deserialize<'de> for DriverWaveform {
             4 => DriverWaveform::Random,
             _ => DriverWaveform::Sine,
         })
+    }
+}
+
+impl DriverWaveform {
+    pub fn from_index(idx: usize) -> Option<Self> {
+        const ALL: [DriverWaveform; 5] = [
+            DriverWaveform::Sine,
+            DriverWaveform::Triangle,
+            DriverWaveform::Sawtooth,
+            DriverWaveform::Square,
+            DriverWaveform::Random,
+        ];
+        ALL.get(idx).copied()
     }
 }
 
