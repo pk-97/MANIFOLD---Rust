@@ -717,7 +717,7 @@ impl Panel for InspectorCompositePanel {
                 // subsequent Drag/DragEnd events route to the correct sub-panel.
                 self.route_pointer_down(*node_id, *pos)
             }
-            UIEvent::RightClick { node_id, pos } => {
+            UIEvent::RightClick { node_id, pos, .. } => {
                 if !self.viewport_rect.contains(*pos) { return Vec::new(); }
                 self.route_right_click(*node_id)
             }

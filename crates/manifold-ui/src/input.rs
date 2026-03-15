@@ -49,7 +49,8 @@ pub enum Key {
 pub enum UIEvent {
     Click { node_id: u32, pos: Vec2, modifiers: Modifiers },
     DoubleClick { node_id: u32, pos: Vec2, modifiers: Modifiers },
-    RightClick { node_id: u32, pos: Vec2 },
+    RightClick { node_id: u32, pos: Vec2, modifiers: Modifiers },
+    Scroll { pos: Vec2, delta: Vec2, modifiers: Modifiers },
     PointerDown { node_id: u32, pos: Vec2 },
     PointerUp { node_id: u32, pos: Vec2 },
     HoverEnter { node_id: u32, pos: Vec2 },
@@ -260,8 +261,18 @@ impl UIInputSystem {
             self.pending_events.push(UIEvent::RightClick {
                 node_id: hit_id as u32,
                 pos,
+                modifiers: self.modifiers,
             });
         }
+    }
+
+    /// Process a scroll wheel event at `pos` with pixel `delta`.
+    pub fn process_scroll(&mut self, pos: Vec2, delta: Vec2) {
+        self.pending_events.push(UIEvent::Scroll {
+            pos,
+            delta,
+            modifiers: self.modifiers,
+        });
     }
 
     /// Process a key press on the currently focused node.

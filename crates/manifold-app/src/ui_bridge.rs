@@ -30,6 +30,7 @@ use manifold_editing::service::EditingService;
 use manifold_playback::engine::PlaybackEngine;
 use manifold_ui::{PanelAction, InspectorTab, DriverConfigAction};
 use manifold_ui::node::Color32;
+use manifold_ui::color;
 use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::viewport::{TrackInfo, HitRegion};
 use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
@@ -1766,6 +1767,53 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
 
         ui.header.set_time_display(tree, &display);
         ui.transport.set_bpm_text(tree, &format!("{:.1}", bpm));
+
+        // Clock authority display
+        let auth = project.settings.clock_authority;
+        let auth_color = match auth {
+            manifold_core::types::ClockAuthority::Internal => color::BUTTON_INACTIVE_C32,
+            manifold_core::types::ClockAuthority::Link => color::LINK_ORANGE,
+            manifold_core::types::ClockAuthority::MidiClock => color::MIDI_PURPLE,
+            manifold_core::types::ClockAuthority::Osc => color::SYNC_ACTIVE,
+        };
+        ui.transport.set_clock_authority(tree, auth.display_name(), auth_color);
+
+        // Sync source status (default inactive — no actual connections yet)
+        ui.transport.set_link_state(tree, false, color::STATUS_DOT_INACTIVE, "—", color::TEXT_DIMMED_C32);
+        ui.transport.set_clk_state(tree, false, "—", color::STATUS_DOT_INACTIVE, "—", color::TEXT_DIMMED_C32);
+        ui.transport.set_sync_state(tree, false, color::STATUS_DOT_INACTIVE, "—", color::TEXT_DIMMED_C32);
+
+        // Record state
+        ui.transport.set_record_state(tree, engine.is_recording(), true);
+
+        // BPM tap/reset buttons (inactive until tapped)
+        ui.transport.set_bpm_reset_active(tree, false);
+        ui.transport.set_bpm_clear_active(tree, false);
+
+        // Save button — no dirty tracking yet, show clean state
+        ui.transport.set_save_text(tree, "Save");
+
+        // Export state
+        let has_export_range = project.timeline.export_in_beat < project.timeline.export_out_beat;
+        if has_export_range {
+            let export_label = format!("Export {:.1}-{:.1}", project.timeline.export_in_beat, project.timeline.export_out_beat);
+            ui.transport.set_export_label(tree, &export_label);
+        } else {
+            ui.transport.set_export_label(tree, "Export");
+        }
+        ui.transport.set_export_active(tree, false); // No active export in Rust port yet
+        ui.transport.set_hdr_active(tree, project.settings.export_hdr);
+
+        // Header — project name + zoom label
+        ui.header.set_project_name(tree, "Untitled"); // No project file path yet
+        let ppb = ui.viewport.pixels_per_beat();
+        let zoom_pct = (ppb / color::ZOOM_LEVELS[color::DEFAULT_ZOOM_INDEX]) * 100.0;
+        ui.header.set_zoom_label(tree, &format!("{:.0}%", zoom_pct));
+
+        // Footer — quantize mode, resolution, FPS
+        ui.footer.set_quantize_text(tree, project.settings.quantize_mode.display_name());
+        ui.footer.set_resolution_text(tree, project.settings.resolution_preset.display_name());
+        ui.footer.set_fps_text(tree, &format!("{:.0} FPS", project.settings.frame_rate));
     }
 
     // Footer stats
@@ -1804,12 +1852,33 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
         ui.viewport.set_insert_cursor(beat);
     }
 
-    // Layer mute/solo state sync + active layer highlighting
+    // Layer mute/solo state sync + active layer highlighting + labels
     ui.layer_headers.set_active_layer(active_layer);
     if let Some(project) = engine.project() {
         for (i, layer) in project.timeline.layers.iter().enumerate() {
             ui.layer_headers.set_mute_state(tree, i, layer.is_muted);
             ui.layer_headers.set_solo_state(tree, i, layer.is_solo);
+            ui.layer_headers.set_blend_mode_text(tree, i, layer.default_blend_mode.display_name());
+
+            // MIDI note/channel labels
+            let note_text = if layer.midi_note >= 0 {
+                format!("{}", layer.midi_note)
+            } else {
+                "—".into()
+            };
+            ui.layer_headers.set_midi_note_text(tree, i, &note_text);
+
+            let ch_text = if layer.midi_channel >= 0 {
+                format!("Ch {}", layer.midi_channel + 1)
+            } else {
+                "Any".into()
+            };
+            ui.layer_headers.set_midi_channel_text(tree, i, &ch_text);
+
+            // Layer info text (clip count)
+            let clip_count = layer.clips.len();
+            let info = if clip_count == 1 { "1 clip".into() } else { format!("{} clips", clip_count) };
+            ui.layer_headers.set_info_text(tree, i, &info);
         }
     }
 
@@ -1867,6 +1936,61 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
         // No clip selected — hide clip chrome content
         let chrome = ui.inspector.clip_chrome_mut();
         chrome.set_mode(false, false, false, false);
+    }
+
+    // Sync effect card values (master, layer, clip)
+    if let Some(project) = engine.project() {
+        // Master effects
+        for (i, effect) in project.settings.master_effects.iter().enumerate() {
+            if let Some(card) = ui.inspector.master_effect_mut(i) {
+                card.sync_effect_name(tree, effect.effect_type.display_name());
+                card.sync_enabled(tree, effect.enabled);
+                card.sync_values(tree, &effect.param_values);
+            }
+        }
+
+        // Layer effects
+        if let Some(idx) = active_layer {
+            if let Some(layer) = project.timeline.layers.get(idx) {
+                if let Some(effects) = &layer.effects {
+                    for (i, effect) in effects.iter().enumerate() {
+                        if let Some(card) = ui.inspector.layer_effect_mut(i) {
+                            card.sync_effect_name(tree, effect.effect_type.display_name());
+                            card.sync_enabled(tree, effect.enabled);
+                            card.sync_values(tree, &effect.param_values);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clip effects
+        if let Some(clip_id) = &selection.primary_clip_id {
+            let clip = project.timeline.layers.iter()
+                .flat_map(|l| l.clips.iter())
+                .find(|c| c.id == *clip_id);
+            if let Some(clip) = clip {
+                for (i, effect) in clip.effects.iter().enumerate() {
+                    if let Some(card) = ui.inspector.clip_effect_mut(i) {
+                        card.sync_effect_name(tree, effect.effect_type.display_name());
+                        card.sync_enabled(tree, effect.enabled);
+                        card.sync_values(tree, &effect.param_values);
+                    }
+                }
+            }
+        }
+
+        // Generator params (stored on layer, not clip)
+        if let Some(idx) = active_layer {
+            if let Some(layer) = project.timeline.layers.get(idx) {
+                if let Some(gp_state) = &layer.gen_params {
+                    if let Some(gp) = ui.inspector.gen_params_mut() {
+                        gp.sync_gen_type_name(tree, gp_state.generator_type.display_name());
+                        gp.sync_values(tree, &gp_state.param_values);
+                    }
+                }
+            }
+        }
     }
 
     scroll_changed
