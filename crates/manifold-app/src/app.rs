@@ -8,10 +8,8 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
 use manifold_core::project::Project;
-use manifold_core::types::{BlendMode, GeneratorType, LayerType, PlaybackState};
+use manifold_core::types::{BlendMode, LayerType, PlaybackState};
 use manifold_core::layer::Layer;
-use manifold_core::clip::TimelineClip;
-use manifold_core::generator::GeneratorParamState;
 use manifold_editing::commands::layer::DeleteLayerCommand;
 use manifold_editing::service::EditingService;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
@@ -196,10 +194,9 @@ impl Application {
         ];
         let mut engine = PlaybackEngine::new(renderers);
 
-        // Create test project with a Plasma generator clip
-        let project = Self::create_test_project();
+        // Create default project with one empty video layer
+        let project = Self::create_default_project();
         engine.initialize(project);
-        engine.set_state(PlaybackState::Playing);
 
         Self {
             gpu: None,
@@ -234,31 +231,13 @@ impl Application {
         }
     }
 
-    fn create_test_project() -> Project {
+    fn create_default_project() -> Project {
         let mut project = Project::default();
         project.settings.bpm = 120.0;
         project.settings.time_signature_numerator = 4;
 
-        // Generator layer with Plasma clip
-        let mut layer = Layer::new("Plasma".to_string(), LayerType::Generator, 0);
-        layer.gen_params = Some(GeneratorParamState {
-            generator_type: GeneratorType::Plasma,
-            param_values: vec![
-                0.0, // PATTERN
-                0.5, // COMPLEXITY
-                0.5, // CONTRAST
-                1.0, // SPEED
-                1.0, // SCALE
-                0.0, // SNAP
-            ],
-            base_param_values: None,
-            drivers: None,
-            envelopes: None,
-            legacy_param_version: None,
-        });
-
-        let clip = TimelineClip::new_generator(GeneratorType::Plasma, 0, 0.0, 10000.0);
-        layer.add_clip(clip);
+        // One empty video layer (matches Unity startup behavior)
+        let layer = Layer::new("Layer 1".to_string(), LayerType::Video, 0);
         project.timeline.layers.push(layer);
 
         project

@@ -11,8 +11,8 @@ use super::{Panel, PanelAction};
 
 const RULER_HEIGHT: f32 = color::RULER_HEIGHT;
 const PLAYHEAD_WIDTH: f32 = color::PLAYHEAD_WIDTH;
-const INSERT_CURSOR_WIDTH: f32 = 1.0;
-const CLIP_VERTICAL_PAD: f32 = 4.0;
+const INSERT_CURSOR_WIDTH: f32 = 2.0;
+const CLIP_VERTICAL_PAD: f32 = 12.0;
 const CLIP_LABEL_PAD: f32 = 4.0;
 const CLIP_CORNER_RADIUS: f32 = 2.0;
 const CLIP_BORDER_WIDTH: f32 = 1.0;

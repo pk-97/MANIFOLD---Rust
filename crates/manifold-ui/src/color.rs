@@ -12,7 +12,7 @@ use crate::node::Color32;
 // ── Panel / Background ──────────────────────────────────────────────
 // 6-level elevation: Void → Deep → Base → Surface → Raised → Elevated
 pub const PANEL_BG: Color32 = Color32::new(37, 37, 38, 245);
-pub const TRACK_BG: Color32 = Color32::new(36, 36, 37, 255);
+pub const TRACK_BG: Color32 = Color32::new(26, 26, 27, 255);
 pub const TRACK_BG_ALT: Color32 = Color32::new(27, 27, 28, 255);
 pub const INSPECTOR_BG: Color32 = Color32::new(26, 26, 27, 255);
 pub const INSPECTOR_BG_FOCUSED: Color32 = Color32::new(32, 32, 34, 255);
@@ -80,7 +80,7 @@ pub const DEFAULT_GROUP_ACCENT: Color32 = Color32::new(115, 115, 191, 255);
 pub const GROUP_BOTTOM_BORDER: Color32 = Color32::new(97, 97, 148, 153);
 
 // ── Text colors ─────────────────────────────────────────────────────
-pub const TEXT_NORMAL: Color32 = Color32::new(224, 224, 230, 255);
+pub const TEXT_NORMAL: Color32 = Color32::new(224, 224, 224, 255);
 pub const TEXT_DIMMED: Color32 = Color32::new(158, 158, 163, 255);
 pub const TEXT_SUBTLE: Color32 = Color32::new(107, 107, 112, 255);
 pub const PLACEHOLDER_TEXT: Color32 = Color32::new(107, 107, 112, 153);
@@ -225,7 +225,7 @@ pub const EXIT_PATH_PRESSED: Color32 = Color32::new(40, 40, 43, 255);
 pub const OVERVIEW_BG: Color32 = Color32::new(15, 15, 17, 255);
 pub const OVERVIEW_VIEWPORT: Color32 = Color32::new(89, 148, 235, 64);
 pub const OVERVIEW_PLAYHEAD: Color32 = Color32::new(217, 64, 56, 255);
-pub const EXPORT_MARKER_COLOR: Color32 = Color32::new(77, 140, 235, 255);
+pub const EXPORT_MARKER_COLOR: Color32 = Color32::new(77, 141, 235, 255);
 pub const EXPORT_RANGE_HIGHLIGHT: Color32 = Color32::new(77, 140, 235, 31);
 
 // ── Bitmap Panel Common ─────────────────────────────────────────────
@@ -233,7 +233,7 @@ pub const TRANSPARENT: Color32 = Color32::new(0, 0, 0, 0);
 pub const HOVER_OVERLAY: Color32 = Color32::new(255, 255, 255, 15);
 pub const PRESS_OVERLAY: Color32 = Color32::new(255, 255, 255, 25);
 pub const PANEL_BG_DARK: Color32 = Color32::new(26, 26, 27, 255);
-pub const TEXT_PRIMARY_C32: Color32 = Color32::new(224, 224, 230, 255);
+pub const TEXT_PRIMARY_C32: Color32 = Color32::new(224, 224, 224, 255);
 pub const TEXT_WHITE_C32: Color32 = Color32::new(255, 255, 255, 255);
 pub const TEXT_LIGHT_C32: Color32 = Color32::new(220, 220, 225, 255);
 pub const TEXT_DIMMED_C32: Color32 = Color32::new(158, 158, 163, 255);
@@ -297,14 +297,14 @@ pub const FOOTER_HEIGHT: f32 = 29.0;
 pub const TRACK_HEIGHT: f32 = 140.0;
 pub const COLLAPSED_TRACK_HEIGHT: f32 = 48.0;
 pub const COLLAPSED_GEN_TRACK_HEIGHT: f32 = 62.0;
-pub const RULER_HEIGHT: f32 = 40.0;
+pub const RULER_HEIGHT: f32 = 24.0;
 pub const LAYER_CONTROLS_WIDTH: f32 = 200.0;
 pub const PLAYHEAD_WIDTH: f32 = 2.0;
 pub const CLIP_MIN_WIDTH: f32 = 10.0;
 pub const OVERVIEW_STRIP_HEIGHT: f32 = 16.0;
 pub const MIN_INSPECTOR_WIDTH: f32 = 196.0;
 pub const MAX_INSPECTOR_WIDTH: f32 = 500.0;
-pub const DEFAULT_INSPECTOR_WIDTH: f32 = MAX_INSPECTOR_WIDTH;
+pub const DEFAULT_INSPECTOR_WIDTH: f32 = 280.0;
 pub const INSPECTOR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
 pub const INSPECTOR_GAP: f32 = 4.0;
 

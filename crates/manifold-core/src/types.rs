@@ -336,10 +336,12 @@ impl GeneratorType {
     pub fn param_defs(&self) -> &'static [(&'static str, f32, f32, f32, bool, bool)] {
         match self {
             Self::Plasma => &[
-                ("Speed", 0.0, 5.0, 1.0, false, false),
-                ("Scale", 0.1, 10.0, 3.0, false, false),
-                ("Complexity", 1.0, 8.0, 4.0, true, false),
-                ("Color Shift", 0.0, 1.0, 0.0, false, false),
+                ("Pattern",    0.0,  4.0,  0.0,  true,  false),
+                ("Complexity", 0.0,  1.0,  0.5,  false, false),
+                ("Contrast",   0.0,  1.0,  0.63, false, false),
+                ("Speed",      0.1,  5.0,  1.0,  false, false),
+                ("Scale",      0.25, 3.0,  1.0,  false, false),
+                ("Snap",       0.0,  1.0,  1.0,  false, true),
             ],
             Self::ConcentricTunnel => &[
                 ("Speed", 0.0, 5.0, 1.0, false, false),
