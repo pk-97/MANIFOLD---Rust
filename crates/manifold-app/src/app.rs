@@ -348,18 +348,21 @@ impl Application {
             }
         }
         if needs_structural_sync {
-            crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine);
+            crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine, self.active_layer_index);
             crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
         } else if self.active_layer_index != prev_active_layer {
             crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
         }
-        if self.needs_rebuild {
+        // 2. Push engine state to UI panels (may trigger auto-scroll)
+        let scroll_changed = crate::ui_bridge::push_state(&mut self.ui_root, &self.engine, self.active_layer_index, &self.selection);
+
+        // 3. Rebuild if needed (after push_state so auto-scroll is captured)
+        if self.needs_rebuild || scroll_changed {
             self.needs_rebuild = false;
             self.ui_root.build();
         }
 
-        // 2. Push engine state to UI panels
-        crate::ui_bridge::push_state(&mut self.ui_root, &self.engine, self.active_layer_index, &self.selection);
+        // 4. Lightweight update (playhead, insert cursor, slider values, layer selection)
         self.ui_root.update();
 
         // 3. Tick the engine
@@ -819,7 +822,7 @@ impl ApplicationHandler for Application {
         self.ui_root.resize(logical_w, logical_h);
 
         // Push initial project data (layers, tracks) and rebuild
-        crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine);
+        crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine, self.active_layer_index);
         crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
 
         self.initialized = true;

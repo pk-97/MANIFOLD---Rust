@@ -341,8 +341,14 @@ impl InspectorCompositePanel {
 
     // ── Drag event routing (needs &mut UITree) ───────────────────
 
+    /// Whether a sub-panel is currently pressed (active drag target).
+    pub fn has_pressed_target(&self) -> bool {
+        self.pressed_target.is_some() || self.dragging_scrollbar
+    }
+
     /// Route drag events to the pressed sub-panel.
-    /// Call directly from the app layer (not through Panel::handle_event).
+    /// Called from UIRoot::process_events (not through Panel::handle_event)
+    /// because it needs &mut UITree for slider visual feedback.
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         if self.dragging_scrollbar {
             let vp = self.viewport_rect;
@@ -703,6 +709,12 @@ impl Panel for InspectorCompositePanel {
             }
             UIEvent::PointerDown { node_id, pos } => {
                 if !self.viewport_rect.contains(*pos) { return Vec::new(); }
+                self.route_pointer_down(*node_id, *pos)
+            }
+            UIEvent::DragBegin { node_id, pos, .. } => {
+                if !self.viewport_rect.contains(*pos) { return Vec::new(); }
+                // DragBegin sets pressed_target (same as PointerDown) so
+                // subsequent Drag/DragEnd events route to the correct sub-panel.
                 self.route_pointer_down(*node_id, *pos)
             }
             UIEvent::RightClick { node_id, pos } => {

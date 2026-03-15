@@ -417,9 +417,29 @@ pub fn dispatch(
         }
 
         // ── Zoom ───────────────────────────────────────────────────
-        PanelAction::ZoomIn | PanelAction::ZoomOut => {
-            // Zoom is UI-only state, handled in UIRoot.
-            DispatchResult::handled()
+        PanelAction::ZoomIn => {
+            let ppb = ui.viewport.pixels_per_beat();
+            let levels = &manifold_ui::color::ZOOM_LEVELS;
+            let current_idx = levels.iter()
+                .position(|&l| (l - ppb).abs() < 0.01)
+                .unwrap_or(manifold_ui::color::DEFAULT_ZOOM_INDEX);
+            let new_idx = (current_idx + 1).min(levels.len() - 1);
+            if new_idx != current_idx {
+                ui.viewport.set_zoom(levels[new_idx]);
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::ZoomOut => {
+            let ppb = ui.viewport.pixels_per_beat();
+            let levels = &manifold_ui::color::ZOOM_LEVELS;
+            let current_idx = levels.iter()
+                .position(|&l| (l - ppb).abs() < 0.01)
+                .unwrap_or(manifold_ui::color::DEFAULT_ZOOM_INDEX);
+            let new_idx = current_idx.saturating_sub(1);
+            if new_idx != current_idx {
+                ui.viewport.set_zoom(levels[new_idx]);
+            }
+            DispatchResult::structural()
         }
 
         // ── Inspector navigation ───────────────────────────────────
@@ -1476,7 +1496,8 @@ const PLAY_GREEN: Color32 = Color32::new(56, 115, 66, 255);
 const PLAY_ACTIVE: Color32 = Color32::new(64, 184, 82, 255);
 
 /// Push engine state into UI panels (called once per frame).
-pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option<usize>, selection: &SelectionState) {
+/// Returns true if auto-scroll changed the viewport scroll position (needs rebuild).
+pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option<usize>, selection: &SelectionState) -> bool {
     let tree = &mut ui.tree;
 
     // Transport state
@@ -1521,6 +1542,7 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
     ui.viewport.set_playing(engine.is_playing());
 
     // Auto-scroll: keep playhead visible during playback
+    let mut scroll_changed = false;
     if engine.is_playing() {
         let ppb = ui.viewport.pixels_per_beat();
         let tracks_w = ui.viewport.viewport_rect().width;
@@ -1530,6 +1552,7 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
                 playhead_beat - tracks_w * 0.1 / ppb,
                 ui.viewport.scroll_y_px(),
             );
+            scroll_changed = true;
         }
     }
 
@@ -1541,7 +1564,8 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
         ui.viewport.set_insert_cursor(beat);
     }
 
-    // Layer mute/solo state sync
+    // Layer mute/solo state sync + active layer highlighting
+    ui.layer_headers.set_active_layer(active_layer);
     if let Some(project) = engine.project() {
         for (i, layer) in project.timeline.layers.iter().enumerate() {
             ui.layer_headers.set_mute_state(tree, i, layer.is_muted);
@@ -1604,12 +1628,14 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
         let chrome = ui.inspector.clip_chrome_mut();
         chrome.set_mode(false, false, false, false);
     }
+
+    scroll_changed
 }
 
 /// Sync structural project data (layers, tracks) into UI panels.
 /// Call once at init and whenever the project structure changes.
 /// Triggers a full UI rebuild afterward.
-pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine) {
+pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option<usize>) {
     if let Some(project) = engine.project() {
         // Layer data → LayerHeaderPanel
         let layers: Vec<LayerInfo> = project.timeline.layers.iter().enumerate().map(|(i, layer)| {
@@ -1633,9 +1659,10 @@ pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine) {
                 midi_channel: layer.midi_channel,
                 y_offset: i as f32 * track_h,
                 height: track_h,
-                is_selected: false,
+                is_selected: active_layer == Some(i),
             }
         }).collect();
+        ui.layer_headers.set_active_layer(active_layer);
         ui.layer_headers.set_layers(layers);
 
         // Track data → TimelineViewportPanel

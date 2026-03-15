@@ -419,6 +419,10 @@ pub struct LayerHeaderPanel {
     cached_solo: Vec<bool>,
     cached_selected: Vec<bool>,
 
+    // Active layer (pushed from app layer each frame)
+    active_layer: Option<usize>,
+    cached_active_layer: Option<usize>,
+
     // Screen-space origin of the layer controls panel
     panel_origin: Vec2,
     panel_width: f32,
@@ -436,6 +440,8 @@ impl LayerHeaderPanel {
             cached_mute: Vec::new(),
             cached_solo: Vec::new(),
             cached_selected: Vec::new(),
+            active_layer: None,
+            cached_active_layer: None,
             panel_origin: Vec2::ZERO,
             panel_width: 0.0,
         }
@@ -449,6 +455,11 @@ impl LayerHeaderPanel {
     /// Number of layers in the current build.
     pub fn layer_count(&self) -> usize {
         self.rows.len()
+    }
+
+    /// Set the active (focused) layer index. Applied in update() via dirty-check.
+    pub fn set_active_layer(&mut self, index: Option<usize>) {
+        self.active_layer = index;
     }
 
     // ── Accessors ───────────────────────────────────────────────────
@@ -1008,7 +1019,23 @@ impl Panel for LayerHeaderPanel {
         ) as i32;
     }
 
-    fn update(&mut self, _tree: &mut UITree) {}
+    fn update(&mut self, tree: &mut UITree) {
+        // Dirty-check active layer and update selection highlighting
+        if self.active_layer != self.cached_active_layer {
+            let old = self.cached_active_layer;
+            let new = self.active_layer;
+            self.cached_active_layer = new;
+
+            // Deselect old active layer
+            if let Some(old_idx) = old {
+                self.set_selection(tree, old_idx, false);
+            }
+            // Select new active layer
+            if let Some(new_idx) = new {
+                self.set_selection(tree, new_idx, true);
+            }
+        }
+    }
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
         match event {

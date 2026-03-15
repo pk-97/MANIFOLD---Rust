@@ -154,6 +154,7 @@ enum ViewportDragMode {
     None,
     ClipDrag,
     RegionDrag,
+    RulerScrub,
 }
 
 impl TimelineViewportPanel {
@@ -579,6 +580,11 @@ impl Panel for TimelineViewportPanel {
                 }
             }
             UIEvent::DragBegin { pos, .. } => {
+                if self.ruler_rect.contains(*pos) {
+                    self.drag_mode = ViewportDragMode::RulerScrub;
+                    let beat = self.pixel_to_beat(pos.x).max(0.0);
+                    return vec![PanelAction::Seek(beat)];
+                }
                 if self.tracks_rect.contains(*pos) {
                     let beat = self.pixel_to_beat(pos.x);
                     if let Some(hit) = self.hit_test_clip(*pos) {
@@ -594,6 +600,9 @@ impl Panel for TimelineViewportPanel {
                 let beat = self.pixel_to_beat(pos.x);
                 let layer = self.layer_at_y(pos.y);
                 match self.drag_mode {
+                    ViewportDragMode::RulerScrub => {
+                        return vec![PanelAction::Seek(beat.max(0.0))];
+                    }
                     ViewportDragMode::ClipDrag => {
                         return vec![PanelAction::ClipDragMoved(beat, layer)];
                     }
@@ -609,6 +618,7 @@ impl Panel for TimelineViewportPanel {
                 let was_dragging = self.drag_mode;
                 self.drag_mode = ViewportDragMode::None;
                 match was_dragging {
+                    ViewportDragMode::RulerScrub => {} // No commit needed
                     ViewportDragMode::ClipDrag => {
                         return vec![PanelAction::ClipDragEnded];
                     }

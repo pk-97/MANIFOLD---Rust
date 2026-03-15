@@ -183,6 +183,27 @@ impl UIRoot {
             actions.append(&mut panel_actions);
         }
 
+        // Route Drag/DragEnd to inspector directly (needs &mut tree for slider feedback).
+        // This is separate from the panel event loop because Panel::handle_event takes
+        // &UITree, but slider drag updates need &mut UITree.
+        for event in &events {
+            match event {
+                UIEvent::Drag { pos, .. } => {
+                    if self.inspector.has_pressed_target() {
+                        let mut drag_actions = self.inspector.handle_drag(*pos, &mut self.tree);
+                        actions.append(&mut drag_actions);
+                    }
+                }
+                UIEvent::DragEnd { .. } => {
+                    if self.inspector.has_pressed_target() {
+                        let mut end_actions = self.inspector.handle_drag_end(&mut self.tree);
+                        actions.append(&mut end_actions);
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Intercept dropdown-triggering actions and open dropdowns here
         // (where we have access to the tree for node bounds).
         let mut filtered = Vec::with_capacity(actions.len());
