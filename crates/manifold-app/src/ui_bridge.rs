@@ -1516,8 +1516,22 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
     }
 
     // Playhead + playing state
-    ui.viewport.set_playhead(engine.current_beat());
+    let playhead_beat = engine.current_beat();
+    ui.viewport.set_playhead(playhead_beat);
     ui.viewport.set_playing(engine.is_playing());
+
+    // Auto-scroll: keep playhead visible during playback
+    if engine.is_playing() {
+        let ppb = ui.viewport.pixels_per_beat();
+        let tracks_w = ui.viewport.viewport_rect().width;
+        let visible_end_beat = ui.viewport.scroll_x_beats() + tracks_w / ppb;
+        if playhead_beat > visible_end_beat {
+            ui.viewport.set_scroll(
+                playhead_beat - tracks_w * 0.1 / ppb,
+                ui.viewport.scroll_y_px(),
+            );
+        }
+    }
 
     // Selection → viewport
     ui.viewport.set_selected_clip_ids(

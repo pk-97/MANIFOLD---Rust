@@ -183,6 +183,7 @@ pub struct Application {
 
     // State
     initialized: bool,
+    needs_rebuild: bool,
 }
 
 impl Application {
@@ -228,6 +229,7 @@ impl Application {
             },
             time_since_start: 0.0,
             initialized: false,
+            needs_rebuild: false,
         }
     }
 
@@ -350,6 +352,10 @@ impl Application {
             crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
         } else if self.active_layer_index != prev_active_layer {
             crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
+        }
+        if self.needs_rebuild {
+            self.needs_rebuild = false;
+            self.ui_root.build();
         }
 
         // 2. Push engine state to UI panels
@@ -927,6 +933,77 @@ impl ApplicationHandler for Application {
                 }
             }
 
+            // ── Mouse wheel (scroll / zoom) ──────────────────────────
+            WindowEvent::MouseWheel { delta, .. } => {
+                if is_primary {
+                    let (dx, dy) = match delta {
+                        winit::event::MouseScrollDelta::LineDelta(x, y) => (x * 20.0, y * 20.0),
+                        winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
+                    };
+
+                    let pos = self.cursor_pos;
+                    let inspector_rect = self.ui_root.layout.inspector();
+                    let tracks_rect = self.ui_root.layout.timeline_tracks();
+
+                    if inspector_rect.contains(pos) {
+                        // Scroll the inspector panel
+                        self.ui_root.inspector.handle_scroll(dy);
+                        self.needs_rebuild = true;
+                    } else if tracks_rect.contains(pos) {
+                        if self.modifiers.alt {
+                            // Alt + scroll Y → zoom (step through zoom levels)
+                            let anchor_beat = self.ui_root.viewport.pixel_to_beat(pos.x);
+                            let current_ppb = self.ui_root.viewport.pixels_per_beat();
+                            let levels = &manifold_ui::color::ZOOM_LEVELS;
+                            let current_idx = levels.iter()
+                                .position(|&l| (l - current_ppb).abs() < 0.01)
+                                .unwrap_or_else(|| {
+                                    levels.iter().enumerate()
+                                        .min_by(|(_, a), (_, b)| {
+                                            (*a - current_ppb).abs().partial_cmp(&(*b - current_ppb).abs()).unwrap()
+                                        })
+                                        .map(|(i, _)| i)
+                                        .unwrap_or(0)
+                                });
+                            let new_idx = if dy > 0.0 {
+                                current_idx.saturating_add(1).min(levels.len() - 1)
+                            } else {
+                                current_idx.saturating_sub(1)
+                            };
+                            if new_idx != current_idx {
+                                let new_ppb = levels[new_idx];
+                                // Anchor: keep the beat under cursor at the same screen X
+                                let new_scroll = anchor_beat - (pos.x - tracks_rect.x) / new_ppb;
+                                self.ui_root.viewport.set_zoom(new_ppb);
+                                self.ui_root.viewport.set_scroll(
+                                    new_scroll.max(0.0),
+                                    self.ui_root.viewport.scroll_y_px(),
+                                );
+                                self.needs_rebuild = true;
+                            }
+                        } else if self.modifiers.shift {
+                            // Shift + scroll Y → horizontal pan
+                            let ppb = self.ui_root.viewport.pixels_per_beat();
+                            let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
+                            let new_x = (self.ui_root.viewport.scroll_x_beats() - beat_delta).max(0.0);
+                            self.ui_root.viewport.set_scroll(
+                                new_x,
+                                self.ui_root.viewport.scroll_y_px(),
+                            );
+                            self.needs_rebuild = true;
+                        } else {
+                            // Plain scroll → vertical track scroll
+                            let new_y = (self.ui_root.viewport.scroll_y_px() - dy).max(0.0);
+                            self.ui_root.viewport.set_scroll(
+                                self.ui_root.viewport.scroll_x_beats(),
+                                new_y,
+                            );
+                            self.needs_rebuild = true;
+                        }
+                    }
+                }
+            }
+
             // ── Modifier tracking ──────────────────────────────────
             WindowEvent::ModifiersChanged(mods) => {
                 let state = mods.state();
@@ -1179,6 +1256,43 @@ impl ApplicationHandler for Application {
                                 let count = self.engine.project().map_or(0, |p| p.timeline.layers.len());
                                 if idx + 1 < count {
                                     self.active_layer_index = Some(idx + 1);
+                                }
+                            }
+                            consumed = true;
+                        }
+                        // ── F — zoom to fit all clips ──
+                        Key::Character(ref c) if c.as_str() == "f" && !self.modifiers.command => {
+                            if let Some(project) = self.engine.project() {
+                                let clips = project.timeline.layers.iter()
+                                    .flat_map(|l| l.clips.iter());
+                                let mut min_beat = f32::MAX;
+                                let mut max_beat = f32::MIN;
+                                let mut has_clips = false;
+                                for c in clips {
+                                    min_beat = min_beat.min(c.start_beat);
+                                    max_beat = max_beat.max(c.start_beat + c.duration_beats);
+                                    has_clips = true;
+                                }
+                                if has_clips {
+                                    let margin = 0.1 * (max_beat - min_beat).max(1.0);
+                                    let range = max_beat - min_beat + 2.0 * margin;
+                                    let tracks_w = self.ui_root.layout.timeline_tracks().width;
+                                    let required_ppb = tracks_w / range;
+                                    // Find closest zoom level
+                                    let levels = &manifold_ui::color::ZOOM_LEVELS;
+                                    let best_idx = levels.iter().enumerate()
+                                        .min_by(|(_, a), (_, b)| {
+                                            (*a - required_ppb).abs().partial_cmp(&(*b - required_ppb).abs()).unwrap()
+                                        })
+                                        .map(|(i, _)| i)
+                                        .unwrap_or(0);
+                                    let ppb = levels[best_idx];
+                                    self.ui_root.viewport.set_zoom(ppb);
+                                    self.ui_root.viewport.set_scroll(
+                                        (min_beat - margin).max(0.0),
+                                        0.0,
+                                    );
+                                    self.needs_rebuild = true;
                                 }
                             }
                             consumed = true;
