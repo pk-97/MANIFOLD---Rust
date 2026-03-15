@@ -89,6 +89,10 @@ pub struct InspectorCompositePanel {
 
     // Event routing
     pressed_target: Option<PressedTarget>,
+    /// Remembers which inspector tab (Master/Layer/Clip) the last effect
+    /// interaction targeted. Survives across drag_end so dispatch can
+    /// route effect actions to the correct data location.
+    last_effect_tab: InspectorTab,
 
     // Background
     bg_panel_id: i32,
@@ -118,6 +122,7 @@ impl InspectorCompositePanel {
             scrollbar_thumb_id: -1,
             dragging_scrollbar: false,
             pressed_target: None,
+            last_effect_tab: InspectorTab::Layer,
             bg_panel_id: -1,
         }
     }
@@ -191,6 +196,10 @@ impl InspectorCompositePanel {
 
     pub fn viewport_rect(&self) -> Rect { self.viewport_rect }
     pub fn scroll_offset(&self) -> f32 { self.scroll_offset }
+    /// Which inspector tab the last effect interaction targeted.
+    /// Dispatch uses this to route EffectParamChanged etc. to the
+    /// correct data location (master / layer / clip effects).
+    pub fn last_effect_tab(&self) -> InspectorTab { self.last_effect_tab }
 
     pub fn is_dragging(&self) -> bool {
         self.dragging_scrollbar
@@ -282,6 +291,23 @@ impl InspectorCompositePanel {
             self.scrollbar_thumb_id as u32,
             Rect::new(thumb_x, thumb_y, SCROLLBAR_W, thumb_h),
         );
+    }
+
+    // ── Tab tracking for dispatch routing ────────────────────────
+
+    fn update_last_effect_tab(&mut self, target: &PressedTarget) {
+        match target {
+            PressedTarget::MasterChrome | PressedTarget::MasterEffect(_) => {
+                self.last_effect_tab = InspectorTab::Master;
+            }
+            PressedTarget::LayerChrome | PressedTarget::LayerEffect(_) => {
+                self.last_effect_tab = InspectorTab::Layer;
+            }
+            PressedTarget::ClipChrome | PressedTarget::ClipEffect(_) | PressedTarget::GenParam => {
+                self.last_effect_tab = InspectorTab::Clip;
+            }
+            PressedTarget::Scrollbar => {}
+        }
     }
 
     // ── Node range ownership ─────────────────────────────────────
@@ -455,6 +481,7 @@ impl InspectorCompositePanel {
         }
 
         if let Some(target) = self.find_target_for_node(node_id) {
+            self.update_last_effect_tab(&target);
             match target {
                 PressedTarget::MasterChrome => self.master_chrome.handle_click(node_id),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_click(node_id),
@@ -489,6 +516,10 @@ impl InspectorCompositePanel {
     fn route_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
         let target = self.find_target_for_node(node_id);
         self.pressed_target = target;
+        // Record which tab this interaction targets (survives drag_end)
+        if let Some(ref t) = target {
+            self.update_last_effect_tab(t);
+        }
 
         if let Some(target) = target {
             match target {

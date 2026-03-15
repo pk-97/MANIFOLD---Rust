@@ -132,9 +132,12 @@ impl UIInputSystem {
         &self.pending_events
     }
 
-    /// Reset cached hover state after a tree rebuild.
+    /// Reset cached interaction state after a tree rebuild.
+    /// All old node IDs are stale — clear them to prevent ghost hover/press.
     pub fn invalidate_hover(&mut self) {
         self.hovered_id = -1;
+        self.pressed_id = -1;
+        self.is_dragging = false;
     }
 
     /// Clear keyboard focus.

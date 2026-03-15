@@ -878,20 +878,17 @@ pub fn dispatch(
         }
 
         // ── Effect operations ──────────────────────────────────────
+        // NOTE: All effect actions route through last_effect_tab() to
+        // write to the correct location (master / layer / clip effects).
         PanelAction::EffectToggle(fx_idx) => {
-            if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
-                    let target = EffectTarget::Layer { layer_index: layer_idx };
-                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
-                        if let Some(effects) = &layer.effects {
-                            if let Some(fx) = effects.get(*fx_idx) {
-                                let old = fx.enabled;
-                                let cmd = ToggleEffectCommand::new(
-                                    target, *fx_idx, old, !old,
-                                );
-                                editing.execute(Box::new(cmd), project);
-                            }
-                        }
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project_mut() {
+                let (effects_ref, target) = resolve_effects_read(tab, project, *active_layer, selection);
+                if let Some(effects) = effects_ref {
+                    if let Some(fx) = effects.get(*fx_idx) {
+                        let old = fx.enabled;
+                        let cmd = ToggleEffectCommand::new(target, *fx_idx, old, !old);
+                        editing.execute(Box::new(cmd), project);
                     }
                 }
             }
@@ -901,24 +898,21 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::EffectParamRightClick(fx_idx, param_idx, default_val) => {
-            // Reset effect param to its default value
-            if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
-                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
-                        let effects = layer.effects_mut();
-                        if let Some(fx) = effects.get_mut(*fx_idx) {
-                            let old = fx.param_values.get(*param_idx).copied().unwrap_or(0.0);
-                            if (old - *default_val).abs() > f32::EPSILON {
-                                while fx.param_values.len() <= *param_idx {
-                                    fx.param_values.push(0.0);
-                                }
-                                fx.param_values[*param_idx] = *default_val;
-                                let target = EffectTarget::Layer { layer_index: layer_idx };
-                                let cmd = ChangeEffectParamCommand::new(
-                                    target, *fx_idx, *param_idx, old, *default_val,
-                                );
-                                editing.record(Box::new(cmd));
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project_mut() {
+                let (effects_mut, target) = resolve_effects_mut(tab, project, *active_layer, selection);
+                if let Some(effects) = effects_mut {
+                    if let Some(fx) = effects.get_mut(*fx_idx) {
+                        let old = fx.param_values.get(*param_idx).copied().unwrap_or(0.0);
+                        if (old - *default_val).abs() > f32::EPSILON {
+                            while fx.param_values.len() <= *param_idx {
+                                fx.param_values.push(0.0);
                             }
+                            fx.param_values[*param_idx] = *default_val;
+                            let cmd = ChangeEffectParamCommand::new(
+                                target, *fx_idx, *param_idx, old, *default_val,
+                            );
+                            editing.record(Box::new(cmd));
                         }
                     }
                 }
@@ -926,32 +920,27 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::EffectParamSnapshot(fx_idx, param_idx) => {
-            if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project() {
-                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
-                        if let Some(effects) = &layer.effects {
-                            if let Some(fx) = effects.get(*fx_idx) {
-                                *drag_snapshot = Some(
-                                    fx.param_values.get(*param_idx).copied().unwrap_or(0.0)
-                                );
-                            }
-                        }
-                    }
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project() {
+                let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                if let Some(fx) = effects.and_then(|e| e.get(*fx_idx)) {
+                    *drag_snapshot = Some(
+                        fx.param_values.get(*param_idx).copied().unwrap_or(0.0)
+                    );
                 }
             }
             DispatchResult::handled()
         }
         PanelAction::EffectParamChanged(fx_idx, param_idx, val) => {
-            if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
-                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
-                        let effects = layer.effects_mut();
-                        if let Some(fx) = effects.get_mut(*fx_idx) {
-                            while fx.param_values.len() <= *param_idx {
-                                fx.param_values.push(0.0);
-                            }
-                            fx.param_values[*param_idx] = *val;
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project_mut() {
+                let (effects_mut, _target) = resolve_effects_mut(tab, project, *active_layer, selection);
+                if let Some(effects) = effects_mut {
+                    if let Some(fx) = effects.get_mut(*fx_idx) {
+                        while fx.param_values.len() <= *param_idx {
+                            fx.param_values.push(0.0);
                         }
+                        fx.param_values[*param_idx] = *val;
                     }
                 }
             }
@@ -959,22 +948,18 @@ pub fn dispatch(
         }
         PanelAction::EffectParamCommit(fx_idx, param_idx) => {
             if let Some(old_val) = drag_snapshot.take() {
-                if let Some(layer_idx) = *active_layer {
-                    if let Some(project) = engine.project() {
-                        if let Some(layer) = project.timeline.layers.get(layer_idx) {
-                            if let Some(effects) = &layer.effects {
-                                if let Some(fx) = effects.get(*fx_idx) {
-                                    let new_val = fx.param_values.get(*param_idx)
-                                        .copied().unwrap_or(0.0);
-                                    if (old_val - new_val).abs() > f32::EPSILON {
-                                        let target = EffectTarget::Layer { layer_index: layer_idx };
-                                        let cmd = ChangeEffectParamCommand::new(
-                                            target, *fx_idx, *param_idx, old_val, new_val,
-                                        );
-                                        editing.record(Box::new(cmd));
-                                    }
-                                }
-                            }
+                let tab = ui.inspector.last_effect_tab();
+                if let Some(project) = engine.project() {
+                    let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                    if let Some(fx) = effects.and_then(|e| e.get(*fx_idx)) {
+                        let new_val = fx.param_values.get(*param_idx)
+                            .copied().unwrap_or(0.0);
+                        if (old_val - new_val).abs() > f32::EPSILON {
+                            let target = resolve_effect_target(tab, *active_layer);
+                            let cmd = ChangeEffectParamCommand::new(
+                                target, *fx_idx, *param_idx, old_val, new_val,
+                            );
+                            editing.record(Box::new(cmd));
                         }
                     }
                 }
@@ -1193,16 +1178,13 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::RemoveEffect(fx_idx) => {
-            if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
-                    let target = EffectTarget::Layer { layer_index: layer_idx };
-                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
-                        if let Some(effects) = &layer.effects {
-                            if let Some(fx) = effects.get(*fx_idx) {
-                                let cmd = RemoveEffectCommand::new(target, fx.clone(), *fx_idx);
-                                editing.execute(Box::new(cmd), project);
-                            }
-                        }
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project_mut() {
+                let (effects_ref, target) = resolve_effects_read(tab, project, *active_layer, selection);
+                if let Some(effects) = effects_ref {
+                    if let Some(fx) = effects.get(*fx_idx) {
+                        let cmd = RemoveEffectCommand::new(target, fx.clone(), *fx_idx);
+                        editing.execute(Box::new(cmd), project);
                     }
                 }
             }
@@ -1732,13 +1714,132 @@ pub fn redo(engine: &mut PlaybackEngine, editing: &mut EditingService) -> bool {
     }
 }
 
+// ── Effect tab routing helpers ───────────────────────────────────
+
+use manifold_core::project::Project;
+
+/// Build an EffectTarget for the given tab.
+fn resolve_effect_target(tab: InspectorTab, active_layer: Option<usize>) -> EffectTarget {
+    match tab {
+        InspectorTab::Master => EffectTarget::Master,
+        InspectorTab::Layer => EffectTarget::Layer {
+            layer_index: active_layer.unwrap_or(0),
+        },
+        InspectorTab::Clip => EffectTarget::Layer {
+            layer_index: active_layer.unwrap_or(0),
+        }, // Clip effects use layer for undo target
+    }
+}
+
+/// Get a read-only reference to the effects list and the EffectTarget
+/// for the given inspector tab. Returns (effects_slice, target).
+fn resolve_effects_read<'a>(
+    tab: InspectorTab,
+    project: &'a Project,
+    active_layer: Option<usize>,
+    selection: &SelectionState,
+) -> (Option<&'a [EffectInstance]>, EffectTarget) {
+    match tab {
+        InspectorTab::Master => (
+            Some(&project.settings.master_effects),
+            EffectTarget::Master,
+        ),
+        InspectorTab::Layer => {
+            let target = EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) };
+            let effects = active_layer
+                .and_then(|idx| project.timeline.layers.get(idx))
+                .and_then(|l| l.effects.as_deref());
+            (effects, target)
+        }
+        InspectorTab::Clip => {
+            let target = EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) };
+            let effects = selection.primary_clip_id.as_ref().and_then(|cid| {
+                project.timeline.layers.iter()
+                    .flat_map(|l| l.clips.iter())
+                    .find(|c| c.id == *cid)
+                    .map(|c| c.effects.as_slice())
+            });
+            (effects, target)
+        }
+    }
+}
+
+/// Get a read-only reference to effects (simpler version for snapshot/commit).
+fn resolve_effects_ref<'a>(
+    tab: InspectorTab,
+    project: &'a Project,
+    active_layer: Option<usize>,
+    selection: &SelectionState,
+) -> Option<&'a [EffectInstance]> {
+    resolve_effects_read(tab, project, active_layer, selection).0
+}
+
+/// Get a mutable reference to the effects list and EffectTarget.
+fn resolve_effects_mut<'a>(
+    tab: InspectorTab,
+    project: &'a mut Project,
+    active_layer: Option<usize>,
+    selection: &SelectionState,
+) -> (Option<&'a mut Vec<EffectInstance>>, EffectTarget) {
+    match tab {
+        InspectorTab::Master => {
+            let effects = &mut project.settings.master_effects;
+            (Some(effects), EffectTarget::Master)
+        }
+        InspectorTab::Layer => {
+            let target = EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) };
+            let effects = active_layer
+                .and_then(move |idx| project.timeline.layers.get_mut(idx))
+                .map(|l| l.effects_mut());
+            (effects, target)
+        }
+        InspectorTab::Clip => {
+            let target = EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) };
+            let clip_id = selection.primary_clip_id.clone();
+            let effects = clip_id.and_then(|cid| {
+                project.timeline.find_clip_by_id_mut(&cid)
+                    .map(|c| &mut c.effects)
+            });
+            (effects, target)
+        }
+    }
+}
+
 // Transport colors for play state.
 const PLAY_GREEN: Color32 = Color32::new(56, 115, 66, 255);
 const PLAY_ACTIVE: Color32 = Color32::new(64, 184, 82, 255);
 
-/// Push engine state into UI panels (called once per frame).
-/// Returns true if auto-scroll changed the viewport scroll position (needs rebuild).
-pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option<usize>, selection: &SelectionState) -> bool {
+/// Check auto-scroll and return true if viewport scroll changed (needs rebuild).
+/// Must run BEFORE build() so the rebuild includes the new scroll position.
+pub fn check_auto_scroll(ui: &mut UIRoot, engine: &PlaybackEngine) -> bool {
+    let playhead_beat = engine.current_beat();
+    let mut scroll_changed = false;
+    if engine.is_playing() {
+        let ppb = ui.viewport.pixels_per_beat();
+        let tracks_w = ui.viewport.viewport_rect().width;
+        let scroll_x = ui.viewport.scroll_x_beats();
+        let visible_end_beat = scroll_x + tracks_w / ppb;
+
+        if playhead_beat > visible_end_beat {
+            ui.viewport.set_scroll(
+                playhead_beat - tracks_w * 0.1 / ppb,
+                ui.viewport.scroll_y_px(),
+            );
+            scroll_changed = true;
+        } else if playhead_beat < scroll_x {
+            ui.viewport.set_scroll(
+                (playhead_beat - tracks_w * 0.2 / ppb).max(0.0),
+                ui.viewport.scroll_y_px(),
+            );
+            scroll_changed = true;
+        }
+    }
+    scroll_changed
+}
+
+/// Push engine state into UI panels (called once per frame, AFTER build).
+/// Syncs all data-model state into tree nodes so the renderer shows current values.
+pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option<usize>, selection: &SelectionState) {
     let tree = &mut ui.tree;
 
     // Transport state
@@ -1831,31 +1932,6 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
     let playhead_beat = engine.current_beat();
     ui.viewport.set_playhead(playhead_beat);
     ui.viewport.set_playing(engine.is_playing());
-
-    // Auto-scroll: keep playhead visible during playback
-    let mut scroll_changed = false;
-    if engine.is_playing() {
-        let ppb = ui.viewport.pixels_per_beat();
-        let tracks_w = ui.viewport.viewport_rect().width;
-        let scroll_x = ui.viewport.scroll_x_beats();
-        let visible_end_beat = scroll_x + tracks_w / ppb;
-
-        if playhead_beat > visible_end_beat {
-            // Right edge: playhead exited right — scroll forward
-            ui.viewport.set_scroll(
-                playhead_beat - tracks_w * 0.1 / ppb,
-                ui.viewport.scroll_y_px(),
-            );
-            scroll_changed = true;
-        } else if playhead_beat < scroll_x {
-            // Left edge: playhead is behind viewport (e.g. loop/seek back)
-            ui.viewport.set_scroll(
-                (playhead_beat - tracks_w * 0.2 / ppb).max(0.0),
-                ui.viewport.scroll_y_px(),
-            );
-            scroll_changed = true;
-        }
-    }
 
     // Selection → viewport
     ui.viewport.set_selected_clip_ids(
@@ -2006,7 +2082,6 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
         }
     }
 
-    scroll_changed
 }
 
 /// Sync structural project data (layers, tracks) into UI panels.

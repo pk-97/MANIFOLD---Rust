@@ -79,6 +79,9 @@ impl UIRoot {
     /// Build all panels. Call once after creation and after resize.
     pub fn build(&mut self) {
         self.tree.clear();
+        // Invalidate input state — old node IDs are now stale
+        self.input.invalidate_hover();
+
         self.layout = ScreenLayout::new(self.screen_width, self.screen_height);
 
         self.transport.build(&mut self.tree, &self.layout);
