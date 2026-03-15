@@ -39,7 +39,7 @@ const SAVE_AS_W: f32 = 55.0;
 const EXPORT_BUTTON_W: f32 = 55.0;
 const HDR_BUTTON_W: f32 = 35.0;
 const XML_BUTTON_W: f32 = 40.0;
-const EXPORT_LABEL_W: f32 = 0.0;
+const EXPORT_LABEL_W: f32 = 120.0;
 const PERC_BUTTON_W: f32 = 48.0;
 
 // ── Panel-specific colors ──────────────────────────────────────────

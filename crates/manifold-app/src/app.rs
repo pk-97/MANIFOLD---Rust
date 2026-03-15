@@ -12,6 +12,7 @@ use manifold_core::types::{BlendMode, GeneratorType, LayerType, PlaybackState};
 use manifold_core::layer::Layer;
 use manifold_core::clip::TimelineClip;
 use manifold_core::generator::GeneratorParamState;
+use manifold_editing::commands::layer::DeleteLayerCommand;
 use manifold_editing::service::EditingService;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::renderer::StubRenderer;
@@ -1095,6 +1096,23 @@ impl ApplicationHandler for Application {
                                     self.editing_service.execute_batch(commands, "Delete clips".into(), project);
                                 }
                                 self.selection.clear();
+                            } else if let Some(idx) = self.active_layer_index {
+                                // No clips selected — delete the active layer (if >1 layer)
+                                if let Some(project) = self.engine.project_mut() {
+                                    if project.timeline.layers.len() > 1 {
+                                        if let Some(layer) = project.timeline.layers.get(idx) {
+                                            let layer_clone = layer.clone();
+                                            let cmd = DeleteLayerCommand::new(layer_clone, idx);
+                                            self.editing_service.execute(Box::new(cmd), project);
+                                            // Fix active_layer if out of bounds
+                                            let new_count = project.timeline.layers.len();
+                                            if idx >= new_count {
+                                                self.active_layer_index = Some(new_count.saturating_sub(1));
+                                            }
+                                            self.needs_rebuild = true;
+                                        }
+                                    }
+                                }
                             }
                             consumed = true;
                         }
@@ -1388,6 +1406,11 @@ impl ApplicationHandler for Application {
                             }
                             consumed = true;
                         }
+                        // ── Backtick — toggle performance HUD ──
+                        Key::Character(ref c) if c.as_str() == "`" && !self.modifiers.command => {
+                            log::info!("Toggle performance HUD");
+                            consumed = true;
+                        }
                         _ => {}
                     }
                 }
@@ -1399,19 +1422,17 @@ impl ApplicationHandler for Application {
                     }
                 }
 
-                // App-level shortcuts (output window management)
-                match &logical_key {
-                    Key::Character(ref c) if c.as_str() == "o" || c.as_str() == "O" => {
-                        let count = self.window_registry.len();
-                        self.open_output_window(event_loop, &format!("Output {}", count), None);
-                    }
-                    Key::Named(NamedKey::Escape) => {
-                        if !is_primary {
-                            self.window_registry.remove(&window_id);
-                            log::info!("Closed output window");
+                // Output window management (only when key wasn't consumed by app shortcuts)
+                if !consumed {
+                    match &logical_key {
+                        Key::Named(NamedKey::Escape) => {
+                            if !is_primary {
+                                self.window_registry.remove(&window_id);
+                                log::info!("Closed output window");
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
 

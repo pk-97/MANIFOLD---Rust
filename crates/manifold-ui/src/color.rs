@@ -203,6 +203,31 @@ pub const MUTE_SOLO_BTN_INACTIVE: Color32 = Color32::new(64, 64, 69, 255);
 // ── Ruler ───────────────────────────────────────────────────────────
 pub const RULER_BG: Color32 = Color32::new(102, 102, 102, 255);
 
+// ── Dropdown item states ────────────────────────────────────────────
+pub const DROPDOWN_ITEM_SELECTED: Color32 = Color32::new(45, 65, 95, 255);
+pub const DROPDOWN_CHECK_COLOR: Color32 = Color32::new(100, 180, 255, 255);
+pub const DROPDOWN_BORDER: Color32 = Color32::new(58, 58, 62, 255);
+
+// ── Clip chrome ─────────────────────────────────────────────────────
+pub const LOOP_ON_COLOR: Color32 = Color32::new(50, 100, 180, 255);
+pub const LOOP_OFF_COLOR: Color32 = Color32::new(45, 45, 48, 255);
+pub const BPM_BTN_COLOR: Color32 = Color32::new(40, 40, 42, 255);
+pub const BPM_BTN_HOVER: Color32 = Color32::new(50, 50, 55, 255);
+pub const GEN_TYPE_COLOR: Color32 = Color32::new(100, 199, 140, 255);
+pub const GEN_TYPE_HOVER: Color32 = Color32::new(40, 40, 44, 255);
+
+// ── Master chrome ───────────────────────────────────────────────────
+pub const EXIT_PATH_BG: Color32 = Color32::new(48, 48, 51, 255);
+pub const EXIT_PATH_HOVER: Color32 = Color32::new(58, 58, 63, 255);
+pub const EXIT_PATH_PRESSED: Color32 = Color32::new(40, 40, 43, 255);
+
+// ── Overview strip ──────────────────────────────────────────────────
+pub const OVERVIEW_BG: Color32 = Color32::new(15, 15, 17, 255);
+pub const OVERVIEW_VIEWPORT: Color32 = Color32::new(89, 148, 235, 64);
+pub const OVERVIEW_PLAYHEAD: Color32 = Color32::new(217, 64, 56, 255);
+pub const EXPORT_MARKER_COLOR: Color32 = Color32::new(77, 140, 235, 255);
+pub const EXPORT_RANGE_HIGHLIGHT: Color32 = Color32::new(77, 140, 235, 31);
+
 // ── Bitmap Panel Common ─────────────────────────────────────────────
 pub const TRANSPARENT: Color32 = Color32::new(0, 0, 0, 0);
 pub const HOVER_OVERLAY: Color32 = Color32::new(255, 255, 255, 15);

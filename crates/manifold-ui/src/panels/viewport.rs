@@ -436,13 +436,18 @@ impl TimelineViewportPanel {
     // ── Grid subdivision ──────────────────────────────────────────
 
     /// Determine grid subdivision level based on zoom.
+    /// Uses per-note pixel widths (matching Unity's GridOverlay thresholds):
+    ///   - Show 16ths when a 16th-note ≥ 4px wide
+    ///   - Show 8ths  when an 8th-note ≥ 6px wide
+    ///   - Show beats when a beat ≥ 6px wide
     fn grid_subdivision(&self) -> GridSubdivision {
-        let bar_width = self.pixels_per_beat * self.beats_per_bar as f32;
-        if bar_width >= 400.0 {
+        let sixteenth_px = self.pixels_per_beat * 0.25;
+        let eighth_px = self.pixels_per_beat * 0.5;
+        if sixteenth_px >= 4.0 {
             GridSubdivision::Sixteenth
-        } else if bar_width >= 200.0 {
+        } else if eighth_px >= 6.0 {
             GridSubdivision::Eighth
-        } else if bar_width >= 80.0 {
+        } else if self.pixels_per_beat >= 6.0 {
             GridSubdivision::Beat
         } else {
             GridSubdivision::Bar
@@ -984,7 +989,7 @@ impl TimelineViewportPanel {
             }
 
             // Trim handle indicators (on hovered or selected clips, when wide enough)
-            if (is_selected || is_hovered) && clip_w > 24.0 {
+            if (is_selected || is_hovered) && clip_w > 12.0 {
                 let handle_w = 8.0_f32.min(clip_w * 0.25);
                 let trim_style = UIStyle {
                     bg_color: color::TRIM_HANDLE_COLOR,
@@ -1224,16 +1229,20 @@ mod tests {
         let mut panel = TimelineViewportPanel::new();
         panel.beats_per_bar = 4;
 
-        panel.pixels_per_beat = 1.0; // Very zoomed out: bar_width = 4
+        // Very zoomed out: ppb=1, beat < 6px → Bar
+        panel.pixels_per_beat = 1.0;
         assert_eq!(panel.grid_subdivision(), GridSubdivision::Bar);
 
-        panel.pixels_per_beat = 40.0; // bar_width = 160
+        // ppb=8: beat=8px ≥ 6 → Beat; eighth=4px < 6 → not Eighth
+        panel.pixels_per_beat = 8.0;
         assert_eq!(panel.grid_subdivision(), GridSubdivision::Beat);
 
-        panel.pixels_per_beat = 80.0; // bar_width = 320
+        // ppb=14: eighth=7px ≥ 6 → Eighth; sixteenth=3.5px < 4 → not Sixteenth
+        panel.pixels_per_beat = 14.0;
         assert_eq!(panel.grid_subdivision(), GridSubdivision::Eighth);
 
-        panel.pixels_per_beat = 200.0; // bar_width = 800
+        // ppb=20: sixteenth=5px ≥ 4 → Sixteenth
+        panel.pixels_per_beat = 20.0;
         assert_eq!(panel.grid_subdivision(), GridSubdivision::Sixteenth);
     }
 
