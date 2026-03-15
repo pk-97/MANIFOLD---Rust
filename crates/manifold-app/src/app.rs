@@ -962,10 +962,16 @@ impl ApplicationHandler for Application {
                             consumed = true;
                         }
                         Key::Named(NamedKey::Escape) => {
-                            self.engine.set_state(PlaybackState::Stopped);
-                            self.engine.seek_to(0.0);
+                            // Clear selection first; if already clear, stop
+                            if !self.selection.selected_clip_ids.is_empty() {
+                                self.selection.clear();
+                            } else {
+                                self.engine.set_state(PlaybackState::Stopped);
+                                self.engine.seek_to(0.0);
+                            }
                             consumed = true;
                         }
+                        // ── Undo/Redo ──
                         Key::Character(ref c) if c.as_str() == "z" && self.modifiers.command => {
                             if self.modifiers.shift {
                                 crate::ui_bridge::redo(&mut self.engine, &mut self.editing_service);
@@ -978,31 +984,185 @@ impl ApplicationHandler for Application {
                             crate::ui_bridge::redo(&mut self.engine, &mut self.editing_service);
                             consumed = true;
                         }
+                        // ── File ──
                         Key::Character(ref c) if c.as_str() == "s" && self.modifiers.command => {
                             log::info!("Save project (Cmd+S) — not yet implemented");
                             consumed = true;
                         }
+                        // ── Delete selected clips ──
                         Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace)
                             if !self.modifiers.command =>
                         {
-                            log::info!("Delete selected (not yet implemented)");
+                            if !self.selection.selected_clip_ids.is_empty() {
+                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                                if let Some(project) = self.engine.project_mut() {
+                                    let commands = EditingService::delete_clips(project, &ids);
+                                    self.editing_service.execute_batch(commands, "Delete clips".into(), project);
+                                }
+                                self.selection.clear();
+                            }
                             consumed = true;
                         }
+                        // ── Split at playhead ──
+                        Key::Character(ref c) if c.as_str() == "s" && !self.modifiers.command => {
+                            let beat = self.engine.current_beat();
+                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                            if !ids.is_empty() {
+                                if let Some(project) = self.engine.project_mut() {
+                                    let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
+                                    for id in &ids {
+                                        if let Some(cmd) = EditingService::split_clip_at_beat(project, id, beat) {
+                                            commands.push(cmd);
+                                        }
+                                    }
+                                    if !commands.is_empty() {
+                                        self.editing_service.execute_batch(commands, "Split clips".into(), project);
+                                    }
+                                }
+                            }
+                            consumed = true;
+                        }
+                        // ── Extend / Shrink by grid step ──
+                        Key::Character(ref c) if c.as_str() == "e" && !self.modifiers.command => {
+                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                            if !ids.is_empty() {
+                                let step = self.ui_root.viewport.grid_step();
+                                if let Some(project) = self.engine.project_mut() {
+                                    let commands = if self.modifiers.shift {
+                                        EditingService::shrink_clips_by_grid(project, &ids, step)
+                                    } else {
+                                        EditingService::extend_clips_by_grid(project, &ids, step)
+                                    };
+                                    if !commands.is_empty() {
+                                        let desc = if self.modifiers.shift { "Shrink clips" } else { "Extend clips" };
+                                        self.editing_service.execute_batch(commands, desc.into(), project);
+                                    }
+                                }
+                            }
+                            consumed = true;
+                        }
+                        // ── Toggle mute on selected clips ──
+                        Key::Character(ref c) if c.as_str() == "0" && !self.modifiers.command => {
+                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                            if let Some(project) = self.engine.project_mut() {
+                                for id in &ids {
+                                    if let Some(clip) = project.timeline.find_clip_by_id_mut(id) {
+                                        clip.is_muted = !clip.is_muted;
+                                    }
+                                }
+                            }
+                            consumed = true;
+                        }
+                        // ── Select all (Cmd+A) ──
+                        Key::Character(ref c) if c.as_str() == "a" && self.modifiers.command => {
+                            if let Some(project) = self.engine.project() {
+                                self.selection.selected_clip_ids.clear();
+                                for layer in &project.timeline.layers {
+                                    for clip in &layer.clips {
+                                        self.selection.selected_clip_ids.insert(clip.id.clone());
+                                    }
+                                }
+                                self.selection.primary_clip_id = self.selection.selected_clip_ids.iter().next().cloned();
+                                self.selection.version += 1;
+                            }
+                            consumed = true;
+                        }
+                        // ── Copy (Cmd+C) ──
+                        Key::Character(ref c) if c.as_str() == "c" && self.modifiers.command => {
+                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                            if !ids.is_empty() {
+                                if let Some(project) = self.engine.project() {
+                                    self.editing_service.copy_clips(project, &ids);
+                                }
+                            }
+                            consumed = true;
+                        }
+                        // ── Cut (Cmd+X) ──
+                        Key::Character(ref c) if c.as_str() == "x" && self.modifiers.command => {
+                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                            if !ids.is_empty() {
+                                if let Some(project) = self.engine.project_mut() {
+                                    self.editing_service.copy_clips(project, &ids);
+                                    let commands = EditingService::delete_clips(project, &ids);
+                                    self.editing_service.execute_batch(commands, "Cut clips".into(), project);
+                                }
+                                self.selection.clear();
+                            }
+                            consumed = true;
+                        }
+                        // ── Paste (Cmd+V) ──
+                        Key::Character(ref c) if c.as_str() == "v" && self.modifiers.command => {
+                            let target_beat = self.selection.insert_cursor_beat
+                                .unwrap_or(self.engine.current_beat());
+                            let target_layer = self.selection.insert_cursor_layer
+                                .or(self.active_layer_index)
+                                .unwrap_or(0) as i32;
+                            if let Some(project) = self.engine.project_mut() {
+                                let result = self.editing_service.paste_clips(project, target_beat, target_layer);
+                                if !result.commands.is_empty() {
+                                    self.editing_service.execute_batch(result.commands, "Paste clips".into(), project);
+                                    // Select pasted clips
+                                    self.selection.selected_clip_ids.clear();
+                                    for id in result.pasted_clip_ids {
+                                        self.selection.selected_clip_ids.insert(id);
+                                    }
+                                    self.selection.primary_clip_id = self.selection.selected_clip_ids.iter().next().cloned();
+                                    self.selection.version += 1;
+                                }
+                            }
+                            consumed = true;
+                        }
+                        // ── Duplicate (Cmd+D) ──
+                        Key::Character(ref c) if c.as_str() == "d" && self.modifiers.command => {
+                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                            if !ids.is_empty() {
+                                // Use a default region spanning the selected clips
+                                let region = manifold_core::selection::SelectionRegion::default();
+                                if let Some(project) = self.engine.project_mut() {
+                                    let commands = EditingService::duplicate_clips(project, &ids, &region);
+                                    if !commands.is_empty() {
+                                        self.editing_service.execute_batch(commands, "Duplicate clips".into(), project);
+                                    }
+                                }
+                            }
+                            consumed = true;
+                        }
+                        // ── Arrow keys — nudge clips or seek ──
                         Key::Named(NamedKey::ArrowLeft) if !self.modifiers.command => {
                             let step = if self.modifiers.shift { 0.0625 } else { 0.25 };
-                            let beat = (self.engine.current_beat() - step).max(0.0);
-                            if let Some(p) = self.engine.project() {
-                                let time = beat * (60.0 / p.settings.bpm);
-                                self.engine.seek_to(time);
+                            if !self.selection.selected_clip_ids.is_empty() {
+                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                                if let Some(project) = self.engine.project_mut() {
+                                    let commands = EditingService::nudge_clips(project, &ids, -step);
+                                    if !commands.is_empty() {
+                                        self.editing_service.execute_batch(commands, "Nudge clips left".into(), project);
+                                    }
+                                }
+                            } else {
+                                let beat = (self.engine.current_beat() - step).max(0.0);
+                                if let Some(p) = self.engine.project() {
+                                    let time = beat * (60.0 / p.settings.bpm);
+                                    self.engine.seek_to(time);
+                                }
                             }
                             consumed = true;
                         }
                         Key::Named(NamedKey::ArrowRight) if !self.modifiers.command => {
                             let step = if self.modifiers.shift { 0.0625 } else { 0.25 };
-                            let beat = self.engine.current_beat() + step;
-                            if let Some(p) = self.engine.project() {
-                                let time = beat * (60.0 / p.settings.bpm);
-                                self.engine.seek_to(time);
+                            if !self.selection.selected_clip_ids.is_empty() {
+                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                                if let Some(project) = self.engine.project_mut() {
+                                    let commands = EditingService::nudge_clips(project, &ids, step);
+                                    if !commands.is_empty() {
+                                        self.editing_service.execute_batch(commands, "Nudge clips right".into(), project);
+                                    }
+                                }
+                            } else {
+                                let beat = self.engine.current_beat() + step;
+                                if let Some(p) = self.engine.project() {
+                                    let time = beat * (60.0 / p.settings.bpm);
+                                    self.engine.seek_to(time);
+                                }
                             }
                             consumed = true;
                         }
@@ -1020,6 +1180,22 @@ impl ApplicationHandler for Application {
                                 if idx + 1 < count {
                                     self.active_layer_index = Some(idx + 1);
                                 }
+                            }
+                            consumed = true;
+                        }
+                        // ── Home/End — seek to start/end ──
+                        Key::Named(NamedKey::Home) => {
+                            self.engine.seek_to(0.0);
+                            consumed = true;
+                        }
+                        Key::Named(NamedKey::End) => {
+                            if let Some(project) = self.engine.project() {
+                                let max_beat = project.timeline.layers.iter()
+                                    .flat_map(|l| l.clips.iter())
+                                    .map(|c| c.start_beat + c.duration_beats)
+                                    .fold(0.0_f32, f32::max);
+                                let time = max_beat * (60.0 / project.settings.bpm);
+                                self.engine.seek_to(time);
                             }
                             consumed = true;
                         }
