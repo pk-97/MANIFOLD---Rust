@@ -1804,6 +1804,9 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
         ui.transport.set_export_active(tree, false); // No active export in Rust port yet
         ui.transport.set_hdr_active(tree, project.settings.export_hdr);
 
+        // Export range markers on viewport
+        ui.viewport.set_export_range(project.timeline.export_in_beat, project.timeline.export_out_beat);
+
         // Header — project name + zoom label
         ui.header.set_project_name(tree, "Untitled"); // No project file path yet
         let ppb = ui.viewport.pixels_per_beat();
@@ -1834,10 +1837,20 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
     if engine.is_playing() {
         let ppb = ui.viewport.pixels_per_beat();
         let tracks_w = ui.viewport.viewport_rect().width;
-        let visible_end_beat = ui.viewport.scroll_x_beats() + tracks_w / ppb;
+        let scroll_x = ui.viewport.scroll_x_beats();
+        let visible_end_beat = scroll_x + tracks_w / ppb;
+
         if playhead_beat > visible_end_beat {
+            // Right edge: playhead exited right — scroll forward
             ui.viewport.set_scroll(
                 playhead_beat - tracks_w * 0.1 / ppb,
+                ui.viewport.scroll_y_px(),
+            );
+            scroll_changed = true;
+        } else if playhead_beat < scroll_x {
+            // Left edge: playhead is behind viewport (e.g. loop/seek back)
+            ui.viewport.set_scroll(
+                (playhead_beat - tracks_w * 0.2 / ppb).max(0.0),
                 ui.viewport.scroll_y_px(),
             );
             scroll_changed = true;
