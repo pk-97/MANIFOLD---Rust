@@ -257,20 +257,21 @@ impl UIRoot {
                 let mode = BlendMode::from_index(index);
                 Some(PanelAction::SetBlendMode(layer_idx, format!("{:?}", mode)))
             }
-            DropdownContext::MidiNote(_layer_idx) => {
-                Some(PanelAction::DropdownSelected(index))
+            DropdownContext::MidiNote(layer_idx) => {
+                Some(PanelAction::SetMidiNote(layer_idx, index as i32))
             }
-            DropdownContext::MidiChannel(_layer_idx) => {
-                Some(PanelAction::DropdownSelected(index))
+            DropdownContext::MidiChannel(layer_idx) => {
+                // Dropdown items are 0-indexed ("Ch 1" = index 0), channel is 1-based.
+                Some(PanelAction::SetMidiChannel(layer_idx, index as i32 + 1))
             }
             DropdownContext::Resolution => {
-                Some(PanelAction::DropdownSelected(index))
+                Some(PanelAction::SetResolution(index))
             }
-            DropdownContext::AddEffect(_tab) => {
-                Some(PanelAction::DropdownSelected(index))
+            DropdownContext::AddEffect(tab) => {
+                Some(PanelAction::AddEffect(tab, index))
             }
-            DropdownContext::GenType(_layer_idx) => {
-                Some(PanelAction::DropdownSelected(index))
+            DropdownContext::GenType(layer_idx) => {
+                Some(PanelAction::SetGenType(layer_idx, index))
             }
         }
     }

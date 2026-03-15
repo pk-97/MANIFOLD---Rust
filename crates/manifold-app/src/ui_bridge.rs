@@ -19,7 +19,7 @@ use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
 use manifold_playback::engine::PlaybackEngine;
-use manifold_ui::PanelAction;
+use manifold_ui::{PanelAction, InspectorTab};
 use manifold_ui::node::Color32;
 use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::viewport::TrackInfo;
@@ -218,14 +218,13 @@ pub fn dispatch(
             if let Some(project) = engine.project_mut() {
                 if let Some(layer) = project.timeline.layers.get(*idx) {
                     let old_mode = layer.default_blend_mode;
-                    // Parse mode from string (format is Debug repr like "Normal", "Add", etc.)
                     if let Some(new_mode) = BlendMode::ALL.iter().find(|m| format!("{:?}", m) == *mode_str) {
                         let cmd = ChangeLayerBlendModeCommand::new(*idx, old_mode, *new_mode);
                         editing.execute(Box::new(cmd), project);
                     }
                 }
             }
-            DispatchResult::handled()
+            DispatchResult::structural()
         }
         PanelAction::ExpandLayer(idx) => {
             if let Some(project) = engine.project_mut() {
@@ -660,10 +659,118 @@ pub fn dispatch(
             DispatchResult::handled()
         }
 
-        // ── Dropdown selection (context-routed) ────────────────────
+        // ── Dropdown results (context-routed from UIRoot) ────────────
+        PanelAction::SetMidiNote(layer_idx, note) => {
+            if let Some(project) = engine.project_mut() {
+                if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+                    let old_note = layer.midi_note;
+                    let cmd = manifold_editing::commands::settings::ChangeLayerMidiNoteCommand::new(
+                        *layer_idx, old_note, *note,
+                    );
+                    editing.execute(Box::new(cmd), project);
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::SetMidiChannel(layer_idx, channel) => {
+            if let Some(project) = engine.project_mut() {
+                if let Some(layer) = project.timeline.layers.get_mut(*layer_idx) {
+                    layer.midi_channel = *channel;
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::SetResolution(preset_idx) => {
+            use manifold_core::types::ResolutionPreset;
+            if let Some(project) = engine.project_mut() {
+                let old = project.settings.resolution_preset;
+                if let Some(new) = ResolutionPreset::from_index(*preset_idx) {
+                    let cmd = manifold_editing::commands::settings::ChangeResolutionCommand::new(old, new);
+                    editing.execute(Box::new(cmd), project);
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::AddEffect(tab, effect_type_idx) => {
+            use manifold_core::types::EffectType;
+            let Some(effect_type) = EffectType::from_index(*effect_type_idx) else {
+                return DispatchResult::handled();
+            };
+            let defaults: Vec<f32> = effect_type.param_defs().iter()
+                .map(|&(_, _, _, default, _)| default)
+                .collect();
+            let effect = EffectInstance {
+                effect_type,
+                enabled: true,
+                collapsed: false,
+                param_values: defaults,
+                base_param_values: None,
+                drivers: None,
+                group_id: None,
+                legacy_param0: None,
+                legacy_param1: None,
+                legacy_param2: None,
+                legacy_param3: None,
+            };
+            let target = match tab {
+                InspectorTab::Master => EffectTarget::Master,
+                InspectorTab::Layer => {
+                    if let Some(idx) = *active_layer {
+                        EffectTarget::Layer { layer_index: idx }
+                    } else {
+                        return DispatchResult::handled();
+                    }
+                }
+                InspectorTab::Clip => {
+                    // Clip-level effects need active clip tracking (future)
+                    log::debug!("Add effect to clip (clip selection not yet implemented)");
+                    return DispatchResult::handled();
+                }
+            };
+            if let Some(project) = engine.project_mut() {
+                let insert_idx = match &target {
+                    EffectTarget::Master => project.settings.master_effects.len(),
+                    EffectTarget::Layer { layer_index } => {
+                        project.timeline.layers.get(*layer_index)
+                            .and_then(|l| l.effects.as_ref())
+                            .map(|e| e.len())
+                            .unwrap_or(0)
+                    }
+                    _ => 0,
+                };
+                let cmd = manifold_editing::commands::effects::AddEffectCommand::new(
+                    target, effect, insert_idx,
+                );
+                editing.execute(Box::new(cmd), project);
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::SetGenType(layer_idx, gen_type_idx) => {
+            if let Some(project) = engine.project_mut() {
+                if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+                    let old_type = layer.gen_params.as_ref()
+                        .map(|gp| gp.generator_type)
+                        .unwrap_or(GeneratorType::None);
+                    if let Some(new_type) = GeneratorType::from_index(*gen_type_idx) {
+                        let old_params = layer.gen_params.as_ref()
+                            .map(|gp| gp.param_values.clone())
+                            .unwrap_or_default();
+                        let old_drivers = layer.gen_params.as_ref()
+                            .and_then(|gp| gp.drivers.clone());
+                        let old_envelopes = layer.gen_params.as_ref()
+                            .and_then(|gp| gp.envelopes.clone());
+                        let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
+                            *layer_idx, old_type, new_type, old_params, old_drivers, old_envelopes,
+                        );
+                        editing.execute(Box::new(cmd), project);
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+
+        // Generic dropdown fallback (should not normally fire)
         PanelAction::DropdownSelected(index) => {
-            // Already handled by UIRoot dropdown_to_action routing.
-            // This catches any that need engine-level dispatch.
             log::debug!("Dropdown selected: {} (no context)", index);
             DispatchResult::handled()
         }

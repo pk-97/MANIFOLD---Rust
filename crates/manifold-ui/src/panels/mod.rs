@@ -171,7 +171,14 @@ pub enum PanelAction {
     AddEffectClicked(InspectorTab),
     RemoveEffect(usize),
 
-    // Dropdown result (context-routed)
+    // Dropdown results (context-routed from UIRoot)
+    SetMidiNote(usize, i32),       // layer_index, note (0-127)
+    SetMidiChannel(usize, i32),    // layer_index, channel (1-16)
+    SetResolution(usize),          // preset index
+    AddEffect(InspectorTab, usize), // tab, effect_type index
+    SetGenType(usize, usize),      // layer_index, gen_type index
+
+    // Generic dropdown fallback (should not normally reach dispatch)
     DropdownSelected(usize),
 }
 
