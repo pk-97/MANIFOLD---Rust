@@ -237,7 +237,8 @@ impl DropdownPanel {
         };
         self.root_id = tree.add_panel(-1, bounds.x, bounds.y, bounds.width, bounds.height, container_style) as i32;
 
-        // Build items.
+        // Build items — positions must be absolute screen coordinates
+        // (the tree does not offset children by parent position).
         let mut cy = PADDING_V;
         let item_w = bounds.width - PADDING_H * 2.0;
         let visible_count = self.items.len().min(MAX_VISIBLE_ITEMS);
@@ -280,7 +281,7 @@ impl DropdownPanel {
 
             let id = tree.add_node(
                 self.root_id,
-                Rect::new(PADDING_H, cy, item_w, ITEM_HEIGHT),
+                Rect::new(bounds.x + PADDING_H, bounds.y + cy, item_w, ITEM_HEIGHT),
                 UINodeType::Button,
                 item_style,
                 Some(&display_text),
@@ -297,8 +298,8 @@ impl DropdownPanel {
                 };
                 let sep_id = tree.add_panel(
                     self.root_id,
-                    PADDING_H,
-                    sep_y,
+                    bounds.x + PADDING_H,
+                    bounds.y + sep_y,
                     item_w,
                     1.0,
                     sep_style,
