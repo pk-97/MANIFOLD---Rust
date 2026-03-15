@@ -5,6 +5,14 @@
 //! from all panels, and `push_state()` to sync engine state back to panels.
 
 use manifold_core::types::{LayerType, PlaybackState};
+use manifold_editing::commands::settings::{
+    ChangeMasterOpacityCommand, ChangeLayerOpacityCommand, ChangeGeneratorParamsCommand,
+};
+use manifold_editing::commands::effects::{
+    ToggleEffectCommand, ChangeEffectParamCommand,
+};
+use manifold_editing::commands::effect_target::EffectTarget;
+use manifold_editing::service::EditingService;
 use manifold_playback::engine::PlaybackEngine;
 use manifold_ui::PanelAction;
 use manifold_ui::node::Color32;
@@ -13,8 +21,28 @@ use manifold_ui::panels::viewport::TrackInfo;
 
 use crate::ui_root::UIRoot;
 
-/// Dispatch a panel action to the engine. Returns true if handled.
-pub fn dispatch(action: &PanelAction, engine: &mut PlaybackEngine) -> bool {
+/// Result of dispatching a panel action.
+pub struct DispatchResult {
+    /// True if the action was handled.
+    pub handled: bool,
+    /// True if the action changed project structure (needs sync_project_data).
+    pub structural_change: bool,
+}
+
+impl DispatchResult {
+    fn handled() -> Self { Self { handled: true, structural_change: false } }
+    fn structural() -> Self { Self { handled: true, structural_change: true } }
+    fn unhandled() -> Self { Self { handled: false, structural_change: false } }
+}
+
+/// Dispatch a panel action to the engine/editing service.
+pub fn dispatch(
+    action: &PanelAction,
+    engine: &mut PlaybackEngine,
+    editing: &mut EditingService,
+    active_layer: &mut Option<usize>,
+    drag_snapshot: &mut Option<f32>,
+) -> DispatchResult {
     match action {
         // ── Transport ──────────────────────────────────────────────
         PanelAction::PlayPause => {
@@ -23,29 +51,291 @@ pub fn dispatch(action: &PanelAction, engine: &mut PlaybackEngine) -> bool {
             } else {
                 engine.set_state(PlaybackState::Playing);
             }
-            true
+            DispatchResult::handled()
         }
         PanelAction::Stop => {
             engine.set_state(PlaybackState::Stopped);
             engine.seek_to(0.0);
-            true
+            DispatchResult::handled()
         }
         PanelAction::Seek(beat) => {
-            let project = engine.project();
-            if let Some(p) = project {
+            if let Some(p) = engine.project() {
                 let time = *beat * (60.0 / p.settings.bpm);
                 engine.seek_to(time);
             }
-            true
+            DispatchResult::handled()
         }
 
         // ── Zoom ───────────────────────────────────────────────────
         PanelAction::ZoomIn | PanelAction::ZoomOut => {
             // Zoom is UI-only state, handled in UIRoot.
-            true
+            DispatchResult::handled()
         }
 
-        // ── File operations (stubs — no EditingService yet) ────────
+        // ── Layer operations ───────────────────────────────────────
+        PanelAction::ToggleMute(idx) => {
+            if let Some(project) = engine.project_mut() {
+                if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+                    layer.is_muted = !layer.is_muted;
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::ToggleSolo(idx) => {
+            if let Some(project) = engine.project_mut() {
+                if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+                    layer.is_solo = !layer.is_solo;
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::LayerClicked(idx) => {
+            *active_layer = Some(*idx);
+            DispatchResult::handled()
+        }
+        PanelAction::ChevronClicked(idx) => {
+            if let Some(project) = engine.project_mut() {
+                if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+                    layer.is_collapsed = !layer.is_collapsed;
+                }
+            }
+            DispatchResult::structural()
+        }
+
+        // ── Master chrome ──────────────────────────────────────────
+        PanelAction::MasterOpacitySnapshot => {
+            if let Some(project) = engine.project() {
+                *drag_snapshot = Some(project.settings.master_opacity);
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::MasterOpacityChanged(val) => {
+            if let Some(project) = engine.project_mut() {
+                project.settings.master_opacity = *val;
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::MasterOpacityCommit => {
+            if let Some(old_val) = drag_snapshot.take() {
+                if let Some(project) = engine.project_mut() {
+                    let new_val = project.settings.master_opacity;
+                    if (old_val - new_val).abs() > f32::EPSILON {
+                        let cmd = ChangeMasterOpacityCommand::new(old_val, new_val);
+                        editing.record(Box::new(cmd));
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::MasterCollapseToggle | PanelAction::MasterExitPathClicked
+        | PanelAction::MasterOpacityRightClick => {
+            // UI-only state (collapse) or unimplemented
+            DispatchResult::handled()
+        }
+
+        // ── Layer chrome ───────────────────────────────────────────
+        PanelAction::LayerOpacitySnapshot => {
+            if let Some(idx) = *active_layer {
+                if let Some(project) = engine.project() {
+                    if let Some(layer) = project.timeline.layers.get(idx) {
+                        *drag_snapshot = Some(layer.opacity);
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::LayerOpacityChanged(val) => {
+            if let Some(idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(idx) {
+                        layer.opacity = *val;
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::LayerOpacityCommit => {
+            if let Some(old_val) = drag_snapshot.take() {
+                if let Some(idx) = *active_layer {
+                    if let Some(project) = engine.project_mut() {
+                        if let Some(layer) = project.timeline.layers.get(idx) {
+                            let new_val = layer.opacity;
+                            if (old_val - new_val).abs() > f32::EPSILON {
+                                let cmd = ChangeLayerOpacityCommand::new(idx, old_val, new_val);
+                                editing.record(Box::new(cmd));
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::LayerChromeCollapseToggle => {
+            DispatchResult::handled()
+        }
+
+        // ── Effect operations ──────────────────────────────────────
+        PanelAction::EffectToggle(fx_idx) => {
+            // Toggle on the active layer's effects (for now, layer scope)
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    let target = EffectTarget::Layer { layer_index: layer_idx };
+                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                        if let Some(effects) = &layer.effects {
+                            if let Some(fx) = effects.get(*fx_idx) {
+                                let old = fx.enabled;
+                                let cmd = ToggleEffectCommand::new(
+                                    target, *fx_idx, old, !old,
+                                );
+                                editing.execute(Box::new(cmd), project);
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::EffectParamSnapshot(fx_idx, param_idx) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project() {
+                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                        if let Some(effects) = &layer.effects {
+                            if let Some(fx) = effects.get(*fx_idx) {
+                                *drag_snapshot = Some(
+                                    fx.param_values.get(*param_idx).copied().unwrap_or(0.0)
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::EffectParamChanged(fx_idx, param_idx, val) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        let effects = layer.effects_mut();
+                        if let Some(fx) = effects.get_mut(*fx_idx) {
+                            while fx.param_values.len() <= *param_idx {
+                                fx.param_values.push(0.0);
+                            }
+                            fx.param_values[*param_idx] = *val;
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::EffectParamCommit(fx_idx, param_idx) => {
+            if let Some(old_val) = drag_snapshot.take() {
+                if let Some(layer_idx) = *active_layer {
+                    if let Some(project) = engine.project() {
+                        if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                            if let Some(effects) = &layer.effects {
+                                if let Some(fx) = effects.get(*fx_idx) {
+                                    let new_val = fx.param_values.get(*param_idx)
+                                        .copied().unwrap_or(0.0);
+                                    if (old_val - new_val).abs() > f32::EPSILON {
+                                        let target = EffectTarget::Layer { layer_index: layer_idx };
+                                        let cmd = ChangeEffectParamCommand::new(
+                                            target, *fx_idx, *param_idx, old_val, new_val,
+                                        );
+                                        editing.record(Box::new(cmd));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::EffectCollapseToggle(_) | PanelAction::EffectCardClicked(_)
+        | PanelAction::EffectParamRightClick(_, _) => {
+            // UI-only state
+            DispatchResult::handled()
+        }
+
+        // ── Generator params ───────────────────────────────────────
+        PanelAction::GenParamSnapshot(param_idx) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project() {
+                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                        if let Some(gp) = &layer.gen_params {
+                            *drag_snapshot = Some(
+                                gp.param_values.get(*param_idx).copied().unwrap_or(0.0)
+                            );
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::GenParamChanged(param_idx, val) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        if let Some(gp) = &mut layer.gen_params {
+                            while gp.param_values.len() <= *param_idx {
+                                gp.param_values.push(0.0);
+                            }
+                            gp.param_values[*param_idx] = *val;
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::GenParamCommit(param_idx) => {
+            if let Some(old_val) = drag_snapshot.take() {
+                if let Some(layer_idx) = *active_layer {
+                    if let Some(project) = engine.project() {
+                        if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                            if let Some(gp) = &layer.gen_params {
+                                let new_val = gp.param_values.get(*param_idx)
+                                    .copied().unwrap_or(0.0);
+                                if (old_val - new_val).abs() > f32::EPSILON {
+                                    let mut old_params = gp.param_values.clone();
+                                    let mut new_params = gp.param_values.clone();
+                                    // Restore old value in old_params
+                                    if *param_idx < old_params.len() {
+                                        old_params[*param_idx] = old_val;
+                                    }
+                                    let cmd = ChangeGeneratorParamsCommand::new(
+                                        layer_idx, old_params, new_params,
+                                    );
+                                    editing.record(Box::new(cmd));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::GenParamToggle(param_idx) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        if let Some(gp) = &mut layer.gen_params {
+                            while gp.param_values.len() <= *param_idx {
+                                gp.param_values.push(0.0);
+                            }
+                            let cur = gp.param_values[*param_idx];
+                            gp.param_values[*param_idx] = if cur > 0.5 { 0.0 } else { 1.0 };
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::GenParamRightClick(_) | PanelAction::GenTypeClicked => {
+            // Unimplemented (would need dropdown)
+            DispatchResult::handled()
+        }
+
+        // ── File operations (stubs — no I/O yet) ───────────────────
         PanelAction::NewProject
         | PanelAction::OpenProject
         | PanelAction::OpenRecent
@@ -54,14 +344,32 @@ pub fn dispatch(action: &PanelAction, engine: &mut PlaybackEngine) -> bool {
         | PanelAction::ExportVideo
         | PanelAction::ExportXml => {
             log::info!("File action: {:?} (not yet wired)", action);
-            true
+            DispatchResult::handled()
         }
 
-        // ── All other actions are logged but not yet wired ─────────
+        // ── All other actions ──────────────────────────────────────
         _ => {
             log::debug!("Unhandled panel action: {:?}", action);
-            false
+            DispatchResult::unhandled()
         }
+    }
+}
+
+/// Handle undo (called from keyboard shortcut).
+pub fn undo(engine: &mut PlaybackEngine, editing: &mut EditingService) -> bool {
+    if let Some(project) = engine.project_mut() {
+        editing.undo(project)
+    } else {
+        false
+    }
+}
+
+/// Handle redo (called from keyboard shortcut).
+pub fn redo(engine: &mut PlaybackEngine, editing: &mut EditingService) -> bool {
+    if let Some(project) = engine.project_mut() {
+        editing.redo(project)
+    } else {
+        false
     }
 }
 
@@ -70,7 +378,7 @@ const PLAY_GREEN: Color32 = Color32::new(56, 115, 66, 255);
 const PLAY_ACTIVE: Color32 = Color32::new(64, 184, 82, 255);
 
 /// Push engine state into UI panels (called once per frame).
-pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine) {
+pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option<usize>) {
     let tree = &mut ui.tree;
 
     // Transport state
@@ -109,9 +417,29 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine) {
         ui.footer.set_selection_info(tree, &info);
     }
 
-    // Playhead + playing state (lightweight, every frame)
+    // Playhead + playing state
     ui.viewport.set_playhead(engine.current_beat());
     ui.viewport.set_playing(engine.is_playing());
+
+    // Layer mute/solo state sync
+    if let Some(project) = engine.project() {
+        for (i, layer) in project.timeline.layers.iter().enumerate() {
+            ui.layer_headers.set_mute_state(tree, i, layer.is_muted);
+            ui.layer_headers.set_solo_state(tree, i, layer.is_solo);
+        }
+    }
+
+    // Sync active layer opacity to inspector chrome
+    if let Some(idx) = active_layer {
+        if let Some(project) = engine.project() {
+            if let Some(layer) = project.timeline.layers.get(idx) {
+                ui.inspector.layer_chrome_mut().sync_opacity(tree, layer.opacity);
+                ui.inspector.layer_chrome_mut().sync_name(tree, &layer.name);
+            }
+            // Master opacity
+            ui.inspector.master_chrome_mut().sync_opacity(tree, project.settings.master_opacity);
+        }
+    }
 }
 
 /// Sync structural project data (layers, tracks) into UI panels.

@@ -12,6 +12,7 @@ use manifold_core::types::{BlendMode, GeneratorType, LayerType, PlaybackState};
 use manifold_core::layer::Layer;
 use manifold_core::clip::TimelineClip;
 use manifold_core::generator::GeneratorParamState;
+use manifold_editing::service::EditingService;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::renderer::StubRenderer;
 use manifold_renderer::blit::BlitPipeline;
@@ -39,6 +40,11 @@ pub struct Application {
 
     // Engine
     engine: PlaybackEngine,
+    editing_service: EditingService,
+
+    // Selection state
+    active_layer_index: Option<usize>,
+    drag_snapshot: Option<f32>,
 
     // Rendering
     generator_renderer: Option<GeneratorRenderer>,
@@ -86,6 +92,9 @@ impl Application {
             window_registry: WindowRegistry::new(),
             primary_window_id: None,
             engine,
+            editing_service: EditingService::new(),
+            active_layer_index: None,
+            drag_snapshot: None,
             generator_renderer: None,
             compositor: None,
             blit_pipeline: None,
@@ -205,12 +214,25 @@ impl Application {
 
         // 1. Process UI events and dispatch actions
         let actions = self.ui_root.process_events();
+        let mut needs_structural_sync = false;
         for action in &actions {
-            crate::ui_bridge::dispatch(action, &mut self.engine);
+            let result = crate::ui_bridge::dispatch(
+                action,
+                &mut self.engine,
+                &mut self.editing_service,
+                &mut self.active_layer_index,
+                &mut self.drag_snapshot,
+            );
+            if result.structural_change {
+                needs_structural_sync = true;
+            }
+        }
+        if needs_structural_sync {
+            crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine);
         }
 
         // 2. Push engine state to UI panels
-        crate::ui_bridge::push_state(&mut self.ui_root, &self.engine);
+        crate::ui_bridge::push_state(&mut self.ui_root, &self.engine, self.active_layer_index);
         self.ui_root.update();
 
         // 3. Tick the engine
@@ -804,8 +826,41 @@ impl ApplicationHandler for Application {
                     },
                 ..
             } => {
-                // Forward to UI input system
+                // App-level shortcuts (handled before UI forwarding)
+                let mut consumed = false;
                 if is_primary {
+                    match &logical_key {
+                        Key::Named(NamedKey::Space) => {
+                            if self.engine.is_playing() {
+                                self.engine.set_state(PlaybackState::Paused);
+                            } else {
+                                self.engine.set_state(PlaybackState::Playing);
+                            }
+                            consumed = true;
+                        }
+                        Key::Named(NamedKey::Escape) => {
+                            self.engine.set_state(PlaybackState::Stopped);
+                            self.engine.seek_to(0.0);
+                            consumed = true;
+                        }
+                        Key::Character(ref c) if c.as_str() == "z" && self.modifiers.command => {
+                            if self.modifiers.shift {
+                                crate::ui_bridge::redo(&mut self.engine, &mut self.editing_service);
+                            } else {
+                                crate::ui_bridge::undo(&mut self.engine, &mut self.editing_service);
+                            }
+                            consumed = true;
+                        }
+                        Key::Character(ref c) if c.as_str() == "y" && self.modifiers.command => {
+                            crate::ui_bridge::redo(&mut self.engine, &mut self.editing_service);
+                            consumed = true;
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Forward to UI input system (unless consumed by app shortcut)
+                if is_primary && !consumed {
                     if let Some(ui_key) = Self::convert_key(&logical_key) {
                         self.ui_root.key_event(ui_key, self.modifiers);
                     }

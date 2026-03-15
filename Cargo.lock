@@ -1041,6 +1041,7 @@ dependencies = [
  "env_logger",
  "log",
  "manifold-core",
+ "manifold-editing",
  "manifold-playback",
  "manifold-renderer",
  "manifold-ui",
