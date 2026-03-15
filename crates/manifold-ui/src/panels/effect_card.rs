@@ -991,7 +991,8 @@ impl EffectCardPanel {
         for (pi, slider) in self.slider_ids.iter().enumerate() {
             if let Some(ref ids) = slider {
                 if node_id == ids.track {
-                    return vec![PanelAction::EffectParamRightClick(ei, pi)];
+                    let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
+                    return vec![PanelAction::EffectParamRightClick(ei, pi, default)];
                 }
             }
         }

@@ -281,7 +281,7 @@ impl LayerChromePanel {
     pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
         if let Some(ref ids) = self.opacity_slider {
             if node_id == ids.track {
-                return vec![PanelAction::MasterOpacityRightClick];
+                return vec![PanelAction::LayerOpacityRightClick];
             }
         }
         Vec::new()

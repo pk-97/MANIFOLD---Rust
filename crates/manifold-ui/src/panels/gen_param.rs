@@ -796,7 +796,8 @@ impl GenParamPanel {
             if self.param_info.get(pi).map(|i| i.is_toggle).unwrap_or(false) { continue; }
             if let Some(ref ids) = slider {
                 if node_id == ids.track {
-                    return vec![PanelAction::GenParamRightClick(pi)];
+                    let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
+                    return vec![PanelAction::GenParamRightClick(pi, default)];
                 }
             }
         }

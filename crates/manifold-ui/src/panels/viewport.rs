@@ -372,6 +372,45 @@ impl TimelineViewportPanel {
         (beat / step).round() * step
     }
 
+    /// Magnetic snap: snap to grid lines AND neighboring clip edges within threshold.
+    /// Returns the best snap point within `SNAP_THRESHOLD_PX` pixels (12px), or the
+    /// grid-snapped beat if no clip edge is closer.
+    /// `ignore_ids` are clip IDs being dragged (don't snap to self).
+    pub fn magnetic_snap(&self, beat: f32, layer_index: usize, ignore_ids: &[String]) -> f32 {
+        const SNAP_THRESHOLD_PX: f32 = 12.0;
+
+        // Clamp threshold to avoid snapping across bars at low zoom
+        let max_snap_beats = 0.5_f32;
+        let threshold_beats = (SNAP_THRESHOLD_PX / self.pixels_per_beat).min(max_snap_beats);
+
+        let grid_snapped = self.snap_to_grid(beat);
+        let mut best_beat = grid_snapped;
+        let mut best_dist = (grid_snapped - beat).abs();
+
+        // Check neighboring clip edges on the same layer
+        for clip in &self.clips {
+            if clip.layer_index != layer_index { continue; }
+            if ignore_ids.contains(&clip.clip_id) { continue; }
+
+            // Check start edge
+            let dist_start = (clip.start_beat - beat).abs();
+            if dist_start < threshold_beats && dist_start < best_dist {
+                best_dist = dist_start;
+                best_beat = clip.start_beat;
+            }
+
+            // Check end edge
+            let end_beat = clip.start_beat + clip.duration_beats;
+            let dist_end = (end_beat - beat).abs();
+            if dist_end < threshold_beats && dist_end < best_dist {
+                best_dist = dist_end;
+                best_beat = end_beat;
+            }
+        }
+
+        best_beat
+    }
+
     /// Current grid step size in beats.
     pub fn grid_step(&self) -> f32 {
         match self.grid_subdivision() {
@@ -626,6 +665,16 @@ impl Panel for TimelineViewportPanel {
                         return vec![PanelAction::RegionDragEnded];
                     }
                     ViewportDragMode::None => {}
+                }
+            }
+            UIEvent::RightClick { pos, .. } => {
+                if self.tracks_rect.contains(*pos) {
+                    let beat = self.pixel_to_beat(pos.x);
+                    if let Some(hit) = self.hit_test_clip(*pos) {
+                        return vec![PanelAction::ClipRightClicked(hit.clip_id)];
+                    } else if let Some(layer) = self.layer_at_y(pos.y) {
+                        return vec![PanelAction::TrackRightClicked(beat, layer)];
+                    }
                 }
             }
             UIEvent::HoverEnter { pos, .. } | UIEvent::PointerDown { pos, .. } => {

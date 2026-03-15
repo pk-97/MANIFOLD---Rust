@@ -115,6 +115,7 @@ pub enum PanelAction {
     LayerOpacitySnapshot,
     LayerOpacityChanged(f32),
     LayerOpacityCommit,
+    LayerOpacityRightClick,
 
     // Inspector chrome — Clip
     ClipChromeCollapseToggle,
@@ -123,9 +124,11 @@ pub enum PanelAction {
     ClipSlipSnapshot,
     ClipSlipChanged(f32),
     ClipSlipCommit,
+    ClipSlipRightClick,
     ClipLoopSnapshot,
     ClipLoopChanged(f32),
     ClipLoopCommit,
+    ClipLoopRightClick,
 
     // Effect card (effect_index, param_index where applicable)
     EffectToggle(usize),
@@ -134,7 +137,7 @@ pub enum PanelAction {
     EffectParamSnapshot(usize, usize),
     EffectParamChanged(usize, usize, f32),
     EffectParamCommit(usize, usize),
-    EffectParamRightClick(usize, usize),
+    EffectParamRightClick(usize, usize, f32), // fx_idx, param_idx, default_value
     EffectDriverToggle(usize, usize),
     EffectEnvelopeToggle(usize, usize),
     EffectDriverConfig(usize, usize, DriverConfigAction),
@@ -147,7 +150,7 @@ pub enum PanelAction {
     GenParamSnapshot(usize),
     GenParamChanged(usize, f32),
     GenParamCommit(usize),
-    GenParamRightClick(usize),
+    GenParamRightClick(usize, f32), // param_idx, default_value
     GenParamToggle(usize),
     GenDriverToggle(usize),
     GenEnvelopeToggle(usize),
@@ -176,6 +179,8 @@ pub enum PanelAction {
     TrackClicked(f32, usize, Modifiers),           // beat, layer, modifiers
     TrackDoubleClicked(f32, usize),                // beat, layer (create clip)
     ViewportHoverChanged(Option<String>),           // clip_id or None
+    ClipRightClicked(String),                        // clip_id (context menu)
+    TrackRightClicked(f32, usize),                   // beat, layer (context menu)
 
     // Layer management
     AddLayerClicked,
@@ -191,6 +196,14 @@ pub enum PanelAction {
     SetResolution(usize),          // preset index
     AddEffect(InspectorTab, usize), // tab, effect_type index
     SetGenType(usize, usize),      // layer_index, gen_type index
+
+    // Context menu results
+    ContextSplitAtPlayhead(String),                  // clip_id
+    ContextDeleteClip(String),                       // clip_id
+    ContextDuplicateClip(String),                    // clip_id
+    ContextPasteAtTrack(f32, usize),                 // beat, layer
+    ContextAddVideoLayer(usize),                     // after_layer
+    ContextAddGeneratorLayer(usize),                 // after_layer
 
     // Generic dropdown fallback (should not normally reach dispatch)
     DropdownSelected(usize),

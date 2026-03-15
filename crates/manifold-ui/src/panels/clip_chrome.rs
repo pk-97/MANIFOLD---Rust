@@ -578,10 +578,10 @@ impl ClipChromePanel {
 
     pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
         if let Some(ref ids) = self.slip_slider {
-            if node_id == ids.track { return vec![PanelAction::ClipSlipSnapshot]; }
+            if node_id == ids.track { return vec![PanelAction::ClipSlipRightClick]; }
         }
         if let Some(ref ids) = self.loop_slider {
-            if node_id == ids.track { return vec![PanelAction::ClipLoopSnapshot]; }
+            if node_id == ids.track { return vec![PanelAction::ClipLoopRightClick]; }
         }
         Vec::new()
     }

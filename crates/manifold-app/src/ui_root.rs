@@ -17,6 +17,8 @@ pub enum DropdownContext {
     Resolution,
     AddEffect(InspectorTab),
     GenType(usize),
+    ClipContext(String),     // right-click on clip: clip_id
+    TrackContext(f32, usize), // right-click on empty track: beat, layer
 }
 
 /// Owns all UI state for one window.
@@ -135,11 +137,15 @@ impl UIRoot {
         let events = self.input.drain_events();
         let mut actions = Vec::new();
         let mut last_click_node: i32 = -1;
+        let mut last_right_click_pos = Vec2::new(0.0, 0.0);
 
         for event in &events {
             // Track which node was clicked (for dropdown anchoring).
             if let UIEvent::Click { node_id, .. } = event {
                 last_click_node = *node_id as i32;
+            }
+            if let UIEvent::RightClick { pos, .. } = event {
+                last_right_click_pos = *pos;
             }
 
             // Dropdown gets first crack at all events.
@@ -208,7 +214,7 @@ impl UIRoot {
         // (where we have access to the tree for node bounds).
         let mut filtered = Vec::with_capacity(actions.len());
         for action in actions {
-            if self.try_open_dropdown(&action, last_click_node) {
+            if self.try_open_dropdown(&action, last_click_node, last_right_click_pos) {
                 // Consumed — don't forward to dispatch.
                 continue;
             }
@@ -220,7 +226,7 @@ impl UIRoot {
 
     /// If the action is a dropdown trigger, open the dropdown anchored to the
     /// clicked button and return true (action consumed). Otherwise return false.
-    fn try_open_dropdown(&mut self, action: &PanelAction, click_node: i32) -> bool {
+    fn try_open_dropdown(&mut self, action: &PanelAction, click_node: i32, right_click_pos: Vec2) -> bool {
         let trigger = if click_node >= 0 {
             self.tree.get_bounds(click_node as u32)
         } else {
@@ -274,6 +280,26 @@ impl UIRoot {
                 self.open_dropdown_at(DropdownContext::Resolution, items, trigger);
                 true
             }
+            PanelAction::ClipRightClicked(clip_id) => {
+                let items = vec![
+                    DropdownItem::new("Split at Playhead"),
+                    DropdownItem::new("Delete"),
+                    DropdownItem::new("Duplicate"),
+                ];
+                self.dropdown_context = Some(DropdownContext::ClipContext(clip_id.clone()));
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
+            PanelAction::TrackRightClicked(beat, layer) => {
+                let items = vec![
+                    DropdownItem::new("Paste"),
+                    DropdownItem::new("Insert Video Layer"),
+                    DropdownItem::new("Insert Generator Layer"),
+                ];
+                self.dropdown_context = Some(DropdownContext::TrackContext(*beat, *layer));
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
             _ => false,
         }
     }
@@ -301,6 +327,22 @@ impl UIRoot {
             }
             DropdownContext::GenType(layer_idx) => {
                 Some(PanelAction::SetGenType(layer_idx, index))
+            }
+            DropdownContext::ClipContext(clip_id) => {
+                match index {
+                    0 => Some(PanelAction::ContextSplitAtPlayhead(clip_id)),
+                    1 => Some(PanelAction::ContextDeleteClip(clip_id)),
+                    2 => Some(PanelAction::ContextDuplicateClip(clip_id)),
+                    _ => None,
+                }
+            }
+            DropdownContext::TrackContext(beat, layer) => {
+                match index {
+                    0 => Some(PanelAction::ContextPasteAtTrack(beat, layer)),
+                    1 => Some(PanelAction::ContextAddVideoLayer(layer)),
+                    2 => Some(PanelAction::ContextAddGeneratorLayer(layer)),
+                    _ => None,
+                }
             }
         }
     }

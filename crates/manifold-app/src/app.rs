@@ -1196,6 +1196,20 @@ impl ApplicationHandler for Application {
                                 let result = self.editing_service.paste_clips(project, target_beat, target_layer);
                                 if !result.commands.is_empty() {
                                     self.editing_service.execute_batch(result.commands, "Paste clips".into(), project);
+                                    // Enforce non-overlap for each pasted clip
+                                    let pasted_set: std::collections::HashSet<String> =
+                                        result.pasted_clip_ids.iter().cloned().collect();
+                                    for id in &result.pasted_clip_ids {
+                                        if let Some(clip) = project.timeline.find_clip_by_id(id).cloned() {
+                                            let layer_idx = clip.layer_index as usize;
+                                            let overlap_cmds = EditingService::enforce_non_overlap(
+                                                project, &clip, layer_idx, &pasted_set,
+                                            );
+                                            for cmd in overlap_cmds {
+                                                self.editing_service.execute(cmd, project);
+                                            }
+                                        }
+                                    }
                                     // Select pasted clips
                                     self.selection.selected_clip_ids.clear();
                                     for id in result.pasted_clip_ids {
@@ -1211,9 +1225,24 @@ impl ApplicationHandler for Application {
                         Key::Character(ref c) if c.as_str() == "d" && self.modifiers.command => {
                             let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
                             if !ids.is_empty() {
-                                // Use a default region spanning the selected clips
-                                let region = manifold_core::selection::SelectionRegion::default();
                                 if let Some(project) = self.engine.project_mut() {
+                                    // Calculate span of selected clips for offset
+                                    let mut min_beat = f32::MAX;
+                                    let mut max_beat = f32::MIN;
+                                    for layer in &project.timeline.layers {
+                                        for clip in &layer.clips {
+                                            if ids.contains(&clip.id) {
+                                                min_beat = min_beat.min(clip.start_beat);
+                                                max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
+                                            }
+                                        }
+                                    }
+                                    let mut region = manifold_core::selection::SelectionRegion::default();
+                                    if max_beat > min_beat {
+                                        region.is_active = true;
+                                        region.start_beat = min_beat;
+                                        region.end_beat = max_beat;
+                                    }
                                     let commands = EditingService::duplicate_clips(project, &ids, &region);
                                     if !commands.is_empty() {
                                         self.editing_service.execute_batch(commands, "Duplicate clips".into(), project);
@@ -1324,6 +1353,20 @@ impl ApplicationHandler for Application {
                                     project.timeline.export_range_enabled = false;
                                 } else {
                                     project.timeline.export_in_beat = beat;
+                                    project.timeline.export_range_enabled = true;
+                                }
+                            }
+                            consumed = true;
+                        }
+                        // ── O — set/clear export out point ──
+                        Key::Character(ref c) if c.as_str() == "o" && !self.modifiers.command => {
+                            let beat = self.engine.current_beat();
+                            if let Some(project) = self.engine.project_mut() {
+                                if self.modifiers.alt {
+                                    project.timeline.export_out_beat = 0.0;
+                                    project.timeline.export_range_enabled = false;
+                                } else {
+                                    project.timeline.export_out_beat = beat;
                                     project.timeline.export_range_enabled = true;
                                 }
                             }

@@ -145,10 +145,19 @@ pub fn dispatch(
             if let Some(project) = engine.project_mut() {
                 let cmd = EditingService::create_clip_at_position(project, snapped, *layer, 4.0);
                 editing.execute(cmd, project);
-                // Select the newly created clip
+                // Enforce non-overlap for the newly created clip
                 if let Some(new_layer) = project.timeline.layers.get(*layer) {
                     if let Some(new_clip) = new_layer.clips.last() {
-                        selection.select_single(new_clip.id.clone());
+                        let new_clip_clone = new_clip.clone();
+                        let ignore = std::collections::HashSet::new();
+                        let overlap_cmds = EditingService::enforce_non_overlap(
+                            project, &new_clip_clone, *layer, &ignore,
+                        );
+                        for cmd in overlap_cmds {
+                            editing.execute(cmd, project);
+                        }
+                        // Select the newly created clip
+                        selection.select_single(new_clip_clone.id);
                     }
                 }
             }
@@ -203,10 +212,25 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ClipDragMoved(current_beat, _target_layer) => {
-            let snapped = ui.viewport.snap_to_grid(*current_beat);
+            // Collect IDs being dragged for magnetic snap ignore list
+            let drag_ids: Vec<String> = clip_drag.snapshots.iter().map(|s| s.clip_id.clone()).collect();
+            let anchor_layer = engine.project()
+                .and_then(|p| {
+                    p.timeline.layers.iter()
+                        .enumerate()
+                        .find_map(|(li, layer)| {
+                            layer.clips.iter()
+                                .find(|c| c.id == clip_drag.anchor_clip_id)
+                                .map(|_| li)
+                        })
+                })
+                .unwrap_or(0);
+
             match clip_drag.mode {
                 ClipDragMode::Move => {
-                    let delta = snapped - ui.viewport.snap_to_grid(clip_drag.anchor_beat);
+                    let snapped = ui.viewport.magnetic_snap(*current_beat, anchor_layer, &drag_ids);
+                    let anchor_snapped = ui.viewport.magnetic_snap(clip_drag.anchor_beat, anchor_layer, &drag_ids);
+                    let delta = snapped - anchor_snapped;
                     if let Some(project) = engine.project_mut() {
                         for snap in &clip_drag.snapshots {
                             let new_start = (snap.original_start_beat + delta).max(0.0);
@@ -217,6 +241,7 @@ pub fn dispatch(
                     }
                 }
                 ClipDragMode::TrimLeft => {
+                    let snapped = ui.viewport.magnetic_snap(*current_beat, anchor_layer, &drag_ids);
                     if let Some(project) = engine.project_mut() {
                         let old_end = clip_drag.trim_old_start + clip_drag.trim_old_duration;
                         let new_start = snapped.max(0.0).min(old_end - 0.25);
@@ -234,6 +259,7 @@ pub fn dispatch(
                     }
                 }
                 ClipDragMode::TrimRight => {
+                    let snapped = ui.viewport.magnetic_snap(*current_beat, anchor_layer, &drag_ids);
                     if let Some(project) = engine.project_mut() {
                         let new_duration = (snapped - clip_drag.trim_old_start).max(0.25);
                         if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_drag.anchor_clip_id) {
@@ -250,6 +276,8 @@ pub fn dispatch(
                 ClipDragMode::Move => {
                     // Collect current positions first, then create commands
                     let mut moves: Vec<(String, f32, f32, i32, i32)> = Vec::new();
+                    let drag_ids: std::collections::HashSet<String> =
+                        clip_drag.snapshots.iter().map(|s| s.clip_id.clone()).collect();
                     if let Some(project) = engine.project_mut() {
                         for snap in &clip_drag.snapshots {
                             if let Some(clip) = project.timeline.find_clip_by_id(&snap.clip_id) {
@@ -265,6 +293,18 @@ pub fn dispatch(
                                         snap.original_layer_index,
                                         new_layer,
                                     ));
+                                }
+                            }
+                        }
+                        // Enforce non-overlap for each moved clip
+                        for snap in &clip_drag.snapshots {
+                            if let Some(clip) = project.timeline.find_clip_by_id(&snap.clip_id).cloned() {
+                                let layer_idx = clip.layer_index as usize;
+                                let overlap_cmds = EditingService::enforce_non_overlap(
+                                    project, &clip, layer_idx, &drag_ids,
+                                );
+                                for cmd in overlap_cmds {
+                                    editing.execute(cmd, project);
                                 }
                             }
                         }
@@ -621,8 +661,19 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::MasterCollapseToggle | PanelAction::MasterExitPathClicked
-        | PanelAction::MasterOpacityRightClick => {
+        PanelAction::MasterCollapseToggle | PanelAction::MasterExitPathClicked => {
+            DispatchResult::handled()
+        }
+        PanelAction::MasterOpacityRightClick => {
+            // Reset master opacity to 1.0
+            if let Some(project) = engine.project_mut() {
+                let old = project.settings.master_opacity;
+                if (old - 1.0).abs() > f32::EPSILON {
+                    project.settings.master_opacity = 1.0;
+                    let cmd = ChangeMasterOpacityCommand::new(old, 1.0);
+                    editing.record(Box::new(cmd));
+                }
+            }
             DispatchResult::handled()
         }
 
@@ -664,6 +715,22 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::LayerChromeCollapseToggle => {
+            DispatchResult::handled()
+        }
+        PanelAction::LayerOpacityRightClick => {
+            // Reset layer opacity to 1.0
+            if let Some(idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(idx) {
+                        let old = layer.opacity;
+                        if (old - 1.0).abs() > f32::EPSILON {
+                            layer.opacity = 1.0;
+                            let cmd = ChangeLayerOpacityCommand::new(idx, old, 1.0);
+                            editing.record(Box::new(cmd));
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
 
@@ -770,6 +837,45 @@ pub fn dispatch(
             DispatchResult::handled()
         }
 
+        PanelAction::ClipSlipRightClick => {
+            // Reset clip slip (in_point) to 0.0
+            if let Some(clip_id) = &selection.primary_clip_id {
+                let clip_id = clip_id.clone();
+                if let Some(project) = engine.project_mut() {
+                    if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_id) {
+                        let old = clip.in_point;
+                        if old.abs() > f32::EPSILON {
+                            clip.in_point = 0.0;
+                            let cmd = SlipClipCommand::new(clip_id, old, 0.0);
+                            editing.record(Box::new(cmd));
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::ClipLoopRightClick => {
+            // Reset clip loop duration to clip's full duration
+            if let Some(clip_id) = &selection.primary_clip_id {
+                let clip_id = clip_id.clone();
+                if let Some(project) = engine.project_mut() {
+                    if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_id) {
+                        let old_dur = clip.loop_duration_beats;
+                        let full_dur = clip.duration_beats;
+                        let is_looping = clip.is_looping;
+                        if (old_dur - full_dur).abs() > f32::EPSILON {
+                            clip.loop_duration_beats = full_dur;
+                            let cmd = ChangeClipLoopCommand::new(
+                                clip_id, is_looping, is_looping, old_dur, full_dur,
+                            );
+                            editing.record(Box::new(cmd));
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+
         // ── Effect operations ──────────────────────────────────────
         PanelAction::EffectToggle(fx_idx) => {
             if let Some(layer_idx) = *active_layer {
@@ -790,8 +896,32 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectCollapseToggle(_) | PanelAction::EffectCardClicked(_)
-        | PanelAction::EffectParamRightClick(_, _) => {
+        PanelAction::EffectCollapseToggle(_) | PanelAction::EffectCardClicked(_) => {
+            DispatchResult::handled()
+        }
+        PanelAction::EffectParamRightClick(fx_idx, param_idx, default_val) => {
+            // Reset effect param to its default value
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        let effects = layer.effects_mut();
+                        if let Some(fx) = effects.get_mut(*fx_idx) {
+                            let old = fx.param_values.get(*param_idx).copied().unwrap_or(0.0);
+                            if (old - *default_val).abs() > f32::EPSILON {
+                                while fx.param_values.len() <= *param_idx {
+                                    fx.param_values.push(0.0);
+                                }
+                                fx.param_values[*param_idx] = *default_val;
+                                let target = EffectTarget::Layer { layer_index: layer_idx };
+                                let cmd = ChangeEffectParamCommand::new(
+                                    target, *fx_idx, *param_idx, old, *default_val,
+                                );
+                                editing.record(Box::new(cmd));
+                            }
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
         PanelAction::EffectParamSnapshot(fx_idx, param_idx) => {
@@ -1154,7 +1284,29 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::GenParamRightClick(_) => {
+        PanelAction::GenParamRightClick(param_idx, default_val) => {
+            // Reset generator param to its default value
+            if let Some(layer_idx) = *active_layer {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                        if let Some(gp) = &mut layer.gen_params {
+                            let old = gp.param_values.get(*param_idx).copied().unwrap_or(0.0);
+                            if (old - *default_val).abs() > f32::EPSILON {
+                                while gp.param_values.len() <= *param_idx {
+                                    gp.param_values.push(0.0);
+                                }
+                                let old_params = gp.param_values.clone();
+                                gp.param_values[*param_idx] = *default_val;
+                                let new_params = gp.param_values.clone();
+                                let cmd = ChangeGeneratorParamsCommand::new(
+                                    layer_idx, old_params, new_params,
+                                );
+                                editing.record(Box::new(cmd));
+                            }
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
 
@@ -1461,6 +1613,94 @@ pub fn dispatch(
                         editing.execute(Box::new(cmd), project);
                     }
                 }
+            }
+            DispatchResult::structural()
+        }
+
+        // Right-click actions (intercepted by UIRoot for dropdown; should not reach dispatch)
+        PanelAction::ClipRightClicked(_) | PanelAction::TrackRightClicked(_, _) => {
+            DispatchResult::handled()
+        }
+
+        // ── Context menu actions ──────────────────────────────────
+        PanelAction::ContextSplitAtPlayhead(clip_id) => {
+            let beat = engine.current_beat();
+            if let Some(project) = engine.project_mut() {
+                if let Some(cmd) = EditingService::split_clip_at_beat(project, clip_id, beat) {
+                    editing.execute(cmd, project);
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::ContextDeleteClip(clip_id) => {
+            if let Some(project) = engine.project_mut() {
+                let commands = EditingService::delete_clips(project, &[clip_id.clone()]);
+                if !commands.is_empty() {
+                    editing.execute_batch(commands, "Delete clip".into(), project);
+                }
+            }
+            selection.selected_clip_ids.remove(clip_id);
+            DispatchResult::structural()
+        }
+        PanelAction::ContextDuplicateClip(clip_id) => {
+            if let Some(project) = engine.project_mut() {
+                // Calculate region from the single clip for proper offset
+                let mut region = manifold_core::selection::SelectionRegion::default();
+                if let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
+                    region.start_beat = clip.start_beat;
+                    region.end_beat = clip.start_beat + clip.duration_beats;
+                    region.is_active = true;
+                }
+                let commands = EditingService::duplicate_clips(project, &[clip_id.clone()], &region);
+                if !commands.is_empty() {
+                    editing.execute_batch(commands, "Duplicate clip".into(), project);
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::ContextPasteAtTrack(beat, layer) => {
+            let snapped = ui.viewport.snap_to_grid(*beat);
+            if let Some(project) = engine.project_mut() {
+                let result = editing.paste_clips(project, snapped, *layer as i32);
+                if !result.commands.is_empty() {
+                    editing.execute_batch(result.commands, "Paste clips".into(), project);
+                    selection.selected_clip_ids.clear();
+                    for id in result.pasted_clip_ids {
+                        selection.selected_clip_ids.insert(id);
+                    }
+                    selection.primary_clip_id = selection.selected_clip_ids.iter().next().cloned();
+                    selection.version += 1;
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::ContextAddVideoLayer(after_layer) => {
+            if let Some(project) = engine.project_mut() {
+                let idx = after_layer + 1;
+                let name = format!("Layer {}", project.timeline.layers.len() + 1);
+                let cmd = AddLayerCommand::new(
+                    name,
+                    LayerType::Video,
+                    GeneratorType::None,
+                    idx,
+                    None,
+                );
+                editing.execute(Box::new(cmd), project);
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::ContextAddGeneratorLayer(after_layer) => {
+            if let Some(project) = engine.project_mut() {
+                let idx = after_layer + 1;
+                let name = format!("Gen {}", project.timeline.layers.len() + 1);
+                let cmd = AddLayerCommand::new(
+                    name,
+                    LayerType::Generator,
+                    GeneratorType::Plasma,
+                    idx,
+                    None,
+                );
+                editing.execute(Box::new(cmd), project);
             }
             DispatchResult::structural()
         }
