@@ -935,6 +935,12 @@ impl Panel for LayerHeaderPanel {
         self.panel_origin = Vec2::new(lc.x, lc.y);
         self.panel_width = lc.width;
 
+        // Full-area background (prevents compositor blit bleed-through)
+        tree.add_panel(
+            -1, lc.x, lc.y, lc.width, lc.height,
+            UIStyle { bg_color: color::CONTROL_BG, ..UIStyle::default() },
+        );
+
         let layer_count = self.layers.len();
         self.rows = vec![LayerRowIds::default(); layer_count];
         self.cached_mute = vec![false; layer_count];

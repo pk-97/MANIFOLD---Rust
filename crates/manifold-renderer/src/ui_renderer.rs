@@ -489,6 +489,9 @@ impl UIRenderer {
     // ── Render pass ─────────────────────────────────────────────────
 
     /// Render all queued commands to the target view.
+    ///
+    /// `width`/`height`: logical pixel dimensions (matches UITree coordinates).
+    /// `scale_factor`: HiDPI scale (e.g. 2.0 on Retina). Used for crisp text.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -497,8 +500,12 @@ impl UIRenderer {
         target: &wgpu::TextureView,
         width: u32,
         height: u32,
+        scale_factor: f64,
     ) {
-        // Update globals
+        let physical_w = (width as f64 * scale_factor) as u32;
+        let physical_h = (height as f64 * scale_factor) as u32;
+
+        // Update globals — logical pixel dimensions for NDC mapping
         let globals_data: [f32; 4] = [width as f32, height as f32, 0.0, 0.0];
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals_data));
 
@@ -573,36 +580,39 @@ impl UIRenderer {
             self.text_buffers.push(buffer);
         }
 
+        let sf = scale_factor as f32;
         for (i, cmd) in self.text_commands.iter().enumerate() {
+            // TextArea positions and bounds must be in physical pixels
+            // because the viewport is set to physical resolution.
             let bounds = if let Some(clip) = cmd.clip_bounds {
                 TextBounds {
-                    left: clip[0] as i32,
-                    top: clip[1] as i32,
-                    right: clip[2] as i32,
-                    bottom: clip[3] as i32,
+                    left: (clip[0] * sf) as i32,
+                    top: (clip[1] * sf) as i32,
+                    right: (clip[2] * sf) as i32,
+                    bottom: (clip[3] * sf) as i32,
                 }
             } else {
                 TextBounds {
                     left: 0,
                     top: 0,
-                    right: width as i32,
-                    bottom: height as i32,
+                    right: physical_w as i32,
+                    bottom: physical_h as i32,
                 }
             };
 
             text_areas.push(TextArea {
                 buffer: &self.text_buffers[i],
-                left: cmd.x,
-                top: cmd.y,
-                scale: 1.0,
+                left: cmd.x * sf,
+                top: cmd.y * sf,
+                scale: sf,
                 bounds,
                 default_color: GlyphonColor::rgba(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]),
                 custom_glyphs: &[],
             });
         }
 
-        // Update viewport and prepare text renderer
-        self.viewport.update(queue, Resolution { width, height });
+        // Update viewport — physical resolution for crisp text
+        self.viewport.update(queue, Resolution { width: physical_w, height: physical_h });
 
         self.text_renderer
             .prepare(

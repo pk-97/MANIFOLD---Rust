@@ -161,7 +161,12 @@ impl TransportLayout {
 
     fn compute_center(&mut self, bounds: Rect, ey: f32, eh: f32) {
         let total_w = Self::center_width();
-        let mut x = bounds.x + (bounds.width - total_w) * 0.5;
+        let centered_x = bounds.x + (bounds.width - total_w) * 0.5;
+        // Clamp so center group doesn't overlap left or right groups
+        let left_end = bounds.x + INSET + Self::left_width() + SECTION_SPACER;
+        let right_start = bounds.x_max() - INSET - Self::right_width() - SECTION_SPACER;
+        let max_center_x = (right_start - total_w).max(left_end);
+        let mut x = centered_x.max(left_end).min(max_center_x);
 
         self.play_button = Rect::new(x, ey, PLAY_BUTTON_W, eh);
         x += PLAY_BUTTON_W + ITEM_SPACING;
@@ -201,6 +206,15 @@ impl TransportLayout {
         self.export_label = Rect::new(x, ey, EXPORT_LABEL_W, eh);
         x += EXPORT_LABEL_W + RIGHT_SPACING;
         self.perc_button = Rect::new(x, ey, PERC_BUTTON_W, eh);
+    }
+
+    fn left_width() -> f32 {
+        CLOCK_AUTHORITY_W + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING
+            + LINK_BUTTON_W + ITEM_SPACING + STATUS_DOT_SIZE + ITEM_SPACING + STATUS_TEXT_W
+            + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING
+            + CLK_BUTTON_W + ITEM_SPACING + CLK_DEVICE_W + ITEM_SPACING + STATUS_DOT_SIZE
+            + ITEM_SPACING + STATUS_TEXT_W + ITEM_SPACING + SECTION_SPACER + ITEM_SPACING
+            + SYNC_BUTTON_W + ITEM_SPACING + STATUS_DOT_SIZE + ITEM_SPACING + STATUS_TEXT_W
     }
 
     fn center_width() -> f32 {

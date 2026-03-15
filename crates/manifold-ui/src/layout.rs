@@ -30,7 +30,7 @@ impl ScreenLayout {
             transport_bar_height: color::TRANSPORT_BAR_HEIGHT,
             header_height: color::HEADER_HEIGHT,
             footer_height: color::FOOTER_HEIGHT,
-            inspector_width: 0.0,
+            inspector_width: 280.0,
             effect_browser_width: 0.0,
             timeline_split_ratio: 0.30,
         }
@@ -165,7 +165,9 @@ mod tests {
     fn content_area_below_transport() {
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let content = layout.content_area();
+        assert_eq!(content.x, 280.0); // right of default inspector
         assert_eq!(content.y, 36.0); // below transport
+        assert_eq!(content.width, 1640.0); // 1920 - 280
         assert_eq!(content.height, 1044.0); // 1080 - 36
     }
 
@@ -197,8 +199,18 @@ mod tests {
     }
 
     #[test]
-    fn inspector_zero_when_closed() {
+    fn inspector_default_width() {
         let layout = ScreenLayout::new(1920.0, 1080.0);
+        let inspector = layout.inspector();
+        assert_eq!(inspector.width, 280.0);
+        assert_eq!(inspector.x, 0.0);
+        assert_eq!(inspector.y, 36.0);
+    }
+
+    #[test]
+    fn inspector_zero_when_closed() {
+        let mut layout = ScreenLayout::new(1920.0, 1080.0);
+        layout.inspector_width = 0.0;
         let inspector = layout.inspector();
         assert_eq!(inspector.width, 0.0);
     }

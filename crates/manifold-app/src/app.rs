@@ -374,6 +374,7 @@ impl Application {
 
             let surface_w = ws.surface.width;
             let surface_h = ws.surface.height;
+            let scale = ws.surface.scale_factor;
 
             let mut encoder =
                 gpu.device
@@ -384,16 +385,20 @@ impl Application {
             blit.blit(&gpu.device, &mut encoder, compositor_output, &surface_view);
 
             // Draw UI overlay on workspace window using the UITree
+            // Pass logical pixel dimensions — the tree is built in logical coords
             if is_workspace {
                 if let Some(ui) = &mut self.ui_renderer {
+                    let logical_w = (surface_w as f64 / scale) as u32;
+                    let logical_h = (surface_h as f64 / scale) as u32;
                     ui.render_tree(&self.ui_root.tree);
                     ui.render(
                         &gpu.device,
                         &gpu.queue,
                         &mut encoder,
                         &surface_view,
-                        surface_w,
-                        surface_h,
+                        logical_w,
+                        logical_h,
+                        scale,
                     );
                 }
             }
@@ -637,6 +642,9 @@ impl ApplicationHandler for Application {
         let logical_w = size.width as f32 / scale as f32;
         let logical_h = size.height as f32 / scale as f32;
         self.ui_root.resize(logical_w, logical_h);
+
+        // Push initial project data (layers, tracks) and rebuild
+        crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine);
 
         self.initialized = true;
 

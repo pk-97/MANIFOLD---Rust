@@ -70,7 +70,9 @@ impl UIRoot {
 
     /// Handle a resize event. Rebuilds all panels.
     pub fn resize(&mut self, width: f32, height: f32) {
-        if (width - self.screen_width).abs() < 1.0 && (height - self.screen_height).abs() < 1.0 {
+        let same_size = (width - self.screen_width).abs() < 1.0
+            && (height - self.screen_height).abs() < 1.0;
+        if same_size && self.built {
             return;
         }
         self.screen_width = width;

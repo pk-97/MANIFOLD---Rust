@@ -4,10 +4,12 @@
 //! mutations. The app layer calls `dispatch()` after collecting actions
 //! from all panels, and `push_state()` to sync engine state back to panels.
 
-use manifold_core::types::PlaybackState;
+use manifold_core::types::{LayerType, PlaybackState};
 use manifold_playback::engine::PlaybackEngine;
 use manifold_ui::PanelAction;
 use manifold_ui::node::Color32;
+use manifold_ui::panels::layer_header::LayerInfo;
+use manifold_ui::panels::viewport::TrackInfo;
 
 use crate::ui_root::UIRoot;
 
@@ -106,4 +108,56 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine) {
         let info = format!("Layers: {} | Clips: {}", layers, clips);
         ui.footer.set_selection_info(tree, &info);
     }
+
+    // Playhead + playing state (lightweight, every frame)
+    ui.viewport.set_playhead(engine.current_beat());
+    ui.viewport.set_playing(engine.is_playing());
+}
+
+/// Sync structural project data (layers, tracks) into UI panels.
+/// Call once at init and whenever the project structure changes.
+/// Triggers a full UI rebuild afterward.
+pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine) {
+    if let Some(project) = engine.project() {
+        // Layer data → LayerHeaderPanel
+        let layers: Vec<LayerInfo> = project.timeline.layers.iter().enumerate().map(|(i, layer)| {
+            let track_h = if layer.is_collapsed { 48.0 } else { 140.0 };
+            LayerInfo {
+                name: layer.name.clone(),
+                layer_id: layer.layer_id.clone(),
+                is_collapsed: layer.is_collapsed,
+                is_group: false,
+                is_generator: layer.layer_type == LayerType::Generator,
+                is_muted: layer.is_muted,
+                is_solo: layer.is_solo,
+                parent_layer_id: layer.parent_layer_id.clone(),
+                blend_mode: format!("{:?}", layer.default_blend_mode),
+                generator_type: layer.gen_params.as_ref()
+                    .map(|g| format!("{:?}", g.generator_type)),
+                clip_count: layer.clips.len(),
+                video_folder_path: layer.video_folder_path.clone(),
+                source_clip_count: 0,
+                midi_note: layer.midi_note,
+                midi_channel: layer.midi_channel,
+                y_offset: i as f32 * track_h,
+                height: track_h,
+                is_selected: false,
+            }
+        }).collect();
+        ui.layer_headers.set_layers(layers);
+
+        // Track data → TimelineViewportPanel
+        let tracks: Vec<TrackInfo> = project.timeline.layers.iter().map(|layer| {
+            TrackInfo {
+                height: if layer.is_collapsed { 48.0 } else { 140.0 },
+                is_muted: layer.is_muted,
+                is_group: false,
+                accent_color: None,
+            }
+        }).collect();
+        ui.viewport.set_tracks(tracks);
+    }
+
+    // Rebuild UI tree with the new data
+    ui.build();
 }

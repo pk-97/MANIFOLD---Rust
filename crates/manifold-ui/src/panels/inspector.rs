@@ -681,7 +681,8 @@ mod tests {
     fn build_with_zero_inspector_width() {
         let mut tree = UITree::new();
         let mut panel = InspectorCompositePanel::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0); // inspector_width = 0
+        let mut layout = ScreenLayout::new(1920.0, 1080.0);
+        layout.inspector_width = 0.0;
         panel.build(&mut tree, &layout);
 
         // Nothing built when inspector is closed
