@@ -149,6 +149,9 @@ pub const EFFECT_DRAG_INDICATOR_REGROUP: Color32 = Color32::new(77, 158, 97, 255
 // ── Selection ───────────────────────────────────────────────────────
 pub const SELECTED_BORDER: Color32 = Color32::new(89, 148, 235, 255);
 
+// ── Trim handles (viewport clip edges) ─────────────────────────────
+pub const TRIM_HANDLE_COLOR: Color32 = Color32::new(255, 255, 255, 51);
+
 // ── Resize handle ───────────────────────────────────────────────────
 pub const RESIZE_HANDLE_IDLE: Color32 = Color32::new(89, 89, 94, 0);
 pub const RESIZE_HANDLE_HOVER: Color32 = Color32::new(128, 128, 133, 128);

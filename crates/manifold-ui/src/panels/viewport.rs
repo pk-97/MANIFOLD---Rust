@@ -1,5 +1,7 @@
 use crate::color;
-use crate::input::{Modifiers, UIEvent};
+use crate::input::UIEvent;
+#[cfg(test)]
+use crate::input::Modifiers;
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::tree::UITree;
@@ -137,6 +139,7 @@ pub struct TimelineViewportPanel {
     clip_bg_ids: Vec<i32>,
     clip_label_ids: Vec<i32>,
     clip_border_ids: Vec<i32>,
+    clip_trim_handle_ids: Vec<i32>,
 
     // Node range
     first_node: usize,
@@ -187,6 +190,7 @@ impl TimelineViewportPanel {
             clip_bg_ids: Vec::new(),
             clip_label_ids: Vec::new(),
             clip_border_ids: Vec::new(),
+            clip_trim_handle_ids: Vec::new(),
             first_node: 0,
             node_count: 0,
             drag_mode: ViewportDragMode::None,
@@ -814,6 +818,7 @@ impl TimelineViewportPanel {
         self.clip_bg_ids.clear();
         self.clip_label_ids.clear();
         self.clip_border_ids.clear();
+        self.clip_trim_handle_ids.clear();
 
         let (min_beat, max_beat) = self.visible_beat_range();
         let mut count = 0;
@@ -917,6 +922,28 @@ impl TimelineViewportPanel {
                     },
                 ) as i32;
                 self.clip_label_ids.push(label_id);
+            }
+
+            // Trim handle indicators (on hovered or selected clips, when wide enough)
+            if (is_selected || is_hovered) && clip_w > 24.0 {
+                let handle_w = 8.0_f32.min(clip_w * 0.25);
+                let trim_style = UIStyle {
+                    bg_color: color::TRIM_HANDLE_COLOR,
+                    corner_radius: CLIP_CORNER_RADIUS,
+                    ..UIStyle::default()
+                };
+
+                // Left trim handle
+                let left_id = tree.add_panel(
+                    -1, x1, clip_y, handle_w, clip_h, trim_style,
+                ) as i32;
+                self.clip_trim_handle_ids.push(left_id);
+
+                // Right trim handle
+                let right_id = tree.add_panel(
+                    -1, x2 - handle_w, clip_y, handle_w, clip_h, trim_style,
+                ) as i32;
+                self.clip_trim_handle_ids.push(right_id);
             }
 
             count += 1;
