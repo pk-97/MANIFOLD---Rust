@@ -49,10 +49,9 @@ const BEAT_DIV_LABELS: [&str; BEAT_DIV_COUNT] = [
 ];
 const WAVEFORM_LABELS: [&str; WAVEFORM_COUNT] = ["Sin", "Tri", "Saw", "Sqr", "Rnd"];
 
-// ── Panel-specific colors ────────────────────────────────────────
+// ── Panel-specific colors (imported from color module) ───────────
 
-const GEN_TYPE_HOVER: Color32 = Color32::new(40, 40, 44, 255);
-const GEN_TYPE_LABEL_COLOR: Color32 = Color32::new(150, 200, 150, 255);
+use crate::color::{GEN_TYPE_HOVER, GEN_TYPE_LABEL as GEN_TYPE_LABEL_COLOR};
 
 // ── Data types ───────────────────────────────────────────────────
 

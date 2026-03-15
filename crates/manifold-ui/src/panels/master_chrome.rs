@@ -18,11 +18,9 @@ const EXIT_LABEL_W: f32 = 60.0;
 const OPACITY_LABEL_W: f32 = 50.0;
 const FONT_SIZE: u16 = 10;
 
-// ── Panel-specific colors ────────────────────────────────────────
+// ── Panel-specific colors (imported from color module) ───────────
 
-const EXIT_PATH_BG: Color32 = Color32::new(48, 48, 51, 255);
-const EXIT_PATH_HOVER: Color32 = Color32::new(58, 58, 63, 255);
-const EXIT_PATH_PRESSED: Color32 = Color32::new(40, 40, 43, 255);
+use crate::color::{EXIT_PATH_BG, EXIT_PATH_HOVER, EXIT_PATH_PRESSED};
 
 // ── MasterChromePanel ────────────────────────────────────────────
 

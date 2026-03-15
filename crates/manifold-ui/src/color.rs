@@ -72,7 +72,7 @@ pub const CLIP_SEPARATOR: Color32 = Color32::new(20, 20, 22, 255);
 pub const CLIP_GEN_NORMAL: Color32 = Color32::new(101, 252, 255, 255);
 pub const CLIP_GEN_SELECTED: Color32 = Color32::new(102, 140, 224, 255);
 pub const CLIP_GEN_HOVER: Color32 = Color32::new(77, 97, 153, 255);
-pub const GEN_TYPE_LABEL: Color32 = Color32::new(140, 179, 242, 255);
+pub const GEN_TYPE_LABEL: Color32 = Color32::new(150, 200, 150, 255);
 
 // ── Group layer structural colors ───────────────────────────────────
 pub const COLLAPSED_GROUP_OVERLAY_BG: Color32 = Color32::new(20, 20, 28, 255);

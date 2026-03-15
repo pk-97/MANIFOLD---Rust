@@ -24,13 +24,9 @@ const FONT_SIZE: u16 = 10;
 const NAME_FONT_SIZE: u16 = 12;
 const SMALL_FONT_SIZE: u16 = 11;
 
-// ── Panel-specific colors ────────────────────────────────────────
+// ── Panel-specific colors (imported from color module) ───────────
 
-const LOOP_ON_COLOR: Color32 = Color32::new(50, 100, 180, 255);
-const LOOP_OFF_COLOR: Color32 = Color32::new(45, 45, 48, 255);
-const BPM_BTN_COLOR: Color32 = Color32::new(40, 40, 42, 255);
-const BPM_BTN_HOVER: Color32 = Color32::new(50, 50, 55, 255);
-const GEN_TYPE_COLOR: Color32 = Color32::new(100, 199, 140, 255);
+use crate::color::{LOOP_ON_COLOR, LOOP_OFF_COLOR, BPM_BTN_COLOR, BPM_BTN_HOVER, GEN_TYPE_COLOR};
 
 // ── ClipChromePanel ──────────────────────────────────────────────
 
