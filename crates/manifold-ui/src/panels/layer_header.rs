@@ -426,6 +426,9 @@ pub struct LayerHeaderPanel {
     // Screen-space origin of the layer controls panel
     panel_origin: Vec2,
     panel_width: f32,
+
+    // Vertical scroll offset — synchronized with viewport scroll_y_px
+    scroll_y_px: f32,
 }
 
 impl LayerHeaderPanel {
@@ -444,7 +447,13 @@ impl LayerHeaderPanel {
             cached_active_layer: None,
             panel_origin: Vec2::ZERO,
             panel_width: 0.0,
+            scroll_y_px: 0.0,
         }
+    }
+
+    /// Set vertical scroll offset (synchronized with viewport).
+    pub fn set_scroll_y(&mut self, y: f32) {
+        self.scroll_y_px = y;
     }
 
     /// Set the layer data snapshot. Must be called before build().
@@ -949,7 +958,7 @@ impl Default for LayerHeaderPanel {
 impl Panel for LayerHeaderPanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
         let lc = layout.layer_controls();
-        self.panel_origin = Vec2::new(lc.x, lc.y);
+        self.panel_origin = Vec2::new(lc.x, lc.y - self.scroll_y_px);
         self.panel_width = lc.width;
 
         // Full-area background (prevents compositor blit bleed-through)

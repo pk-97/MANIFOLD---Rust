@@ -88,6 +88,7 @@ pub struct DropdownPanel {
     /// Computed bounds of the dropdown container.
     container_bounds: Rect,
     /// Node IDs.
+    backdrop_id: i32,
     root_id: i32,
     item_ids: Vec<i32>,
     separator_ids: Vec<i32>,
@@ -108,6 +109,7 @@ impl DropdownPanel {
             screen_height: 1080.0,
             min_width: MIN_WIDTH,
             container_bounds: Rect::ZERO,
+            backdrop_id: -1,
             root_id: -1,
             item_ids: Vec::new(),
             separator_ids: Vec::new(),
@@ -215,6 +217,9 @@ impl DropdownPanel {
             return;
         }
         self.is_open = false;
+        if self.backdrop_id >= 0 {
+            tree.set_visible(self.backdrop_id as u32, false);
+        }
         if self.root_id >= 0 {
             tree.set_visible(self.root_id as u32, false);
         }
@@ -226,6 +231,21 @@ impl DropdownPanel {
         self.separator_ids.clear();
 
         let bounds = self.container_bounds;
+
+        // Fullscreen interactive backdrop — catches clicks outside the dropdown
+        // so they dismiss instead of passing through to panels behind it.
+        let backdrop_style = UIStyle {
+            bg_color: Color32::new(0, 0, 0, 1), // nearly invisible
+            ..UIStyle::default()
+        };
+        self.backdrop_id = tree.add_node(
+            -1,
+            Rect::new(0.0, 0.0, self.screen_width, self.screen_height),
+            UINodeType::Button,
+            backdrop_style,
+            None,
+            UIFlags::INTERACTIVE | UIFlags::VISIBLE,
+        ) as i32;
 
         // Root container with border + shadow bg.
         let container_style = UIStyle {
@@ -470,9 +490,9 @@ mod tests {
 
         assert!(dd.is_open());
         assert_eq!(dd.item_ids.len(), 4);
-        // 1 root + 4 items + 1 separator = 6 nodes
-        assert_eq!(dd.node_count(), 6);
-        assert!(tree.count() >= 6);
+        // 1 backdrop + 1 root + 4 items + 1 separator = 7 nodes
+        assert_eq!(dd.node_count(), 7);
+        assert!(tree.count() >= 7);
     }
 
     #[test]

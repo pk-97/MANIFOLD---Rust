@@ -258,15 +258,15 @@ impl UIInputSystem {
     }
 
     /// Process a right-click at `pos`.
+    /// Always emits the event even if no interactive node is hit — panels
+    /// use position-based routing to determine what was right-clicked.
     pub fn process_right_click(&mut self, tree: &UITree, pos: Vec2) {
         let hit_id = tree.hit_test(pos);
-        if hit_id >= 0 {
-            self.pending_events.push(UIEvent::RightClick {
-                node_id: hit_id as u32,
-                pos,
-                modifiers: self.modifiers,
-            });
-        }
+        self.pending_events.push(UIEvent::RightClick {
+            node_id: if hit_id >= 0 { hit_id as u32 } else { u32::MAX },
+            pos,
+            modifiers: self.modifiers,
+        });
     }
 
     /// Process a scroll wheel event at `pos` with pixel `delta`.

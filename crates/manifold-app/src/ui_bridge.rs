@@ -2090,8 +2090,11 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
 pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option<usize>) {
     if let Some(project) = engine.project() {
         // Layer data → LayerHeaderPanel
+        let mut cumulative_y: f32 = 0.0;
         let layers: Vec<LayerInfo> = project.timeline.layers.iter().enumerate().map(|(i, layer)| {
             let track_h = if layer.is_collapsed { 48.0 } else { 140.0 };
+            let y = cumulative_y;
+            cumulative_y += track_h;
             LayerInfo {
                 name: layer.name.clone(),
                 layer_id: layer.layer_id.clone(),
@@ -2109,7 +2112,7 @@ pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer:
                 source_clip_count: 0,
                 midi_note: layer.midi_note,
                 midi_channel: layer.midi_channel,
-                y_offset: i as f32 * track_h,
+                y_offset: y,
                 height: track_h,
                 is_selected: active_layer == Some(i),
             }

@@ -938,7 +938,7 @@ impl ApplicationHandler for Application {
             // ── Mouse wheel (scroll / zoom) ──────────────────────────
             WindowEvent::MouseWheel { delta, .. } => {
                 if is_primary {
-                    let (_dx, dy) = match delta {
+                    let (dx, dy) = match delta {
                         winit::event::MouseScrollDelta::LineDelta(x, y) => (x * 20.0, y * 20.0),
                         winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
                     };
@@ -1000,6 +1000,21 @@ impl ApplicationHandler for Application {
                                 self.ui_root.viewport.scroll_x_beats(),
                                 new_y,
                             );
+                            // Sync layer headers with viewport vertical scroll
+                            self.ui_root.layer_headers.set_scroll_y(
+                                self.ui_root.viewport.scroll_y_px(),
+                            );
+                            self.needs_rebuild = true;
+                        }
+                        // Native horizontal scroll (trackpad two-finger swipe)
+                        if dx.abs() > 0.01 && !self.modifiers.alt {
+                            let ppb = self.ui_root.viewport.pixels_per_beat();
+                            let beat_delta = dx * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
+                            let new_x = (self.ui_root.viewport.scroll_x_beats() - beat_delta).max(0.0);
+                            self.ui_root.viewport.set_scroll(
+                                new_x,
+                                self.ui_root.viewport.scroll_y_px(),
+                            );
                             self.needs_rebuild = true;
                         }
                     }
@@ -1041,13 +1056,15 @@ impl ApplicationHandler for Application {
                             consumed = true;
                         }
                         Key::Named(NamedKey::Escape) => {
-                            // Clear selection first; if already clear, stop
-                            if !self.selection.selected_clip_ids.is_empty() {
+                            // 4-level priority chain (from INTERACTION_CONTRACT.md §28)
+                            if self.ui_root.dropdown.is_open() {
+                                // Level 1: dismiss dropdown/context menu
+                                self.ui_root.dropdown.close(&mut self.ui_root.tree);
+                            } else if !self.selection.selected_clip_ids.is_empty() {
+                                // Level 4: clear all selection + insert cursor
                                 self.selection.clear();
-                            } else {
-                                self.engine.set_state(PlaybackState::Stopped);
-                                self.engine.seek_to(0.0);
                             }
+                            // Note: Escape never stops playback (contract says clear only)
                             consumed = true;
                         }
                         // ── Undo/Redo ──

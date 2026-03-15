@@ -729,12 +729,23 @@ impl TimelineViewportPanel {
     fn build_track_backgrounds(&mut self, tree: &mut UITree) {
         self.track_bg_ids.clear();
 
+        let tr = &self.tracks_rect;
+        let tr_top = tr.y;
+        let tr_bottom = tr.y + tr.height;
+
         for (i, track) in self.tracks.iter().enumerate() {
             let y = self.track_y(i);
             let h = track.height;
 
             // Skip if completely outside viewport
-            if y + h < self.tracks_rect.y || y > self.tracks_rect.y_max() {
+            if y + h < tr_top || y > tr_bottom {
+                continue;
+            }
+
+            // Clamp to tracks_rect bounds (prevents bleeding into video area)
+            let clamped_y = y.max(tr_top);
+            let clamped_h = (y + h).min(tr_bottom) - clamped_y;
+            if clamped_h <= 0.0 {
                 continue;
             }
 
@@ -752,29 +763,32 @@ impl TimelineViewportPanel {
             }
 
             let id = tree.add_panel(
-                -1, self.tracks_rect.x, y,
-                self.tracks_rect.width, h,
+                -1, tr.x, clamped_y,
+                tr.width, clamped_h,
                 style,
             ) as i32;
             self.track_bg_ids.push(id);
 
-            // Group accent bar
-            if track.is_group {
+            // Group accent bar (only if top is visible)
+            if track.is_group && y >= tr_top {
                 if let Some(accent) = track.accent_color {
                     tree.add_panel(
-                        -1, self.tracks_rect.x, y,
-                        color::GROUP_ACCENT_BAR_WIDTH, h,
+                        -1, tr.x, clamped_y,
+                        color::GROUP_ACCENT_BAR_WIDTH, clamped_h,
                         UIStyle { bg_color: accent, ..UIStyle::default() },
                     );
                 }
             }
 
-            // Bottom separator
-            tree.add_panel(
-                -1, self.tracks_rect.x, y + h - 1.0,
-                self.tracks_rect.width, 1.0,
-                UIStyle { bg_color: color::SEPARATOR_COLOR, ..UIStyle::default() },
-            );
+            // Bottom separator (only if bottom edge is visible)
+            let sep_y = y + h - 1.0;
+            if sep_y >= tr_top && sep_y < tr_bottom {
+                tree.add_panel(
+                    -1, tr.x, sep_y,
+                    tr.width, 1.0,
+                    UIStyle { bg_color: color::SEPARATOR_COLOR, ..UIStyle::default() },
+                );
+            }
         }
     }
 
@@ -941,8 +955,13 @@ impl TimelineViewportPanel {
 
             if clip_w < 1.0 { continue; }
 
-            let clip_y = track_y + CLIP_VERTICAL_PAD;
-            let clip_h = track_h - CLIP_VERTICAL_PAD * 2.0;
+            let raw_clip_y = track_y + CLIP_VERTICAL_PAD;
+            let raw_clip_h = track_h - CLIP_VERTICAL_PAD * 2.0;
+            // Clamp clip rect to tracks_rect bounds (prevent bleeding into video area)
+            let clip_y = raw_clip_y.max(self.tracks_rect.y);
+            let clip_bottom = (raw_clip_y + raw_clip_h).min(self.tracks_rect.y + self.tracks_rect.height);
+            let clip_h = clip_bottom - clip_y;
+            if clip_h <= 0.0 { continue; }
 
             // Determine clip color
             let is_selected = self.selected_clip_ids.contains(&clip.clip_id);
