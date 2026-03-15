@@ -1183,6 +1183,20 @@ impl ApplicationHandler for Application {
                             }
                             consumed = true;
                         }
+                        // ── I — set/clear export in point ──
+                        Key::Character(ref c) if c.as_str() == "i" && !self.modifiers.command => {
+                            let beat = self.engine.current_beat();
+                            if let Some(project) = self.engine.project_mut() {
+                                if self.modifiers.alt {
+                                    project.timeline.export_in_beat = 0.0;
+                                    project.timeline.export_range_enabled = false;
+                                } else {
+                                    project.timeline.export_in_beat = beat;
+                                    project.timeline.export_range_enabled = true;
+                                }
+                            }
+                            consumed = true;
+                        }
                         // ── Home/End — seek to start/end ──
                         Key::Named(NamedKey::Home) => {
                             self.engine.seek_to(0.0);

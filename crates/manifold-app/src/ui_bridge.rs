@@ -22,7 +22,9 @@ use manifold_editing::commands::drivers::{
     ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand,
     ToggleDriverReversedCommand,
 };
-use manifold_editing::commands::clip::{MoveClipCommand, TrimClipCommand};
+use manifold_editing::commands::clip::{
+    MoveClipCommand, TrimClipCommand, SlipClipCommand, ChangeClipLoopCommand,
+};
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
 use manifold_playback::engine::PlaybackEngine;
@@ -647,6 +649,7 @@ pub fn dispatch(
 
         // ── Clip chrome ────────────────────────────────────────────
         PanelAction::ClipChromeCollapseToggle => {
+            // Handled by inspector rebuild (toggle state on clip_chrome panel).
             DispatchResult::handled()
         }
         PanelAction::ClipBpmClicked => {
@@ -654,25 +657,96 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ClipLoopToggle => {
-            log::debug!("Clip loop toggle (clip selection not yet implemented)");
-            DispatchResult::handled()
+            if let Some(clip_id) = &selection.primary_clip_id {
+                let clip_id = clip_id.clone();
+                if let Some(project) = engine.project_mut() {
+                    if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
+                        let old_loop = clip.is_looping;
+                        let old_dur = clip.loop_duration_beats;
+                        let cmd = ChangeClipLoopCommand::new(
+                            clip_id, old_loop, !old_loop, old_dur, old_dur,
+                        );
+                        editing.execute(Box::new(cmd), project);
+                    }
+                }
+            }
+            DispatchResult::structural()
         }
         PanelAction::ClipSlipSnapshot => {
+            if let Some(clip_id) = &selection.primary_clip_id {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
+                        *drag_snapshot = Some(clip.in_point);
+                    }
+                }
+            }
             DispatchResult::handled()
         }
-        PanelAction::ClipSlipChanged(_val) => {
+        PanelAction::ClipSlipChanged(val) => {
+            if let Some(clip_id) = &selection.primary_clip_id {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
+                        clip.in_point = val.max(0.0);
+                    }
+                }
+            }
             DispatchResult::handled()
         }
         PanelAction::ClipSlipCommit => {
+            if let Some(old_val) = drag_snapshot.take() {
+                if let Some(clip_id) = &selection.primary_clip_id {
+                    let clip_id = clip_id.clone();
+                    if let Some(project) = engine.project_mut() {
+                        if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
+                            let new_val = clip.in_point;
+                            if (old_val - new_val).abs() > f32::EPSILON {
+                                let cmd = SlipClipCommand::new(clip_id, old_val, new_val);
+                                editing.record(Box::new(cmd));
+                            }
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
         PanelAction::ClipLoopSnapshot => {
+            if let Some(clip_id) = &selection.primary_clip_id {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
+                        *drag_snapshot = Some(clip.loop_duration_beats);
+                    }
+                }
+            }
             DispatchResult::handled()
         }
-        PanelAction::ClipLoopChanged(_val) => {
+        PanelAction::ClipLoopChanged(val) => {
+            if let Some(clip_id) = &selection.primary_clip_id {
+                if let Some(project) = engine.project_mut() {
+                    if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
+                        clip.loop_duration_beats = val.max(0.0);
+                    }
+                }
+            }
             DispatchResult::handled()
         }
         PanelAction::ClipLoopCommit => {
+            if let Some(old_val) = drag_snapshot.take() {
+                if let Some(clip_id) = &selection.primary_clip_id {
+                    let clip_id = clip_id.clone();
+                    if let Some(project) = engine.project_mut() {
+                        if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
+                            let new_val = clip.loop_duration_beats;
+                            let is_looping = clip.is_looping;
+                            if (old_val - new_val).abs() > f32::EPSILON {
+                                let cmd = ChangeClipLoopCommand::new(
+                                    clip_id, is_looping, is_looping, old_val, new_val,
+                                );
+                                editing.record(Box::new(cmd));
+                            }
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
 
@@ -1471,6 +1545,50 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
             // Master opacity
             ui.inspector.master_chrome_mut().sync_opacity(tree, project.settings.master_opacity);
         }
+    }
+
+    // Sync clip chrome from primary selected clip
+    if let Some(clip_id) = &selection.primary_clip_id {
+        if let Some(project) = engine.project() {
+            // Linear search (no mut needed for read-only)
+            let clip = project.timeline.layers.iter()
+                .flat_map(|l| l.clips.iter())
+                .find(|c| c.id == *clip_id);
+            if let Some(clip) = clip {
+                let is_video = !clip.video_clip_id.is_empty();
+                let is_gen = clip.generator_type != GeneratorType::None;
+                let chrome = ui.inspector.clip_chrome_mut();
+                let mode_changed = chrome.set_mode(true, is_video, is_gen, clip.is_looping);
+                if is_video {
+                    let name = clip.video_clip_id.clone();
+                    chrome.sync_name(tree, &name);
+                    chrome.sync_source_name(tree, &clip.video_clip_id);
+                    chrome.sync_slip(tree, clip.in_point);
+                    chrome.sync_loop_enabled(tree, clip.is_looping);
+                    chrome.sync_loop_duration(tree, clip.loop_duration_beats);
+                    if clip.recorded_bpm > 0.0 {
+                        chrome.sync_bpm(tree, &format!("{:.1}", clip.recorded_bpm));
+                    } else {
+                        chrome.sync_bpm(tree, "Auto");
+                    }
+                    // Slip range = source duration - clip duration in seconds
+                    let spb = 60.0 / engine.project().map_or(120.0, |p| p.settings.bpm);
+                    let clip_dur_s = clip.duration_beats * spb;
+                    chrome.set_slip_range(clip_dur_s.max(1.0));
+                    chrome.set_loop_range(clip.duration_beats.max(1.0));
+                } else if is_gen {
+                    chrome.sync_name(tree, &format!("{}", clip.generator_type.display_name()));
+                    chrome.sync_gen_type(tree, clip.generator_type.display_name());
+                }
+                if mode_changed {
+                    // Rebuild needed — mark as structural
+                }
+            }
+        }
+    } else {
+        // No clip selected — hide clip chrome content
+        let chrome = ui.inspector.clip_chrome_mut();
+        chrome.set_mode(false, false, false, false);
     }
 }
 
