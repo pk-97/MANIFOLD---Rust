@@ -11,4 +11,5 @@ pub mod layer_compositor;
 pub mod effect;
 pub mod effect_registry;
 pub mod effect_chain;
+pub mod effects;
 pub mod ui_renderer;

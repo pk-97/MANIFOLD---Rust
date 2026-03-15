@@ -1,6 +1,11 @@
 use std::collections::HashMap;
 use manifold_core::EffectType;
 use crate::effect::PostProcessEffect;
+use crate::effects::invert_colors::InvertColorsFX;
+use crate::effects::color_grade::ColorGradeFX;
+use crate::effects::mirror::MirrorFX;
+use crate::effects::feedback::FeedbackFX;
+use crate::effects::bloom::BloomFX;
 
 /// Factory + singleton storage for all effect processors.
 /// One processor per EffectType — per-owner state lives inside each processor.
@@ -9,12 +14,13 @@ pub struct EffectRegistry {
 }
 
 impl EffectRegistry {
-    pub fn new(_device: &wgpu::Device) -> Self {
-        let processors = HashMap::new();
-        // Concrete effects will be registered here as they are implemented:
-        // processors.insert(EffectType::InvertColors, Box::new(InvertColorsFX::new(device)));
-        // processors.insert(EffectType::ColorGrade, Box::new(ColorGradeFX::new(device)));
-        // etc.
+    pub fn new(device: &wgpu::Device) -> Self {
+        let mut processors: HashMap<EffectType, Box<dyn PostProcessEffect>> = HashMap::new();
+        processors.insert(EffectType::InvertColors, Box::new(InvertColorsFX::new(device)));
+        processors.insert(EffectType::ColorGrade, Box::new(ColorGradeFX::new(device)));
+        processors.insert(EffectType::Mirror, Box::new(MirrorFX::new(device)));
+        processors.insert(EffectType::Feedback, Box::new(FeedbackFX::new(device)));
+        processors.insert(EffectType::Bloom, Box::new(BloomFX::new(device)));
         Self { processors }
     }
 
