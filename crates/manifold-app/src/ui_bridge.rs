@@ -4,7 +4,8 @@
 //! mutations. The app layer calls `dispatch()` after collecting actions
 //! from all panels, and `push_state()` to sync engine state back to panels.
 
-use manifold_core::types::{LayerType, PlaybackState};
+use manifold_core::types::{EffectType, GeneratorType, LayerType, PlaybackState};
+use manifold_core::effects::EffectInstance;
 use manifold_editing::commands::settings::{
     ChangeMasterOpacityCommand, ChangeLayerOpacityCommand, ChangeGeneratorParamsCommand,
 };
@@ -18,6 +19,8 @@ use manifold_ui::PanelAction;
 use manifold_ui::node::Color32;
 use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::viewport::TrackInfo;
+use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
+use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo};
 
 use crate::ui_root::UIRoot;
 
@@ -488,4 +491,90 @@ pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine) {
 
     // Rebuild UI tree with the new data
     ui.build();
+}
+
+/// Sync inspector content for the active selection.
+/// Called when the active layer changes or after structural mutations.
+pub fn sync_inspector_data(
+    ui: &mut UIRoot,
+    engine: &PlaybackEngine,
+    active_layer: Option<usize>,
+) {
+    let Some(project) = engine.project() else { return };
+
+    // Master effects → inspector
+    let master_configs = effects_to_configs(&project.settings.master_effects);
+    ui.inspector.configure_master_effects(&master_configs);
+
+    // Active layer effects + gen params → inspector
+    if let Some(idx) = active_layer {
+        if let Some(layer) = project.timeline.layers.get(idx) {
+            // Layer effects
+            let layer_effects = layer.effects.as_ref()
+                .map(|e| effects_to_configs(e))
+                .unwrap_or_default();
+            ui.inspector.configure_layer_effects(&layer_effects);
+
+            // Generator params
+            let gen_config = layer.gen_params.as_ref()
+                .filter(|gp| gp.generator_type != GeneratorType::None)
+                .map(|gp| gen_params_to_config(gp));
+            ui.inspector.configure_gen_params(gen_config.as_ref());
+        } else {
+            ui.inspector.configure_layer_effects(&[]);
+            ui.inspector.configure_gen_params(None);
+        }
+    } else {
+        ui.inspector.configure_layer_effects(&[]);
+        ui.inspector.configure_gen_params(None);
+    }
+
+    // Rebuild to reflect new inspector content
+    ui.build();
+}
+
+// ── Helpers ──────────────────────────────────────────────────────
+
+/// Convert a slice of `EffectInstance` into `EffectCardConfig` for the UI.
+fn effects_to_configs(effects: &[EffectInstance]) -> Vec<EffectCardConfig> {
+    effects.iter().enumerate().map(|(i, fx)| {
+        let defs = fx.effect_type.param_defs();
+        let params: Vec<EffectParamInfo> = defs.iter().map(|&(name, min, max, default, whole)| {
+            EffectParamInfo {
+                name: name.to_string(),
+                min,
+                max,
+                default,
+                whole_numbers: whole,
+            }
+        }).collect();
+
+        EffectCardConfig {
+            effect_index: i,
+            name: fx.effect_type.display_name().to_string(),
+            enabled: fx.enabled,
+            supports_envelopes: true,
+            params,
+        }
+    }).collect()
+}
+
+/// Convert a `GeneratorParamState` into `GenParamConfig` for the UI.
+fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState) -> GenParamConfig {
+    let defs = gp.generator_type.param_defs();
+    let params: Vec<GenParamInfo> = defs.iter().map(|&(name, min, max, default, whole, toggle)| {
+        GenParamInfo {
+            name: name.to_string(),
+            min,
+            max,
+            default,
+            whole_numbers: whole,
+            is_toggle: toggle,
+        }
+    }).collect();
+
+    GenParamConfig {
+        gen_type_name: gp.generator_type.display_name().to_string(),
+        params,
+    }
 }

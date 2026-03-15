@@ -215,6 +215,7 @@ impl Application {
         // 1. Process UI events and dispatch actions
         let actions = self.ui_root.process_events();
         let mut needs_structural_sync = false;
+        let prev_active_layer = self.active_layer_index;
         for action in &actions {
             let result = crate::ui_bridge::dispatch(
                 action,
@@ -229,6 +230,9 @@ impl Application {
         }
         if needs_structural_sync {
             crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine);
+            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
+        } else if self.active_layer_index != prev_active_layer {
+            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
         }
 
         // 2. Push engine state to UI panels
@@ -693,6 +697,7 @@ impl ApplicationHandler for Application {
 
         // Push initial project data (layers, tracks) and rebuild
         crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine);
+        crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
 
         self.initialized = true;
 

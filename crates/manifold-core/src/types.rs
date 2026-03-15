@@ -89,6 +89,98 @@ pub enum EffectType {
     Redaction = 39,
 }
 
+impl EffectType {
+    /// Human-readable name for UI display.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Transform => "Transform",
+            Self::InvertColors => "Invert Colors",
+            Self::Feedback => "Feedback",
+            Self::PixelSort => "Pixel Sort",
+            Self::Bloom => "Bloom",
+            Self::InfiniteZoom => "Infinite Zoom",
+            Self::Kaleidoscope => "Kaleidoscope",
+            Self::EdgeStretch => "Edge Stretch",
+            Self::VoronoiPrism => "Voronoi Prism",
+            Self::QuadMirror => "Quad Mirror",
+            Self::Dither => "Dither",
+            Self::Strobe => "Strobe",
+            Self::StylizedFeedback => "Stylized Feedback",
+            Self::Mirror => "Mirror",
+            Self::BlobTracking => "Blob Tracking",
+            Self::CRT => "CRT",
+            Self::FluidDistortion => "Fluid Distortion",
+            Self::EdgeGlow => "Edge Glow",
+            Self::Datamosh => "Datamosh",
+            Self::SlitScan => "Slit Scan",
+            Self::ColorGrade => "Color Grade",
+            Self::WireframeDepth => "Wireframe Depth",
+            Self::ChromaticAberration => "Chromatic Aberration",
+            Self::GradientMap => "Gradient Map",
+            Self::Glitch => "Glitch",
+            Self::FilmGrain => "Film Grain",
+            Self::Halation => "Halation",
+            Self::Microscope => "Microscope",
+            Self::Corruption => "Corruption",
+            Self::Infrared => "Infrared",
+            Self::Surveillance => "Surveillance",
+            Self::Redaction => "Redaction",
+        }
+    }
+
+    /// Parameter definitions for this effect type.
+    /// Returns (name, min, max, default, whole_numbers).
+    pub fn param_defs(&self) -> &'static [(&'static str, f32, f32, f32, bool)] {
+        match self {
+            Self::InvertColors => &[("Intensity", 0.0, 1.0, 1.0, false)],
+            Self::Feedback => &[("Amount", 0.0, 1.0, 0.5, false)],
+            Self::Bloom => &[
+                ("Threshold", 0.0, 2.0, 0.8, false),
+                ("Intensity", 0.0, 2.0, 0.5, false),
+            ],
+            Self::Mirror => &[("Mode", 0.0, 2.0, 0.0, true)],
+            Self::ColorGrade => &[
+                ("Hue Shift", -1.0, 1.0, 0.0, false),
+                ("Saturation", 0.0, 2.0, 1.0, false),
+                ("Gain", 0.0, 3.0, 1.0, false),
+                ("Contrast", 0.0, 2.0, 1.0, false),
+            ],
+            Self::Transform => &[
+                ("Scale", 0.1, 5.0, 1.0, false),
+                ("Rotation", -180.0, 180.0, 0.0, false),
+                ("Offset X", -1.0, 1.0, 0.0, false),
+                ("Offset Y", -1.0, 1.0, 0.0, false),
+            ],
+            Self::Kaleidoscope => &[
+                ("Amount", 0.0, 1.0, 1.0, false),
+                ("Segments", 2.0, 16.0, 6.0, true),
+            ],
+            Self::EdgeStretch => &[
+                ("Amount", 0.0, 1.0, 0.5, false),
+                ("Source Width", 0.01, 0.5, 0.1, false),
+            ],
+            Self::PixelSort => &[
+                ("Amount", 0.0, 1.0, 0.5, false),
+                ("Threshold", 0.0, 1.0, 0.3, false),
+            ],
+            Self::Strobe => &[
+                ("Rate", 0.0, 1.0, 0.5, false),
+                ("Intensity", 0.0, 1.0, 1.0, false),
+            ],
+            Self::ChromaticAberration => &[("Amount", 0.0, 50.0, 5.0, false)],
+            Self::FilmGrain => &[("Amount", 0.0, 1.0, 0.3, false)],
+            Self::Glitch => &[("Amount", 0.0, 1.0, 0.5, false)],
+            Self::Dither => &[("Amount", 0.0, 1.0, 0.5, false)],
+            Self::CRT => &[("Amount", 0.0, 1.0, 0.5, false)],
+            Self::Halation => &[
+                ("Amount", 0.0, 1.0, 0.5, false),
+                ("Radius", 0.0, 50.0, 10.0, false),
+            ],
+            _ => &[],
+        }
+    }
+}
+
 impl Serialize for EffectType {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_i32(*self as i32)
@@ -160,6 +252,80 @@ pub enum GeneratorType {
     Mycelium = 17,
     ComputeStrangeAttractor = 18,
     FluidSimulation3D = 19,
+}
+
+impl GeneratorType {
+    /// Human-readable name for UI display.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::BasicShapesSnap => "Basic Shapes",
+            Self::Duocylinder => "Duocylinder",
+            Self::Tesseract => "Tesseract",
+            Self::ConcentricTunnel => "Concentric Tunnel",
+            Self::Plasma => "Plasma",
+            Self::Lissajous => "Lissajous",
+            Self::FractalZoom => "Fractal Zoom",
+            Self::OscilloscopeXY => "Oscilloscope XY",
+            Self::WireframeZoo => "Wireframe Zoo",
+            Self::ReactionDiffusion => "Reaction Diffusion",
+            Self::Flowfield => "Flowfield",
+            Self::ParametricSurface => "Parametric Surface",
+            Self::StrangeAttractor => "Strange Attractor",
+            Self::FluidSimulation => "Fluid Simulation",
+            Self::NumberStation => "Number Station",
+            Self::Mycelium => "Mycelium",
+            Self::ComputeStrangeAttractor => "Compute Attractor",
+            Self::FluidSimulation3D => "Fluid Sim 3D",
+        }
+    }
+
+    /// Parameter definitions for this generator type.
+    /// Returns (name, min, max, default, whole_numbers, is_toggle).
+    pub fn param_defs(&self) -> &'static [(&'static str, f32, f32, f32, bool, bool)] {
+        match self {
+            Self::Plasma => &[
+                ("Speed", 0.0, 5.0, 1.0, false, false),
+                ("Scale", 0.1, 10.0, 3.0, false, false),
+                ("Complexity", 1.0, 8.0, 4.0, true, false),
+                ("Color Shift", 0.0, 1.0, 0.0, false, false),
+            ],
+            Self::ConcentricTunnel => &[
+                ("Speed", 0.0, 5.0, 1.0, false, false),
+                ("Rings", 2.0, 20.0, 8.0, true, false),
+                ("Twist", 0.0, 10.0, 1.0, false, false),
+            ],
+            Self::Lissajous => &[
+                ("Freq X", 1.0, 12.0, 3.0, true, false),
+                ("Freq Y", 1.0, 12.0, 2.0, true, false),
+                ("Phase", 0.0, 6.28, 1.57, false, false),
+                ("Trail", 0.0, 1.0, 0.95, false, false),
+            ],
+            Self::FractalZoom => &[
+                ("Zoom Speed", 0.0, 3.0, 0.5, false, false),
+                ("Iterations", 10.0, 500.0, 100.0, true, false),
+                ("Color Cycle", 0.0, 5.0, 1.0, false, false),
+            ],
+            Self::Flowfield => &[
+                ("Speed", 0.0, 5.0, 1.0, false, false),
+                ("Scale", 0.1, 10.0, 3.0, false, false),
+                ("Particle Count", 100.0, 10000.0, 2000.0, true, false),
+            ],
+            Self::ReactionDiffusion => &[
+                ("Feed Rate", 0.01, 0.1, 0.055, false, false),
+                ("Kill Rate", 0.04, 0.08, 0.062, false, false),
+                ("Diffusion A", 0.5, 1.5, 1.0, false, false),
+                ("Diffusion B", 0.1, 1.0, 0.5, false, false),
+            ],
+            Self::FluidSimulation | Self::FluidSimulation3D => &[
+                ("Viscosity", 0.0, 1.0, 0.1, false, false),
+                ("Diffusion", 0.0, 1.0, 0.0, false, false),
+                ("Force", 0.0, 500.0, 100.0, false, false),
+                ("Color Decay", 0.9, 1.0, 0.99, false, false),
+            ],
+            _ => &[],
+        }
+    }
 }
 
 // GeneratorType serializes as integer in JSON
