@@ -19,6 +19,7 @@ pub enum DropdownContext {
     GenType(usize),
     ClipContext(String),     // right-click on clip: clip_id
     TrackContext(f32, usize), // right-click on empty track: beat, layer
+    LayerContext(usize),     // right-click on layer header: layer_index
 }
 
 /// Owns all UI state for one window.
@@ -303,6 +304,19 @@ impl UIRoot {
                 self.dropdown.open_context(items, right_click_pos, &mut self.tree);
                 true
             }
+            PanelAction::LayerHeaderRightClicked(layer_idx) => {
+                let mut items = vec![
+                    DropdownItem::new("Insert Video Layer"),
+                    DropdownItem::new("Insert Generator Layer"),
+                ];
+                // Only allow delete if more than 1 layer exists
+                if self.layer_headers.layer_count() > 1 {
+                    items.push(DropdownItem::new("Delete Layer"));
+                }
+                self.dropdown_context = Some(DropdownContext::LayerContext(*layer_idx));
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
             _ => false,
         }
     }
@@ -344,6 +358,14 @@ impl UIRoot {
                     0 => Some(PanelAction::ContextPasteAtTrack(beat, layer)),
                     1 => Some(PanelAction::ContextAddVideoLayer(layer)),
                     2 => Some(PanelAction::ContextAddGeneratorLayer(layer)),
+                    _ => None,
+                }
+            }
+            DropdownContext::LayerContext(layer_idx) => {
+                match index {
+                    0 => Some(PanelAction::ContextAddVideoLayer(layer_idx)),
+                    1 => Some(PanelAction::ContextAddGeneratorLayer(layer_idx)),
+                    2 => Some(PanelAction::ContextDeleteLayer(layer_idx)),
                     _ => None,
                 }
             }

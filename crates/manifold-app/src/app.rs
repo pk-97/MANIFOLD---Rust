@@ -53,6 +53,8 @@ impl SelectionState {
     pub fn clear(&mut self) {
         self.selected_clip_ids.clear();
         self.primary_clip_id = None;
+        self.insert_cursor_beat = None;
+        self.insert_cursor_layer = None;
         self.version += 1;
     }
 
@@ -241,6 +243,60 @@ impl Application {
         project.timeline.layers.push(layer);
 
         project
+    }
+
+    /// Navigate the insert cursor using the cursor_nav module.
+    /// Handles Left/Right/Up/Down with auto-select and collapsed-layer skipping.
+    fn navigate_cursor(&mut self, direction: manifold_ui::cursor_nav::Direction) {
+        use manifold_ui::cursor_nav::{navigate_cursor, NavResult, NavLayerInfo, NavClipInfo};
+
+        let current_beat = self.selection.insert_cursor_beat.unwrap_or(self.engine.current_beat());
+        let current_layer = self.selection.insert_cursor_layer
+            .or(self.active_layer_index)
+            .unwrap_or(0);
+        let grid_interval = 0.25; // default 16th note grid
+
+        // Build layer info for navigation (skip collapsed layers)
+        let layers: Vec<NavLayerInfo> = self.engine.project()
+            .map(|p| p.timeline.layers.iter().enumerate().map(|(i, l)| {
+                NavLayerInfo {
+                    index: i,
+                    height: if l.is_collapsed { 0.0 } else { 140.0 },
+                }
+            }).collect())
+            .unwrap_or_default();
+
+        // Build clip info for auto-select
+        let clips: Vec<NavClipInfo> = self.engine.project()
+            .map(|p| p.timeline.layers.iter().enumerate().flat_map(|(li, l)| {
+                l.clips.iter().map(move |c| NavClipInfo {
+                    clip_id: c.id.clone(),
+                    layer_index: li,
+                    start_beat: c.start_beat,
+                    end_beat: c.start_beat + c.duration_beats,
+                })
+            }).collect())
+            .unwrap_or_default();
+
+        match navigate_cursor(
+            direction, current_beat, current_layer, grid_interval,
+            self.modifiers.shift, &layers, &clips,
+        ) {
+            NavResult::SelectClip(clip_id) => {
+                self.selection.clear();
+                self.selection.selected_clip_ids.insert(clip_id.clone());
+                self.selection.primary_clip_id = Some(clip_id);
+                self.needs_rebuild = true;
+            }
+            NavResult::SetCursor { beat, layer } => {
+                self.selection.clear();
+                self.selection.insert_cursor_beat = Some(beat);
+                self.selection.insert_cursor_layer = Some(layer);
+                self.active_layer_index = Some(layer);
+                self.needs_rebuild = true;
+            }
+            NavResult::NoChange => {}
+        }
     }
 
     fn open_output_window(
@@ -1085,6 +1141,17 @@ impl ApplicationHandler for Application {
                             log::info!("Save project (Cmd+S) — not yet implemented");
                             consumed = true;
                         }
+                        Key::Character(ref c) if c.as_str() == "n" && self.modifiers.command => {
+                            // New project — reset to empty default
+                            let project = Self::create_default_project();
+                            self.engine.initialize(project);
+                            self.editing_service.set_project();
+                            self.selection.clear();
+                            self.active_layer_index = Some(0);
+                            self.needs_rebuild = true;
+                            log::info!("New project created");
+                            consumed = true;
+                        }
                         // ── Delete selected clips ──
                         Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace)
                             if !self.modifiers.command =>
@@ -1281,11 +1348,8 @@ impl ApplicationHandler for Application {
                                     }
                                 }
                             } else {
-                                let beat = (self.engine.current_beat() - step).max(0.0);
-                                if let Some(p) = self.engine.project() {
-                                    let time = beat * (60.0 / p.settings.bpm);
-                                    self.engine.seek_to(time);
-                                }
+                                // Navigate insert cursor left (Ableton behavior)
+                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Left);
                             }
                             consumed = true;
                         }
@@ -1300,16 +1364,15 @@ impl ApplicationHandler for Application {
                                     }
                                 }
                             } else {
-                                let beat = self.engine.current_beat() + step;
-                                if let Some(p) = self.engine.project() {
-                                    let time = beat * (60.0 / p.settings.bpm);
-                                    self.engine.seek_to(time);
-                                }
+                                // Navigate insert cursor right (Ableton behavior)
+                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Right);
                             }
                             consumed = true;
                         }
                         Key::Named(NamedKey::ArrowUp) if !self.modifiers.command => {
-                            if let Some(idx) = self.active_layer_index {
+                            if self.selection.selected_clip_ids.is_empty() {
+                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Up);
+                            } else if let Some(idx) = self.active_layer_index {
                                 if idx > 0 {
                                     self.active_layer_index = Some(idx - 1);
                                 }
@@ -1317,7 +1380,9 @@ impl ApplicationHandler for Application {
                             consumed = true;
                         }
                         Key::Named(NamedKey::ArrowDown) if !self.modifiers.command => {
-                            if let Some(idx) = self.active_layer_index {
+                            if self.selection.selected_clip_ids.is_empty() {
+                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Down);
+                            } else if let Some(idx) = self.active_layer_index {
                                 let count = self.engine.project().map_or(0, |p| p.timeline.layers.len());
                                 if idx + 1 < count {
                                     self.active_layer_index = Some(idx + 1);

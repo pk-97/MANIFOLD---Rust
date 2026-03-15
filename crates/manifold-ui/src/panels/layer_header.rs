@@ -949,6 +949,17 @@ impl LayerHeaderPanel {
         }
         Vec::new()
     }
+
+    fn handle_right_click(&self, pos: Vec2) -> Vec<PanelAction> {
+        // Position-based lookup: find which layer the Y coordinate falls in
+        let local_y = pos.y - self.panel_origin.y;
+        for (i, layer) in self.layers.iter().enumerate() {
+            if local_y >= layer.y_offset && local_y < layer.y_offset + layer.height {
+                return vec![PanelAction::LayerHeaderRightClicked(i)];
+            }
+        }
+        Vec::new()
+    }
 }
 
 impl Default for LayerHeaderPanel {
@@ -1050,6 +1061,7 @@ impl Panel for LayerHeaderPanel {
         match event {
             UIEvent::Click { node_id, .. } => self.handle_click(*node_id),
             UIEvent::DoubleClick { node_id, .. } => self.handle_double_click(*node_id),
+            UIEvent::RightClick { pos, .. } => self.handle_right_click(*pos),
             // PointerDown on drag handle → immediate select
             UIEvent::PointerDown { node_id, .. } => {
                 let id = *node_id as i32;

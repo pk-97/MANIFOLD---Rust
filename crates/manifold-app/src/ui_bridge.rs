@@ -1688,6 +1688,23 @@ pub fn dispatch(
             DispatchResult::structural()
         }
 
+        PanelAction::ContextDeleteLayer(layer_idx) => {
+            if let Some(project) = engine.project_mut() {
+                let idx = *layer_idx;
+                if project.timeline.layers.len() > 1 && idx < project.timeline.layers.len() {
+                    let layer = project.timeline.layers[idx].clone();
+                    let cmd = DeleteLayerCommand::new(layer, idx);
+                    editing.execute(Box::new(cmd), project);
+                }
+            }
+            DispatchResult::structural()
+        }
+
+        PanelAction::LayerHeaderRightClicked(_) => {
+            // Handled by UIRoot::try_open_dropdown — should not reach dispatch
+            DispatchResult::handled()
+        }
+
         // Generic dropdown fallback (should not normally fire)
         PanelAction::DropdownSelected(index) => {
             log::debug!("Dropdown selected: {} (no context)", index);

@@ -197,6 +197,9 @@ pub enum PanelAction {
     AddEffect(InspectorTab, usize), // tab, effect_type index
     SetGenType(usize, usize),      // layer_index, gen_type index
 
+    // Layer header right-click
+    LayerHeaderRightClicked(usize),                    // layer_index
+
     // Context menu results
     ContextSplitAtPlayhead(String),                  // clip_id
     ContextDeleteClip(String),                       // clip_id
@@ -204,6 +207,7 @@ pub enum PanelAction {
     ContextPasteAtTrack(f32, usize),                 // beat, layer
     ContextAddVideoLayer(usize),                     // after_layer
     ContextAddGeneratorLayer(usize),                 // after_layer
+    ContextDeleteLayer(usize),                       // layer_index
 
     // Generic dropdown fallback (should not normally reach dispatch)
     DropdownSelected(usize),
