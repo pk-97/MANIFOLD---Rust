@@ -364,12 +364,15 @@ impl UITree {
     {
         let node = &self.nodes[index];
         let visible = node.flags.contains(UIFlags::VISIBLE);
-        let clipping = visible && node.flags.contains(UIFlags::CLIPS_CHILDREN);
 
-        if visible {
-            visitor(TraversalEvent::Node(node));
+        // If this node is invisible, skip it AND all its children.
+        if !visible {
+            return;
         }
 
+        visitor(TraversalEvent::Node(node));
+
+        let clipping = node.flags.contains(UIFlags::CLIPS_CHILDREN);
         if clipping {
             visitor(TraversalEvent::PushClip(node.bounds));
         }
