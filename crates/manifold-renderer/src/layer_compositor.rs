@@ -1,4 +1,5 @@
 use manifold_core::BlendMode;
+use manifold_core::effects::{EffectGroup, EffectInstance};
 use crate::render_target::RenderTarget;
 use crate::compositor::{Compositor, CompositorFrame};
 
@@ -14,6 +15,8 @@ pub struct CompositeClipDescriptor<'a> {
     pub scale: f32,
     pub rotation: f32,
     pub invert_colors: bool,
+    pub effects: &'a [EffectInstance],
+    pub effect_groups: &'a [EffectGroup],
 }
 
 #[repr(C)]

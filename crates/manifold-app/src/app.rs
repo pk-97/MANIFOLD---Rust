@@ -297,11 +297,15 @@ impl Application {
                     scale: clip.scale,
                     rotation: clip.rotation,
                     invert_colors: clip.invert_colors,
+                    effects: &clip.effects,
+                    effect_groups: clip.effect_groups.as_deref().unwrap_or(&[]),
                 });
             }
         }
 
         // 7. Build layer descriptors for compositor
+        let empty_effects: Vec<manifold_core::effects::EffectInstance> = Vec::new();
+        let empty_groups: Vec<manifold_core::effects::EffectGroup> = Vec::new();
         let layer_descs: Vec<CompositeLayerDescriptor> = layers.iter().map(|layer| {
             CompositeLayerDescriptor {
                 layer_index: layer.index,
@@ -309,6 +313,8 @@ impl Application {
                 opacity: layer.opacity,
                 is_muted: layer.is_muted,
                 is_solo: layer.is_solo,
+                effects: layer.effects.as_deref().unwrap_or(&empty_effects),
+                effect_groups: layer.effect_groups.as_deref().unwrap_or(&empty_groups),
             }
         }).collect();
 
@@ -318,6 +324,12 @@ impl Application {
             None => return,
         };
 
+        let project = self.engine.project();
+        let master_effects = project.map_or(&empty_effects[..], |p| &p.settings.master_effects);
+        let master_effect_groups = project
+            .and_then(|p| p.settings.master_effect_groups.as_deref())
+            .unwrap_or(&empty_groups);
+
         let frame = CompositorFrame {
             time: self.engine.current_time(),
             beat: self.engine.current_beat(),
@@ -326,6 +338,8 @@ impl Application {
             compositor_dirty: tick_result.compositor_dirty,
             clips: &clip_descs,
             layers: &layer_descs,
+            master_effects,
+            master_effect_groups,
         };
 
         let output_view = compositor.render(&gpu.device, &gpu.queue, &mut encoder, &frame);

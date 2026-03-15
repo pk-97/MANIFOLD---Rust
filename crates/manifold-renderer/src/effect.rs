@@ -8,10 +8,15 @@ pub struct EffectContext {
     pub dt: f32,
     pub width: u32,
     pub height: u32,
+    /// Owner key for per-owner state management in stateful effects.
+    /// 0 = master, layer_index+1 = layer, hash(clip_id) = clip.
+    pub owner_key: i64,
+    pub is_clip_level: bool,
 }
 
 /// GPU-aware post-process effect processor.
-/// Phase 5 will add concrete implementations.
+/// One singleton per EffectType in the registry. Per-owner state (if any)
+/// lives inside each processor, keyed by `EffectContext::owner_key`.
 pub trait PostProcessEffect: Send {
     fn effect_type(&self) -> EffectType;
 
@@ -29,9 +34,18 @@ pub trait PostProcessEffect: Send {
         ctx: &EffectContext,
     );
 
-    /// Clear temporal state (called on seek to prevent stale trails/feedback).
+    /// Clear all temporal state (called on seek to prevent stale trails/feedback).
     fn clear_state(&mut self) {}
 
     /// Recreate resolution-dependent resources.
     fn resize(&mut self, _device: &wgpu::Device, _width: u32, _height: u32) {}
+}
+
+/// Extension for effects that maintain per-owner state (e.g., Feedback, Bloom).
+pub trait StatefulEffect: PostProcessEffect {
+    /// Clear state for a specific owner (e.g., when a clip is removed).
+    fn clear_state_for_owner(&mut self, owner_key: i64);
+
+    /// Clean up all resources for a specific owner.
+    fn cleanup_owner(&mut self, owner_key: i64);
 }
