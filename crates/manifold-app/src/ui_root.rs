@@ -5,8 +5,8 @@
 //! workspace window and forwards winit events through it.
 
 use manifold_ui::*;
-use manifold_ui::input::{Key, Modifiers, PointerAction};
-use manifold_ui::node::Vec2;
+use manifold_ui::input::{Key, Modifiers, PointerAction, UIEvent};
+use manifold_ui::node::{Vec2, Rect};
 
 /// What the currently-open dropdown is selecting for.
 #[derive(Debug, Clone)]
@@ -111,8 +111,8 @@ impl UIRoot {
         self.input.process_key(key, modifiers);
     }
 
-    /// Open a dropdown with a context that determines what the selection means.
-    pub fn open_dropdown(&mut self, context: DropdownContext, items: Vec<DropdownItem>, trigger: manifold_ui::node::Rect) {
+    /// Open a dropdown anchored below a trigger rect.
+    fn open_dropdown_at(&mut self, context: DropdownContext, items: Vec<DropdownItem>, trigger: Rect) {
         self.dropdown_context = Some(context);
         self.dropdown.open(items, trigger, 120.0, &mut self.tree);
     }
@@ -126,8 +126,14 @@ impl UIRoot {
 
         let events = self.input.drain_events();
         let mut actions = Vec::new();
+        let mut last_click_node: i32 = -1;
 
         for event in &events {
+            // Track which node was clicked (for dropdown anchoring).
+            if let UIEvent::Click { node_id, .. } = event {
+                last_click_node = *node_id as i32;
+            }
+
             // Dropdown gets first crack at all events.
             if self.dropdown.is_open() {
                 if let Some(dd_action) = self.dropdown.handle_event(event, &mut self.tree) {
@@ -169,7 +175,78 @@ impl UIRoot {
             actions.append(&mut panel_actions);
         }
 
-        actions
+        // Intercept dropdown-triggering actions and open dropdowns here
+        // (where we have access to the tree for node bounds).
+        let mut filtered = Vec::with_capacity(actions.len());
+        for action in actions {
+            if self.try_open_dropdown(&action, last_click_node) {
+                // Consumed — don't forward to dispatch.
+                continue;
+            }
+            filtered.push(action);
+        }
+
+        filtered
+    }
+
+    /// If the action is a dropdown trigger, open the dropdown anchored to the
+    /// clicked button and return true (action consumed). Otherwise return false.
+    fn try_open_dropdown(&mut self, action: &PanelAction, click_node: i32) -> bool {
+        let trigger = if click_node >= 0 {
+            self.tree.get_bounds(click_node as u32)
+        } else {
+            Rect::new(100.0, 100.0, 80.0, 24.0)
+        };
+
+        match action {
+            PanelAction::BlendModeClicked(idx) => {
+                use manifold_core::types::BlendMode;
+                let items: Vec<DropdownItem> = BlendMode::ALL.iter()
+                    .map(|m| DropdownItem::new(m.display_name()))
+                    .collect();
+                self.open_dropdown_at(DropdownContext::BlendMode(*idx), items, trigger);
+                true
+            }
+            PanelAction::AddEffectClicked(tab) => {
+                use manifold_core::types::EffectType;
+                let items: Vec<DropdownItem> = EffectType::ALL.iter()
+                    .map(|e| DropdownItem::new(e.display_name()))
+                    .collect();
+                self.open_dropdown_at(DropdownContext::AddEffect(*tab), items, trigger);
+                true
+            }
+            PanelAction::GenTypeClicked => {
+                use manifold_core::types::GeneratorType;
+                let items: Vec<DropdownItem> = GeneratorType::ALL.iter()
+                    .map(|g| DropdownItem::new(g.display_name()))
+                    .collect();
+                self.open_dropdown_at(DropdownContext::GenType(0), items, trigger);
+                true
+            }
+            PanelAction::MidiInputClicked(idx) => {
+                let items: Vec<DropdownItem> = (0..128)
+                    .map(|n| DropdownItem::new(&format!("{}", n)))
+                    .collect();
+                self.open_dropdown_at(DropdownContext::MidiNote(*idx), items, trigger);
+                true
+            }
+            PanelAction::MidiChannelClicked(idx) => {
+                let items: Vec<DropdownItem> = (1..=16)
+                    .map(|ch| DropdownItem::new(&format!("Ch {}", ch)))
+                    .collect();
+                self.open_dropdown_at(DropdownContext::MidiChannel(*idx), items, trigger);
+                true
+            }
+            PanelAction::ResolutionClicked => {
+                use manifold_core::types::ResolutionPreset;
+                let items: Vec<DropdownItem> = ResolutionPreset::ALL.iter()
+                    .map(|r| DropdownItem::new(r.display_name()))
+                    .collect();
+                self.open_dropdown_at(DropdownContext::Resolution, items, trigger);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Convert a dropdown selection into the appropriate PanelAction based on context.

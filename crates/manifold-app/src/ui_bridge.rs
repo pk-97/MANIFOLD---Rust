@@ -5,7 +5,7 @@
 //! from all panels, and `push_state()` to sync engine state back to panels.
 
 use manifold_core::types::{
-    BlendMode, EffectType, GeneratorType, LayerType, PlaybackState, ResolutionPreset,
+    BlendMode, GeneratorType, LayerType, PlaybackState,
 };
 use manifold_core::effects::EffectInstance;
 use manifold_editing::commands::settings::{
@@ -19,14 +19,14 @@ use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
 use manifold_playback::engine::PlaybackEngine;
-use manifold_ui::{PanelAction, DropdownItem};
-use manifold_ui::node::{Color32, Rect};
+use manifold_ui::PanelAction;
+use manifold_ui::node::Color32;
 use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::viewport::TrackInfo;
 use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
 use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo};
 
-use crate::ui_root::{UIRoot, DropdownContext};
+use crate::ui_root::UIRoot;
 
 /// Result of dispatching a panel action.
 pub struct DispatchResult {
@@ -149,13 +149,7 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ResolutionClicked => {
-            // Open resolution dropdown
-            let items: Vec<DropdownItem> = ResolutionPreset::ALL.iter().map(|r| {
-                DropdownItem::new(r.display_name())
-            }).collect();
-            // Anchor at a reasonable position (footer area)
-            let trigger = Rect::new(200.0, ui.layout.footer_y(), 100.0, 24.0);
-            ui.open_dropdown(DropdownContext::Resolution, items, trigger);
+            // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
         PanelAction::FpsFieldClicked => {
@@ -216,13 +210,8 @@ pub fn dispatch(
             }
             DispatchResult::structural()
         }
-        PanelAction::BlendModeClicked(idx) => {
-            // Open blend mode dropdown
-            let items: Vec<DropdownItem> = BlendMode::ALL.iter().map(|m| {
-                DropdownItem::new(m.display_name())
-            }).collect();
-            let trigger = Rect::new(0.0, *idx as f32 * 48.0, 80.0, 24.0);
-            ui.open_dropdown(DropdownContext::BlendMode(*idx), items, trigger);
+        PanelAction::BlendModeClicked(_idx) => {
+            // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
         PanelAction::SetBlendMode(idx, mode_str) => {
@@ -274,22 +263,12 @@ pub fn dispatch(
             }
             DispatchResult::structural()
         }
-        PanelAction::MidiInputClicked(idx) => {
-            // Open MIDI note dropdown (0-127)
-            let items: Vec<DropdownItem> = (0..128).map(|n| {
-                DropdownItem::new(&format!("{}", n))
-            }).collect();
-            let trigger = Rect::new(0.0, *idx as f32 * 48.0, 60.0, 24.0);
-            ui.open_dropdown(DropdownContext::MidiNote(*idx), items, trigger);
+        PanelAction::MidiInputClicked(_idx) => {
+            // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
-        PanelAction::MidiChannelClicked(idx) => {
-            // Open MIDI channel dropdown (1-16)
-            let items: Vec<DropdownItem> = (1..=16).map(|ch| {
-                DropdownItem::new(&format!("Ch {}", ch))
-            }).collect();
-            let trigger = Rect::new(0.0, *idx as f32 * 48.0, 60.0, 24.0);
-            ui.open_dropdown(DropdownContext::MidiChannel(*idx), items, trigger);
+        PanelAction::MidiChannelClicked(_idx) => {
+            // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
         PanelAction::LayerDragStarted(_idx) => {
@@ -546,17 +525,8 @@ pub fn dispatch(
         }
 
         // ── Effect management ──────────────────────────────────────
-        PanelAction::AddEffectClicked(tab) => {
-            // Open effect type dropdown
-            let items: Vec<DropdownItem> = EffectType::ALL.iter().map(|e| {
-                DropdownItem::new(e.display_name())
-            }).collect();
-            let trigger = Rect::new(
-                ui.layout.inspector_x(),
-                ui.layout.inspector_y() + 100.0,
-                140.0, 24.0,
-            );
-            ui.open_dropdown(DropdownContext::AddEffect(*tab), items, trigger);
+        PanelAction::AddEffectClicked(_tab) => {
+            // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
         PanelAction::RemoveEffect(fx_idx) => {
@@ -578,17 +548,7 @@ pub fn dispatch(
 
         // ── Generator params ───────────────────────────────────────
         PanelAction::GenTypeClicked => {
-            // Open generator type dropdown
-            let items: Vec<DropdownItem> = GeneratorType::ALL.iter().map(|g| {
-                DropdownItem::new(g.display_name())
-            }).collect();
-            let trigger = Rect::new(
-                ui.layout.inspector_x(),
-                ui.layout.inspector_y() + 50.0,
-                140.0, 24.0,
-            );
-            let layer_idx = active_layer.unwrap_or(0);
-            ui.open_dropdown(DropdownContext::GenType(layer_idx), items, trigger);
+            // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
         PanelAction::GenParamSnapshot(param_idx) => {
