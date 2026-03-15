@@ -16,17 +16,18 @@ use manifold_editing::commands::effects::{
     ToggleEffectCommand, ChangeEffectParamCommand, RemoveEffectCommand,
 };
 use manifold_editing::commands::effect_target::EffectTarget;
+use manifold_editing::commands::clip::{MoveClipCommand, TrimClipCommand};
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
 use manifold_playback::engine::PlaybackEngine;
 use manifold_ui::{PanelAction, InspectorTab};
 use manifold_ui::node::Color32;
 use manifold_ui::panels::layer_header::LayerInfo;
-use manifold_ui::panels::viewport::TrackInfo;
+use manifold_ui::panels::viewport::{TrackInfo, HitRegion};
 use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
 use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo};
 
-use crate::app::SelectionState;
+use crate::app::{SelectionState, ClipDragState, ClipDragMode, ClipDragSnapshot};
 use crate::ui_root::UIRoot;
 
 /// Result of dispatching a panel action.
@@ -50,6 +51,7 @@ pub fn dispatch(
     editing: &mut EditingService,
     ui: &mut UIRoot,
     selection: &mut SelectionState,
+    clip_drag: &mut ClipDragState,
     active_layer: &mut Option<usize>,
     drag_snapshot: &mut Option<f32>,
 ) -> DispatchResult {
@@ -145,28 +147,201 @@ pub fn dispatch(
             *active_layer = Some(*layer);
             DispatchResult::structural()
         }
-        PanelAction::ClipDragStarted(_clip_id, _region, _anchor_beat) => {
-            // Phase 2 will implement full drag logic
+        PanelAction::ClipDragStarted(clip_id, region, anchor_beat) => {
+            // Select the clip if not already selected
+            if !selection.selected_clip_ids.contains(clip_id) {
+                selection.select_single(clip_id.clone());
+            }
+
+            match region {
+                HitRegion::Body => {
+                    // Snapshot all selected clips for move
+                    let mut snapshots = Vec::new();
+                    let sel_ids: Vec<String> = selection.selected_clip_ids.iter().cloned().collect();
+                    if let Some(project) = engine.project_mut() {
+                        for sel_id in &sel_ids {
+                            if let Some(clip) = project.timeline.find_clip_by_id(sel_id) {
+                                snapshots.push(ClipDragSnapshot {
+                                    clip_id: sel_id.clone(),
+                                    original_start_beat: clip.start_beat,
+                                    original_layer_index: clip.layer_index,
+                                });
+                            }
+                        }
+                    }
+                    clip_drag.mode = ClipDragMode::Move;
+                    clip_drag.anchor_clip_id = clip_id.clone();
+                    clip_drag.anchor_beat = *anchor_beat;
+                    clip_drag.snapshots = snapshots;
+                }
+                HitRegion::TrimLeft | HitRegion::TrimRight => {
+                    if let Some(project) = engine.project_mut() {
+                        if let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
+                            clip_drag.trim_old_start = clip.start_beat;
+                            clip_drag.trim_old_duration = clip.duration_beats;
+                            clip_drag.trim_old_in_point = clip.in_point;
+                        }
+                    }
+                    clip_drag.mode = if *region == HitRegion::TrimLeft {
+                        ClipDragMode::TrimLeft
+                    } else {
+                        ClipDragMode::TrimRight
+                    };
+                    clip_drag.anchor_clip_id = clip_id.clone();
+                    clip_drag.anchor_beat = *anchor_beat;
+                    clip_drag.snapshots.clear();
+                }
+            }
             DispatchResult::handled()
         }
-        PanelAction::ClipDragMoved(_beat, _layer) => {
-            // Phase 2 will implement full drag logic
-            DispatchResult::handled()
+        PanelAction::ClipDragMoved(current_beat, _target_layer) => {
+            let snapped = ui.viewport.snap_to_grid(*current_beat);
+            match clip_drag.mode {
+                ClipDragMode::Move => {
+                    let delta = snapped - ui.viewport.snap_to_grid(clip_drag.anchor_beat);
+                    if let Some(project) = engine.project_mut() {
+                        for snap in &clip_drag.snapshots {
+                            let new_start = (snap.original_start_beat + delta).max(0.0);
+                            if let Some(clip) = project.timeline.find_clip_by_id_mut(&snap.clip_id) {
+                                clip.start_beat = new_start;
+                            }
+                        }
+                    }
+                }
+                ClipDragMode::TrimLeft => {
+                    if let Some(project) = engine.project_mut() {
+                        let old_end = clip_drag.trim_old_start + clip_drag.trim_old_duration;
+                        let new_start = snapped.max(0.0).min(old_end - 0.25);
+                        let new_duration = old_end - new_start;
+                        // Adjust in_point for video clips
+                        let spb = 60.0 / project.settings.bpm;
+                        let in_point_delta = (new_start - clip_drag.trim_old_start) * spb;
+                        let new_in_point = (clip_drag.trim_old_in_point + in_point_delta).max(0.0);
+
+                        if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_drag.anchor_clip_id) {
+                            clip.start_beat = new_start;
+                            clip.duration_beats = new_duration;
+                            clip.in_point = new_in_point;
+                        }
+                    }
+                }
+                ClipDragMode::TrimRight => {
+                    if let Some(project) = engine.project_mut() {
+                        let new_duration = (snapped - clip_drag.trim_old_start).max(0.25);
+                        if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_drag.anchor_clip_id) {
+                            clip.duration_beats = new_duration;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            DispatchResult::structural()
         }
         PanelAction::ClipDragEnded => {
-            // Phase 2 will implement full drag logic
+            match clip_drag.mode {
+                ClipDragMode::Move => {
+                    // Collect current positions first, then create commands
+                    let mut moves: Vec<(String, f32, f32, i32, i32)> = Vec::new();
+                    if let Some(project) = engine.project_mut() {
+                        for snap in &clip_drag.snapshots {
+                            if let Some(clip) = project.timeline.find_clip_by_id(&snap.clip_id) {
+                                let new_start = clip.start_beat;
+                                let new_layer = clip.layer_index;
+                                if (new_start - snap.original_start_beat).abs() > f32::EPSILON
+                                    || new_layer != snap.original_layer_index
+                                {
+                                    moves.push((
+                                        snap.clip_id.clone(),
+                                        snap.original_start_beat,
+                                        new_start,
+                                        snap.original_layer_index,
+                                        new_layer,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    for (id, old_start, new_start, old_layer, new_layer) in moves {
+                        let cmd = MoveClipCommand::new(id, old_start, new_start, old_layer, new_layer);
+                        editing.record(Box::new(cmd));
+                    }
+                }
+                ClipDragMode::TrimLeft | ClipDragMode::TrimRight => {
+                    if let Some(project) = engine.project_mut() {
+                        if let Some(clip) = project.timeline.find_clip_by_id(&clip_drag.anchor_clip_id) {
+                            let changed = (clip.start_beat - clip_drag.trim_old_start).abs() > f32::EPSILON
+                                || (clip.duration_beats - clip_drag.trim_old_duration).abs() > f32::EPSILON;
+                            if changed {
+                                let cmd = TrimClipCommand::new(
+                                    clip_drag.anchor_clip_id.clone(),
+                                    clip_drag.trim_old_start,
+                                    clip.start_beat,
+                                    clip_drag.trim_old_duration,
+                                    clip.duration_beats,
+                                    clip_drag.trim_old_in_point,
+                                    clip.in_point,
+                                );
+                                editing.record(Box::new(cmd));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            clip_drag.mode = ClipDragMode::None;
+            clip_drag.snapshots.clear();
+            DispatchResult::structural()
+        }
+        PanelAction::RegionDragStarted(beat, layer) => {
+            clip_drag.mode = ClipDragMode::RegionSelect;
+            clip_drag.region_anchor_beat = *beat;
+            clip_drag.region_anchor_layer = *layer;
+            selection.clear();
             DispatchResult::handled()
         }
-        PanelAction::RegionDragStarted(_beat, _layer) => {
-            // Phase 2 will implement region selection
-            DispatchResult::handled()
-        }
-        PanelAction::RegionDragMoved(_beat, _layer) => {
-            // Phase 2 will implement region selection
+        PanelAction::RegionDragMoved(beat, layer) => {
+            if clip_drag.mode == ClipDragMode::RegionSelect {
+                let min_beat = clip_drag.region_anchor_beat.min(*beat);
+                let max_beat = clip_drag.region_anchor_beat.max(*beat);
+                let min_layer = clip_drag.region_anchor_layer.min(*layer);
+                let max_layer = clip_drag.region_anchor_layer.max(*layer);
+
+                // Set visual region on viewport
+                ui.viewport.set_selection_region(Some(
+                    manifold_ui::panels::viewport::SelectionRegion {
+                        start_beat: min_beat,
+                        end_beat: max_beat,
+                        start_layer: min_layer,
+                        end_layer: max_layer,
+                    }
+                ));
+
+                // Select clips within region
+                if let Some(project) = engine.project() {
+                    let region = manifold_core::selection::SelectionRegion {
+                        start_beat: min_beat,
+                        end_beat: max_beat,
+                        start_layer_index: min_layer as i32,
+                        end_layer_index: max_layer as i32,
+                        is_active: true,
+                    };
+                    let clips_in_region = EditingService::get_clips_in_region(project, &region);
+                    selection.selected_clip_ids.clear();
+                    for (_, clip_id) in clips_in_region {
+                        selection.selected_clip_ids.insert(clip_id);
+                    }
+                    selection.primary_clip_id = selection.selected_clip_ids.iter().next().cloned();
+                    selection.version += 1;
+                }
+            }
             DispatchResult::handled()
         }
         PanelAction::RegionDragEnded => {
-            // Phase 2 will implement region selection
+            if clip_drag.mode == ClipDragMode::RegionSelect {
+                clip_drag.mode = ClipDragMode::None;
+                // Clear visual region but keep selection
+                ui.viewport.set_selection_region(None);
+            }
             DispatchResult::handled()
         }
         PanelAction::ViewportHoverChanged(_clip_id) => {

@@ -87,6 +87,59 @@ impl SelectionState {
     }
 }
 
+/// Active drag mode for timeline clip interaction.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClipDragMode {
+    None,
+    Move,
+    TrimLeft,
+    TrimRight,
+    RegionSelect,
+}
+
+/// Snapshot of a clip's state at drag start (for undo).
+#[derive(Debug, Clone)]
+pub struct ClipDragSnapshot {
+    pub clip_id: String,
+    pub original_start_beat: f32,
+    pub original_layer_index: i32,
+}
+
+/// State for an active clip drag operation.
+pub struct ClipDragState {
+    pub mode: ClipDragMode,
+    pub anchor_clip_id: String,
+    pub anchor_beat: f32,
+    pub snapshots: Vec<ClipDragSnapshot>,
+    // For trim:
+    pub trim_old_start: f32,
+    pub trim_old_duration: f32,
+    pub trim_old_in_point: f32,
+    // For region select:
+    pub region_anchor_beat: f32,
+    pub region_anchor_layer: usize,
+}
+
+impl ClipDragState {
+    pub fn new() -> Self {
+        Self {
+            mode: ClipDragMode::None,
+            anchor_clip_id: String::new(),
+            anchor_beat: 0.0,
+            snapshots: Vec::new(),
+            trim_old_start: 0.0,
+            trim_old_duration: 0.0,
+            trim_old_in_point: 0.0,
+            region_anchor_beat: 0.0,
+            region_anchor_layer: 0,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.mode != ClipDragMode::None
+    }
+}
+
 pub struct Application {
     // GPU
     gpu: Option<GpuContext>,
@@ -99,8 +152,9 @@ pub struct Application {
     engine: PlaybackEngine,
     editing_service: EditingService,
 
-    // Selection state
+    // Selection + drag state
     selection: SelectionState,
+    clip_drag: ClipDragState,
     active_layer_index: Option<usize>,
     drag_snapshot: Option<f32>,
 
@@ -152,6 +206,7 @@ impl Application {
             engine,
             editing_service: EditingService::new(),
             selection: SelectionState::new(),
+            clip_drag: ClipDragState::new(),
             active_layer_index: None,
             drag_snapshot: None,
             generator_renderer: None,
@@ -282,6 +337,7 @@ impl Application {
                 &mut self.editing_service,
                 &mut self.ui_root,
                 &mut self.selection,
+                &mut self.clip_drag,
                 &mut self.active_layer_index,
                 &mut self.drag_snapshot,
             );
