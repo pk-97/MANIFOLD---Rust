@@ -3,6 +3,7 @@ mod window_registry;
 mod frame_timer;
 mod ui_root;
 mod ui_bridge;
+mod text_input;
 
 fn main() {
     env_logger::init();

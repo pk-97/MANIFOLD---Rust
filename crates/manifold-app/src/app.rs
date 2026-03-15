@@ -24,6 +24,7 @@ use manifold_renderer::ui_renderer::UIRenderer;
 
 use manifold_ui::input::{Modifiers, PointerAction};
 use manifold_ui::node::Vec2;
+use manifold_ui::panels::PanelAction;
 
 use crate::frame_timer::FrameTimer;
 use crate::ui_root::UIRoot;
@@ -182,6 +183,12 @@ pub struct Application {
     modifiers: Modifiers,
     time_since_start: f32,
 
+    // File I/O
+    current_project_path: Option<std::path::PathBuf>,
+
+    // Text input
+    text_input: crate::text_input::TextInputState,
+
     // State
     initialized: bool,
     needs_rebuild: bool,
@@ -228,6 +235,8 @@ impl Application {
                 command: false,
             },
             time_since_start: 0.0,
+            current_project_path: None,
+            text_input: crate::text_input::TextInputState::new(),
             initialized: false,
             needs_rebuild: false,
         }
@@ -296,6 +305,108 @@ impl Application {
                 self.needs_rebuild = true;
             }
             NavResult::NoChange => {}
+        }
+    }
+
+    /// Handle committed text input value.
+    fn handle_text_input_commit(&mut self, field: crate::text_input::TextInputField, text: &str) {
+        use crate::text_input::TextInputField;
+        match field {
+            TextInputField::Bpm => {
+                if let Ok(bpm) = text.parse::<f32>() {
+                    let bpm = bpm.clamp(20.0, 300.0);
+                    if let Some(project) = self.engine.project_mut() {
+                        let cmd = manifold_editing::commands::settings::ChangeBpmCommand::new(
+                            project.settings.bpm, bpm,
+                        );
+                        self.editing_service.execute(Box::new(cmd), project);
+                    }
+                    self.needs_rebuild = true;
+                }
+            }
+            TextInputField::Fps => {
+                if let Ok(fps) = text.parse::<f32>() {
+                    let fps = fps.clamp(1.0, 240.0);
+                    if let Some(project) = self.engine.project_mut() {
+                        let cmd = manifold_editing::commands::settings::ChangeFrameRateCommand::new(
+                            project.settings.frame_rate, fps,
+                        );
+                        self.editing_service.execute(Box::new(cmd), project);
+                    }
+                    self.needs_rebuild = true;
+                }
+            }
+            TextInputField::LayerName(idx) => {
+                if let Some(project) = self.engine.project_mut() {
+                    if let Some(layer) = project.timeline.layers.get_mut(idx) {
+                        layer.name = text.to_string();
+                    }
+                }
+                self.needs_rebuild = true;
+            }
+            TextInputField::ClipBpm => {
+                log::info!("Clip BPM input: {} (not yet wired)", text);
+            }
+        }
+    }
+
+    /// Save the current project. If no path exists, triggers Save As.
+    fn save_project(&mut self) {
+        if let Some(path) = &self.current_project_path {
+            if let Some(project) = self.engine.project() {
+                match manifold_io::saver::save_project(project, path) {
+                    Ok(()) => {
+                        self.editing_service.mark_clean();
+                        log::info!("Saved to {}", path.display());
+                    }
+                    Err(e) => log::error!("Save failed: {e}"),
+                }
+            }
+        } else {
+            self.save_project_as();
+        }
+    }
+
+    /// Save As — open native save dialog.
+    fn save_project_as(&mut self) {
+        let dialog = rfd::FileDialog::new()
+            .set_title("Save Project")
+            .add_filter("MANIFOLD Project", &["json", "manifold"])
+            .set_file_name("project.json");
+
+        if let Some(path) = dialog.save_file() {
+            self.current_project_path = Some(path.clone());
+            if let Some(project) = self.engine.project() {
+                match manifold_io::saver::save_project(project, &path) {
+                    Ok(()) => {
+                        self.editing_service.mark_clean();
+                        log::info!("Saved to {}", path.display());
+                    }
+                    Err(e) => log::error!("Save failed: {e}"),
+                }
+            }
+        }
+    }
+
+    /// Open — native file dialog + load.
+    fn open_project(&mut self) {
+        let dialog = rfd::FileDialog::new()
+            .set_title("Open Project")
+            .add_filter("MANIFOLD Project", &["json", "manifold"]);
+
+        if let Some(path) = dialog.pick_file() {
+            match manifold_io::loader::load_project(&path) {
+                Ok(project) => {
+                    self.engine.initialize(project);
+                    self.editing_service.set_project();
+                    self.selection.clear();
+                    self.active_layer_index = Some(0);
+                    self.current_project_path = Some(path.clone());
+                    self.needs_rebuild = true;
+                    log::info!("Opened {}", path.display());
+                }
+                Err(e) => log::error!("Open failed: {e}"),
+            }
         }
     }
 
@@ -369,6 +480,39 @@ impl Application {
         let mut needs_structural_sync = false;
         let prev_active_layer = self.active_layer_index;
         for action in &actions {
+            // Intercept actions that need Application-level access
+            match action {
+                PanelAction::SaveProject => { self.save_project(); continue; }
+                PanelAction::SaveProjectAs => { self.save_project_as(); continue; }
+                PanelAction::OpenProject => { self.open_project(); needs_structural_sync = true; continue; }
+                PanelAction::BpmFieldClicked => {
+                    let bpm = self.engine.project().map_or(120.0, |p| p.settings.bpm);
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::Bpm,
+                        &format!("{:.1}", bpm),
+                    );
+                    continue;
+                }
+                PanelAction::FpsFieldClicked => {
+                    let fps = self.engine.project().map_or(60.0, |p| p.settings.frame_rate);
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::Fps,
+                        &format!("{:.0}", fps),
+                    );
+                    continue;
+                }
+                PanelAction::NewProject => {
+                    let project = Self::create_default_project();
+                    self.engine.initialize(project);
+                    self.editing_service.set_project();
+                    self.selection.clear();
+                    self.active_layer_index = Some(0);
+                    self.current_project_path = None;
+                    needs_structural_sync = true;
+                    continue;
+                }
+                _ => {}
+            }
             let result = crate::ui_bridge::dispatch(
                 action,
                 &mut self.engine,
@@ -1102,6 +1246,47 @@ impl ApplicationHandler for Application {
                 // App-level shortcuts (handled before UI forwarding)
                 let mut consumed = false;
                 if is_primary {
+                    // Text input mode: intercept all keys for text editing
+                    if self.text_input.active {
+                        match &logical_key {
+                            Key::Named(NamedKey::Escape) => {
+                                self.text_input.cancel();
+                                consumed = true;
+                            }
+                            Key::Named(NamedKey::Enter) => {
+                                let (field, text) = self.text_input.commit();
+                                self.handle_text_input_commit(field, &text);
+                                consumed = true;
+                            }
+                            Key::Named(NamedKey::Backspace) => {
+                                self.text_input.backspace();
+                                consumed = true;
+                            }
+                            Key::Named(NamedKey::Delete) => {
+                                self.text_input.delete();
+                                consumed = true;
+                            }
+                            Key::Named(NamedKey::ArrowLeft) => {
+                                self.text_input.move_left();
+                                consumed = true;
+                            }
+                            Key::Named(NamedKey::ArrowRight) => {
+                                self.text_input.move_right();
+                                consumed = true;
+                            }
+                            Key::Character(ref c) => {
+                                for ch in c.chars() {
+                                    self.text_input.insert_char(ch);
+                                }
+                                consumed = true;
+                            }
+                            _ => { consumed = true; } // Suppress all other keys
+                        }
+                        // Skip normal shortcut processing when text input consumed the key
+                        if consumed {
+                            return;
+                        }
+                    }
                     match &logical_key {
                         Key::Named(NamedKey::Space) => {
                             if self.engine.is_playing() {
@@ -1138,7 +1323,11 @@ impl ApplicationHandler for Application {
                         }
                         // ── File ──
                         Key::Character(ref c) if c.as_str() == "s" && self.modifiers.command => {
-                            log::info!("Save project (Cmd+S) — not yet implemented");
+                            self.save_project();
+                            consumed = true;
+                        }
+                        Key::Character(ref c) if c.as_str() == "o" && self.modifiers.command => {
+                            self.open_project();
                             consumed = true;
                         }
                         Key::Character(ref c) if c.as_str() == "n" && self.modifiers.command => {

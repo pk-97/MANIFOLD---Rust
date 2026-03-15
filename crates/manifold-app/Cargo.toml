@@ -13,8 +13,10 @@ manifold-editing = { path = "../manifold-editing" }
 manifold-ui = { path = "../manifold-ui" }
 manifold-playback = { path = "../manifold-playback" }
 manifold-renderer = { path = "../manifold-renderer" }
+manifold-io = { path = "../manifold-io" }
 winit = { workspace = true }
 wgpu = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
 pollster = { workspace = true }
+rfd = "0.15"
