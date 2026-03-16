@@ -1357,7 +1357,7 @@ impl ApplicationHandler for Application {
                             if !self.selection.selected_clip_ids.is_empty() {
                                 let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
                                 if let Some(project) = self.engine.project_mut() {
-                                    let commands = EditingService::delete_clips(project, &ids);
+                                    let commands = EditingService::delete_clips(project, &ids, None, 0.0);
                                     self.editing_service.execute_batch(commands, "Delete clips".into(), project);
                                 }
                                 self.selection.clear();
@@ -1462,7 +1462,7 @@ impl ApplicationHandler for Application {
                             if !ids.is_empty() {
                                 if let Some(project) = self.engine.project_mut() {
                                     self.editing_service.copy_clips(project, &ids);
-                                    let commands = EditingService::delete_clips(project, &ids);
+                                    let commands = EditingService::delete_clips(project, &ids, None, 0.0);
                                     self.editing_service.execute_batch(commands, "Cut clips".into(), project);
                                 }
                                 self.selection.clear();
@@ -1477,24 +1477,10 @@ impl ApplicationHandler for Application {
                                 .or(self.active_layer_index)
                                 .unwrap_or(0) as i32;
                             if let Some(project) = self.engine.project_mut() {
-                                let result = self.editing_service.paste_clips(project, target_beat, target_layer);
+                                let spb = 60.0 / project.settings.bpm;
+                                let result = self.editing_service.paste_clips(project, target_beat, target_layer, spb);
                                 if !result.commands.is_empty() {
                                     self.editing_service.execute_batch(result.commands, "Paste clips".into(), project);
-                                    // Enforce non-overlap for each pasted clip
-                                    let pasted_set: std::collections::HashSet<String> =
-                                        result.pasted_clip_ids.iter().cloned().collect();
-                                    let spb = 60.0 / project.settings.bpm;
-                                    for id in &result.pasted_clip_ids {
-                                        if let Some(clip) = project.timeline.find_clip_by_id(id).cloned() {
-                                            let layer_idx = clip.layer_index as usize;
-                                            let overlap_cmds = EditingService::enforce_non_overlap(
-                                                project, &clip, layer_idx, &pasted_set, spb,
-                                            );
-                                            for cmd in overlap_cmds {
-                                                self.editing_service.execute(cmd, project);
-                                            }
-                                        }
-                                    }
                                     // Select pasted clips
                                     self.selection.selected_clip_ids.clear();
                                     for id in result.pasted_clip_ids {
@@ -1542,7 +1528,8 @@ impl ApplicationHandler for Application {
                             if !self.selection.selected_clip_ids.is_empty() {
                                 let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
                                 if let Some(project) = self.engine.project_mut() {
-                                    let commands = EditingService::nudge_clips(project, &ids, -step);
+                                    let spb = 60.0 / project.settings.bpm;
+                                    let commands = EditingService::nudge_clips(project, &ids, -step, spb);
                                     if !commands.is_empty() {
                                         self.editing_service.execute_batch(commands, "Nudge clips left".into(), project);
                                     }
@@ -1558,7 +1545,8 @@ impl ApplicationHandler for Application {
                             if !self.selection.selected_clip_ids.is_empty() {
                                 let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
                                 if let Some(project) = self.engine.project_mut() {
-                                    let commands = EditingService::nudge_clips(project, &ids, step);
+                                    let spb = 60.0 / project.settings.bpm;
+                                    let commands = EditingService::nudge_clips(project, &ids, step, spb);
                                     if !commands.is_empty() {
                                         self.editing_service.execute_batch(commands, "Nudge clips right".into(), project);
                                     }

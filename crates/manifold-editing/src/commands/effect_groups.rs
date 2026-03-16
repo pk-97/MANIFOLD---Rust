@@ -1,15 +1,21 @@
 use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
 use manifold_core::project::Project;
-use manifold_core::effects::EffectGroup;
+use manifold_core::effects::{EffectGroup, EffectInstance};
 
 /// Group effects into a rack group.
+/// Matches Unity GroupEffectsCommand: makes effects contiguous in the list
+/// starting at the position of the first selected effect, stores original
+/// indices for undo to restore exact positions, assigns shared groupId.
 #[derive(Debug)]
 pub struct GroupEffectsCommand {
     target: EffectTarget,
+    /// Indices into the effects list at the time of construction.
     effect_indices: Vec<usize>,
     group: Option<EffectGroup>,
     old_group_ids: Vec<Option<String>>,
+    /// Original indices before MakeContiguous — used for undo RestoreOriginalOrder.
+    original_indices: Vec<usize>,
 }
 
 impl GroupEffectsCommand {
@@ -19,6 +25,7 @@ impl GroupEffectsCommand {
             effect_indices,
             group: Some(EffectGroup::new(group_name)),
             old_group_ids: Vec::new(),
+            original_indices: Vec::new(),
         }
     }
 }
@@ -30,38 +37,108 @@ impl Command for GroupEffectsCommand {
         let group_id = group.id.clone();
 
         with_effects_mut(project, &self.target, |effects, groups| {
-            // Save old group IDs for undo
-            self.old_group_ids = indices.iter()
-                .map(|&i| effects.get(i).and_then(|e| e.group_id.clone()))
+            // Snapshot old group IDs for undo
+            self.old_group_ids.clear();
+            for &i in &indices {
+                self.old_group_ids.push(
+                    effects.get(i).and_then(|e| e.group_id.clone())
+                );
+            }
+
+            // Snapshot original indices for undo
+            self.original_indices = indices.clone();
+
+            // Collect the grouped effects (in selection order, which preserves relative order)
+            let grouped: Vec<EffectInstance> = indices.iter()
+                .filter_map(|&i| effects.get(i).cloned())
                 .collect();
 
-            // Assign group ID to selected effects
-            for &idx in &indices {
-                if let Some(effect) = effects.get_mut(idx) {
-                    effect.group_id = Some(group_id.clone());
+            if grouped.len() <= 1 {
+                // No reorder needed for 0-1 effects, just assign group ID
+                for &idx in &indices {
+                    if let Some(effect) = effects.get_mut(idx) {
+                        effect.group_id = Some(group_id.clone());
+                    }
+                }
+                groups.push(group);
+                return;
+            }
+
+            // MakeContiguous: find the index of the first grouped effect
+            let mut insert_at = effects.len();
+            let grouped_at_indices: Vec<bool> = (0..effects.len())
+                .map(|i| indices.contains(&i))
+                .collect();
+            for (i, &is_grouped) in grouped_at_indices.iter().enumerate() {
+                if is_grouped {
+                    insert_at = i;
+                    break;
                 }
             }
 
-            // Add group to groups list
+            // Remove all grouped effects from the list (reverse order to preserve indices)
+            let mut sorted_indices: Vec<usize> = indices.clone();
+            sorted_indices.sort_unstable();
+            for &idx in sorted_indices.iter().rev() {
+                if idx < effects.len() {
+                    effects.remove(idx);
+                }
+            }
+
+            // Clamp insertAt after removals
+            if insert_at > effects.len() {
+                insert_at = effects.len();
+            }
+
+            // Re-insert in order at the target position, assigning group ID
+            for (i, mut fx) in grouped.into_iter().enumerate() {
+                fx.group_id = Some(group_id.clone());
+                effects.insert(insert_at + i, fx);
+            }
+
             groups.push(group);
         });
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let indices = self.effect_indices.clone();
-        let old_ids = self.old_group_ids.clone();
+        let original_indices = self.original_indices.clone();
+        let old_group_ids = self.old_group_ids.clone();
         let group_id = self.group.as_ref().map(|g| g.id.clone());
 
         with_effects_mut(project, &self.target, |effects, groups| {
-            // Restore old group IDs
-            for (i, &idx) in indices.iter().enumerate() {
-                if let Some(effect) = effects.get_mut(idx) {
-                    effect.group_id = old_ids.get(i).cloned().flatten();
-                }
+            // Find all effects in this group (they are contiguous after execute)
+            let grouped: Vec<EffectInstance> = if let Some(ref gid) = group_id {
+                effects.iter()
+                    .filter(|e| e.group_id.as_deref() == Some(gid.as_str()))
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            // Remove grouped effects from list
+            if let Some(ref gid) = group_id {
+                effects.retain(|e| e.group_id.as_deref() != Some(gid.as_str()));
+            }
+
+            // Restore original group IDs and re-insert at original positions
+            // Sort by original index (ascending) so insertions don't shift subsequent indices
+            let mut pairs: Vec<(usize, EffectInstance)> = Vec::with_capacity(grouped.len());
+            for (i, mut fx) in grouped.into_iter().enumerate() {
+                // Restore old group ID
+                fx.group_id = old_group_ids.get(i).cloned().flatten();
+                let idx = original_indices.get(i).copied().unwrap_or(effects.len());
+                pairs.push((idx, fx));
+            }
+            pairs.sort_by_key(|(idx, _)| *idx);
+
+            for (idx, fx) in pairs {
+                let insert_at = idx.min(effects.len());
+                effects.insert(insert_at, fx);
             }
 
             // Remove the group
-            if let Some(gid) = &group_id {
+            if let Some(ref gid) = group_id {
                 groups.retain(|g| g.id != *gid);
             }
         });
@@ -90,23 +167,19 @@ impl Command for UngroupEffectsCommand {
         let gid = self.group_id.clone();
 
         with_effects_mut(project, &self.target, |effects, groups| {
-            // Save group for undo
             self.group = groups.iter().find(|g| g.id == gid).cloned();
 
-            // Find member indices
             self.member_indices = effects.iter().enumerate()
                 .filter(|(_, e)| e.group_id.as_deref() == Some(&gid))
                 .map(|(i, _)| i)
                 .collect();
 
-            // Clear group ID on members
             for effect in effects.iter_mut() {
                 if effect.group_id.as_deref() == Some(&gid) {
                     effect.group_id = None;
                 }
             }
 
-            // Remove group
             groups.retain(|g| g.id != gid);
         });
     }
@@ -117,14 +190,12 @@ impl Command for UngroupEffectsCommand {
         let member_indices = self.member_indices.clone();
 
         with_effects_mut(project, &self.target, |effects, groups| {
-            // Restore group ID on members
             for &idx in &member_indices {
                 if let Some(effect) = effects.get_mut(idx) {
                     effect.group_id = Some(gid.clone());
                 }
             }
 
-            // Restore group
             if let Some(g) = group {
                 groups.push(g);
             }
@@ -252,6 +323,7 @@ impl Command for ChangeGroupWetDryCommand {
 }
 
 /// Move an effect to a different rack (change group assignment + index).
+/// Matches Unity MoveEffectToRackCommand.
 #[derive(Debug)]
 pub struct MoveEffectToRackCommand {
     target: EffectTarget,
@@ -285,7 +357,7 @@ impl Command for MoveEffectToRackCommand {
             if from < effects.len() {
                 let mut effect = effects.remove(from);
                 effect.group_id = new_gid;
-                // After remove, indices shift: if from < to, the target shifted down by 1
+                // After remove, if from < to the target shifted down by 1
                 let insert_idx = if from < to { to - 1 } else { to };
                 let insert_idx = insert_idx.min(effects.len());
                 effects.insert(insert_idx, effect);
@@ -298,7 +370,6 @@ impl Command for MoveEffectToRackCommand {
         let to = self.new_index;
         let old_gid = self.old_group_id.clone();
         with_effects_mut(project, &self.target, |effects, _groups| {
-            // Reverse of execute: the item is now at adjusted position
             let adjusted_to = if from < to { to - 1 } else { to };
             let adjusted_to = adjusted_to.min(effects.len().saturating_sub(1));
             if adjusted_to < effects.len() {
@@ -311,4 +382,97 @@ impl Command for MoveEffectToRackCommand {
     }
 
     fn description(&self) -> &str { "Move Effect to Rack" }
+}
+
+/// Move an entire rack (all effects with matching groupId) to a new position.
+/// Maintains contiguity invariant. Matches Unity ReorderRackCommand.
+#[derive(Debug)]
+pub struct ReorderRackCommand {
+    target: EffectTarget,
+    group_id: String,
+    target_insert_index: usize,
+    /// Original indices of all group members, captured on first execute.
+    original_indices: Vec<usize>,
+}
+
+impl ReorderRackCommand {
+    pub fn new(target: EffectTarget, group_id: String, target_insert_index: usize) -> Self {
+        Self {
+            target,
+            group_id,
+            target_insert_index,
+            original_indices: Vec::new(),
+        }
+    }
+}
+
+impl Command for ReorderRackCommand {
+    fn execute(&mut self, project: &mut Project) {
+        let gid = self.group_id.clone();
+        let target_idx = self.target_insert_index;
+
+        with_effects_mut(project, &self.target, |effects, _groups| {
+            // Snapshot original indices on first execute
+            if self.original_indices.is_empty() {
+                for (i, e) in effects.iter().enumerate() {
+                    if e.group_id.as_deref() == Some(&gid) {
+                        self.original_indices.push(i);
+                    }
+                }
+            }
+
+            // Collect members in list order
+            let members: Vec<EffectInstance> = self.original_indices.iter()
+                .filter_map(|&i| effects.get(i).cloned())
+                .collect();
+
+            // Count how many members were before the target (their removal shifts target down)
+            let removed_before = self.original_indices.iter()
+                .filter(|&&i| i < target_idx)
+                .count();
+
+            // Remove all members (reverse order to preserve indices)
+            for &idx in self.original_indices.iter().rev() {
+                if idx < effects.len() {
+                    effects.remove(idx);
+                }
+            }
+
+            // Re-insert contiguously at adjusted target
+            let insert_at = target_idx.saturating_sub(removed_before).min(effects.len());
+            for (i, member) in members.into_iter().enumerate() {
+                effects.insert(insert_at + i, member);
+            }
+        });
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        let gid = self.group_id.clone();
+        let original_indices = self.original_indices.clone();
+
+        with_effects_mut(project, &self.target, |effects, _groups| {
+            // Collect current members
+            let members: Vec<EffectInstance> = effects.iter()
+                .filter(|e| e.group_id.as_deref() == Some(&gid))
+                .cloned()
+                .collect();
+
+            // Remove all members
+            effects.retain(|e| e.group_id.as_deref() != Some(&gid));
+
+            // Re-insert at original positions (ascending order)
+            let mut pairs: Vec<(usize, EffectInstance)> = original_indices.iter()
+                .zip(members.into_iter())
+                .map(|(&idx, fx)| (idx, fx))
+                .collect();
+            pairs.sort_by_key(|(idx, _)| *idx);
+
+            for (idx, fx) in pairs {
+                let insert_at = idx.min(effects.len());
+                effects.insert(insert_at, fx);
+            }
+        });
+    }
+
+    fn description(&self) -> &str { "Move Rack" }
 }

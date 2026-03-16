@@ -4,6 +4,7 @@ use crate::commands::clip::*;
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::selection::SelectionRegion;
+use manifold_core::types::LayerType;
 use std::collections::HashSet;
 
 /// Host trait for EditingService — replaces C#'s UIState/CoordinateMapper/PlaybackController.
@@ -28,6 +29,8 @@ struct ClipboardEntry {
 /// Result of a paste operation.
 pub struct PasteResult {
     pub pasted_clip_ids: Vec<String>,
+    pub skipped_count: usize,
+    pub skip_reason: Option<String>,
     pub commands: Vec<Box<dyn Command>>,
 }
 
@@ -129,7 +132,6 @@ impl EditingService {
                 continue;
             }
             for clip in &layer.clips {
-                // Clip overlaps region if its range intersects
                 if clip.start_beat < region.end_beat && clip.end_beat() > region.start_beat {
                     results.push((li, clip.id.clone()));
                 }
@@ -172,18 +174,13 @@ impl EditingService {
                 continue;
             }
 
-            // Case 1: placed clip covers both start and end → delete existing
+            // Case 1: placed clip covers both start and end -> delete existing
             if placed_start <= clip_start && placed_end >= clip_end {
                 commands.push(Box::new(DeleteClipCommand::new(clip.clone(), layer_index as i32)));
                 continue;
             }
 
-            // Case 2: placed clip covers the start → trim start of existing
-            // Unity: trimBeats = placedClip.EndBeat - otherClip.StartBeat;
-            //        trimSeconds = trimBeats * spb;
-            //        otherClip.InPoint += trimSeconds;
-            //        otherClip.StartBeat = placedClip.EndBeat;
-            //        otherClip.DurationBeats -= trimBeats;
+            // Case 2: placed clip covers the start -> trim start of existing
             if placed_start <= clip_start && placed_end < clip_end {
                 let trim_beats = placed_end - clip_start;
                 let trim_seconds = trim_beats * spb;
@@ -199,7 +196,7 @@ impl EditingService {
                 continue;
             }
 
-            // Case 3: placed clip covers the end → trim end of existing
+            // Case 3: placed clip covers the end -> trim end of existing
             if placed_start > clip_start && placed_end >= clip_end {
                 let new_duration = placed_start - clip_start;
                 commands.push(Box::new(TrimClipCommand::new(
@@ -211,15 +208,13 @@ impl EditingService {
                 continue;
             }
 
-            // Case 4: placed clip is in the middle → trim existing + create tail
+            // Case 4: placed clip is in the middle -> trim existing + create tail
             if placed_start > clip_start && placed_end < clip_end {
                 let new_duration = placed_start - clip_start;
 
-                // Create tail clip
                 let mut tail = clip.clone_with_new_id();
                 tail.start_beat = placed_end;
                 tail.duration_beats = clip_end - placed_end;
-                // InPoint for the tail: original in_point + beats-elapsed * spb
                 let beats_elapsed = placed_end - clip_start;
                 tail.in_point = clip.in_point + beats_elapsed * spb;
 
@@ -245,7 +240,6 @@ impl EditingService {
             return;
         }
 
-        // Find all clips and compute offsets relative to the earliest
         let mut clips: Vec<TimelineClip> = Vec::new();
         for layer in &project.timeline.layers {
             for clip in &layer.clips {
@@ -259,7 +253,6 @@ impl EditingService {
             return;
         }
 
-        // Find earliest beat and lowest layer
         let min_beat = clips.iter().map(|c| c.start_beat).fold(f32::MAX, f32::min);
         let min_layer = clips.iter().map(|c| c.layer_index).min().unwrap_or(0);
 
@@ -273,32 +266,68 @@ impl EditingService {
     }
 
     /// Paste clips from clipboard at the given position.
+    /// Matches Unity PasteClips: skips gen/video type mismatches,
+    /// adopts target layer's generator type, enforces non-overlap.
     pub fn paste_clips(
         &self,
         project: &mut Project,
         target_beat: f32,
         target_layer: i32,
+        spb: f32,
     ) -> PasteResult {
         let mut pasted_ids = Vec::new();
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        let mut skipped = 0usize;
 
         for entry in &self.clipboard {
             let paste_beat = target_beat + entry.beat_offset;
-            let paste_layer = (target_layer + entry.layer_offset) as usize;
+            let paste_layer_idx = (target_layer + entry.layer_offset) as usize;
 
             // Ensure layer exists
-            project.timeline.ensure_layer_count(paste_layer + 1);
+            project.timeline.ensure_layer_count(paste_layer_idx + 1);
+
+            let layer = match project.timeline.layers.get(paste_layer_idx) {
+                Some(l) => l,
+                None => { skipped += 1; continue; }
+            };
+
+            let clip_is_gen = entry.source_clip.is_generator();
+            let layer_is_gen = layer.layer_type == LayerType::Generator;
+
+            // Gen<->video mismatch: skip
+            if clip_is_gen != layer_is_gen {
+                skipped += 1;
+                continue;
+            }
 
             let mut new_clip = entry.source_clip.clone_with_new_id();
             new_clip.start_beat = paste_beat;
-            new_clip.layer_index = paste_layer as i32;
+            new_clip.layer_index = paste_layer_idx as i32;
+
+            // Gen->gen with different type: adopt target layer's generator type
+            if clip_is_gen && layer_is_gen && new_clip.generator_type != layer.generator_type() {
+                new_clip.generator_type = layer.generator_type();
+            }
+
+            // Enforce non-overlap for the new clip
+            let empty_ignore = HashSet::new();
+            let overlap_cmds = Self::enforce_non_overlap(
+                project, &new_clip, paste_layer_idx, &empty_ignore, spb,
+            );
+            commands.extend(overlap_cmds);
 
             pasted_ids.push(new_clip.id.clone());
-            commands.push(Box::new(AddClipCommand::new(new_clip, paste_layer as i32)));
+            commands.push(Box::new(AddClipCommand::new(new_clip, paste_layer_idx as i32)));
         }
 
         PasteResult {
             pasted_clip_ids: pasted_ids,
+            skipped_count: skipped,
+            skip_reason: if skipped > 0 {
+                Some("generator/video type mismatch".to_string())
+            } else {
+                None
+            },
             commands,
         }
     }
@@ -318,7 +347,6 @@ impl EditingService {
         split_beat: f32,
         spb: f32,
     ) -> Option<Box<dyn Command>> {
-        // Find the clip
         for (li, layer) in project.timeline.layers.iter().enumerate() {
             if let Some(clip) = layer.find_clip(clip_id) {
                 if split_beat <= clip.start_beat || split_beat >= clip.end_beat() {
@@ -332,7 +360,6 @@ impl EditingService {
                 let mut tail = clip.clone_with_new_id();
                 tail.start_beat = tail_start;
                 tail.duration_beats = tail_duration;
-                // Adjust in-point for video clips
                 if !clip.is_generator() && clip.duration_beats > 0.0 {
                     tail.in_point = clip.in_point + new_duration * spb;
                 }
@@ -350,6 +377,56 @@ impl EditingService {
         None
     }
 
+    /// Split clips that straddle region boundaries.
+    /// Returns commands for all splits performed.
+    /// Matches Unity SplitClipsAtRegionBoundaries.
+    pub fn split_clips_at_region_boundaries(
+        project: &Project,
+        region: &SelectionRegion,
+        spb: f32,
+    ) -> Vec<Box<dyn Command>> {
+        let mut commands: Vec<Box<dyn Command>> = Vec::new();
+
+        let (min_layer, max_layer) = region.layer_range();
+        let layer_count = project.timeline.layers.len();
+        let start_layer = (min_layer.max(0) as usize).min(layer_count.saturating_sub(1));
+        let end_layer = (max_layer.max(0) as usize).min(layer_count.saturating_sub(1));
+
+        for li in start_layer..=end_layer {
+            // Snapshot clip IDs (splits add new clips)
+            let clip_ids: Vec<String> = project.timeline.layers[li]
+                .clips.iter().map(|c| c.id.clone()).collect();
+
+            for clip_id in &clip_ids {
+                let clip = match project.timeline.layers[li].find_clip(clip_id) {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                if clip.end_beat() <= region.start_beat || clip.start_beat >= region.end_beat {
+                    continue;
+                }
+
+                // Split at region end FIRST (so the original's EndBeat is still valid
+                // when we split at region start)
+                if clip.end_beat() > region.end_beat {
+                    if let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region.end_beat, spb) {
+                        commands.push(cmd);
+                    }
+                }
+
+                // Split at region start
+                if clip.start_beat < region.start_beat {
+                    if let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region.start_beat, spb) {
+                        commands.push(cmd);
+                    }
+                }
+            }
+        }
+
+        commands
+    }
+
     // ─── Create clip ───
 
     /// Create a new clip at the given beat and layer.
@@ -360,7 +437,7 @@ impl EditingService {
         duration_beats: f32,
     ) -> Box<dyn Command> {
         let layer = project.timeline.layers.get(layer_index);
-        let is_generator = layer.is_some_and(|l| l.layer_type == manifold_core::types::LayerType::Generator);
+        let is_generator = layer.is_some_and(|l| l.layer_type == LayerType::Generator);
 
         let clip = if is_generator {
             let gen_type = layer.map_or(manifold_core::types::GeneratorType::None, |l| l.generator_type());
@@ -404,12 +481,35 @@ impl EditingService {
     // ─── Delete ───
 
     /// Delete selected clips.
+    /// When a region is active, splits clips at region boundaries first
+    /// then deletes only the interior segments. Matches Unity DeleteSelectedClips.
     pub fn delete_clips(
         project: &Project,
         clip_ids: &[String],
+        region: Option<&SelectionRegion>,
+        spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
 
+        if let Some(region) = region {
+            if region.is_active {
+                // Region mode: split at boundaries, then delete clips inside region
+                let split_cmds = Self::split_clips_at_region_boundaries(project, region, spb);
+                commands.extend(split_cmds);
+
+                // After splits, collect clips fully inside the region
+                let clips_in_region = Self::get_clips_in_region(project, region);
+                for (li, clip_id) in &clips_in_region {
+                    if let Some(clip) = project.timeline.layers[*li].find_clip(clip_id) {
+                        commands.push(Box::new(DeleteClipCommand::new(clip.clone(), *li as i32)));
+                    }
+                }
+
+                return commands;
+            }
+        }
+
+        // Individual selection path
         for (li, layer) in project.timeline.layers.iter().enumerate() {
             for clip in &layer.clips {
                 if clip_ids.contains(&clip.id) {
@@ -424,24 +524,63 @@ impl EditingService {
     // ─── Nudge ───
 
     /// Nudge selected clips by a beat delta.
+    /// Enforces non-overlap after nudging, excluding the nudged clips from resolution.
+    /// Matches Unity NudgeSelectedClips.
     pub fn nudge_clips(
         project: &Project,
         clip_ids: &[String],
         beat_delta: f32,
+        spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        let mut nudged_ids: HashSet<String> = HashSet::new();
 
-        for layer in &project.timeline.layers {
+        // Collect move commands for each nudged clip
+        // We build "virtual" post-move clips to compute overlap enforcement
+        struct NudgedClip {
+            clip: TimelineClip,
+            layer_index: usize,
+        }
+        let mut nudged_clips: Vec<NudgedClip> = Vec::new();
+
+        for (li, layer) in project.timeline.layers.iter().enumerate() {
             for clip in &layer.clips {
-                if clip_ids.contains(&clip.id) {
-                    let new_start = (clip.start_beat + beat_delta).max(0.0);
-                    commands.push(Box::new(MoveClipCommand::new(
-                        clip.id.clone(),
-                        clip.start_beat, new_start,
-                        clip.layer_index, clip.layer_index,
-                    )));
+                if !clip_ids.contains(&clip.id) {
+                    continue;
                 }
+                let old_start = clip.start_beat;
+                let new_start = (old_start + beat_delta).max(0.0);
+                if (new_start - old_start).abs() < 0.0001 {
+                    continue;
+                }
+
+                commands.push(Box::new(MoveClipCommand::new(
+                    clip.id.clone(),
+                    old_start, new_start,
+                    clip.layer_index, clip.layer_index,
+                )));
+                nudged_ids.insert(clip.id.clone());
+
+                // Build virtual post-move clip for overlap enforcement
+                let mut moved_clip = clip.clone();
+                moved_clip.start_beat = new_start;
+                nudged_clips.push(NudgedClip {
+                    clip: moved_clip,
+                    layer_index: li,
+                });
             }
+        }
+
+        if commands.is_empty() {
+            return commands;
+        }
+
+        // Enforce overlaps for each nudged clip, excluding other nudged clips
+        for nudged in &nudged_clips {
+            let overlap_cmds = Self::enforce_non_overlap(
+                project, &nudged.clip, nudged.layer_index, &nudged_ids, spb,
+            );
+            commands.extend(overlap_cmds);
         }
 
         commands
@@ -450,6 +589,8 @@ impl EditingService {
     // ─── Extend/Shrink ───
 
     /// Extend selected clips by one grid step.
+    /// Clamps to prevent overlap with the next clip on the same layer.
+    /// Matches Unity ExtendSelectedClipsByGridStep.
     pub fn extend_clips_by_grid(
         project: &Project,
         clip_ids: &[String],
@@ -459,15 +600,41 @@ impl EditingService {
 
         for layer in &project.timeline.layers {
             for clip in &layer.clips {
-                if clip_ids.contains(&clip.id) {
-                    let new_duration = (clip.duration_beats + grid_step).max(grid_step);
-                    commands.push(Box::new(TrimClipCommand::new(
-                        clip.id.clone(),
-                        clip.start_beat, clip.start_beat,
-                        clip.duration_beats, new_duration,
-                        clip.in_point, clip.in_point,
-                    )));
+                if !clip_ids.contains(&clip.id) {
+                    continue;
                 }
+
+                let mut new_duration = clip.duration_beats + grid_step;
+
+                // Clamp to next clip on same layer to prevent overlap
+                let mut next_start = f32::MAX;
+                for other in &layer.clips {
+                    if other.id == clip.id {
+                        continue;
+                    }
+                    if other.start_beat > clip.start_beat && other.start_beat < next_start {
+                        next_start = other.start_beat;
+                    }
+                }
+                let max_duration = next_start - clip.start_beat;
+                if new_duration > max_duration {
+                    new_duration = max_duration;
+                }
+
+                // Skip if duration didn't actually change or decreased
+                if (new_duration - clip.duration_beats).abs() < 0.001 {
+                    continue;
+                }
+                if new_duration <= clip.duration_beats {
+                    continue;
+                }
+
+                commands.push(Box::new(TrimClipCommand::new(
+                    clip.id.clone(),
+                    clip.start_beat, clip.start_beat,
+                    clip.duration_beats, new_duration,
+                    clip.in_point, clip.in_point,
+                )));
             }
         }
 
@@ -505,16 +672,35 @@ impl EditingService {
     // ─── Move clip to layer ───
 
     /// Move a clip to a different layer.
+    /// Checks gen/video compatibility and adopts generator type.
+    /// Matches Unity MoveClipToLayer.
     pub fn move_clip_to_layer(
         project: &Project,
         clip_id: &str,
         new_layer_index: i32,
     ) -> Option<Box<dyn Command>> {
+        let target_idx = new_layer_index as usize;
+        let target_layer = project.timeline.layers.get(target_idx)?;
+
+        // Block group layers
+        if target_layer.is_group() {
+            return None;
+        }
+
         for layer in &project.timeline.layers {
             if let Some(clip) = layer.find_clip(clip_id) {
                 if clip.layer_index == new_layer_index {
                     return None;
                 }
+
+                // Gen/video type mismatch: block
+                let clip_is_gen = clip.is_generator();
+                let target_is_gen = target_layer.layer_type == LayerType::Generator;
+                if clip_is_gen != target_is_gen {
+                    return None;
+                }
+
+                // MoveClipCommand handles generator type adoption internally
                 return Some(Box::new(MoveClipCommand::new(
                     clip.id.clone(),
                     clip.start_beat, clip.start_beat,

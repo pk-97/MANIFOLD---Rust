@@ -1620,7 +1620,7 @@ pub fn dispatch(
         }
         PanelAction::ContextDeleteClip(clip_id) => {
             if let Some(project) = engine.project_mut() {
-                let commands = EditingService::delete_clips(project, &[clip_id.clone()]);
+                let commands = EditingService::delete_clips(project, &[clip_id.clone()], None, 0.0);
                 if !commands.is_empty() {
                     editing.execute_batch(commands, "Delete clip".into(), project);
                 }
@@ -1647,7 +1647,8 @@ pub fn dispatch(
         PanelAction::ContextPasteAtTrack(beat, layer) => {
             let snapped = ui.viewport.snap_to_grid(*beat);
             if let Some(project) = engine.project_mut() {
-                let result = editing.paste_clips(project, snapped, *layer as i32);
+                let spb = 60.0 / project.settings.bpm;
+                let result = editing.paste_clips(project, snapped, *layer as i32, spb);
                 if !result.commands.is_empty() {
                     editing.execute_batch(result.commands, "Paste clips".into(), project);
                     selection.selected_clip_ids.clear();
