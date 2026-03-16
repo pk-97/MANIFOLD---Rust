@@ -102,14 +102,33 @@ impl Color32 {
         }
     }
 
-    /// Convert to normalized float RGBA (for GPU uniforms).
+    /// Convert sRGB byte values to linear float RGBA for GPU rendering.
+    ///
+    /// The UI colors are specified in sRGB space (matching Unity's UGUI).
+    /// Since the surface uses an sRGB format (Bgra8UnormSrgb), the GPU
+    /// automatically applies gamma encoding when writing. We must convert
+    /// to linear space here so the final displayed color matches the
+    /// original sRGB byte values.
+    ///
+    /// Without this conversion, colors appear ~3x brighter because the
+    /// sRGB values get gamma-encoded a second time.
     pub fn to_f32(self) -> [f32; 4] {
         [
-            self.r as f32 / 255.0,
-            self.g as f32 / 255.0,
-            self.b as f32 / 255.0,
-            self.a as f32 / 255.0,
+            srgb_to_linear(self.r as f32 / 255.0),
+            srgb_to_linear(self.g as f32 / 255.0),
+            srgb_to_linear(self.b as f32 / 255.0),
+            self.a as f32 / 255.0, // Alpha is always linear
         ]
+    }
+}
+
+/// Convert an sRGB component (0.0-1.0) to linear light.
+/// Uses the standard sRGB transfer function (IEC 61966-2-1).
+fn srgb_to_linear(s: f32) -> f32 {
+    if s <= 0.04045 {
+        s / 12.92
+    } else {
+        ((s + 0.055) / 1.055).powf(2.4)
     }
 }
 
