@@ -94,7 +94,7 @@ impl UIRoot {
         // Invalidate input state — old node IDs are now stale
         self.input.invalidate_hover();
 
-        self.layout = ScreenLayout::new(self.screen_width, self.screen_height);
+        self.layout.resize(self.screen_width, self.screen_height);
 
         // Static panels — preserved during scroll-only rebuilds.
         // Order: transport, header, footer, inspector (non-scroll-affected).

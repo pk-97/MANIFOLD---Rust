@@ -274,15 +274,8 @@ impl Application {
         }
 
         // Priority 3: Video/timeline split handle hover
-        // (The split handle is at the top edge of the timeline body)
-        let timeline_body = self.ui_root.layout.timeline_body();
-        let split_handle_y = timeline_body.y;
-        let split_handle_height = 6.0; // UIConstants.InspectorResizeHandleWidth equivalent
-        if self.cursor_pos.y >= split_handle_y - split_handle_height
-            && self.cursor_pos.y <= split_handle_y + split_handle_height
-            && self.cursor_pos.x >= timeline_body.x
-            && self.cursor_pos.x <= timeline_body.x + timeline_body.width
-        {
+        // Use the same hit test as click detection (layout.split_handle rect).
+        if self.split_dragging || self.ui_root.layout.is_near_split_handle(self.cursor_pos) {
             self.cursor_manager.set(TimelineCursor::ResizeVertical);
             return;
         }
