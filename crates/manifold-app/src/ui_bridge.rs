@@ -2188,9 +2188,6 @@ pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer:
         // Beats per bar
         ui.viewport.set_beats_per_bar(project.settings.time_signature_numerator as u32);
     }
-
-    // Rebuild UI tree with the new data
-    ui.build();
 }
 
 /// Sync inspector content for the active selection.
@@ -2228,9 +2225,6 @@ pub fn sync_inspector_data(
         ui.inspector.configure_layer_effects(&[]);
         ui.inspector.configure_gen_params(None);
     }
-
-    // Rebuild to reflect new inspector content
-    ui.build();
 }
 
 // ── Helpers ──────────────────────────────────────────────────────

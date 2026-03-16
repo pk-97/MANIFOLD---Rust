@@ -479,12 +479,22 @@ impl Application {
         let realtime = self.frame_timer.realtime_since_start();
         self.time_since_start = realtime as f32;
 
-        // 1. Process UI events and dispatch actions
+        // 1. Tick the engine FIRST so this frame's UI sees the advanced time
+        let ctx = TickContext {
+            dt_seconds: dt,
+            realtime_now: realtime,
+            pre_render_dt: dt as f32,
+            frame_count: self.frame_count as i32,
+        };
+        let tick_result = self.engine.tick(ctx);
+
+        // 2. Process UI events and dispatch actions
         let actions = self.ui_root.process_events();
         // Consume deferred structural sync flag (set by keyboard shortcuts)
         let mut needs_structural_sync = self.needs_structural_sync;
         self.needs_structural_sync = false;
         let prev_active_layer = self.active_layer_index;
+        let prev_sel_version = self.selection.version;
         for action in &actions {
             // Intercept actions that need Application-level access
             match action {
@@ -533,6 +543,12 @@ impl Application {
                 needs_structural_sync = true;
             }
         }
+        // Selection version change → sync inspector so it shows the newly selected clip
+        if self.selection.version != prev_sel_version && !needs_structural_sync {
+            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
+            needs_structural_sync = true;
+        }
+
         if needs_structural_sync {
             crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine, self.active_layer_index);
             crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
@@ -555,14 +571,7 @@ impl Application {
         // 5. Lightweight update (playhead, insert cursor, layer selection)
         self.ui_root.update();
 
-        // 3. Tick the engine
-        let ctx = TickContext {
-            dt_seconds: dt,
-            realtime_now: realtime,
-            pre_render_dt: dt as f32,
-            frame_count: self.frame_count as i32,
-        };
-        let tick_result = self.engine.tick(ctx);
+        // tick_result was computed at the top of tick_and_render (engine ticked first)
 
         let gpu = match &self.gpu {
             Some(g) => g,
@@ -1330,11 +1339,13 @@ impl ApplicationHandler for Application {
                             } else {
                                 crate::ui_bridge::undo(&mut self.engine, &mut self.editing_service);
                             }
+                            self.engine.mark_compositor_dirty(self.frame_timer.realtime_since_start());
                             self.needs_structural_sync = true;
                             consumed = true;
                         }
                         Key::Character(ref c) if c.as_str() == "y" && self.modifiers.command => {
                             crate::ui_bridge::redo(&mut self.engine, &mut self.editing_service);
+                            self.engine.mark_compositor_dirty(self.frame_timer.realtime_since_start());
                             self.needs_structural_sync = true;
                             consumed = true;
                         }
@@ -1438,6 +1449,8 @@ impl ApplicationHandler for Application {
                                     }
                                 }
                             }
+                            self.needs_structural_sync = true;
+                            self.needs_rebuild = true;
                             consumed = true;
                         }
                         // ── Select all (Cmd+A) ──
@@ -1452,6 +1465,7 @@ impl ApplicationHandler for Application {
                                 self.selection.primary_clip_id = self.selection.selected_clip_ids.iter().next().cloned();
                                 self.selection.version += 1;
                             }
+                            self.needs_structural_sync = true;
                             consumed = true;
                         }
                         // ── Copy (Cmd+C) ──
