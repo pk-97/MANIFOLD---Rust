@@ -990,9 +990,22 @@ impl Panel for LayerHeaderPanel {
         // Clone layers to avoid borrow conflict in build_layer_row
         let layers_snapshot = self.layers.clone();
 
+        // Clip bounds: layer rows are only visible within the scrollable area
+        // (below the header spacer, above the footer). Rows outside are skipped.
+        let clip_top = lc.y + header_spacer;
+        let clip_bottom = lc.y + lc.height;
+
         for i in 0..layer_count {
             let layer = &layers_snapshot[i];
             if layer.height <= 0.0 { continue; }
+
+            // Check if this layer row is within the visible clip bounds
+            let row_screen_y = self.panel_origin.y + layer.y_offset;
+            let row_screen_bottom = row_screen_y + layer.height;
+            if row_screen_bottom < clip_top || row_screen_y > clip_bottom {
+                // Entirely outside visible area — skip
+                continue;
+            }
 
             let is_child = layer.parent_layer_id.is_some();
             let is_last_child = if is_child {
