@@ -63,7 +63,9 @@ impl SyncArbiter {
 
     pub fn seek(&mut self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, time: f32) -> bool {
         if source != authority { return false; }
-        self.suppress_next_transport = true;
+        // NOTE: Unity's Seek() does NOT set SuppressNextTransport.
+        // Only Play() and Pause() suppress echo. Seeks during playback are
+        // detected by OscPositionSender via beat-delta comparison instead.
         target.seek(time);
         true
     }

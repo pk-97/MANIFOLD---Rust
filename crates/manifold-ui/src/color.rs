@@ -115,7 +115,7 @@ pub const MIDI_POPUP_ACTIVE: Color32 = Color32::new(89, 46, 89, 255);
 pub const SYNC_ACTIVE: Color32 = Color32::new(56, 158, 133, 255);
 pub const LINK_ORANGE: Color32 = Color32::new(191, 122, 20, 255);
 pub const MIDI_PURPLE: Color32 = Color32::new(148, 77, 148, 255);
-pub const ABLETON_LINK_BLUE: Color32 = Color32::new(56, 133, 179, 255);
+pub const ABLETON_LINK_BLUE: Color32 = Color32::new(89, 173, 232, 255);
 
 // ── Delete / Remove button ──────────────────────────────────────────
 pub const DELETE_BTN_NORMAL: Color32 = Color32::new(97, 46, 46, 255);

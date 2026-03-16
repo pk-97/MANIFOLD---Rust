@@ -6,3 +6,7 @@ pub mod video_time;
 pub mod active_window;
 pub mod live_clip_manager;
 pub mod sync_source;
+pub mod transport_controller;
+pub mod osc_sender;
+pub mod link_sync;
+pub mod midi_clock_sync;

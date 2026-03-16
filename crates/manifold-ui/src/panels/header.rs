@@ -357,7 +357,7 @@ impl Panel for HeaderPanel {
             self.layout.monitor_button.x, self.layout.monitor_button.y,
             self.layout.monitor_button.width, self.layout.monitor_button.height,
             self.monitor_style(),
-            "OUT",
+            "Monitor",
         ) as i32;
     }
 

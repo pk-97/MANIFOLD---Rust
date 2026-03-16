@@ -4,6 +4,7 @@ mod frame_timer;
 mod ui_root;
 mod ui_bridge;
 mod text_input;
+mod transport_state;
 
 fn main() {
     env_logger::init();

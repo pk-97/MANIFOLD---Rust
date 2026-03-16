@@ -70,20 +70,30 @@ pub fn dispatch(
             if engine.is_playing() {
                 engine.pause();
             } else {
+                // Unity: seek to insert cursor before playing (TransportController.TogglePlayPause)
+                if let Some(cursor_beat) = selection.insert_cursor_beat {
+                    let time = engine.beat_to_timeline_time(cursor_beat);
+                    engine.seek_to(time);
+                }
                 engine.play();
             }
             DispatchResult::handled()
         }
         PanelAction::Stop => {
             engine.stop();
+            // Unity: after stop, seek to insert cursor if set (TransportController.StopPlayback)
+            if let Some(cursor_beat) = selection.insert_cursor_beat {
+                let time = engine.beat_to_timeline_time(cursor_beat);
+                engine.seek_to(time);
+            }
             DispatchResult::handled()
         }
         PanelAction::Record => {
-            log::info!("Record toggled (MIDI recording not yet implemented)");
+            engine.set_recording(!engine.is_recording());
             DispatchResult::handled()
         }
         PanelAction::ResetBpm => {
-            log::info!("Reset BPM (tempo lane restore not yet implemented)");
+            // Intercepted by Application before dispatch
             DispatchResult::handled()
         }
         PanelAction::ClearBpm => {
@@ -107,41 +117,63 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::SetInsertCursor(beat) => {
-            // Legacy path — when no layer context available
-            selection.insert_cursor_beat = Some(*beat);
-            DispatchResult::handled()
+            // Legacy path — when no layer context available.
+            // Uses set_insert_cursor_beat (non-clearing variant)
+            // since we don't have a layer index here.
+            selection.set_insert_cursor_beat(*beat);
+            DispatchResult::structural()
         }
 
         // ── Viewport clip interaction ─────────────────────────────
         PanelAction::ClipClicked(clip_id, modifiers) => {
-            if modifiers.command || modifiers.ctrl {
-                selection.toggle(clip_id.clone());
+            // Find the clip's layer index and end beat for UIState
+            let (layer_idx, clip_end_beat) = engine.project()
+                .and_then(|p| p.timeline.layers.iter().enumerate()
+                    .find_map(|(i, l)| l.clips.iter()
+                        .find(|c| c.id == *clip_id)
+                        .map(|c| (i, c.start_beat + c.duration_beats))))
+                .unwrap_or((0, 0.0));
+
+            if modifiers.shift {
+                // Shift+Click: extend region from anchor to clip end.
+                // From Unity InteractionOverlay.OnPointerClick (line 206-207).
+                selection.select_region_to(clip_end_beat, layer_idx);
+            } else if modifiers.command || modifiers.ctrl {
+                // Cmd/Ctrl+Click: toggle clip in/out of selection, then update region bounds.
+                // From Unity InteractionOverlay.OnPointerClick (line 208-211).
+                selection.toggle_clip_selection(clip_id.clone(), layer_idx);
+                // Update region to encompass all selected clips (Fix #3)
+                update_region_from_clip_selection(selection, engine);
             } else {
-                selection.select_single(clip_id.clone());
+                // Plain click: select single clip (clears region, layers, insert cursor)
+                selection.select_clip(clip_id.clone(), layer_idx);
             }
-            // Find the clip's layer to set active layer
-            if let Some(project) = engine.project() {
-                for (i, layer) in project.timeline.layers.iter().enumerate() {
-                    if layer.clips.iter().any(|c| c.id == *clip_id) {
-                        *active_layer = Some(i);
-                        break;
-                    }
-                }
-            }
+            *active_layer = Some(layer_idx);
             DispatchResult::structural()
         }
         PanelAction::ClipDoubleClicked(_clip_id) => {
             // Future: open clip properties or enter clip editing mode
             DispatchResult::handled()
         }
-        PanelAction::TrackClicked(beat, layer, _modifiers) => {
-            selection.clear();
-            selection.set_insert_cursor(*beat, *layer);
+        PanelAction::TrackClicked(beat, layer, modifiers) => {
+            if modifiers.shift {
+                // Shift+Click on empty area: extend region from anchor to beat/layer.
+                // From Unity InteractionOverlay.OnPointerClick (line 177-180).
+                let snapped = ui.viewport.snap_to_grid(*beat);
+                selection.select_region_to(snapped, *layer);
+            } else {
+                // Plain click: set insert cursor (clears everything, Ableton behavior).
+                // From Unity InteractionOverlay.OnPointerClick (line 183).
+                selection.set_insert_cursor(*beat, *layer);
+            }
             *active_layer = Some(*layer);
-            DispatchResult::handled()
+            DispatchResult::structural()
         }
         PanelAction::TrackDoubleClicked(beat, layer) => {
-            let snapped = ui.viewport.snap_to_grid(*beat);
+            // From Unity InteractionOverlay.OnPointerClick double-click path:
+            // Use FloorBeatToGrid (grid cell start), NOT SnapBeatToGrid (nearest line).
+            let grid_step = ui.viewport.grid_step();
+            let snapped = manifold_ui::snap::floor_beat_to_grid(*beat, grid_step);
             if let Some(project) = engine.project_mut() {
                 let cmd = EditingService::create_clip_at_position(project, snapped, *layer, 4.0);
                 editing.execute(cmd, project);
@@ -158,7 +190,7 @@ pub fn dispatch(
                             editing.execute(cmd, project);
                         }
                         // Select the newly created clip
-                        selection.select_single(new_clip_clone.id);
+                        selection.select_clip(new_clip_clone.id, *layer);
                     }
                 }
             }
@@ -168,28 +200,49 @@ pub fn dispatch(
         PanelAction::ClipDragStarted(clip_id, region, anchor_beat) => {
             // Select the clip if not already selected
             if !selection.selected_clip_ids.contains(clip_id) {
-                selection.select_single(clip_id.clone());
+                let li = engine.project()
+                    .and_then(|p| p.timeline.layers.iter().enumerate()
+                        .find_map(|(i, l)| l.clips.iter().any(|c| c.id == *clip_id).then_some(i)))
+                    .unwrap_or(0);
+                selection.select_clip(clip_id.clone(), li);
             }
 
             match region {
                 HitRegion::Body => {
-                    // Snapshot all selected clips for move
+                    // Snapshot all selected clips for move.
+                    // From Unity InteractionOverlay.BeginMoveDrag + CaptureDragSelection.
                     let mut snapshots = Vec::new();
+                    let mut min_layer = usize::MAX;
+                    let mut max_layer = 0usize;
+                    let mut anchor_layer_idx = 0usize;
+                    let mut anchor_start_beat = 0.0f32;
                     let sel_ids: Vec<String> = selection.selected_clip_ids.iter().cloned().collect();
                     if let Some(project) = engine.project_mut() {
                         for sel_id in &sel_ids {
                             if let Some(clip) = project.timeline.find_clip_by_id(sel_id) {
+                                let li = clip.layer_index as usize;
                                 snapshots.push(ClipDragSnapshot {
                                     clip_id: sel_id.clone(),
                                     original_start_beat: clip.start_beat,
                                     original_layer_index: clip.layer_index,
                                 });
+                                min_layer = min_layer.min(li);
+                                max_layer = max_layer.max(li);
+                                if sel_id == clip_id {
+                                    anchor_layer_idx = li;
+                                    anchor_start_beat = clip.start_beat;
+                                }
                             }
                         }
                     }
                     clip_drag.mode = ClipDragMode::Move;
                     clip_drag.anchor_clip_id = clip_id.clone();
                     clip_drag.anchor_beat = *anchor_beat;
+                    clip_drag.drag_start_layer_index = anchor_layer_idx;
+                    clip_drag.drag_selection_min_layer = if snapshots.is_empty() { 0 } else { min_layer };
+                    clip_drag.drag_selection_max_layer = max_layer;
+                    clip_drag.drag_offset_beats = *anchor_beat - anchor_start_beat;
+                    clip_drag.drag_layer_blocked = false;
                     clip_drag.snapshots = snapshots;
                 }
                 HitRegion::TrimLeft | HitRegion::TrimRight => {
@@ -212,31 +265,74 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::ClipDragMoved(current_beat, _target_layer) => {
+        PanelAction::ClipDragMoved(current_beat, target_layer) => {
             // Collect IDs being dragged for magnetic snap ignore list
             let drag_ids: Vec<String> = clip_drag.snapshots.iter().map(|s| s.clip_id.clone()).collect();
-            let anchor_layer = engine.project()
-                .and_then(|p| {
-                    p.timeline.layers.iter()
-                        .enumerate()
-                        .find_map(|(li, layer)| {
-                            layer.clips.iter()
-                                .find(|c| c.id == clip_drag.anchor_clip_id)
-                                .map(|_| li)
-                        })
-                })
-                .unwrap_or(0);
+            let anchor_layer = clip_drag.drag_start_layer_index;
 
             match clip_drag.mode {
                 ClipDragMode::Move => {
-                    let snapped = ui.viewport.magnetic_snap(*current_beat, anchor_layer, &drag_ids);
-                    let anchor_snapped = ui.viewport.magnetic_snap(clip_drag.anchor_beat, anchor_layer, &drag_ids);
-                    let delta = snapped - anchor_snapped;
+                    // From Unity InteractionOverlay.HandleMoveDrag (lines 463-537).
+
+                    // 1. Compute beat delta using anchor clip with magnetic snap
+                    let anchor_start = *current_beat - clip_drag.drag_offset_beats;
+                    let snapped_start = ui.viewport.magnetic_snap(anchor_start, anchor_layer, &drag_ids);
+                    let min_start = clip_drag.snapshots.iter()
+                        .map(|s| s.original_start_beat)
+                        .fold(f32::MAX, f32::min);
+                    let beat_delta = (snapped_start - clip_drag.snapshots.iter()
+                        .find(|s| s.clip_id == clip_drag.anchor_clip_id)
+                        .map(|s| s.original_start_beat)
+                        .unwrap_or(0.0))
+                        .max(-min_start); // Clamp so no clip goes below beat 0
+
+                    // 2. Compute cross-layer delta
+                    let mut layer_delta: i32 = 0;
+                    clip_drag.drag_layer_blocked = false;
+                    if let Some(tl) = target_layer {
+                        let total_layers = engine.project()
+                            .map(|p| p.timeline.layers.len())
+                            .unwrap_or(1);
+                        let raw_delta = *tl as i32 - clip_drag.drag_start_layer_index as i32;
+                        // Clamp so no clip moves out of bounds
+                        let min_clamp = -(clip_drag.drag_selection_min_layer as i32);
+                        let max_clamp = (total_layers.saturating_sub(1)) as i32
+                            - clip_drag.drag_selection_max_layer as i32;
+                        layer_delta = raw_delta.clamp(min_clamp, max_clamp);
+
+                        // 3. Type compatibility check: reject video↔generator mismatch
+                        if layer_delta != 0 {
+                            if let Some(project) = engine.project() {
+                                for snap in &clip_drag.snapshots {
+                                    let src_li = snap.original_layer_index as usize;
+                                    let dst_li = (snap.original_layer_index + layer_delta) as usize;
+                                    let src_is_gen = project.timeline.layers.get(src_li)
+                                        .map(|l| l.layer_type == manifold_core::types::LayerType::Generator)
+                                        .unwrap_or(false);
+                                    let dst_is_gen = project.timeline.layers.get(dst_li)
+                                        .map(|l| l.layer_type == manifold_core::types::LayerType::Generator)
+                                        .unwrap_or(false);
+                                    if src_is_gen != dst_is_gen {
+                                        layer_delta = 0;
+                                        clip_drag.drag_layer_blocked = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 4. Apply deltas to clips
                     if let Some(project) = engine.project_mut() {
                         for snap in &clip_drag.snapshots {
-                            let new_start = (snap.original_start_beat + delta).max(0.0);
+                            let new_start = (snap.original_start_beat + beat_delta).max(0.0);
+                            let new_layer = (snap.original_layer_index + layer_delta)
+                                .max(0) as usize;
                             if let Some(clip) = project.timeline.find_clip_by_id_mut(&snap.clip_id) {
                                 clip.start_beat = new_start;
+                                if layer_delta != 0 {
+                                    clip.layer_index = new_layer as i32;
+                                }
                             }
                         }
                     }
@@ -245,7 +341,22 @@ pub fn dispatch(
                     let snapped = ui.viewport.magnetic_snap(*current_beat, anchor_layer, &drag_ids);
                     if let Some(project) = engine.project_mut() {
                         let old_end = clip_drag.trim_old_start + clip_drag.trim_old_duration;
-                        let new_start = snapped.max(0.0).min(old_end - 0.25);
+
+                        // From Unity InteractionOverlay.HandleTrimLeftDrag (lines 539-559):
+                        // Video clips can only shorten from left (new_start >= original).
+                        // Generator clips can extend left freely.
+                        let is_generator = project.timeline.layers.get(anchor_layer)
+                            .map(|l| l.layer_type == manifold_core::types::LayerType::Generator)
+                            .unwrap_or(false);
+
+                        let mut new_start = snapped.max(0.0);
+                        if !is_generator {
+                            // Video: can only shorten from the left, not extend past original
+                            new_start = new_start.max(clip_drag.trim_old_start);
+                        }
+                        // Min duration: 0.25 beats (1/16 note)
+                        new_start = new_start.min(old_end - 0.25);
+
                         let new_duration = old_end - new_start;
                         // Adjust in_point for video clips
                         let spb = 60.0 / project.settings.bpm;
@@ -275,11 +386,14 @@ pub fn dispatch(
         PanelAction::ClipDragEnded => {
             match clip_drag.mode {
                 ClipDragMode::Move => {
-                    // Collect current positions first, then create commands
-                    let mut moves: Vec<(String, f32, f32, i32, i32)> = Vec::new();
+                    // From Unity InteractionOverlay.OnEndDrag (lines 356-446):
+                    // Build all move + overlap commands, wrap in CompositeCommand for atomic undo.
+                    let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
                     let drag_ids: std::collections::HashSet<String> =
                         clip_drag.snapshots.iter().map(|s| s.clip_id.clone()).collect();
+
                     if let Some(project) = engine.project_mut() {
+                        // Collect move commands for clips that actually changed
                         for snap in &clip_drag.snapshots {
                             if let Some(clip) = project.timeline.find_clip_by_id(&snap.clip_id) {
                                 let new_start = clip.start_beat;
@@ -287,16 +401,17 @@ pub fn dispatch(
                                 if (new_start - snap.original_start_beat).abs() > f32::EPSILON
                                     || new_layer != snap.original_layer_index
                                 {
-                                    moves.push((
+                                    commands.push(Box::new(MoveClipCommand::new(
                                         snap.clip_id.clone(),
                                         snap.original_start_beat,
                                         new_start,
                                         snap.original_layer_index,
                                         new_layer,
-                                    ));
+                                    )));
                                 }
                             }
                         }
+
                         // Enforce non-overlap for each moved clip
                         let spb = 60.0 / project.settings.bpm;
                         for snap in &clip_drag.snapshots {
@@ -305,15 +420,20 @@ pub fn dispatch(
                                 let overlap_cmds = EditingService::enforce_non_overlap(
                                     project, &clip, layer_idx, &drag_ids, spb,
                                 );
-                                for cmd in overlap_cmds {
-                                    editing.execute(cmd, project);
-                                }
+                                commands.extend(overlap_cmds);
                             }
                         }
                     }
-                    for (id, old_start, new_start, old_layer, new_layer) in moves {
-                        let cmd = MoveClipCommand::new(id, old_start, new_start, old_layer, new_layer);
-                        editing.record(Box::new(cmd));
+
+                    // Record as single composite command (atomic undo)
+                    if commands.len() == 1 {
+                        editing.record(commands.pop().unwrap());
+                    } else if commands.len() > 1 {
+                        let composite = manifold_editing::command::CompositeCommand::new(
+                            commands,
+                            "Move clips".to_string(),
+                        );
+                        editing.record(Box::new(composite));
                     }
                 }
                 ClipDragMode::TrimLeft | ClipDragMode::TrimRight => {
@@ -346,17 +466,25 @@ pub fn dispatch(
             clip_drag.mode = ClipDragMode::RegionSelect;
             clip_drag.region_anchor_beat = *beat;
             clip_drag.region_anchor_layer = *layer;
-            selection.clear();
+            selection.clear_selection();
             DispatchResult::handled()
         }
         PanelAction::RegionDragMoved(beat, layer) => {
             if clip_drag.mode == ClipDragMode::RegionSelect {
-                let min_beat = clip_drag.region_anchor_beat.min(*beat);
-                let max_beat = clip_drag.region_anchor_beat.max(*beat);
+                let raw_min_beat = clip_drag.region_anchor_beat.min(*beat);
+                let raw_max_beat = clip_drag.region_anchor_beat.max(*beat);
+                // From Unity InteractionOverlay.UpdateRegionDrag (lines 819-821):
+                // Grid snap BOTH edges of the region.
+                let grid_step = ui.viewport.grid_step();
+                let min_beat = manifold_ui::snap::snap_beat_to_grid(raw_min_beat, grid_step);
+                let max_beat = manifold_ui::snap::snap_beat_to_grid(raw_max_beat, grid_step);
                 let min_layer = clip_drag.region_anchor_layer.min(*layer);
                 let max_layer = clip_drag.region_anchor_layer.max(*layer);
 
-                // Set visual region on viewport
+                // Use UIState.set_region — clears clips, sets region, bumps version
+                selection.set_region(min_beat, max_beat, min_layer as i32, max_layer as i32);
+
+                // Also set visual region on viewport (for rendering)
                 ui.viewport.set_selection_region(Some(
                     manifold_ui::panels::viewport::SelectionRegion {
                         start_beat: min_beat,
@@ -366,31 +494,32 @@ pub fn dispatch(
                     }
                 ));
 
-                // Select clips within region
+                // Collect clips within region and add to selection
+                // (SetRegion clears them, but during drag we need to show which clips are in the box)
                 if let Some(project) = engine.project() {
-                    let region = manifold_core::selection::SelectionRegion {
+                    let core_region = manifold_core::selection::SelectionRegion {
                         start_beat: min_beat,
                         end_beat: max_beat,
                         start_layer_index: min_layer as i32,
                         end_layer_index: max_layer as i32,
                         is_active: true,
                     };
-                    let clips_in_region = EditingService::get_clips_in_region(project, &region);
-                    selection.selected_clip_ids.clear();
+                    let clips_in_region = EditingService::get_clips_in_region(project, &core_region);
                     for (_, clip_id) in clips_in_region {
                         selection.selected_clip_ids.insert(clip_id);
                     }
-                    selection.primary_clip_id = selection.selected_clip_ids.iter().next().cloned();
-                    selection.version += 1;
+                    selection.primary_selected_clip_id = selection.selected_clip_ids.iter().next().cloned();
                 }
             }
-            DispatchResult::handled()
+            DispatchResult::structural()
         }
         PanelAction::RegionDragEnded => {
             if clip_drag.mode == ClipDragMode::RegionSelect {
                 clip_drag.mode = ClipDragMode::None;
-                // Clear visual region but keep selection
-                ui.viewport.set_selection_region(None);
+                // From Unity InteractionOverlay.EndRegionDrag (lines 838-843):
+                // Region PERSISTS after drag ends — user needs it for copy/paste/delete.
+                // It stays visible until the next click, selection, or clear_selection clears it.
+                // Do NOT clear the visual region here.
             }
             DispatchResult::handled()
         }
@@ -399,28 +528,16 @@ pub fn dispatch(
             DispatchResult::handled()
         }
 
-        // ── Clock/Sync ─────────────────────────────────────────────
-        PanelAction::CycleClockAuthority => {
-            if let Some(project) = engine.project_mut() {
-                project.settings.clock_authority = project.settings.clock_authority.next();
-                log::info!("Clock authority → {}", project.settings.clock_authority.display_name());
-            }
-            DispatchResult::handled()
-        }
-        PanelAction::ToggleLink => {
-            log::info!("Toggle Link (not yet implemented)");
-            DispatchResult::handled()
-        }
-        PanelAction::ToggleMidiClock => {
-            log::info!("Toggle MIDI Clock (not yet implemented)");
+        // ── Clock/Sync (handled at Application level, these are fallbacks) ──
+        PanelAction::CycleClockAuthority
+        | PanelAction::ToggleLink
+        | PanelAction::ToggleMidiClock
+        | PanelAction::ToggleSyncOutput => {
+            // Intercepted by Application before dispatch — should not reach here
             DispatchResult::handled()
         }
         PanelAction::SelectClkDevice => {
-            log::info!("Select clock device (not yet implemented)");
-            DispatchResult::handled()
-        }
-        PanelAction::ToggleSyncOutput => {
-            log::info!("Toggle sync output (not yet implemented)");
+            log::info!("Select clock device (dropdown not yet implemented)");
             DispatchResult::handled()
         }
 
@@ -515,9 +632,28 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::LayerClicked(idx) => {
+        PanelAction::LayerClicked(idx, modifiers) => {
+            // From Unity UIState.cs layer selection methods (lines 247-333).
             *active_layer = Some(*idx);
-            DispatchResult::handled()
+
+            if let Some(project) = engine.project() {
+                let layer_id = project.timeline.layers.get(*idx)
+                    .map(|l| l.layer_id.clone())
+                    .unwrap_or_default();
+
+                if modifiers.shift {
+                    // Shift+Click: range select from primary to target
+                    selection.select_layer_range(&layer_id, &project.timeline.layers);
+                } else if modifiers.ctrl || modifiers.command {
+                    // Cmd/Ctrl+Click: toggle layer in/out of selection
+                    selection.toggle_layer_selection(layer_id);
+                } else {
+                    // Plain click: select single layer (clears clips, region, insert cursor)
+                    selection.select_layer(layer_id);
+                }
+            }
+
+            DispatchResult::structural()
         }
         PanelAction::LayerDoubleClicked(_idx) => {
             log::debug!("Layer double-clicked (rename not yet implemented)");
@@ -592,15 +728,56 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::LayerDragStarted(_idx) => {
-            log::debug!("Layer drag started");
             DispatchResult::handled()
         }
         PanelAction::LayerDragMoved(_from, _to) => {
             DispatchResult::handled()
         }
-        PanelAction::LayerDragEnded(_from, _to) => {
-            log::debug!("Layer drag ended (reorder not yet implemented via drag)");
-            DispatchResult::handled()
+        PanelAction::LayerDragEnded(from, to) => {
+            // From Unity LayerHeaderPanel.HandleDragEnd + ReorderLayerCommand.
+            // Atomically reorder layers and update parent_layer_id when moving into/out of groups.
+            if from != to {
+                if let Some(project) = engine.project_mut() {
+                    let old_order = project.timeline.layers.clone();
+                    let mut new_order = old_order.clone();
+
+                    if *from < new_order.len() && *to <= new_order.len() {
+                        let layer = new_order.remove(*from);
+                        let insert_at = if *to > *from { to.saturating_sub(1) } else { *to };
+                        let insert_at = insert_at.min(new_order.len());
+
+                        // Determine parent group for the target position
+                        let target_parent = if insert_at < new_order.len() {
+                            new_order[insert_at].parent_layer_id.clone()
+                        } else if !new_order.is_empty() {
+                            new_order.last().and_then(|l| l.parent_layer_id.clone())
+                        } else {
+                            None
+                        };
+
+                        new_order.insert(insert_at, layer);
+
+                        // Build parent ID maps for undo
+                        let mut old_parents = std::collections::HashMap::new();
+                        let mut new_parents = std::collections::HashMap::new();
+                        for (i, l) in old_order.iter().enumerate() {
+                            old_parents.insert(l.layer_id.clone(), l.parent_layer_id.clone());
+                        }
+                        // Update moved layer's parent
+                        for l in &new_order {
+                            new_parents.insert(l.layer_id.clone(), l.parent_layer_id.clone());
+                        }
+                        let moved_id = new_order[insert_at].layer_id.clone();
+                        new_parents.insert(moved_id, target_parent);
+
+                        let cmd = manifold_editing::commands::layer::ReorderLayerCommand::new(
+                            old_order, new_order, old_parents, new_parents,
+                        );
+                        editing.execute(Box::new(cmd), project);
+                    }
+                }
+            }
+            DispatchResult::structural()
         }
 
         // ── Layer management ───────────────────────────────────────
@@ -746,7 +923,7 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ClipLoopToggle => {
-            if let Some(clip_id) = &selection.primary_clip_id {
+            if let Some(clip_id) = &selection.primary_selected_clip_id {
                 let clip_id = clip_id.clone();
                 if let Some(project) = engine.project_mut() {
                     if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
@@ -762,7 +939,7 @@ pub fn dispatch(
             DispatchResult::structural()
         }
         PanelAction::ClipSlipSnapshot => {
-            if let Some(clip_id) = &selection.primary_clip_id {
+            if let Some(clip_id) = &selection.primary_selected_clip_id {
                 if let Some(project) = engine.project_mut() {
                     if let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
                         *drag_snapshot = Some(clip.in_point);
@@ -772,7 +949,7 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ClipSlipChanged(val) => {
-            if let Some(clip_id) = &selection.primary_clip_id {
+            if let Some(clip_id) = &selection.primary_selected_clip_id {
                 if let Some(project) = engine.project_mut() {
                     if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
                         clip.in_point = val.max(0.0);
@@ -783,7 +960,7 @@ pub fn dispatch(
         }
         PanelAction::ClipSlipCommit => {
             if let Some(old_val) = drag_snapshot.take() {
-                if let Some(clip_id) = &selection.primary_clip_id {
+                if let Some(clip_id) = &selection.primary_selected_clip_id {
                     let clip_id = clip_id.clone();
                     if let Some(project) = engine.project_mut() {
                         if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
@@ -799,7 +976,7 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ClipLoopSnapshot => {
-            if let Some(clip_id) = &selection.primary_clip_id {
+            if let Some(clip_id) = &selection.primary_selected_clip_id {
                 if let Some(project) = engine.project_mut() {
                     if let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
                         *drag_snapshot = Some(clip.loop_duration_beats);
@@ -809,7 +986,7 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ClipLoopChanged(val) => {
-            if let Some(clip_id) = &selection.primary_clip_id {
+            if let Some(clip_id) = &selection.primary_selected_clip_id {
                 if let Some(project) = engine.project_mut() {
                     if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
                         clip.loop_duration_beats = val.max(0.0);
@@ -820,7 +997,7 @@ pub fn dispatch(
         }
         PanelAction::ClipLoopCommit => {
             if let Some(old_val) = drag_snapshot.take() {
-                if let Some(clip_id) = &selection.primary_clip_id {
+                if let Some(clip_id) = &selection.primary_selected_clip_id {
                     let clip_id = clip_id.clone();
                     if let Some(project) = engine.project_mut() {
                         if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
@@ -841,7 +1018,7 @@ pub fn dispatch(
 
         PanelAction::ClipSlipRightClick => {
             // Reset clip slip (in_point) to 0.0
-            if let Some(clip_id) = &selection.primary_clip_id {
+            if let Some(clip_id) = &selection.primary_selected_clip_id {
                 let clip_id = clip_id.clone();
                 if let Some(project) = engine.project_mut() {
                     if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_id) {
@@ -858,7 +1035,7 @@ pub fn dispatch(
         }
         PanelAction::ClipLoopRightClick => {
             // Reset clip loop duration to clip's full duration
-            if let Some(clip_id) = &selection.primary_clip_id {
+            if let Some(clip_id) = &selection.primary_selected_clip_id {
                 let clip_id = clip_id.clone();
                 if let Some(project) = engine.project_mut() {
                     if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_id) {
@@ -1654,8 +1831,8 @@ pub fn dispatch(
                     for id in result.pasted_clip_ids {
                         selection.selected_clip_ids.insert(id);
                     }
-                    selection.primary_clip_id = selection.selected_clip_ids.iter().next().cloned();
-                    selection.version += 1;
+                    selection.primary_selected_clip_id = selection.selected_clip_ids.iter().next().cloned();
+                    selection.selection_version += 1;
                 }
             }
             DispatchResult::structural()
@@ -1716,6 +1893,68 @@ pub fn dispatch(
     }
 }
 
+/// Update the selection region to encompass all currently selected clips.
+/// Called after Ctrl+Click multi-select, paste, and duplicate.
+/// From Unity InteractionOverlay.UpdateRegionFromClipSelection.
+fn update_region_from_clip_selection(selection: &mut SelectionState, engine: &PlaybackEngine) {
+    if selection.selected_clip_ids.len() < 2 {
+        // Single or no clips — no region needed
+        return;
+    }
+    if let Some(project) = engine.project() {
+        let mut min_beat = f32::MAX;
+        let mut max_beat = f32::MIN;
+        let mut min_layer = i32::MAX;
+        let mut max_layer = i32::MIN;
+        let mut found = false;
+
+        for layer in &project.timeline.layers {
+            for clip in &layer.clips {
+                if selection.selected_clip_ids.contains(&clip.id) {
+                    min_beat = min_beat.min(clip.start_beat);
+                    max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
+                    min_layer = min_layer.min(clip.layer_index);
+                    max_layer = max_layer.max(clip.layer_index);
+                    found = true;
+                }
+            }
+        }
+
+        if found {
+            selection.set_region_from_clip_bounds(min_beat, max_beat, min_layer, max_layer);
+        }
+    }
+}
+
+/// Update region from clip selection — public version taking &Project directly.
+/// Used by app.rs keyboard handlers that can't pass &PlaybackEngine.
+pub fn update_region_from_clip_selection_inline(selection: &mut SelectionState, project: &manifold_core::project::Project) {
+    if selection.selected_clip_ids.len() < 2 {
+        return;
+    }
+    let mut min_beat = f32::MAX;
+    let mut max_beat = f32::MIN;
+    let mut min_layer = i32::MAX;
+    let mut max_layer = i32::MIN;
+    let mut found = false;
+
+    for layer in &project.timeline.layers {
+        for clip in &layer.clips {
+            if selection.selected_clip_ids.contains(&clip.id) {
+                min_beat = min_beat.min(clip.start_beat);
+                max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
+                min_layer = min_layer.min(clip.layer_index);
+                max_layer = max_layer.max(clip.layer_index);
+                found = true;
+            }
+        }
+    }
+
+    if found {
+        selection.set_region_from_clip_bounds(min_beat, max_beat, min_layer, max_layer);
+    }
+}
+
 /// Handle undo (called from keyboard shortcut).
 pub fn undo(engine: &mut PlaybackEngine, editing: &mut EditingService) -> bool {
     if let Some(project) = engine.project_mut() {
@@ -1773,7 +2012,7 @@ fn resolve_effects_read<'a>(
         }
         InspectorTab::Clip => {
             let target = EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) };
-            let effects = selection.primary_clip_id.as_ref().and_then(|cid| {
+            let effects = selection.primary_selected_clip_id.as_ref().and_then(|cid| {
                 project.timeline.layers.iter()
                     .flat_map(|l| l.clips.iter())
                     .find(|c| c.id == *cid)
@@ -1815,7 +2054,7 @@ fn resolve_effects_mut<'a>(
         }
         InspectorTab::Clip => {
             let target = EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) };
-            let clip_id = selection.primary_clip_id.clone();
+            let clip_id = selection.primary_selected_clip_id.clone();
             let effects = clip_id.and_then(|cid| {
                 project.timeline.find_clip_by_id_mut(&cid)
                     .map(|c| &mut c.effects)
@@ -1828,46 +2067,77 @@ fn resolve_effects_mut<'a>(
 // Transport colors for play state.
 const PLAY_GREEN: Color32 = Color32::new(56, 115, 66, 255);
 const PLAY_ACTIVE: Color32 = Color32::new(64, 184, 82, 255);
+const PAUSED_YELLOW: Color32 = Color32::new(209, 166, 38, 255);
 
-/// Check auto-scroll and return true if viewport scroll changed (needs rebuild).
+/// Check auto-scroll during playback and return true if viewport scroll changed.
 /// Must run BEFORE build() so the rebuild includes the new scroll position.
+/// From Unity ViewportManager.UpdatePlayheadPosition (lines 327-357).
 pub fn check_auto_scroll(ui: &mut UIRoot, engine: &PlaybackEngine) -> bool {
-    let playhead_beat = engine.current_beat();
-    let mut scroll_changed = false;
-    if engine.is_playing() {
-        let ppb = ui.viewport.pixels_per_beat();
-        let tracks_w = ui.viewport.viewport_rect().width;
-        let scroll_x = ui.viewport.scroll_x_beats();
-        let visible_end_beat = scroll_x + tracks_w / ppb;
-
-        if playhead_beat > visible_end_beat {
-            ui.viewport.set_scroll(
-                playhead_beat - tracks_w * 0.1 / ppb,
-                ui.viewport.scroll_y_px(),
-            );
-            scroll_changed = true;
-        } else if playhead_beat < scroll_x {
-            ui.viewport.set_scroll(
-                (playhead_beat - tracks_w * 0.2 / ppb).max(0.0),
-                ui.viewport.scroll_y_px(),
-            );
-            scroll_changed = true;
-        }
+    if !engine.is_playing() {
+        return false;
     }
-    scroll_changed
+
+    let playhead_beat = engine.current_beat();
+    let ppb = ui.viewport.pixels_per_beat();
+    let viewport_w = ui.viewport.tracks_rect().width;
+    if viewport_w <= 0.0 || ppb <= 0.0 {
+        return false;
+    }
+
+    let scroll_x_beats = ui.viewport.scroll_x_beats();
+    let playhead_px = (playhead_beat - scroll_x_beats) * ppb; // pixel offset from viewport left
+
+    // Content expansion: if playhead approaches end of content, grow it.
+    // From Unity ViewportManager.UpdatePlayheadPosition (lines 314-324).
+    let content_beats = engine.project()
+        .map(|p| p.timeline.duration_beats())
+        .unwrap_or(0.0);
+    let content_w_px = content_beats * ppb;
+    let playhead_abs_px = playhead_beat * ppb;
+    if playhead_abs_px > content_w_px - 50.0 {
+        // Content would need to grow — handled by sync_project_data setting clips
+        // which automatically extends the viewport range. No explicit action needed here
+        // since the viewport always shows scroll_x..scroll_x + viewport_w.
+    }
+
+    // Right edge margin: 50px. When playhead approaches right, scroll to 25% from left.
+    let right_margin_px = 50.0;
+    if playhead_px > viewport_w - right_margin_px {
+        // Scroll so playhead is at 25% from left (75% ahead)
+        let target_scroll_beat = playhead_beat - (viewport_w * 0.25) / ppb;
+        ui.viewport.set_scroll(target_scroll_beat.max(0.0), ui.viewport.scroll_y_px());
+        return true;
+    }
+
+    // Left edge margin: 20px. When playhead goes behind left edge, scroll back.
+    let left_margin_px = 20.0;
+    if playhead_px < left_margin_px {
+        let target_scroll_beat = playhead_beat - left_margin_px / ppb;
+        ui.viewport.set_scroll(target_scroll_beat.max(0.0), ui.viewport.scroll_y_px());
+        return true;
+    }
+
+    false
 }
 
 /// Push engine state into UI panels (called once per frame, AFTER build).
 /// Syncs all data-model state into tree nodes so the renderer shows current values.
-pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option<usize>, selection: &SelectionState) {
+pub fn push_state(
+    ui: &mut UIRoot,
+    engine: &PlaybackEngine,
+    active_layer: Option<usize>,
+    selection: &SelectionState,
+    is_dirty: bool,
+    project_path: Option<&std::path::Path>,
+) {
     let tree = &mut ui.tree;
 
-    // Transport state
-    let is_playing = engine.is_playing();
-    let (play_text, play_color) = if is_playing {
-        ("PLAY", PLAY_ACTIVE)
-    } else {
-        ("PLAY", PLAY_GREEN)
+    // Transport state — three visual states matching Unity TransportPanel
+    let state = engine.current_state();
+    let (play_text, play_color) = match state {
+        manifold_core::types::PlaybackState::Playing => ("PAUSE", PLAY_ACTIVE),
+        manifold_core::types::PlaybackState::Paused => ("PLAY", PAUSED_YELLOW),
+        manifold_core::types::PlaybackState::Stopped => ("PLAY", PLAY_GREEN),
     };
     ui.transport.set_play_state(tree, play_text, play_color);
 
@@ -1877,50 +2147,69 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
 
     if let Some(project) = engine.project() {
         let bpm = project.settings.bpm;
-        let bar = (beat / 4.0).floor() as i32 + 1;
-        let beat_in_bar = (beat % 4.0).floor() as i32 + 1;
-        let sub = ((beat % 1.0) * 4.0).floor() as i32 + 1;
-        let beat_text = format!("{:02}.{}.{}", bar, beat_in_bar, sub);
 
+        // Unity FormatTime: "{minutes:D2}:{seconds:D2}.{tenths}"
+        // Time first, then bar.beat.sixteenth — matches Unity exactly
         let mins = (time / 60.0).floor() as i32;
-        let secs = time % 60.0;
-        let display = format!("{} | {:02}:{:05.2}", beat_text, mins, secs);
+        let secs = (time % 60.0).floor() as i32;
+        let tenths = ((time * 10.0) % 10.0).floor() as i32;
+        let time_str = format!("{:02}:{:02}.{}", mins, secs, tenths);
+
+        // Beat display uses time_signature_numerator (not hardcoded 4)
+        let bpb = (project.settings.time_signature_numerator.max(1)) as f32;
+        let bar = (beat / bpb).floor() as i32 + 1;
+        let beat_in_bar = (beat % bpb).floor() as i32 + 1;
+        let sixteenth = ((beat % 1.0) * 4.0).floor() as i32 + 1;
+        let display = format!("{}  |  {}.{}.{}", time_str, bar, beat_in_bar, sixteenth);
 
         ui.header.set_time_display(tree, &display);
         ui.transport.set_bpm_text(tree, &format!("{:.1}", bpm));
 
-        // Clock authority display
+        // Clock authority display — "SRC:INT"/"SRC:LNK"/"SRC:CLK"/"SRC:OSC"
         let auth = project.settings.clock_authority;
         let auth_color = match auth {
             manifold_core::types::ClockAuthority::Internal => color::BUTTON_INACTIVE_C32,
             manifold_core::types::ClockAuthority::Link => color::LINK_ORANGE,
             manifold_core::types::ClockAuthority::MidiClock => color::MIDI_PURPLE,
-            manifold_core::types::ClockAuthority::Osc => color::SYNC_ACTIVE,
+            manifold_core::types::ClockAuthority::Osc => color::ABLETON_LINK_BLUE,
         };
-        ui.transport.set_clock_authority(tree, auth.display_name(), auth_color);
+        ui.transport.set_clock_authority(tree, auth.transport_label(), auth_color);
 
-        // Sync source status (default inactive — no actual connections yet)
-        ui.transport.set_link_state(tree, false, color::STATUS_DOT_INACTIVE, "—", color::TEXT_DIMMED_C32);
-        ui.transport.set_clk_state(tree, false, "—", color::STATUS_DOT_INACTIVE, "—", color::TEXT_DIMMED_C32);
-        ui.transport.set_sync_state(tree, false, color::STATUS_DOT_INACTIVE, "—", color::TEXT_DIMMED_C32);
+        // Sync source status (default inactive until sync controllers exist)
+        ui.transport.set_link_state(tree, false, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
+        ui.transport.set_clk_state(tree, false, "Select...", color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
+        ui.transport.set_sync_state(tree, false, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
 
-        // Record state
-        ui.transport.set_record_state(tree, engine.is_recording(), true);
+        // Record state — disabled when OSC is clock authority (Unity invariant)
+        let rec_allowed = auth != manifold_core::types::ClockAuthority::Osc;
+        ui.transport.set_record_state(tree, engine.is_recording() && rec_allowed, rec_allowed);
 
-        // BPM tap/reset buttons (inactive until tapped)
-        ui.transport.set_bpm_reset_active(tree, false);
-        ui.transport.set_bpm_clear_active(tree, false);
+        // BPM reset: enabled when recorded tempo lane exists or recorded BPM differs
+        let can_reset = !project.recording_provenance.recorded_tempo_lane.is_empty()
+            || (project.recording_provenance.has_recorded_project_bpm
+                && (bpm - project.recording_provenance.recorded_project_bpm).abs() >= 0.0001);
+        ui.transport.set_bpm_reset_active(tree, can_reset);
 
-        // Save button — no dirty tracking yet, show clean state
-        ui.transport.set_save_text(tree, "Save");
+        // BPM clear: enabled when tempo map has >1 point
+        let can_clear = project.tempo_map.points.len() > 1;
+        ui.transport.set_bpm_clear_active(tree, can_clear);
+
+        // Save button — "SAVE" clean, "SAVE *" dirty with warm brown tint
+        ui.transport.set_save_text(tree, if is_dirty { "SAVE *" } else { "SAVE" });
 
         // Export state
         let has_export_range = project.timeline.export_in_beat < project.timeline.export_out_beat;
         if has_export_range {
-            let export_label = format!("Export {:.1}-{:.1}", project.timeline.export_in_beat, project.timeline.export_out_beat);
+            let in_b = project.timeline.export_in_beat;
+            let out_b = project.timeline.export_out_beat;
+            let export_label = if out_b > 0.0 {
+                format!("IN: {:.1} OUT: {:.1}", in_b, out_b)
+            } else {
+                format!("IN: {:.1}", in_b)
+            };
             ui.transport.set_export_label(tree, &export_label);
         } else {
-            ui.transport.set_export_label(tree, "Export");
+            ui.transport.set_export_label(tree, "");
         }
         ui.transport.set_export_active(tree, false); // No active export in Rust port yet
         ui.transport.set_hdr_active(tree, project.settings.export_hdr);
@@ -1928,11 +2217,19 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
         // Export range markers on viewport
         ui.viewport.set_export_range(project.timeline.export_in_beat, project.timeline.export_out_beat);
 
-        // Header — project name + zoom label
-        ui.header.set_project_name(tree, "Untitled"); // No project file path yet
+        // Header — project name + dirty bullet
+        let project_name = project_path
+            .and_then(|p| p.file_stem())
+            .and_then(|s| s.to_str())
+            .unwrap_or("Untitled");
+        let header_name = if is_dirty {
+            format!("{} \u{2022}", project_name)
+        } else {
+            project_name.to_string()
+        };
+        ui.header.set_project_name(tree, &header_name);
         let ppb = ui.viewport.pixels_per_beat();
-        let zoom_pct = (ppb / color::ZOOM_LEVELS[color::DEFAULT_ZOOM_INDEX]) * 100.0;
-        ui.header.set_zoom_label(tree, &format!("{:.0}%", zoom_pct));
+        ui.header.set_zoom_label(tree, &format!("{:.0} px/beat", ppb));
 
         // Footer — quantize mode, resolution, FPS
         ui.footer.set_quantize_text(tree, project.settings.quantize_mode.display_name());
@@ -1961,7 +2258,30 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
         ui.viewport.set_insert_cursor(beat);
     }
 
-    // Layer mute/solo state sync + active layer highlighting + labels
+    // Region → viewport (sync from UIState so clearing via set_insert_cursor propagates)
+    if selection.has_region() {
+        let r = selection.get_region();
+        ui.viewport.set_selection_region(Some(
+            manifold_ui::panels::viewport::SelectionRegion {
+                start_beat: r.start_beat,
+                end_beat: r.end_beat,
+                start_layer: r.start_layer_index.max(0) as usize,
+                end_layer: r.end_layer_index.max(0) as usize,
+            }
+        ));
+    } else {
+        ui.viewport.set_selection_region(None);
+    }
+
+    // Layer highlighting via UIState.is_layer_active (unified check across 4 paths):
+    // explicit layer selection, clip selection, insert cursor, region.
+    if let Some(project) = engine.project() {
+        let active_flags: Vec<bool> = project.timeline.layers.iter().enumerate()
+            .map(|(i, l)| selection.is_layer_active(i, &l.layer_id))
+            .collect();
+        ui.layer_headers.set_active_layers(&active_flags);
+    }
+    // Also set single active_layer for backward compat (inspector routing)
     ui.layer_headers.set_active_layer(active_layer);
     if let Some(project) = engine.project() {
         for (i, layer) in project.timeline.layers.iter().enumerate() {
@@ -2004,7 +2324,7 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
     }
 
     // Sync clip chrome from primary selected clip
-    if let Some(clip_id) = &selection.primary_clip_id {
+    if let Some(clip_id) = &selection.primary_selected_clip_id {
         if let Some(project) = engine.project() {
             // Linear search (no mut needed for read-only)
             let clip = project.timeline.layers.iter()
@@ -2074,7 +2394,7 @@ pub fn push_state(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option
         }
 
         // Clip effects
-        if let Some(clip_id) = &selection.primary_clip_id {
+        if let Some(clip_id) = &selection.primary_selected_clip_id {
             let clip = project.timeline.layers.iter()
                 .flat_map(|l| l.clips.iter())
                 .find(|c| c.id == *clip_id);
@@ -2141,15 +2461,67 @@ pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer:
         ui.layer_headers.set_layers(layers);
 
         // Track data → TimelineViewportPanel
-        let tracks: Vec<TrackInfo> = project.timeline.layers.iter().map(|layer| {
+        // From Unity ViewportManager.BuildTrack (lines 548-663):
+        // - is_muted includes parent group mute (children of muted groups are dimmed)
+        // - is_group set correctly for group layers
+        // - accent_color set for child layers
+        let tracks: Vec<TrackInfo> = project.timeline.layers.iter().enumerate().map(|(i, layer)| {
+            // Check if muted individually or by parent group
+            let parent_muted = layer.parent_layer_id.as_ref().map_or(false, |pid| {
+                project.timeline.layers.iter().any(|l| l.layer_id == *pid && l.is_muted)
+            });
+            let is_muted = layer.is_muted || parent_muted;
+
+            // Variable track heights matching Unity CoordinateMapper.RebuildYLayout
+            let height = if layer.parent_layer_id.is_some() {
+                // Child of group: check parent collapsed
+                let parent_collapsed = layer.parent_layer_id.as_ref().map_or(false, |pid| {
+                    project.timeline.layers.iter().any(|l| l.layer_id == *pid && l.is_collapsed)
+                });
+                if parent_collapsed { 0.0 } else { color::TRACK_HEIGHT }
+            } else if layer.is_group() && layer.is_collapsed {
+                color::COLLAPSED_GROUP_TRACK_HEIGHT
+            } else if !layer.is_group() && layer.is_collapsed {
+                if layer.layer_type == manifold_core::types::LayerType::Generator {
+                    color::COLLAPSED_GEN_TRACK_HEIGHT
+                } else {
+                    color::COLLAPSED_TRACK_HEIGHT
+                }
+            } else {
+                color::TRACK_HEIGHT
+            };
+
+            // Accent color for child layers (group visual)
+            let accent_color = if layer.parent_layer_id.is_some() {
+                Some(color::DEFAULT_GROUP_ACCENT)
+            } else {
+                None
+            };
+
+            // Child layer indices for collapsed group preview
+            let child_layer_indices = if layer.is_group() {
+                let layer_id = &layer.layer_id;
+                project.timeline.layers.iter().enumerate()
+                    .filter(|(_, l)| l.parent_layer_id.as_ref() == Some(layer_id))
+                    .map(|(j, _)| j)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
             TrackInfo {
-                height: if layer.is_collapsed { 48.0 } else { 140.0 },
-                is_muted: layer.is_muted,
-                is_group: false,
-                accent_color: None,
+                height,
+                is_muted,
+                is_group: layer.is_group(),
+                is_collapsed: layer.is_collapsed,
+                accent_color,
+                child_layer_indices,
             }
         }).collect();
         ui.viewport.set_tracks(tracks);
+
+        // Rebuild CoordinateMapper Y-layout from layers (shared with layer headers)
+        ui.viewport.rebuild_mapper_layout(&project.timeline.layers);
 
         // Clip data → TimelineViewportPanel
         let mut viewport_clips = Vec::new();

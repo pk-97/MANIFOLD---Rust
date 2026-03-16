@@ -1740,6 +1740,7 @@ dependencies = [
 name = "manifold-playback"
 version = "0.1.0"
 dependencies = [
+ "log",
  "manifold-core",
  "manifold-editing",
  "manifold-io",

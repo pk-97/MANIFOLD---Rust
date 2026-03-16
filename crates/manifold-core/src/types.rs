@@ -919,6 +919,16 @@ impl ClockAuthority {
             Self::Osc => "OSC",
         }
     }
+
+    /// Transport bar label matching Unity's PushClockAuthorityToPanel format.
+    pub fn transport_label(&self) -> &'static str {
+        match self {
+            Self::Internal => "SRC:INT",
+            Self::Link => "SRC:LNK",
+            Self::MidiClock => "SRC:CLK",
+            Self::Osc => "SRC:OSC",
+        }
+    }
 }
 
 impl Serialize for ClockAuthority {

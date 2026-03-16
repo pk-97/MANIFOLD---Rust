@@ -485,3 +485,66 @@ impl Command for ClearTempoMapCommand {
 
     fn description(&self) -> &str { "Clear Tempo Map" }
 }
+
+/// Rescale all clip beat positions when BPM changes.
+/// Port of Unity PercussionImportOrchestrator.BuildRescaleBeatsForBpmChange.
+///
+/// For each clip: new_start_beat = max(0, old_start_beat * (new_bpm / old_bpm)).
+/// Stores old/new positions for undo.
+#[derive(Debug)]
+pub struct RescaleBeatsForBpmChangeCommand {
+    old_bpm: f32,
+    new_bpm: f32,
+    /// (layer_index, clip_index, old_start_beat, new_start_beat)
+    clip_moves: Vec<(usize, usize, f32, f32)>,
+}
+
+impl RescaleBeatsForBpmChangeCommand {
+    /// Build the command. Returns None if no rescaling is needed.
+    pub fn build(project: &Project, old_bpm: f32, new_bpm: f32) -> Option<Self> {
+        if old_bpm <= 0.0 || new_bpm <= 0.0 || (old_bpm - new_bpm).abs() < 0.01 {
+            return None;
+        }
+
+        let ratio = new_bpm / old_bpm;
+        let mut clip_moves = Vec::new();
+
+        for (li, layer) in project.timeline.layers.iter().enumerate() {
+            for (ci, clip) in layer.clips.iter().enumerate() {
+                let old_beat = clip.start_beat;
+                let new_beat = (old_beat * ratio).max(0.0);
+                if (new_beat - old_beat).abs() >= 0.0001 {
+                    clip_moves.push((li, ci, old_beat, new_beat));
+                }
+            }
+        }
+
+        if clip_moves.is_empty() { return None; }
+
+        Some(Self { old_bpm, new_bpm, clip_moves })
+    }
+}
+
+impl Command for RescaleBeatsForBpmChangeCommand {
+    fn execute(&mut self, project: &mut Project) {
+        for &(li, ci, _, new_beat) in &self.clip_moves {
+            if let Some(layer) = project.timeline.layers.get_mut(li) {
+                if let Some(clip) = layer.clips.get_mut(ci) {
+                    clip.start_beat = new_beat;
+                }
+            }
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        for &(li, ci, old_beat, _) in &self.clip_moves {
+            if let Some(layer) = project.timeline.layers.get_mut(li) {
+                if let Some(clip) = layer.clips.get_mut(ci) {
+                    clip.start_beat = old_beat;
+                }
+            }
+        }
+    }
+
+    fn description(&self) -> &str { "Rescale beats for BPM change" }
+}

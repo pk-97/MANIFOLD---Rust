@@ -22,72 +22,24 @@ use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerComposit
 use manifold_renderer::surface::SurfaceWrapper;
 use manifold_renderer::ui_renderer::UIRenderer;
 
+use manifold_ui::cursors::{CursorManager, TimelineCursor};
 use manifold_ui::input::{Modifiers, PointerAction};
 use manifold_ui::node::Vec2;
 use manifold_ui::panels::PanelAction;
+use manifold_ui::ui_state::UIState;
 
 use crate::frame_timer::FrameTimer;
 use crate::ui_root::UIRoot;
 use crate::window_registry::{WindowRegistry, WindowRole, WindowState};
 
-/// Selection state for the timeline viewport.
-pub struct SelectionState {
-    pub selected_clip_ids: HashSet<String>,
-    pub primary_clip_id: Option<String>,
-    pub insert_cursor_beat: Option<f32>,
-    pub insert_cursor_layer: Option<usize>,
-    pub version: u64,
-}
-
-impl SelectionState {
-    pub fn new() -> Self {
-        Self {
-            selected_clip_ids: HashSet::new(),
-            primary_clip_id: None,
-            insert_cursor_beat: None,
-            insert_cursor_layer: None,
-            version: 0,
-        }
-    }
-
-    /// Clear all selection state, bump version.
-    pub fn clear(&mut self) {
-        self.selected_clip_ids.clear();
-        self.primary_clip_id = None;
-        self.insert_cursor_beat = None;
-        self.insert_cursor_layer = None;
-        self.version += 1;
-    }
-
-    /// Select a single clip (replaces existing selection).
-    pub fn select_single(&mut self, clip_id: String) {
-        self.selected_clip_ids.clear();
-        self.selected_clip_ids.insert(clip_id.clone());
-        self.primary_clip_id = Some(clip_id);
-        self.version += 1;
-    }
-
-    /// Toggle a clip in the selection (Ctrl+Click).
-    pub fn toggle(&mut self, clip_id: String) {
-        if self.selected_clip_ids.contains(&clip_id) {
-            self.selected_clip_ids.remove(&clip_id);
-            if self.primary_clip_id.as_ref() == Some(&clip_id) {
-                self.primary_clip_id = self.selected_clip_ids.iter().next().cloned();
-            }
-        } else {
-            self.selected_clip_ids.insert(clip_id.clone());
-            self.primary_clip_id = Some(clip_id);
-        }
-        self.version += 1;
-    }
-
-    /// Set insert cursor position.
-    pub fn set_insert_cursor(&mut self, beat: f32, layer: usize) {
-        self.insert_cursor_beat = Some(beat);
-        self.insert_cursor_layer = Some(layer);
-        self.version += 1;
-    }
-}
+/// Re-export UIState as the selection state (replaces the old SelectionState).
+/// UIState is the 1:1 port of Unity's UIState.cs with proper Ableton semantics:
+/// - SelectionVersion for dirty-checking
+/// - Layer selection (single/toggle/range)
+/// - Region (SetRegion clears clips; SetRegionFromClipBounds preserves them)
+/// - Insert cursor clears everything (Ableton behavior)
+/// - IsLayerActive unified check across 4 interaction paths
+pub type SelectionState = UIState;
 
 /// Active drag mode for timeline clip interaction.
 #[derive(Debug, Clone, PartialEq)]
@@ -108,11 +60,18 @@ pub struct ClipDragSnapshot {
 }
 
 /// State for an active clip drag operation.
+/// From Unity InteractionOverlay drag fields.
 pub struct ClipDragState {
     pub mode: ClipDragMode,
     pub anchor_clip_id: String,
     pub anchor_beat: f32,
     pub snapshots: Vec<ClipDragSnapshot>,
+    // For move — cross-layer tracking (from Unity InteractionOverlay):
+    pub drag_start_layer_index: usize,
+    pub drag_selection_min_layer: usize,
+    pub drag_selection_max_layer: usize,
+    pub drag_offset_beats: f32,       // mouse beat - clip start beat at drag begin
+    pub drag_layer_blocked: bool,     // true when video↔generator mismatch
     // For trim:
     pub trim_old_start: f32,
     pub trim_old_duration: f32,
@@ -129,6 +88,11 @@ impl ClipDragState {
             anchor_clip_id: String::new(),
             anchor_beat: 0.0,
             snapshots: Vec::new(),
+            drag_start_layer_index: 0,
+            drag_selection_min_layer: 0,
+            drag_selection_max_layer: 0,
+            drag_offset_beats: 0.0,
+            drag_layer_blocked: false,
             trim_old_start: 0.0,
             trim_old_duration: 0.0,
             trim_old_in_point: 0.0,
@@ -183,11 +147,22 @@ pub struct Application {
     modifiers: Modifiers,
     time_since_start: f32,
 
+    // Cursor feedback — tracks current cursor shape for interaction hints.
+    // From Unity Cursors.cs: SetMove, SetBlocked, SetResizeHorizontal, SetDefault.
+    cursor_manager: CursorManager,
+
+    // Video/timeline split handle drag state.
+    // From Unity PanelResizeHandle.cs — drag to resize video vs timeline proportion.
+    split_dragging: bool,
+
     // File I/O
     current_project_path: Option<std::path::PathBuf>,
 
     // Text input
     text_input: crate::text_input::TextInputState,
+
+    // Transport controller — sync management, BPM editing, playback actions
+    transport_controller: manifold_playback::transport_controller::TransportController,
 
     // Panel focus — set when user clicks in inspector area, cleared on timeline click.
     // Matches Unity's InputHandler.inspectorHasFocus for context-sensitive routing
@@ -221,7 +196,7 @@ impl Application {
             primary_window_id: None,
             engine,
             editing_service: EditingService::new(),
-            selection: SelectionState::new(),
+            selection: UIState::new(),
             clip_drag: ClipDragState::new(),
             active_layer_index: None,
             drag_snapshot: None,
@@ -243,8 +218,11 @@ impl Application {
                 command: false,
             },
             time_since_start: 0.0,
+            cursor_manager: CursorManager::new(),
+            split_dragging: false,
             current_project_path: None,
             text_input: crate::text_input::TextInputState::new(),
+            transport_controller: manifold_playback::transport_controller::TransportController::new(),
             inspector_has_focus: false,
             initialized: false,
             needs_rebuild: false,
@@ -266,11 +244,68 @@ impl Application {
 
     /// Navigate the insert cursor using the cursor_nav module.
     /// Handles Left/Right/Up/Down with auto-select and collapsed-layer skipping.
+    /// Determine the correct cursor icon based on current interaction state.
+    /// From Unity: InteractionOverlay sets Move/Blocked during drag,
+    /// PanelResizeHandle sets ResizeHorizontal/ResizeVertical on hover,
+    /// Cursors.SetDefault() on drag end and pointer exit.
+    fn update_cursor_for_position(&mut self) {
+        // Priority 1: Active drag — cursor follows drag mode
+        if self.clip_drag.mode == ClipDragMode::Move {
+            if self.clip_drag.drag_layer_blocked {
+                self.cursor_manager.set(TimelineCursor::Blocked);
+            } else {
+                self.cursor_manager.set(TimelineCursor::Move);
+            }
+            return;
+        }
+        if self.clip_drag.mode == ClipDragMode::TrimLeft || self.clip_drag.mode == ClipDragMode::TrimRight {
+            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
+            return;
+        }
+
+        // Priority 2: Inspector resize edge hover
+        if self.ui_root.inspector_resize_dragging || self.ui_root.is_near_inspector_edge(self.cursor_pos) {
+            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
+            return;
+        }
+
+        // Priority 3: Video/timeline split handle hover
+        // (The split handle is at the top edge of the timeline body)
+        let timeline_body = self.ui_root.layout.timeline_body();
+        let split_handle_y = timeline_body.y;
+        let split_handle_height = 6.0; // UIConstants.InspectorResizeHandleWidth equivalent
+        if self.cursor_pos.y >= split_handle_y - split_handle_height
+            && self.cursor_pos.y <= split_handle_y + split_handle_height
+            && self.cursor_pos.x >= timeline_body.x
+            && self.cursor_pos.x <= timeline_body.x + timeline_body.width
+        {
+            self.cursor_manager.set(TimelineCursor::ResizeVertical);
+            return;
+        }
+
+        // Priority 4: Clip trim handle hover
+        let tracks_rect = self.ui_root.viewport.tracks_rect();
+        if tracks_rect.contains(self.cursor_pos) {
+            if let Some(hit) = self.ui_root.viewport.hit_test_clip(self.cursor_pos) {
+                match hit.region {
+                    manifold_ui::panels::HitRegion::TrimLeft | manifold_ui::panels::HitRegion::TrimRight => {
+                        self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Default: standard arrow
+        self.cursor_manager.set_default();
+    }
+
     fn navigate_cursor(&mut self, direction: manifold_ui::cursor_nav::Direction) {
         use manifold_ui::cursor_nav::{navigate_cursor, NavResult, NavLayerInfo, NavClipInfo};
 
         let current_beat = self.selection.insert_cursor_beat.unwrap_or(self.engine.current_beat());
-        let current_layer = self.selection.insert_cursor_layer
+        let current_layer = self.selection.insert_cursor_layer_index
             .or(self.active_layer_index)
             .unwrap_or(0);
         let grid_interval = self.ui_root.viewport.grid_step();
@@ -302,15 +337,17 @@ impl Application {
             self.modifiers.shift, &layers, &clips,
         ) {
             NavResult::SelectClip(clip_id) => {
-                self.selection.clear();
-                self.selection.selected_clip_ids.insert(clip_id.clone());
-                self.selection.primary_clip_id = Some(clip_id);
+                // Find the clip's layer for proper UIState selection
+                let li = self.engine.project()
+                    .and_then(|p| p.timeline.layers.iter().enumerate()
+                        .find_map(|(i, l)| l.clips.iter().any(|c| c.id == clip_id).then_some(i)))
+                    .unwrap_or(0);
+                self.selection.select_clip(clip_id, li);
+                self.active_layer_index = Some(li);
                 self.needs_rebuild = true;
             }
             NavResult::SetCursor { beat, layer } => {
-                self.selection.clear();
-                self.selection.insert_cursor_beat = Some(beat);
-                self.selection.insert_cursor_layer = Some(layer);
+                self.selection.set_insert_cursor(beat, layer);
                 self.active_layer_index = Some(layer);
                 self.needs_rebuild = true;
             }
@@ -323,13 +360,17 @@ impl Application {
         use crate::text_input::TextInputField;
         match field {
             TextInputField::Bpm => {
-                if let Ok(bpm) = text.parse::<f32>() {
-                    let bpm = bpm.clamp(20.0, 300.0);
+                if let Ok(new_bpm) = text.parse::<f32>() {
+                    let new_bpm = new_bpm.clamp(20.0, 300.0);
                     if let Some(project) = self.engine.project_mut() {
-                        let cmd = manifold_editing::commands::settings::ChangeBpmCommand::new(
-                            project.settings.bpm, bpm,
-                        );
-                        self.editing_service.execute(Box::new(cmd), project);
+                        let old_bpm = project.settings.bpm;
+                        // Unity: skip if approximately equal
+                        if (old_bpm - new_bpm).abs() >= 0.01 {
+                            let cmd = manifold_editing::commands::settings::ChangeBpmCommand::new(
+                                old_bpm, new_bpm,
+                            );
+                            self.editing_service.execute(Box::new(cmd), project);
+                        }
                     }
                     self.needs_rebuild = true;
                 }
@@ -409,7 +450,7 @@ impl Application {
                 Ok(project) => {
                     self.engine.initialize(project);
                     self.editing_service.set_project();
-                    self.selection.clear();
+                    self.selection.clear_selection();
                     self.active_layer_index = Some(0);
                     self.current_project_path = Some(path.clone());
                     self.needs_rebuild = true;
@@ -500,7 +541,7 @@ impl Application {
         let mut needs_structural_sync = self.needs_structural_sync;
         self.needs_structural_sync = false;
         let prev_active_layer = self.active_layer_index;
-        let prev_sel_version = self.selection.version;
+        let prev_sel_version = self.selection.selection_version;
         for action in &actions {
             // Intercept actions that need Application-level access
             match action {
@@ -527,10 +568,34 @@ impl Application {
                     let project = Self::create_default_project();
                     self.engine.initialize(project);
                     self.editing_service.set_project();
-                    self.selection.clear();
+                    self.selection.clear_selection();
                     self.active_layer_index = Some(0);
                     self.current_project_path = None;
                     needs_structural_sync = true;
+                    continue;
+                }
+                // Transport controller actions — intercept here for Application-level access
+                PanelAction::CycleClockAuthority => {
+                    self.transport_controller.cycle_authority(&mut self.engine);
+                    continue;
+                }
+                PanelAction::ToggleLink => {
+                    self.transport_controller.toggle_link(&mut self.engine);
+                    continue;
+                }
+                PanelAction::ToggleMidiClock => {
+                    self.transport_controller.toggle_midi_clock(&mut self.engine);
+                    continue;
+                }
+                PanelAction::ToggleSyncOutput => {
+                    self.transport_controller.toggle_sync_output(&mut self.engine);
+                    continue;
+                }
+                PanelAction::ResetBpm => {
+                    manifold_playback::transport_controller::TransportController::reset_bpm(
+                        &mut self.engine, &mut self.editing_service,
+                    );
+                    self.needs_rebuild = true;
                     continue;
                 }
                 _ => {}
@@ -550,7 +615,7 @@ impl Application {
             }
         }
         // Selection version change → sync inspector so it shows the newly selected clip
-        if self.selection.version != prev_sel_version && !needs_structural_sync {
+        if self.selection.selection_version != prev_sel_version && !needs_structural_sync {
             crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
             needs_structural_sync = true;
         }
@@ -562,7 +627,39 @@ impl Application {
             crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
             needs_structural_sync = true; // Inspector content changed — needs rebuild
         }
-        // 2. Auto-scroll check (BEFORE build so rebuild includes new scroll)
+        // 2a. Per-frame drag polling with auto-scroll.
+        // From Unity InteractionOverlay.PollMoveDrag (lines 116-124):
+        // When mouse is stationary at viewport edge during Move drag,
+        // OnDrag stops firing but auto-scroll must continue.
+        if self.clip_drag.mode == ClipDragMode::Move && !self.clip_drag.snapshots.is_empty() {
+            let tracks_rect = self.ui_root.viewport.tracks_rect();
+            if tracks_rect.width > 0.0 {
+                // From Unity WorkspaceController.cs lines 58-60:
+                // DragEdgeScrollZonePx = 72, DragEdgeScrollSpeedPxPerSec = 900
+                let edge_zone_px = 72.0;
+                let scroll_speed_px_per_sec = 900.0;
+                let ppb = self.ui_root.viewport.pixels_per_beat();
+                let dt = self.frame_timer.last_dt() as f32;
+                let scroll_speed_beats = (scroll_speed_px_per_sec * dt) / ppb;
+
+                let local_x = self.cursor_pos.x - tracks_rect.x;
+                if local_x > tracks_rect.width - edge_zone_px {
+                    // Near right edge — scroll right, speed proportional to proximity
+                    let factor = 1.0 - (tracks_rect.width - local_x) / edge_zone_px;
+                    let new_scroll = self.ui_root.viewport.scroll_x_beats() + scroll_speed_beats * factor;
+                    self.ui_root.viewport.set_scroll(new_scroll, self.ui_root.viewport.scroll_y_px());
+                    needs_structural_sync = true;
+                } else if local_x < edge_zone_px && local_x >= 0.0 {
+                    // Near left edge — scroll left
+                    let factor = 1.0 - local_x / edge_zone_px;
+                    let new_scroll = (self.ui_root.viewport.scroll_x_beats() - scroll_speed_beats * factor).max(0.0);
+                    self.ui_root.viewport.set_scroll(new_scroll, self.ui_root.viewport.scroll_y_px());
+                    needs_structural_sync = true;
+                }
+            }
+        }
+
+        // 2b. Auto-scroll check for playback (BEFORE build so rebuild includes new scroll)
         let scroll_changed = crate::ui_bridge::check_auto_scroll(&mut self.ui_root, &self.engine);
 
         // 3. Rebuild if needed
@@ -572,9 +669,36 @@ impl Application {
         }
 
         // 4. Push engine state to UI panels (AFTER build so new nodes get state)
-        crate::ui_bridge::push_state(&mut self.ui_root, &self.engine, self.active_layer_index, &self.selection);
+        crate::ui_bridge::push_state(
+            &mut self.ui_root,
+            &self.engine,
+            self.active_layer_index,
+            &self.selection,
+            self.editing_service.is_dirty(),
+            self.current_project_path.as_deref(),
+        );
 
-        // 5. Lightweight update (playhead, insert cursor, layer selection)
+        // 5. Push performance metrics to HUD
+        if self.ui_root.perf_hud.is_visible() {
+            let bpm = self.engine.project().map(|p| p.settings.bpm).unwrap_or(120.0);
+            let clock_source = self.engine.project()
+                .map(|p| p.settings.clock_authority.display_name().to_string())
+                .unwrap_or_else(|| "Internal".to_string());
+            self.ui_root.perf_hud.set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
+                fps: self.frame_timer.current_fps() as f32,
+                frame_time_ms: (self.frame_timer.last_dt() * 1000.0) as f32,
+                active_clips: 0, // TODO: wire from tick_result
+                preparing_clips: 0,
+                current_beat: self.engine.current_beat(),
+                current_time_secs: self.engine.current_time(),
+                bpm,
+                clock_source,
+                is_playing: self.engine.is_playing(),
+                data_version: self.editing_service.data_version(),
+            });
+        }
+
+        // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)
         self.ui_root.update();
 
         // tick_result was computed at the top of tick_and_render (engine ticked first)
@@ -1140,15 +1264,42 @@ impl ApplicationHandler for Application {
                         position.y as f32 / scale as f32,
                     );
 
-                    // Inspector resize drag takes priority
-                    if self.ui_root.inspector_resize_dragging {
+                    // Split handle drag takes highest priority
+                    // From Unity PanelResizeHandle.OnDrag
+                    if self.split_dragging {
+                        self.ui_root.layout.update_split_from_drag(self.cursor_pos.y);
+                        self.cursor_manager.set(TimelineCursor::ResizeVertical);
+                        self.needs_rebuild = true;
+                    }
+                    // Inspector resize drag takes next priority
+                    else if self.ui_root.inspector_resize_dragging {
                         self.ui_root.update_inspector_resize(self.cursor_pos.x);
+                        self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
                     } else {
                         self.ui_root.pointer_event(
                             self.cursor_pos,
                             PointerAction::Move,
                             self.time_since_start,
                         );
+
+                        // Update cursor based on current interaction state.
+                        // From Unity: Cursors.SetMove/SetBlocked/SetResizeHorizontal/SetDefault
+                        self.update_cursor_for_position();
+                    }
+
+                    // Apply cursor to window if changed
+                    if self.cursor_manager.needs_update() {
+                        if let Some(ws) = self.window_registry.get(&window_id) {
+                            let icon = match self.cursor_manager.pending_cursor_icon() {
+                                TimelineCursor::Default => winit::window::CursorIcon::Default,
+                                TimelineCursor::ResizeHorizontal => winit::window::CursorIcon::ColResize,
+                                TimelineCursor::ResizeVertical => winit::window::CursorIcon::RowResize,
+                                TimelineCursor::Move => winit::window::CursorIcon::Move,
+                                TimelineCursor::Blocked => winit::window::CursorIcon::NotAllowed,
+                            };
+                            ws.window.set_cursor(icon);
+                            self.cursor_manager.mark_applied();
+                        }
                     }
                 }
             }
@@ -1180,6 +1331,10 @@ impl ApplicationHandler for Application {
                                     {
                                         self.ui_root.dropdown.close(&mut self.ui_root.tree);
                                         // Click is consumed by dismiss — do not forward.
+                                    } else if self.ui_root.layout.is_near_split_handle(self.cursor_pos) {
+                                        // Begin video/timeline split drag.
+                                        // From Unity PanelResizeHandle.OnPointerDown.
+                                        self.split_dragging = true;
                                     } else if self.ui_root.is_near_inspector_edge(self.cursor_pos) {
                                         self.ui_root.begin_inspector_resize(self.cursor_pos.x);
                                     } else {
@@ -1192,7 +1347,12 @@ impl ApplicationHandler for Application {
                                 }
                                 ElementState::Released => {
                                     self.mouse_pressed = false;
-                                    if self.ui_root.inspector_resize_dragging {
+                                    if self.split_dragging {
+                                        // End video/timeline split drag.
+                                        // From Unity PanelResizeHandle.OnPointerUp.
+                                        self.split_dragging = false;
+                                        self.cursor_manager.set_default();
+                                    } else if self.ui_root.inspector_resize_dragging {
                                         self.ui_root.end_inspector_resize();
                                     } else {
                                         self.ui_root.pointer_event(
@@ -1378,9 +1538,11 @@ impl ApplicationHandler for Application {
                     let m = self.modifiers;
                     match &logical_key {
 
-                        // ── Backtick — toggle performance HUD (before Escape chain) ──
+                        // ── Backtick — toggle performance HUD ──
+                        // From Unity InputHandler — toggles PerformanceHUDPanel visibility.
                         Key::Character(ref c) if c.as_str() == "`" && m.is_none() => {
-                            log::info!("Toggle performance HUD");
+                            self.ui_root.perf_hud.toggle();
+                            self.needs_rebuild = true;
                             consumed = true;
                         }
 
@@ -1401,7 +1563,7 @@ impl ApplicationHandler for Application {
                             }
                             // Level 4: clear all selection + insert cursor
                             else {
-                                self.selection.clear();
+                                self.selection.clear_selection();
                             }
                             consumed = true;
                         }
@@ -1443,7 +1605,7 @@ impl ApplicationHandler for Application {
                             let project = Self::create_default_project();
                             self.engine.initialize(project);
                             self.editing_service.set_project();
-                            self.selection.clear();
+                            self.selection.clear_selection();
                             self.active_layer_index = Some(0);
                             self.needs_rebuild = true;
                             log::info!("New project created");
@@ -1453,14 +1615,15 @@ impl ApplicationHandler for Application {
                         // ── Select all: Cmd+A ──
                         Key::Character(ref c) if c.as_str() == "a" && m.is_command_only() => {
                             if let Some(project) = self.engine.project() {
-                                self.selection.selected_clip_ids.clear();
+                                // Clear everything first, then add all clips
+                                self.selection.clear_selection();
                                 for layer in &project.timeline.layers {
                                     for clip in &layer.clips {
                                         self.selection.selected_clip_ids.insert(clip.id.clone());
                                     }
                                 }
-                                self.selection.primary_clip_id = self.selection.selected_clip_ids.iter().next().cloned();
-                                self.selection.version += 1;
+                                self.selection.primary_selected_clip_id = self.selection.selected_clip_ids.iter().next().cloned();
+                                self.selection.selection_version += 1;
                             }
                             self.needs_structural_sync = true;
                             consumed = true;
@@ -1491,10 +1654,19 @@ impl ApplicationHandler for Application {
                                 if !ids.is_empty() {
                                     if let Some(project) = self.engine.project_mut() {
                                         self.editing_service.copy_clips(project, &ids);
-                                        let commands = EditingService::delete_clips(project, &ids, None, 0.0);
+                                        // Region-aware cut (Fix #6)
+                                        let spb = 60.0 / project.settings.bpm;
+                                        let region = if self.selection.has_region() {
+                                            Some(self.selection.get_region().clone())
+                                        } else {
+                                            None
+                                        };
+                                        let commands = EditingService::delete_clips(
+                                            project, &ids, region.as_ref(), spb,
+                                        );
                                         self.editing_service.execute_batch(commands, "Cut clips".into(), project);
                                     }
-                                    self.selection.clear();
+                                    self.selection.clear_selection();
                                 }
                             }
                             consumed = true;
@@ -1507,7 +1679,7 @@ impl ApplicationHandler for Application {
                             } else {
                                 let target_beat = self.selection.insert_cursor_beat
                                     .unwrap_or(self.engine.current_beat());
-                                let target_layer = self.selection.insert_cursor_layer
+                                let target_layer = self.selection.insert_cursor_layer_index
                                     .or(self.active_layer_index)
                                     .unwrap_or(0) as i32;
                                 if let Some(project) = self.engine.project_mut() {
@@ -1515,12 +1687,17 @@ impl ApplicationHandler for Application {
                                     let result = self.editing_service.paste_clips(project, target_beat, target_layer, spb);
                                     if !result.commands.is_empty() {
                                         self.editing_service.execute_batch(result.commands, "Paste clips".into(), project);
-                                        self.selection.selected_clip_ids.clear();
+                                        // Select all pasted clips and create region (Fix #5)
+                                        // From Unity EditingService.PasteClips (line 660-667)
+                                        self.selection.clear_selection();
                                         for id in result.pasted_clip_ids {
                                             self.selection.selected_clip_ids.insert(id);
                                         }
-                                        self.selection.primary_clip_id = self.selection.selected_clip_ids.iter().next().cloned();
-                                        self.selection.version += 1;
+                                        self.selection.primary_selected_clip_id = self.selection.selected_clip_ids.iter().next().cloned();
+                                        self.selection.selection_version += 1;
+                                        // Update region to encompass pasted clips
+                                        crate::ui_bridge::update_region_from_clip_selection_inline(
+                                            &mut self.selection, project);
                                     }
                                 }
                             }
@@ -1528,6 +1705,8 @@ impl ApplicationHandler for Application {
                         }
 
                         // ── Duplicate: Cmd+D ──
+                        // From Unity EditingService.DuplicateSelectedClips (line 767-778):
+                        // After duplicate, select the new clips and update region.
                         Key::Character(ref c) if c.as_str() == "d" && m.is_command_only() => {
                             let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
                             if !ids.is_empty() {
@@ -1548,12 +1727,37 @@ impl ApplicationHandler for Application {
                                         region.start_beat = min_beat;
                                         region.end_beat = max_beat;
                                     }
+                                    // Count clips before to identify new ones after
+                                    let before_ids: std::collections::HashSet<String> = project.timeline.layers.iter()
+                                        .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
+                                        .collect();
+
                                     let commands = EditingService::duplicate_clips(project, &ids, &region);
                                     if !commands.is_empty() {
                                         self.editing_service.execute_batch(commands, "Duplicate clips".into(), project);
+
+                                        // Find newly created clips (IDs that didn't exist before)
+                                        let new_ids: Vec<String> = project.timeline.layers.iter()
+                                            .flat_map(|l| l.clips.iter()
+                                                .filter(|c| !before_ids.contains(&c.id))
+                                                .map(|c| c.id.clone()))
+                                            .collect();
+
+                                        // Select the duplicates (Fix #4)
+                                        self.selection.clear_selection();
+                                        for id in &new_ids {
+                                            self.selection.selected_clip_ids.insert(id.clone());
+                                        }
+                                        self.selection.primary_selected_clip_id = new_ids.first().cloned();
+                                        self.selection.selection_version += 1;
+
+                                        // Update region to encompass duplicates
+                                        crate::ui_bridge::update_region_from_clip_selection_inline(
+                                            &mut self.selection, project);
                                     }
                                 }
                             }
+                            self.needs_structural_sync = true;
                             consumed = true;
                         }
 
@@ -1605,14 +1809,25 @@ impl ApplicationHandler for Application {
                                     }
                                 }
                             }
-                            // Priority 3: delete selected clips
+                            // Priority 3: delete selected clips (region-aware)
+                            // From Unity EditingService.DeleteSelectedClips: if region active,
+                            // split at boundaries and delete interior only.
                             else {
                                 let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
                                 if let Some(project) = self.engine.project_mut() {
-                                    let commands = EditingService::delete_clips(project, &ids, None, 0.0);
+                                    let spb = 60.0 / project.settings.bpm;
+                                    // Pass the region if active (Fix #6)
+                                    let region = if self.selection.has_region() {
+                                        Some(self.selection.get_region().clone())
+                                    } else {
+                                        None
+                                    };
+                                    let commands = EditingService::delete_clips(
+                                        project, &ids, region.as_ref(), spb,
+                                    );
                                     self.editing_service.execute_batch(commands, "Delete clips".into(), project);
                                 }
-                                self.selection.clear();
+                                self.selection.clear_selection();
                             }
                             consumed = true;
                         }
@@ -1623,11 +1838,10 @@ impl ApplicationHandler for Application {
                                 self.engine.pause();
                             } else {
                                 // Unity: if paused and insert cursor exists, seek to cursor beat first
+                                // Use beat_to_timeline_time (goes through tempo map) not simple BPM division
                                 if let Some(cursor_beat) = self.selection.insert_cursor_beat {
-                                    if let Some(project) = self.engine.project() {
-                                        let spb = 60.0 / project.settings.bpm;
-                                        self.engine.seek_to(cursor_beat * spb);
-                                    }
+                                    let time = self.engine.beat_to_timeline_time(cursor_beat);
+                                    self.engine.seek_to(time);
                                 }
                                 self.engine.play();
                             }
@@ -1902,6 +2116,56 @@ impl ApplicationHandler for Application {
 
             WindowEvent::Focused(true) => {
                 // No action needed on focus gain.
+            }
+
+            // File drag-drop support.
+            // From Unity FileDragDrop.cs — polls for OS-level file drops.
+            // In winit, this is event-driven instead of polled.
+            WindowEvent::DroppedFile(path) => {
+                let path_str = path.to_string_lossy().to_string();
+                let ext = path.extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+
+                match ext.as_str() {
+                    // Video files → import as video clip on active layer
+                    "mp4" | "mov" | "avi" | "mkv" | "webm" => {
+                        log::info!("Video file dropped: {}", path_str);
+                        // Future: create video clip on active layer at cursor position
+                    }
+                    // Project files → load project
+                    "json" | "manifold" => {
+                        log::info!("Project file dropped: {}", path_str);
+                        let load_path = path.clone();
+                        match manifold_io::loader::load_project(&load_path) {
+                            Ok(project) => {
+                                self.engine.initialize(project);
+                                self.editing_service.set_project();
+                                self.selection.clear_selection();
+                                self.active_layer_index = Some(0);
+                                self.current_project_path = Some(load_path);
+                                self.needs_structural_sync = true;
+                                self.needs_rebuild = true;
+                                log::info!("Loaded project from drop");
+                            }
+                            Err(e) => log::error!("Failed to load dropped project: {e}"),
+                        }
+                    }
+                    // Audio files → import as audio lane
+                    "wav" | "mp3" | "flac" | "aiff" | "ogg" => {
+                        log::info!("Audio file dropped: {} (audio import not yet implemented)", path_str);
+                    }
+                    _ => {
+                        log::debug!("Unrecognized file type dropped: {}", path_str);
+                    }
+                }
+            }
+            WindowEvent::HoveredFile(path) => {
+                log::debug!("File hovering: {}", path.to_string_lossy());
+                // Future: show drop preview (highlight target layer/position)
+            }
+            WindowEvent::HoveredFileCancelled => {
+                log::debug!("File hover cancelled");
             }
 
             _ => {}
