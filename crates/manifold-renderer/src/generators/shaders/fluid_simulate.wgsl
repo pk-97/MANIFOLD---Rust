@@ -26,9 +26,8 @@ struct Particle {
 
 @group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
 @group(0) @binding(1) var t_field: texture_2d<f32>;
-@group(0) @binding(2) var s_field: sampler;
-@group(0) @binding(3) var t_density: texture_2d<f32>;
-@group(0) @binding(4) var<uniform> params: SimUniforms;
+@group(0) @binding(2) var t_density: texture_2d<f32>;
+@group(0) @binding(3) var<uniform> params: SimUniforms;
 
 const PI: f32 = 3.14159265;
 
@@ -89,10 +88,14 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         fract(p.position.x + 1.0),
         fract(p.position.y + 1.0),
     );
-    let field_force = textureSampleLevel(t_field, s_field, field_uv, 0.0).rg;
+    let field_dims = textureDimensions(t_field);
+    let field_coord = vec2<u32>(field_uv * vec2<f32>(field_dims));
+    let field_force = textureLoad(t_field, field_coord, 0).rg;
 
     // Sample density at particle position for density-adaptive effects
-    let density_val = textureSampleLevel(t_density, s_field, field_uv, 0.0).r;
+    let density_dims = textureDimensions(t_density);
+    let density_coord = vec2<u32>(field_uv * vec2<f32>(density_dims));
+    let density_val = textureLoad(t_density, density_coord, 0).r;
     let capped_density = min(density_val, 5.0);
 
     // Turbulence: simplex noise, density-adaptive amplitude

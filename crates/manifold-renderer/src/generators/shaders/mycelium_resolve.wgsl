@@ -10,7 +10,7 @@ struct ResolveUniforms {
 };
 
 @group(0) @binding(0) var trail_read: texture_2d<f32>;
-@group(0) @binding(1) var trail_write: texture_storage_2d<r32float, write>;
+@group(0) @binding(1) var trail_write: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(2) var<storage, read_write> accum: array<atomic<u32>>;
 @group(0) @binding(3) var<uniform> params: ResolveUniforms;
 

@@ -1,6 +1,5 @@
 // Display pass: extended Reinhard tone mapping of density field
 // with 6 color palette modes and alpha from luminance.
-// Uses textureLoad (not textureSample) because R32Float is not filterable on Metal.
 
 struct DisplayUniforms {
     intensity: f32,
@@ -15,6 +14,7 @@ struct DisplayUniforms {
 
 @group(0) @binding(0) var<uniform> params: DisplayUniforms;
 @group(0) @binding(1) var t_density: texture_2d<f32>;
+@group(0) @binding(2) var s_density: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -53,7 +53,7 @@ fn apply_palette(lum: f32, mode: f32) -> vec3<f32> {
         // Blush
         return mix(vec3<f32>(0.1, 0.05, 0.08), vec3<f32>(1.0, 0.85, 0.9), lum);
     } else if mode_int == 2 {
-        // Sunset: dark→mid→bright with orange mid push
+        // Sunset: dark->mid->bright with orange mid push
         let base = mix(vec3<f32>(0.1, 0.02, 0.05), vec3<f32>(1.0, 0.6, 0.2), lum);
         let mid_push = vec3<f32>(1.0, 0.3, 0.1);
         let mid_weight = smoothstep(0.0, 0.5, lum) * smoothstep(1.0, 0.5, lum) * 2.0;
@@ -78,13 +78,7 @@ fn apply_palette(lum: f32, mode: f32) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let dims = textureDimensions(t_density);
-    let coord = clamp(
-        vec2<i32>(vec2<f32>(dims) * in.uv),
-        vec2<i32>(0, 0),
-        vec2<i32>(i32(dims.x) - 1, i32(dims.y) - 1),
-    );
-    let density = textureLoad(t_density, coord, 0).r;
+    let density = textureSample(t_density, s_density, in.uv).r;
 
     // Extended Reinhard tone mapping (WHITE_POINT = 3.0)
     let x = density * params.intensity * params.contrast;

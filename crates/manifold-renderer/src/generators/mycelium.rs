@@ -24,7 +24,7 @@ const AGENTS: usize = 9;
 const SCALE: usize = 10;
 const SEEDS: usize = 11;
 
-const TRAIL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+const TRAIL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const MAX_AGENTS: u32 = 500_000;
 const MIN_AGENTS: u32 = 10_000;
 
@@ -140,12 +140,12 @@ impl MyceliumGenerator {
                     },
                     count: None,
                 },
-                // binding 1: trail texture (read)
+                // binding 1: trail texture (read, filterable)
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -202,12 +202,12 @@ impl MyceliumGenerator {
         let resolve_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Mycelium Resolve BGL"),
             entries: &[
-                // binding 0: trail_read (texture)
+                // binding 0: trail_read (texture, filterable)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
@@ -502,7 +502,7 @@ impl MyceliumGenerator {
         let zeros = vec![0u8; accum_size as usize];
         queue.write_buffer(&accum_buffer, 0, &zeros);
 
-        // Trail textures (R32Float, half-res)
+        // Trail textures (Rgba16Float, half-res)
         let trail_a = RenderTarget::new(device, tw, th, TRAIL_FORMAT, "Mycelium Trail A");
         let trail_b = RenderTarget::new(device, tw, th, TRAIL_FORMAT, "Mycelium Trail B");
 

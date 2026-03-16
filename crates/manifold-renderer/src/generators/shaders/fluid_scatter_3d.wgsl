@@ -60,7 +60,7 @@ struct Resolve3DUniforms {
 };
 
 @group(0) @binding(0) var<storage, read_write> resolve_accum: array<atomic<u32>>;
-@group(0) @binding(1) var density_volume: texture_storage_3d<r32float, write>;
+@group(0) @binding(1) var density_volume: texture_storage_3d<rgba16float, write>;
 @group(0) @binding(2) var<uniform> resolve_params: Resolve3DUniforms;
 
 @compute @workgroup_size(4, 4, 4)
@@ -172,7 +172,7 @@ struct ResolveDisplayUniforms {
 };
 
 @group(0) @binding(0) var<storage, read_write> resolve_disp_accum: array<atomic<u32>>;
-@group(0) @binding(1) var display_density_out: texture_storage_2d<r32float, write>;
+@group(0) @binding(1) var display_density_out: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(2) var<uniform> resolve_disp_params: ResolveDisplayUniforms;
 
 @compute @workgroup_size(16, 16, 1)

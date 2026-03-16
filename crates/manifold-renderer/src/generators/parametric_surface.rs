@@ -68,7 +68,7 @@ impl ParametricSurfaceGenerator {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D3,
-            format: wgpu::TextureFormat::R32Float,
+            format: wgpu::TextureFormat::Rgba16Float,
             usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -100,7 +100,7 @@ impl ParametricSurfaceGenerator {
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R32Float,
+                        format: wgpu::TextureFormat::Rgba16Float,
                         view_dimension: wgpu::TextureViewDimension::D3,
                     },
                     count: None,

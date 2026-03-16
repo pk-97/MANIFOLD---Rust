@@ -1,6 +1,5 @@
 // Gradient + rotation pass: compute central-difference gradient of blurred
 // density field, scale by flow, rotate by curl angle to produce 2D force field.
-// Uses textureLoad (not textureSample) because R32Float is not filterable on Metal.
 
 struct GradientUniforms {
     texel_x: f32,
@@ -11,6 +10,7 @@ struct GradientUniforms {
 
 @group(0) @binding(0) var<uniform> params: GradientUniforms;
 @group(0) @binding(1) var t_density: texture_2d<f32>;
+@group(0) @binding(2) var s_density: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -27,26 +27,16 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     return out;
 }
 
-fn load_density(uv: vec2<f32>, dims: vec2<u32>) -> f32 {
-    let coord = clamp(
-        vec2<i32>(vec2<f32>(dims) * uv),
-        vec2<i32>(0, 0),
-        vec2<i32>(i32(dims.x) - 1, i32(dims.y) - 1),
-    );
-    return textureLoad(t_density, coord, 0).r;
-}
-
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = in.uv;
-    let dims = textureDimensions(t_density);
     let texel = vec2<f32>(params.texel_x, params.texel_y);
 
     // Central differences on blurred density
-    let dR = load_density(uv + vec2<f32>(texel.x, 0.0), dims);
-    let dL = load_density(uv - vec2<f32>(texel.x, 0.0), dims);
-    let dU = load_density(uv + vec2<f32>(0.0, texel.y), dims);
-    let dD = load_density(uv - vec2<f32>(0.0, texel.y), dims);
+    let dR = textureSample(t_density, s_density, uv + vec2<f32>(texel.x, 0.0)).r;
+    let dL = textureSample(t_density, s_density, uv - vec2<f32>(texel.x, 0.0)).r;
+    let dU = textureSample(t_density, s_density, uv + vec2<f32>(0.0, texel.y)).r;
+    let dD = textureSample(t_density, s_density, uv - vec2<f32>(0.0, texel.y)).r;
 
     let grad = vec2<f32>(dR - dL, dU - dD) / (2.0 * texel);
     let scaled = grad * params.slope_strength;

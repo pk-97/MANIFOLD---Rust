@@ -40,8 +40,8 @@ const CAM_DIST: usize = 23;
 const CAM_TILT: usize = 24;
 const FLATTEN: usize = 25;
 
-const DENSITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
-const DENSITY_3D_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+const DENSITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const DENSITY_3D_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const VECTOR_3D_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const PARTICLE_SIZE_BYTES: u64 = std::mem::size_of::<Particle>() as u64;
 
@@ -393,8 +393,8 @@ impl FluidSimulation3DGenerator {
             entries: &[
                 bgl_storage_rw(0, wgpu::ShaderStages::COMPUTE),
                 bgl_texture_3d_filterable(1, wgpu::ShaderStages::COMPUTE), // vector field (Rgba16Float, filterable)
-                bgl_sampler(2, wgpu::ShaderStages::COMPUTE),              // filtering sampler (for vector field)
-                bgl_texture_3d(3, wgpu::ShaderStages::COMPUTE),           // density (R32Float, uses textureLoad)
+                bgl_sampler(2, wgpu::ShaderStages::COMPUTE),              // filtering sampler
+                bgl_texture_3d_filterable(3, wgpu::ShaderStages::COMPUTE), // density (Rgba16Float, filterable)
                 bgl_uniform(4, wgpu::ShaderStages::COMPUTE),
             ],
         });
@@ -429,7 +429,8 @@ impl FluidSimulation3DGenerator {
             label: Some("FluidSim3D Display BGL"),
             entries: &[
                 bgl_uniform(0, wgpu::ShaderStages::FRAGMENT),
-                bgl_texture_unfilterable(1, wgpu::ShaderStages::FRAGMENT),
+                bgl_texture_filterable(1, wgpu::ShaderStages::FRAGMENT),
+                bgl_sampler(2, wgpu::ShaderStages::FRAGMENT),
             ],
         });
 
@@ -459,7 +460,8 @@ impl FluidSimulation3DGenerator {
             label: Some("FluidSim3D Blur2D BGL"),
             entries: &[
                 bgl_uniform(0, wgpu::ShaderStages::FRAGMENT),
-                bgl_texture_unfilterable(1, wgpu::ShaderStages::FRAGMENT),
+                bgl_texture_filterable(1, wgpu::ShaderStages::FRAGMENT),
+                bgl_sampler(2, wgpu::ShaderStages::FRAGMENT),
             ],
         });
 
@@ -798,6 +800,10 @@ impl FluidSimulation3DGenerator {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(source),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler_3d),
                 },
             ],
         });
@@ -1319,6 +1325,10 @@ impl Generator for FluidSimulation3DGenerator {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&display_density_rt.view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler_3d),
+                },
             ],
         });
 
@@ -1399,19 +1409,6 @@ fn bgl_texture_3d(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGro
         binding,
         visibility,
         ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-            view_dimension: wgpu::TextureViewDimension::D3,
-            multisampled: false,
-        },
-        count: None,
-    }
-}
-
-fn bgl_texture_3d_filterable(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: wgpu::BindingType::Texture {
             sample_type: wgpu::TextureSampleType::Float { filterable: true },
             view_dimension: wgpu::TextureViewDimension::D3,
             multisampled: false,
@@ -1420,13 +1417,16 @@ fn bgl_texture_3d_filterable(binding: u32, visibility: wgpu::ShaderStages) -> wg
     }
 }
 
-// R32Float is not filterable on Metal — use this for density textures
-fn bgl_texture_unfilterable(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+fn bgl_texture_3d_filterable(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    bgl_texture_3d(binding, visibility)
+}
+
+fn bgl_texture_filterable(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility,
         ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
         },

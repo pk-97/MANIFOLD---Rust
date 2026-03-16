@@ -54,7 +54,7 @@ struct ResolveUniforms {
 };
 
 @group(0) @binding(0) var<storage, read_write> resolve_accum: array<atomic<u32>>;
-@group(0) @binding(1) var density_out: texture_storage_2d<r32float, write>;
+@group(0) @binding(1) var density_out: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(2) var<uniform> resolve_params: ResolveUniforms;
 
 @compute @workgroup_size(16, 16, 1)

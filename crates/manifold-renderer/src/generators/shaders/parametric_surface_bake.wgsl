@@ -10,7 +10,7 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var volume_out: texture_storage_3d<r32float, write>;
+@group(0) @binding(1) var volume_out: texture_storage_3d<rgba16float, write>;
 
 const VOL_SIZE: f32 = 128.0;
 const HALF_EXTENT: f32 = 4.0;

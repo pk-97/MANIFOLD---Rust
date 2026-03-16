@@ -1,8 +1,6 @@
-// Separable Gaussian blur with discrete texel taps.
+// Separable Gaussian blur with bilinear-filtered taps.
 // Called twice per blur operation (H then V), used for both
 // density blur and vector field blur.
-// Uses textureLoad (not textureSample) because R32Float/Rg32Float
-// are not filterable on Metal.
 
 struct BlurUniforms {
     direction: vec2<f32>,
@@ -16,6 +14,7 @@ struct BlurUniforms {
 
 @group(0) @binding(0) var<uniform> params: BlurUniforms;
 @group(0) @binding(1) var t_source: texture_2d<f32>;
+@group(0) @binding(2) var s_source: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -32,36 +31,26 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     return out;
 }
 
-fn load_clamped(uv: vec2<f32>, dims: vec2<u32>) -> vec4<f32> {
-    let coord = clamp(
-        vec2<i32>(vec2<f32>(dims) * uv),
-        vec2<i32>(0, 0),
-        vec2<i32>(i32(dims.x) - 1, i32(dims.y) - 1),
-    );
-    return textureLoad(t_source, coord, 0);
-}
-
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = in.uv;
-    let dims = textureDimensions(t_source);
     let texel_size = vec2<f32>(params.texel_x, params.texel_y);
     let sigma = max(params.radius / 3.0, 1.0);
     let two_sigma_sq = 2.0 * sigma * sigma;
 
     // Center tap
     var center_weight = 1.0;
-    var result = load_clamped(uv, dims) * center_weight;
+    var result = textureSample(t_source, s_source, uv) * center_weight;
     var total_weight = center_weight;
 
-    // Gaussian taps at integer offsets
+    // Gaussian taps at integer offsets (bilinear filtering gives sub-pixel quality)
     let radius_int = i32(params.radius);
     for (var j: i32 = 1; j <= radius_int; j = j + 1) {
         let fj = f32(j);
         let w = exp(-(fj * fj) / two_sigma_sq);
         let sample_offset = params.direction * fj * texel_size;
-        result += load_clamped(uv + sample_offset, dims) * w;
-        result += load_clamped(uv - sample_offset, dims) * w;
+        result += textureSample(t_source, s_source, uv + sample_offset) * w;
+        result += textureSample(t_source, s_source, uv - sample_offset) * w;
         total_weight += w * 2.0;
     }
 
