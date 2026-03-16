@@ -140,6 +140,12 @@ pub struct UIRenderer {
     rect_commands: Vec<RectCommand>,
     text_commands: Vec<TextCommand>,
 
+    /// Index where overlay (dropdown) commands start.
+    /// Commands [0..overlay_split_rect] are base layer.
+    /// Commands [overlay_split_rect..] are overlay layer.
+    overlay_split_rect: usize,
+    overlay_split_text: usize,
+
     // Per-frame vertex buffer
     vertices: Vec<UIVertex>,
     indices: Vec<u32>,
@@ -272,6 +278,8 @@ impl UIRenderer {
             text_buffers: Vec::new(),
             rect_commands: Vec::with_capacity(256),
             text_commands: Vec::with_capacity(128),
+            overlay_split_rect: 0,
+            overlay_split_text: 0,
             vertices: Vec::with_capacity(1024),
             indices: Vec::with_capacity(1536),
             clip_stack: Vec::with_capacity(8),
@@ -338,18 +346,50 @@ impl UIRenderer {
 
     // ── UITree rendering ────────────────────────────────────────────
 
+    /// Mark the current command count as the split point between
+    /// base UI and overlay (dropdown). Called after render_tree()
+    /// but before any overlay commands are added. During render(),
+    /// base commands (rects+text) draw first, then overlay commands
+    /// (rects+text) draw on top — preventing background text from
+    /// bleeding through the dropdown.
+    pub fn mark_overlay_split(&mut self) {
+        self.overlay_split_rect = self.rect_commands.len();
+        self.overlay_split_text = self.text_commands.len();
+    }
+
     /// Render a UITree by walking it in DFS order, resolving styles, and
     /// emitting draw commands. Handles clipping mathematically (clamping
     /// child geometry to clip ancestors).
+    /// Render a UITree, splitting commands at `overlay_start_node` for
+    /// two-pass rendering (base UI rects+text, then overlay rects+text).
+    /// Pass `None` for no overlay (single-pass).
     pub fn render_tree(&mut self, tree: &UITree) {
+        self.render_tree_with_overlay(tree, None);
+    }
+
+    /// Render with optional overlay split. `overlay_start_node` is the
+    /// tree node index where the overlay (dropdown) starts.
+    pub fn render_tree_with_overlay(&mut self, tree: &UITree, overlay_start_node: Option<usize>) {
         self.clip_stack.clear();
+        self.overlay_split_rect = 0;
+        self.overlay_split_text = 0;
+        let mut overlay_marked = overlay_start_node.is_none(); // skip marking if no overlay
 
         tree.traverse(|event| match event {
             TraversalEvent::Node(node) => {
+                // Mark the split point when we reach the overlay start node
+                if !overlay_marked {
+                    if let Some(start) = overlay_start_node {
+                        if node.id as usize >= start {
+                            self.overlay_split_rect = self.rect_commands.len();
+                            self.overlay_split_text = self.text_commands.len();
+                            overlay_marked = true;
+                        }
+                    }
+                }
                 self.draw_node(node);
             }
             TraversalEvent::PushClip(rect) => {
-                // Intersect with current clip if nested
                 let clipped = if let Some(current) = self.clip_stack.last() {
                     intersect_rects(*current, rect)
                 } else {
@@ -361,6 +401,12 @@ impl UIRenderer {
                 self.clip_stack.pop();
             }
         });
+
+        // If overlay was specified but never reached (nodes not found), no split
+        if !overlay_marked {
+            self.overlay_split_rect = self.rect_commands.len();
+            self.overlay_split_text = self.text_commands.len();
+        }
     }
 
     /// Draw a single UI node — resolves effective colors and emits commands.
@@ -632,47 +678,264 @@ impl UIRenderer {
             return;
         }
 
-        // Render pass — rects then text
-        {
+        let has_overlay = self.overlay_split_rect < self.rect_commands.len()
+            || self.overlay_split_text < self.text_commands.len();
+
+        // Helper: build vertices+indices from a range of rect_commands
+        let build_rect_buffers = |cmds: &[RectCommand], verts: &mut Vec<UIVertex>, idxs: &mut Vec<u32>| {
+            verts.clear();
+            idxs.clear();
+            for cmd in cmds {
+                let base = verts.len() as u32;
+                let (x0, y0) = (cmd.x, cmd.y);
+                let (x1, y1) = (cmd.x + cmd.w, cmd.y + cmd.h);
+                verts.push(UIVertex {
+                    position: [x0, y0], uv: [0.0, 0.0], color: cmd.color,
+                    rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
+                    border_color: cmd.border_color,
+                });
+                verts.push(UIVertex {
+                    position: [x1, y0], uv: [1.0, 0.0], color: cmd.color,
+                    rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
+                    border_color: cmd.border_color,
+                });
+                verts.push(UIVertex {
+                    position: [x1, y1], uv: [1.0, 1.0], color: cmd.color,
+                    rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
+                    border_color: cmd.border_color,
+                });
+                verts.push(UIVertex {
+                    position: [x0, y1], uv: [0.0, 1.0], color: cmd.color,
+                    rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
+                    border_color: cmd.border_color,
+                });
+                idxs.extend_from_slice(&[base, base+1, base+2, base, base+2, base+3]);
+            }
+        };
+
+        self.viewport.update(queue, Resolution { width: physical_w, height: physical_h });
+
+        if !has_overlay {
+            // Single pass — no dropdown, original behavior
+            build_rect_buffers(&self.rect_commands, &mut self.vertices, &mut self.indices);
+
+            // Prepare text buffers
+            self.text_buffers.clear();
+            for cmd in &self.text_commands {
+                let mut buffer = TextBuffer::new(
+                    &mut self.font_system,
+                    Metrics::new(cmd.font_size, cmd.font_size * 1.2),
+                );
+                buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+                buffer.set_text(
+                    &mut self.font_system, &cmd.text,
+                    &Attrs::new().family(Family::SansSerif),
+                    Shaping::Advanced, None,
+                );
+                buffer.shape_until_scroll(&mut self.font_system, false);
+                self.text_buffers.push(buffer);
+            }
+            let mut text_areas: Vec<TextArea> = Vec::with_capacity(self.text_buffers.len());
+            for (i, cmd) in self.text_commands.iter().enumerate() {
+                let bounds = if let Some(clip) = cmd.clip_bounds {
+                    TextBounds {
+                        left: (clip[0] * sf) as i32, top: (clip[1] * sf) as i32,
+                        right: (clip[2] * sf) as i32, bottom: (clip[3] * sf) as i32,
+                    }
+                } else {
+                    TextBounds {
+                        left: 0, top: 0,
+                        right: physical_w as i32, bottom: physical_h as i32,
+                    }
+                };
+                text_areas.push(TextArea {
+                    buffer: &self.text_buffers[i],
+                    left: cmd.x * sf, top: cmd.y * sf, scale: sf, bounds,
+                    default_color: GlyphonColor::rgba(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]),
+                    custom_glyphs: &[],
+                });
+            }
+            self.text_renderer.prepare(
+                device, queue, &mut self.font_system, &mut self.text_atlas,
+                &self.viewport, text_areas, &mut self.swash_cache,
+            ).expect("Failed to prepare text");
+
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("UI Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
+                    view: target, resolve_target: None, depth_slice: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                 })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
+                depth_stencil_attachment: None, timestamp_writes: None,
+                occlusion_query_set: None, multiview_mask: None,
             });
-
             if !self.vertices.is_empty() {
-                let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("UI Vertices"),
-                    contents: bytemuck::cast_slice(&self.vertices),
+                let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("UI Vertices"), contents: bytemuck::cast_slice(&self.vertices),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
-                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("UI Indices"),
-                    contents: bytemuck::cast_slice(&self.indices),
+                let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("UI Indices"), contents: bytemuck::cast_slice(&self.indices),
                     usage: wgpu::BufferUsages::INDEX,
                 });
-
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &globals_bind_group, &[]);
-                pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                pass.set_vertex_buffer(0, vb.slice(..));
+                pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
             }
-
-            self.text_renderer
-                .render(&self.text_atlas, &self.viewport, &mut pass)
+            self.text_renderer.render(&self.text_atlas, &self.viewport, &mut pass)
                 .expect("Failed to render text");
+        } else {
+            // Two-pass: base UI (rects+text) then overlay (rects+text)
+            let split_r = self.overlay_split_rect;
+            let split_t = self.overlay_split_text;
+
+            // ── Pass 1: Base UI ──
+            build_rect_buffers(&self.rect_commands[..split_r], &mut self.vertices, &mut self.indices);
+
+            // Prepare base text buffers
+            self.text_buffers.clear();
+            for cmd in &self.text_commands[..split_t] {
+                let mut buffer = TextBuffer::new(
+                    &mut self.font_system,
+                    Metrics::new(cmd.font_size, cmd.font_size * 1.2),
+                );
+                buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+                buffer.set_text(
+                    &mut self.font_system, &cmd.text,
+                    &Attrs::new().family(Family::SansSerif),
+                    Shaping::Advanced, None,
+                );
+                buffer.shape_until_scroll(&mut self.font_system, false);
+                self.text_buffers.push(buffer);
+            }
+            let mut base_text_areas: Vec<TextArea> = Vec::with_capacity(self.text_buffers.len());
+            for (i, cmd) in self.text_commands[..split_t].iter().enumerate() {
+                let bounds = if let Some(clip) = cmd.clip_bounds {
+                    TextBounds {
+                        left: (clip[0] * sf) as i32, top: (clip[1] * sf) as i32,
+                        right: (clip[2] * sf) as i32, bottom: (clip[3] * sf) as i32,
+                    }
+                } else {
+                    TextBounds {
+                        left: 0, top: 0,
+                        right: physical_w as i32, bottom: physical_h as i32,
+                    }
+                };
+                base_text_areas.push(TextArea {
+                    buffer: &self.text_buffers[i],
+                    left: cmd.x * sf, top: cmd.y * sf, scale: sf, bounds,
+                    default_color: GlyphonColor::rgba(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]),
+                    custom_glyphs: &[],
+                });
+            }
+            self.text_renderer.prepare(
+                device, queue, &mut self.font_system, &mut self.text_atlas,
+                &self.viewport, base_text_areas, &mut self.swash_cache,
+            ).expect("Failed to prepare base text");
+
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("UI Base Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target, resolve_target: None, depth_slice: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None, timestamp_writes: None,
+                    occlusion_query_set: None, multiview_mask: None,
+                });
+                if !self.vertices.is_empty() {
+                    let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("UI Base Vertices"), contents: bytemuck::cast_slice(&self.vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                    let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("UI Base Indices"), contents: bytemuck::cast_slice(&self.indices),
+                        usage: wgpu::BufferUsages::INDEX,
+                    });
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &globals_bind_group, &[]);
+                    pass.set_vertex_buffer(0, vb.slice(..));
+                    pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
+                }
+                self.text_renderer.render(&self.text_atlas, &self.viewport, &mut pass)
+                    .expect("Failed to render base text");
+            }
+
+            // ── Pass 2: Overlay (dropdown) ──
+            build_rect_buffers(&self.rect_commands[split_r..], &mut self.vertices, &mut self.indices);
+
+            // Prepare overlay text buffers
+            self.text_buffers.clear();
+            for cmd in &self.text_commands[split_t..] {
+                let mut buffer = TextBuffer::new(
+                    &mut self.font_system,
+                    Metrics::new(cmd.font_size, cmd.font_size * 1.2),
+                );
+                buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+                buffer.set_text(
+                    &mut self.font_system, &cmd.text,
+                    &Attrs::new().family(Family::SansSerif),
+                    Shaping::Advanced, None,
+                );
+                buffer.shape_until_scroll(&mut self.font_system, false);
+                self.text_buffers.push(buffer);
+            }
+            let mut overlay_text_areas: Vec<TextArea> = Vec::with_capacity(self.text_buffers.len());
+            for (i, cmd) in self.text_commands[split_t..].iter().enumerate() {
+                let bounds = if let Some(clip) = cmd.clip_bounds {
+                    TextBounds {
+                        left: (clip[0] * sf) as i32, top: (clip[1] * sf) as i32,
+                        right: (clip[2] * sf) as i32, bottom: (clip[3] * sf) as i32,
+                    }
+                } else {
+                    TextBounds {
+                        left: 0, top: 0,
+                        right: physical_w as i32, bottom: physical_h as i32,
+                    }
+                };
+                overlay_text_areas.push(TextArea {
+                    buffer: &self.text_buffers[i],
+                    left: cmd.x * sf, top: cmd.y * sf, scale: sf, bounds,
+                    default_color: GlyphonColor::rgba(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]),
+                    custom_glyphs: &[],
+                });
+            }
+            self.text_renderer.prepare(
+                device, queue, &mut self.font_system, &mut self.text_atlas,
+                &self.viewport, overlay_text_areas, &mut self.swash_cache,
+            ).expect("Failed to prepare overlay text");
+
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("UI Overlay Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target, resolve_target: None, depth_slice: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None, timestamp_writes: None,
+                    occlusion_query_set: None, multiview_mask: None,
+                });
+                if !self.vertices.is_empty() {
+                    let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("UI Overlay Vertices"), contents: bytemuck::cast_slice(&self.vertices),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    });
+                    let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("UI Overlay Indices"), contents: bytemuck::cast_slice(&self.indices),
+                        usage: wgpu::BufferUsages::INDEX,
+                    });
+                    pass.set_pipeline(&self.pipeline);
+                    pass.set_bind_group(0, &globals_bind_group, &[]);
+                    pass.set_vertex_buffer(0, vb.slice(..));
+                    pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
+                }
+                self.text_renderer.render(&self.text_atlas, &self.viewport, &mut pass)
+                    .expect("Failed to render overlay text");
+            }
         }
 
         self.rect_commands.clear();
