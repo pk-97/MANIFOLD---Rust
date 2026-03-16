@@ -33,6 +33,19 @@ impl TempoMap {
         }
     }
 
+    /// Validate and sanitize all tempo points.
+    pub fn ensure_valid(&mut self) {
+        // Remove any points with NaN or infinite BPM/beat
+        self.points.retain(|p| p.bpm.is_finite() && p.beat.is_finite());
+        // Clamp BPM to 20-300
+        for p in &mut self.points {
+            p.bpm = p.bpm.clamp(20.0, 300.0);
+        }
+        // Re-sort by beat
+        self.points.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
+        self.is_sorted = true;
+    }
+
     /// Get BPM at a given beat (step-change lookup).
     pub fn get_bpm_at_beat(&mut self, beat: f32, fallback: f32) -> f32 {
         self.ensure_sorted();
@@ -44,7 +57,7 @@ impl TempoMap {
                 break;
             }
         }
-        bpm
+        bpm.clamp(20.0, 300.0)
     }
 
     pub fn add_or_replace_point(&mut self, beat: f32, bpm: f32, source: TempoPointSource, epsilon: f32) {

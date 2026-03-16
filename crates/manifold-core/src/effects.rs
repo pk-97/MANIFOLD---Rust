@@ -93,6 +93,31 @@ impl EffectInstance {
         self.param_values[index] = value;
     }
 
+    /// Resize paramValues and baseParamValues to match the current effect definition.
+    /// New slots are filled with the definition's default values.
+    pub fn align_to_definition(&mut self) {
+        let defs = self.effect_type.param_defs();
+        let target_len = defs.len();
+
+        // Extend paramValues
+        while self.param_values.len() < target_len {
+            let idx = self.param_values.len();
+            let default_val = defs.get(idx).map(|d| d.3).unwrap_or(0.0);
+            self.param_values.push(default_val);
+        }
+        self.param_values.truncate(target_len);
+
+        // Same for baseParamValues if present
+        if let Some(ref mut base) = self.base_param_values {
+            while base.len() < target_len {
+                let idx = base.len();
+                let default_val = defs.get(idx).map(|d| d.3).unwrap_or(0.0);
+                base.push(default_val);
+            }
+            base.truncate(target_len);
+        }
+    }
+
     /// Get the drivers list, creating it if None.
     pub fn drivers_mut(&mut self) -> &mut Vec<ParameterDriver> {
         if self.drivers.is_none() {
@@ -199,7 +224,7 @@ pub struct ParamEnvelope {
     #[serde(default)]
     pub target_effect_type: EffectType,
     /// Unity V2 serializes this as "targetParamIndex" via [JsonProperty].
-    #[serde(default, alias = "targetParamIndex")]
+    #[serde(default, rename = "targetParamIndex")]
     pub param_index: i32,
     #[serde(default = "default_true")]
     pub enabled: bool,

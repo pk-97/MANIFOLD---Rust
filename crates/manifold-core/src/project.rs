@@ -29,7 +29,7 @@ pub struct Project {
     pub recording_provenance: RecordingProvenance,
     #[serde(default)]
     pub percussion_import: Option<PercussionImportState>,
-    #[serde(default)]
+    #[serde(skip)]
     pub last_saved_path: String,
     #[serde(default)]
     pub saved_playhead_time: f32,
@@ -56,16 +56,49 @@ impl Project {
         self.video_library.rebuild_lookup();
         self.midi_config.rebuild_dictionary();
         self.timeline.rebuild_clip_lookup();
+
+        // Validate tempo map data
+        self.tempo_map.ensure_valid();
         self.tempo_map.ensure_default_at_beat_zero(
             self.settings.bpm,
-            crate::TempoPointSource::Unknown,
+            crate::TempoPointSource::Manual,
         );
+
+        // Sync BPM from tempo map at beat 0
+        self.settings.bpm = self.tempo_map.get_bpm_at_beat(0.0, self.settings.bpm);
+
+        // Clamp saved playhead
+        self.saved_playhead_time = self.saved_playhead_time.max(0.0);
+
+        // Align all effect params to current definitions
+        self.align_all_effect_params();
 
         // Sync layer indices
         for (i, layer) in self.timeline.layers.iter_mut().enumerate() {
             layer.index = i as i32;
             for clip in &mut layer.clips {
                 clip.layer_index = i as i32;
+            }
+        }
+    }
+
+    /// Resize all effect param arrays to match their definitions.
+    fn align_all_effect_params(&mut self) {
+        // Master effects
+        for fx in &mut self.settings.master_effects {
+            fx.align_to_definition();
+        }
+        // Layer effects + clip effects
+        for layer in &mut self.timeline.layers {
+            if let Some(ref mut effects) = layer.effects {
+                for fx in effects.iter_mut() {
+                    fx.align_to_definition();
+                }
+            }
+            for clip in &mut layer.clips {
+                for fx in &mut clip.effects {
+                    fx.align_to_definition();
+                }
             }
         }
     }

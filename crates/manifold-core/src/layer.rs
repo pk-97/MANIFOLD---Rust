@@ -53,7 +53,7 @@ pub struct Layer {
     pub video_folder_path: Option<String>,
     #[serde(default)]
     pub relative_video_folder_path: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_neg_one")]
     pub midi_note: i32,
     #[serde(default = "default_neg_one")]
     pub midi_channel: i32,

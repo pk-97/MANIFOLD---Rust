@@ -15,7 +15,7 @@ pub struct TimelineClip {
     // ── Beat-primary timing (source of truth) ──
     #[serde(default)]
     pub start_beat: f32,
-    #[serde(default = "default_one")]
+    #[serde(default)]
     pub duration_beats: f32,
 
     // ── Seconds (video source offset, BPM-independent) ──

@@ -41,9 +41,15 @@ impl GeneratorParamState {
 
     pub fn change_type(&mut self, new_type: GeneratorType) {
         self.generator_type = new_type;
-        self.param_values.clear();
-        self.base_param_values = None;
+        self.init_defaults();
         self.drivers = None;
         self.envelopes = None;
+    }
+
+    /// Fill param_values and base_param_values from the definition defaults.
+    pub fn init_defaults(&mut self) {
+        let defs = self.generator_type.param_defs();
+        self.param_values = defs.iter().map(|d| d.3).collect();
+        self.base_param_values = Some(self.param_values.clone());
     }
 }
