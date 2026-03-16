@@ -31,85 +31,78 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     return out;
 }
 
-// ── Distance metrics for different shapes ──
-
 const PI: f32 = 3.14159265;
 const TWO_PI: f32 = 6.28318530;
 
-// Circle: Euclidean distance
-fn dist_circle(p: vec2<f32>) -> f32 {
-    return length(p);
-}
-
-// Regular polygon distance (N sides)
-fn poly_dist(p: vec2<f32>, n: f32) -> f32 {
-    let angle = atan2(p.y, p.x);
-    let sector = TWO_PI / n;
-    // Distance to nearest polygon edge
+// Concentric regular polygon distance metric.
+// Level sets of this function form concentric N-gons.
+// Matches Unity: atan2 + PI before modular sector computation.
+fn poly_dist(p: vec2<f32>, sides: f32) -> f32 {
     let r = length(p);
-    let theta = ((angle % sector) + sector) % sector;  // mod into [0, sector)
-    let half_sector = sector * 0.5;
-    return r * cos(theta - half_sector);
+    if r < 0.0001 {
+        return 0.0;
+    }
+    let a = atan2(p.y, p.x) + PI;
+    let seg = TWO_PI / sides;
+    let a_mod = a - floor(a / seg) * seg - seg * 0.5;
+    return r * cos(a_mod);
 }
 
-// Square: Chebyshev distance
-fn dist_square(p: vec2<f32>) -> f32 {
-    return max(abs(p.x), abs(p.y));
-}
-
-// Star distance
+// Concentric star distance metric.
+// Level sets form concentric 5-pointed stars.
+// Uses Unity's piecewise-linear formula: lerp(1.0, 0.42, t)
 fn star_dist(p: vec2<f32>) -> f32 {
     let r = length(p);
-    let angle = atan2(p.y, p.x);
-    // 5-pointed star modulation
-    let star_mod = cos(5.0 * angle) * 0.3 + 0.7;
-    return r / star_mod;
+    if r < 0.0001 {
+        return 0.0;
+    }
+    let a = atan2(p.y, p.x) + PI;
+    let seg = TWO_PI / 5.0;
+    let half_seg = seg * 0.5;
+    let sa = a - floor(a / seg) * seg;
+    let t = abs(sa - half_seg) / half_seg;
+    let star_r = mix(1.0, 0.42, t);
+    return r / star_r;
 }
 
-// Get distance based on shape type
-fn shape_distance(p: vec2<f32>, shape: i32) -> f32 {
-    switch shape {
-        case 1: { return poly_dist(p, 3.0); }    // Triangle
-        case 2: { return dist_square(p); }         // Square
-        case 3: { return poly_dist(p, 5.0); }     // Pentagon
-        case 4: { return poly_dist(p, 6.0); }     // Hexagon
-        case 5: { return star_dist(p); }           // Star
-        default: { return dist_circle(p); }        // Circle
-    }
+// Select distance metric by shape index
+fn shape_dist(p: vec2<f32>, shape: i32) -> f32 {
+    if shape <= 0 { return length(p); }                    // Circle
+    if shape == 1 { return poly_dist(p, 3.0); }           // Triangle
+    if shape == 2 { return max(abs(p.x), abs(p.y)); }     // Square
+    if shape == 3 { return poly_dist(p, 5.0); }           // Pentagon
+    if shape == 4 { return poly_dist(p, 6.0); }           // Hexagon
+    return star_dist(p);                                    // Star
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Center and aspect-correct UV
     var uv = in.uv - vec2<f32>(0.5);
     uv.x *= u.aspect_ratio;
     uv *= u.uv_scale;
 
-    let shape = i32(u.shape_type);
+    let shape = clamp(i32(floor(u.shape_type)), 0, 5);
+    let r = shape_dist(uv, shape);
 
-    // Beat-driven expansion: rings expand from center at beat rate
-    // anim_speed is the beat fraction (0.25, 0.5, 1.0, 2.0, 4.0)
-    let beat_phase = u.beat * u.anim_speed;
-    let expansion = fract(beat_phase);
+    // Ring spacing from beats-per-ring (anim_speed = beatsPerRing)
+    let beats_per_ring = max(u.anim_speed, 0.01);
+    let ring_freq = 1.0 / beats_per_ring;
+    var expansion = u.beat * ring_freq;
 
-    // Get distance from center using the selected shape metric
-    let d = shape_distance(uv, shape);
+    // Spawn mode: when snap_mode > 0.5, add trigger_count to expansion
+    if u.snap_mode > 0.5 {
+        expansion += u.trigger_count;
+    }
 
-    // Create concentric rings expanding outward
-    // Ring spacing is proportional to the beat rate
-    let ring_spacing = 0.15;
-    let shifted_d = d + expansion * ring_spacing;
-    let ring_pattern = fract(shifted_d / ring_spacing);
+    // Concentric rings expanding outward from center
+    let pattern = r * ring_freq - expansion;
+    let ring_dist = abs(fract(pattern) - 0.5) / ring_freq;
 
-    // Anti-aliased ring edges
-    let aa = fwidth(shifted_d / ring_spacing);
-    let edge = smoothstep(0.5 - u.line_thickness / ring_spacing - aa,
-                          0.5 - u.line_thickness / ring_spacing,
-                          ring_pattern)
-             - smoothstep(0.5 + u.line_thickness / ring_spacing,
-                          0.5 + u.line_thickness / ring_spacing + aa,
-                          ring_pattern);
+    // Anti-aliased ring edges (single-sided smoothstep, matching Unity)
+    let pw = fwidth(ring_dist);
+    let half_thick = u.line_thickness * 0.5;
+    let ring = 1.0 - smoothstep(half_thick - pw, half_thick + pw, ring_dist);
 
-    let lum = edge;
+    let lum = clamp(ring, 0.0, 1.0);
     return vec4<f32>(lum, lum, lum, lum);
 }
