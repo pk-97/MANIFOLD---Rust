@@ -445,6 +445,8 @@ impl Application {
         if let Some(path) = dialog.pick_file() {
             match manifold_io::loader::load_project(&path) {
                 Ok(project) => {
+                    // Apply saved layout before initializing (Unity ApplySavedLayout)
+                    self.ui_root.apply_project_layout(&project.settings);
                     self.engine.initialize(project);
                     self.editing_service.set_project();
                     self.selection.clear_selection();
@@ -631,10 +633,9 @@ impl Application {
         if self.clip_drag.mode == ClipDragMode::Move && !self.clip_drag.snapshots.is_empty() {
             let tracks_rect = self.ui_root.viewport.tracks_rect();
             if tracks_rect.width > 0.0 {
-                // From Unity WorkspaceController.cs lines 58-60:
-                // DragEdgeScrollZonePx = 72, DragEdgeScrollSpeedPxPerSec = 900
-                let edge_zone_px = 72.0;
-                let scroll_speed_px_per_sec = 900.0;
+                // From Unity WorkspaceController.cs lines 58-60
+                let edge_zone_px = manifold_ui::color::DRAG_EDGE_ZONE_PX;
+                let scroll_speed_px_per_sec = manifold_ui::color::DRAG_SCROLL_SPEED_PX_PER_SEC;
                 let ppb = self.ui_root.viewport.pixels_per_beat();
                 let dt = self.frame_timer.last_dt() as f32;
                 let scroll_speed_beats = (scroll_speed_px_per_sec * dt) / ppb;
@@ -1357,7 +1358,17 @@ impl ApplicationHandler for Application {
                                         // From Unity PanelResizeHandle.OnPointerUp.
                                         self.split_dragging = false;
                                         self.cursor_manager.set_default();
+                                        // Persist to ProjectSettings (Unity WorkspaceController line 591)
+                                        if let Some(project) = self.engine.project_mut() {
+                                            project.settings.timeline_height_percent =
+                                                self.ui_root.layout.timeline_split_ratio;
+                                        }
                                     } else if self.ui_root.inspector_resize_dragging {
+                                        // Persist to ProjectSettings (Unity WorkspaceController line 528)
+                                        if let Some(project) = self.engine.project_mut() {
+                                            project.settings.inspector_width =
+                                                self.ui_root.layout.inspector_width;
+                                        }
                                         self.ui_root.end_inspector_resize();
                                     } else {
                                         self.ui_root.pointer_event(
@@ -2148,6 +2159,7 @@ impl ApplicationHandler for Application {
                         let load_path = path.clone();
                         match manifold_io::loader::load_project(&load_path) {
                             Ok(project) => {
+                                self.ui_root.apply_project_layout(&project.settings);
                                 self.engine.initialize(project);
                                 self.editing_service.set_project();
                                 self.selection.clear_selection();

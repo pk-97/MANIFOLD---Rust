@@ -125,8 +125,8 @@ pub struct UIInputSystem {
     pending_events: Vec<UIEvent>,
 }
 
-const DRAG_THRESHOLD: f32 = 4.0;
-const DOUBLE_CLICK_TIME: f32 = 0.3;
+const DRAG_THRESHOLD: f32 = crate::color::DRAG_THRESHOLD_PX;
+const DOUBLE_CLICK_TIME: f32 = crate::color::DOUBLE_CLICK_TIME_SEC;
 
 impl UIInputSystem {
     pub fn new() -> Self {

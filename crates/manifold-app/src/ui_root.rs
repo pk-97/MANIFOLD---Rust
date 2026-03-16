@@ -88,6 +88,20 @@ impl UIRoot {
         }
     }
 
+    /// Apply saved layout from project settings. Called after project load.
+    /// Equivalent to Unity's WorkspaceController.ApplySavedLayout().
+    pub fn apply_project_layout(&mut self, settings: &manifold_core::settings::ProjectSettings) {
+        if settings.inspector_width > 0.0 {
+            self.layout.inspector_width = settings.inspector_width
+                .clamp(Self::INSPECTOR_MIN_W, Self::INSPECTOR_MAX_W);
+        }
+        if settings.timeline_height_percent > 0.0 {
+            self.layout.timeline_split_ratio = settings.timeline_height_percent
+                .clamp(manifold_ui::color::MIN_TIMELINE_SPLIT_RATIO,
+                       manifold_ui::color::MAX_TIMELINE_SPLIT_RATIO);
+        }
+    }
+
     /// Build all panels. Call once after creation and after resize.
     pub fn build(&mut self) {
         self.tree.clear();
@@ -428,9 +442,9 @@ impl UIRoot {
 
     // ── Inspector resize ──────────────────────────────────────────
 
-    const RESIZE_EDGE_PX: f32 = 4.0;
-    const INSPECTOR_MIN_W: f32 = 200.0;
-    const INSPECTOR_MAX_W: f32 = 500.0;
+    const RESIZE_EDGE_PX: f32 = manifold_ui::color::RESIZE_EDGE_PX;
+    const INSPECTOR_MIN_W: f32 = manifold_ui::color::MIN_INSPECTOR_WIDTH;
+    const INSPECTOR_MAX_W: f32 = manifold_ui::color::MAX_INSPECTOR_WIDTH;
 
     /// Returns true if pos is near the inspector right edge (resize handle).
     pub fn is_near_inspector_edge(&self, pos: Vec2) -> bool {

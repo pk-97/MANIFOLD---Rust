@@ -290,6 +290,27 @@ pub const CARD_BORDER_C32: Color32 = Color32::new(46, 46, 49, 255);
 pub const DRAG_HANDLE_BG_C32: Color32 = Color32::new(38, 38, 42, 255);
 pub const DRAG_HANDLE_HOVER_BG_C32: Color32 = Color32::new(52, 52, 56, 255);
 
+// ── Interaction thresholds ──────────────────────────────────────────
+pub const DRAG_THRESHOLD_PX: f32 = 4.0;
+pub const DOUBLE_CLICK_TIME_SEC: f32 = 0.3;
+pub const DRAG_EDGE_ZONE_PX: f32 = 72.0;
+pub const DRAG_SCROLL_SPEED_PX_PER_SEC: f32 = 900.0;
+pub const TRIM_HANDLE_THRESHOLD_PX: f32 = 8.0;
+pub const TRIM_HANDLE_MIN_CLIP_WIDTH_PX: f32 = 16.0;
+pub const RESIZE_EDGE_PX: f32 = 4.0;
+
+// ── Split ratio ────────────────────────────────────────────────────
+pub const DEFAULT_TIMELINE_SPLIT_RATIO: f32 = 0.30;
+pub const MIN_TIMELINE_SPLIT_RATIO: f32 = 0.15;
+pub const MAX_TIMELINE_SPLIT_RATIO: f32 = 0.70;
+
+// ── Waveform / stem lane heights ───────────────────────────────────
+pub const WAVEFORM_LANE_HEIGHT: f32 = 56.0;
+pub const STEM_LANE_HEIGHT: f32 = 56.0;
+
+// ── Insert cursor marker ───────────────────────────────────────────
+pub const INSERT_CURSOR_RULER_MARKER_SIZE: f32 = 6.0;
+
 // ── Layout constants ────────────────────────────────────────────────
 pub const TRANSPORT_BAR_HEIGHT: f32 = 36.0;
 pub const HEADER_HEIGHT: f32 = 40.0;

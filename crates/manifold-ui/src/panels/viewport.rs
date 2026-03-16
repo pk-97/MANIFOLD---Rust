@@ -439,9 +439,9 @@ impl TimelineViewportPanel {
             let clip_width_px = clip.duration_beats * self.mapper.pixels_per_beat();
             let local_px = (beat - clip.start_beat) * self.mapper.pixels_per_beat();
 
-            let region = if clip_width_px > 16.0 && local_px < 8.0 {
+            let region = if clip_width_px > color::TRIM_HANDLE_MIN_CLIP_WIDTH_PX && local_px < color::TRIM_HANDLE_THRESHOLD_PX {
                 HitRegion::TrimLeft
-            } else if clip_width_px > 16.0 && local_px > clip_width_px - 8.0 {
+            } else if clip_width_px > color::TRIM_HANDLE_MIN_CLIP_WIDTH_PX && local_px > clip_width_px - color::TRIM_HANDLE_THRESHOLD_PX {
                 HitRegion::TrimRight
             } else {
                 HitRegion::Body
@@ -509,7 +509,7 @@ impl TimelineViewportPanel {
     /// or `beat` unchanged if nothing is within threshold.
     /// `ignore_ids` are clip IDs being dragged (don't snap to self).
     pub fn magnetic_snap(&self, beat: f32, layer_index: usize, ignore_ids: &[String]) -> f32 {
-        const SNAP_THRESHOLD_PX: f32 = 12.0;
+        use crate::snap::SNAP_THRESHOLD_PX;
 
         // Clamp threshold to avoid snapping across bars at low zoom
         let max_snap_beats = 0.5_f32;
@@ -641,11 +641,11 @@ impl TimelineViewportPanel {
         if self.insert_cursor_ruler_id >= 0 {
             tree.set_visible(self.insert_cursor_ruler_id as u32, in_view);
             if in_view {
-                let marker_h = 6.0;
+                let marker_s = color::INSERT_CURSOR_RULER_MARKER_SIZE;
                 tree.set_bounds(
                     self.insert_cursor_ruler_id as u32,
-                    Rect::new(px - 3.0, self.ruler_rect.y + self.ruler_rect.height - marker_h,
-                              6.0, marker_h),
+                    Rect::new(px - marker_s * 0.5, self.ruler_rect.y + self.ruler_rect.height - marker_s,
+                              marker_s, marker_s),
                 );
             }
         }
@@ -1596,10 +1596,10 @@ impl TimelineViewportPanel {
         }
 
         // Ruler marker (small triangle/rect)
-        let marker_h = 6.0;
+        let marker_s = color::INSERT_CURSOR_RULER_MARKER_SIZE;
         self.insert_cursor_ruler_id = tree.add_panel(
-            -1, px - 3.0, self.ruler_rect.y + self.ruler_rect.height - marker_h,
-            6.0, marker_h,
+            -1, px - marker_s * 0.5, self.ruler_rect.y + self.ruler_rect.height - marker_s,
+            marker_s, marker_s,
             UIStyle { bg_color: color::INSERT_CURSOR_BLUE, ..UIStyle::default() },
         ) as i32;
         if !in_view {

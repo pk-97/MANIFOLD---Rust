@@ -354,8 +354,8 @@ pub fn dispatch(
                             // Video: can only shorten from the left, not extend past original
                             new_start = new_start.max(clip_drag.trim_old_start);
                         }
-                        // Min duration: 0.25 beats (1/16 note)
-                        new_start = new_start.min(old_end - 0.25);
+                        // Min duration (1/16 note)
+                        new_start = new_start.min(old_end - manifold_ui::trim::MIN_CLIP_DURATION_BEATS);
 
                         let new_duration = old_end - new_start;
                         // Adjust in_point for video clips
@@ -373,7 +373,7 @@ pub fn dispatch(
                 ClipDragMode::TrimRight => {
                     let snapped = ui.viewport.magnetic_snap(*current_beat, anchor_layer, &drag_ids);
                     if let Some(project) = engine.project_mut() {
-                        let new_duration = (snapped - clip_drag.trim_old_start).max(0.25);
+                        let new_duration = (snapped - clip_drag.trim_old_start).max(manifold_ui::trim::MIN_CLIP_DURATION_BEATS);
                         if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_drag.anchor_clip_id) {
                             clip.duration_beats = new_duration;
                         }

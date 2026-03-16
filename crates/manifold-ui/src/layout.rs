@@ -30,9 +30,9 @@ impl ScreenLayout {
             transport_bar_height: color::TRANSPORT_BAR_HEIGHT,
             header_height: color::HEADER_HEIGHT,
             footer_height: color::FOOTER_HEIGHT,
-            inspector_width: 280.0,
+            inspector_width: color::DEFAULT_INSPECTOR_WIDTH,
             effect_browser_width: 0.0,
-            timeline_split_ratio: 0.30,
+            timeline_split_ratio: color::DEFAULT_TIMELINE_SPLIT_RATIO,
         }
     }
 
@@ -157,13 +157,13 @@ impl ScreenLayout {
     /// Height of the imported audio waveform lane (when visible).
     /// From Unity UIConstants.ImportedWaveformLaneHeight = 56.
     pub fn waveform_lane_height() -> f32 {
-        56.0
+        color::WAVEFORM_LANE_HEIGHT
     }
 
     /// Height of a single stem lane.
     /// From Unity UIConstants.StemLaneHeight = 56.
     pub fn stem_lane_height() -> f32 {
-        56.0
+        color::STEM_LANE_HEIGHT
     }
 
     /// Layer controls region: right side of timeline body.
@@ -203,7 +203,7 @@ impl ScreenLayout {
         if content.height <= 0.0 { return; }
         // How much of the content area is below the drag point
         let timeline_h = (content.y + content.height) - screen_y;
-        let ratio = (timeline_h / content.height).clamp(0.15, 0.70);
+        let ratio = (timeline_h / content.height).clamp(color::MIN_TIMELINE_SPLIT_RATIO, color::MAX_TIMELINE_SPLIT_RATIO);
         self.timeline_split_ratio = ratio;
     }
 }

@@ -1011,9 +1011,11 @@ impl Panel for LayerHeaderPanel {
 
         let layer_count = self.layers.len();
         self.rows = vec![LayerRowIds::default(); layer_count];
-        self.cached_mute = vec![false; layer_count];
-        self.cached_solo = vec![false; layer_count];
-        self.cached_selected = vec![false; layer_count];
+        // Only resize cached state vectors if layer count changed —
+        // preserve existing values to keep dirty-check logic correct.
+        self.cached_mute.resize(layer_count, false);
+        self.cached_solo.resize(layer_count, false);
+        self.cached_selected.resize(layer_count, false);
 
         // Clone layers to avoid borrow conflict in build_layer_row
         let layers_snapshot = self.layers.clone();

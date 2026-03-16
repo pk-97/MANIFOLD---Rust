@@ -46,7 +46,7 @@ const PERC_BUTTON_W: f32 = 48.0;
 
 const BUTTON_HOVER_C: Color32 = Color32::new(78, 78, 82, 255);
 const SAVE_DIRTY_BG: Color32 = Color32::new(82, 68, 48, 255);
-const EXPORT_MARKER_C: Color32 = Color32::new(77, 141, 235, 255);
+const EXPORT_MARKER_C: Color32 = color::EXPORT_MARKER_COLOR;
 const BPM_FIELD_HOVER: Color32 = Color32::new(50, 50, 53, 255);
 
 const BUTTON_FONT: u16 = 12;
