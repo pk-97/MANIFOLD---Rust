@@ -759,7 +759,38 @@ impl Application {
                         label: Some("Blit Encoder"),
                     });
 
-            blit.blit(&gpu.device, &mut encoder, compositor_output, &surface_view);
+            if is_workspace {
+                // Blit compositor output into the video preview area only (not fullscreen)
+                let video_rect = self.ui_root.layout.video_area();
+                let sf = scale as f32;
+                // Clear surface first (black background for areas outside video)
+                {
+                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Clear Surface"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &surface_view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                }
+                blit.blit_to_rect(
+                    &gpu.device, &mut encoder, compositor_output, &surface_view,
+                    video_rect.x * sf, video_rect.y * sf,
+                    video_rect.width * sf, video_rect.height * sf,
+                );
+            } else {
+                // Output windows: fullscreen blit
+                blit.blit(&gpu.device, &mut encoder, compositor_output, &surface_view);
+            }
 
             // Draw UI overlay on workspace window using the UITree
             // Pass logical pixel dimensions — the tree is built in logical coords
