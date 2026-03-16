@@ -16,6 +16,11 @@ const CLIP_LABEL_PAD: f32 = 4.0;
 const CLIP_CORNER_RADIUS: f32 = 2.0;
 const CLIP_BORDER_WIDTH: f32 = 1.0;
 const CLIP_MIN_WIDTH_PX: f32 = color::CLIP_MIN_WIDTH;
+
+/// Center a vertical line of given width at pixel position `px`.
+#[inline]
+fn centered_line_x(px: f32, width: f32) -> f32 { px - width * 0.5 }
+
 const FONT_SIZE: u16 = 9;
 const RULER_FONT_SIZE: u16 = 9;
 const RULER_TICK_W: f32 = 1.0;
@@ -604,7 +609,7 @@ impl TimelineViewportPanel {
             if in_view {
                 tree.set_bounds(
                     self.playhead_track_id as u32,
-                    Rect::new(px - PLAYHEAD_WIDTH * 0.5, self.tracks_rect.y,
+                    Rect::new(centered_line_x(px, PLAYHEAD_WIDTH), self.tracks_rect.y,
                               PLAYHEAD_WIDTH, self.tracks_rect.height),
                 );
             }
@@ -615,7 +620,7 @@ impl TimelineViewportPanel {
             if in_view {
                 tree.set_bounds(
                     self.playhead_ruler_id as u32,
-                    Rect::new(px - PLAYHEAD_WIDTH * 0.5, self.ruler_rect.y,
+                    Rect::new(centered_line_x(px, PLAYHEAD_WIDTH), self.ruler_rect.y,
                               PLAYHEAD_WIDTH, self.ruler_rect.height),
                 );
             }
@@ -632,7 +637,7 @@ impl TimelineViewportPanel {
             if in_view {
                 tree.set_bounds(
                     self.insert_cursor_track_id as u32,
-                    Rect::new(px - INSERT_CURSOR_WIDTH * 0.5, self.tracks_rect.y,
+                    Rect::new(centered_line_x(px, INSERT_CURSOR_WIDTH), self.tracks_rect.y,
                               INSERT_CURSOR_WIDTH, self.tracks_rect.height),
                 );
             }
@@ -1434,9 +1439,9 @@ impl TimelineViewportPanel {
                 let label_x = x1 + CLIP_LABEL_PAD + 1.0; // past 1px separator
                 let label_w = clip_w - CLIP_LABEL_PAD * 2.0 - 1.0;
                 let text_color = if clip.is_generator {
-                    Color32::new(20, 20, 22, 255)
+                    color::CLIP_LABEL_BG
                 } else {
-                    Color32::new(20, 20, 22, 220)
+                    color::CLIP_LABEL_BG_HOVER
                 };
 
                 let label_id = tree.add_label(
@@ -1562,7 +1567,7 @@ impl TimelineViewportPanel {
 
         // Track playhead
         self.playhead_track_id = tree.add_panel(
-            -1, px - PLAYHEAD_WIDTH * 0.5, self.tracks_rect.y,
+            -1, centered_line_x(px, PLAYHEAD_WIDTH), self.tracks_rect.y,
             PLAYHEAD_WIDTH, self.tracks_rect.height,
             UIStyle { bg_color: color::PLAYHEAD_RED, ..UIStyle::default() },
         ) as i32;
@@ -1572,7 +1577,7 @@ impl TimelineViewportPanel {
 
         // Ruler playhead
         self.playhead_ruler_id = tree.add_panel(
-            -1, px - PLAYHEAD_WIDTH * 0.5, self.ruler_rect.y,
+            -1, centered_line_x(px, PLAYHEAD_WIDTH), self.ruler_rect.y,
             PLAYHEAD_WIDTH, self.ruler_rect.height,
             UIStyle { bg_color: color::PLAYHEAD_RED, ..UIStyle::default() },
         ) as i32;
@@ -1587,7 +1592,7 @@ impl TimelineViewportPanel {
 
         // Track cursor line
         self.insert_cursor_track_id = tree.add_panel(
-            -1, px - INSERT_CURSOR_WIDTH * 0.5, self.tracks_rect.y,
+            -1, centered_line_x(px, INSERT_CURSOR_WIDTH), self.tracks_rect.y,
             INSERT_CURSOR_WIDTH, self.tracks_rect.height,
             UIStyle { bg_color: color::INSERT_CURSOR_BLUE, ..UIStyle::default() },
         ) as i32;

@@ -17,14 +17,14 @@ const SCROLLBAR_MIN_THUMB_H: f32 = 16.0;
 const SCROLL_SPEED: f32 = 12.5;
 const SECTION_GAP: f32 = 2.0;
 
-const SCROLLBAR_TRACK_COLOR: Color32 = Color32::new(30, 30, 32, 180);
-const SCROLLBAR_THUMB_COLOR: Color32 = Color32::new(90, 90, 95, 200);
-const SCROLLBAR_THUMB_HOVER: Color32 = Color32::new(110, 110, 115, 220);
+const SCROLLBAR_TRACK_COLOR: Color32 = color::SCROLLBAR_TRACK_C32;
+const SCROLLBAR_THUMB_COLOR: Color32 = color::SCROLLBAR_THUMB_C32;
+const SCROLLBAR_THUMB_HOVER: Color32 = color::SCROLLBAR_THUMB_HOVER_C32;
 
 const ADD_EFFECT_BTN_H: f32 = 26.0;
-const ADD_EFFECT_BTN_BG: Color32 = Color32::new(40, 45, 50, 255);
-const ADD_EFFECT_BTN_HOVER: Color32 = Color32::new(55, 65, 75, 255);
-const ADD_EFFECT_BTN_TEXT: Color32 = Color32::new(130, 170, 210, 255);
+const ADD_EFFECT_BTN_BG: Color32 = color::ADD_EFFECT_BTN_BG_C32;
+const ADD_EFFECT_BTN_HOVER: Color32 = color::ADD_EFFECT_BTN_HOVER_C32;
+const ADD_EFFECT_BTN_TEXT: Color32 = color::ADD_EFFECT_BTN_TEXT_C32;
 
 // ── Pressed target (for drag routing) ───────────────────────────
 

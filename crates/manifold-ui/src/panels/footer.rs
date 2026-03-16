@@ -22,8 +22,8 @@ const RIGHT_GUTTER: f32 = 10.0;
 
 // ── Panel-specific colors ──────────────────────────────────────────
 
-const FOOTER_BTN_HOVER: Color32 = Color32::new(75, 75, 79, 255);
-const FOOTER_BTN_PRESSED: Color32 = Color32::new(50, 50, 53, 255);
+const FOOTER_BTN_HOVER: Color32 = color::FOOTER_BTN_HOVER;
+const FOOTER_BTN_PRESSED: Color32 = color::FOOTER_BTN_PRESSED;
 
 const FOOTER_FONT: u16 = 11;
 

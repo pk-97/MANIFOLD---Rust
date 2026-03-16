@@ -401,6 +401,11 @@ impl Application {
     /// Save the current project. If no path exists, triggers Save As.
     fn save_project(&mut self) {
         if let Some(path) = &self.current_project_path {
+            // Sync playhead position before save (Unity ProjectIOService line 235)
+            let current_time = self.engine.current_time();
+            if let Some(project) = self.engine.project_mut() {
+                project.saved_playhead_time = current_time;
+            }
             if let Some(project) = self.engine.project() {
                 match manifold_io::saver::save_project(project, path) {
                     Ok(()) => {
@@ -447,7 +452,12 @@ impl Application {
                 Ok(project) => {
                     // Apply saved layout before initializing (Unity ApplySavedLayout)
                     self.ui_root.apply_project_layout(&project.settings);
+                    let saved_time = project.saved_playhead_time;
                     self.engine.initialize(project);
+                    // Restore playhead position (Unity ProjectIOService line 235)
+                    if saved_time > 0.0 {
+                        self.engine.seek_to(saved_time);
+                    }
                     self.editing_service.set_project();
                     self.selection.clear_selection();
                     self.active_layer_index = Some(0);
@@ -2160,7 +2170,11 @@ impl ApplicationHandler for Application {
                         match manifold_io::loader::load_project(&load_path) {
                             Ok(project) => {
                                 self.ui_root.apply_project_layout(&project.settings);
+                                let saved_time = project.saved_playhead_time;
                                 self.engine.initialize(project);
+                                if saved_time > 0.0 {
+                                    self.engine.seek_to(saved_time);
+                                }
                                 self.editing_service.set_project();
                                 self.selection.clear_selection();
                                 self.active_layer_index = Some(0);

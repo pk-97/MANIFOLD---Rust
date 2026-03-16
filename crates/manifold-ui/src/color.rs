@@ -290,6 +290,50 @@ pub const CARD_BORDER_C32: Color32 = Color32::new(46, 46, 49, 255);
 pub const DRAG_HANDLE_BG_C32: Color32 = Color32::new(38, 38, 42, 255);
 pub const DRAG_HANDLE_HOVER_BG_C32: Color32 = Color32::new(52, 52, 56, 255);
 
+// ── Panel-specific colors ────────────────────────────────────────────
+
+// Header panel
+pub const HEADER_BUTTON_DIM: Color32 = Color32::new(71, 71, 74, 255);
+pub const HEADER_BUTTON_HOVER: Color32 = Color32::new(90, 90, 94, 255);
+pub const HEADER_BUTTON_PRESSED: Color32 = Color32::new(55, 55, 58, 255);
+pub const HEADER_BUTTON_ACTIVE: Color32 = Color32::new(89, 173, 232, 255);
+pub const HEADER_BUTTON_ACTIVE_HOVER: Color32 = Color32::new(110, 190, 240, 255);
+pub const HEADER_BUTTON_ACTIVE_PRESSED: Color32 = Color32::new(70, 150, 210, 255);
+pub const HEADER_PROGRESS_FILL: Color32 = Color32::new(89, 173, 232, 255);
+
+// Footer panel
+pub const FOOTER_BTN_HOVER: Color32 = Color32::new(75, 75, 79, 255);
+pub const FOOTER_BTN_PRESSED: Color32 = Color32::new(50, 50, 53, 255);
+
+// Transport panel
+pub const TRANSPORT_BUTTON_HOVER: Color32 = Color32::new(78, 78, 82, 255);
+pub const TRANSPORT_SAVE_DIRTY_BG: Color32 = Color32::new(82, 68, 48, 255);
+pub const TRANSPORT_BPM_FIELD_HOVER: Color32 = Color32::new(50, 50, 53, 255);
+
+// Inspector panel
+pub const SCROLLBAR_TRACK_C32: Color32 = Color32::new(30, 30, 32, 180);
+pub const SCROLLBAR_THUMB_C32: Color32 = Color32::new(90, 90, 95, 200);
+pub const SCROLLBAR_THUMB_HOVER_C32: Color32 = Color32::new(110, 110, 115, 220);
+pub const ADD_EFFECT_BTN_BG_C32: Color32 = Color32::new(40, 45, 50, 255);
+pub const ADD_EFFECT_BTN_HOVER_C32: Color32 = Color32::new(55, 65, 75, 255);
+pub const ADD_EFFECT_BTN_TEXT_C32: Color32 = Color32::new(130, 170, 210, 255);
+
+// Layer header panel
+pub const LAYER_DRAG_SOURCE_DIM: Color32 = Color32::new(22, 22, 24, 255);
+pub const LAYER_INSERT_LINE: Color32 = Color32::new(100, 180, 255, 255);
+pub const LAYER_ROW_BG: Color32 = Color32::new(40, 40, 42, 255);
+pub const LAYER_ROW_HOVER_BG: Color32 = Color32::new(50, 50, 53, 255);
+pub const LAYER_ROW_PRESSED_BG: Color32 = Color32::new(35, 35, 37, 255);
+pub const LAYER_CHEVRON_HOVER: Color32 = Color32::new(255, 255, 255, 15);
+pub const LAYER_CHEVRON_PRESSED: Color32 = Color32::new(255, 255, 255, 8);
+
+// Viewport panel
+pub const CLIP_LABEL_BG: Color32 = Color32::new(20, 20, 22, 255);
+pub const CLIP_LABEL_BG_HOVER: Color32 = Color32::new(20, 20, 22, 220);
+
+// Dropdown panel
+pub const DROPDOWN_SCRIM: Color32 = Color32::new(0, 0, 0, 1);
+
 // ── Interaction thresholds ──────────────────────────────────────────
 pub const DRAG_THRESHOLD_PX: f32 = 4.0;
 pub const DOUBLE_CLICK_TIME_SEC: f32 = 0.3;

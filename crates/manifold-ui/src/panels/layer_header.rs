@@ -37,8 +37,8 @@ const ACCENT_COLOR: Color32 = color::DEFAULT_GROUP_ACCENT;
 const BORDER_CLR: Color32 = color::GROUP_BOTTOM_BORDER;
 const GEN_TYPE_CLR: Color32 = color::CLIP_GEN_NORMAL;
 
-const DRAG_SOURCE_DIM: Color32 = Color32::new(22, 22, 24, 255);
-const INSERT_LINE_CLR: Color32 = Color32::new(100, 180, 255, 255);
+const DRAG_SOURCE_DIM: Color32 = color::LAYER_DRAG_SOURCE_DIM;
+const INSERT_LINE_CLR: Color32 = color::LAYER_INSERT_LINE;
 const INSERT_LINE_H: f32 = 2.0;
 
 const NAME_FONT: u16 = color::LAYER_CTRL_NAME_FONT_SIZE;
@@ -110,9 +110,9 @@ fn small_button_style() -> UIStyle {
 
 fn field_style() -> UIStyle {
     UIStyle {
-        bg_color: Color32::new(40, 40, 42, 255),
-        hover_bg_color: Color32::new(50, 50, 53, 255),
-        pressed_bg_color: Color32::new(35, 35, 37, 255),
+        bg_color: color::LAYER_ROW_BG,
+        hover_bg_color: color::LAYER_ROW_HOVER_BG,
+        pressed_bg_color: color::LAYER_ROW_PRESSED_BG,
         text_color: color::TEXT_DIMMED_C32,
         font_size: SMALL_FONT,
         corner_radius: LH_BTN_RADIUS,
@@ -754,8 +754,8 @@ impl LayerHeaderPanel {
             clip_parent, nr.x, nr.y, nr.width, nr.height,
             UIStyle {
                 bg_color: Color32::TRANSPARENT,
-                hover_bg_color: Color32::new(255, 255, 255, 15),
-                pressed_bg_color: Color32::new(255, 255, 255, 8),
+                hover_bg_color: color::LAYER_CHEVRON_HOVER,
+                pressed_bg_color: color::LAYER_CHEVRON_PRESSED,
                 text_color: color::TEXT_WHITE_C32,
                 font_size: NAME_FONT,
                 text_align: TextAlign::Left,
@@ -1154,7 +1154,8 @@ mod tests {
     #[test]
     fn build_layer_header() {
         let mut tree = UITree::new();
-        let layout = ScreenLayout::new(1920.0, 1080.0);
+        // Use tall screen so all 3 layers (y=0..420) fit in timeline body.
+        let layout = ScreenLayout::new(1920.0, 2160.0);
         let mut panel = LayerHeaderPanel::new();
 
         panel.set_layers(vec![

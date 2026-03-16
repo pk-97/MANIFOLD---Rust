@@ -26,13 +26,13 @@ const TIME_DISPLAY_W: f32 = 260.0;
 
 // ── Panel-specific colors ──────────────────────────────────────────
 
-const BUTTON_DIM: Color32 = Color32::new(71, 71, 74, 255);
-const BUTTON_HOVER_H: Color32 = Color32::new(90, 90, 94, 255);
-const BUTTON_PRESSED_H: Color32 = Color32::new(55, 55, 58, 255);
-const BUTTON_ACTIVE: Color32 = Color32::new(89, 173, 232, 255);
-const BUTTON_ACTIVE_HOVER: Color32 = Color32::new(110, 190, 240, 255);
-const BUTTON_ACTIVE_PRESSED: Color32 = Color32::new(70, 150, 210, 255);
-const PROGRESS_FILL: Color32 = Color32::new(89, 173, 232, 255);
+const BUTTON_DIM: Color32 = color::HEADER_BUTTON_DIM;
+const BUTTON_HOVER_H: Color32 = color::HEADER_BUTTON_HOVER;
+const BUTTON_PRESSED_H: Color32 = color::HEADER_BUTTON_PRESSED;
+const BUTTON_ACTIVE: Color32 = color::HEADER_BUTTON_ACTIVE;
+const BUTTON_ACTIVE_HOVER: Color32 = color::HEADER_BUTTON_ACTIVE_HOVER;
+const BUTTON_ACTIVE_PRESSED: Color32 = color::HEADER_BUTTON_ACTIVE_PRESSED;
+const PROGRESS_FILL: Color32 = color::HEADER_PROGRESS_FILL;
 
 const PROGRESS_RADIUS: f32 = 2.0;
 

@@ -263,10 +263,13 @@ mod tests {
         assert_eq!(c.b, 0);
         assert_eq!(c.a, 191);
 
+        // to_f32() returns sRGB-to-linear values (for GPU rendering).
+        // 128/255 ≈ 0.502 sRGB → ~0.214 linear via IEC 61966-2-1.
         let f = Color32::new(255, 128, 0, 191).to_f32();
-        assert!((f[0] - 1.0).abs() < 0.01);
-        assert!((f[1] - 0.502).abs() < 0.01);
-        assert!((f[2] - 0.0).abs() < 0.01);
+        assert!((f[0] - 1.0).abs() < 0.01, "red: {}", f[0]);
+        assert!((f[1] - 0.214).abs() < 0.02, "green (linear): {}", f[1]);
+        assert!((f[2] - 0.0).abs() < 0.01, "blue: {}", f[2]);
+        assert!((f[3] - 0.749).abs() < 0.01, "alpha (linear): {}", f[3]);
     }
 
     #[test]

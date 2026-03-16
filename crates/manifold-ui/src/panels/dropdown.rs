@@ -251,7 +251,7 @@ impl DropdownPanel {
         // Fullscreen interactive backdrop — catches clicks outside the dropdown
         // so they dismiss instead of passing through to panels behind it.
         let backdrop_style = UIStyle {
-            bg_color: Color32::new(0, 0, 0, 1), // nearly invisible
+            bg_color: color::DROPDOWN_SCRIM, // nearly invisible
             ..UIStyle::default()
         };
         self.backdrop_id = tree.add_node(
