@@ -60,7 +60,24 @@ impl TempoMap {
         bpm.clamp(20.0, 300.0)
     }
 
-    pub fn add_or_replace_point(&mut self, beat: f32, bpm: f32, source: TempoPointSource, epsilon: f32) {
+    pub fn add_or_replace_point(
+        &mut self,
+        beat: f32,
+        bpm: f32,
+        source: TempoPointSource,
+        epsilon: f32,
+    ) {
+        self.add_or_replace_point_with_time(beat, bpm, source, epsilon, -1.0);
+    }
+
+    pub fn add_or_replace_point_with_time(
+        &mut self,
+        beat: f32,
+        bpm: f32,
+        source: TempoPointSource,
+        epsilon: f32,
+        recorded_at_seconds: f32,
+    ) {
         let beat = BeatQuantizer::quantize_beat(beat);
         let bpm = BeatQuantizer::quantize_bpm(bpm);
 
@@ -71,7 +88,7 @@ impl TempoMap {
             beat,
             bpm,
             source,
-            recorded_at_seconds: -1.0,
+            recorded_at_seconds,
         });
         self.is_sorted = false;
     }

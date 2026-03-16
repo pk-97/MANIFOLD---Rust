@@ -5,35 +5,129 @@ use manifold_core::tempo::TempoPoint;
 use manifold_core::types::{BlendMode, GeneratorType, QuantizeMode, TempoPointSource};
 use manifold_core::effects::ParameterDriver;
 
-/// Change project BPM.
+/// Change project BPM with full tempo map support.
+/// Matches Unity's ChangeBpmCommand exactly:
+/// - Stores old/new tempo points (cloned) for full tempo map restore on undo
+/// - `flatten_tempo_map` flag clears the map to a single point
+/// - `tempo_point_source` propagates to AddOrReplacePoint
+/// - ApplyBpm: sets BPM, adds/replaces tempo point, optionally flattens map
+/// - Undo: restores the old tempo map points completely
 #[derive(Debug)]
 pub struct ChangeBpmCommand {
     old_bpm: f32,
     new_bpm: f32,
+    tempo_point_source: TempoPointSource,
+    flatten_tempo_map: bool,
+    /// Cloned snapshot of tempo map points at construction time.
+    /// None when constructed with the settings-only constructor.
+    old_tempo_points: Option<Vec<TempoPoint>>,
+    /// Whether this command has access to the project's tempo map.
+    has_project: bool,
 }
 
 impl ChangeBpmCommand {
+    /// Settings-only constructor (no tempo map manipulation).
+    /// Equivalent to Unity's `ChangeBpmCommand(ProjectSettings, float, float)`.
     pub fn new(old_bpm: f32, new_bpm: f32) -> Self {
         Self {
             old_bpm: BeatQuantizer::quantize_bpm(old_bpm),
             new_bpm: BeatQuantizer::quantize_bpm(new_bpm),
+            tempo_point_source: TempoPointSource::Manual,
+            flatten_tempo_map: false,
+            old_tempo_points: None,
+            has_project: false,
+        }
+    }
+
+    /// Full constructor with tempo map support.
+    /// Equivalent to Unity's `ChangeBpmCommand(Project, float, float, TempoPointSource, bool)`.
+    /// `old_tempo_points` should be `project.tempo_map.clone_points()` captured by the caller.
+    pub fn with_tempo_map(
+        old_bpm: f32,
+        new_bpm: f32,
+        tempo_point_source: TempoPointSource,
+        flatten_tempo_map: bool,
+        old_tempo_points: Vec<TempoPoint>,
+    ) -> Self {
+        Self {
+            old_bpm: BeatQuantizer::quantize_bpm(old_bpm),
+            new_bpm: BeatQuantizer::quantize_bpm(new_bpm),
+            tempo_point_source,
+            flatten_tempo_map,
+            old_tempo_points: Some(old_tempo_points),
+            has_project: true,
+        }
+    }
+
+    fn apply_bpm(&self, project: &mut Project, bpm: f32, is_undo: bool) {
+        project.settings.bpm = BeatQuantizer::quantize_bpm(bpm);
+        let applied_bpm = project.settings.bpm;
+
+        if !self.has_project {
+            return;
+        }
+
+        if !self.flatten_tempo_map {
+            project.tempo_map.add_or_replace_point(
+                0.0, applied_bpm, self.tempo_point_source, 0.001,
+            );
+            project.tempo_map.ensure_default_at_beat_zero(applied_bpm, self.tempo_point_source);
+            return;
+        }
+
+        if is_undo {
+            self.restore_old_tempo_map(project);
+            return;
+        }
+
+        project.tempo_map.clear();
+        project.tempo_map.add_or_replace_point(
+            0.0, applied_bpm, self.tempo_point_source, 0.001,
+        );
+        project.tempo_map.ensure_default_at_beat_zero(applied_bpm, self.tempo_point_source);
+    }
+
+    fn restore_old_tempo_map(&self, project: &mut Project) {
+        project.tempo_map.clear();
+
+        match &self.old_tempo_points {
+            Some(points) if !points.is_empty() => {
+                for p in points {
+                    project.tempo_map.add_or_replace_point_with_time(
+                        p.beat, p.bpm, p.source, 0.001, p.recorded_at_seconds,
+                    );
+                }
+                project.tempo_map.ensure_default_at_beat_zero(
+                    project.settings.bpm, self.tempo_point_source,
+                );
+            }
+            _ => {
+                project.tempo_map.add_or_replace_point(
+                    0.0, self.old_bpm, self.tempo_point_source, 0.001,
+                );
+                project.tempo_map.ensure_default_at_beat_zero(
+                    self.old_bpm, self.tempo_point_source,
+                );
+            }
         }
     }
 }
 
 impl Command for ChangeBpmCommand {
     fn execute(&mut self, project: &mut Project) {
-        project.settings.bpm = self.new_bpm;
+        self.apply_bpm(project, self.new_bpm, false);
     }
 
     fn undo(&mut self, project: &mut Project) {
-        project.settings.bpm = self.old_bpm;
+        self.apply_bpm(project, self.old_bpm, true);
     }
 
     fn description(&self) -> &str { "Change BPM" }
 }
 
 /// Change output resolution.
+/// Caller is responsible for applying the resolution to the runtime pipeline.
+/// Matches Unity: only sets the preset, never width/height.
 #[derive(Debug)]
 pub struct ChangeResolutionCommand {
     old_preset: manifold_core::ResolutionPreset,
@@ -52,16 +146,10 @@ impl ChangeResolutionCommand {
 impl Command for ChangeResolutionCommand {
     fn execute(&mut self, project: &mut Project) {
         project.settings.resolution_preset = self.new_preset;
-        let (w, h) = self.new_preset.dimensions();
-        project.settings.output_width = w;
-        project.settings.output_height = h;
     }
 
     fn undo(&mut self, project: &mut Project) {
         project.settings.resolution_preset = self.old_preset;
-        let (w, h) = self.old_preset.dimensions();
-        project.settings.output_width = w;
-        project.settings.output_height = h;
     }
 
     fn description(&self) -> &str { "Change Resolution" }
@@ -314,6 +402,7 @@ impl Command for ChangeMasterOpacityCommand {
 }
 
 /// Restore a recorded tempo lane.
+/// Matches Unity's RestoreRecordedTempoLaneCommand exactly.
 #[derive(Debug)]
 pub struct RestoreRecordedTempoLaneCommand {
     old_bpm: f32,
@@ -325,26 +414,37 @@ impl RestoreRecordedTempoLaneCommand {
     pub fn new(old_bpm: f32, old_points: Vec<TempoPoint>, new_points: Vec<TempoPoint>) -> Self {
         Self { old_bpm, old_points, new_points }
     }
+
+    fn apply_lane(project: &mut Project, lane: &[TempoPoint], fallback_bpm: f32) {
+        project.tempo_map.clear();
+
+        for point in lane {
+            project.tempo_map.add_or_replace_point_with_time(
+                point.beat, point.bpm, point.source, 0.001, point.recorded_at_seconds,
+            );
+        }
+
+        project.tempo_map.ensure_default_at_beat_zero(fallback_bpm, TempoPointSource::Manual);
+
+        let bpm_at_zero = project.tempo_map.get_bpm_at_beat(0.0, fallback_bpm);
+        project.settings.bpm = bpm_at_zero;
+    }
 }
 
 impl Command for RestoreRecordedTempoLaneCommand {
     fn execute(&mut self, project: &mut Project) {
-        project.tempo_map.set_points(self.new_points.clone());
-        // Update BPM to first point if available
-        if let Some(first) = self.new_points.first() {
-            project.settings.bpm = first.bpm;
-        }
+        Self::apply_lane(project, &self.new_points.clone(), self.old_bpm);
     }
 
     fn undo(&mut self, project: &mut Project) {
-        project.tempo_map.set_points(self.old_points.clone());
-        project.settings.bpm = self.old_bpm;
+        Self::apply_lane(project, &self.old_points.clone(), self.old_bpm);
     }
 
     fn description(&self) -> &str { "Restore Tempo Lane" }
 }
 
 /// Clear the tempo map, flattening to current BPM.
+/// Matches Unity's ClearTempoMapCommand exactly.
 #[derive(Debug)]
 pub struct ClearTempoMapCommand {
     old_points: Vec<TempoPoint>,
@@ -366,10 +466,21 @@ impl Command for ClearTempoMapCommand {
             TempoPointSource::Manual,
             0.001,
         );
+        project.tempo_map.ensure_default_at_beat_zero(self.current_bpm, TempoPointSource::Manual);
     }
 
     fn undo(&mut self, project: &mut Project) {
-        project.tempo_map.set_points(self.old_points.clone());
+        project.tempo_map.clear();
+
+        if !self.old_points.is_empty() {
+            for p in &self.old_points {
+                project.tempo_map.add_or_replace_point_with_time(
+                    p.beat, p.bpm, p.source, 0.001, p.recorded_at_seconds,
+                );
+            }
+        }
+
+        project.tempo_map.ensure_default_at_beat_zero(self.current_bpm, TempoPointSource::Manual);
     }
 
     fn description(&self) -> &str { "Clear Tempo Map" }
