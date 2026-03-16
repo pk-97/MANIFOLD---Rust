@@ -633,12 +633,24 @@ impl Panel for TimelineViewportPanel {
             UIStyle { bg_color: color::OVERVIEW_BG, ..UIStyle::default() },
         );
 
-        // Ruler background
-        self.ruler_bg_id = tree.add_panel(
+        // Ruler background — INTERACTIVE so clicks register for playhead scrubbing
+        self.ruler_bg_id = tree.add_button(
             -1, self.ruler_rect.x, self.ruler_rect.y,
             self.ruler_rect.width, self.ruler_rect.height,
             UIStyle { bg_color: color::HEADER_BG, ..UIStyle::default() },
+            "",
         ) as i32;
+
+        // Interactive overlay covering entire tracks area — catches all clicks/drags
+        // (matches Unity's InteractionOverlay which is a transparent MonoBehaviour
+        // covering the tracks viewport). Without this, clicks on non-interactive
+        // panel nodes (track backgrounds, grid lines) won't generate events.
+        tree.add_button(
+            -1, self.tracks_rect.x, self.tracks_rect.y,
+            self.tracks_rect.width, self.tracks_rect.height,
+            UIStyle { bg_color: Color32::TRANSPARENT, ..UIStyle::default() },
+            "",
+        );
 
         // Build track backgrounds
         self.build_track_backgrounds(tree);
