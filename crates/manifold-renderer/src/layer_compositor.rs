@@ -1,6 +1,12 @@
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use manifold_core::BlendMode;
 use manifold_core::effects::{EffectGroup, EffectInstance};
+use crate::effect::EffectContext;
+use crate::effect_chain::EffectChain;
+use crate::effect_registry::EffectRegistry;
 use crate::render_target::RenderTarget;
+use crate::wet_dry_lerp::WetDryLerpPipeline;
 use crate::compositor::{Compositor, CompositorFrame};
 
 /// Descriptor for a single clip to composite.
@@ -271,6 +277,23 @@ impl PingPong {
     }
 }
 
+/// Deterministic hash of a clip ID string to produce an owner_key for effect context.
+fn clip_id_owner_key(clip_id: &str) -> i64 {
+    let mut hasher = DefaultHasher::new();
+    clip_id.hash(&mut hasher);
+    hasher.finish() as i64
+}
+
+/// Check if an effect slice has any enabled effects.
+fn has_enabled_effects(effects: &[EffectInstance]) -> bool {
+    for fx in effects {
+        if fx.enabled {
+            return true;
+        }
+    }
+    false
+}
+
 /// Layer-aware compositor with per-layer ping-pong blending.
 ///
 /// Compositing flow:
@@ -280,7 +303,8 @@ impl PingPong {
 ///    - Single clip: blit directly into main with layer blend mode
 ///    - Multi-clip: composite clips into layer buffer (Normal blend), then
 ///      blit layer result into main with layer blend mode
-/// 4. Return final accumulated main buffer
+/// 4. Apply master effects to final buffer
+/// 5. Return final accumulated main buffer
 pub struct LayerCompositor {
     /// Main accumulation ping-pong (opaque black init).
     main: PingPong,
@@ -288,6 +312,12 @@ pub struct LayerCompositor {
     layer_buf: Option<PingPong>,
     /// GPU resources for blend operations (pipeline, sampler, uniforms).
     blend: BlendResources,
+    /// Effect chain processor (owns its own ping-pong for effect processing).
+    effect_chain: EffectChain,
+    /// Registry of all effect processors.
+    effect_registry: EffectRegistry,
+    /// Wet/dry lerp pipeline for effect group blending.
+    wet_dry_lerp: WetDryLerpPipeline,
 }
 
 impl LayerCompositor {
@@ -296,6 +326,9 @@ impl LayerCompositor {
             main: PingPong::new(device, width, height, "Compositor"),
             layer_buf: None,
             blend: BlendResources::new(device),
+            effect_chain: EffectChain::new(),
+            effect_registry: EffectRegistry::new(device),
+            wet_dry_lerp: WetDryLerpPipeline::new(device),
         }
     }
 
@@ -308,6 +341,31 @@ impl LayerCompositor {
         }
     }
 
+    /// Apply effect chain to the given input view, returning the processed view
+    /// if any effects were applied, or None if the input should be used as-is.
+    fn apply_effects<'a>(
+        effect_chain: &'a mut EffectChain,
+        registry: &mut EffectRegistry,
+        wet_dry_lerp: &WetDryLerpPipeline,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        input_view: &'a wgpu::TextureView,
+        effects: &[EffectInstance],
+        groups: &[EffectGroup],
+        ctx: &EffectContext,
+    ) -> Option<&'a wgpu::TextureView> {
+        effect_chain.apply_chain(
+            device, queue, encoder,
+            registry,
+            input_view,
+            effects,
+            groups,
+            ctx,
+            Some(wet_dry_lerp),
+        )
+    }
+
     /// Composite all clips into main buffer, grouping by layer.
     fn composite(
         &mut self,
@@ -317,7 +375,9 @@ impl LayerCompositor {
         frame: &CompositorFrame,
     ) {
         let clips = frame.clips;
-        let aspect = self.main.width() as f32 / self.main.height() as f32;
+        let width = self.main.width();
+        let height = self.main.height();
+        let aspect = width as f32 / height as f32;
 
         // Clear main to opaque black
         self.main.clear_source(encoder, true);
@@ -358,6 +418,28 @@ impl LayerCompositor {
             if group.len() == 1 {
                 // Single clip: blit directly into main with layer blend mode
                 let clip = &group[0];
+
+                // Apply clip-level effects if present
+                let blend_input = if has_enabled_effects(clip.effects) {
+                    let ctx = EffectContext {
+                        time: frame.time,
+                        beat: frame.beat,
+                        dt: frame.dt,
+                        width,
+                        height,
+                        owner_key: clip_id_owner_key(clip.clip_id),
+                        is_clip_level: true,
+                    };
+                    Self::apply_effects(
+                        &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
+                        device, queue, encoder,
+                        clip.texture_view, clip.effects, clip.effect_groups, &ctx,
+                    )
+                } else {
+                    None
+                };
+                let effective_blend_view = blend_input.unwrap_or(clip.texture_view);
+
                 let uniforms = BlendUniforms {
                     blend_mode: layer_blend as u32,
                     opacity: layer_opacity * clip.opacity,
@@ -372,7 +454,7 @@ impl LayerCompositor {
                 self.blend.blend_pass(
                     device, queue, encoder,
                     self.main.source_view(),
-                    clip.texture_view,
+                    effective_blend_view,
                     self.main.target_view(),
                     &uniforms,
                 );
@@ -387,6 +469,27 @@ impl LayerCompositor {
 
                 // Composite each clip into layer buffer with Normal blend
                 for clip in group {
+                    // Apply clip-level effects if present
+                    let blend_input = if has_enabled_effects(clip.effects) {
+                        let ctx = EffectContext {
+                            time: frame.time,
+                            beat: frame.beat,
+                            dt: frame.dt,
+                            width,
+                            height,
+                            owner_key: clip_id_owner_key(clip.clip_id),
+                            is_clip_level: true,
+                        };
+                        Self::apply_effects(
+                            &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
+                            device, queue, encoder,
+                            clip.texture_view, clip.effects, clip.effect_groups, &ctx,
+                        )
+                    } else {
+                        None
+                    };
+                    let effective_blend_view = blend_input.unwrap_or(clip.texture_view);
+
                     let uniforms = BlendUniforms {
                         blend_mode: BlendMode::Normal as u32,
                         opacity: clip.opacity,
@@ -401,12 +504,39 @@ impl LayerCompositor {
                     self.blend.blend_pass(
                         device, queue, encoder,
                         layer_buf.source_view(),
-                        clip.texture_view,
+                        effective_blend_view,
                         layer_buf.target_view(),
                         &uniforms,
                     );
                     layer_buf.swap();
                 }
+
+                // Apply layer-level effects to composited layer buffer
+                let layer_source = if let Some(ld) = layer_desc {
+                    if has_enabled_effects(ld.effects) {
+                        let ctx = EffectContext {
+                            time: frame.time,
+                            beat: frame.beat,
+                            dt: frame.dt,
+                            width,
+                            height,
+                            owner_key: (layer_idx as i64) + 1,
+                            is_clip_level: false,
+                        };
+                        let layer_buf = self.layer_buf.as_ref().unwrap();
+                        Self::apply_effects(
+                            &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
+                            device, queue, encoder,
+                            layer_buf.source_view(), ld.effects, ld.effect_groups, &ctx,
+                        )
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let layer_buf = self.layer_buf.as_ref().unwrap();
+                let effective_layer_view = layer_source.unwrap_or(layer_buf.source_view());
 
                 // Blit layer result into main with layer blend mode (no transforms)
                 let uniforms = BlendUniforms {
@@ -423,7 +553,47 @@ impl LayerCompositor {
                 self.blend.blend_pass(
                     device, queue, encoder,
                     self.main.source_view(),
-                    layer_buf.source_view(),
+                    effective_layer_view,
+                    self.main.target_view(),
+                    &uniforms,
+                );
+                self.main.swap();
+            }
+        }
+
+        // Apply master effects to final composited buffer
+        if has_enabled_effects(frame.master_effects) {
+            let ctx = EffectContext {
+                time: frame.time,
+                beat: frame.beat,
+                dt: frame.dt,
+                width,
+                height,
+                owner_key: 0, // master
+                is_clip_level: false,
+            };
+            if let Some(processed) = Self::apply_effects(
+                &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
+                device, queue, encoder,
+                self.main.source_view(), frame.master_effects, frame.master_effect_groups, &ctx,
+            ) {
+                // Blit effect chain result back into main via Opaque blend (full replace).
+                // source_view (t_base) and target_view are always different textures (ping/pong).
+                // processed points to effect_chain's internal buffer (third texture). No hazard.
+                let uniforms = BlendUniforms {
+                    blend_mode: BlendMode::Opaque as u32,
+                    opacity: 1.0,
+                    translate_x: 0.0,
+                    translate_y: 0.0,
+                    scale_val: 1.0,
+                    rotation: 0.0,
+                    aspect_ratio: aspect,
+                    invert_colors: 0.0,
+                };
+                self.blend.blend_pass(
+                    device, queue, encoder,
+                    self.main.source_view(),
+                    processed,
                     self.main.target_view(),
                     &uniforms,
                 );
@@ -455,6 +625,8 @@ impl Compositor for LayerCompositor {
         if let Some(lb) = &mut self.layer_buf {
             lb.resize(device, width, height);
         }
+        self.effect_chain.resize(device, width, height);
+        self.effect_registry.resize_all(device, width, height);
     }
 
     fn dimensions(&self) -> (u32, u32) {

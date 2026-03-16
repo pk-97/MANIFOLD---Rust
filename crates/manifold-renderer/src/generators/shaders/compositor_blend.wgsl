@@ -63,15 +63,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         blend = textureSample(t_blend, s, blend_uv);
     }
 
-    // Invert
-    if u.invert_colors > 0.5 {
-        blend = vec4<f32>(max(vec3<f32>(1.0) - blend.rgb, vec3<f32>(0.0)), blend.a);
-    }
-
     let ba = base.a;
-    let bl_a = blend.a * u.opacity;
+    let bl_a = blend.a;
     let b = base.rgb;
-    let f_val = blend.rgb;
+
+    // Unpremultiply blend for non-Normal/Stencil/Opaque blends
+    var f_val = blend.rgb;
+    if u.blend_mode != 0u && u.blend_mode != 5u && u.blend_mode != 6u {
+        if blend.a > 0.001 {
+            f_val = blend.rgb / max(blend.a, 0.01);
+        } else {
+            f_val = vec3<f32>(0.0);
+        }
+    }
 
     var blended: vec3<f32>;
 
@@ -101,8 +105,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // 5: Stencil — blend texture's alpha masks the base
         case 5u: {
             blended = b;
-            // Alpha stencil: output alpha = base alpha * blend alpha
-            let out_a = ba * bl_a;
+            let out_a = ba * bl_a * u.opacity;
             return vec4<f32>(b * out_a, out_a);
         }
         // 6: Opaque — fully replace, ignore alpha
@@ -143,7 +146,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // Alpha compositing: lerp base → blended by blend alpha
-    let out_rgb = mix(b, blended, bl_a);
+    var out_rgb = mix(b, blended, bl_a);
     let out_a = bl_a + ba * (1.0 - bl_a);
-    return vec4<f32>(out_rgb, out_a);
+
+    // Post-blend invert (matches Unity: applied to composited result)
+    if u.invert_colors > 0.5 {
+        out_rgb = max(vec3<f32>(1.0) - out_rgb, vec3<f32>(0.0));
+    }
+
+    // Post-blend opacity lerp (matches Unity: lerp(base, result, opacity))
+    let blended_result = vec4<f32>(out_rgb, out_a);
+    let final_result = mix(base, blended_result, u.opacity);
+    return final_result;
 }
