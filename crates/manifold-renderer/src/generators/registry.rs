@@ -2,9 +2,14 @@ use manifold_core::GeneratorType;
 use crate::generator::Generator;
 use super::basic_shapes_snap::BasicShapesSnapGenerator;
 use super::concentric_tunnel::ConcentricTunnelGenerator;
+use super::duocylinder::DuocylinderGenerator;
 use super::fractal_zoom::FractalZoomGenerator;
+use super::lissajous::LissajousGenerator;
 use super::number_station::NumberStationGenerator;
+use super::oscilloscope_xy::OscilloscopeXYGenerator;
 use super::plasma::PlasmaGenerator;
+use super::tesseract::TesseractGenerator;
+use super::wireframe_zoo::WireframeZooGenerator;
 
 /// Factory that maps GeneratorType to concrete Generator instances.
 /// Pipeline compilation happens at creation time (expensive — do at startup or first use).
@@ -25,6 +30,11 @@ impl GeneratorRegistry {
             GeneratorType::BasicShapesSnap => Some(Box::new(BasicShapesSnapGenerator::new(device, self.target_format))),
             GeneratorType::ConcentricTunnel => Some(Box::new(ConcentricTunnelGenerator::new(device, self.target_format))),
             GeneratorType::NumberStation => Some(Box::new(NumberStationGenerator::new(device, self.target_format))),
+            GeneratorType::Tesseract => Some(Box::new(TesseractGenerator::new(device, self.target_format))),
+            GeneratorType::Duocylinder => Some(Box::new(DuocylinderGenerator::new(device, self.target_format))),
+            GeneratorType::Lissajous => Some(Box::new(LissajousGenerator::new(device, self.target_format))),
+            GeneratorType::WireframeZoo => Some(Box::new(WireframeZooGenerator::new(device, self.target_format))),
+            GeneratorType::OscilloscopeXY => Some(Box::new(OscilloscopeXYGenerator::new(device, self.target_format))),
             _ => {
                 log::warn!("Generator type {:?} not yet implemented", gen_type);
                 None
