@@ -7,3 +7,4 @@ edition = "2021"
 bitflags = "2"
 
 [dev-dependencies]
+manifold-core = { path = "../manifold-core" }

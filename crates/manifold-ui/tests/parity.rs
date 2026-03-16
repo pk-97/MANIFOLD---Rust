@@ -169,3 +169,62 @@ fn color_track_background_deep_level() {
     // Deep (0.10 gray) ≈ 26
     assert_eq!(color::TRACK_BG, Color32::new(26, 26, 27, 255));
 }
+
+// ── Generator param counts (from GeneratorDefinitionRegistry.cs) ──
+
+use manifold_core::types::GeneratorType;
+
+#[test]
+fn generator_param_count_plasma() { assert_eq!(GeneratorType::Plasma.param_defs().len(), 6); }
+#[test]
+fn generator_param_count_basic_shapes() { assert_eq!(GeneratorType::BasicShapesSnap.param_defs().len(), 3); }
+#[test]
+fn generator_param_count_concentric_tunnel() { assert_eq!(GeneratorType::ConcentricTunnel.param_defs().len(), 6); }
+#[test]
+fn generator_param_count_fractal_zoom() { assert_eq!(GeneratorType::FractalZoom.param_defs().len(), 2); }
+#[test]
+fn generator_param_count_number_station() { assert_eq!(GeneratorType::NumberStation.param_defs().len(), 8); }
+#[test]
+fn generator_param_count_tesseract() { assert_eq!(GeneratorType::Tesseract.param_defs().len(), 11); }
+#[test]
+fn generator_param_count_duocylinder() { assert_eq!(GeneratorType::Duocylinder.param_defs().len(), 11); }
+#[test]
+fn generator_param_count_lissajous() { assert_eq!(GeneratorType::Lissajous.param_defs().len(), 11); }
+#[test]
+fn generator_param_count_wireframe_zoo() { assert_eq!(GeneratorType::WireframeZoo.param_defs().len(), 8); }
+#[test]
+fn generator_param_count_oscilloscope_xy() { assert_eq!(GeneratorType::OscilloscopeXY.param_defs().len(), 9); }
+#[test]
+fn generator_param_count_reaction_diffusion() { assert_eq!(GeneratorType::ReactionDiffusion.param_defs().len(), 4); }
+#[test]
+fn generator_param_count_flowfield() { assert_eq!(GeneratorType::Flowfield.param_defs().len(), 6); }
+#[test]
+fn generator_param_count_parametric_surface() { assert_eq!(GeneratorType::ParametricSurface.param_defs().len(), 5); }
+#[test]
+fn generator_param_count_strange_attractor() { assert_eq!(GeneratorType::StrangeAttractor.param_defs().len(), 8); }
+#[test]
+fn generator_param_count_mycelium() { assert_eq!(GeneratorType::Mycelium.param_defs().len(), 12); }
+#[test]
+fn generator_param_count_compute_attractor() { assert_eq!(GeneratorType::ComputeStrangeAttractor.param_defs().len(), 11); }
+#[test]
+fn generator_param_count_fluid_sim() { assert_eq!(GeneratorType::FluidSimulation.param_defs().len(), 20); }
+#[test]
+fn generator_param_count_fluid_sim_3d() { assert_eq!(GeneratorType::FluidSimulation3D.param_defs().len(), 26); }
+
+#[test]
+fn generator_all_types_have_params() {
+    // Every generator type (except None) must have at least 1 param defined
+    for gen_type in GeneratorType::ALL {
+        assert!(!gen_type.param_defs().is_empty(), "{:?} has no param definitions", gen_type);
+    }
+}
+
+#[test]
+fn generator_max_param_count() {
+    // FluidSimulation3D has the most params (26)
+    let max = GeneratorType::ALL.iter()
+        .map(|g| g.param_defs().len())
+        .max()
+        .unwrap_or(0);
+    assert_eq!(max, 26);
+}

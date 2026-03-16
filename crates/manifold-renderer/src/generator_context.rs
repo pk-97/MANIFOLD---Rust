@@ -1,6 +1,7 @@
 /// Maximum generator parameters per type.
-/// Covers all existing generators (max ~10 params). Increase if needed.
-pub const MAX_GEN_PARAMS: usize = 16;
+/// FluidSimulation3D has 26 params (the most of any generator).
+/// Set to 32 for alignment and future headroom.
+pub const MAX_GEN_PARAMS: usize = 32;
 
 /// Per-frame rendering context passed to generators.
 /// Copy + fixed-size array = zero allocation on the hot path.
