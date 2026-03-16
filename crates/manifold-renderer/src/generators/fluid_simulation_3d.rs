@@ -401,9 +401,9 @@ impl FluidSimulation3DGenerator {
             label: Some("FluidSim3D Simulate3D BGL"),
             entries: &[
                 bgl_storage_rw(0, wgpu::ShaderStages::COMPUTE),
-                bgl_texture_3d_filterable(1, wgpu::ShaderStages::COMPUTE),
-                bgl_sampler(2, wgpu::ShaderStages::COMPUTE),
-                bgl_texture_3d_filterable(3, wgpu::ShaderStages::COMPUTE),
+                bgl_texture_3d_filterable(1, wgpu::ShaderStages::COMPUTE), // vector field (Rgba16Float, filterable)
+                bgl_sampler(2, wgpu::ShaderStages::COMPUTE),              // filtering sampler (for vector field)
+                bgl_texture_3d(3, wgpu::ShaderStages::COMPUTE),           // density (R32Float, uses textureLoad)
                 bgl_uniform(4, wgpu::ShaderStages::COMPUTE),
             ],
         });
@@ -1458,6 +1458,15 @@ fn bgl_sampler(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupL
         binding,
         visibility,
         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    }
+}
+
+fn bgl_sampler_non_filtering(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
         count: None,
     }
 }

@@ -112,7 +112,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let field_force = textureSampleLevel(t_field, s_field, field_uv, 0.0).rgb;
 
     // Sample 3D density at particle position
-    let density_val = textureSampleLevel(t_density, s_field, field_uv, 0.0).r;
+    // R32Float is not filterable on Metal — use textureLoad with nearest-neighbor coords
+    let density_dims = textureDimensions(t_density);
+    let density_coord = vec3<u32>(clamp(field_uv, vec3(0.0), vec3(1.0)) * vec3<f32>(density_dims));
+    let density_val = textureLoad(t_density, density_coord, 0).r;
     let capped_density = min(density_val, 5.0);
 
     // 3D simplex noise via 3 orthogonal 2D slices (YZ, XZ, XY)
