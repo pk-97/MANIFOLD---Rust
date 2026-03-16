@@ -172,6 +172,9 @@ pub struct Application {
     // State
     initialized: bool,
     needs_rebuild: bool,
+    /// Set by scroll/zoom events that only affect viewport + layer_headers.
+    /// Uses the partial rebuild path (rebuild_scroll_panels) instead of full build.
+    needs_scroll_rebuild: bool,
     /// Set by keyboard shortcuts that mutate project data (undo, delete, etc.).
     /// Consumed by tick_and_render to trigger sync_project_data + rebuild.
     needs_structural_sync: bool,
@@ -226,6 +229,7 @@ impl Application {
             inspector_has_focus: false,
             initialized: false,
             needs_rebuild: false,
+            needs_scroll_rebuild: false,
             needs_structural_sync: false,
         }
     }
@@ -660,12 +664,20 @@ impl Application {
         }
 
         // 2b. Auto-scroll check for playback (BEFORE build so rebuild includes new scroll)
-        let scroll_changed = crate::ui_bridge::check_auto_scroll(&mut self.ui_root, &self.engine);
+        let auto_scroll_changed = crate::ui_bridge::check_auto_scroll(&mut self.ui_root, &self.engine);
+        let scroll_changed = auto_scroll_changed || self.needs_scroll_rebuild;
+        self.needs_scroll_rebuild = false;
 
         // 3. Rebuild if needed
-        if self.needs_rebuild || scroll_changed || needs_structural_sync {
+        // Full rebuild: structural changes, data mutations, or explicit needs_rebuild.
+        // Partial rebuild: only scroll/zoom changed — rebuild viewport + layer_headers,
+        // preserve transport, header, footer, inspector nodes.
+        // From Unity: CheckScrollAndInvalidate only repaints affected layers.
+        if self.needs_rebuild || needs_structural_sync {
             self.needs_rebuild = false;
             self.ui_root.build();
+        } else if scroll_changed {
+            self.ui_root.rebuild_scroll_panels();
         }
 
         // 4. Push engine state to UI panels (AFTER build so new nodes get state)
@@ -1387,7 +1399,7 @@ impl ApplicationHandler for Application {
                     let tracks_rect = self.ui_root.layout.timeline_tracks();
 
                     if inspector_rect.contains(pos) {
-                        // Scroll the inspector panel
+                        // Scroll the inspector panel — full rebuild (inspector is static)
                         self.ui_root.inspector.handle_scroll(dy);
                         self.needs_rebuild = true;
                     } else if tracks_rect.contains(pos) {
@@ -1416,45 +1428,49 @@ impl ApplicationHandler for Application {
                                 // Anchor: keep the beat under cursor at the same screen X
                                 let new_scroll = anchor_beat - (pos.x - tracks_rect.x) / new_ppb;
                                 self.ui_root.viewport.set_zoom(new_ppb);
+                                // Zoom always requires rebuild (ppb changed)
                                 self.ui_root.viewport.set_scroll(
                                     new_scroll.max(0.0),
                                     self.ui_root.viewport.scroll_y_px(),
                                 );
-                                self.needs_rebuild = true;
+                                self.needs_scroll_rebuild = true;
                             }
                         } else if self.modifiers.shift {
                             // Shift + scroll Y → horizontal pan
                             let ppb = self.ui_root.viewport.pixels_per_beat();
                             let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
                             let new_x = (self.ui_root.viewport.scroll_x_beats() - beat_delta).max(0.0);
-                            self.ui_root.viewport.set_scroll(
+                            if self.ui_root.viewport.set_scroll(
                                 new_x,
                                 self.ui_root.viewport.scroll_y_px(),
-                            );
-                            self.needs_rebuild = true;
+                            ) {
+                                self.needs_scroll_rebuild = true;
+                            }
                         } else {
                             // Plain scroll → vertical track scroll
                             let new_y = (self.ui_root.viewport.scroll_y_px() - dy).max(0.0);
-                            self.ui_root.viewport.set_scroll(
+                            if self.ui_root.viewport.set_scroll(
                                 self.ui_root.viewport.scroll_x_beats(),
                                 new_y,
-                            );
-                            // Sync layer headers with viewport vertical scroll
-                            self.ui_root.layer_headers.set_scroll_y(
-                                self.ui_root.viewport.scroll_y_px(),
-                            );
-                            self.needs_rebuild = true;
+                            ) {
+                                // Sync layer headers with viewport vertical scroll
+                                self.ui_root.layer_headers.set_scroll_y(
+                                    self.ui_root.viewport.scroll_y_px(),
+                                );
+                                self.needs_scroll_rebuild = true;
+                            }
                         }
                         // Native horizontal scroll (trackpad two-finger swipe)
                         if dx.abs() > 0.01 && !self.modifiers.alt {
                             let ppb = self.ui_root.viewport.pixels_per_beat();
                             let beat_delta = dx * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
                             let new_x = (self.ui_root.viewport.scroll_x_beats() - beat_delta).max(0.0);
-                            self.ui_root.viewport.set_scroll(
+                            if self.ui_root.viewport.set_scroll(
                                 new_x,
                                 self.ui_root.viewport.scroll_y_px(),
-                            );
-                            self.needs_rebuild = true;
+                            ) {
+                                self.needs_scroll_rebuild = true;
+                            }
                         }
                     }
                 }
@@ -1954,7 +1970,7 @@ impl ApplicationHandler for Application {
                                         (min_beat - margin).max(0.0),
                                         0.0,
                                     );
-                                    self.needs_rebuild = true;
+                                    self.needs_scroll_rebuild = true;
                                 }
                             }
                             consumed = true;

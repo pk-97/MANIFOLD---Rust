@@ -44,6 +44,10 @@ pub struct UIRoot {
     screen_width: f32,
     screen_height: f32,
     time_accumulator: f32,
+    /// Tree index where scroll-affected panels begin (layer_headers, viewport, perf_hud).
+    /// Everything before this index is "static" (transport, header, footer, inspector)
+    /// and preserved during scroll-only rebuilds via tree.truncate_from().
+    scroll_panels_start: usize,
 
     /// Context for the currently-open dropdown (set before open, read on selection).
     dropdown_context: Option<DropdownContext>,
@@ -75,6 +79,7 @@ impl UIRoot {
             screen_width: 1280.0,
             screen_height: 720.0,
             time_accumulator: 0.0,
+            scroll_panels_start: 0,
             dropdown_context: None,
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
@@ -91,21 +96,46 @@ impl UIRoot {
 
         self.layout = ScreenLayout::new(self.screen_width, self.screen_height);
 
+        // Static panels — preserved during scroll-only rebuilds.
+        // Order: transport, header, footer, inspector (non-scroll-affected).
         self.transport.build(&mut self.tree, &self.layout);
         self.header.build(&mut self.tree, &self.layout);
         self.footer.build(&mut self.tree, &self.layout);
-        self.layer_headers.build(&mut self.tree, &self.layout);
         self.inspector.build(&mut self.tree, &self.layout);
+
+        // Mark boundary — everything after this is rebuilt on scroll.
+        self.scroll_panels_start = self.tree.count();
+
+        // Scroll-affected panels — rebuilt on scroll/zoom changes.
+        self.build_scroll_panels();
+
+        self.built = true;
+    }
+
+    /// Rebuild only scroll-affected panels (layer_headers, viewport, perf_hud).
+    /// Static panels (transport, header, footer, inspector) keep their tree nodes.
+    /// From Unity's pattern: CheckScrollAndInvalidate only repaints dirty layers,
+    /// not the entire UI.
+    pub fn rebuild_scroll_panels(&mut self) {
+        if !self.built {
+            return self.build();
+        }
+        self.tree.truncate_from(self.scroll_panels_start);
+        // Invalidate hover — scroll panel node IDs are now stale
+        self.input.invalidate_hover();
+        self.build_scroll_panels();
+    }
+
+    /// Internal: build the scroll-affected panel group.
+    fn build_scroll_panels(&mut self) {
+        self.layer_headers.build(&mut self.tree, &self.layout);
         self.viewport.build(&mut self.tree, &self.layout);
         self.perf_hud.build(&mut self.tree, &self.layout);
 
         self.dropdown.set_screen_size(self.screen_width, self.screen_height);
-        // Re-add dropdown nodes if it was open (build() clears the tree)
         if self.dropdown.is_open() {
             self.dropdown.rebuild_nodes(&mut self.tree);
         }
-
-        self.built = true;
     }
 
     /// Handle a resize event. Rebuilds all panels.

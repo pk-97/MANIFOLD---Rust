@@ -408,6 +408,27 @@ impl UITree {
         self.count = 0;
         self.has_dirty = false;
     }
+
+    /// Truncate the tree to `from_index` nodes, removing everything at and
+    /// after that index. Used for partial rebuilds: panels before `from_index`
+    /// keep their nodes intact; panels at/after are rebuilt from scratch.
+    ///
+    /// SAFETY: `from_index` must be a panel boundary — no remaining node
+    /// may have children, siblings, or parents at index >= from_index.
+    /// This is guaranteed when panels are self-contained subtrees built
+    /// sequentially (each panel's nodes are contiguous).
+    pub fn truncate_from(&mut self, from_index: usize) {
+        if from_index >= self.count {
+            return;
+        }
+        self.nodes.truncate(from_index);
+        self.parent_index.truncate(from_index);
+        self.first_child.truncate(from_index);
+        self.next_sibling.truncate(from_index);
+        self.last_child.truncate(from_index);
+        self.count = from_index;
+        self.has_dirty = true;
+    }
 }
 
 impl Default for UITree {
@@ -572,5 +593,44 @@ mod tests {
         assert_eq!(tree.get_bounds(0).y, 0.0);
         assert_eq!(tree.get_bounds(1).y, 120.0);
         assert_eq!(tree.get_bounds(2).y, 140.0);
+    }
+
+    #[test]
+    fn truncate_from_preserves_earlier_nodes() {
+        let mut tree = UITree::new();
+        // Panel A: root + child
+        let a_root = tree.add_panel(-1, 0.0, 0.0, 100.0, 50.0, default_style());
+        let _a_child = tree.add_label(a_root as i32, 10.0, 10.0, 80.0, 20.0, "A", default_style());
+        let boundary = tree.count(); // = 2
+
+        // Panel B: root + child
+        let _b_root = tree.add_panel(-1, 0.0, 50.0, 100.0, 50.0, default_style());
+        let _b_child = tree.add_label(2, 10.0, 60.0, 80.0, 20.0, "B", default_style());
+        assert_eq!(tree.count(), 4);
+
+        // Truncate at panel B boundary
+        tree.truncate_from(boundary);
+        assert_eq!(tree.count(), 2);
+        assert!(tree.has_dirty());
+
+        // Panel A nodes intact
+        assert_eq!(tree.get_bounds(0).y, 0.0);
+        assert_eq!(tree.get_node(1).text.as_deref(), Some("A"));
+
+        // Can re-add after truncation — IDs continue from truncation point
+        let new_id = tree.add_panel(-1, 0.0, 100.0, 100.0, 50.0, default_style());
+        assert_eq!(new_id, 2);
+        assert_eq!(tree.count(), 3);
+    }
+
+    #[test]
+    fn truncate_from_beyond_count_is_noop() {
+        let mut tree = UITree::new();
+        tree.add_panel(-1, 0.0, 0.0, 100.0, 100.0, default_style());
+        tree.clear_dirty();
+
+        tree.truncate_from(5);
+        assert_eq!(tree.count(), 1);
+        assert!(!tree.has_dirty());
     }
 }

@@ -308,12 +308,19 @@ impl TimelineViewportPanel {
         self.mapper.set_zoom_by_index(index);
     }
 
-    pub fn set_scroll(&mut self, scroll_x_beats: f32, scroll_y_px: f32) {
-        self.scroll_x_beats = scroll_x_beats.max(0.0);
+    /// Set scroll position (clamped). Returns true if the value actually changed.
+    pub fn set_scroll(&mut self, scroll_x_beats: f32, scroll_y_px: f32) -> bool {
+        let new_x = scroll_x_beats.max(0.0);
         // Clamp vertical scroll: never scroll past the last track
         let viewport_h = self.tracks_rect.height;
         let max_scroll_y = (self.total_tracks_height - viewport_h).max(0.0);
-        self.scroll_y_px = scroll_y_px.clamp(0.0, max_scroll_y);
+        let new_y = scroll_y_px.clamp(0.0, max_scroll_y);
+
+        let changed = (new_x - self.scroll_x_beats).abs() > 0.001
+            || (new_y - self.scroll_y_px).abs() > 0.001;
+        self.scroll_x_beats = new_x;
+        self.scroll_y_px = new_y;
+        changed
     }
 
     pub fn set_beats_per_bar(&mut self, bpb: u32) {
