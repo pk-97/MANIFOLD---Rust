@@ -1,0 +1,63 @@
+use manifold_core::EffectType;
+use manifold_core::effects::EffectInstance;
+use crate::effect::{EffectContext, PostProcessEffect};
+use super::simple_blit_helper::SimpleBlitHelper;
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct StrobeUniforms {
+    amount: f32,
+    rate: f32,
+    mode: u32,      // 0=Opacity(black), 1=White, 2=Gain
+    beat: f32,
+}
+
+/// Strobe effect — beat-synced square wave flash.
+pub struct StrobeFX {
+    helper: SimpleBlitHelper,
+}
+
+impl StrobeFX {
+    pub fn new(device: &wgpu::Device) -> Self {
+        Self {
+            helper: SimpleBlitHelper::new(
+                device,
+                include_str!("shaders/fx_strobe.wgsl"),
+                "Strobe",
+                std::mem::size_of::<StrobeUniforms>() as u64,
+            ),
+        }
+    }
+}
+
+impl PostProcessEffect for StrobeFX {
+    fn effect_type(&self) -> EffectType {
+        EffectType::Strobe
+    }
+
+    fn apply(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        fx: &EffectInstance,
+        ctx: &EffectContext,
+    ) {
+        let p = &fx.param_values;
+        let uniforms = StrobeUniforms {
+            amount: p.first().copied().unwrap_or(0.0),
+            rate: p.get(1).copied().unwrap_or(4.0),
+            mode: (p.get(2).copied().unwrap_or(0.0) as u32).min(2),
+            beat: ctx.beat,
+        };
+
+        self.helper.draw(
+            device, queue, encoder,
+            source, target,
+            bytemuck::bytes_of(&uniforms),
+            "Strobe Pass",
+        );
+    }
+}

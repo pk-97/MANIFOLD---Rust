@@ -6,6 +6,16 @@ use crate::effects::color_grade::ColorGradeFX;
 use crate::effects::mirror::MirrorFX;
 use crate::effects::feedback::FeedbackFX;
 use crate::effects::bloom::BloomFX;
+use crate::effects::chromatic_aberration::ChromaticAberrationFX;
+use crate::effects::film_grain::FilmGrainFX;
+use crate::effects::glitch::GlitchFX;
+use crate::effects::dither::DitherFX;
+use crate::effects::halation::HalationFX;
+use crate::effects::kaleidoscope::KaleidoscopeFX;
+use crate::effects::edge_stretch::EdgeStretchFX;
+use crate::effects::quad_mirror::QuadMirrorFX;
+use crate::effects::strobe::StrobeFX;
+use crate::effects::crt::CrtFX;
 
 /// Factory + singleton storage for all effect processors.
 /// One processor per EffectType — per-owner state lives inside each processor.
@@ -21,6 +31,16 @@ impl EffectRegistry {
         processors.insert(EffectType::Mirror, Box::new(MirrorFX::new(device)));
         processors.insert(EffectType::Feedback, Box::new(FeedbackFX::new(device)));
         processors.insert(EffectType::Bloom, Box::new(BloomFX::new(device)));
+        processors.insert(EffectType::ChromaticAberration, Box::new(ChromaticAberrationFX::new(device)));
+        processors.insert(EffectType::FilmGrain, Box::new(FilmGrainFX::new(device)));
+        processors.insert(EffectType::Glitch, Box::new(GlitchFX::new(device)));
+        processors.insert(EffectType::Dither, Box::new(DitherFX::new(device)));
+        processors.insert(EffectType::Halation, Box::new(HalationFX::new(device)));
+        processors.insert(EffectType::Kaleidoscope, Box::new(KaleidoscopeFX::new(device)));
+        processors.insert(EffectType::EdgeStretch, Box::new(EdgeStretchFX::new(device)));
+        processors.insert(EffectType::QuadMirror, Box::new(QuadMirrorFX::new(device)));
+        processors.insert(EffectType::Strobe, Box::new(StrobeFX::new(device)));
+        processors.insert(EffectType::CRT, Box::new(CrtFX::new(device)));
         Self { processors }
     }
 
