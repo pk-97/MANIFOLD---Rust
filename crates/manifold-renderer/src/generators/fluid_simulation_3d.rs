@@ -41,7 +41,7 @@ const CAM_TILT: usize = 24;
 const FLATTEN: usize = 25;
 
 const DENSITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
-const DENSITY_3D_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+const DENSITY_3D_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 const VECTOR_3D_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const PARTICLE_SIZE_BYTES: u64 = std::mem::size_of::<Particle>() as u64;
 

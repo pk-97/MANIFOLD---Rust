@@ -16,7 +16,7 @@ struct BlurUniforms {
 
 @group(0) @binding(0) var<uniform> params: BlurUniforms;
 @group(0) @binding(1) var src_scalar: texture_3d<f32>;
-@group(0) @binding(2) var dst_scalar: texture_storage_3d<r16float, write>;
+@group(0) @binding(2) var dst_scalar: texture_storage_3d<r32float, write>;
 
 @compute @workgroup_size(4, 4, 4)
 fn blur_scalar(@builtin(global_invocation_id) id: vec3<u32>) {
