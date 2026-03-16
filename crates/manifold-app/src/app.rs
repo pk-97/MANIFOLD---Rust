@@ -192,6 +192,9 @@ pub struct Application {
     // State
     initialized: bool,
     needs_rebuild: bool,
+    /// Set by keyboard shortcuts that mutate project data (undo, delete, etc.).
+    /// Consumed by tick_and_render to trigger sync_project_data + rebuild.
+    needs_structural_sync: bool,
 }
 
 impl Application {
@@ -239,6 +242,7 @@ impl Application {
             text_input: crate::text_input::TextInputState::new(),
             initialized: false,
             needs_rebuild: false,
+            needs_structural_sync: false,
         }
     }
 
@@ -477,7 +481,9 @@ impl Application {
 
         // 1. Process UI events and dispatch actions
         let actions = self.ui_root.process_events();
-        let mut needs_structural_sync = false;
+        // Consume deferred structural sync flag (set by keyboard shortcuts)
+        let mut needs_structural_sync = self.needs_structural_sync;
+        self.needs_structural_sync = false;
         let prev_active_layer = self.active_layer_index;
         for action in &actions {
             // Intercept actions that need Application-level access
@@ -1245,6 +1251,7 @@ impl ApplicationHandler for Application {
             } => {
                 // App-level shortcuts (handled before UI forwarding)
                 let mut consumed = false;
+                let data_version_before = self.editing_service.data_version();
                 if is_primary {
                     // Text input mode: intercept all keys for text editing
                     if self.text_input.active {
@@ -1315,10 +1322,12 @@ impl ApplicationHandler for Application {
                             } else {
                                 crate::ui_bridge::undo(&mut self.engine, &mut self.editing_service);
                             }
+                            self.needs_structural_sync = true;
                             consumed = true;
                         }
                         Key::Character(ref c) if c.as_str() == "y" && self.modifiers.command => {
                             crate::ui_bridge::redo(&mut self.engine, &mut self.editing_service);
+                            self.needs_structural_sync = true;
                             consumed = true;
                         }
                         // ── File ──
@@ -1667,6 +1676,12 @@ impl ApplicationHandler for Application {
                         }
                         _ => {}
                     }
+                }
+
+                // If any keyboard shortcut mutated project data, trigger structural sync
+                if self.editing_service.data_version() != data_version_before {
+                    self.needs_structural_sync = true;
+                    self.needs_rebuild = true;
                 }
 
                 // Forward to UI input system (unless consumed by app shortcut)
