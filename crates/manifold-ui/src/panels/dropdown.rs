@@ -123,6 +123,11 @@ impl DropdownPanel {
         self.is_open
     }
 
+    /// Returns true when the dropdown is open and `pos` is inside its bounds.
+    pub fn contains_point(&self, pos: Vec2) -> bool {
+        self.is_open && self.container_bounds.contains(pos)
+    }
+
     pub fn first_node(&self) -> usize {
         self.first_node
     }

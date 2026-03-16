@@ -1106,8 +1106,16 @@ impl ApplicationHandler for Application {
                             match state {
                                 ElementState::Pressed => {
                                     self.mouse_pressed = true;
-                                    // Check if clicking on inspector resize edge
-                                    if self.ui_root.is_near_inspector_edge(self.cursor_pos) {
+                                    // If a dropdown is open and the click lands outside it,
+                                    // dismiss the dropdown and consume the event so that the
+                                    // background node never receives a PointerDown (prevents
+                                    // phantom pressed_id on the node behind the dropdown).
+                                    if self.ui_root.dropdown.is_open()
+                                        && !self.ui_root.dropdown.contains_point(self.cursor_pos)
+                                    {
+                                        self.ui_root.dropdown.close(&mut self.ui_root.tree);
+                                        // Click is consumed by dismiss — do not forward.
+                                    } else if self.ui_root.is_near_inspector_edge(self.cursor_pos) {
                                         self.ui_root.begin_inspector_resize(self.cursor_pos.x);
                                     } else {
                                         self.ui_root.pointer_event(
@@ -1693,6 +1701,31 @@ impl ApplicationHandler for Application {
                         _ => {}
                     }
                 }
+            }
+
+            // ── Focus loss → cancel in-progress drags ──────────────
+            WindowEvent::Focused(false) => {
+                // Synthesize a PointerUp to cancel any drag that was in
+                // progress when the user alt-tabbed away. Without this the
+                // drag state stays active forever because no real PointerUp
+                // is delivered while the window is out of focus.
+                // Matches Unity OnApplicationFocus(false) in UIBitmapRoot.cs.
+                if is_primary {
+                    log::debug!("Window lost focus — synthesizing PointerUp to cancel drag");
+                    self.ui_root.pointer_event(
+                        self.cursor_pos,
+                        PointerAction::Up,
+                        self.time_since_start,
+                    );
+                    self.mouse_pressed = false;
+                    if self.ui_root.inspector_resize_dragging {
+                        self.ui_root.end_inspector_resize();
+                    }
+                }
+            }
+
+            WindowEvent::Focused(true) => {
+                // No action needed on focus gain.
             }
 
             _ => {}
