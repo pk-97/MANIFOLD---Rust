@@ -880,7 +880,8 @@ impl Generator for FluidSimulation3DGenerator {
         let cam_tilt = param(ctx, CAM_TILT, 0.3);
         let flatten = param(ctx, FLATTEN, 0.0);
 
-        let desired_count = ((particles_param * 1_000_000.0) as u32).clamp(1000, 4_000_000);
+        // Metal max_storage_buffer_binding_size is 128MB. 2M × 48 bytes = 96MB (safe).
+        let desired_count = ((particles_param * 1_000_000.0) as u32).clamp(1000, 2_000_000);
         let desired_vol_res = vol_res_from_param(vol_res_param);
 
         // Lazy-init or reinit on particle count / volume resolution change

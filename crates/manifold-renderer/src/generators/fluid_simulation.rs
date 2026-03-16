@@ -747,7 +747,8 @@ impl Generator for FluidSimulationGenerator {
         let color_bright = param(ctx, COLOR_BRIGHT, 2.0);
         let _zone_force = param(ctx, ZONE_FORCE, 0.0);
 
-        let desired_count = ((particles_param * 1_000_000.0) as u32).clamp(1000, 4_000_000);
+        // Metal max_storage_buffer_binding_size is 128MB. 2M × 48 bytes = 96MB (safe).
+        let desired_count = ((particles_param * 1_000_000.0) as u32).clamp(1000, 2_000_000);
 
         // Lazy-init or reinit on particle count / resolution change
         if !self.initialized || desired_count != self.active_count {
