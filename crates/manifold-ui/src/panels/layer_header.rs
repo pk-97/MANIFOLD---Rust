@@ -429,6 +429,9 @@ pub struct LayerHeaderPanel {
 
     // Vertical scroll offset — synchronized with viewport scroll_y_px
     scroll_y_px: f32,
+
+    // Scroll container for clipping layer rows to the visible area
+    scroll_clip_id: i32,
 }
 
 impl LayerHeaderPanel {
@@ -448,6 +451,7 @@ impl LayerHeaderPanel {
             panel_origin: Vec2::ZERO,
             panel_width: 0.0,
             scroll_y_px: 0.0,
+            scroll_clip_id: -1,
         }
     }
 
@@ -677,6 +681,7 @@ impl LayerHeaderPanel {
         layer: &LayerInfo,
         row: LayerRowData,
         origin: Vec2,
+        clip_parent: i32,
     ) {
         let ids = &mut self.rows[index];
         let s = |r: Rect| screen(r, origin);
@@ -684,7 +689,7 @@ impl LayerHeaderPanel {
         // Background (full row interactive area)
         let bg_r = s(row.background);
         ids.bg = tree.add_button(
-            -1, bg_r.x, bg_r.y, bg_r.width, bg_r.height,
+            clip_parent, bg_r.x, bg_r.y, bg_r.width, bg_r.height,
             bg_style(layer.is_selected), "",
         ) as i32;
 
@@ -692,7 +697,7 @@ impl LayerHeaderPanel {
         if row.has_accent_bar {
             let r = s(row.accent_bar);
             ids.accent_bar = tree.add_panel(
-                -1, r.x, r.y, r.width, r.height,
+                clip_parent, r.x, r.y, r.width, r.height,
                 UIStyle { bg_color: ACCENT_COLOR, ..UIStyle::default() },
             ) as i32;
         }
@@ -701,7 +706,7 @@ impl LayerHeaderPanel {
         if row.has_connector {
             let r = s(row.connector);
             ids.connector = tree.add_panel(
-                -1, r.x, r.y, r.width, r.height,
+                clip_parent, r.x, r.y, r.width, r.height,
                 UIStyle { bg_color: ACCENT_COLOR, ..UIStyle::default() },
             ) as i32;
         }
@@ -710,7 +715,7 @@ impl LayerHeaderPanel {
         if row.has_bottom_border {
             let r = s(row.bottom_border);
             ids.bottom_border = tree.add_panel(
-                -1, r.x, r.y, r.width, r.height,
+                clip_parent, r.x, r.y, r.width, r.height,
                 UIStyle { bg_color: BORDER_CLR, ..UIStyle::default() },
             ) as i32;
         }
@@ -720,7 +725,7 @@ impl LayerHeaderPanel {
             let chev = if layer.is_collapsed { "\u{25B6}" } else { "\u{25BC}" };
             let r = s(row.chevron);
             ids.chevron = tree.add_button(
-                -1, r.x, r.y, r.width, r.height,
+                clip_parent, r.x, r.y, r.width, r.height,
                 UIStyle {
                     bg_color: Color32::TRANSPARENT,
                     hover_bg_color: color::BUTTON_HIGHLIGHTED,
@@ -738,7 +743,7 @@ impl LayerHeaderPanel {
         // Layer name
         let nr = s(row.name);
         ids.name = tree.add_button(
-            -1, nr.x, nr.y, nr.width, nr.height,
+            clip_parent, nr.x, nr.y, nr.width, nr.height,
             UIStyle {
                 bg_color: Color32::TRANSPARENT,
                 hover_bg_color: Color32::new(255, 255, 255, 15),
@@ -754,7 +759,7 @@ impl LayerHeaderPanel {
         // Drag handle
         let dr = s(row.drag_handle);
         ids.drag_handle = tree.add_button(
-            -1, dr.x, dr.y, dr.width, dr.height,
+            clip_parent, dr.x, dr.y, dr.width, dr.height,
             UIStyle {
                 bg_color: color::HANDLE_BG,
                 hover_bg_color: color::BUTTON_HIGHLIGHTED,
@@ -773,7 +778,7 @@ impl LayerHeaderPanel {
             let gen_text = layer.generator_type.as_deref().unwrap_or("Unknown");
             let r = s(row.gen_type);
             ids.gen_type = tree.add_label(
-                -1, r.x, r.y, r.width, r.height,
+                clip_parent, r.x, r.y, r.width, r.height,
                 gen_text,
                 UIStyle {
                     text_color: GEN_TYPE_CLR,
@@ -787,28 +792,28 @@ impl LayerHeaderPanel {
         // Mute button
         let mr = s(row.mute);
         ids.mute = tree.add_button(
-            -1, mr.x, mr.y, mr.width, mr.height,
+            clip_parent, mr.x, mr.y, mr.width, mr.height,
             mute_style(layer.is_muted), "M",
         ) as i32;
 
         // Solo button
         let sr = s(row.solo);
         ids.solo = tree.add_button(
-            -1, sr.x, sr.y, sr.width, sr.height,
+            clip_parent, sr.x, sr.y, sr.width, sr.height,
             solo_style(layer.is_solo), "S",
         ) as i32;
 
         // Blend mode
         let br = s(row.blend_mode);
         ids.blend_mode = tree.add_button(
-            -1, br.x, br.y, br.width, br.height,
+            clip_parent, br.x, br.y, br.width, br.height,
             small_button_style(), &layer.blend_mode,
         ) as i32;
 
         // Separator
         let sepr = s(row.separator);
         ids.separator = tree.add_panel(
-            -1, sepr.x, sepr.y, sepr.width, sepr.height,
+            clip_parent, sepr.x, sepr.y, sepr.width, sepr.height,
             UIStyle { bg_color: SEP_COLOR, ..UIStyle::default() },
         ) as i32;
 
@@ -821,7 +826,7 @@ impl LayerHeaderPanel {
         let info = info_text(layer, &self.layers);
         let ir = s(row.info);
         ids.info = tree.add_label(
-            -1, ir.x, ir.y, ir.width, ir.height,
+            clip_parent, ir.x, ir.y, ir.width, ir.height,
             &info,
             UIStyle {
                 text_color: color::TEXT_SUBTLE,
@@ -835,7 +840,7 @@ impl LayerHeaderPanel {
             // Folder button
             let fr = s(row.folder);
             ids.folder = tree.add_button(
-                -1, fr.x, fr.y, fr.width, fr.height,
+                clip_parent, fr.x, fr.y, fr.width, fr.height,
                 small_button_style(), "Folder",
             ) as i32;
 
@@ -843,7 +848,7 @@ impl LayerHeaderPanel {
             let path_text = folder_path_text(&layer.video_folder_path, layer.source_clip_count);
             let pr = s(row.path_label);
             ids.path_label = tree.add_label(
-                -1, pr.x, pr.y, pr.width, pr.height,
+                clip_parent, pr.x, pr.y, pr.width, pr.height,
                 &path_text,
                 UIStyle {
                     text_color: color::TEXT_DIMMED_C32,
@@ -856,7 +861,7 @@ impl LayerHeaderPanel {
             // +new clip button
             let ncr = s(row.new_clip);
             ids.new_clip = tree.add_button(
-                -1, ncr.x, ncr.y, ncr.width, ncr.height,
+                clip_parent, ncr.x, ncr.y, ncr.width, ncr.height,
                 small_button_style(), "+ new clip",
             ) as i32;
         }
@@ -866,7 +871,7 @@ impl LayerHeaderPanel {
             // MIDI label + input
             let mlr = s(row.midi_label);
             ids.midi_label = tree.add_label(
-                -1, mlr.x, mlr.y, mlr.width, mlr.height,
+                clip_parent, mlr.x, mlr.y, mlr.width, mlr.height,
                 "MIDI",
                 UIStyle {
                     text_color: color::TEXT_SUBTLE,
@@ -879,14 +884,14 @@ impl LayerHeaderPanel {
             let midi_text = midi_note_to_name(layer.midi_note);
             let mir = s(row.midi_input);
             ids.midi_input = tree.add_button(
-                -1, mir.x, mir.y, mir.width, mir.height,
+                clip_parent, mir.x, mir.y, mir.width, mir.height,
                 field_style(), &midi_text,
             ) as i32;
 
             // Channel label + dropdown
             let clr = s(row.ch_label);
             ids.ch_label = tree.add_label(
-                -1, clr.x, clr.y, clr.width, clr.height,
+                clip_parent, clr.x, clr.y, clr.width, clr.height,
                 "CH",
                 UIStyle {
                     text_color: color::TEXT_SUBTLE,
@@ -903,7 +908,7 @@ impl LayerHeaderPanel {
             };
             let cdr = s(row.ch_dropdown);
             ids.ch_dropdown = tree.add_button(
-                -1, cdr.x, cdr.y, cdr.width, cdr.height,
+                clip_parent, cdr.x, cdr.y, cdr.width, cdr.height,
                 small_button_style(), &ch_text,
             ) as i32;
         }
@@ -911,7 +916,7 @@ impl LayerHeaderPanel {
         if row.has_generator_controls {
             let agr = s(row.add_gen_clip);
             ids.add_gen_clip = tree.add_button(
-                -1, agr.x, agr.y, agr.width, agr.height,
+                clip_parent, agr.x, agr.y, agr.width, agr.height,
                 small_button_style(), "+ Clip",
             ) as i32;
         }
@@ -981,6 +986,21 @@ impl Panel for LayerHeaderPanel {
             UIStyle { bg_color: color::CONTROL_BG, ..UIStyle::default() },
         );
 
+        // Create a clip region for the scrollable layer rows area.
+        // This prevents layer content from overflowing into the header or footer.
+        // The clip rect covers from below the header spacer to the bottom of the body.
+        let clip_top = lc.y + header_spacer;
+        let clip_height = (lc.height - header_spacer).max(0.0);
+        let clip_rect = Rect::new(lc.x, clip_top, lc.width, clip_height);
+        self.scroll_clip_id = tree.add_node(
+            -1,
+            clip_rect,
+            UINodeType::ClipRegion,
+            UIStyle::default(),
+            None,
+            UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
+        ) as i32;
+
         let layer_count = self.layers.len();
         self.rows = vec![LayerRowIds::default(); layer_count];
         self.cached_mute = vec![false; layer_count];
@@ -1025,7 +1045,7 @@ impl Panel for LayerHeaderPanel {
                 layer.is_group && !layer.is_collapsed,
             );
 
-            self.build_layer_row(tree, i, layer, row, self.panel_origin);
+            self.build_layer_row(tree, i, layer, row, self.panel_origin, self.scroll_clip_id);
             self.cached_mute[i] = layer.is_muted;
             self.cached_solo[i] = layer.is_solo;
             self.cached_selected[i] = layer.is_selected;
@@ -1033,7 +1053,7 @@ impl Panel for LayerHeaderPanel {
 
         // Insert indicator (hidden off-screen)
         self.insert_indicator_id = tree.add_panel(
-            -1, lc.x, lc.y - 10.0, lc.width, INSERT_LINE_H,
+            self.scroll_clip_id, lc.x, lc.y - 10.0, lc.width, INSERT_LINE_H,
             UIStyle { bg_color: Color32::TRANSPARENT, ..UIStyle::default() },
         ) as i32;
 
@@ -1041,7 +1061,7 @@ impl Panel for LayerHeaderPanel {
         let total_h: f32 = self.layers.iter().map(|l| l.height).sum();
         let btn_y = lc.y + total_h + 4.0;
         self.add_layer_btn = tree.add_button(
-            -1, lc.x + 4.0, btn_y, lc.width - 8.0, 24.0,
+            self.scroll_clip_id, lc.x + 4.0, btn_y, lc.width - 8.0, 24.0,
             UIStyle {
                 bg_color: Color32::new(40, 45, 50, 255),
                 hover_bg_color: Color32::new(55, 65, 75, 255),

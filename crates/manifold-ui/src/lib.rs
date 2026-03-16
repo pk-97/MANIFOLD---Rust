@@ -9,6 +9,7 @@ pub mod panels;
 pub mod snap;
 pub mod trim;
 pub mod cursor_nav;
+pub mod scroll_container;
 
 pub use node::*;
 pub use tree::UITree;
