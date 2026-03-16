@@ -804,14 +804,15 @@ impl Application {
                 if let Some(ui) = &mut self.ui_renderer {
                     let logical_w = (surface_w as f64 / scale) as u32;
                     let logical_h = (surface_h as f64 / scale) as u32;
-                    // Pass dropdown overlay split point for two-pass rendering
-                    // (base UI rects+text, then dropdown rects+text on top)
-                    let overlay_start = if self.ui_root.dropdown.is_open() {
-                        Some(self.ui_root.dropdown.first_node())
+                    // When dropdown is open, pass its bounds so base text behind
+                    // it is hidden (prevents text bleed-through).
+                    if self.ui_root.dropdown.is_open() {
+                        let start = Some(self.ui_root.dropdown.first_node());
+                        let bounds = Some(self.ui_root.dropdown.container_bounds());
+                        ui.render_tree_with_overlay(&self.ui_root.tree, start, bounds);
                     } else {
-                        None
-                    };
-                    ui.render_tree_with_overlay(&self.ui_root.tree, overlay_start);
+                        ui.render_tree(&self.ui_root.tree);
+                    }
                     ui.render(
                         &gpu.device,
                         &gpu.queue,

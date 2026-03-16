@@ -132,6 +132,11 @@ impl DropdownPanel {
         self.first_node
     }
 
+    /// The dropdown container rect (for overlay occlusion).
+    pub fn container_bounds(&self) -> Rect {
+        self.container_bounds
+    }
+
     pub fn node_count(&self) -> usize {
         self.node_count
     }

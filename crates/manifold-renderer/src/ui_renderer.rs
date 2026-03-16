@@ -40,6 +40,7 @@ struct VertexOutput {
 
 struct Globals {
     screen_size: vec2<f32>,
+    _pad: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -47,10 +48,12 @@ struct Globals {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    // Convert pixel coordinates to NDC: (0,0) top-left, (w,h) bottom-right
-    let ndc_x = (in.position.x / globals.screen_size.x) * 2.0 - 1.0;
-    let ndc_y = 1.0 - (in.position.y / globals.screen_size.y) * 2.0;
-    out.position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
+    // Map logical pixel position to NDC: (0,0) = top-left, (w,h) = bottom-right
+    let ndc = vec2<f32>(
+        in.position.x / globals.screen_size.x * 2.0 - 1.0,
+        1.0 - in.position.y / globals.screen_size.y * 2.0,
+    );
+    out.position = vec4<f32>(ndc, 0.0, 1.0);
     out.uv = in.uv;
     out.color = in.color;
     out.rect_params = in.rect_params;
@@ -60,37 +63,25 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let rect_w = in.rect_params.x;
-    let rect_h = in.rect_params.y;
+    let w = in.rect_params.x;
+    let h = in.rect_params.y;
     let radius = in.rect_params.z;
     let border_w = in.rect_params.w;
 
-    // If no corner radius, just output solid color (fast path)
-    if radius <= 0.0 && border_w <= 0.0 {
-        return in.color;
-    }
+    // SDF for rounded rectangle (distance from edge)
+    let half_size = vec2<f32>(w * 0.5, h * 0.5);
+    let p = (in.uv - 0.5) * vec2<f32>(w, h);
+    let d = length(max(abs(p) - half_size + vec2<f32>(radius), vec2<f32>(0.0))) - radius;
 
-    // SDF rounded rectangle
-    let pixel = in.uv * vec2<f32>(rect_w, rect_h);
-    let center = vec2<f32>(rect_w, rect_h) * 0.5;
-    let half_size = center - vec2<f32>(radius);
-    let d = length(max(abs(pixel - center) - half_size, vec2<f32>(0.0))) - radius;
-
-    // Antialiased edge
-    let aa = 1.0;
-    let alpha = 1.0 - smoothstep(-aa, aa, d);
-
-    if alpha <= 0.0 {
-        discard;
-    }
+    // Anti-aliased edge
+    let alpha = 1.0 - smoothstep(-1.0, 0.5, d);
 
     // Border
     if border_w > 0.0 {
-        let inner_d = d + border_w;
-        if inner_d > 0.0 {
-            // In border region
-            return vec4<f32>(in.border_color.rgb, in.border_color.a * alpha);
-        }
+        let inner_d = length(max(abs(p) - half_size + vec2<f32>(radius + border_w), vec2<f32>(0.0))) - radius;
+        let border_alpha = smoothstep(-1.0, 0.5, inner_d);
+        let mixed = mix(in.color, in.border_color, border_alpha);
+        return vec4<f32>(mixed.rgb, mixed.a * alpha);
     }
 
     return vec4<f32>(in.color.rgb, in.color.a * alpha);
@@ -140,18 +131,20 @@ pub struct UIRenderer {
     rect_commands: Vec<RectCommand>,
     text_commands: Vec<TextCommand>,
 
-    /// Index where overlay (dropdown) commands start.
-    /// Commands [0..overlay_split_rect] are base layer.
-    /// Commands [overlay_split_rect..] are overlay layer.
-    overlay_split_rect: usize,
-    overlay_split_text: usize,
-
     // Per-frame vertex buffer
     vertices: Vec<UIVertex>,
     indices: Vec<u32>,
 
     // Clip stack for render_tree (mathematical clipping)
     clip_stack: Vec<Rect>,
+
+    /// When set, base text overlapping this rect is hidden.
+    /// Set by render_tree_with_overlay when a dropdown is open.
+    overlay_occlude_rect: Option<Rect>,
+    /// Node index where overlay starts (text after this is NOT occluded).
+    overlay_start_node: Option<usize>,
+    /// Whether we've passed the overlay start during traversal.
+    in_overlay: bool,
 }
 
 impl UIRenderer {
@@ -186,46 +179,24 @@ impl UIRenderer {
             immediate_size: 0,
         });
 
-        let vertex_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<UIVertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 0,
-                    shader_location: 0,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 8,
-                    shader_location: 1,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 16,
-                    shader_location: 2,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 32,
-                    shader_location: 3,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 48,
-                    shader_location: 4,
-                },
-            ],
-        };
-
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("UI Pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vertex_layout],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<UIVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x2 },
+                        wgpu::VertexAttribute { offset: 8, shader_location: 1, format: wgpu::VertexFormat::Float32x2 },
+                        wgpu::VertexAttribute { offset: 16, shader_location: 2, format: wgpu::VertexFormat::Float32x4 },
+                        wgpu::VertexAttribute { offset: 32, shader_location: 3, format: wgpu::VertexFormat::Float32x4 },
+                        wgpu::VertexAttribute { offset: 48, shader_location: 4, format: wgpu::VertexFormat::Float32x4 },
+                    ],
+                }],
+                compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -235,7 +206,7 @@ impl UIRenderer {
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
@@ -254,16 +225,17 @@ impl UIRenderer {
             mapped_at_creation: false,
         });
 
+        // Font setup
         let mut font_system = FontSystem::new();
         let font_data = include_bytes!("../assets/fonts/Inter-Regular.ttf");
         font_system.db_mut().load_font_data(font_data.to_vec());
 
         let swash_cache = SwashCache::new();
-        let cache = Cache::new(device);
-        let mut text_atlas = TextAtlas::new(device, queue, &cache, target_format);
+        let text_cache = Cache::new(device);
+        let mut text_atlas = TextAtlas::new(device, queue, &text_cache, target_format);
         let text_renderer =
             TextRenderer::new(&mut text_atlas, device, wgpu::MultisampleState::default(), None);
-        let viewport = Viewport::new(device, &cache);
+        let viewport = Viewport::new(device, &text_cache);
 
         Self {
             pipeline,
@@ -271,119 +243,82 @@ impl UIRenderer {
             globals_bind_group_layout,
             font_system,
             swash_cache,
-            text_cache: cache,
+            text_cache,
             text_atlas,
             text_renderer,
             viewport,
             text_buffers: Vec::new(),
             rect_commands: Vec::with_capacity(256),
             text_commands: Vec::with_capacity(128),
-            overlay_split_rect: 0,
-            overlay_split_text: 0,
             vertices: Vec::with_capacity(1024),
             indices: Vec::with_capacity(1536),
             clip_stack: Vec::with_capacity(8),
+            overlay_occlude_rect: None,
+            overlay_start_node: None,
+            in_overlay: false,
         }
     }
 
-    // ── Immediate-mode draw API ─────────────────────────────────────
+    // ── Immediate-mode drawing API ───────────────────────────────────
 
-    /// Queue a filled rectangle.
     pub fn draw_rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
         self.rect_commands.push(RectCommand {
             x, y, w, h, color,
-            corner_radius: 0.0,
-            border_width: 0.0,
-            border_color: [0.0; 4],
+            corner_radius: 0.0, border_width: 0.0, border_color: [0.0; 4],
         });
     }
 
-    /// Queue a rounded rectangle.
-    pub fn draw_rounded_rect(
-        &mut self,
-        x: f32, y: f32, w: f32, h: f32,
-        color: [f32; 4],
-        corner_radius: f32,
+    pub fn draw_rect_rounded(
+        &mut self, x: f32, y: f32, w: f32, h: f32,
+        color: [f32; 4], corner_radius: f32,
     ) {
         self.rect_commands.push(RectCommand {
             x, y, w, h, color, corner_radius,
-            border_width: 0.0,
-            border_color: [0.0; 4],
+            border_width: 0.0, border_color: [0.0; 4],
         });
     }
 
-    /// Queue a rounded rectangle with border.
-    #[allow(clippy::too_many_arguments)]
-    pub fn draw_bordered_rect(
-        &mut self,
-        x: f32, y: f32, w: f32, h: f32,
-        color: [f32; 4],
-        corner_radius: f32,
-        border_width: f32,
-        border_color: [f32; 4],
+    pub fn draw_rect_bordered(
+        &mut self, x: f32, y: f32, w: f32, h: f32,
+        color: [f32; 4], corner_radius: f32, border_width: f32, border_color: [f32; 4],
     ) {
         self.rect_commands.push(RectCommand {
             x, y, w, h, color, corner_radius, border_width, border_color,
         });
     }
 
-    /// Queue text at a position.
-    pub fn draw_text(
-        &mut self,
-        x: f32, y: f32,
-        text: &str,
-        font_size: f32,
-        color: [u8; 4],
-    ) {
-        self.text_commands.push(TextCommand {
-            x, y,
-            text: text.to_string(),
-            font_size,
-            color,
-            clip_bounds: None,
-        });
-    }
-
     // ── UITree rendering ────────────────────────────────────────────
 
-    /// Mark the current command count as the split point between
-    /// base UI and overlay (dropdown). Called after render_tree()
-    /// but before any overlay commands are added. During render(),
-    /// base commands (rects+text) draw first, then overlay commands
-    /// (rects+text) draw on top — preventing background text from
-    /// bleeding through the dropdown.
-    pub fn mark_overlay_split(&mut self) {
-        self.overlay_split_rect = self.rect_commands.len();
-        self.overlay_split_text = self.text_commands.len();
-    }
-
-    /// Render a UITree by walking it in DFS order, resolving styles, and
-    /// emitting draw commands. Handles clipping mathematically (clamping
-    /// child geometry to clip ancestors).
-    /// Render a UITree, splitting commands at `overlay_start_node` for
-    /// two-pass rendering (base UI rects+text, then overlay rects+text).
-    /// Pass `None` for no overlay (single-pass).
+    /// Render a UITree (single pass, no overlay).
     pub fn render_tree(&mut self, tree: &UITree) {
-        self.render_tree_with_overlay(tree, None);
+        self.render_tree_with_overlay(tree, None, None);
     }
 
-    /// Render with optional overlay split. `overlay_start_node` is the
-    /// tree node index where the overlay (dropdown) starts.
-    pub fn render_tree_with_overlay(&mut self, tree: &UITree, overlay_start_node: Option<usize>) {
+    /// Render with optional overlay. When a dropdown is open:
+    /// - `overlay_start_node`: tree node index where dropdown nodes begin
+    /// - `overlay_bounds`: the dropdown container rect
+    ///
+    /// Base text that overlaps `overlay_bounds` is hidden (clip_bounds set
+    /// to exclude the dropdown area). Dropdown text renders normally.
+    /// ALL rects render in a single pass (dropdown rects on top by insertion order).
+    pub fn render_tree_with_overlay(
+        &mut self,
+        tree: &UITree,
+        overlay_start_node: Option<usize>,
+        overlay_bounds: Option<Rect>,
+    ) {
         self.clip_stack.clear();
-        self.overlay_split_rect = 0;
-        self.overlay_split_text = 0;
-        let mut overlay_marked = overlay_start_node.is_none(); // skip marking if no overlay
+        self.overlay_occlude_rect = overlay_bounds;
+        self.overlay_start_node = overlay_start_node;
+        self.in_overlay = overlay_start_node.is_none(); // if no overlay, never occlude
 
         tree.traverse(|event| match event {
             TraversalEvent::Node(node) => {
-                // Mark the split point when we reach the overlay start node
-                if !overlay_marked {
-                    if let Some(start) = overlay_start_node {
+                // Track when we enter the overlay region
+                if !self.in_overlay {
+                    if let Some(start) = self.overlay_start_node {
                         if node.id as usize >= start {
-                            self.overlay_split_rect = self.rect_commands.len();
-                            self.overlay_split_text = self.text_commands.len();
-                            overlay_marked = true;
+                            self.in_overlay = true;
                         }
                     }
                 }
@@ -401,12 +336,6 @@ impl UIRenderer {
                 self.clip_stack.pop();
             }
         });
-
-        // If overlay was specified but never reached (nodes not found), no split
-        if !overlay_marked {
-            self.overlay_split_rect = self.rect_commands.len();
-            self.overlay_split_text = self.text_commands.len();
-        }
     }
 
     /// Draw a single UI node — resolves effective colors and emits commands.
@@ -436,10 +365,8 @@ impl UIRenderer {
             let color = bg_color.to_f32();
             if style.border_width > 0.0 && style.border_color.a > 0 {
                 self.rect_commands.push(RectCommand {
-                    x: bounds.x,
-                    y: bounds.y,
-                    w: bounds.width,
-                    h: bounds.height,
+                    x: bounds.x, y: bounds.y,
+                    w: bounds.width, h: bounds.height,
                     color,
                     corner_radius: style.corner_radius,
                     border_width: style.border_width,
@@ -447,34 +374,25 @@ impl UIRenderer {
                 });
             } else if style.corner_radius > 0.0 {
                 self.rect_commands.push(RectCommand {
-                    x: bounds.x,
-                    y: bounds.y,
-                    w: bounds.width,
-                    h: bounds.height,
+                    x: bounds.x, y: bounds.y,
+                    w: bounds.width, h: bounds.height,
                     color,
                     corner_radius: style.corner_radius,
-                    border_width: 0.0,
-                    border_color: [0.0; 4],
+                    border_width: 0.0, border_color: [0.0; 4],
                 });
             } else {
                 self.rect_commands.push(RectCommand {
-                    x: bounds.x,
-                    y: bounds.y,
-                    w: bounds.width,
-                    h: bounds.height,
+                    x: bounds.x, y: bounds.y,
+                    w: bounds.width, h: bounds.height,
                     color,
-                    corner_radius: 0.0,
-                    border_width: 0.0,
-                    border_color: [0.0; 4],
+                    corner_radius: 0.0, border_width: 0.0, border_color: [0.0; 4],
                 });
             }
         } else if style.border_width > 0.0 && style.border_color.a > 0 {
-            // Border-only (transparent bg)
+            // Border-only (no fill)
             self.rect_commands.push(RectCommand {
-                x: bounds.x,
-                y: bounds.y,
-                w: bounds.width,
-                h: bounds.height,
+                x: bounds.x, y: bounds.y,
+                w: bounds.width, h: bounds.height,
                 color: [0.0, 0.0, 0.0, 0.0],
                 corner_radius: style.corner_radius,
                 border_width: style.border_width,
@@ -485,7 +403,7 @@ impl UIRenderer {
         // Text
         if let Some(text) = &node.text {
             if !text.is_empty() {
-                let text_size = self.measure_text_internal(text, style.font_size, style.font_weight);
+                let text_size = self.measure_text_internal(text, style.font_size, style.font_weight as u16);
                 let text_y = bounds.y + (bounds.height - text_size.y) * 0.5;
 
                 let text_x = match style.text_align {
@@ -494,7 +412,19 @@ impl UIRenderer {
                     TextAlign::Left => bounds.x,
                 };
 
-                let clip_bounds = self.clip_stack.last().map(|c| [c.x, c.y, c.x_max(), c.y_max()]);
+                let mut clip_bounds = self.clip_stack.last().map(|c| [c.x, c.y, c.x_max(), c.y_max()]);
+
+                // If this is a base (non-overlay) text and it overlaps the dropdown,
+                // hide it by setting clip_bounds to a zero-area rect.
+                if !self.in_overlay {
+                    if let Some(ref occlude) = self.overlay_occlude_rect {
+                        let text_rect = Rect::new(text_x, text_y, text_size.x, text_size.y);
+                        if rects_overlap(&text_rect, occlude) {
+                            // Hide this text — it would show through the dropdown
+                            clip_bounds = Some([0.0, 0.0, 0.0, 0.0]);
+                        }
+                    }
+                }
 
                 self.text_commands.push(TextCommand {
                     x: text_x,
@@ -508,36 +438,22 @@ impl UIRenderer {
         }
     }
 
-    /// Internal text measurement using glyphon/cosmic-text.
-    fn measure_text_internal(&mut self, text: &str, font_size: u16, _font_weight: FontWeight) -> Vec2 {
-        let metrics = Metrics::new(font_size as f32, font_size as f32 * 1.2);
-        let mut buffer = TextBuffer::new(&mut self.font_system, metrics);
-        buffer.set_size(&mut self.font_system, Some(10000.0), Some(font_size as f32 * 2.0));
-        buffer.set_text(
-            &mut self.font_system,
-            text,
-            &Attrs::new().family(Family::SansSerif),
-            Shaping::Advanced,
-            None,
-        );
-        buffer.shape_until_scroll(&mut self.font_system, false);
+    // ── Text measurement ─────────────────────────────────────────────
 
-        let mut width = 0.0f32;
-        let mut height = 0.0f32;
-        for run in buffer.layout_runs() {
-            width = width.max(run.line_w);
-            height = height.max(run.line_y + font_size as f32 * 0.2);
-        }
-
-        Vec2::new(width, height.max(font_size as f32))
+    fn measure_text_internal(&mut self, text: &str, font_size: u16, _weight: u16) -> Vec2 {
+        let em = font_size as f32;
+        let approx_width = text.len() as f32 * em * 0.52;
+        let height = em * 1.2;
+        Vec2::new(approx_width, height)
     }
 
-    // ── Render pass ─────────────────────────────────────────────────
+    // ── GPU Rendering ────────────────────────────────────────────────
 
     /// Render all queued commands to the target view.
     ///
-    /// `width`/`height`: logical pixel dimensions (matches UITree coordinates).
-    /// `scale_factor`: HiDPI scale (e.g. 2.0 on Retina). Used for crisp text.
+    /// Single pass: all rects (in insertion order), then all text.
+    /// Dropdown rects render on top of panel rects (added last to tree).
+    /// Base text behind the dropdown is hidden via zero-area clip_bounds.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -551,7 +467,7 @@ impl UIRenderer {
         let physical_w = (width as f64 * scale_factor) as u32;
         let physical_h = (height as f64 * scale_factor) as u32;
 
-        // Update globals — logical pixel dimensions for NDC mapping
+        // Update globals
         let globals_data: [f32; 4] = [width as f32, height as f32, 0.0, 0.0];
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals_data));
 
@@ -564,37 +480,32 @@ impl UIRenderer {
             }],
         });
 
-        // Build vertex/index buffers from rect commands
+        // Build vertices from ALL rect commands (single buffer, single draw)
         self.vertices.clear();
         self.indices.clear();
 
         for cmd in &self.rect_commands {
             let base = self.vertices.len() as u32;
-
             let (x0, y0) = (cmd.x, cmd.y);
             let (x1, y1) = (cmd.x + cmd.w, cmd.y + cmd.h);
 
             self.vertices.push(UIVertex {
-                position: [x0, y0], uv: [0.0, 0.0],
-                color: cmd.color,
+                position: [x0, y0], uv: [0.0, 0.0], color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
                 border_color: cmd.border_color,
             });
             self.vertices.push(UIVertex {
-                position: [x1, y0], uv: [1.0, 0.0],
-                color: cmd.color,
+                position: [x1, y0], uv: [1.0, 0.0], color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
                 border_color: cmd.border_color,
             });
             self.vertices.push(UIVertex {
-                position: [x1, y1], uv: [1.0, 1.0],
-                color: cmd.color,
+                position: [x1, y1], uv: [1.0, 1.0], color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
                 border_color: cmd.border_color,
             });
             self.vertices.push(UIVertex {
-                position: [x0, y1], uv: [0.0, 1.0],
-                color: cmd.color,
+                position: [x0, y1], uv: [0.0, 1.0], color: cmd.color,
                 rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
                 border_color: cmd.border_color,
             });
@@ -605,9 +516,10 @@ impl UIRenderer {
             ]);
         }
 
-        // Prepare text buffers for glyphon
+        // Prepare ALL text (single glyphon prepare call)
         self.text_buffers.clear();
         let mut text_areas = Vec::new();
+        let sf = scale_factor as f32;
 
         for cmd in &self.text_commands {
             let mut buffer = TextBuffer::new(
@@ -626,10 +538,7 @@ impl UIRenderer {
             self.text_buffers.push(buffer);
         }
 
-        let sf = scale_factor as f32;
         for (i, cmd) in self.text_commands.iter().enumerate() {
-            // TextArea positions and bounds must be in physical pixels
-            // because the viewport is set to physical resolution.
             let bounds = if let Some(clip) = cmd.clip_bounds {
                 TextBounds {
                     left: (clip[0] * sf) as i32,
@@ -657,18 +566,12 @@ impl UIRenderer {
             });
         }
 
-        // Update viewport — physical resolution for crisp text
         self.viewport.update(queue, Resolution { width: physical_w, height: physical_h });
 
         self.text_renderer
             .prepare(
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.text_atlas,
-                &self.viewport,
-                text_areas,
-                &mut self.swash_cache,
+                device, queue, &mut self.font_system, &mut self.text_atlas,
+                &self.viewport, text_areas, &mut self.swash_cache,
             )
             .expect("Failed to prepare text renderer");
 
@@ -678,264 +581,47 @@ impl UIRenderer {
             return;
         }
 
-        let has_overlay = self.overlay_split_rect < self.rect_commands.len()
-            || self.overlay_split_text < self.text_commands.len();
-
-        // Helper: build vertices+indices from a range of rect_commands
-        let build_rect_buffers = |cmds: &[RectCommand], verts: &mut Vec<UIVertex>, idxs: &mut Vec<u32>| {
-            verts.clear();
-            idxs.clear();
-            for cmd in cmds {
-                let base = verts.len() as u32;
-                let (x0, y0) = (cmd.x, cmd.y);
-                let (x1, y1) = (cmd.x + cmd.w, cmd.y + cmd.h);
-                verts.push(UIVertex {
-                    position: [x0, y0], uv: [0.0, 0.0], color: cmd.color,
-                    rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
-                    border_color: cmd.border_color,
-                });
-                verts.push(UIVertex {
-                    position: [x1, y0], uv: [1.0, 0.0], color: cmd.color,
-                    rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
-                    border_color: cmd.border_color,
-                });
-                verts.push(UIVertex {
-                    position: [x1, y1], uv: [1.0, 1.0], color: cmd.color,
-                    rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
-                    border_color: cmd.border_color,
-                });
-                verts.push(UIVertex {
-                    position: [x0, y1], uv: [0.0, 1.0], color: cmd.color,
-                    rect_params: [cmd.w, cmd.h, cmd.corner_radius, cmd.border_width],
-                    border_color: cmd.border_color,
-                });
-                idxs.extend_from_slice(&[base, base+1, base+2, base, base+2, base+3]);
-            }
-        };
-
-        self.viewport.update(queue, Resolution { width: physical_w, height: physical_h });
-
-        if !has_overlay {
-            // Single pass — no dropdown, original behavior
-            build_rect_buffers(&self.rect_commands, &mut self.vertices, &mut self.indices);
-
-            // Prepare text buffers
-            self.text_buffers.clear();
-            for cmd in &self.text_commands {
-                let mut buffer = TextBuffer::new(
-                    &mut self.font_system,
-                    Metrics::new(cmd.font_size, cmd.font_size * 1.2),
-                );
-                buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
-                buffer.set_text(
-                    &mut self.font_system, &cmd.text,
-                    &Attrs::new().family(Family::SansSerif),
-                    Shaping::Advanced, None,
-                );
-                buffer.shape_until_scroll(&mut self.font_system, false);
-                self.text_buffers.push(buffer);
-            }
-            let mut text_areas: Vec<TextArea> = Vec::with_capacity(self.text_buffers.len());
-            for (i, cmd) in self.text_commands.iter().enumerate() {
-                let bounds = if let Some(clip) = cmd.clip_bounds {
-                    TextBounds {
-                        left: (clip[0] * sf) as i32, top: (clip[1] * sf) as i32,
-                        right: (clip[2] * sf) as i32, bottom: (clip[3] * sf) as i32,
-                    }
-                } else {
-                    TextBounds {
-                        left: 0, top: 0,
-                        right: physical_w as i32, bottom: physical_h as i32,
-                    }
-                };
-                text_areas.push(TextArea {
-                    buffer: &self.text_buffers[i],
-                    left: cmd.x * sf, top: cmd.y * sf, scale: sf, bounds,
-                    default_color: GlyphonColor::rgba(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]),
-                    custom_glyphs: &[],
-                });
-            }
-            self.text_renderer.prepare(
-                device, queue, &mut self.font_system, &mut self.text_atlas,
-                &self.viewport, text_areas, &mut self.swash_cache,
-            ).expect("Failed to prepare text");
-
+        // Single render pass: all rects then all text
+        {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("UI Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target, resolve_target: None, depth_slice: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    view: target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
                 })],
-                depth_stencil_attachment: None, timestamp_writes: None,
-                occlusion_query_set: None, multiview_mask: None,
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
             });
+
             if !self.vertices.is_empty() {
-                let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("UI Vertices"), contents: bytemuck::cast_slice(&self.vertices),
+                let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("UI Vertices"),
+                    contents: bytemuck::cast_slice(&self.vertices),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
-                let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("UI Indices"), contents: bytemuck::cast_slice(&self.indices),
+                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("UI Indices"),
+                    contents: bytemuck::cast_slice(&self.indices),
                     usage: wgpu::BufferUsages::INDEX,
                 });
+
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &globals_bind_group, &[]);
-                pass.set_vertex_buffer(0, vb.slice(..));
-                pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
             }
-            self.text_renderer.render(&self.text_atlas, &self.viewport, &mut pass)
+
+            self.text_renderer
+                .render(&self.text_atlas, &self.viewport, &mut pass)
                 .expect("Failed to render text");
-        } else {
-            // Two-pass: base UI (rects+text) then overlay (rects+text)
-            let split_r = self.overlay_split_rect;
-            let split_t = self.overlay_split_text;
-
-            // ── Pass 1: Base UI ──
-            build_rect_buffers(&self.rect_commands[..split_r], &mut self.vertices, &mut self.indices);
-
-            // Prepare base text buffers
-            self.text_buffers.clear();
-            for cmd in &self.text_commands[..split_t] {
-                let mut buffer = TextBuffer::new(
-                    &mut self.font_system,
-                    Metrics::new(cmd.font_size, cmd.font_size * 1.2),
-                );
-                buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
-                buffer.set_text(
-                    &mut self.font_system, &cmd.text,
-                    &Attrs::new().family(Family::SansSerif),
-                    Shaping::Advanced, None,
-                );
-                buffer.shape_until_scroll(&mut self.font_system, false);
-                self.text_buffers.push(buffer);
-            }
-            let mut base_text_areas: Vec<TextArea> = Vec::with_capacity(self.text_buffers.len());
-            for (i, cmd) in self.text_commands[..split_t].iter().enumerate() {
-                let bounds = if let Some(clip) = cmd.clip_bounds {
-                    TextBounds {
-                        left: (clip[0] * sf) as i32, top: (clip[1] * sf) as i32,
-                        right: (clip[2] * sf) as i32, bottom: (clip[3] * sf) as i32,
-                    }
-                } else {
-                    TextBounds {
-                        left: 0, top: 0,
-                        right: physical_w as i32, bottom: physical_h as i32,
-                    }
-                };
-                base_text_areas.push(TextArea {
-                    buffer: &self.text_buffers[i],
-                    left: cmd.x * sf, top: cmd.y * sf, scale: sf, bounds,
-                    default_color: GlyphonColor::rgba(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]),
-                    custom_glyphs: &[],
-                });
-            }
-            self.text_renderer.prepare(
-                device, queue, &mut self.font_system, &mut self.text_atlas,
-                &self.viewport, base_text_areas, &mut self.swash_cache,
-            ).expect("Failed to prepare base text");
-
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("UI Base Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: target, resolve_target: None, depth_slice: None,
-                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
-                    })],
-                    depth_stencil_attachment: None, timestamp_writes: None,
-                    occlusion_query_set: None, multiview_mask: None,
-                });
-                if !self.vertices.is_empty() {
-                    let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("UI Base Vertices"), contents: bytemuck::cast_slice(&self.vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-                    let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("UI Base Indices"), contents: bytemuck::cast_slice(&self.indices),
-                        usage: wgpu::BufferUsages::INDEX,
-                    });
-                    pass.set_pipeline(&self.pipeline);
-                    pass.set_bind_group(0, &globals_bind_group, &[]);
-                    pass.set_vertex_buffer(0, vb.slice(..));
-                    pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
-                }
-                self.text_renderer.render(&self.text_atlas, &self.viewport, &mut pass)
-                    .expect("Failed to render base text");
-            }
-
-            // ── Pass 2: Overlay (dropdown) ──
-            build_rect_buffers(&self.rect_commands[split_r..], &mut self.vertices, &mut self.indices);
-
-            // Prepare overlay text buffers
-            self.text_buffers.clear();
-            for cmd in &self.text_commands[split_t..] {
-                let mut buffer = TextBuffer::new(
-                    &mut self.font_system,
-                    Metrics::new(cmd.font_size, cmd.font_size * 1.2),
-                );
-                buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
-                buffer.set_text(
-                    &mut self.font_system, &cmd.text,
-                    &Attrs::new().family(Family::SansSerif),
-                    Shaping::Advanced, None,
-                );
-                buffer.shape_until_scroll(&mut self.font_system, false);
-                self.text_buffers.push(buffer);
-            }
-            let mut overlay_text_areas: Vec<TextArea> = Vec::with_capacity(self.text_buffers.len());
-            for (i, cmd) in self.text_commands[split_t..].iter().enumerate() {
-                let bounds = if let Some(clip) = cmd.clip_bounds {
-                    TextBounds {
-                        left: (clip[0] * sf) as i32, top: (clip[1] * sf) as i32,
-                        right: (clip[2] * sf) as i32, bottom: (clip[3] * sf) as i32,
-                    }
-                } else {
-                    TextBounds {
-                        left: 0, top: 0,
-                        right: physical_w as i32, bottom: physical_h as i32,
-                    }
-                };
-                overlay_text_areas.push(TextArea {
-                    buffer: &self.text_buffers[i],
-                    left: cmd.x * sf, top: cmd.y * sf, scale: sf, bounds,
-                    default_color: GlyphonColor::rgba(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]),
-                    custom_glyphs: &[],
-                });
-            }
-            self.text_renderer.prepare(
-                device, queue, &mut self.font_system, &mut self.text_atlas,
-                &self.viewport, overlay_text_areas, &mut self.swash_cache,
-            ).expect("Failed to prepare overlay text");
-
-            {
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("UI Overlay Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: target, resolve_target: None, depth_slice: None,
-                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
-                    })],
-                    depth_stencil_attachment: None, timestamp_writes: None,
-                    occlusion_query_set: None, multiview_mask: None,
-                });
-                if !self.vertices.is_empty() {
-                    let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("UI Overlay Vertices"), contents: bytemuck::cast_slice(&self.vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-                    let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("UI Overlay Indices"), contents: bytemuck::cast_slice(&self.indices),
-                        usage: wgpu::BufferUsages::INDEX,
-                    });
-                    pass.set_pipeline(&self.pipeline);
-                    pass.set_bind_group(0, &globals_bind_group, &[]);
-                    pass.set_vertex_buffer(0, vb.slice(..));
-                    pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
-                }
-                self.text_renderer.render(&self.text_atlas, &self.viewport, &mut pass)
-                    .expect("Failed to render overlay text");
-            }
         }
 
         self.rect_commands.clear();
@@ -943,34 +629,30 @@ impl UIRenderer {
     }
 }
 
-/// Implement TextMeasure for UIRenderer so panels can compute layout.
 impl TextMeasure for UIRenderer {
-    fn measure_text(&self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
-        // TextMeasure requires &self, but glyphon needs &mut FontSystem.
-        // Use an approximate measurement: Inter is ~0.5em per character on average.
-        // This is good enough for layout; exact measurement happens in draw_node.
-        let _ = font_weight;
+    fn measure_text(&self, text: &str, font_size: u16, _font_weight: FontWeight) -> Vec2 {
         let em = font_size as f32;
-        let avg_char_width = em * 0.52; // Inter average glyph width
-        let width = text.len() as f32 * avg_char_width;
-        Vec2::new(width, em)
+        let approx_width = text.len() as f32 * em * 0.52;
+        let height = em * 1.2;
+        Vec2::new(approx_width, height)
     }
 }
 
-// ── Geometry helpers ────────────────────────────────────────────────
+// ── Geometry helpers ─────────────────────────────────────────────────
 
-/// Intersect two rects (for nested clipping).
-fn intersect_rects(a: Rect, b: Rect) -> Rect {
-    let x0 = a.x.max(b.x);
-    let y0 = a.y.max(b.y);
-    let x1 = a.x_max().min(b.x_max());
-    let y1 = a.y_max().min(b.y_max());
-    Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
+fn clamp_rect_to_clip(rect: Rect, clip: Rect) -> Rect {
+    let x = rect.x.max(clip.x);
+    let y = rect.y.max(clip.y);
+    let right = (rect.x + rect.width).min(clip.x + clip.width);
+    let bottom = (rect.y + rect.height).min(clip.y + clip.height);
+    Rect::new(x, y, (right - x).max(0.0), (bottom - y).max(0.0))
 }
 
-/// Clamp a rect to a clip region (mathematical clipping).
-/// Fixes the Unity "ClipsChildren broken" bug by clamping geometry instead
-/// of relying on a flat-loop push/pop.
-fn clamp_rect_to_clip(rect: Rect, clip: Rect) -> Rect {
-    intersect_rects(rect, clip)
+fn intersect_rects(a: Rect, b: Rect) -> Rect {
+    clamp_rect_to_clip(b, a)
+}
+
+fn rects_overlap(a: &Rect, b: &Rect) -> bool {
+    a.x < b.x + b.width && a.x + a.width > b.x &&
+    a.y < b.y + b.height && a.y + a.height > b.y
 }
