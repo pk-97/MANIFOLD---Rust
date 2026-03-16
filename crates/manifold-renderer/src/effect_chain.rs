@@ -249,7 +249,14 @@ impl EffectChain {
         let enabled: Vec<usize> = effects
             .iter()
             .enumerate()
-            .filter(|(_, fx)| fx.enabled && registry.get_mut(fx.effect_type).is_some())
+            .filter(|(_, fx)| {
+                if !fx.enabled { return false; }
+                if registry.get_mut(fx.effect_type).is_none() {
+                    log::debug!("Effect {:?} has no GPU processor — skipped", fx.effect_type);
+                    return false;
+                }
+                true
+            })
             .map(|(i, _)| i)
             .collect();
 
