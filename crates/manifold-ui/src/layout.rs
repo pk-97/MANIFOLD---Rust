@@ -142,6 +142,13 @@ impl ScreenLayout {
         self.inspector().y
     }
 
+    /// Height of the non-scrollable header area above the track scroll container.
+    /// Overview strip + ruler = 16 + 40 = 56px.
+    /// Waveform lane (56px) and stem lanes are added here once rendering is implemented.
+    pub fn track_header_height(&self) -> f32 {
+        color::OVERVIEW_STRIP_HEIGHT + color::RULER_HEIGHT
+    }
+
     /// Layer controls region: right side of timeline body.
     pub fn layer_controls(&self) -> Rect {
         let body = self.timeline_body();

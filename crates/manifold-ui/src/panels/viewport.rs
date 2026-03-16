@@ -598,13 +598,15 @@ impl Panel for TimelineViewportPanel {
             return;
         }
 
+        // Header stack: overview strip (16) + ruler (40) = 56px
+        let header_h = color::OVERVIEW_STRIP_HEIGHT + RULER_HEIGHT;
         self.viewport_rect = Rect::new(body.x, body.y, tracks_w, body.height);
-        self.ruler_rect = Rect::new(body.x, body.y, tracks_w, RULER_HEIGHT);
+        self.ruler_rect = Rect::new(body.x, body.y + color::OVERVIEW_STRIP_HEIGHT, tracks_w, RULER_HEIGHT);
         self.tracks_rect = Rect::new(
             body.x,
-            body.y + RULER_HEIGHT,
+            body.y + header_h,
             tracks_w,
-            (body.height - RULER_HEIGHT).max(0.0),
+            (body.height - header_h).max(0.0),
         );
 
         // Background
@@ -613,6 +615,13 @@ impl Panel for TimelineViewportPanel {
             self.viewport_rect.width, self.viewport_rect.height,
             UIStyle { bg_color: color::DARK_BG, ..UIStyle::default() },
         ) as i32;
+
+        // Overview strip at top of viewport
+        let overview_rect = Rect::new(body.x, body.y, tracks_w, color::OVERVIEW_STRIP_HEIGHT);
+        tree.add_panel(
+            -1, overview_rect.x, overview_rect.y, overview_rect.width, overview_rect.height,
+            UIStyle { bg_color: color::OVERVIEW_BG, ..UIStyle::default() },
+        );
 
         // Ruler background
         self.ruler_bg_id = tree.add_panel(

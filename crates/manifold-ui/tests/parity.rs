@@ -25,7 +25,7 @@ fn layout_footer_height() {
 
 #[test]
 fn layout_ruler_height() {
-    assert_eq!(color::RULER_HEIGHT, 24.0); // Unity spec: 24px
+    assert_eq!(color::RULER_HEIGHT, 40.0); // Unity UIConstants.cs, NOT USER_GUIDE
 }
 
 #[test]
