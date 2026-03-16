@@ -1057,22 +1057,8 @@ impl Panel for LayerHeaderPanel {
             UIStyle { bg_color: Color32::TRANSPARENT, ..UIStyle::default() },
         ) as i32;
 
-        // "+ Add Layer" button at bottom of layer list
-        let total_h: f32 = self.layers.iter().map(|l| l.height).sum();
-        let btn_y = lc.y + total_h + 4.0;
-        self.add_layer_btn = tree.add_button(
-            self.scroll_clip_id, lc.x + 4.0, btn_y, lc.width - 8.0, 24.0,
-            UIStyle {
-                bg_color: Color32::new(40, 45, 50, 255),
-                hover_bg_color: Color32::new(55, 65, 75, 255),
-                text_color: Color32::new(130, 170, 210, 255),
-                corner_radius: 4.0,
-                text_align: TextAlign::Center,
-                font_size: 11,
-                ..UIStyle::default()
-            },
-            "+ Add Layer",
-        ) as i32;
+        // No "+ Add Layer" button — layers are added via right-click context menu
+        self.add_layer_btn = -1;
     }
 
     fn update(&mut self, tree: &mut UITree) {

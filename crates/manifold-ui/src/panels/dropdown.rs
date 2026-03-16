@@ -230,6 +230,12 @@ impl DropdownPanel {
         }
     }
 
+    /// Rebuild dropdown nodes after a tree clear (e.g., full UI rebuild).
+    /// Only call when the dropdown is open.
+    pub fn rebuild_nodes(&mut self, tree: &mut UITree) {
+        self.build_nodes(tree);
+    }
+
     fn build_nodes(&mut self, tree: &mut UITree) {
         self.first_node = tree.count();
         self.item_ids.clear();
@@ -288,9 +294,9 @@ impl DropdownPanel {
             };
 
             let item_style = UIStyle {
-                bg_color: if checked { color::DROPDOWN_ITEM_SELECTED } else { Color32::TRANSPARENT },
-                hover_bg_color: if enabled { color::DROPDOWN_HIGHLIGHT } else { Color32::TRANSPARENT },
-                pressed_bg_color: if enabled { color::DROPDOWN_PRESSED_BG } else { Color32::TRANSPARENT },
+                bg_color: if checked { color::DROPDOWN_ITEM_SELECTED } else { color::DROPDOWN_BG },
+                hover_bg_color: if enabled { color::DROPDOWN_HIGHLIGHT } else { color::DROPDOWN_BG },
+                pressed_bg_color: if enabled { color::DROPDOWN_PRESSED_BG } else { color::DROPDOWN_BG },
                 text_color: if checked { color::DROPDOWN_CHECK_COLOR } else { text_color },
                 font_size: color::FONT_BODY,
                 text_align: TextAlign::Left,

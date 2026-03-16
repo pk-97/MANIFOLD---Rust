@@ -97,6 +97,10 @@ impl UIRoot {
         self.viewport.build(&mut self.tree, &self.layout);
 
         self.dropdown.set_screen_size(self.screen_width, self.screen_height);
+        // Re-add dropdown nodes if it was open (build() clears the tree)
+        if self.dropdown.is_open() {
+            self.dropdown.rebuild_nodes(&mut self.tree);
+        }
 
         self.built = true;
     }
