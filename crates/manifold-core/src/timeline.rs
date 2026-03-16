@@ -166,29 +166,87 @@ impl Timeline {
         self.mark_clip_lookup_dirty();
     }
 
-    /// Get active clips at a given beat (respecting mute/solo).
+    /// Get active clips at a given beat (respecting mute/solo with group hierarchy).
+    /// From Unity Timeline.cs GetActiveClipsAtBeat (lines 331-374).
+    /// Group layers are skipped (they have no clips).
+    /// Children of muted groups are excluded.
+    /// Solo logic: child solo, parent group solo, or no solo active.
     pub fn get_active_clips_at_beat(&mut self, beat: f32) -> Vec<(usize, usize)> {
-        let has_solo = self.layers.iter().any(|l| l.is_solo);
+        // Pre-scan: check if any layer is solo'd
+        let any_solo = self.layers.iter().any(|l| l.is_solo);
         let mut results = Vec::new();
 
-        for (li, layer) in self.layers.iter_mut().enumerate() {
-            // Solo/mute logic
-            if has_solo && !layer.is_solo {
+        for li in 0..self.layers.len() {
+            // Group layers have no clips — skip
+            if self.layers[li].is_group() {
                 continue;
             }
-            if layer.is_muted {
+
+            // Individual layer mute
+            if self.layers[li].is_muted {
                 continue;
+            }
+
+            if self.layers[li].parent_layer_id.is_some() {
+                // Child layer — check parent group state
+                let parent_muted = self.find_group_parent(li)
+                    .map(|(_, p)| p.is_muted)
+                    .unwrap_or(false);
+                if parent_muted {
+                    continue;
+                }
+
+                let parent_solo = self.find_group_parent(li)
+                    .map(|(_, p)| p.is_solo)
+                    .unwrap_or(false);
+
+                // Solo check: render if child is solo, or parent group is solo, or no solo active
+                if any_solo && !self.layers[li].is_solo && !parent_solo {
+                    continue;
+                }
+            } else {
+                // Root layer solo check
+                if any_solo && !self.layers[li].is_solo {
+                    continue;
+                }
             }
 
             let mut active_indices = Vec::new();
-            layer.collect_active_clips_at_beat(beat, &mut active_indices);
+            self.layers[li].collect_active_clips_at_beat(beat, &mut active_indices);
             for ci in active_indices {
-                if !layer.clips[ci].is_muted {
+                if !self.layers[li].clips[ci].is_muted {
                     results.push((li, ci));
                 }
             }
         }
 
         results
+    }
+
+    /// Find the parent group layer for a child at the given flat index.
+    /// Single-depth: scans backward since parent appears before children.
+    /// From Unity Timeline.cs FindGroupParent (lines 380-390).
+    pub fn find_group_parent(&self, child_index: usize) -> Option<(usize, &Layer)> {
+        let parent_id = self.layers.get(child_index)?.parent_layer_id.as_ref()?;
+        for i in (0..child_index).rev() {
+            if self.layers[i].layer_id == *parent_id {
+                return Some((i, &self.layers[i]));
+            }
+        }
+        None
+    }
+
+    /// Get the earliest clip start beat across all layers.
+    /// From Unity Timeline.cs GetStartBeat.
+    pub fn get_start_beat(&self) -> f32 {
+        let mut min_beat = f32::MAX;
+        for layer in &self.layers {
+            for clip in &layer.clips {
+                if clip.start_beat < min_beat {
+                    min_beat = clip.start_beat;
+                }
+            }
+        }
+        min_beat
     }
 }

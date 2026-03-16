@@ -39,6 +39,17 @@ pub fn snap_beat_to_grid(beat: f32, grid_interval: f32) -> f32 {
     (beat / grid_interval).round() * grid_interval
 }
 
+/// Floor a beat to the left edge of the grid cell.
+/// Used for placement operations (double-click clip creation) where the click
+/// should land in the grid cell the cursor is inside, not snap to nearest line.
+/// From Unity CoordinateMapper.FloorBeatToGrid (lines 262-266).
+pub fn floor_beat_to_grid(beat: f32, grid_interval: f32) -> f32 {
+    if grid_interval <= 0.0 {
+        return beat;
+    }
+    ((beat / grid_interval).floor() * grid_interval).max(0.0)
+}
+
 /// Magnetic snap: finds nearest candidate (grid line + neighbor clip edges)
 /// and snaps if within pixel threshold.
 ///

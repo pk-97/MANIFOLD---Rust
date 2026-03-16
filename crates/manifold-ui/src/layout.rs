@@ -143,10 +143,27 @@ impl ScreenLayout {
     }
 
     /// Height of the non-scrollable header area above the track scroll container.
-    /// Overview strip + ruler = 16 + 40 = 56px.
-    /// Waveform lane (56px) and stem lanes are added here once rendering is implemented.
+    /// Overview strip (16) + ruler (40) = 56px base.
+    /// When audio waveform lane is visible: + 56px.
+    /// When stem lanes are visible (4×56): + 224px.
+    /// From Unity UIConstants: ImportedWaveformLaneHeight = 56, StemLaneHeight = 56.
     pub fn track_header_height(&self) -> f32 {
-        color::OVERVIEW_STRIP_HEIGHT + color::RULER_HEIGHT
+        let mut h = color::OVERVIEW_STRIP_HEIGHT + color::RULER_HEIGHT;
+        // Future: add waveform_lane_visible * 56.0
+        // Future: add stem_lane_count * 56.0
+        h
+    }
+
+    /// Height of the imported audio waveform lane (when visible).
+    /// From Unity UIConstants.ImportedWaveformLaneHeight = 56.
+    pub fn waveform_lane_height() -> f32 {
+        56.0
+    }
+
+    /// Height of a single stem lane.
+    /// From Unity UIConstants.StemLaneHeight = 56.
+    pub fn stem_lane_height() -> f32 {
+        56.0
     }
 
     /// Layer controls region: right side of timeline body.
@@ -161,6 +178,33 @@ impl ScreenLayout {
         let body = self.timeline_body();
         let ctrl_w = color::LAYER_CONTROLS_WIDTH;
         Rect::new(body.x, body.y, body.width - ctrl_w, body.height)
+    }
+
+    /// Split handle rect: the boundary between video area and timeline area.
+    /// From Unity PanelResizeHandle.cs — a thin horizontal bar the user can drag
+    /// to adjust the video/timeline proportion.
+    /// Handle height: 6px (same as InspectorResizeHandleWidth), centered on the split line.
+    pub fn split_handle(&self) -> Rect {
+        let tl = self.timeline_area();
+        let handle_h = color::INSPECTOR_RESIZE_HANDLE_WIDTH; // 6px
+        Rect::new(tl.x, tl.y - handle_h * 0.5, tl.width, handle_h)
+    }
+
+    /// Check if a point is near the video/timeline split handle.
+    pub fn is_near_split_handle(&self, pos: crate::node::Vec2) -> bool {
+        self.split_handle().contains(pos)
+    }
+
+    /// Update the split ratio from a drag position (in screen Y).
+    /// Clamps to [0.15, 0.70] matching Unity PanelResizeHandle min/max.
+    /// From Unity PanelResizeHandle.OnDrag (lines 55-76).
+    pub fn update_split_from_drag(&mut self, screen_y: f32) {
+        let content = self.content_area();
+        if content.height <= 0.0 { return; }
+        // How much of the content area is below the drag point
+        let timeline_h = (content.y + content.height) - screen_y;
+        let ratio = (timeline_h / content.height).clamp(0.15, 0.70);
+        self.timeline_split_ratio = ratio;
     }
 }
 

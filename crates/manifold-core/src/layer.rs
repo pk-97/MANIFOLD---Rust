@@ -95,6 +95,11 @@ pub struct Layer {
     // ── Runtime caches (not serialized) ──
     #[serde(skip)]
     clips_sorted: bool,
+    /// Indices into `clips`, sorted by end_beat. From Unity Layer.cs clipsByEndBeat.
+    #[serde(skip)]
+    clips_by_end_indices: Vec<usize>,
+    #[serde(skip)]
+    clips_by_end_sorted: bool,
 }
 
 impl Layer {
@@ -104,9 +109,18 @@ impl Layer {
             index,
             name,
             layer_type,
+            layer_color: Self::generate_layer_color(index as usize),
             clips: Vec::new(),
             ..Default::default()
         }
+    }
+
+    /// Generates a distinct color for layer visualization based on index.
+    /// Uses golden ratio hue distribution for maximum visual separation.
+    /// From Unity Layer.cs line 586-590.
+    pub fn generate_layer_color(index: usize) -> crate::color::Color {
+        let hue = (index as f32 * 0.618033988749895) % 1.0;
+        crate::color::Color::hsv_to_rgb(hue, 0.6, 0.8)
     }
 
     pub fn is_group(&self) -> bool {
@@ -122,38 +136,139 @@ impl Layer {
         }
     }
 
-    pub fn ensure_clips_sorted(&mut self) {
+    /// Ensure both clip ordering caches are up-to-date.
+    /// From Unity Layer.cs EnsureClipOrderingCaches (lines 457-473).
+    pub fn ensure_clip_ordering_caches(&mut self) {
         if !self.clips_sorted {
-            self.clips.sort_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal));
+            self.clips.sort_by(Self::compare_by_start_beat);
             self.clips_sorted = true;
+        }
+
+        if !self.clips_by_end_sorted || self.clips_by_end_indices.len() != self.clips.len() {
+            self.clips_by_end_indices = (0..self.clips.len()).collect();
+            let clips = &self.clips;
+            self.clips_by_end_indices.sort_by(|&a, &b| {
+                Self::compare_by_end_beat_ref(&clips[a], &clips[b])
+            });
+            self.clips_by_end_sorted = true;
         }
     }
 
     pub fn mark_clips_unsorted(&mut self) {
         self.clips_sorted = false;
+        self.clips_by_end_sorted = false;
     }
 
-    /// Collect clips active at a given beat.
+    /// Collect clips active at a given beat using dual sorted indexes.
+    /// From Unity Layer.cs CollectActiveClipsAtBeat (lines 388-431).
+    /// Uses the smaller of two candidate sets (started-by-beat vs ending-after-beat)
+    /// to minimize per-frame work.
     pub fn collect_active_clips_at_beat(&mut self, beat: f32, results: &mut Vec<usize>) {
-        self.ensure_clips_sorted();
-        for (i, clip) in self.clips.iter().enumerate() {
-            if clip.start_beat > beat {
-                break; // Sorted, so no more can be active
+        if self.clips.is_empty() {
+            return;
+        }
+        self.ensure_clip_ordering_caches();
+
+        // Count of clips with start_beat <= beat (sorted by start)
+        let started_count = Self::upper_bound_start_beat(&self.clips, beat);
+        if started_count == 0 {
+            return;
+        }
+
+        // Index into clips_by_end_indices where end_beat > beat starts
+        let end_idx = Self::lower_bound_end_beat(&self.clips, &self.clips_by_end_indices, beat);
+        let ending_after_count = self.clips_by_end_indices.len() - end_idx;
+
+        // Iterate the smaller candidate set
+        if started_count <= ending_after_count {
+            // Scan the start-sorted prefix: clips 0..started_count where start_beat <= beat
+            for i in 0..started_count {
+                let clip = &self.clips[i];
+                if clip.is_muted {
+                    continue;
+                }
+                if beat < clip.end_beat() {
+                    results.push(i);
+                }
             }
-            if clip.is_active_at_beat(beat) {
-                results.push(i);
+        } else {
+            // Scan the end-sorted suffix: clips where end_beat > beat
+            // Collect into scratch, sort by start_beat for deterministic ordering
+            let mut scratch: Vec<usize> = Vec::new();
+            for i in end_idx..self.clips_by_end_indices.len() {
+                let ci = self.clips_by_end_indices[i];
+                let clip = &self.clips[ci];
+                if clip.is_muted {
+                    continue;
+                }
+                if clip.start_beat <= beat {
+                    scratch.push(ci);
+                }
+            }
+            // Preserve deterministic per-layer ordering (sort by clip index in start-sorted order)
+            scratch.sort_unstable();
+            results.extend(scratch);
+        }
+    }
+
+    /// Binary search: count of clips with start_beat <= beat.
+    /// From Unity Layer.cs UpperBoundStartBeat (lines 475-489).
+    fn upper_bound_start_beat(clips: &[TimelineClip], beat: f32) -> usize {
+        let mut lo = 0;
+        let mut hi = clips.len();
+        while lo < hi {
+            let mid = lo + ((hi - lo) >> 1);
+            if clips[mid].start_beat <= beat {
+                lo = mid + 1;
+            } else {
+                hi = mid;
             }
         }
+        lo
+    }
+
+    /// Binary search: first index in clips_by_end_indices where end_beat > beat.
+    /// From Unity Layer.cs LowerBoundEndBeat (lines 491-505).
+    fn lower_bound_end_beat(clips: &[TimelineClip], indices: &[usize], beat: f32) -> usize {
+        let mut lo = 0;
+        let mut hi = indices.len();
+        while lo < hi {
+            let mid = lo + ((hi - lo) >> 1);
+            if clips[indices[mid]].end_beat() <= beat {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        lo
+    }
+
+    /// Compare by start_beat, tiebreak by end_beat.
+    /// From Unity Layer.cs CompareByStartBeat (lines 507-515).
+    fn compare_by_start_beat(a: &TimelineClip, b: &TimelineClip) -> std::cmp::Ordering {
+        a.start_beat.partial_cmp(&b.start_beat)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.end_beat().partial_cmp(&b.end_beat()).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
+    /// Compare by end_beat, tiebreak by start_beat.
+    /// From Unity Layer.cs CompareByEndBeat (lines 517-525).
+    fn compare_by_end_beat_ref(a: &TimelineClip, b: &TimelineClip) -> std::cmp::Ordering {
+        a.end_beat().partial_cmp(&b.end_beat())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal))
     }
 
     pub fn add_clip(&mut self, clip: TimelineClip) {
         self.clips.push(clip);
-        self.clips_sorted = false;
+        self.mark_clips_unsorted();
     }
 
     pub fn remove_clip(&mut self, clip_id: &str) -> Option<TimelineClip> {
         if let Some(idx) = self.clips.iter().position(|c| c.id == clip_id) {
-            Some(self.clips.remove(idx))
+            let clip = self.clips.remove(idx);
+            self.mark_clips_unsorted();
+            Some(clip)
         } else {
             None
         }
@@ -176,7 +291,7 @@ impl Layer {
     pub fn insert_clip_at(&mut self, index: usize, clip: TimelineClip) {
         let idx = index.min(self.clips.len());
         self.clips.insert(idx, clip);
-        self.clips_sorted = false;
+        self.mark_clips_unsorted();
     }
 
     /// Get the effects list, creating it if None.
@@ -306,6 +421,8 @@ impl Default for Layer {
             legacy_gen_vertex_size: None,
             legacy_gen_window_size: None,
             clips_sorted: false,
+            clips_by_end_indices: Vec::new(),
+            clips_by_end_sorted: false,
         }
     }
 }

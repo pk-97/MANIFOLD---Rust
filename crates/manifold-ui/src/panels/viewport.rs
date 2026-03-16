@@ -1,4 +1,5 @@
 use crate::color;
+use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
 use crate::node::*;
@@ -76,7 +77,11 @@ pub struct TrackInfo {
     pub height: f32,
     pub is_muted: bool,
     pub is_group: bool,
+    pub is_collapsed: bool,
     pub accent_color: Option<Color32>,
+    /// For group layers: indices of child layers (used for collapsed group preview).
+    /// From Unity ViewportManager.GenerateCollapsedGroupTexture.
+    pub child_layer_indices: Vec<usize>,
 }
 
 impl Default for TrackInfo {
@@ -85,7 +90,9 @@ impl Default for TrackInfo {
             height: color::TRACK_HEIGHT,
             is_muted: false,
             is_group: false,
+            is_collapsed: false,
             accent_color: None,
+            child_layer_indices: Vec::new(),
         }
     }
 }
@@ -93,15 +100,18 @@ impl Default for TrackInfo {
 // ── TimelineViewportPanel ───────────────────────────────────────
 
 pub struct TimelineViewportPanel {
-    // Coordinate mapping
-    pixels_per_beat: f32,
+    // Shared coordinate mapper (owns zoom, Y-layout, grid snapping).
+    // The viewport adds screen-space offset (tracks_rect.x) on top.
+    mapper: CoordinateMapper,
+
+    // Viewport-specific scroll state (in beats, not pixels)
     scroll_x_beats: f32,
     scroll_y_px: f32,
     beats_per_bar: u32,
 
-    // Track layout
+    // Track layout (kept in sync with mapper via set_tracks)
     tracks: Vec<TrackInfo>,
-    track_y_offsets: Vec<f32>,
+    track_y_offsets: Vec<f32>,    // cumulative Y offsets from tracks
     total_tracks_height: f32,
 
     // Clip data
@@ -154,6 +164,10 @@ pub struct TimelineViewportPanel {
 
     // Drag interaction state
     drag_mode: ViewportDragMode,
+
+    // Dirty-checking fingerprint to skip unnecessary rebuilds.
+    // From Unity LayerBitmapRenderer dirty-checking (lines 99-186).
+    cached_fingerprint: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,7 +183,7 @@ enum ViewportDragMode {
 impl TimelineViewportPanel {
     pub fn new() -> Self {
         Self {
-            pixels_per_beat: color::ZOOM_LEVELS[color::DEFAULT_ZOOM_INDEX],
+            mapper: CoordinateMapper::new(),
             scroll_x_beats: 0.0,
             scroll_y_px: 0.0,
             beats_per_bar: 4,
@@ -209,14 +223,77 @@ impl TimelineViewportPanel {
             first_node: 0,
             node_count: 0,
             drag_mode: ViewportDragMode::None,
+            cached_fingerprint: 0,
         }
+    }
+
+    /// Compute a fingerprint of the current viewport state.
+    /// If unchanged from cached, the tree rebuild can be skipped.
+    /// From Unity LayerBitmapRenderer.ComputeClipFingerprint (lines 332-344).
+    pub fn compute_fingerprint(&self) -> u64 {
+        let (min_beat, max_beat) = self.visible_beat_range();
+        let mut hash = self.clips.len() as u64;
+        hash = hash.wrapping_mul(31).wrapping_add(self.mapper.pixels_per_beat().to_bits() as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(self.scroll_x_beats.to_bits() as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(self.scroll_y_px.to_bits() as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(self.tracks.len() as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(self.selected_clip_ids.len() as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(
+            self.hovered_clip_id.as_ref().map(|s| {
+                let mut h = 0u64;
+                for b in s.bytes() { h = h.wrapping_mul(31).wrapping_add(b as u64); }
+                h
+            }).unwrap_or(0)
+        );
+        // Per-visible-clip fingerprint
+        for clip in &self.clips {
+            let clip_end = clip.start_beat + clip.duration_beats;
+            if clip_end <= min_beat || clip.start_beat >= max_beat {
+                continue;
+            }
+            hash = hash.wrapping_mul(31).wrapping_add(clip.start_beat.to_bits() as u64);
+            hash = hash.wrapping_mul(31).wrapping_add(clip_end.to_bits() as u64);
+            hash = hash.wrapping_mul(31).wrapping_add(clip.is_muted as u64);
+            hash = hash.wrapping_mul(31).wrapping_add(clip.is_locked as u64);
+        }
+        hash
+    }
+
+    /// Check if the viewport needs a full tree rebuild based on fingerprint.
+    /// Returns true if changed (needs rebuild), false if unchanged (skip).
+    pub fn needs_rebuild(&mut self) -> bool {
+        let fp = self.compute_fingerprint();
+        if fp == self.cached_fingerprint {
+            return false;
+        }
+        self.cached_fingerprint = fp;
+        true
     }
 
     // ── Configuration ─────────────────────────────────────────────
 
     pub fn set_tracks(&mut self, tracks: Vec<TrackInfo>) {
         self.tracks = tracks;
-        self.recompute_track_layout();
+        // Recompute cumulative Y offsets from track heights
+        self.track_y_offsets.clear();
+        let mut y = 0.0;
+        for track in &self.tracks {
+            self.track_y_offsets.push(y);
+            y += track.height;
+        }
+        self.total_tracks_height = y;
+    }
+
+    /// Rebuild the CoordinateMapper's Y-layout from layer data.
+    /// Call this from app.rs when layers change (before build).
+    pub fn rebuild_mapper_layout(&mut self, layers: &[manifold_core::layer::Layer]) {
+        self.mapper.rebuild_y_layout(layers);
+    }
+
+    /// Get a reference to the shared CoordinateMapper.
+    /// Used by layer headers and other panels that need shared coordinate space.
+    pub fn mapper(&self) -> &CoordinateMapper {
+        &self.mapper
     }
 
     pub fn set_clips(&mut self, clips: Vec<ViewportClip>) {
@@ -224,13 +301,11 @@ impl TimelineViewportPanel {
     }
 
     pub fn set_zoom(&mut self, pixels_per_beat: f32) {
-        self.pixels_per_beat = pixels_per_beat.max(1.0);
+        self.mapper.set_zoom(pixels_per_beat);
     }
 
     pub fn set_zoom_index(&mut self, index: usize) {
-        if let Some(&ppb) = color::ZOOM_LEVELS.get(index) {
-            self.pixels_per_beat = ppb;
-        }
+        self.mapper.set_zoom_by_index(index);
     }
 
     pub fn set_scroll(&mut self, scroll_x_beats: f32, scroll_y_px: f32) {
@@ -276,7 +351,7 @@ impl TimelineViewportPanel {
 
     // ── Accessors ─────────────────────────────────────────────────
 
-    pub fn pixels_per_beat(&self) -> f32 { self.pixels_per_beat }
+    pub fn pixels_per_beat(&self) -> f32 { self.mapper.pixels_per_beat() }
     pub fn scroll_x_beats(&self) -> f32 { self.scroll_x_beats }
     pub fn scroll_y_px(&self) -> f32 { self.scroll_y_px }
     pub fn viewport_rect(&self) -> Rect { self.viewport_rect }
@@ -287,19 +362,19 @@ impl TimelineViewportPanel {
 
     // ── Coordinate mapping ────────────────────────────────────────
 
-    /// Convert beat position to pixel X in the tracks area.
+    /// Convert beat position to pixel X in the tracks area (screen-space).
     pub fn beat_to_pixel(&self, beat: f32) -> f32 {
-        (beat - self.scroll_x_beats) * self.pixels_per_beat + self.tracks_rect.x
+        (beat - self.scroll_x_beats) * self.mapper.pixels_per_beat() + self.tracks_rect.x
     }
 
     /// Convert pixel X in the tracks area to beat position.
     pub fn pixel_to_beat(&self, px: f32) -> f32 {
-        (px - self.tracks_rect.x) / self.pixels_per_beat + self.scroll_x_beats
+        (px - self.tracks_rect.x) / self.mapper.pixels_per_beat() + self.scroll_x_beats
     }
 
     /// Convert beat duration to pixel width.
     pub fn beat_duration_to_width(&self, beats: f32) -> f32 {
-        beats * self.pixels_per_beat
+        self.mapper.beat_duration_to_width(beats)
     }
 
     /// Get Y position of a track (relative to tracks_rect top, before scroll).
@@ -318,7 +393,7 @@ impl TimelineViewportPanel {
     /// Visible beat range (with buffer).
     fn visible_beat_range(&self) -> (f32, f32) {
         let min_beat = self.scroll_x_beats;
-        let max_beat = min_beat + self.tracks_rect.width / self.pixels_per_beat;
+        let max_beat = min_beat + self.tracks_rect.width / self.mapper.pixels_per_beat();
         (min_beat, max_beat)
     }
 
@@ -354,8 +429,8 @@ impl TimelineViewportPanel {
                 continue;
             }
 
-            let clip_width_px = clip.duration_beats * self.pixels_per_beat;
-            let local_px = (beat - clip.start_beat) * self.pixels_per_beat;
+            let clip_width_px = clip.duration_beats * self.mapper.pixels_per_beat();
+            let local_px = (beat - clip.start_beat) * self.mapper.pixels_per_beat();
 
             let region = if clip_width_px > 16.0 && local_px < 8.0 {
                 HitRegion::TrimLeft
@@ -431,7 +506,7 @@ impl TimelineViewportPanel {
 
         // Clamp threshold to avoid snapping across bars at low zoom
         let max_snap_beats = 0.5_f32;
-        let threshold_beats = (SNAP_THRESHOLD_PX / self.pixels_per_beat).min(max_snap_beats);
+        let threshold_beats = (SNAP_THRESHOLD_PX / self.mapper.pixels_per_beat()).min(max_snap_beats);
 
         // Start with raw beat — only snap if a candidate is within threshold.
         let mut best_beat = beat;
@@ -489,18 +564,6 @@ impl TimelineViewportPanel {
         }
     }
 
-    // ── Track layout ──────────────────────────────────────────────
-
-    fn recompute_track_layout(&mut self) {
-        self.track_y_offsets.clear();
-        let mut y = 0.0;
-        for track in &self.tracks {
-            self.track_y_offsets.push(y);
-            y += track.height;
-        }
-        self.total_tracks_height = y;
-    }
-
     // ── Grid subdivision ──────────────────────────────────────────
 
     /// Determine grid subdivision level based on zoom.
@@ -509,13 +572,13 @@ impl TimelineViewportPanel {
     ///   - Show 8ths  when an 8th-note ≥ 6px wide
     ///   - Show beats when a beat ≥ 6px wide
     fn grid_subdivision(&self) -> GridSubdivision {
-        let sixteenth_px = self.pixels_per_beat * 0.25;
-        let eighth_px = self.pixels_per_beat * 0.5;
+        let sixteenth_px = self.mapper.pixels_per_beat() * 0.25;
+        let eighth_px = self.mapper.pixels_per_beat() * 0.5;
         if sixteenth_px >= 4.0 {
             GridSubdivision::Sixteenth
         } else if eighth_px >= 6.0 {
             GridSubdivision::Eighth
-        } else if self.pixels_per_beat >= 6.0 {
+        } else if self.mapper.pixels_per_beat() >= 6.0 {
             GridSubdivision::Beat
         } else {
             GridSubdivision::Bar
@@ -626,12 +689,17 @@ impl Panel for TimelineViewportPanel {
             UIStyle { bg_color: color::DARK_BG, ..UIStyle::default() },
         ) as i32;
 
-        // Overview strip at top of viewport
+        // Overview strip at top of viewport.
+        // From Unity OverviewStripPanel.cs — mini-timeline with clip miniatures,
+        // viewport indicator, playhead, and export range markers.
         let overview_rect = Rect::new(body.x, body.y, tracks_w, color::OVERVIEW_STRIP_HEIGHT);
         tree.add_panel(
             -1, overview_rect.x, overview_rect.y, overview_rect.width, overview_rect.height,
             UIStyle { bg_color: color::OVERVIEW_BG, ..UIStyle::default() },
         );
+
+        // Overview clip miniatures (from Unity OverviewStripPanel.BuildPanel lines 218-238)
+        self.build_overview_clips(tree, overview_rect);
 
         // Ruler background — INTERACTIVE so clicks register for playhead scrubbing
         self.ruler_bg_id = tree.add_button(
@@ -967,6 +1035,63 @@ impl Panel for TimelineViewportPanel {
 // ── Build helpers (private) ──────────────────────────────────────
 
 impl TimelineViewportPanel {
+    /// Build clip miniatures in the overview strip.
+    /// From Unity OverviewStripPanel.BuildPanel (lines 218-270).
+    /// Renders small colored rects for each clip, a viewport indicator,
+    /// and the playhead position.
+    fn build_overview_clips(&self, tree: &mut UITree, overview_rect: Rect) {
+        if self.clips.is_empty() || self.tracks.is_empty() {
+            return;
+        }
+
+        // Compute total content duration for normalization
+        let mut max_beat = 0.0f32;
+        for clip in &self.clips {
+            let end = clip.start_beat + clip.duration_beats;
+            if end > max_beat { max_beat = end; }
+        }
+        if max_beat <= 0.0 { return; }
+
+        let layer_count = self.tracks.len();
+        let row_h = overview_rect.height / layer_count as f32;
+        let palette = &color::LAYER_PALETTE;
+
+        // Clip miniatures
+        for clip in &self.clips {
+            let start_norm = clip.start_beat / max_beat;
+            let end_norm = (clip.start_beat + clip.duration_beats) / max_beat;
+            let x = overview_rect.x + start_norm * overview_rect.width;
+            let w = ((end_norm - start_norm) * overview_rect.width).max(1.0);
+            // Layer 0 at bottom, layer N-1 at top (matching Unity line 230)
+            let y = overview_rect.y + (layer_count.saturating_sub(1).saturating_sub(clip.layer_index)) as f32 * row_h;
+
+            let clip_color = palette[clip.layer_index % palette.len()];
+            tree.add_panel(-1, x, y, w, row_h,
+                UIStyle { bg_color: clip_color, ..UIStyle::default() },
+            );
+        }
+
+        // Viewport indicator (semi-transparent blue showing visible portion)
+        let ppb = self.mapper.pixels_per_beat();
+        if ppb > 0.0 {
+            let viewport_width_beats = self.tracks_rect.width / ppb;
+            let vp_start_norm = self.scroll_x_beats / max_beat;
+            let vp_width_norm = viewport_width_beats / max_beat;
+            let vp_x = overview_rect.x + vp_start_norm * overview_rect.width;
+            let vp_w = (vp_width_norm * overview_rect.width).min(overview_rect.width);
+            tree.add_panel(-1, vp_x, overview_rect.y, vp_w, overview_rect.height,
+                UIStyle { bg_color: color::OVERVIEW_VIEWPORT, ..UIStyle::default() },
+            );
+        }
+
+        // Playhead in overview
+        let ph_norm = self.playhead_beat / max_beat;
+        let ph_x = overview_rect.x + (ph_norm * overview_rect.width).clamp(0.0, overview_rect.width);
+        tree.add_panel(-1, ph_x, overview_rect.y, 1.0, overview_rect.height,
+            UIStyle { bg_color: color::OVERVIEW_PLAYHEAD, ..UIStyle::default() },
+        );
+    }
+
     fn build_track_backgrounds(&mut self, tree: &mut UITree) {
         self.track_bg_ids.clear();
 
@@ -1021,6 +1146,36 @@ impl TimelineViewportPanel {
                 }
             }
 
+            // Collapsed group preview: miniature clip rects of child layers.
+            // From Unity ViewportManager.GenerateCollapsedGroupTexture (lines 700-770).
+            if track.is_group && track.is_collapsed && !track.child_layer_indices.is_empty() {
+                let child_count = track.child_layer_indices.len();
+                let rows_per_child = 2.0_f32.min(clamped_h / child_count.max(1) as f32);
+                let palette = &color::LAYER_PALETTE;
+                let (min_beat, max_beat) = self.visible_beat_range();
+                let ppb = self.mapper.pixels_per_beat();
+
+                for (ci, &child_idx) in track.child_layer_indices.iter().enumerate() {
+                    let child_y = clamped_y + ci as f32 * rows_per_child;
+                    let child_color = palette[ci % palette.len()];
+
+                    // Render clips of this child layer as tiny rects
+                    for clip in &self.clips {
+                        if clip.layer_index != child_idx { continue; }
+                        let clip_end = clip.start_beat + clip.duration_beats;
+                        if clip_end < min_beat || clip.start_beat > max_beat { continue; }
+
+                        let cx = self.beat_to_pixel(clip.start_beat).max(tr.x);
+                        let cx2 = self.beat_to_pixel(clip_end).min(tr.x + tr.width);
+                        let cw = (cx2 - cx).max(1.0);
+
+                        tree.add_panel(-1, cx, child_y, cw, rows_per_child,
+                            UIStyle { bg_color: child_color, ..UIStyle::default() },
+                        );
+                    }
+                }
+            }
+
             // Bottom separator (only if bottom edge is visible)
             let sep_y = y + h - 1.0;
             if sep_y >= tr_top && sep_y < tr_bottom {
@@ -1067,9 +1222,12 @@ impl TimelineViewportPanel {
                     color::GRID_SIXTEENTH_LINE
                 };
 
+                // Bar lines are 2px wide, all others 1px.
+                // From Unity LayerBitmapRenderer.PaintGridLines.
+                let line_w = if is_bar { 2.0 } else { GRID_LINE_W };
                 let id = tree.add_panel(
                     -1, px, self.tracks_rect.y,
-                    GRID_LINE_W, self.tracks_rect.height,
+                    line_w, self.tracks_rect.height,
                     UIStyle { bg_color: line_color, ..UIStyle::default() },
                 ) as i32;
                 self.grid_line_ids.push(id);
@@ -1209,7 +1367,22 @@ impl TimelineViewportPanel {
             let is_hovered = self.hovered_clip_id.as_ref() == Some(&clip.clip_id);
             let clip_color = get_clip_color(clip, is_selected, is_hovered);
 
-            // Clip background
+            // ── Clip rendering (matches Unity LayerBitmapRenderer.DrawClip) ──
+
+            // Determine border width: 2px when selected, 1px otherwise.
+            // From Unity DrawClip lines 72-77.
+            let border_w = if is_selected { 2.0 } else { 1.0 };
+
+            // Clip background with top/bottom borders always drawn.
+            // Left/right borders only when clip_w >= 12px (prevents "caterpillar" at low zoom).
+            let border_color = if is_selected { color::ACCENT_BLUE } else {
+                Color32::new(
+                    clip_color.r.saturating_sub(30),
+                    clip_color.g.saturating_sub(30),
+                    clip_color.b.saturating_sub(30),
+                    clip_color.a,
+                )
+            };
             let bg_id = tree.add_button(
                 -1, x1, clip_y, clip_w, clip_h,
                 UIStyle {
@@ -1229,31 +1402,30 @@ impl TimelineViewportPanel {
                         clip_color.a,
                     ),
                     corner_radius: CLIP_CORNER_RADIUS,
-                    border_color: if is_selected { color::SELECTED_BORDER } else { Color32::TRANSPARENT },
-                    border_width: if is_selected { CLIP_BORDER_WIDTH } else { 0.0 },
+                    border_color,
+                    border_width: border_w,
                     ..UIStyle::default()
                 },
                 "",
             ) as i32;
             self.clip_bg_ids.push(bg_id);
 
-            // Left separator (Ableton-style dark edge)
-            if clip_w > 6.0 {
-                let sep_id = tree.add_panel(
-                    -1, x1, clip_y, 2.0, clip_h,
+            // 1px dark separator at clip left edge (only when clip_w >= 4px).
+            // From Unity DrawClip line 67-68.
+            if clip_w >= 4.0 {
+                tree.add_panel(
+                    -1, x1, clip_y, 1.0, clip_h,
                     UIStyle {
                         bg_color: color::CLIP_SEPARATOR,
-                        corner_radius: CLIP_CORNER_RADIUS,
                         ..UIStyle::default()
                     },
-                ) as i32;
-                self.clip_border_ids.push(sep_id);
+                );
             }
 
             // Clip name label (if wide enough)
             if clip_w > CLIP_MIN_WIDTH_PX + CLIP_LABEL_PAD * 2.0 {
-                let label_x = x1 + CLIP_LABEL_PAD + 2.0; // past separator
-                let label_w = clip_w - CLIP_LABEL_PAD * 2.0 - 2.0;
+                let label_x = x1 + CLIP_LABEL_PAD + 1.0; // past 1px separator
+                let label_w = clip_w - CLIP_LABEL_PAD * 2.0 - 1.0;
                 let text_color = if clip.is_generator {
                     Color32::new(20, 20, 22, 255)
                 } else {
@@ -1273,24 +1445,24 @@ impl TimelineViewportPanel {
                 self.clip_label_ids.push(label_id);
             }
 
-            // Trim handle indicators (on hovered or selected clips, when wide enough)
+            // Trim hint indicators: 6px inset at each end on hover OR selected.
+            // Color: ACCENT_BLUE_DIM. From Unity DrawClip lines 82-91.
             if (is_selected || is_hovered) && clip_w > 12.0 {
-                let handle_w = 8.0_f32.min(clip_w * 0.25);
+                let hint_w = 6.0_f32.min(clip_w * 0.25);
                 let trim_style = UIStyle {
-                    bg_color: color::TRIM_HANDLE_COLOR,
-                    corner_radius: CLIP_CORNER_RADIUS,
+                    bg_color: color::ACCENT_BLUE_DIM,
                     ..UIStyle::default()
                 };
 
-                // Left trim handle
+                // Left trim hint
                 let left_id = tree.add_panel(
-                    -1, x1, clip_y, handle_w, clip_h, trim_style,
+                    -1, x1, clip_y, hint_w, clip_h, trim_style,
                 ) as i32;
                 self.clip_trim_handle_ids.push(left_id);
 
-                // Right trim handle
+                // Right trim hint
                 let right_id = tree.add_panel(
-                    -1, x2 - handle_w, clip_y, handle_w, clip_h, trim_style,
+                    -1, x2 - hint_w, clip_y, hint_w, clip_h, trim_style,
                 ) as i32;
                 self.clip_trim_handle_ids.push(right_id);
             }
@@ -1435,23 +1607,33 @@ impl Default for TimelineViewportPanel {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
+/// Determine clip visual color following Unity's priority chain:
+/// locked → selected → hovered → normal.
+/// Muted is a POST-PROCESS blend: average (base + MutedColor) / 2 per channel.
+/// From Unity LayerBitmapRenderer visual state logic.
 fn get_clip_color(clip: &ViewportClip, is_selected: bool, is_hovered: bool) -> Color32 {
-    if clip.is_locked {
-        return color::CLIP_LOCKED;
-    }
-    if clip.is_muted {
-        let base = if clip.is_generator { color::CLIP_GEN_NORMAL } else { color::CLIP_NORMAL };
-        return Color32::new(base.r / 2, base.g / 2, base.b / 2, 128);
-    }
-
-    if clip.is_generator {
-        if is_selected { color::CLIP_GEN_SELECTED }
-        else if is_hovered { color::CLIP_GEN_HOVER }
-        else { clip.color }
+    // Priority: locked → selected → hovered → normal
+    let base = if clip.is_locked {
+        color::CLIP_LOCKED
+    } else if is_selected {
+        if clip.is_generator { color::CLIP_GEN_SELECTED } else { color::CLIP_SELECTED }
+    } else if is_hovered {
+        if clip.is_generator { color::CLIP_GEN_HOVER } else { color::CLIP_HOVER }
     } else {
-        if is_selected { color::CLIP_SELECTED }
-        else if is_hovered { color::CLIP_HOVER }
-        else { clip.color }
+        if clip.is_generator { color::CLIP_GEN_NORMAL } else { clip.color }
+    };
+
+    // Muted post-process: blend 50% with MutedColor (rust-orange tint)
+    if clip.is_muted {
+        let m = color::MUTED_COLOR;
+        Color32::new(
+            ((base.r as u16 + m.r as u16) / 2) as u8,
+            ((base.g as u16 + m.g as u16) / 2) as u8,
+            ((base.b as u16 + m.b as u16) / 2) as u8,
+            base.a,
+        )
+    } else {
+        base
     }
 }
 
@@ -1535,7 +1717,7 @@ mod tests {
     fn coordinate_mapping_roundtrip() {
         let mut panel = TimelineViewportPanel::new();
         panel.tracks_rect = Rect::new(100.0, 0.0, 1000.0, 500.0);
-        panel.pixels_per_beat = 120.0;
+        panel.set_zoom(120.0);
         panel.scroll_x_beats = 0.0;
 
         let beat = 4.0;
@@ -1548,7 +1730,7 @@ mod tests {
     fn coordinate_mapping_with_scroll() {
         let mut panel = TimelineViewportPanel::new();
         panel.tracks_rect = Rect::new(0.0, 0.0, 1000.0, 500.0);
-        panel.pixels_per_beat = 100.0;
+        panel.set_zoom(100.0);
         panel.scroll_x_beats = 4.0;
 
         // Beat 4 should be at x=0 when scrolled to beat 4
@@ -1566,19 +1748,19 @@ mod tests {
         panel.beats_per_bar = 4;
 
         // Very zoomed out: ppb=1, beat < 6px → Bar
-        panel.pixels_per_beat = 1.0;
+        panel.set_zoom(1.0);
         assert_eq!(panel.grid_subdivision(), GridSubdivision::Bar);
 
         // ppb=8: beat=8px ≥ 6 → Beat; eighth=4px < 6 → not Eighth
-        panel.pixels_per_beat = 8.0;
+        panel.set_zoom(8.0);
         assert_eq!(panel.grid_subdivision(), GridSubdivision::Beat);
 
         // ppb=14: eighth=7px ≥ 6 → Eighth; sixteenth=3.5px < 4 → not Sixteenth
-        panel.pixels_per_beat = 14.0;
+        panel.set_zoom(14.0);
         assert_eq!(panel.grid_subdivision(), GridSubdivision::Eighth);
 
         // ppb=20: sixteenth=5px ≥ 4 → Sixteenth
-        panel.pixels_per_beat = 20.0;
+        panel.set_zoom(20.0);
         assert_eq!(panel.grid_subdivision(), GridSubdivision::Sixteenth);
     }
 

@@ -475,6 +475,14 @@ impl LayerHeaderPanel {
         self.active_layer = index;
     }
 
+    /// Set per-layer active state from UIState.is_layer_active().
+    /// Multiple layers can be active simultaneously (region, multi-select).
+    /// Falls back to single active_layer if active_layers is empty.
+    pub fn set_active_layers(&mut self, active_layers: &[bool]) {
+        // Find the first active layer as the primary
+        self.active_layer = active_layers.iter().position(|&a| a);
+    }
+
     // ── Accessors ───────────────────────────────────────────────────
 
     pub fn blend_mode_node_id(&self, index: usize) -> i32 {
@@ -922,7 +930,7 @@ impl LayerHeaderPanel {
         }
     }
 
-    fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
+    fn handle_click(&self, node_id: u32, modifiers: crate::input::Modifiers) -> Vec<PanelAction> {
         let id = node_id as i32;
         // Add Layer button
         if id == self.add_layer_btn && id >= 0 {
@@ -939,7 +947,7 @@ impl LayerHeaderPanel {
             if id == row.midi_input { return vec![PanelAction::MidiInputClicked(i)]; }
             if id == row.ch_dropdown { return vec![PanelAction::MidiChannelClicked(i)]; }
             if id == row.name || id == row.bg || id == row.drag_handle {
-                return vec![PanelAction::LayerClicked(i)];
+                return vec![PanelAction::LayerClicked(i, modifiers)];
             }
         }
         Vec::new()
@@ -1081,7 +1089,7 @@ impl Panel for LayerHeaderPanel {
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
         match event {
-            UIEvent::Click { node_id, .. } => self.handle_click(*node_id),
+            UIEvent::Click { node_id, modifiers, .. } => self.handle_click(*node_id, *modifiers),
             UIEvent::DoubleClick { node_id, .. } => self.handle_double_click(*node_id),
             UIEvent::RightClick { pos, .. } => self.handle_right_click(*pos),
             // PointerDown on drag handle → immediate select
@@ -1089,7 +1097,7 @@ impl Panel for LayerHeaderPanel {
                 let id = *node_id as i32;
                 for (i, row) in self.rows.iter().enumerate() {
                     if id == row.drag_handle {
-                        return vec![PanelAction::LayerClicked(i)];
+                        return vec![PanelAction::LayerClicked(i, crate::input::Modifiers::NONE)];
                     }
                 }
                 Vec::new()
@@ -1182,11 +1190,11 @@ mod tests {
         panel.set_layers(vec![make_video_layer("L1", 0.0, 140.0)]);
         panel.build(&mut tree, &layout);
 
-        let a = panel.handle_click(panel.rows[0].mute as u32);
+        let a = panel.handle_click(panel.rows[0].mute as u32, crate::input::Modifiers::NONE);
         assert_eq!(a.len(), 1);
         assert!(matches!(a[0], PanelAction::ToggleMute(0)));
 
-        let a = panel.handle_click(panel.rows[0].solo as u32);
+        let a = panel.handle_click(panel.rows[0].solo as u32, crate::input::Modifiers::NONE);
         assert_eq!(a.len(), 1);
         assert!(matches!(a[0], PanelAction::ToggleSolo(0)));
     }
@@ -1199,7 +1207,7 @@ mod tests {
         panel.set_layers(vec![make_video_layer("L1", 0.0, 140.0)]);
         panel.build(&mut tree, &layout);
 
-        let a = panel.handle_click(panel.rows[0].chevron as u32);
+        let a = panel.handle_click(panel.rows[0].chevron as u32, crate::input::Modifiers::NONE);
         assert!(matches!(a[0], PanelAction::ChevronClicked(0)));
     }
 

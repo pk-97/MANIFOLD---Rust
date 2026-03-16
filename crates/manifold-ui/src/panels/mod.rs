@@ -10,6 +10,7 @@ pub mod gen_param;
 pub mod inspector;
 pub mod viewport;
 pub mod dropdown;
+pub mod perf_hud;
 
 use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
@@ -89,7 +90,7 @@ pub enum PanelAction {
     CollapseLayer(usize),
 
     // Layer header
-    LayerClicked(usize),
+    LayerClicked(usize, crate::input::Modifiers),
     LayerDoubleClicked(usize),
     ChevronClicked(usize),
     BlendModeClicked(usize),

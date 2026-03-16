@@ -10,6 +10,9 @@ pub mod snap;
 pub mod trim;
 pub mod cursor_nav;
 pub mod scroll_container;
+pub mod coordinate_mapper;
+pub mod ui_state;
+pub mod cursors;
 
 pub use node::*;
 pub use tree::UITree;
@@ -29,3 +32,5 @@ pub use panels::gen_param::{GenParamPanel, GenParamConfig, GenParamInfo, GenPara
 pub use panels::inspector::InspectorCompositePanel;
 pub use panels::viewport::{TimelineViewportPanel, ViewportClip, SelectionRegion, TrackInfo, ClipHitResult};
 pub use panels::dropdown::{DropdownPanel, DropdownItem, DropdownAction};
+pub use coordinate_mapper::CoordinateMapper;
+pub use ui_state::UIState;

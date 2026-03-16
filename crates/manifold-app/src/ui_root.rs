@@ -37,6 +37,7 @@ pub struct UIRoot {
     pub inspector: InspectorCompositePanel,
     pub viewport: TimelineViewportPanel,
     pub dropdown: DropdownPanel,
+    pub perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel,
 
     // State
     built: bool,
@@ -69,6 +70,7 @@ impl UIRoot {
             inspector: InspectorCompositePanel::new(),
             viewport: TimelineViewportPanel::new(),
             dropdown: DropdownPanel::new(),
+            perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
             built: false,
             screen_width: 1280.0,
             screen_height: 720.0,
@@ -95,6 +97,7 @@ impl UIRoot {
         self.layer_headers.build(&mut self.tree, &self.layout);
         self.inspector.build(&mut self.tree, &self.layout);
         self.viewport.build(&mut self.tree, &self.layout);
+        self.perf_hud.build(&mut self.tree, &self.layout);
 
         self.dropdown.set_screen_size(self.screen_width, self.screen_height);
         // Re-add dropdown nodes if it was open (build() clears the tree)
@@ -444,5 +447,6 @@ impl UIRoot {
         self.layer_headers.update(&mut self.tree);
         self.inspector.update(&mut self.tree);
         self.viewport.update(&mut self.tree);
+        self.perf_hud.update(&mut self.tree);
     }
 }
