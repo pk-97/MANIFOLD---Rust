@@ -5,7 +5,7 @@
 //! from all panels, and `push_state()` to sync engine state back to panels.
 
 use manifold_core::types::{
-    BlendMode, GeneratorType, LayerType, PlaybackState,
+    BlendMode, GeneratorType, LayerType,
     BeatDivision, DriverWaveform,
 };
 use manifold_core::effects::{EffectInstance, ParameterDriver, ParamEnvelope};
@@ -68,15 +68,14 @@ pub fn dispatch(
         // ── Transport ──────────────────────────────────────────────
         PanelAction::PlayPause => {
             if engine.is_playing() {
-                engine.set_state(PlaybackState::Paused);
+                engine.pause();
             } else {
-                engine.set_state(PlaybackState::Playing);
+                engine.play();
             }
             DispatchResult::handled()
         }
         PanelAction::Stop => {
-            engine.set_state(PlaybackState::Stopped);
-            engine.seek_to(0.0);
+            engine.stop();
             DispatchResult::handled()
         }
         PanelAction::Record => {

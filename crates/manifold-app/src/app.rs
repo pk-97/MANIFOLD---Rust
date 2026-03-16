@@ -8,7 +8,7 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
 use manifold_core::project::Project;
-use manifold_core::types::{BlendMode, LayerType, PlaybackState};
+use manifold_core::types::{BlendMode, LayerType};
 use manifold_core::layer::Layer;
 use manifold_editing::commands::layer::DeleteLayerCommand;
 use manifold_editing::service::EditingService;
@@ -1297,9 +1297,9 @@ impl ApplicationHandler for Application {
                     match &logical_key {
                         Key::Named(NamedKey::Space) => {
                             if self.engine.is_playing() {
-                                self.engine.set_state(PlaybackState::Paused);
+                                self.engine.pause();
                             } else {
-                                self.engine.set_state(PlaybackState::Playing);
+                                self.engine.play();
                             }
                             consumed = true;
                         }

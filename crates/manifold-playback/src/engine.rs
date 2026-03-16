@@ -1,4 +1,4 @@
-use manifold_core::types::PlaybackState;
+use manifold_core::types::{LayerType, PlaybackState};
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::tempo::TempoMapConverter;
@@ -18,7 +18,6 @@ pub const RECENTLY_STARTED_TIME: f32 = 0.1;
 pub const LIVE_RECENTLY_STARTED_TIME: f32 = 0.02;
 pub const COMPOSITOR_DIRTY_TIME: f32 = 0.05;
 pub const MIN_START_REMAINING_TIME: f32 = 0.02;
-pub const MIN_REMAINING_BEATS: f32 = 0.1;
 
 // ─── Engine I/O ───
 
@@ -162,6 +161,35 @@ impl PlaybackEngine {
         self.current_state = state;
     }
 
+    pub fn play(&mut self) {
+        if self.current_state == PlaybackState::Playing { return; }
+        self.current_state = PlaybackState::Playing;
+        self.pending_pauses.clear();
+        self.sync_clips_to_time();
+    }
+
+    pub fn stop(&mut self) {
+        self.current_state = PlaybackState::Stopped;
+        self.stop_all_clips();
+        self.current_time_double = 0.0;
+        self.current_time = 0.0;
+        self.current_beat = 0.0;
+        self.compositor_dirty_deadline = 0.0; // Force one more compositor update
+        self.active_window.reset();
+    }
+
+    pub fn pause(&mut self) {
+        if self.current_state != PlaybackState::Playing { return; }
+        self.current_state = PlaybackState::Paused;
+        // Pause active video clips (generators keep rendering)
+        let clip_ids: Vec<String> = self.active_clip_renderers.keys().cloned().collect();
+        for clip_id in &clip_ids {
+            if let Some(&renderer_idx) = self.active_clip_renderers.get(clip_id.as_str()) {
+                self.renderers[renderer_idx].pause_clip(clip_id);
+            }
+        }
+    }
+
     pub fn set_time(&mut self, time_double: f64) {
         self.current_time_double = time_double;
         self.current_time = time_double as f32;
@@ -199,10 +227,12 @@ impl PlaybackEngine {
 
     pub fn seek_to(&mut self, time: f32) -> f32 {
         let old_beat = self.current_beat;
-        self.current_time_double = time as f64;
-        self.current_time = time;
-        self.update_beat_from_time();
+        self.set_time(time.max(0.0) as f64);
         self.active_window.reset();
+        // Re-sync clips at new position
+        if self.current_state != PlaybackState::Stopped {
+            self.sync_clips_to_time();
+        }
         self.current_beat - old_beat
     }
 
@@ -240,13 +270,22 @@ impl PlaybackEngine {
             }
         }
 
-        // Run scheduler
+        // Compute dynamic min remaining beats from current BPM (Fix 1)
+        let spb = 60.0_f32 / project.settings.bpm.max(20.0);
+        let min_remaining_beats = if spb > 0.0 {
+            MIN_START_REMAINING_TIME / spb
+        } else {
+            MIN_START_REMAINING_TIME
+        };
+
+        // Run scheduler (Fix 2: pass looping_clip_ids for bypass)
         let sync_result = self.scheduler.compute_sync(
             self.current_time,
             self.current_beat,
             &self.timeline_active_scratch,
             &self.active_clip_ids,
-            MIN_REMAINING_BEATS,
+            &self.looping_clip_ids,
+            min_remaining_beats,
         );
 
         // Stop clips
@@ -297,6 +336,15 @@ impl PlaybackEngine {
     // ─── Clip lifecycle ───
 
     pub fn start_clip(&mut self, clip: &TimelineClip, realtime_now: f64) {
+        // Fix 6: Never start clips on group layers
+        if let Some(project) = &self.project {
+            if let Some(layer) = project.timeline.layers.get(clip.layer_index as usize) {
+                if layer.layer_type == LayerType::Group {
+                    return;
+                }
+            }
+        }
+
         // Find renderer
         let renderer_idx = self.renderers.iter().position(|r| r.can_handle(clip));
         if let Some(idx) = renderer_idx {
@@ -332,6 +380,8 @@ impl PlaybackEngine {
         self.pending_pauses.remove(clip_id);
         self.looping_clip_ids.remove(clip_id);
         self.recently_started_times.remove(clip_id);
+        // Fix 5: notify live clip manager when implemented
+        // self.live_clip_manager.notify_clip_stopped(clip_id);
     }
 
     pub fn stop_all_clips(&mut self) {
@@ -357,6 +407,8 @@ impl PlaybackEngine {
             .map(|(id, _)| id.clone())
             .collect();
 
+        let had_expired = !expired.is_empty();
+
         for clip_id in expired {
             self.pending_pauses.remove(&clip_id);
             if let Some(&renderer_idx) = self.active_clip_renderers.get(&clip_id) {
@@ -366,12 +418,64 @@ impl PlaybackEngine {
                 }
             }
         }
+
+        // Fix 4: Set compositor dirty after processing pending pauses
+        if had_expired {
+            self.compositor_dirty_deadline = realtime_now + COMPOSITOR_DIRTY_TIME as f64;
+        }
     }
 
     // ─── Compositor ───
 
     pub fn mark_compositor_dirty(&mut self, realtime_now: f64) {
         self.compositor_dirty_deadline = realtime_now + COMPOSITOR_DIRTY_TIME as f64;
+    }
+
+    // ─── Sync ───
+
+    /// Re-synchronize active clips to current playback position.
+    /// Called by play() and seek_to() for immediate state consistency.
+    fn sync_clips_to_time(&mut self) {
+        let project = match &self.project {
+            Some(p) => p.clone(),
+            None => return,
+        };
+
+        self.timeline_active_scratch.clear();
+        let active_indices = {
+            let mut timeline = project.timeline.clone();
+            timeline.get_active_clips_at_beat(self.current_beat)
+        };
+        for (li, ci) in &active_indices {
+            if let Some(clip) = project.timeline.layers.get(*li).and_then(|l| l.clips.get(*ci)) {
+                self.timeline_active_scratch.push(clip.clone());
+            }
+        }
+
+        let spb = 60.0_f32 / project.settings.bpm.max(20.0);
+        let min_remaining_beats = if spb > 0.0 {
+            MIN_START_REMAINING_TIME / spb
+        } else {
+            MIN_START_REMAINING_TIME
+        };
+
+        let sync_result = self.scheduler.compute_sync(
+            self.current_time,
+            self.current_beat,
+            &self.timeline_active_scratch,
+            &self.active_clip_ids,
+            &self.looping_clip_ids,
+            min_remaining_beats,
+        );
+
+        for clip_id in &sync_result.to_stop {
+            self.stop_clip(clip_id);
+        }
+
+        // Use realtime 0.0 as fallback since this is called outside tick context
+        for clip in &sync_result.to_start {
+            self.start_clip(clip, 0.0);
+        }
     }
 
     // ─── Time/Tempo math ───

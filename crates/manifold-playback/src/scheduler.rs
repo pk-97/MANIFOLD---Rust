@@ -27,6 +27,7 @@ impl ClipScheduler {
     ///
     /// `timeline_active_clips`: clips that should be active based on timeline position.
     /// `currently_active_ids`: IDs of clips currently active in renderers.
+    /// `looping_clip_ids`: clips with IsLooping enabled (bypass min-remaining check).
     /// `min_remaining_beats`: skip clips with less than this remaining.
     pub fn compute_sync(
         &mut self,
@@ -34,6 +35,7 @@ impl ClipScheduler {
         current_beat: f32,
         timeline_active_clips: &[TimelineClip],
         currently_active_ids: &HashSet<String>,
+        looping_clip_ids: &HashSet<String>,
         min_remaining_beats: f32,
     ) -> SyncResult {
         self.should_be_active_ids.clear();
@@ -52,14 +54,15 @@ impl ClipScheduler {
             }
         }
 
-        // Clips to start: should be active but aren't
+        // Clips to start: should be active but aren't.
+        // Skip clips whose remaining lifetime in BEATS is too short — UNLESS looping.
         for clip in timeline_active_clips {
             if !currently_active_ids.contains(&clip.id) {
-                // Skip clips with too little remaining
                 let remaining = clip.end_beat() - current_beat;
-                if remaining >= min_remaining_beats {
-                    self.to_start.push(clip.clone());
+                if remaining < min_remaining_beats && !looping_clip_ids.contains(&clip.id) {
+                    continue;
                 }
+                self.to_start.push(clip.clone());
             }
         }
 
