@@ -62,21 +62,40 @@ impl Serialize for BlendMode {
 
 impl<'de> Deserialize<'de> for BlendMode {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let v = i32::deserialize(deserializer)?;
-        Ok(match v {
-            0 => BlendMode::Normal,
-            1 => BlendMode::Additive,
-            2 => BlendMode::Multiply,
-            3 => BlendMode::Screen,
-            4 => BlendMode::Overlay,
-            5 => BlendMode::Stencil,
-            6 => BlendMode::Opaque,
-            7 => BlendMode::Difference,
-            8 => BlendMode::Exclusion,
-            9 => BlendMode::Subtract,
-            10 => BlendMode::ColorDodge,
-            11 => BlendMode::Lighten,
-            12 => BlendMode::Darken,
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match &value {
+            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
+                0 => BlendMode::Normal,
+                1 => BlendMode::Additive,
+                2 => BlendMode::Multiply,
+                3 => BlendMode::Screen,
+                4 => BlendMode::Overlay,
+                5 => BlendMode::Stencil,
+                6 => BlendMode::Opaque,
+                7 => BlendMode::Difference,
+                8 => BlendMode::Exclusion,
+                9 => BlendMode::Subtract,
+                10 => BlendMode::ColorDodge,
+                11 => BlendMode::Lighten,
+                12 => BlendMode::Darken,
+                _ => BlendMode::Normal,
+            },
+            serde_json::Value::String(s) => match s.as_str() {
+                "Normal" => BlendMode::Normal,
+                "Additive" => BlendMode::Additive,
+                "Multiply" => BlendMode::Multiply,
+                "Screen" => BlendMode::Screen,
+                "Overlay" => BlendMode::Overlay,
+                "Stencil" => BlendMode::Stencil,
+                "Opaque" => BlendMode::Opaque,
+                "Difference" => BlendMode::Difference,
+                "Exclusion" => BlendMode::Exclusion,
+                "Subtract" => BlendMode::Subtract,
+                "ColorDodge" => BlendMode::ColorDodge,
+                "Lighten" => BlendMode::Lighten,
+                "Darken" => BlendMode::Darken,
+                _ => BlendMode::Normal,
+            },
             _ => BlendMode::Normal,
         })
     }
@@ -240,40 +259,78 @@ impl Serialize for EffectType {
 
 impl<'de> Deserialize<'de> for EffectType {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let v = i32::deserialize(deserializer)?;
-        Ok(match v {
-            0 => EffectType::Transform,
-            1 => EffectType::InvertColors,
-            10 => EffectType::Feedback,
-            11 => EffectType::PixelSort,
-            12 => EffectType::Bloom,
-            13 => EffectType::InfiniteZoom,
-            14 => EffectType::Kaleidoscope,
-            15 => EffectType::EdgeStretch,
-            16 => EffectType::VoronoiPrism,
-            17 => EffectType::QuadMirror,
-            18 => EffectType::Dither,
-            19 => EffectType::Strobe,
-            20 => EffectType::StylizedFeedback,
-            21 => EffectType::Mirror,
-            22 => EffectType::BlobTracking,
-            23 => EffectType::CRT,
-            24 => EffectType::FluidDistortion,
-            25 => EffectType::EdgeGlow,
-            26 => EffectType::Datamosh,
-            27 => EffectType::SlitScan,
-            28 => EffectType::ColorGrade,
-            29 => EffectType::WireframeDepth,
-            30 => EffectType::ChromaticAberration,
-            31 => EffectType::GradientMap,
-            32 => EffectType::Glitch,
-            33 => EffectType::FilmGrain,
-            34 => EffectType::Halation,
-            35 => EffectType::Microscope,
-            36 => EffectType::Corruption,
-            37 => EffectType::Infrared,
-            38 => EffectType::Surveillance,
-            39 => EffectType::Redaction,
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match &value {
+            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
+                0 => EffectType::Transform,
+                1 => EffectType::InvertColors,
+                10 => EffectType::Feedback,
+                11 => EffectType::PixelSort,
+                12 => EffectType::Bloom,
+                13 => EffectType::InfiniteZoom,
+                14 => EffectType::Kaleidoscope,
+                15 => EffectType::EdgeStretch,
+                16 => EffectType::VoronoiPrism,
+                17 => EffectType::QuadMirror,
+                18 => EffectType::Dither,
+                19 => EffectType::Strobe,
+                20 => EffectType::StylizedFeedback,
+                21 => EffectType::Mirror,
+                22 => EffectType::BlobTracking,
+                23 => EffectType::CRT,
+                24 => EffectType::FluidDistortion,
+                25 => EffectType::EdgeGlow,
+                26 => EffectType::Datamosh,
+                27 => EffectType::SlitScan,
+                28 => EffectType::ColorGrade,
+                29 => EffectType::WireframeDepth,
+                30 => EffectType::ChromaticAberration,
+                31 => EffectType::GradientMap,
+                32 => EffectType::Glitch,
+                33 => EffectType::FilmGrain,
+                34 => EffectType::Halation,
+                35 => EffectType::Microscope,
+                36 => EffectType::Corruption,
+                37 => EffectType::Infrared,
+                38 => EffectType::Surveillance,
+                39 => EffectType::Redaction,
+                _ => EffectType::Transform,
+            },
+            serde_json::Value::String(s) => match s.as_str() {
+                "Transform" => EffectType::Transform,
+                "InvertColors" => EffectType::InvertColors,
+                "Feedback" => EffectType::Feedback,
+                "PixelSort" => EffectType::PixelSort,
+                "Bloom" => EffectType::Bloom,
+                "InfiniteZoom" => EffectType::InfiniteZoom,
+                "Kaleidoscope" => EffectType::Kaleidoscope,
+                "EdgeStretch" => EffectType::EdgeStretch,
+                "VoronoiPrism" => EffectType::VoronoiPrism,
+                "QuadMirror" => EffectType::QuadMirror,
+                "Dither" => EffectType::Dither,
+                "Strobe" => EffectType::Strobe,
+                "StylizedFeedback" => EffectType::StylizedFeedback,
+                "Mirror" => EffectType::Mirror,
+                "BlobTracking" => EffectType::BlobTracking,
+                "CRT" => EffectType::CRT,
+                "FluidDistortion" => EffectType::FluidDistortion,
+                "EdgeGlow" => EffectType::EdgeGlow,
+                "Datamosh" => EffectType::Datamosh,
+                "SlitScan" => EffectType::SlitScan,
+                "ColorGrade" => EffectType::ColorGrade,
+                "WireframeDepth" => EffectType::WireframeDepth,
+                "ChromaticAberration" => EffectType::ChromaticAberration,
+                "GradientMap" => EffectType::GradientMap,
+                "Glitch" => EffectType::Glitch,
+                "FilmGrain" => EffectType::FilmGrain,
+                "Halation" => EffectType::Halation,
+                "Microscope" => EffectType::Microscope,
+                "Corruption" => EffectType::Corruption,
+                "Infrared" => EffectType::Infrared,
+                "Surveillance" => EffectType::Surveillance,
+                "Redaction" => EffectType::Redaction,
+                _ => EffectType::Transform,
+            },
             _ => EffectType::Transform,
         })
     }
@@ -587,29 +644,54 @@ impl Serialize for GeneratorType {
 
 impl<'de> Deserialize<'de> for GeneratorType {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let v = i32::deserialize(deserializer)?;
-        match v {
-            0 => Ok(GeneratorType::None),
-            2 => Ok(GeneratorType::BasicShapesSnap),
-            3 => Ok(GeneratorType::Duocylinder),
-            4 => Ok(GeneratorType::Tesseract),
-            5 => Ok(GeneratorType::ConcentricTunnel),
-            6 => Ok(GeneratorType::Plasma),
-            7 => Ok(GeneratorType::Lissajous),
-            8 => Ok(GeneratorType::FractalZoom),
-            9 => Ok(GeneratorType::OscilloscopeXY),
-            10 => Ok(GeneratorType::WireframeZoo),
-            11 => Ok(GeneratorType::ReactionDiffusion),
-            12 => Ok(GeneratorType::Flowfield),
-            13 => Ok(GeneratorType::ParametricSurface),
-            14 => Ok(GeneratorType::StrangeAttractor),
-            15 => Ok(GeneratorType::FluidSimulation),
-            16 => Ok(GeneratorType::NumberStation),
-            17 => Ok(GeneratorType::Mycelium),
-            18 => Ok(GeneratorType::ComputeStrangeAttractor),
-            19 => Ok(GeneratorType::FluidSimulation3D),
-            _ => Ok(GeneratorType::None),
-        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match &value {
+            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
+                0 => GeneratorType::None,
+                2 => GeneratorType::BasicShapesSnap,
+                3 => GeneratorType::Duocylinder,
+                4 => GeneratorType::Tesseract,
+                5 => GeneratorType::ConcentricTunnel,
+                6 => GeneratorType::Plasma,
+                7 => GeneratorType::Lissajous,
+                8 => GeneratorType::FractalZoom,
+                9 => GeneratorType::OscilloscopeXY,
+                10 => GeneratorType::WireframeZoo,
+                11 => GeneratorType::ReactionDiffusion,
+                12 => GeneratorType::Flowfield,
+                13 => GeneratorType::ParametricSurface,
+                14 => GeneratorType::StrangeAttractor,
+                15 => GeneratorType::FluidSimulation,
+                16 => GeneratorType::NumberStation,
+                17 => GeneratorType::Mycelium,
+                18 => GeneratorType::ComputeStrangeAttractor,
+                19 => GeneratorType::FluidSimulation3D,
+                _ => GeneratorType::None,
+            },
+            serde_json::Value::String(s) => match s.as_str() {
+                "None" => GeneratorType::None,
+                "BasicShapesSnap" => GeneratorType::BasicShapesSnap,
+                "Duocylinder" => GeneratorType::Duocylinder,
+                "Tesseract" => GeneratorType::Tesseract,
+                "ConcentricTunnel" => GeneratorType::ConcentricTunnel,
+                "Plasma" => GeneratorType::Plasma,
+                "Lissajous" => GeneratorType::Lissajous,
+                "FractalZoom" => GeneratorType::FractalZoom,
+                "OscilloscopeXY" => GeneratorType::OscilloscopeXY,
+                "WireframeZoo" => GeneratorType::WireframeZoo,
+                "ReactionDiffusion" => GeneratorType::ReactionDiffusion,
+                "Flowfield" => GeneratorType::Flowfield,
+                "ParametricSurface" => GeneratorType::ParametricSurface,
+                "StrangeAttractor" => GeneratorType::StrangeAttractor,
+                "FluidSimulation" => GeneratorType::FluidSimulation,
+                "NumberStation" => GeneratorType::NumberStation,
+                "Mycelium" => GeneratorType::Mycelium,
+                "ComputeStrangeAttractor" => GeneratorType::ComputeStrangeAttractor,
+                "FluidSimulation3D" => GeneratorType::FluidSimulation3D,
+                _ => GeneratorType::None,
+            },
+            _ => GeneratorType::None,
+        })
     }
 }
 
@@ -631,13 +713,22 @@ impl Serialize for LayerType {
 
 impl<'de> Deserialize<'de> for LayerType {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let v = i32::deserialize(deserializer)?;
-        match v {
-            0 => Ok(LayerType::Video),
-            1 => Ok(LayerType::Generator),
-            2 => Ok(LayerType::Group),
-            _ => Ok(LayerType::Video),
-        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match &value {
+            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
+                0 => LayerType::Video,
+                1 => LayerType::Generator,
+                2 => LayerType::Group,
+                _ => LayerType::Video,
+            },
+            serde_json::Value::String(s) => match s.as_str() {
+                "Video" => LayerType::Video,
+                "Generator" => LayerType::Generator,
+                "Group" => LayerType::Group,
+                _ => LayerType::Video,
+            },
+            _ => LayerType::Video,
+        })
     }
 }
 
@@ -680,14 +771,24 @@ impl Serialize for ClockAuthority {
 
 impl<'de> Deserialize<'de> for ClockAuthority {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let v = i32::deserialize(deserializer)?;
-        match v {
-            0 => Ok(ClockAuthority::Internal),
-            1 => Ok(ClockAuthority::Link),
-            2 => Ok(ClockAuthority::MidiClock),
-            3 => Ok(ClockAuthority::Osc),
-            _ => Ok(ClockAuthority::Internal),
-        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match &value {
+            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
+                0 => ClockAuthority::Internal,
+                1 => ClockAuthority::Link,
+                2 => ClockAuthority::MidiClock,
+                3 => ClockAuthority::Osc,
+                _ => ClockAuthority::Internal,
+            },
+            serde_json::Value::String(s) => match s.as_str() {
+                "Internal" => ClockAuthority::Internal,
+                "Link" => ClockAuthority::Link,
+                "MidiClock" => ClockAuthority::MidiClock,
+                "Osc" => ClockAuthority::Osc,
+                _ => ClockAuthority::Internal,
+            },
+            _ => ClockAuthority::Internal,
+        })
     }
 }
 
@@ -730,14 +831,24 @@ impl Serialize for QuantizeMode {
 
 impl<'de> Deserialize<'de> for QuantizeMode {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let v = i32::deserialize(deserializer)?;
-        match v {
-            0 => Ok(QuantizeMode::Off),
-            1 => Ok(QuantizeMode::QuarterBeat),
-            2 => Ok(QuantizeMode::Beat),
-            3 => Ok(QuantizeMode::Bar),
-            _ => Ok(QuantizeMode::Off),
-        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match &value {
+            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
+                0 => QuantizeMode::Off,
+                1 => QuantizeMode::QuarterBeat,
+                2 => QuantizeMode::Beat,
+                3 => QuantizeMode::Bar,
+                _ => QuantizeMode::Off,
+            },
+            serde_json::Value::String(s) => match s.as_str() {
+                "Off" => QuantizeMode::Off,
+                "QuarterBeat" => QuantizeMode::QuarterBeat,
+                "Beat" => QuantizeMode::Beat,
+                "Bar" => QuantizeMode::Bar,
+                _ => QuantizeMode::Off,
+            },
+            _ => QuantizeMode::Off,
+        })
     }
 }
 
@@ -764,18 +875,32 @@ impl Serialize for ResolutionPreset {
 
 impl<'de> Deserialize<'de> for ResolutionPreset {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let v = i32::deserialize(deserializer)?;
-        match v {
-            0 => Ok(ResolutionPreset::HD720p),
-            1 => Ok(ResolutionPreset::FHD1080p),
-            2 => Ok(ResolutionPreset::QHD1440p),
-            3 => Ok(ResolutionPreset::UHD4K),
-            4 => Ok(ResolutionPreset::Square1080),
-            5 => Ok(ResolutionPreset::Portrait720),
-            6 => Ok(ResolutionPreset::Portrait1080),
-            7 => Ok(ResolutionPreset::Portrait1440),
-            _ => Ok(ResolutionPreset::FHD1080p),
-        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match &value {
+            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(1) as i32 {
+                0 => ResolutionPreset::HD720p,
+                1 => ResolutionPreset::FHD1080p,
+                2 => ResolutionPreset::QHD1440p,
+                3 => ResolutionPreset::UHD4K,
+                4 => ResolutionPreset::Square1080,
+                5 => ResolutionPreset::Portrait720,
+                6 => ResolutionPreset::Portrait1080,
+                7 => ResolutionPreset::Portrait1440,
+                _ => ResolutionPreset::FHD1080p,
+            },
+            serde_json::Value::String(s) => match s.as_str() {
+                "HD720p" => ResolutionPreset::HD720p,
+                "FHD1080p" => ResolutionPreset::FHD1080p,
+                "QHD1440p" => ResolutionPreset::QHD1440p,
+                "UHD4K" => ResolutionPreset::UHD4K,
+                "Square1080" => ResolutionPreset::Square1080,
+                "Portrait720" => ResolutionPreset::Portrait720,
+                "Portrait1080" => ResolutionPreset::Portrait1080,
+                "Portrait1440" => ResolutionPreset::Portrait1440,
+                _ => ResolutionPreset::FHD1080p,
+            },
+            _ => ResolutionPreset::FHD1080p,
+        })
     }
 }
 
@@ -846,15 +971,26 @@ impl Serialize for TempoPointSource {
 
 impl<'de> Deserialize<'de> for TempoPointSource {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let v = i32::deserialize(deserializer)?;
-        match v {
-            0 => Ok(TempoPointSource::Unknown),
-            1 => Ok(TempoPointSource::Manual),
-            2 => Ok(TempoPointSource::Link),
-            3 => Ok(TempoPointSource::MidiClock),
-            4 => Ok(TempoPointSource::Recorded),
-            _ => Ok(TempoPointSource::Unknown),
-        }
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match &value {
+            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
+                0 => TempoPointSource::Unknown,
+                1 => TempoPointSource::Manual,
+                2 => TempoPointSource::Link,
+                3 => TempoPointSource::MidiClock,
+                4 => TempoPointSource::Recorded,
+                _ => TempoPointSource::Unknown,
+            },
+            serde_json::Value::String(s) => match s.as_str() {
+                "Unknown" => TempoPointSource::Unknown,
+                "Manual" => TempoPointSource::Manual,
+                "Link" => TempoPointSource::Link,
+                "MidiClock" => TempoPointSource::MidiClock,
+                "Recorded" => TempoPointSource::Recorded,
+                _ => TempoPointSource::Unknown,
+            },
+            _ => TempoPointSource::Unknown,
+        })
     }
 }
 
@@ -893,28 +1029,54 @@ impl Serialize for BeatDivision {
 
 impl<'de> Deserialize<'de> for BeatDivision {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let v = i32::deserialize(deserializer)?;
-        Ok(match v {
-            0 => BeatDivision::ThirtySecond,
-            1 => BeatDivision::Sixteenth,
-            2 => BeatDivision::Eighth,
-            3 => BeatDivision::Quarter,
-            4 => BeatDivision::Half,
-            5 => BeatDivision::Whole,
-            6 => BeatDivision::TwoWhole,
-            7 => BeatDivision::FourWhole,
-            8 => BeatDivision::EightWhole,
-            9 => BeatDivision::SixteenWhole,
-            10 => BeatDivision::ThirtyTwoWhole,
-            11 => BeatDivision::EighthDotted,
-            12 => BeatDivision::QuarterDotted,
-            13 => BeatDivision::HalfDotted,
-            14 => BeatDivision::WholeDotted,
-            15 => BeatDivision::TwoWholeDotted,
-            16 => BeatDivision::EighthTriplet,
-            17 => BeatDivision::QuarterTriplet,
-            18 => BeatDivision::HalfTriplet,
-            19 => BeatDivision::WholeTriplet,
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match &value {
+            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(3) as i32 {
+                0 => BeatDivision::ThirtySecond,
+                1 => BeatDivision::Sixteenth,
+                2 => BeatDivision::Eighth,
+                3 => BeatDivision::Quarter,
+                4 => BeatDivision::Half,
+                5 => BeatDivision::Whole,
+                6 => BeatDivision::TwoWhole,
+                7 => BeatDivision::FourWhole,
+                8 => BeatDivision::EightWhole,
+                9 => BeatDivision::SixteenWhole,
+                10 => BeatDivision::ThirtyTwoWhole,
+                11 => BeatDivision::EighthDotted,
+                12 => BeatDivision::QuarterDotted,
+                13 => BeatDivision::HalfDotted,
+                14 => BeatDivision::WholeDotted,
+                15 => BeatDivision::TwoWholeDotted,
+                16 => BeatDivision::EighthTriplet,
+                17 => BeatDivision::QuarterTriplet,
+                18 => BeatDivision::HalfTriplet,
+                19 => BeatDivision::WholeTriplet,
+                _ => BeatDivision::Quarter,
+            },
+            serde_json::Value::String(s) => match s.as_str() {
+                "ThirtySecond" => BeatDivision::ThirtySecond,
+                "Sixteenth" => BeatDivision::Sixteenth,
+                "Eighth" => BeatDivision::Eighth,
+                "Quarter" => BeatDivision::Quarter,
+                "Half" => BeatDivision::Half,
+                "Whole" => BeatDivision::Whole,
+                "TwoWhole" => BeatDivision::TwoWhole,
+                "FourWhole" => BeatDivision::FourWhole,
+                "EightWhole" => BeatDivision::EightWhole,
+                "SixteenWhole" => BeatDivision::SixteenWhole,
+                "ThirtyTwoWhole" => BeatDivision::ThirtyTwoWhole,
+                "EighthDotted" => BeatDivision::EighthDotted,
+                "QuarterDotted" => BeatDivision::QuarterDotted,
+                "HalfDotted" => BeatDivision::HalfDotted,
+                "WholeDotted" => BeatDivision::WholeDotted,
+                "TwoWholeDotted" => BeatDivision::TwoWholeDotted,
+                "EighthTriplet" => BeatDivision::EighthTriplet,
+                "QuarterTriplet" => BeatDivision::QuarterTriplet,
+                "HalfTriplet" => BeatDivision::HalfTriplet,
+                "WholeTriplet" => BeatDivision::WholeTriplet,
+                _ => BeatDivision::Quarter,
+            },
             _ => BeatDivision::Quarter,
         })
     }
@@ -1042,13 +1204,24 @@ impl Serialize for DriverWaveform {
 
 impl<'de> Deserialize<'de> for DriverWaveform {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let v = i32::deserialize(deserializer)?;
-        Ok(match v {
-            0 => DriverWaveform::Sine,
-            1 => DriverWaveform::Triangle,
-            2 => DriverWaveform::Sawtooth,
-            3 => DriverWaveform::Square,
-            4 => DriverWaveform::Random,
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match &value {
+            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
+                0 => DriverWaveform::Sine,
+                1 => DriverWaveform::Triangle,
+                2 => DriverWaveform::Sawtooth,
+                3 => DriverWaveform::Square,
+                4 => DriverWaveform::Random,
+                _ => DriverWaveform::Sine,
+            },
+            serde_json::Value::String(s) => match s.as_str() {
+                "Sine" => DriverWaveform::Sine,
+                "Triangle" => DriverWaveform::Triangle,
+                "Sawtooth" => DriverWaveform::Sawtooth,
+                "Square" => DriverWaveform::Square,
+                "Random" => DriverWaveform::Random,
+                _ => DriverWaveform::Sine,
+            },
             _ => DriverWaveform::Sine,
         })
     }
@@ -1083,7 +1256,8 @@ impl Serialize for ClipDurationMode {
 
 impl<'de> Deserialize<'de> for ClipDurationMode {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let _v = i32::deserialize(deserializer)?;
+        // Only one variant exists; accept any integer or string representation.
+        let _value = serde_json::Value::deserialize(deserializer)?;
         Ok(ClipDurationMode::NoteOff)
     }
 }

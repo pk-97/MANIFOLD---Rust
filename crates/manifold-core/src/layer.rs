@@ -52,6 +52,8 @@ pub struct Layer {
     #[serde(default)]
     pub video_folder_path: Option<String>,
     #[serde(default)]
+    pub relative_video_folder_path: Option<String>,
+    #[serde(default)]
     pub midi_note: i32,
     #[serde(default = "default_neg_one")]
     pub midi_channel: i32,
@@ -284,6 +286,7 @@ impl Default for Layer {
             envelopes: None,
             gen_params: None,
             video_folder_path: None,
+            relative_video_folder_path: None,
             midi_note: -1,
             midi_channel: -1,
             duration_mode: None,

@@ -156,7 +156,7 @@ pub struct ParameterDriver {
     pub phase: f32,
     #[serde(default)]
     pub base_value: f32,
-    #[serde(default = "default_one")]
+    #[serde(default)]
     pub trim_min: f32,
     #[serde(default = "default_one")]
     pub trim_max: f32,
@@ -198,16 +198,18 @@ impl ParameterDriver {
 pub struct ParamEnvelope {
     #[serde(default)]
     pub target_effect_type: EffectType,
+    /// Unity V2 serializes this as "targetParamIndex" via [JsonProperty].
+    #[serde(default, alias = "targetParamIndex")]
     pub param_index: i32,
     #[serde(default = "default_true")]
     pub enabled: bool,
-    #[serde(default = "default_quarter")]
+    #[serde(default)]
     pub attack_beats: f32,
-    #[serde(default = "default_quarter")]
+    #[serde(default)]
     pub decay_beats: f32,
-    #[serde(default = "default_one")]
+    #[serde(default)]
     pub sustain_level: f32,
-    #[serde(default = "default_quarter")]
+    #[serde(default)]
     pub release_beats: f32,
     #[serde(default = "default_one")]
     pub target_normalized: f32,

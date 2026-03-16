@@ -42,7 +42,7 @@ pub struct ProjectSettings {
     #[serde(default)]
     pub master_effect_groups: Option<Vec<EffectGroup>>,
 
-    #[serde(default)]
+    #[serde(default = "default_neg_one_i32")]
     pub led_exit_index: i32,
     #[serde(default)]
     pub midi_clock_source_name: Option<String>,
@@ -118,7 +118,7 @@ impl Default for ProjectSettings {
             master_opacity: 1.0,
             master_effects: Vec::new(),
             master_effect_groups: None,
-            led_exit_index: 0,
+            led_exit_index: -1,
             midi_clock_source_name: None,
             clock_authority: ClockAuthority::Internal,
             osc_send_port: 9001,
@@ -187,3 +187,4 @@ fn default_4() -> i32 { 4 }
 fn default_one() -> f32 { 1.0 }
 fn default_9001() -> i32 { 9001 }
 fn default_neg_one_f() -> f32 { -1.0 }
+fn default_neg_one_i32() -> i32 { -1 }
