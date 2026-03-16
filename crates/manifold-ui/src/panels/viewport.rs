@@ -334,6 +334,15 @@ impl TimelineViewportPanel {
         let layer_index = self.layer_at_y(pos.y)?;
         let beat = self.pixel_to_beat(pos.x);
 
+        // Reject clicks in vertical padding — only the padded clip rect is interactive.
+        let track_y = self.track_y(layer_index);
+        let track_h = self.track_height(layer_index);
+        let clip_top = track_y + CLIP_VERTICAL_PAD;
+        let clip_bottom = track_y + track_h - CLIP_VERTICAL_PAD;
+        if pos.y < clip_top || pos.y > clip_bottom {
+            return None;
+        }
+
         // Iterate clips on this layer in reverse order (topmost/last wins)
         for clip in self.clips.iter().rev() {
             if clip.layer_index != layer_index {
@@ -348,9 +357,9 @@ impl TimelineViewportPanel {
             let clip_width_px = clip.duration_beats * self.pixels_per_beat;
             let local_px = (beat - clip.start_beat) * self.pixels_per_beat;
 
-            let region = if clip_width_px > 24.0 && local_px < 8.0 {
+            let region = if clip_width_px > 16.0 && local_px < 8.0 {
                 HitRegion::TrimLeft
-            } else if clip_width_px > 24.0 && local_px > clip_width_px - 8.0 {
+            } else if clip_width_px > 16.0 && local_px > clip_width_px - 8.0 {
                 HitRegion::TrimRight
             } else {
                 HitRegion::Body
@@ -364,6 +373,25 @@ impl TimelineViewportPanel {
         }
 
         None
+    }
+
+    /// Called every frame (or on CursorMoved) with the current cursor position
+    /// to update clip hover state. Matches Unity's OnPointerMove continuous hit-testing.
+    pub fn update_hover_at(&mut self, pos: Vec2) -> Vec<PanelAction> {
+        if !self.tracks_rect.contains(pos) {
+            if self.hovered_clip_id.is_some() {
+                self.hovered_clip_id = None;
+                return vec![PanelAction::ViewportHoverChanged(None)];
+            }
+            return Vec::new();
+        }
+
+        let new_hover = self.hit_test_clip(pos).map(|h| h.clip_id);
+        if new_hover != self.hovered_clip_id {
+            self.hovered_clip_id = new_hover.clone();
+            return vec![PanelAction::ViewportHoverChanged(new_hover)];
+        }
+        Vec::new()
     }
 
     /// Determine which layer a Y coordinate falls in.
@@ -395,8 +423,8 @@ impl TimelineViewportPanel {
     }
 
     /// Magnetic snap: snap to grid lines AND neighboring clip edges within threshold.
-    /// Returns the best snap point within `SNAP_THRESHOLD_PX` pixels (12px), or the
-    /// grid-snapped beat if no clip edge is closer.
+    /// Returns the nearest snap point within `SNAP_THRESHOLD_PX` pixels (12px),
+    /// or `beat` unchanged if nothing is within threshold.
     /// `ignore_ids` are clip IDs being dragged (don't snap to self).
     pub fn magnetic_snap(&self, beat: f32, layer_index: usize, ignore_ids: &[String]) -> f32 {
         const SNAP_THRESHOLD_PX: f32 = 12.0;
@@ -405,9 +433,17 @@ impl TimelineViewportPanel {
         let max_snap_beats = 0.5_f32;
         let threshold_beats = (SNAP_THRESHOLD_PX / self.pixels_per_beat).min(max_snap_beats);
 
+        // Start with raw beat — only snap if a candidate is within threshold.
+        let mut best_beat = beat;
+        let mut best_dist = f32::MAX;
+
+        // Grid candidate
         let grid_snapped = self.snap_to_grid(beat);
-        let mut best_beat = grid_snapped;
-        let mut best_dist = (grid_snapped - beat).abs();
+        let grid_dist = (grid_snapped - beat).abs();
+        if grid_dist <= threshold_beats && grid_dist < best_dist {
+            best_dist = grid_dist;
+            best_beat = grid_snapped;
+        }
 
         // Check neighboring clip edges on the same layer
         for clip in &self.clips {
@@ -648,22 +684,25 @@ impl Panel for TimelineViewportPanel {
                     }
                 }
             }
-            UIEvent::DragBegin { pos, .. } => {
-                if self.ruler_rect.contains(*pos) {
+            UIEvent::DragBegin { pos, origin, .. } => {
+                // Use origin (press position) for hit test, matching Unity's eventData.pressPosition.
+                // pos is the current cursor position after crossing the drag threshold.
+                if self.ruler_rect.contains(*origin) {
                     self.drag_mode = ViewportDragMode::RulerScrub;
-                    let beat = self.pixel_to_beat(pos.x).max(0.0);
+                    let beat = self.pixel_to_beat(origin.x).max(0.0);
                     return vec![PanelAction::Seek(beat)];
                 }
-                if self.tracks_rect.contains(*pos) {
-                    let beat = self.pixel_to_beat(pos.x);
-                    if let Some(hit) = self.hit_test_clip(*pos) {
+                if self.tracks_rect.contains(*origin) {
+                    let beat = self.pixel_to_beat(origin.x);
+                    if let Some(hit) = self.hit_test_clip(*origin) {
                         self.drag_mode = ViewportDragMode::ClipDrag;
                         return vec![PanelAction::ClipDragStarted(hit.clip_id, hit.region, beat)];
-                    } else if let Some(layer) = self.layer_at_y(pos.y) {
+                    } else if let Some(layer) = self.layer_at_y(origin.y) {
                         self.drag_mode = ViewportDragMode::RegionDrag;
                         return vec![PanelAction::RegionDragStarted(beat, layer)];
                     }
                 }
+                let _ = pos; // Current position unused at drag begin; origin is authoritative
             }
             UIEvent::Drag { pos, .. } => {
                 let beat = self.pixel_to_beat(pos.x);
@@ -715,6 +754,12 @@ impl Panel for TimelineViewportPanel {
                         self.hovered_clip_id = new_id.clone();
                         return vec![PanelAction::ViewportHoverChanged(new_id)];
                     }
+                }
+            }
+            UIEvent::HoverExit { .. } => {
+                if self.hovered_clip_id.is_some() {
+                    self.hovered_clip_id = None;
+                    return vec![PanelAction::ViewportHoverChanged(None)];
                 }
             }
             _ => {}

@@ -51,6 +51,9 @@ pub struct UIRoot {
     pub inspector_resize_dragging: bool,
     inspector_drag_start_x: f32,
     inspector_drag_start_width: f32,
+
+    /// Hover actions produced by continuous cursor movement, drained in process_events.
+    cursor_hover_actions: Vec<PanelAction>,
 }
 
 impl UIRoot {
@@ -74,6 +77,7 @@ impl UIRoot {
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
+            cursor_hover_actions: Vec::new(),
         }
     }
 
@@ -113,6 +117,15 @@ impl UIRoot {
     pub fn pointer_event(&mut self, pos: Vec2, action: PointerAction, time: f32) {
         self.time_accumulator = time;
         self.input.process_pointer(&mut self.tree, pos, action, time);
+
+        // On cursor move, perform continuous clip hit-testing in the viewport.
+        // HoverEnter/HoverExit only fire on node-level transitions; they cannot
+        // detect hover changes within the same node's bounding box (e.g., moving
+        // between clips in the same track background). update_hover_at fills that gap.
+        if action == PointerAction::Move {
+            let mut hover_actions = self.viewport.update_hover_at(pos);
+            self.cursor_hover_actions.append(&mut hover_actions);
+        }
     }
 
     /// Process a right-click from winit.
@@ -140,6 +153,10 @@ impl UIRoot {
 
         let events = self.input.drain_events();
         let mut actions = Vec::new();
+
+        // Drain continuous hover actions accumulated from cursor movement.
+        actions.append(&mut self.cursor_hover_actions);
+
         let mut last_click_node: i32 = -1;
         let mut last_right_click_pos = Vec2::new(0.0, 0.0);
 
