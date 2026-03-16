@@ -1,6 +1,7 @@
 pub mod basic_shapes_snap;
 pub mod concentric_tunnel;
 pub mod duocylinder;
+pub mod flowfield;
 pub mod fractal_zoom;
 pub mod generator_math;
 pub mod line_pipeline;
@@ -8,6 +9,9 @@ pub mod lissajous;
 pub mod number_station;
 pub mod oscilloscope_xy;
 pub mod plasma;
+pub mod reaction_diffusion;
 pub mod registry;
+pub mod stateful_base;
+pub mod strange_attractor;
 pub mod tesseract;
 pub mod wireframe_zoo;
