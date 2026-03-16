@@ -224,7 +224,6 @@ pub struct FluidSimulation3DGenerator {
     seed_uniform_buf: wgpu::Buffer,
     display_uniform_buf: wgpu::Buffer,
     blur_2d_uniform_buf: wgpu::Buffer,
-    sampler: wgpu::Sampler,
     sampler_3d: wgpu::Sampler,
 
     // State
@@ -270,15 +269,6 @@ impl Volume3D {
 
 impl FluidSimulation3DGenerator {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("FluidSim3D Sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            ..Default::default()
-        });
-
         let sampler_3d = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("FluidSim3D 3D Sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -288,6 +278,7 @@ impl FluidSimulation3DGenerator {
             address_mode_w: wgpu::AddressMode::Repeat,
             ..Default::default()
         });
+
 
         // ── Scatter 3D shader (4 entry points) ──
         let scatter_3d_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -438,8 +429,7 @@ impl FluidSimulation3DGenerator {
             label: Some("FluidSim3D Display BGL"),
             entries: &[
                 bgl_uniform(0, wgpu::ShaderStages::FRAGMENT),
-                bgl_texture_filterable(1, wgpu::ShaderStages::FRAGMENT),
-                bgl_sampler(2, wgpu::ShaderStages::FRAGMENT),
+                bgl_texture_unfilterable(1, wgpu::ShaderStages::FRAGMENT),
             ],
         });
 
@@ -469,8 +459,7 @@ impl FluidSimulation3DGenerator {
             label: Some("FluidSim3D Blur2D BGL"),
             entries: &[
                 bgl_uniform(0, wgpu::ShaderStages::FRAGMENT),
-                bgl_texture_filterable(1, wgpu::ShaderStages::FRAGMENT),
-                bgl_sampler(2, wgpu::ShaderStages::FRAGMENT),
+                bgl_texture_unfilterable(1, wgpu::ShaderStages::FRAGMENT),
             ],
         });
 
@@ -543,7 +532,6 @@ impl FluidSimulation3DGenerator {
             seed_uniform_buf,
             display_uniform_buf,
             blur_2d_uniform_buf,
-            sampler,
             sampler_3d,
             active_count: 0,
             vol_res: 0,
@@ -810,10 +798,6 @@ impl FluidSimulation3DGenerator {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(source),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
         });
@@ -1335,10 +1319,6 @@ impl Generator for FluidSimulation3DGenerator {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&display_density_rt.view),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
             ],
         });
 
@@ -1440,12 +1420,13 @@ fn bgl_texture_3d_filterable(binding: u32, visibility: wgpu::ShaderStages) -> wg
     }
 }
 
-fn bgl_texture_filterable(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+// R32Float is not filterable on Metal — use this for density textures
+fn bgl_texture_unfilterable(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility,
         ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
         },
@@ -1458,15 +1439,6 @@ fn bgl_sampler(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupL
         binding,
         visibility,
         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    }
-}
-
-fn bgl_sampler_non_filtering(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
         count: None,
     }
 }

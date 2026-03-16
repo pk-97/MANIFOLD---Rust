@@ -332,8 +332,7 @@ impl FluidSimulationGenerator {
             label: Some("FluidSim Blur BGL"),
             entries: &[
                 bgl_uniform(0, wgpu::ShaderStages::FRAGMENT),
-                bgl_texture_filterable(1, wgpu::ShaderStages::FRAGMENT),
-                bgl_sampler(2, wgpu::ShaderStages::FRAGMENT),
+                bgl_texture_unfilterable(1, wgpu::ShaderStages::FRAGMENT),
             ],
         });
 
@@ -384,8 +383,7 @@ impl FluidSimulationGenerator {
             label: Some("FluidSim GradientRotate BGL"),
             entries: &[
                 bgl_uniform(0, wgpu::ShaderStages::FRAGMENT),
-                bgl_texture_filterable(1, wgpu::ShaderStages::FRAGMENT),
-                bgl_sampler(2, wgpu::ShaderStages::FRAGMENT),
+                bgl_texture_unfilterable(1, wgpu::ShaderStages::FRAGMENT),
             ],
         });
 
@@ -415,8 +413,7 @@ impl FluidSimulationGenerator {
             label: Some("FluidSim Display BGL"),
             entries: &[
                 bgl_uniform(0, wgpu::ShaderStages::FRAGMENT),
-                bgl_texture_filterable(1, wgpu::ShaderStages::FRAGMENT),
-                bgl_sampler(2, wgpu::ShaderStages::FRAGMENT),
+                bgl_texture_unfilterable(1, wgpu::ShaderStages::FRAGMENT),
             ],
         });
 
@@ -620,10 +617,6 @@ impl FluidSimulationGenerator {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(source),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
             ],
         });
 
@@ -682,10 +675,6 @@ impl FluidSimulationGenerator {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(source),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
         });
@@ -915,10 +904,6 @@ impl Generator for FluidSimulationGenerator {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&density_rt.view),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
             ],
         });
 
@@ -1064,10 +1049,6 @@ impl Generator for FluidSimulationGenerator {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&density_rt.view),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
             ],
         });
 
@@ -1156,12 +1137,13 @@ fn bgl_texture(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupL
     }
 }
 
-fn bgl_texture_filterable(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+// R32Float is not filterable on Metal — use this for density textures
+fn bgl_texture_unfilterable(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility,
         ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
         },
@@ -1177,6 +1159,7 @@ fn bgl_sampler(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupL
         count: None,
     }
 }
+
 
 fn create_uniform_buffer(device: &wgpu::Device, size: usize, label: &str) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {

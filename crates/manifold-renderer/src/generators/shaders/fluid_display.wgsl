@@ -1,5 +1,6 @@
 // Display pass: extended Reinhard tone mapping of density field
 // with 6 color palette modes and alpha from luminance.
+// Uses textureLoad (not textureSample) because R32Float is not filterable on Metal.
 
 struct DisplayUniforms {
     intensity: f32,
@@ -14,7 +15,6 @@ struct DisplayUniforms {
 
 @group(0) @binding(0) var<uniform> params: DisplayUniforms;
 @group(0) @binding(1) var t_density: texture_2d<f32>;
-@group(0) @binding(2) var s: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -78,7 +78,13 @@ fn apply_palette(lum: f32, mode: f32) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let density = textureSample(t_density, s, in.uv).r;
+    let dims = textureDimensions(t_density);
+    let coord = clamp(
+        vec2<i32>(vec2<f32>(dims) * in.uv),
+        vec2<i32>(0, 0),
+        vec2<i32>(i32(dims.x) - 1, i32(dims.y) - 1),
+    );
+    let density = textureLoad(t_density, coord, 0).r;
 
     // Extended Reinhard tone mapping (WHITE_POINT = 3.0)
     let x = density * params.intensity * params.contrast;
