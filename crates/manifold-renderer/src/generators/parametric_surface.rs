@@ -308,8 +308,8 @@ impl Generator for ParametricSurfaceGenerator {
                 });
                 pass.set_pipeline(&self.compute_pipeline);
                 pass.set_bind_group(0, &compute_bg, &[]);
-                // 128/8 = 16 workgroups per dimension
-                pass.dispatch_workgroups(16, 16, 16);
+                // 128/4 = 32 workgroups per dimension (workgroup_size is 4,4,4 for Metal compat)
+                pass.dispatch_workgroups(32, 32, 32);
             }
 
             self.last_shape = shape;

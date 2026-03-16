@@ -82,7 +82,7 @@ fn eval_sdf(shape_idx: i32, p: vec3<f32>) -> f32 {
     }
 }
 
-@compute @workgroup_size(8, 8, 8)
+@compute @workgroup_size(4, 4, 4)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= 128u || id.y >= 128u || id.z >= 128u {
         return;

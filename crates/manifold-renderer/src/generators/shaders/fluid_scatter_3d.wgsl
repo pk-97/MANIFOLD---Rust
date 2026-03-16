@@ -63,7 +63,7 @@ struct Resolve3DUniforms {
 @group(0) @binding(1) var density_volume: texture_storage_3d<r16float, write>;
 @group(0) @binding(2) var<uniform> resolve_params: Resolve3DUniforms;
 
-@compute @workgroup_size(8, 8, 8)
+@compute @workgroup_size(4, 4, 4)
 fn resolve_3d(@builtin(global_invocation_id) id: vec3<u32>) {
     let vr = resolve_params.vol_res;
     if id.x >= vr || id.y >= vr || id.z >= vr {

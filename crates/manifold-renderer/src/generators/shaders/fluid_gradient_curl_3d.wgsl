@@ -18,7 +18,7 @@ struct GradientCurl3DUniforms {
 @group(0) @binding(1) var density: texture_3d<f32>;
 @group(0) @binding(2) var vector_volume: texture_storage_3d<rgba16float, write>;
 
-@compute @workgroup_size(8, 8, 8)
+@compute @workgroup_size(4, 4, 4)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let vr = params.vol_res;
     if id.x >= vr || id.y >= vr || id.z >= vr {

@@ -707,7 +707,7 @@ impl FluidSimulation3DGenerator {
             ],
         });
 
-        let wg = (self.vol_res + 7) / 8;
+        let wg = (self.vol_res + 3) / 4;
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("FluidSim3D BlurScalar Pass"),
             timestamp_writes: None,
@@ -754,7 +754,7 @@ impl FluidSimulation3DGenerator {
             ],
         });
 
-        let wg = (self.vol_res + 7) / 8;
+        let wg = (self.vol_res + 3) / 4;
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("FluidSim3D BlurVector Pass"),
             timestamp_writes: None,
@@ -988,7 +988,7 @@ impl Generator for FluidSimulation3DGenerator {
             });
 
             {
-                let wg = (vol_res + 7) / 8;
+                let wg = (vol_res + 3) / 4;
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("FluidSim3D Resolve3D Pass"),
                     timestamp_writes: None,
@@ -1067,7 +1067,7 @@ impl Generator for FluidSimulation3DGenerator {
             });
 
             {
-                let wg = (vol_res + 7) / 8;
+                let wg = (vol_res + 3) / 4;
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("FluidSim3D GradientCurl3D Pass"),
                     timestamp_writes: None,
