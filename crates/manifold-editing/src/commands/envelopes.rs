@@ -126,9 +126,9 @@ impl Command for ChangeEnvelopeADSRCommand {
     fn description(&self) -> &str { "Change Envelope ADSR" }
 }
 
-/// Change envelope target (effect type + param index).
+/// Change envelope routing (effect type + param index).
 #[derive(Debug)]
-pub struct ChangeParamEnvelopeTargetCommand {
+pub struct ChangeEnvelopeRoutingCommand {
     clip_id: String,
     env_index: usize,
     old_effect_type: EffectType,
@@ -137,7 +137,7 @@ pub struct ChangeParamEnvelopeTargetCommand {
     new_param_index: i32,
 }
 
-impl ChangeParamEnvelopeTargetCommand {
+impl ChangeEnvelopeRoutingCommand {
     pub fn new(
         clip_id: String,
         env_index: usize,
@@ -150,7 +150,7 @@ impl ChangeParamEnvelopeTargetCommand {
     }
 }
 
-impl Command for ChangeParamEnvelopeTargetCommand {
+impl Command for ChangeEnvelopeRoutingCommand {
     fn execute(&mut self, project: &mut Project) {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             let envs = clip.envelopes_mut();
@@ -167,6 +167,44 @@ impl Command for ChangeParamEnvelopeTargetCommand {
             if let Some(env) = envs.get_mut(self.env_index) {
                 env.target_effect_type = self.old_effect_type;
                 env.param_index = self.old_param_index;
+            }
+        }
+    }
+
+    fn description(&self) -> &str { "Change Envelope Routing" }
+}
+
+/// Change envelope target_normalized value.
+/// Matches Unity's ChangeParamEnvelopeCommand which changes targetNormalized.
+#[derive(Debug)]
+pub struct ChangeEnvelopeTargetNormalizedCommand {
+    clip_id: String,
+    env_index: usize,
+    old_target: f32,
+    new_target: f32,
+}
+
+impl ChangeEnvelopeTargetNormalizedCommand {
+    pub fn new(clip_id: String, env_index: usize, old_target: f32, new_target: f32) -> Self {
+        Self { clip_id, env_index, old_target, new_target }
+    }
+}
+
+impl Command for ChangeEnvelopeTargetNormalizedCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
+            let envs = clip.envelopes_mut();
+            if let Some(env) = envs.get_mut(self.env_index) {
+                env.target_normalized = self.new_target;
+            }
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
+            let envs = clip.envelopes_mut();
+            if let Some(env) = envs.get_mut(self.env_index) {
+                env.target_normalized = self.old_target;
             }
         }
     }

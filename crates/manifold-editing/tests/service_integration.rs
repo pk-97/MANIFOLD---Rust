@@ -42,7 +42,8 @@ fn overlap_covers_both_deletes() {
         ..Default::default()
     };
 
-    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default());
+    let spb = 60.0 / project.settings.bpm;
+    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default(), spb);
     assert_eq!(cmds.len(), 1);
 
     // Execute the delete command
@@ -63,7 +64,8 @@ fn overlap_covers_start_trims() {
         ..Default::default()
     };
 
-    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default());
+    let spb = 60.0 / project.settings.bpm;
+    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default(), spb);
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -86,7 +88,8 @@ fn overlap_covers_end_trims() {
         ..Default::default()
     };
 
-    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default());
+    let spb = 60.0 / project.settings.bpm;
+    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default(), spb);
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -109,7 +112,8 @@ fn overlap_splits_middle() {
         ..Default::default()
     };
 
-    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default());
+    let spb = 60.0 / project.settings.bpm;
+    let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default(), spb);
     assert_eq!(cmds.len(), 2); // trim + add tail
 
     let mut service = EditingService::new();
@@ -347,7 +351,8 @@ fn split_at_beat() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 0.0, 8.0);
 
-    let cmd = EditingService::split_clip_at_beat(&project, &id1, 4.0);
+    let spb = 60.0 / project.settings.bpm;
+    let cmd = EditingService::split_clip_at_beat(&project, &id1, 4.0, spb);
     assert!(cmd.is_some());
 
     let mut cmd = cmd.unwrap();
@@ -370,10 +375,11 @@ fn split_at_boundary_returns_none() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 0.0, 8.0);
 
+    let spb = 60.0 / project.settings.bpm;
     // Split at start — invalid
-    assert!(EditingService::split_clip_at_beat(&project, &id1, 0.0).is_none());
+    assert!(EditingService::split_clip_at_beat(&project, &id1, 0.0, spb).is_none());
     // Split at end — invalid
-    assert!(EditingService::split_clip_at_beat(&project, &id1, 8.0).is_none());
+    assert!(EditingService::split_clip_at_beat(&project, &id1, 8.0, spb).is_none());
 }
 
 // ─── Extend/Shrink ───

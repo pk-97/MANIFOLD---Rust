@@ -151,8 +151,9 @@ pub fn dispatch(
                     if let Some(new_clip) = new_layer.clips.last() {
                         let new_clip_clone = new_clip.clone();
                         let ignore = std::collections::HashSet::new();
+                        let spb = 60.0 / project.settings.bpm;
                         let overlap_cmds = EditingService::enforce_non_overlap(
-                            project, &new_clip_clone, *layer, &ignore,
+                            project, &new_clip_clone, *layer, &ignore, spb,
                         );
                         for cmd in overlap_cmds {
                             editing.execute(cmd, project);
@@ -298,11 +299,12 @@ pub fn dispatch(
                             }
                         }
                         // Enforce non-overlap for each moved clip
+                        let spb = 60.0 / project.settings.bpm;
                         for snap in &clip_drag.snapshots {
                             if let Some(clip) = project.timeline.find_clip_by_id(&snap.clip_id).cloned() {
                                 let layer_idx = clip.layer_index as usize;
                                 let overlap_cmds = EditingService::enforce_non_overlap(
-                                    project, &clip, layer_idx, &drag_ids,
+                                    project, &clip, layer_idx, &drag_ids, spb,
                                 );
                                 for cmd in overlap_cmds {
                                     editing.execute(cmd, project);
@@ -1609,7 +1611,8 @@ pub fn dispatch(
         PanelAction::ContextSplitAtPlayhead(clip_id) => {
             let beat = engine.current_beat();
             if let Some(project) = engine.project_mut() {
-                if let Some(cmd) = EditingService::split_clip_at_beat(project, clip_id, beat) {
+                let spb = 60.0 / project.settings.bpm;
+                if let Some(cmd) = EditingService::split_clip_at_beat(project, clip_id, beat, spb) {
                     editing.execute(cmd, project);
                 }
             }

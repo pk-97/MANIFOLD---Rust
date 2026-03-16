@@ -95,20 +95,23 @@ impl Command for ReorderEffectCommand {
         with_effects_mut(project, &self.target, |effects, _groups| {
             if from < effects.len() {
                 let effect = effects.remove(from);
-                let insert_idx = to.min(effects.len());
+                // After remove, indices shift: if to > from, the target shifted down by 1
+                let insert_idx = if to > from { to - 1 } else { to };
+                let insert_idx = insert_idx.min(effects.len());
                 effects.insert(insert_idx, effect);
             }
         });
     }
 
     fn undo(&mut self, project: &mut Project) {
-        // Reverse: move from to_index back to from_index
-        let to = self.to_index;
         let from = self.from_index;
+        let to = self.to_index;
         with_effects_mut(project, &self.target, |effects, _groups| {
-            let actual_to = to.min(effects.len().saturating_sub(1));
-            if actual_to < effects.len() {
-                let effect = effects.remove(actual_to);
+            // Reverse of execute: the item is now at adjusted_to
+            let adjusted_to = if to > from { to - 1 } else { to };
+            let adjusted_to = adjusted_to.min(effects.len().saturating_sub(1));
+            if adjusted_to < effects.len() {
+                let effect = effects.remove(adjusted_to);
                 let insert_idx = from.min(effects.len());
                 effects.insert(insert_idx, effect);
             }

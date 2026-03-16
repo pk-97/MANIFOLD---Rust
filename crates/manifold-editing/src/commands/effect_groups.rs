@@ -285,20 +285,24 @@ impl Command for MoveEffectToRackCommand {
             if from < effects.len() {
                 let mut effect = effects.remove(from);
                 effect.group_id = new_gid;
-                let insert_idx = to.min(effects.len());
+                // After remove, indices shift: if from < to, the target shifted down by 1
+                let insert_idx = if from < to { to - 1 } else { to };
+                let insert_idx = insert_idx.min(effects.len());
                 effects.insert(insert_idx, effect);
             }
         });
     }
 
     fn undo(&mut self, project: &mut Project) {
-        let to = self.new_index;
         let from = self.old_index;
+        let to = self.new_index;
         let old_gid = self.old_group_id.clone();
         with_effects_mut(project, &self.target, |effects, _groups| {
-            let actual_to = to.min(effects.len().saturating_sub(1));
-            if actual_to < effects.len() {
-                let mut effect = effects.remove(actual_to);
+            // Reverse of execute: the item is now at adjusted position
+            let adjusted_to = if from < to { to - 1 } else { to };
+            let adjusted_to = adjusted_to.min(effects.len().saturating_sub(1));
+            if adjusted_to < effects.len() {
+                let mut effect = effects.remove(adjusted_to);
                 effect.group_id = old_gid;
                 let insert_idx = from.min(effects.len());
                 effects.insert(insert_idx, effect);

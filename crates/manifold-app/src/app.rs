@@ -1387,9 +1387,10 @@ impl ApplicationHandler for Application {
                             let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
                             if !ids.is_empty() {
                                 if let Some(project) = self.engine.project_mut() {
+                                    let spb = 60.0 / project.settings.bpm;
                                     let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
                                     for id in &ids {
-                                        if let Some(cmd) = EditingService::split_clip_at_beat(project, id, beat) {
+                                        if let Some(cmd) = EditingService::split_clip_at_beat(project, id, beat, spb) {
                                             commands.push(cmd);
                                         }
                                     }
@@ -1482,11 +1483,12 @@ impl ApplicationHandler for Application {
                                     // Enforce non-overlap for each pasted clip
                                     let pasted_set: std::collections::HashSet<String> =
                                         result.pasted_clip_ids.iter().cloned().collect();
+                                    let spb = 60.0 / project.settings.bpm;
                                     for id in &result.pasted_clip_ids {
                                         if let Some(clip) = project.timeline.find_clip_by_id(id).cloned() {
                                             let layer_idx = clip.layer_index as usize;
                                             let overlap_cmds = EditingService::enforce_non_overlap(
-                                                project, &clip, layer_idx, &pasted_set,
+                                                project, &clip, layer_idx, &pasted_set, spb,
                                             );
                                             for cmd in overlap_cmds {
                                                 self.editing_service.execute(cmd, project);

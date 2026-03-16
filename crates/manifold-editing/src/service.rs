@@ -142,11 +142,13 @@ impl EditingService {
 
     /// Enforce non-overlapping clips on a layer.
     /// Returns commands that fix overlaps caused by `placed_clip`.
+    /// `spb` = seconds per beat (60.0 / bpm).
     pub fn enforce_non_overlap(
         project: &Project,
         placed_clip: &TimelineClip,
         layer_index: usize,
         ignore_ids: &HashSet<String>,
+        spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
         let layer = match project.timeline.layers.get(layer_index) {
@@ -177,11 +179,17 @@ impl EditingService {
             }
 
             // Case 2: placed clip covers the start → trim start of existing
+            // Unity: trimBeats = placedClip.EndBeat - otherClip.StartBeat;
+            //        trimSeconds = trimBeats * spb;
+            //        otherClip.InPoint += trimSeconds;
+            //        otherClip.StartBeat = placedClip.EndBeat;
+            //        otherClip.DurationBeats -= trimBeats;
             if placed_start <= clip_start && placed_end < clip_end {
+                let trim_beats = placed_end - clip_start;
+                let trim_seconds = trim_beats * spb;
+                let new_in_point = clip.in_point + trim_seconds;
                 let new_start = placed_end;
-                let new_duration = clip_end - new_start;
-                let in_point_delta = (new_start - clip_start) * (clip.in_point / clip.duration_beats.max(0.001));
-                let new_in_point = clip.in_point + in_point_delta;
+                let new_duration = clip.duration_beats - trim_beats;
                 commands.push(Box::new(TrimClipCommand::new(
                     clip.id.clone(),
                     clip.start_beat, new_start,
@@ -211,10 +219,9 @@ impl EditingService {
                 let mut tail = clip.clone_with_new_id();
                 tail.start_beat = placed_end;
                 tail.duration_beats = clip_end - placed_end;
-                let total_original = clip.duration_beats;
-                if total_original > 0.0 {
-                    tail.in_point = clip.in_point + (placed_end - clip_start) / total_original * (clip.duration_beats * (60.0 / 120.0)); // approximate in-point shift
-                }
+                // InPoint for the tail: original in_point + beats-elapsed * spb
+                let beats_elapsed = placed_end - clip_start;
+                tail.in_point = clip.in_point + beats_elapsed * spb;
 
                 commands.push(Box::new(TrimClipCommand::new(
                     clip.id.clone(),
@@ -304,10 +311,12 @@ impl EditingService {
     // ─── Region helpers ───
 
     /// Split a clip at a given beat, returning the command (if split point is valid).
+    /// `spb` = seconds per beat (60.0 / bpm).
     pub fn split_clip_at_beat(
         project: &Project,
         clip_id: &str,
         split_beat: f32,
+        spb: f32,
     ) -> Option<Box<dyn Command>> {
         // Find the clip
         for (li, layer) in project.timeline.layers.iter().enumerate() {
@@ -325,7 +334,6 @@ impl EditingService {
                 tail.duration_beats = tail_duration;
                 // Adjust in-point for video clips
                 if !clip.is_generator() && clip.duration_beats > 0.0 {
-                    let spb = 60.0 / 120.0; // TODO: get actual spb from host
                     tail.in_point = clip.in_point + new_duration * spb;
                 }
                 tail.layer_index = li as i32;

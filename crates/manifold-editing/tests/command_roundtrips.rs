@@ -496,7 +496,9 @@ fn reorder_effect_undo_roundtrip() {
     project.settings.master_effects.push(make_effect(EffectType::Feedback));
 
     let target = EffectTarget::Master;
-    let mut cmd = ReorderEffectCommand::new(target, 0, 1);
+    // to_index uses pre-removal indexing: to=2 means "insert after the last element"
+    // Unity: remove at 0 -> [Feedback], insertAt = 2-1 = 1, insert Bloom at 1 -> [Feedback, Bloom]
+    let mut cmd = ReorderEffectCommand::new(target, 0, 2);
 
     cmd.execute(&mut project);
     assert_eq!(project.settings.master_effects[0].effect_type, EffectType::Feedback);
