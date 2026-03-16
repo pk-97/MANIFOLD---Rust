@@ -18,6 +18,44 @@ pub struct Modifiers {
     pub command: bool,
 }
 
+impl Modifiers {
+    /// No modifiers held.
+    pub const NONE: Self = Self { shift: false, ctrl: false, alt: false, command: false };
+
+    /// True when no modifier keys are pressed.
+    /// Matches Unity's `ShortcutRegistry.WasPressed(kb, key, KeyModifiers.None)`.
+    #[inline]
+    pub fn is_none(self) -> bool {
+        !self.shift && !self.ctrl && !self.alt && !self.command
+    }
+
+    /// True when EXACTLY Cmd/Super is held (no Shift, no Alt, no Ctrl).
+    /// Matches Unity's `ShortcutRegistry.WasPressed(kb, key, KeyModifiers.Ctrl)`
+    /// (Unity's "Ctrl" = macOS Cmd).
+    #[inline]
+    pub fn is_command_only(self) -> bool {
+        self.command && !self.shift && !self.alt && !self.ctrl
+    }
+
+    /// True when EXACTLY Shift is held.
+    #[inline]
+    pub fn is_shift_only(self) -> bool {
+        self.shift && !self.command && !self.alt && !self.ctrl
+    }
+
+    /// True when EXACTLY Alt is held.
+    #[inline]
+    pub fn is_alt_only(self) -> bool {
+        self.alt && !self.command && !self.shift && !self.ctrl
+    }
+
+    /// True when EXACTLY Cmd+Shift are held.
+    #[inline]
+    pub fn is_command_shift(self) -> bool {
+        self.command && self.shift && !self.alt && !self.ctrl
+    }
+}
+
 /// Key identifier — subset of common keys used by the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {

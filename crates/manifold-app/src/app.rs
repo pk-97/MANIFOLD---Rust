@@ -189,6 +189,11 @@ pub struct Application {
     // Text input
     text_input: crate::text_input::TextInputState,
 
+    // Panel focus — set when user clicks in inspector area, cleared on timeline click.
+    // Matches Unity's InputHandler.inspectorHasFocus for context-sensitive routing
+    // of Ctrl+C/X/V, Delete, Ctrl+G shortcuts to effect vs. clip operations.
+    inspector_has_focus: bool,
+
     // State
     initialized: bool,
     needs_rebuild: bool,
@@ -240,6 +245,7 @@ impl Application {
             time_since_start: 0.0,
             current_project_path: None,
             text_input: crate::text_input::TextInputState::new(),
+            inspector_has_focus: false,
             initialized: false,
             needs_rebuild: false,
             needs_structural_sync: false,
@@ -267,7 +273,7 @@ impl Application {
         let current_layer = self.selection.insert_cursor_layer
             .or(self.active_layer_index)
             .unwrap_or(0);
-        let grid_interval = 0.25; // default 16th note grid
+        let grid_interval = self.ui_root.viewport.grid_step();
 
         // Build layer info for navigation (skip collapsed layers)
         let layers: Vec<NavLayerInfo> = self.engine.project()
@@ -1146,6 +1152,17 @@ impl ApplicationHandler for Application {
                             match state {
                                 ElementState::Pressed => {
                                     self.mouse_pressed = true;
+
+                                    // Track which panel has focus for context-sensitive shortcuts.
+                                    // Matches Unity's InputHandler.inspectorHasFocus.
+                                    let inspector_rect = self.ui_root.layout.inspector();
+                                    let timeline_rect = self.ui_root.layout.timeline_tracks();
+                                    if inspector_rect.contains(self.cursor_pos) {
+                                        self.inspector_has_focus = true;
+                                    } else if timeline_rect.contains(self.cursor_pos) {
+                                        self.inspector_has_focus = false;
+                                    }
+
                                     // If a dropdown is open and the click lands outside it,
                                     // dismiss the dropdown and consume the event so that the
                                     // background node never receives a PointerDown (prevents
@@ -1342,55 +1359,79 @@ impl ApplicationHandler for Application {
                             return;
                         }
                     }
+                    // ── Shortcut dispatch ──
+                    // Follows Unity InputHandler.HandleKeyboardInput() control flow exactly.
+                    // Modifier matching is EXACT (matches Unity's ShortcutRegistry.WasPressed):
+                    //   is_none()          = no modifiers held
+                    //   is_command_only()   = only Cmd (macOS) / Ctrl (Windows)
+                    //   is_shift_only()     = only Shift
+                    //   is_alt_only()       = only Alt
+                    //   is_command_shift()  = only Cmd+Shift
+                    let m = self.modifiers;
                     match &logical_key {
-                        Key::Named(NamedKey::Space) => {
-                            if self.engine.is_playing() {
-                                self.engine.pause();
-                            } else {
-                                self.engine.play();
-                            }
+
+                        // ── Backtick — toggle performance HUD (before Escape chain) ──
+                        Key::Character(ref c) if c.as_str() == "`" && m.is_none() => {
+                            log::info!("Toggle performance HUD");
                             consumed = true;
                         }
+
+                        // ── Escape — 4-level priority chain (Unity InputHandler line 224-232) ──
                         Key::Named(NamedKey::Escape) => {
-                            // 4-level priority chain (from INTERACTION_CONTRACT.md §28)
+                            // Level 1: dismiss context menu / dropdown
                             if self.ui_root.dropdown.is_open() {
-                                // Level 1: dismiss dropdown/context menu
                                 self.ui_root.dropdown.close(&mut self.ui_root.tree);
-                            } else if !self.selection.selected_clip_ids.is_empty() {
-                                // Level 4: clear all selection + insert cursor
+                            }
+                            // Level 2: monitor output active → no-op
+                            else if self.window_registry.has_output_window() {
+                                // Matches Unity: if (host.IsMonitorOutputActive) return;
+                            }
+                            // Level 3: inspector has focus → clear effect selection + clear focus
+                            else if self.inspector_has_focus {
+                                // Future: clear effect selection when effect system is implemented
+                                self.inspector_has_focus = false;
+                            }
+                            // Level 4: clear all selection + insert cursor
+                            else {
                                 self.selection.clear();
                             }
-                            // Note: Escape never stops playback (contract says clear only)
                             consumed = true;
                         }
-                        // ── Undo/Redo ──
-                        Key::Character(ref c) if c.as_str() == "z" && self.modifiers.command => {
-                            if self.modifiers.shift {
-                                crate::ui_bridge::redo(&mut self.engine, &mut self.editing_service);
-                            } else {
-                                crate::ui_bridge::undo(&mut self.engine, &mut self.editing_service);
-                            }
-                            self.engine.mark_compositor_dirty(self.frame_timer.realtime_since_start());
-                            self.needs_structural_sync = true;
-                            consumed = true;
-                        }
-                        Key::Character(ref c) if c.as_str() == "y" && self.modifiers.command => {
+
+                        // ── Undo: Cmd+Shift+Z ──
+                        Key::Character(ref c) if c.as_str() == "z" && m.is_command_shift() => {
                             crate::ui_bridge::redo(&mut self.engine, &mut self.editing_service);
                             self.engine.mark_compositor_dirty(self.frame_timer.realtime_since_start());
                             self.needs_structural_sync = true;
                             consumed = true;
                         }
-                        // ── File ──
-                        Key::Character(ref c) if c.as_str() == "s" && self.modifiers.command => {
+                        // ── Undo: Cmd+Z ──
+                        Key::Character(ref c) if c.as_str() == "z" && m.is_command_only() => {
+                            crate::ui_bridge::undo(&mut self.engine, &mut self.editing_service);
+                            self.engine.mark_compositor_dirty(self.frame_timer.realtime_since_start());
+                            self.needs_structural_sync = true;
+                            consumed = true;
+                        }
+                        // ── Redo: Cmd+Y ──
+                        Key::Character(ref c) if c.as_str() == "y" && m.is_command_only() => {
+                            crate::ui_bridge::redo(&mut self.engine, &mut self.editing_service);
+                            self.engine.mark_compositor_dirty(self.frame_timer.realtime_since_start());
+                            self.needs_structural_sync = true;
+                            consumed = true;
+                        }
+
+                        // ── Save: Cmd+S ──
+                        Key::Character(ref c) if c.as_str() == "s" && m.is_command_only() => {
                             self.save_project();
                             consumed = true;
                         }
-                        Key::Character(ref c) if c.as_str() == "o" && self.modifiers.command => {
+                        // ── Open: Cmd+O ──
+                        Key::Character(ref c) if c.as_str() == "o" && m.is_command_only() => {
                             self.open_project();
                             consumed = true;
                         }
-                        Key::Character(ref c) if c.as_str() == "n" && self.modifiers.command => {
-                            // New project — reset to empty default
+                        // ── New: Cmd+N ──
+                        Key::Character(ref c) if c.as_str() == "n" && m.is_command_only() => {
                             let project = Self::create_default_project();
                             self.engine.initialize(project);
                             self.editing_service.set_project();
@@ -1400,92 +1441,9 @@ impl ApplicationHandler for Application {
                             log::info!("New project created");
                             consumed = true;
                         }
-                        // ── Delete selected clips ──
-                        Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace)
-                            if !self.modifiers.command =>
-                        {
-                            if !self.selection.selected_clip_ids.is_empty() {
-                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                                if let Some(project) = self.engine.project_mut() {
-                                    let commands = EditingService::delete_clips(project, &ids, None, 0.0);
-                                    self.editing_service.execute_batch(commands, "Delete clips".into(), project);
-                                }
-                                self.selection.clear();
-                            } else if let Some(idx) = self.active_layer_index {
-                                // No clips selected — delete the active layer (if >1 layer)
-                                if let Some(project) = self.engine.project_mut() {
-                                    if project.timeline.layers.len() > 1 {
-                                        if let Some(layer) = project.timeline.layers.get(idx) {
-                                            let layer_clone = layer.clone();
-                                            let cmd = DeleteLayerCommand::new(layer_clone, idx);
-                                            self.editing_service.execute(Box::new(cmd), project);
-                                            // Fix active_layer if out of bounds
-                                            let new_count = project.timeline.layers.len();
-                                            if idx >= new_count {
-                                                self.active_layer_index = Some(new_count.saturating_sub(1));
-                                            }
-                                            self.needs_rebuild = true;
-                                        }
-                                    }
-                                }
-                            }
-                            consumed = true;
-                        }
-                        // ── Split at playhead ──
-                        Key::Character(ref c) if c.as_str() == "s" && !self.modifiers.command => {
-                            let beat = self.engine.current_beat();
-                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                            if !ids.is_empty() {
-                                if let Some(project) = self.engine.project_mut() {
-                                    let spb = 60.0 / project.settings.bpm;
-                                    let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
-                                    for id in &ids {
-                                        if let Some(cmd) = EditingService::split_clip_at_beat(project, id, beat, spb) {
-                                            commands.push(cmd);
-                                        }
-                                    }
-                                    if !commands.is_empty() {
-                                        self.editing_service.execute_batch(commands, "Split clips".into(), project);
-                                    }
-                                }
-                            }
-                            consumed = true;
-                        }
-                        // ── Extend / Shrink by grid step ──
-                        Key::Character(ref c) if c.as_str() == "e" && !self.modifiers.command => {
-                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                            if !ids.is_empty() {
-                                let step = self.ui_root.viewport.grid_step();
-                                if let Some(project) = self.engine.project_mut() {
-                                    let commands = if self.modifiers.shift {
-                                        EditingService::shrink_clips_by_grid(project, &ids, step)
-                                    } else {
-                                        EditingService::extend_clips_by_grid(project, &ids, step)
-                                    };
-                                    if !commands.is_empty() {
-                                        let desc = if self.modifiers.shift { "Shrink clips" } else { "Extend clips" };
-                                        self.editing_service.execute_batch(commands, desc.into(), project);
-                                    }
-                                }
-                            }
-                            consumed = true;
-                        }
-                        // ── Toggle mute on selected clips ──
-                        Key::Character(ref c) if c.as_str() == "0" && !self.modifiers.command => {
-                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                            if let Some(project) = self.engine.project_mut() {
-                                for id in &ids {
-                                    if let Some(clip) = project.timeline.find_clip_by_id_mut(id) {
-                                        clip.is_muted = !clip.is_muted;
-                                    }
-                                }
-                            }
-                            self.needs_structural_sync = true;
-                            self.needs_rebuild = true;
-                            consumed = true;
-                        }
-                        // ── Select all (Cmd+A) ──
-                        Key::Character(ref c) if c.as_str() == "a" && self.modifiers.command => {
+
+                        // ── Select all: Cmd+A ──
+                        Key::Character(ref c) if c.as_str() == "a" && m.is_command_only() => {
                             if let Some(project) = self.engine.project() {
                                 self.selection.selected_clip_ids.clear();
                                 for layer in &project.timeline.layers {
@@ -1499,58 +1457,73 @@ impl ApplicationHandler for Application {
                             self.needs_structural_sync = true;
                             consumed = true;
                         }
-                        // ── Copy (Cmd+C) ──
-                        Key::Character(ref c) if c.as_str() == "c" && self.modifiers.command => {
-                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                            if !ids.is_empty() {
-                                if let Some(project) = self.engine.project() {
-                                    self.editing_service.copy_clips(project, &ids);
-                                }
-                            }
-                            consumed = true;
-                        }
-                        // ── Cut (Cmd+X) ──
-                        Key::Character(ref c) if c.as_str() == "x" && self.modifiers.command => {
-                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                            if !ids.is_empty() {
-                                if let Some(project) = self.engine.project_mut() {
-                                    self.editing_service.copy_clips(project, &ids);
-                                    let commands = EditingService::delete_clips(project, &ids, None, 0.0);
-                                    self.editing_service.execute_batch(commands, "Cut clips".into(), project);
-                                }
-                                self.selection.clear();
-                            }
-                            consumed = true;
-                        }
-                        // ── Paste (Cmd+V) ──
-                        Key::Character(ref c) if c.as_str() == "v" && self.modifiers.command => {
-                            let target_beat = self.selection.insert_cursor_beat
-                                .unwrap_or(self.engine.current_beat());
-                            let target_layer = self.selection.insert_cursor_layer
-                                .or(self.active_layer_index)
-                                .unwrap_or(0) as i32;
-                            if let Some(project) = self.engine.project_mut() {
-                                let spb = 60.0 / project.settings.bpm;
-                                let result = self.editing_service.paste_clips(project, target_beat, target_layer, spb);
-                                if !result.commands.is_empty() {
-                                    self.editing_service.execute_batch(result.commands, "Paste clips".into(), project);
-                                    // Select pasted clips
-                                    self.selection.selected_clip_ids.clear();
-                                    for id in result.pasted_clip_ids {
-                                        self.selection.selected_clip_ids.insert(id);
+
+                        // ── Copy: Cmd+C (context-sensitive: effects vs clips) ──
+                        Key::Character(ref c) if c.as_str() == "c" && m.is_command_only() => {
+                            if self.inspector_has_focus {
+                                // Future: effect copy when effect system is implemented
+                                log::debug!("Inspector focused — effect copy (stub)");
+                            } else {
+                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                                if !ids.is_empty() {
+                                    if let Some(project) = self.engine.project() {
+                                        self.editing_service.copy_clips(project, &ids);
                                     }
-                                    self.selection.primary_clip_id = self.selection.selected_clip_ids.iter().next().cloned();
-                                    self.selection.version += 1;
                                 }
                             }
                             consumed = true;
                         }
-                        // ── Duplicate (Cmd+D) ──
-                        Key::Character(ref c) if c.as_str() == "d" && self.modifiers.command => {
+                        // ── Cut: Cmd+X (context-sensitive: effects vs clips) ──
+                        Key::Character(ref c) if c.as_str() == "x" && m.is_command_only() => {
+                            if self.inspector_has_focus {
+                                // Future: effect cut when effect system is implemented
+                                log::debug!("Inspector focused — effect cut (stub)");
+                            } else {
+                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                                if !ids.is_empty() {
+                                    if let Some(project) = self.engine.project_mut() {
+                                        self.editing_service.copy_clips(project, &ids);
+                                        let commands = EditingService::delete_clips(project, &ids, None, 0.0);
+                                        self.editing_service.execute_batch(commands, "Cut clips".into(), project);
+                                    }
+                                    self.selection.clear();
+                                }
+                            }
+                            consumed = true;
+                        }
+                        // ── Paste: Cmd+V (context-sensitive: effects vs clips) ──
+                        Key::Character(ref c) if c.as_str() == "v" && m.is_command_only() => {
+                            if self.inspector_has_focus {
+                                // Future: effect paste when effect system is implemented
+                                log::debug!("Inspector focused — effect paste (stub)");
+                            } else {
+                                let target_beat = self.selection.insert_cursor_beat
+                                    .unwrap_or(self.engine.current_beat());
+                                let target_layer = self.selection.insert_cursor_layer
+                                    .or(self.active_layer_index)
+                                    .unwrap_or(0) as i32;
+                                if let Some(project) = self.engine.project_mut() {
+                                    let spb = 60.0 / project.settings.bpm;
+                                    let result = self.editing_service.paste_clips(project, target_beat, target_layer, spb);
+                                    if !result.commands.is_empty() {
+                                        self.editing_service.execute_batch(result.commands, "Paste clips".into(), project);
+                                        self.selection.selected_clip_ids.clear();
+                                        for id in result.pasted_clip_ids {
+                                            self.selection.selected_clip_ids.insert(id);
+                                        }
+                                        self.selection.primary_clip_id = self.selection.selected_clip_ids.iter().next().cloned();
+                                        self.selection.version += 1;
+                                    }
+                                }
+                            }
+                            consumed = true;
+                        }
+
+                        // ── Duplicate: Cmd+D ──
+                        Key::Character(ref c) if c.as_str() == "d" && m.is_command_only() => {
                             let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
                             if !ids.is_empty() {
                                 if let Some(project) = self.engine.project_mut() {
-                                    // Calculate span of selected clips for offset
                                     let mut min_beat = f32::MAX;
                                     let mut max_beat = f32::MIN;
                                     for layer in &project.timeline.layers {
@@ -1575,88 +1548,184 @@ impl ApplicationHandler for Application {
                             }
                             consumed = true;
                         }
-                        // ── Arrow keys — nudge clips or seek ──
-                        Key::Named(NamedKey::ArrowLeft) if !self.modifiers.command => {
-                            let step = if self.modifiers.shift { 0.0625 } else { 0.25 };
-                            if !self.selection.selected_clip_ids.is_empty() {
-                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                                if let Some(project) = self.engine.project_mut() {
-                                    let spb = 60.0 / project.settings.bpm;
-                                    let commands = EditingService::nudge_clips(project, &ids, -step, spb);
-                                    if !commands.is_empty() {
-                                        self.editing_service.execute_batch(commands, "Nudge clips left".into(), project);
+
+                        // ── Ungroup: Cmd+Shift+G (context-sensitive) ──
+                        Key::Character(ref c) if c.as_str() == "g" && m.is_command_shift() => {
+                            if self.inspector_has_focus {
+                                // Future: effect ungroup when effect system is implemented
+                                log::debug!("Inspector focused — effect ungroup (stub)");
+                            }
+                            consumed = true;
+                        }
+                        // ── Group: Cmd+G (context-sensitive) ──
+                        Key::Character(ref c) if c.as_str() == "g" && m.is_command_only() => {
+                            if self.inspector_has_focus {
+                                // Future: effect group when effect system is implemented
+                                log::debug!("Inspector focused — effect group (stub)");
+                            } else {
+                                // Future: group selected layers
+                                log::debug!("Group selected layers (stub)");
+                            }
+                            consumed = true;
+                        }
+
+                        // ── Delete/Backspace (context-sensitive: effects → layers → clips) ──
+                        Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace)
+                            if m.is_none() =>
+                        {
+                            // Priority 1: inspector focused → delete effects
+                            if self.inspector_has_focus {
+                                // Future: effect delete when effect system is implemented
+                                log::debug!("Inspector focused — effect delete (stub)");
+                            }
+                            // Priority 2: active layer selected, no clips → delete layer
+                            else if self.selection.selected_clip_ids.is_empty() {
+                                if let Some(idx) = self.active_layer_index {
+                                    if let Some(project) = self.engine.project_mut() {
+                                        if project.timeline.layers.len() > 1 {
+                                            if let Some(layer) = project.timeline.layers.get(idx) {
+                                                let layer_clone = layer.clone();
+                                                let cmd = DeleteLayerCommand::new(layer_clone, idx);
+                                                self.editing_service.execute(Box::new(cmd), project);
+                                                let new_count = project.timeline.layers.len();
+                                                if idx >= new_count {
+                                                    self.active_layer_index = Some(new_count.saturating_sub(1));
+                                                }
+                                                self.needs_rebuild = true;
+                                            }
+                                        }
                                     }
                                 }
-                            } else {
-                                // Navigate insert cursor left (Ableton behavior)
-                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Left);
                             }
-                            consumed = true;
-                        }
-                        Key::Named(NamedKey::ArrowRight) if !self.modifiers.command => {
-                            let step = if self.modifiers.shift { 0.0625 } else { 0.25 };
-                            if !self.selection.selected_clip_ids.is_empty() {
+                            // Priority 3: delete selected clips
+                            else {
                                 let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
                                 if let Some(project) = self.engine.project_mut() {
-                                    let spb = 60.0 / project.settings.bpm;
-                                    let commands = EditingService::nudge_clips(project, &ids, step, spb);
-                                    if !commands.is_empty() {
-                                        self.editing_service.execute_batch(commands, "Nudge clips right".into(), project);
+                                    let commands = EditingService::delete_clips(project, &ids, None, 0.0);
+                                    self.editing_service.execute_batch(commands, "Delete clips".into(), project);
+                                }
+                                self.selection.clear();
+                            }
+                            consumed = true;
+                        }
+
+                        // ── Space — Play/Pause (seek to insert cursor if paused) ──
+                        Key::Named(NamedKey::Space) if m.is_none() => {
+                            if self.engine.is_playing() {
+                                self.engine.pause();
+                            } else {
+                                // Unity: if paused and insert cursor exists, seek to cursor beat first
+                                if let Some(cursor_beat) = self.selection.insert_cursor_beat {
+                                    if let Some(project) = self.engine.project() {
+                                        let spb = 60.0 / project.settings.bpm;
+                                        self.engine.seek_to(cursor_beat * spb);
                                     }
                                 }
-                            } else {
-                                // Navigate insert cursor right (Ableton behavior)
-                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Right);
+                                self.engine.play();
                             }
                             consumed = true;
                         }
-                        Key::Named(NamedKey::ArrowUp) if !self.modifiers.command => {
-                            if self.selection.selected_clip_ids.is_empty() {
-                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Up);
-                            } else if let Some(idx) = self.active_layer_index {
-                                if idx > 0 {
-                                    self.active_layer_index = Some(idx - 1);
-                                }
-                            }
+
+                        // ── Home — seek to start ──
+                        Key::Named(NamedKey::Home) if m.is_none() => {
+                            self.engine.seek_to(0.0);
                             consumed = true;
                         }
-                        Key::Named(NamedKey::ArrowDown) if !self.modifiers.command => {
-                            if self.selection.selected_clip_ids.is_empty() {
-                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Down);
-                            } else if let Some(idx) = self.active_layer_index {
-                                let count = self.engine.project().map_or(0, |p| p.timeline.layers.len());
-                                if idx + 1 < count {
-                                    self.active_layer_index = Some(idx + 1);
-                                }
-                            }
-                            consumed = true;
-                        }
-                        // ── F — zoom to fit all clips ──
-                        Key::Character(ref c) if c.as_str() == "f" && !self.modifiers.command => {
+                        // ── End — seek to end of last clip ──
+                        Key::Named(NamedKey::End) if m.is_none() => {
                             if let Some(project) = self.engine.project() {
-                                let clips = project.timeline.layers.iter()
-                                    .flat_map(|l| l.clips.iter());
+                                let mut max_beat: f32 = 0.0;
+                                for layer in &project.timeline.layers {
+                                    for clip in &layer.clips {
+                                        let end = clip.start_beat + clip.duration_beats;
+                                        if end > max_beat { max_beat = end; }
+                                    }
+                                }
+                                let time = max_beat * (60.0 / project.settings.bpm);
+                                self.engine.seek_to(time);
+                            }
+                            consumed = true;
+                        }
+
+                        // ── S — split at playhead (bare S only, no modifiers) ──
+                        Key::Character(ref c) if c.as_str() == "s" && m.is_none() => {
+                            let beat = self.engine.current_beat();
+                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                            if !ids.is_empty() {
+                                if let Some(project) = self.engine.project_mut() {
+                                    let spb = 60.0 / project.settings.bpm;
+                                    let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
+                                    for id in &ids {
+                                        if let Some(cmd) = EditingService::split_clip_at_beat(project, id, beat, spb) {
+                                            commands.push(cmd);
+                                        }
+                                    }
+                                    if !commands.is_empty() {
+                                        self.editing_service.execute_batch(commands, "Split clips".into(), project);
+                                    }
+                                }
+                            }
+                            consumed = true;
+                        }
+
+                        // ── Shift+E — shrink by grid step (check before bare E) ──
+                        // winit reports Shift+E as "E" (uppercase) on most platforms
+                        Key::Character(ref c) if (c.as_str() == "E" || c.as_str() == "e") && m.is_shift_only() => {
+                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                            if !ids.is_empty() {
+                                let step = self.ui_root.viewport.grid_step();
+                                if let Some(project) = self.engine.project_mut() {
+                                    let commands = EditingService::shrink_clips_by_grid(project, &ids, step);
+                                    if !commands.is_empty() {
+                                        self.editing_service.execute_batch(commands, "Shrink clips".into(), project);
+                                    }
+                                }
+                            }
+                            consumed = true;
+                        }
+                        // ── E — extend by grid step (bare E only) ──
+                        Key::Character(ref c) if c.as_str() == "e" && m.is_none() => {
+                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                            if !ids.is_empty() {
+                                let step = self.ui_root.viewport.grid_step();
+                                if let Some(project) = self.engine.project_mut() {
+                                    let commands = EditingService::extend_clips_by_grid(project, &ids, step);
+                                    if !commands.is_empty() {
+                                        self.editing_service.execute_batch(commands, "Extend clips".into(), project);
+                                    }
+                                }
+                            }
+                            consumed = true;
+                        }
+
+                        // ── F — zoom to fit (bare F only) ──
+                        Key::Character(ref c) if c.as_str() == "f" && m.is_none() => {
+                            if let Some(project) = self.engine.project() {
                                 let mut min_beat = f32::MAX;
                                 let mut max_beat = f32::MIN;
                                 let mut has_clips = false;
-                                for c in clips {
-                                    min_beat = min_beat.min(c.start_beat);
-                                    max_beat = max_beat.max(c.start_beat + c.duration_beats);
-                                    has_clips = true;
+                                for layer in &project.timeline.layers {
+                                    for clip in &layer.clips {
+                                        min_beat = min_beat.min(clip.start_beat);
+                                        max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
+                                        has_clips = true;
+                                    }
                                 }
                                 if has_clips {
                                     let margin = 0.1 * (max_beat - min_beat).max(1.0);
                                     let range = max_beat - min_beat + 2.0 * margin;
                                     let tracks_w = self.ui_root.layout.timeline_tracks().width;
                                     let required_ppb = tracks_w / range;
-                                    // Find closest zoom level
                                     let levels = &manifold_ui::color::ZOOM_LEVELS;
-                                    let best_idx = levels.iter().enumerate()
-                                        .min_by(|(_, a), (_, b)| {
-                                            (*a - required_ppb).abs().partial_cmp(&(*b - required_ppb).abs()).unwrap()
-                                        })
-                                        .map(|(i, _)| i)
-                                        .unwrap_or(0);
+                                    let mut best_idx = 0;
+                                    let mut best_diff = f32::MAX;
+                                    for (i, &lvl) in levels.iter().enumerate() {
+                                        let diff = (lvl - required_ppb).abs();
+                                        if diff < best_diff {
+                                            best_diff = diff;
+                                            best_idx = i;
+                                        }
+                                    }
                                     let ppb = levels[best_idx];
                                     self.ui_root.viewport.set_zoom(ppb);
                                     self.ui_root.viewport.set_scroll(
@@ -1668,55 +1737,109 @@ impl ApplicationHandler for Application {
                             }
                             consumed = true;
                         }
-                        // ── I — set/clear export in point ──
-                        Key::Character(ref c) if c.as_str() == "i" && !self.modifiers.command => {
-                            let beat = self.engine.current_beat();
+
+                        // ── 0 — toggle mute (bare 0 only) ──
+                        Key::Character(ref c) if c.as_str() == "0" && m.is_none() => {
+                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
                             if let Some(project) = self.engine.project_mut() {
-                                if self.modifiers.alt {
-                                    project.timeline.export_in_beat = 0.0;
-                                    project.timeline.export_range_enabled = false;
-                                } else {
-                                    project.timeline.export_in_beat = beat;
-                                    project.timeline.export_range_enabled = true;
+                                for id in &ids {
+                                    if let Some(clip) = project.timeline.find_clip_by_id_mut(id) {
+                                        clip.is_muted = !clip.is_muted;
+                                    }
                                 }
                             }
+                            self.needs_structural_sync = true;
+                            self.needs_rebuild = true;
                             consumed = true;
                         }
-                        // ── O — set/clear export out point ──
-                        Key::Character(ref c) if c.as_str() == "o" && !self.modifiers.command => {
+
+                        // ── Arrow keys — nudge clips when selected, navigate cursor otherwise ──
+                        // Left/Right with Shift: fine nudge (1/16 beat)
+                        // Left/Right without Shift: grid step nudge
+                        // Up/Down: navigate layers (no-op with clips selected in Unity)
+                        Key::Named(NamedKey::ArrowLeft) if !m.command && !m.alt => {
+                            let grid = self.ui_root.viewport.grid_step();
+                            let step = if m.shift { 1.0 / 16.0 } else { grid };
+                            if !self.selection.selected_clip_ids.is_empty() {
+                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                                if let Some(project) = self.engine.project_mut() {
+                                    let spb = 60.0 / project.settings.bpm;
+                                    let commands = EditingService::nudge_clips(project, &ids, -step, spb);
+                                    if !commands.is_empty() {
+                                        self.editing_service.execute_batch(commands, "Nudge clips left".into(), project);
+                                    }
+                                }
+                            } else {
+                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Left);
+                            }
+                            consumed = true;
+                        }
+                        Key::Named(NamedKey::ArrowRight) if !m.command && !m.alt => {
+                            let grid = self.ui_root.viewport.grid_step();
+                            let step = if m.shift { 1.0 / 16.0 } else { grid };
+                            if !self.selection.selected_clip_ids.is_empty() {
+                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
+                                if let Some(project) = self.engine.project_mut() {
+                                    let spb = 60.0 / project.settings.bpm;
+                                    let commands = EditingService::nudge_clips(project, &ids, step, spb);
+                                    if !commands.is_empty() {
+                                        self.editing_service.execute_batch(commands, "Nudge clips right".into(), project);
+                                    }
+                                }
+                            } else {
+                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Right);
+                            }
+                            consumed = true;
+                        }
+                        Key::Named(NamedKey::ArrowUp) if m.is_none() => {
+                            if self.selection.selected_clip_ids.is_empty() {
+                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Up);
+                            }
+                            // Unity: Up/Down with clips selected = no-op
+                            consumed = true;
+                        }
+                        Key::Named(NamedKey::ArrowDown) if m.is_none() => {
+                            if self.selection.selected_clip_ids.is_empty() {
+                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Down);
+                            }
+                            // Unity: Up/Down with clips selected = no-op
+                            consumed = true;
+                        }
+
+                        // ── Export markers: Alt variants first (exact match) ──
+                        Key::Character(ref c) if c.as_str() == "i" && m.is_alt_only() => {
+                            if let Some(project) = self.engine.project_mut() {
+                                project.timeline.export_in_beat = 0.0;
+                                project.timeline.export_range_enabled = false;
+                            }
+                            consumed = true;
+                        }
+                        Key::Character(ref c) if c.as_str() == "o" && m.is_alt_only() => {
+                            if let Some(project) = self.engine.project_mut() {
+                                project.timeline.export_out_beat = 0.0;
+                                project.timeline.export_range_enabled = false;
+                            }
+                            consumed = true;
+                        }
+                        // ── I — set export in point (bare I only) ──
+                        Key::Character(ref c) if c.as_str() == "i" && m.is_none() => {
                             let beat = self.engine.current_beat();
                             if let Some(project) = self.engine.project_mut() {
-                                if self.modifiers.alt {
-                                    project.timeline.export_out_beat = 0.0;
-                                    project.timeline.export_range_enabled = false;
-                                } else {
-                                    project.timeline.export_out_beat = beat;
-                                    project.timeline.export_range_enabled = true;
-                                }
+                                project.timeline.export_in_beat = beat;
+                                project.timeline.export_range_enabled = true;
                             }
                             consumed = true;
                         }
-                        // ── Home/End — seek to start/end ──
-                        Key::Named(NamedKey::Home) => {
-                            self.engine.seek_to(0.0);
-                            consumed = true;
-                        }
-                        Key::Named(NamedKey::End) => {
-                            if let Some(project) = self.engine.project() {
-                                let max_beat = project.timeline.layers.iter()
-                                    .flat_map(|l| l.clips.iter())
-                                    .map(|c| c.start_beat + c.duration_beats)
-                                    .fold(0.0_f32, f32::max);
-                                let time = max_beat * (60.0 / project.settings.bpm);
-                                self.engine.seek_to(time);
+                        // ── O — set export out point (bare O only) ──
+                        Key::Character(ref c) if c.as_str() == "o" && m.is_none() => {
+                            let beat = self.engine.current_beat();
+                            if let Some(project) = self.engine.project_mut() {
+                                project.timeline.export_out_beat = beat;
+                                project.timeline.export_range_enabled = true;
                             }
                             consumed = true;
                         }
-                        // ── Backtick — toggle performance HUD ──
-                        Key::Character(ref c) if c.as_str() == "`" && !self.modifiers.command => {
-                            log::info!("Toggle performance HUD");
-                            consumed = true;
-                        }
+
                         _ => {}
                     }
                 }

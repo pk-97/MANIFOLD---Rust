@@ -88,4 +88,10 @@ impl WindowRegistry {
     pub fn contains(&self, id: &winit::window::WindowId) -> bool {
         self.windows.contains_key(id)
     }
+
+    /// True if any Output-role window is currently open.
+    /// Matches Unity's `host.IsMonitorOutputActive`.
+    pub fn has_output_window(&self) -> bool {
+        self.windows.values().any(|s| matches!(&s.role, WindowRole::Output { .. }))
+    }
 }
