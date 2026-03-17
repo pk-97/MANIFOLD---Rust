@@ -4,11 +4,11 @@ struct Uniforms {
     amount: f32,
     block_size: f32,
     rgb_shift: f32,
+    scanline: f32,      // GlitchEffect.shader:48 — _Scanline
     speed: f32,
     time: f32,
     resolution_x: f32,
     resolution_y: f32,
-    _pad: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -58,8 +58,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // --- Scanline jitter ---
     let scanline_row = floor(uv.y * res.y);
     let scan_hash = hash1(scanline_row + t * 7.31);
-    // Scanline jitter strength is proportional to amount
-    let scan_mask = step(1.0 - 0.3 * uniforms.amount * 0.3, scan_hash);
+    // GlitchEffect.shader:92 — step(1.0 - _Scanline * _Amount * 0.3, scanHash)
+    let scan_mask = step(1.0 - uniforms.scanline * uniforms.amount * 0.3, scan_hash);
     let scan_shift = (hash1(scanline_row + t * 3.17) * 2.0 - 1.0) * uniforms.amount * 0.08;
     uv.x = uv.x + scan_shift * scan_mask;
 

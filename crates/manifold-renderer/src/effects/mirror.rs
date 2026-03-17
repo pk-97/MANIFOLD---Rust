@@ -6,8 +6,9 @@ use super::simple_blit_helper::SimpleBlitHelper;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct MirrorUniforms {
-    mode: u32,
-    _pad: [f32; 3],
+    amount: f32,   // MirrorFX.cs:13 — _Amount
+    mode: u32,     // MirrorFX.cs:14 — _Mode
+    _pad: [f32; 2],
 }
 
 /// Mirror effect — horizontal, vertical, or quad mirror.
@@ -43,11 +44,14 @@ impl PostProcessEffect for MirrorFX {
         fx: &EffectInstance,
         _ctx: &EffectContext,
     ) {
-        // param[0]: mode — 0=horizontal, 1=vertical, 2=quad
-        let mode = fx.param_values.first().copied().unwrap_or(0.0) as u32;
+        // MirrorFX.cs:13-14 — GetParam(0)=Amount, Mathf.Round(GetParam(1))=Mode
+        let p = &fx.param_values;
+        let amount = p.first().copied().unwrap_or(1.0);
+        let mode = p.get(1).copied().unwrap_or(0.0).round() as u32;
         let uniforms = MirrorUniforms {
+            amount,
             mode: mode.min(2),
-            _pad: [0.0; 3],
+            _pad: [0.0; 2],
         };
 
         self.helper.draw(

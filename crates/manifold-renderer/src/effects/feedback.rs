@@ -224,7 +224,8 @@ impl PostProcessEffect for FeedbackFX {
             return;
         }
 
-        let feedback_amount = fx.param_values.first().copied().unwrap_or(0.5);
+        // FeedbackFX.cs:34 — Mathf.Min(fx.GetParam(0), 0.98f)
+        let feedback_amount = fx.param_values.first().copied().unwrap_or(0.0).min(0.98);
         let uniforms = FeedbackUniforms {
             feedback_amount,
             _pad: [0.0; 3],

@@ -43,7 +43,8 @@ impl PostProcessEffect for QuadMirrorFX {
         fx: &EffectInstance,
         _ctx: &EffectContext,
     ) {
-        let amount = fx.param_values.first().copied().unwrap_or(0.0);
+        // QuadMirrorFX.cs:13 — fx.GetParam(0), registry default 1.0
+        let amount = fx.param_values.first().copied().unwrap_or(1.0);
         let uniforms = QuadMirrorUniforms {
             amount,
             _pad: [0.0; 3],
