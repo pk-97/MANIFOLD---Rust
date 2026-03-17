@@ -1638,9 +1638,30 @@ impl ApplicationHandler for Application {
                             return;
                         }
                     }
-                    // ── Shortcut dispatch ──
-                    // Follows Unity InputHandler.HandleKeyboardInput() control flow exactly.
-                    // Modifier matching is EXACT (matches Unity's ShortcutRegistry.WasPressed):
+                    // ── Shortcut dispatch via InputHandler ──
+                    // Port of Unity InputHandler.HandleKeyboardInput().
+                    // All viewport access goes through the TimelineInputHost trait.
+                    if !consumed {
+                        let mut host = crate::input_host::AppInputHost {
+                            engine: &mut self.engine,
+                            editing: &mut self.editing_service,
+                            ui_root: &mut self.ui_root,
+                            active_layer: &mut self.active_layer_index,
+                            needs_rebuild: &mut self.needs_rebuild,
+                            needs_structural_sync: &mut self.needs_structural_sync,
+                            needs_scroll_rebuild: &mut self.needs_scroll_rebuild,
+                            current_project_path: &self.current_project_path,
+                        };
+                        if self.input_handler.handle_keyboard_input(
+                            &logical_key, self.modifiers,
+                            &mut host, &mut self.selection,
+                        ) {
+                            consumed = true;
+                        }
+                    }
+
+                    // Legacy shortcut dispatch (kept as fallback for shortcuts
+                    // not yet in InputHandler: save/open/new with rfd dialogs).
                     //   is_none()          = no modifiers held
                     //   is_command_only()   = only Cmd (macOS) / Ctrl (Windows)
                     //   is_shift_only()     = only Shift

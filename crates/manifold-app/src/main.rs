@@ -7,6 +7,7 @@ mod text_input;
 mod transport_state;
 mod input_handler;
 mod editing_host;
+mod input_host;
 
 fn main() {
     env_logger::init();
