@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 /// Central GPU resource holder. Created once, shared across all windows and render targets.
 pub struct GpuContext {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
+    pub device: Arc<wgpu::Device>,
+    pub queue: Arc<wgpu::Queue>,
 }
 
 impl GpuContext {
@@ -38,6 +40,6 @@ impl GpuContext {
             .await
             .expect("Failed to create GPU device");
 
-        Self { instance, adapter, device, queue }
+        Self { instance, adapter, device: Arc::new(device), queue: Arc::new(queue) }
     }
 }

@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
+manifold-playback = { path = "../manifold-playback" }
 manifold-ui = { path = "../manifold-ui" }
 wgpu = { workspace = true }
 log = { workspace = true }

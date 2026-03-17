@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use winit::application::ApplicationHandler;
@@ -67,7 +66,6 @@ pub struct Application {
     slider_snapshot: Option<f32>,
 
     // Rendering
-    generator_renderer: Option<GeneratorRenderer>,
     compositor: Option<Box<dyn Compositor>>,
     blit_pipeline: Option<BlitPipeline>,
     ui_renderer: Option<UIRenderer>,
@@ -80,9 +78,6 @@ pub struct Application {
     // Frame timing
     frame_timer: FrameTimer,
     frame_count: u64,
-
-    // Lifecycle tracking for generator renderer sync
-    prev_active_clip_ids: HashSet<String>,
 
     // Input state for winit → UIInputSystem translation
     cursor_pos: Vec2,
@@ -154,7 +149,6 @@ impl Application {
             selection: UIState::new(),
             active_layer_index: None,
             slider_snapshot: None,
-            generator_renderer: None,
             compositor: None,
             blit_pipeline: None,
             ui_renderer: None,
@@ -163,7 +157,6 @@ impl Application {
             ui_root: UIRoot::new(),
             frame_timer: FrameTimer::new(60.0),
             frame_count: 0,
-            prev_active_clip_ids: HashSet::with_capacity(16),
             cursor_pos: Vec2::ZERO,
             mouse_pressed: false,
             modifiers: Modifiers {
@@ -485,8 +478,13 @@ impl Application {
                         if let Some(compositor) = &mut self.compositor {
                             compositor.resize(&gpu.device, w, h);
                         }
-                        if let Some(gen) = &mut self.generator_renderer {
-                            gen.resize(&gpu.device, w, h);
+                        // Resize generator renderer via engine downcast
+                        let (renderers, _) = self.engine.split_renderer_project();
+                        for renderer in renderers.iter_mut() {
+                            if let Some(gen) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
+                                gen.resize_gpu(w, h);
+                                break;
+                            }
                         }
                     }
                     eprintln!("[PROJECT LOAD] Resized compositor/generators to {}x{}", w, h);
@@ -754,15 +752,21 @@ impl Application {
 
         // Resize compositor + generator when resolution preset changes
         if needs_resolution_resize {
-            if let Some(project) = self.engine.project() {
-                let w = project.settings.output_width.max(1) as u32;
-                let h = project.settings.output_height.max(1) as u32;
+            let dims = self.engine.project().map(|p| {
+                (p.settings.output_width.max(1) as u32, p.settings.output_height.max(1) as u32)
+            });
+            if let Some((w, h)) = dims {
                 if let Some(gpu) = &self.gpu {
                     if let Some(compositor) = &mut self.compositor {
                         compositor.resize(&gpu.device, w, h);
                     }
-                    if let Some(gen) = &mut self.generator_renderer {
-                        gen.resize(&gpu.device, w, h);
+                    // Resize generator renderer via engine downcast
+                    let (renderers, _) = self.engine.split_renderer_project();
+                    for renderer in renderers.iter_mut() {
+                        if let Some(gen) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
+                            gen.resize_gpu(w, h);
+                            break;
+                        }
                     }
                 }
                 log::info!("Resolution changed to {}x{}", w, h);
@@ -896,41 +900,9 @@ impl Application {
             None => return,
         };
 
-        let gen_renderer = match &mut self.generator_renderer {
-            Some(g) => g,
-            None => return,
-        };
-
-        // 4. Sync generator renderer lifecycle with engine
-        let mut current_active: HashSet<String> = HashSet::with_capacity(tick_result.ready_clips.len());
-        for clip in &tick_result.ready_clips {
-            if clip.is_generator() {
-                current_active.insert(clip.id.clone());
-
-                if !gen_renderer.is_active(&clip.id) {
-                    gen_renderer.start_clip(
-                        &gpu.device,
-                        &clip.id,
-                        clip.generator_type,
-                        clip.layer_index,
-                    );
-                }
-            }
-        }
-
-        for old_id in &self.prev_active_clip_ids {
-            if !current_active.contains(old_id) {
-                gen_renderer.stop_clip(old_id);
-            }
-        }
-        self.prev_active_clip_ids = current_active;
-
-        // 5. Render all generators
-        let layers = self
-            .engine
-            .project()
-            .map(|p| p.timeline.layers.as_slice())
-            .unwrap_or(&[]);
+        // Extract timing values before split borrow
+        let time = self.engine.current_time();
+        let beat = self.engine.current_beat();
 
         let mut encoder =
             gpu.device
@@ -938,22 +910,30 @@ impl Application {
                     label: Some("Frame Encoder"),
                 });
 
-        gen_renderer.render_all(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            self.engine.current_time(),
-            self.engine.current_beat(),
-            dt as f32,
-            layers,
-        );
+        // Split borrow: get renderers + project from engine simultaneously.
+        // Engine now owns the real GeneratorRenderer (replaced stub in init_gpu),
+        // so clip lifecycle (start/stop) is handled by engine's sync_clips_to_time.
+        let (renderers, project) = self.engine.split_renderer_project();
+        let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
 
-        // 6. Build clip descriptors for compositor
+        // 4. Render generators via downcast (GPU rendering needs queue + encoder)
+        for renderer in renderers.iter_mut() {
+            if let Some(gen) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
+                gen.render_all(&gpu.queue, &mut encoder, time, beat, dt as f32, layers);
+                break;
+            }
+        }
+
+        // 5. Build clip descriptors for compositor
         let mut clip_descs: Vec<CompositeClipDescriptor> =
             Vec::with_capacity(tick_result.ready_clips.len());
 
         for clip in &tick_result.ready_clips {
-            if let Some(view) = gen_renderer.get_clip_texture_view(&clip.id) {
+            let texture_view = renderers.iter().find_map(|r| {
+                r.as_any().downcast_ref::<GeneratorRenderer>()
+                    .and_then(|gen| gen.get_clip_texture_view(&clip.id))
+            });
+            if let Some(view) = texture_view {
                 let layer = layers.get(clip.layer_index as usize);
                 clip_descs.push(CompositeClipDescriptor {
                     clip_id: &clip.id,
@@ -972,7 +952,7 @@ impl Application {
             }
         }
 
-        // 7. Build layer descriptors for compositor
+        // 6. Build layer descriptors for compositor
         let empty_effects: Vec<manifold_core::effects::EffectInstance> = Vec::new();
         let empty_groups: Vec<manifold_core::effects::EffectGroup> = Vec::new();
         let layer_descs: Vec<CompositeLayerDescriptor> = layers.iter().map(|layer| {
@@ -987,21 +967,20 @@ impl Application {
             }
         }).collect();
 
-        // 8. Composite
+        // 7. Composite
         let compositor = match &mut self.compositor {
             Some(c) => c,
             None => return,
         };
 
-        let project = self.engine.project();
         let master_effects = project.map_or(&empty_effects[..], |p| &p.settings.master_effects);
         let master_effect_groups = project
             .and_then(|p| p.settings.master_effect_groups.as_deref())
             .unwrap_or(&empty_groups);
 
         let frame = CompositorFrame {
-            time: self.engine.current_time(),
-            beat: self.engine.current_beat(),
+            time,
+            beat,
             dt: dt as f32,
             frame_count: self.frame_count,
             compositor_dirty: tick_result.compositor_dirty,
@@ -1369,6 +1348,8 @@ impl ApplicationHandler for Application {
             });
 
             let (instance, adapter, device, queue, surface) = gpu;
+            let device = Arc::new(device);
+            let queue = Arc::new(queue);
 
             // Configure surface
             let caps = surface.get_capabilities(&adapter);
@@ -1438,13 +1419,14 @@ impl ApplicationHandler for Application {
             };
             let compositor_format = wgpu::TextureFormat::Rgba16Float;
 
-            self.generator_renderer = Some(GeneratorRenderer::new(
-                &device,
+            // Replace the generator stub with the real GeneratorRenderer
+            self.engine.replace_renderer(1, Box::new(GeneratorRenderer::new(
+                Arc::clone(&device),
                 output_w,
                 output_h,
                 compositor_format,
                 8,
-            ));
+            )));
 
             self.compositor = Some(Box::new(LayerCompositor::new(&device, output_w, output_h)));
             eprintln!("[GPU INIT] generator/compositor resolution: {}x{}", output_w, output_h);

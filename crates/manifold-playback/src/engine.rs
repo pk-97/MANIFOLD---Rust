@@ -167,6 +167,20 @@ impl PlaybackEngine {
     pub fn live_clip_manager_mut(&mut self) -> Option<&mut LiveClipManager> { self.live_clip_manager.as_mut() }
     pub fn compositor_dirty_deadline(&self) -> f64 { self.compositor_dirty_deadline }
 
+    // ─── Renderer access ───
+
+    /// Replace a renderer at the given index (e.g., swap stub for real renderer after GPU init).
+    pub fn replace_renderer(&mut self, index: usize, renderer: Box<dyn ClipRenderer>) {
+        self.renderers[index] = renderer;
+    }
+
+    /// Split borrow: get renderers and project simultaneously.
+    /// Needed because Rust can't borrow both `&mut self.renderers` and `&self.project`
+    /// through a single `&mut self`.
+    pub fn split_renderer_project(&mut self) -> (&mut Vec<Box<dyn ClipRenderer>>, Option<&Project>) {
+        (&mut self.renderers, self.project.as_ref())
+    }
+
     // ─── Lifecycle ───
 
     pub fn initialize(&mut self, project: Project) {

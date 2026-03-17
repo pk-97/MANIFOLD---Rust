@@ -524,21 +524,44 @@ YOU MUST COMMIT AND PUSH CODE CHANGES TO THE RELEVANT REPO AFTER COMPLETING FEAT
 
 ## KEY DOCS IN THIS REPO
 
-**Read before porting:**
+### Tracking (check before and after every port task):
 ```
+docs/parity_tracker.json         — LIVE STATUS of all 44 gaps across 6 tiers (check FIRST for current state)
 docs/PORT_STATUS.md              — File-level parity tracker (check FIRST — is it already ported?)
 docs/KNOWN_DIVERGENCES.md        — Approved intentional divergences (if not listed, it's a bug)
+```
+
+### The Definitive Audit (frozen reference — do NOT edit):
+```
+docs/DEFINITIVE_PARITY_AUDIT.md  — Canonical gap inventory. 1310-line audit with full context for every gap.
+                                    Gap IDs (GAP-PLAY-1, GAP-CORE-3, etc.) are the canonical work item identifiers.
+                                    Subsystem sections explain WHY each gap matters and WHAT the Unity code does.
+                                    Read the relevant section before porting any gap.
+```
+
+### Translation references:
+```
 docs/RUST_TRANSLATION_PATTERNS.md — C# → Rust patterns (inheritance, borrows, observers, serde)
 docs/UNITY_API_MAPPING.md        — Every Unity API → Rust equivalent (Time, Math, Texture, Compute, Material)
 ```
 
-**Reference (load when relevant):**
+### Other reference (load when relevant):
 ```
-docs/UNITY_PARITY_AUDIT.md      — Gap analysis
 docs/INTERACTION_CONTRACT.md     — Behavioral spec (reference only, NOT source of truth)
 docs/PORTING_STRATEGY.md        — Testing strategy
 docs/MIGRATION_PLAN.md          — Phase execution plan
 ```
+
+### Parity Tracker Workflow
+
+When completing a gap:
+1. Read `docs/parity_tracker.json` — find the gap, confirm it's `"status": "todo"`
+2. Read the corresponding section in `docs/DEFINITIVE_PARITY_AUDIT.md` for full context
+3. Read the Unity source (always — never synthesize from audit prose)
+4. Port the code following the mandatory workflow above
+5. Update `docs/parity_tracker.json` — set `"status": "done"`, add `"commit"` hash
+6. Update `docs/PORT_STATUS.md` if file-level status changed
+7. Update subsystem `pct` in the tracker if the gap materially changes completion
 
 ## AVAILABLE SKILLS
 

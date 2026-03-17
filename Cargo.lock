@@ -1756,6 +1756,7 @@ dependencies = [
  "glyphon",
  "log",
  "manifold-core",
+ "manifold-playback",
  "manifold-ui",
  "wgpu",
 ]

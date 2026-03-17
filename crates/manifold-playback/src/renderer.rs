@@ -1,8 +1,9 @@
+use std::any::Any;
 use manifold_core::clip::TimelineClip;
 
 /// Abstraction over clip renderers (video player pool, generator renderer, etc.).
 /// Port of C# IClipRenderer interface.
-pub trait ClipRenderer {
+pub trait ClipRenderer: Any {
     fn can_handle(&self, clip: &TimelineClip) -> bool;
     fn start_clip(&mut self, clip: &TimelineClip, current_time: f32) -> bool;
     fn stop_clip(&mut self, clip_id: &str);
@@ -27,6 +28,10 @@ pub trait ClipRenderer {
 
     fn pre_render(&mut self, time: f32, beat: f32, dt: f32);
     fn resize(&mut self, width: i32, height: i32);
+
+    /// Downcast support for typed renderer access from app layer.
+    fn as_any(&self) -> &dyn Any;
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 /// Stub renderer for testing. Tracks active clips without doing real rendering.
@@ -125,4 +130,7 @@ impl ClipRenderer for StubRenderer {
 
     fn pre_render(&mut self, _time: f32, _beat: f32, _dt: f32) {}
     fn resize(&mut self, _width: i32, _height: i32) {}
+
+    fn as_any(&self) -> &dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

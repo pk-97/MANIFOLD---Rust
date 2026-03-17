@@ -61,6 +61,12 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Why:** Rust's borrow checker requires explicit ownership. Commands can't hold mutable references to the project they modify.
 - **Files affected:** `manifold-editing/src/command.rs`, all command implementations
 
+### [D-07] GeneratorRenderer.PreRender is a no-op; GPU rendering via downcast
+- **Unity does:** `IClipRenderer.PreRender(time, beat, dt)` delegates to `RenderAll()` which does GPU work (Unity GPU API is globally accessible)
+- **Rust does:** `ClipRenderer::pre_render()` is a no-op. App calls `GeneratorRenderer::render_all(queue, encoder, ...)` directly via `as_any_mut().downcast_mut()` to pass GPU context
+- **Why:** The `ClipRenderer` trait lives in `manifold-playback` (no GPU deps). It cannot carry `wgpu::Queue` or `CommandEncoder` parameters. The GPU rendering must be called on the concrete type.
+- **Files affected:** `manifold-renderer/src/generator_renderer.rs`, `manifold-app/src/app.rs`
+
 ---
 
 ## Add new divergences above this line.

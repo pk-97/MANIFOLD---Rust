@@ -1,6 +1,10 @@
+use std::any::Any;
 use std::collections::HashMap;
+use std::sync::Arc;
 use manifold_core::GeneratorType;
+use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
+use manifold_playback::renderer::ClipRenderer;
 use crate::render_target::RenderTarget;
 use crate::generator::Generator;
 use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
@@ -24,7 +28,9 @@ struct LayerGeneratorState {
 
 /// GPU-side clip renderer for generators.
 /// Manages per-layer Generator instances and per-clip RenderTargets.
+/// Port of C# GeneratorRenderer : IClipRenderer.
 pub struct GeneratorRenderer {
+    device: Arc<wgpu::Device>,
     width: u32,
     height: u32,
     format: wgpu::TextureFormat,
@@ -38,7 +44,7 @@ pub struct GeneratorRenderer {
 
 impl GeneratorRenderer {
     pub fn new(
-        device: &wgpu::Device,
+        device: Arc<wgpu::Device>,
         width: u32,
         height: u32,
         format: wgpu::TextureFormat,
@@ -47,7 +53,7 @@ impl GeneratorRenderer {
         let mut available_rts = Vec::with_capacity(pool_size);
         for i in 0..pool_size {
             available_rts.push(RenderTarget::new(
-                device,
+                &device,
                 width,
                 height,
                 format,
@@ -56,6 +62,7 @@ impl GeneratorRenderer {
         }
 
         Self {
+            device,
             width,
             height,
             format,
@@ -67,10 +74,10 @@ impl GeneratorRenderer {
         }
     }
 
-    /// Start a generator clip. Returns true if successfully started.
-    pub fn start_clip(
+    /// Internal: acquire a clip with generator type and layer index.
+    /// Port of C# GeneratorRenderer.Acquire().
+    fn acquire_clip(
         &mut self,
-        device: &wgpu::Device,
         clip_id: &str,
         gen_type: GeneratorType,
         layer_index: i32,
@@ -86,7 +93,7 @@ impl GeneratorRenderer {
             .is_none_or(|ls| ls.generator_type != gen_type);
 
         if needs_create {
-            if let Some(gen) = self.registry.create(device, gen_type) {
+            if let Some(gen) = self.registry.create(&self.device, gen_type) {
                 self.layer_generators.insert(
                     layer_index,
                     LayerGeneratorState {
@@ -109,7 +116,7 @@ impl GeneratorRenderer {
             rt
         } else {
             RenderTarget::new(
-                device,
+                &self.device,
                 self.width,
                 self.height,
                 self.format,
@@ -130,18 +137,11 @@ impl GeneratorRenderer {
         true
     }
 
-    /// Stop a generator clip, returning its RT to the pool.
-    pub fn stop_clip(&mut self, clip_id: &str) {
-        if let Some(active) = self.active_clips.remove(clip_id) {
-            self.available_rts.push(active.render_target);
-        }
-    }
-
     /// Render all active generator clips.
-    #[allow(clippy::too_many_arguments)]
+    /// Called from app layer with full GPU context (queue + encoder).
+    /// Port of C# GeneratorRenderer.RenderAll().
     pub fn render_all(
         &mut self,
-        device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         time: f32,
@@ -200,7 +200,7 @@ impl GeneratorRenderer {
             if let Some(layer_state) = self.layer_generators.get_mut(&layer_index) {
                 if let Some(active) = self.active_clips.get_mut(id) {
                     let new_progress = layer_state.generator.render(
-                        device,
+                        &self.device,
                         queue,
                         encoder,
                         &active.render_target.view,
@@ -217,30 +217,18 @@ impl GeneratorRenderer {
         self.active_clips.get(clip_id).map(|a| &a.render_target.view)
     }
 
-    /// Check if a clip is active.
-    pub fn is_active(&self, clip_id: &str) -> bool {
-        self.active_clips.contains_key(clip_id)
-    }
-
     /// Resize all render targets and generators.
-    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    pub fn resize_gpu(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
         for active in self.active_clips.values_mut() {
-            active.render_target.resize(device, width, height);
+            active.render_target.resize(&self.device, width, height);
         }
         for rt in &mut self.available_rts {
-            rt.resize(device, width, height);
+            rt.resize(&self.device, width, height);
         }
         for layer_state in self.layer_generators.values_mut() {
-            layer_state.generator.resize(device, width, height);
-        }
-    }
-
-    /// Release all active clips, returning RTs to pool.
-    pub fn release_all(&mut self) {
-        for (_, active) in self.active_clips.drain() {
-            self.available_rts.push(active.render_target);
+            layer_state.generator.resize(&self.device, width, height);
         }
     }
 
@@ -248,4 +236,70 @@ impl GeneratorRenderer {
     pub fn active_count(&self) -> usize {
         self.active_clips.len()
     }
+}
+
+// =====================================================================
+// IClipRenderer implementation
+// Port of C# GeneratorRenderer : IClipRenderer
+// =====================================================================
+
+impl ClipRenderer for GeneratorRenderer {
+    fn can_handle(&self, clip: &TimelineClip) -> bool {
+        clip.is_generator()
+    }
+
+    fn start_clip(&mut self, clip: &TimelineClip, _current_time: f32) -> bool {
+        self.acquire_clip(&clip.id, clip.generator_type, clip.layer_index)
+    }
+
+    fn stop_clip(&mut self, clip_id: &str) {
+        if let Some(active) = self.active_clips.remove(clip_id) {
+            self.available_rts.push(active.render_target);
+        }
+    }
+
+    fn release_all(&mut self) {
+        for (_, active) in self.active_clips.drain() {
+            self.available_rts.push(active.render_target);
+        }
+    }
+
+    fn is_clip_ready(&self, clip_id: &str) -> bool {
+        self.active_clips.contains_key(clip_id)
+    }
+
+    fn is_active(&self, clip_id: &str) -> bool {
+        self.active_clips.contains_key(clip_id)
+    }
+
+    fn is_clip_playing(&self, clip_id: &str) -> bool {
+        // Unity: IsClipPlaying => IsActive (generators always "playing")
+        self.active_clips.contains_key(clip_id)
+    }
+
+    fn needs_prepare_phase(&self) -> bool { false }
+    fn needs_drift_correction(&self) -> bool { false }
+    fn needs_pending_pause(&self) -> bool { false }
+
+    fn get_clip_playback_time(&self, _clip_id: &str) -> f32 { 0.0 }
+    fn get_clip_media_length(&self, _clip_id: &str) -> f32 { 0.0 }
+
+    fn resume_clip(&mut self, _clip_id: &str) { /* no-op: generators render every frame */ }
+    fn pause_clip(&mut self, _clip_id: &str) { /* no-op */ }
+    fn seek_clip(&mut self, _clip_id: &str, _video_time: f32) { /* no-op */ }
+    fn set_clip_looping(&mut self, _clip_id: &str, _looping: bool) { /* no-op */ }
+    fn set_clip_playback_rate(&mut self, _clip_id: &str, _rate: f32) { /* no-op */ }
+
+    fn pre_render(&mut self, _time: f32, _beat: f32, _dt: f32) {
+        // No-op: actual GPU rendering is done via render_all() called from app
+        // with queue/encoder context that the trait can't provide.
+        // Unity's PreRender delegates to RenderAll, but Rust needs explicit GPU context.
+    }
+
+    fn resize(&mut self, width: i32, height: i32) {
+        self.resize_gpu(width as u32, height as u32);
+    }
+
+    fn as_any(&self) -> &dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }
