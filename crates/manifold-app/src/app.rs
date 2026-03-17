@@ -407,6 +407,23 @@ impl Application {
                     if saved_time > 0.0 {
                         self.engine.seek_to(saved_time);
                     }
+
+                    // Resize compositor + generators to project resolution
+                    // (Unity: ChangeResolution called on project load)
+                    if let Some(proj) = self.engine.project() {
+                        let w = proj.settings.output_width.max(1) as u32;
+                        let h = proj.settings.output_height.max(1) as u32;
+                        if let Some(gpu) = &self.gpu {
+                            if let Some(compositor) = &mut self.compositor {
+                                compositor.resize(&gpu.device, w, h);
+                            }
+                            if let Some(gen) = &mut self.generator_renderer {
+                                gen.resize(&gpu.device, w, h);
+                            }
+                        }
+                        eprintln!("[PROJECT LOAD] Resized compositor/generators to {}x{}", w, h);
+                    }
+
                     self.editing_service.set_project();
                     self.selection.clear_selection();
                     self.active_layer_index = Some(0);
@@ -1878,6 +1895,22 @@ impl ApplicationHandler for Application {
                                 if saved_time > 0.0 {
                                     self.engine.seek_to(saved_time);
                                 }
+
+                                // Resize compositor + generators to project resolution
+                                if let Some(proj) = self.engine.project() {
+                                    let w = proj.settings.output_width.max(1) as u32;
+                                    let h = proj.settings.output_height.max(1) as u32;
+                                    if let Some(gpu) = &self.gpu {
+                                        if let Some(compositor) = &mut self.compositor {
+                                            compositor.resize(&gpu.device, w, h);
+                                        }
+                                        if let Some(gen) = &mut self.generator_renderer {
+                                            gen.resize(&gpu.device, w, h);
+                                        }
+                                    }
+                                    eprintln!("[PROJECT LOAD] Resized compositor/generators to {}x{}", w, h);
+                                }
+
                                 self.editing_service.set_project();
                                 self.selection.clear_selection();
                                 self.active_layer_index = Some(0);
