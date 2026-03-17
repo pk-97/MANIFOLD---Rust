@@ -14,3 +14,4 @@ pub mod edge_stretch;
 pub mod quad_mirror;
 pub mod strobe;
 pub mod crt;
+pub mod stylized_feedback;

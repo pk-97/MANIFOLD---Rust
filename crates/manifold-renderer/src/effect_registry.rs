@@ -16,6 +16,7 @@ use crate::effects::edge_stretch::EdgeStretchFX;
 use crate::effects::quad_mirror::QuadMirrorFX;
 use crate::effects::strobe::StrobeFX;
 use crate::effects::crt::CrtFX;
+use crate::effects::stylized_feedback::StylizedFeedbackFX;
 
 /// Factory + singleton storage for all effect processors.
 /// One processor per EffectType — per-owner state lives inside each processor.
@@ -41,6 +42,7 @@ impl EffectRegistry {
         processors.insert(EffectType::QuadMirror, Box::new(QuadMirrorFX::new(device)));
         processors.insert(EffectType::Strobe, Box::new(StrobeFX::new(device)));
         processors.insert(EffectType::CRT, Box::new(CrtFX::new(device)));
+        processors.insert(EffectType::StylizedFeedback, Box::new(StylizedFeedbackFX::new(device)));
         Self { processors }
     }
 
