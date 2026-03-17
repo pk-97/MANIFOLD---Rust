@@ -245,3 +245,196 @@ fn find_parent_in_list<'a>(layers: &'a [Layer], parent_id: Option<&str>) -> Opti
     let parent_id = parent_id?;
     layers.iter().find(|l| l.layer_id == parent_id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use manifold_core::layer::Layer;
+    use manifold_core::types::LayerType;
+
+    fn make_layer(name: &str, layer_type: LayerType, index: i32) -> Layer {
+        Layer::new(name.into(), layer_type, index)
+    }
+
+    // ── Beat ↔ Pixel conversions (Unity CoordinateMapperTests.cs) ────
+
+    #[test]
+    fn default_zoom_is_120() {
+        let mapper = CoordinateMapper::new();
+        assert_eq!(mapper.pixels_per_beat(), 120.0);
+    }
+
+    #[test]
+    fn beat_to_pixel_default_zoom() {
+        let mapper = CoordinateMapper::new();
+        // Default zoom is ZoomLevels[7] = 120 ppb, scroll = 0
+        let pixel = mapper.beat_to_pixel(4.0);
+        assert!((pixel - 4.0 * 120.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn beat_to_pixel_with_scroll() {
+        let mut mapper = CoordinateMapper::new();
+        mapper.set_scroll_offset_x(100.0);
+        let pixel = mapper.beat_to_pixel(4.0);
+        assert!((pixel - (4.0 * 120.0 - 100.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn pixel_to_beat_roundtrip() {
+        let mut mapper = CoordinateMapper::new();
+        mapper.set_scroll_offset_x(50.0);
+        let pixel = mapper.beat_to_pixel(7.5);
+        let beat = mapper.pixel_to_beat(pixel);
+        assert!((beat - 7.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn beat_to_pixel_absolute_ignores_scroll() {
+        let mut mapper = CoordinateMapper::new();
+        mapper.set_scroll_offset_x(200.0);
+        let absolute = mapper.beat_to_pixel_absolute(4.0);
+        let scrolled = mapper.beat_to_pixel(4.0);
+
+        assert!((absolute - 4.0 * 120.0).abs() < 0.001);
+        assert!((scrolled - (absolute - 200.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn duration_width_roundtrip() {
+        let mapper = CoordinateMapper::new();
+        let beats = 3.5;
+        let width = mapper.beat_duration_to_width(beats);
+        let result = mapper.width_to_beat_duration(width);
+        assert!((result - beats).abs() < 0.001);
+    }
+
+    // ── Zoom management ──────────────────────────────────────────────
+
+    #[test]
+    fn set_zoom_clamps_minimum() {
+        let mut mapper = CoordinateMapper::new();
+        mapper.set_zoom(0.5);
+        assert!((mapper.pixels_per_beat() - 1.0).abs() < 0.001);
+
+        mapper.set_zoom(-10.0);
+        assert!((mapper.pixels_per_beat() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn set_zoom_by_index_clamps() {
+        let mut mapper = CoordinateMapper::new();
+        // ZoomLevels: [1, 2, 5, 10, 20, 40, 80, 120, 200, 400]
+        mapper.set_zoom_by_index(0);
+        assert!((mapper.pixels_per_beat() - 1.0).abs() < 0.001);
+
+        mapper.set_zoom_by_index(100);
+        assert!((mapper.pixels_per_beat() - 400.0).abs() < 0.001);
+
+        mapper.set_zoom_by_index(2);
+        assert!((mapper.pixels_per_beat() - 5.0).abs() < 0.001);
+    }
+
+    // ── Fit zoom ─────────────────────────────────────────────────────
+
+    #[test]
+    fn calculate_fit_zoom() {
+        let mapper = CoordinateMapper::new();
+        let fit = mapper.calculate_fit_zoom(16.0, 800.0);
+        assert!((fit - 800.0 / 16.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn calculate_fit_zoom_zero_input() {
+        let mapper = CoordinateMapper::new();
+        let current = mapper.pixels_per_beat();
+        assert!((mapper.calculate_fit_zoom(0.0, 800.0) - current).abs() < 0.001);
+        assert!((mapper.calculate_fit_zoom(16.0, 0.0) - current).abs() < 0.001);
+    }
+
+    // ── Y-axis layout ────────────────────────────────────────────────
+
+    #[test]
+    fn rebuild_y_layout_basic() {
+        let mut mapper = CoordinateMapper::new();
+        let layers = vec![
+            make_layer("A", LayerType::Video, 0),
+            make_layer("B", LayerType::Video, 1),
+            make_layer("C", LayerType::Generator, 2),
+        ];
+        mapper.rebuild_y_layout(&layers);
+
+        assert!((mapper.get_layer_y_offset(0) - 0.0).abs() < 0.001);
+        assert!((mapper.get_layer_y_offset(1) - 140.0).abs() < 0.001);
+        assert!((mapper.get_layer_y_offset(2) - 280.0).abs() < 0.001);
+        assert!((mapper.get_layer_height(0) - 140.0).abs() < 0.001);
+        assert!((mapper.get_layer_height(1) - 140.0).abs() < 0.001);
+        assert!((mapper.get_layer_height(2) - 140.0).abs() < 0.001);
+        assert!((mapper.total_content_height() - 420.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn rebuild_y_layout_collapsed() {
+        let mut mapper = CoordinateMapper::new();
+
+        let mut video = make_layer("V", LayerType::Video, 0);
+        video.is_collapsed = true;
+        let mut gen = make_layer("G", LayerType::Generator, 1);
+        gen.is_collapsed = true;
+        let mut group = make_layer("Grp", LayerType::Group, 2);
+        group.is_collapsed = true;
+
+        let layers = vec![video, gen, group];
+        mapper.rebuild_y_layout(&layers);
+
+        // Collapsed video → 48, collapsed generator → 62, collapsed group → 70
+        assert!((mapper.get_layer_height(0) - 48.0).abs() < 0.001);
+        assert!((mapper.get_layer_height(1) - 62.0).abs() < 0.001);
+        assert!((mapper.get_layer_height(2) - 70.0).abs() < 0.001);
+        assert!((mapper.total_content_height() - 180.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn rebuild_y_layout_hidden_child() {
+        let mut mapper = CoordinateMapper::new();
+
+        let mut group = make_layer("Grp", LayerType::Group, 0);
+        group.is_collapsed = true;
+        let group_id = group.layer_id.clone();
+
+        let mut child = make_layer("Child", LayerType::Video, 1);
+        child.parent_layer_id = Some(group_id);
+
+        let layers = vec![group, child];
+        mapper.rebuild_y_layout(&layers);
+
+        // Collapsed group → 70, child of collapsed parent → 0 (hidden)
+        assert!((mapper.get_layer_height(0) - 70.0).abs() < 0.001);
+        assert!((mapper.get_layer_height(1) - 0.0).abs() < 0.001);
+        assert!((mapper.total_content_height() - 70.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn get_layer_at_y_hit_test() {
+        let mut mapper = CoordinateMapper::new();
+        mapper.set_layout(&[140.0, 140.0, 140.0]);
+
+        assert_eq!(mapper.get_layer_at_y(0.0), Some(0));
+        assert_eq!(mapper.get_layer_at_y(70.0), Some(0));
+        assert_eq!(mapper.get_layer_at_y(140.0), Some(1));
+        assert_eq!(mapper.get_layer_at_y(280.0), Some(2));
+        assert_eq!(mapper.get_layer_at_y(419.0), Some(2));
+    }
+
+    #[test]
+    fn get_layer_at_y_skips_zero_height() {
+        let mut mapper = CoordinateMapper::new();
+        // Layer 1 has height 0 (hidden child of collapsed group)
+        mapper.set_layout(&[140.0, 0.0, 140.0]);
+
+        // Y=140 should land on layer 2 (index 2), not the hidden layer 1
+        assert_eq!(mapper.get_layer_at_y(140.0), Some(2));
+        // Y in range of hidden layer should still find previous visible layer
+        assert_eq!(mapper.get_layer_at_y(139.0), Some(0));
+    }
+}
