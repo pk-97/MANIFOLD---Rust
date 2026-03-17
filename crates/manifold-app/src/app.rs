@@ -29,8 +29,10 @@ use manifold_ui::node::Vec2;
 use manifold_ui::panels::PanelAction;
 use manifold_ui::ui_state::UIState;
 
+use crate::dialog_path_memory::{self, DialogContext};
 use crate::frame_timer::FrameTimer;
 use crate::ui_root::UIRoot;
+use crate::user_prefs::UserPrefs;
 use crate::window_registry::{WindowRegistry, WindowRole, WindowState};
 
 /// Re-export UIState as the selection state (replaces the old SelectionState).
@@ -98,6 +100,7 @@ pub struct Application {
 
     // File I/O
     current_project_path: Option<std::path::PathBuf>,
+    user_prefs: UserPrefs,
 
     // Text input
     text_input: crate::text_input::TextInputState,
@@ -173,6 +176,7 @@ impl Application {
             cursor_manager: CursorManager::new(),
             split_dragging: false,
             current_project_path: None,
+            user_prefs: UserPrefs::load(),
             text_input: crate::text_input::TextInputState::new(),
             transport_controller: manifold_playback::transport_controller::TransportController::new(),
             input_handler: crate::input_handler::InputHandler::new(),
@@ -347,21 +351,22 @@ impl Application {
         }
     }
 
+    // ── Project I/O constants ──────────────────────────────────────────
+    // Same key as Unity ProjectIOService.LAST_OPENED_PROJECT_PREF_KEY
+    const LAST_OPENED_PROJECT_PREF_KEY: &str = "MANIFOLD_LastOpenedProjectPath";
+
     /// Save the current project. If no path exists, triggers Save As.
+    /// 1:1 port of ProjectIOService.OnSaveProject (line 175).
     fn save_project(&mut self) {
-        if let Some(path) = &self.current_project_path {
-            // Sync playhead position before save (Unity ProjectIOService line 235)
-            let current_time = self.engine.current_time();
-            if let Some(project) = self.engine.project_mut() {
-                project.saved_playhead_time = current_time;
-            }
+        if let Some(path) = self.current_project_path.clone() {
+            self.sync_project_saved_playhead();
             if let Some(project) = self.engine.project() {
-                match manifold_io::saver::save_project(project, path) {
+                match manifold_io::saver::save_project(project, &path) {
                     Ok(()) => {
                         self.editing_service.mark_clean();
-                        log::info!("Saved to {}", path.display());
+                        log::info!("[ProjectIO] Saved to {}", path.display());
                     }
-                    Err(e) => log::error!("Save failed: {e}"),
+                    Err(e) => log::error!("[ProjectIO] Save failed: {e}"),
                 }
             }
         } else {
@@ -370,69 +375,149 @@ impl Application {
     }
 
     /// Save As — open native save dialog.
+    /// 1:1 port of ProjectIOService.OnSaveProjectAsAsync (line 201).
     fn save_project_as(&mut self) {
-        let dialog = rfd::FileDialog::new()
-            .set_title("Save Project")
+        self.sync_project_saved_playhead();
+
+        let last_dir = dialog_path_memory::get_last_directory(
+            DialogContext::ProjectSave, &mut self.user_prefs,
+        );
+
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Save MANIFOLD Project")
             .add_filter("MANIFOLD Project", &["json", "manifold"])
             .set_file_name("project.json");
+
+        if !last_dir.is_empty() {
+            dialog = dialog.set_directory(&last_dir);
+        }
 
         if let Some(path) = dialog.save_file() {
             self.current_project_path = Some(path.clone());
             if let Some(project) = self.engine.project() {
                 match manifold_io::saver::save_project(project, &path) {
                     Ok(()) => {
+                        // Persist last opened path (Unity line 218-220)
+                        let path_str = path.to_string_lossy();
+                        self.user_prefs.set_string(
+                            Self::LAST_OPENED_PROJECT_PREF_KEY,
+                            &path_str,
+                        );
+                        self.user_prefs.save();
+                        dialog_path_memory::remember_directory(
+                            DialogContext::ProjectSave,
+                            &path_str,
+                            &mut self.user_prefs,
+                        );
                         self.editing_service.mark_clean();
-                        log::info!("Saved to {}", path.display());
+                        log::info!("[ProjectIO] Saved to {}", path.display());
                     }
-                    Err(e) => log::error!("Save failed: {e}"),
+                    Err(e) => log::error!("[ProjectIO] Save failed: {e}"),
                 }
             }
         }
     }
 
     /// Open — native file dialog + load.
+    /// 1:1 port of ProjectIOService.OnOpenProject / OnOpenProjectAsync (line 92).
     fn open_project(&mut self) {
-        let dialog = rfd::FileDialog::new()
-            .set_title("Open Project")
+        let last_dir = dialog_path_memory::get_last_directory(
+            DialogContext::ProjectOpen, &mut self.user_prefs,
+        );
+
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Open MANIFOLD Project")
             .add_filter("MANIFOLD Project", &["json", "manifold"]);
 
+        if !last_dir.is_empty() {
+            dialog = dialog.set_directory(&last_dir);
+        }
+
         if let Some(path) = dialog.pick_file() {
-            match manifold_io::loader::load_project(&path) {
-                Ok(project) => {
-                    // Apply saved layout before initializing (Unity ApplySavedLayout)
-                    self.ui_root.apply_project_layout(&project.settings);
-                    let saved_time = project.saved_playhead_time;
-                    self.engine.initialize(project);
-                    // Restore playhead position (Unity ProjectIOService line 235)
-                    if saved_time > 0.0 {
-                        self.engine.seek_to(saved_time);
-                    }
+            let path_str = path.to_string_lossy().to_string();
+            dialog_path_memory::remember_directory(
+                DialogContext::ProjectOpen,
+                &path_str,
+                &mut self.user_prefs,
+            );
+            self.open_project_from_path(path);
+        }
+    }
 
-                    // Resize compositor + generators to project resolution
-                    // (Unity: ChangeResolution called on project load)
-                    if let Some(proj) = self.engine.project() {
-                        let w = proj.settings.output_width.max(1) as u32;
-                        let h = proj.settings.output_height.max(1) as u32;
-                        if let Some(gpu) = &self.gpu {
-                            if let Some(compositor) = &mut self.compositor {
-                                compositor.resize(&gpu.device, w, h);
-                            }
-                            if let Some(gen) = &mut self.generator_renderer {
-                                gen.resize(&gpu.device, w, h);
-                            }
-                        }
-                        eprintln!("[PROJECT LOAD] Resized compositor/generators to {}x{}", w, h);
-                    }
+    /// Open Recent — load the last opened project without a file dialog.
+    /// 1:1 port of ProjectIOService.OnOpenRecentProject (line 108).
+    fn open_recent_project(&mut self) {
+        let last_path = self.user_prefs.get_string(Self::LAST_OPENED_PROJECT_PREF_KEY, "");
+        if last_path.is_empty() {
+            log::warn!("[ProjectIO] No recent project to open.");
+            return;
+        }
 
-                    self.editing_service.set_project();
-                    self.selection.clear_selection();
-                    self.active_layer_index = Some(0);
-                    self.current_project_path = Some(path.clone());
-                    self.needs_rebuild = true;
-                    log::info!("Opened {}", path.display());
+        let path = std::path::PathBuf::from(&last_path);
+        if !path.exists() {
+            log::warn!("[ProjectIO] Recent project not found: {last_path}");
+            return;
+        }
+
+        self.open_project_from_path(path);
+    }
+
+    /// Shared project-load logic used by both open_project and open_recent_project.
+    /// 1:1 port of ProjectIOService.OpenProjectFromPath (line 125).
+    fn open_project_from_path(&mut self, path: std::path::PathBuf) {
+        match manifold_io::loader::load_project(&path) {
+            Ok(project) => {
+                // Apply saved layout before initializing (Unity ApplySavedLayout)
+                self.ui_root.apply_project_layout(&project.settings);
+                let saved_time = project.saved_playhead_time;
+                self.engine.initialize(project);
+                // Restore playhead position (Unity ProjectIOService line 235)
+                if saved_time > 0.0 {
+                    self.engine.seek_to(saved_time);
                 }
-                Err(e) => log::error!("Open failed: {e}"),
+
+                // Resize compositor + generators to project resolution
+                // (Unity: ChangeResolution called on project load)
+                if let Some(proj) = self.engine.project() {
+                    let w = proj.settings.output_width.max(1) as u32;
+                    let h = proj.settings.output_height.max(1) as u32;
+                    if let Some(gpu) = &self.gpu {
+                        if let Some(compositor) = &mut self.compositor {
+                            compositor.resize(&gpu.device, w, h);
+                        }
+                        if let Some(gen) = &mut self.generator_renderer {
+                            gen.resize(&gpu.device, w, h);
+                        }
+                    }
+                    eprintln!("[PROJECT LOAD] Resized compositor/generators to {}x{}", w, h);
+                }
+
+                self.editing_service.set_project();
+                self.selection.clear_selection();
+                self.active_layer_index = Some(0);
+                self.current_project_path = Some(path.clone());
+                self.needs_rebuild = true;
+
+                // Persist last opened path (Unity line 157-159)
+                let path_str = path.to_string_lossy();
+                self.user_prefs.set_string(
+                    Self::LAST_OPENED_PROJECT_PREF_KEY,
+                    &path_str,
+                );
+                self.user_prefs.save();
+
+                log::info!("[ProjectIO] Opened project from {}", path.display());
             }
+            Err(e) => log::error!("[ProjectIO] Failed to open project: {e}"),
+        }
+    }
+
+    /// Sync the current playhead time into the project before save.
+    /// 1:1 port of ProjectIOService.SyncProjectSavedPlayhead (line 230).
+    fn sync_project_saved_playhead(&mut self) {
+        let current_time = self.engine.current_time();
+        if let Some(project) = self.engine.project_mut() {
+            project.saved_playhead_time = current_time;
         }
     }
 
@@ -597,6 +682,7 @@ impl Application {
                 PanelAction::SaveProject => { self.save_project(); continue; }
                 PanelAction::SaveProjectAs => { self.save_project_as(); continue; }
                 PanelAction::OpenProject => { self.open_project(); needs_structural_sync = true; continue; }
+                PanelAction::OpenRecent => { self.open_recent_project(); needs_structural_sync = true; continue; }
                 PanelAction::BpmFieldClicked => {
                     let bpm = self.engine.project().map_or(120.0, |p| p.settings.bpm);
                     self.text_input.begin(
@@ -1883,44 +1969,11 @@ impl ApplicationHandler for Application {
                         log::info!("Video file dropped: {}", path_str);
                         // Future: create video clip on active layer at cursor position
                     }
-                    // Project files → load project
+                    // Project files → load project (routes through shared load path)
                     "json" | "manifold" => {
-                        log::info!("Project file dropped: {}", path_str);
-                        let load_path = path.clone();
-                        match manifold_io::loader::load_project(&load_path) {
-                            Ok(project) => {
-                                self.ui_root.apply_project_layout(&project.settings);
-                                let saved_time = project.saved_playhead_time;
-                                self.engine.initialize(project);
-                                if saved_time > 0.0 {
-                                    self.engine.seek_to(saved_time);
-                                }
-
-                                // Resize compositor + generators to project resolution
-                                if let Some(proj) = self.engine.project() {
-                                    let w = proj.settings.output_width.max(1) as u32;
-                                    let h = proj.settings.output_height.max(1) as u32;
-                                    if let Some(gpu) = &self.gpu {
-                                        if let Some(compositor) = &mut self.compositor {
-                                            compositor.resize(&gpu.device, w, h);
-                                        }
-                                        if let Some(gen) = &mut self.generator_renderer {
-                                            gen.resize(&gpu.device, w, h);
-                                        }
-                                    }
-                                    eprintln!("[PROJECT LOAD] Resized compositor/generators to {}x{}", w, h);
-                                }
-
-                                self.editing_service.set_project();
-                                self.selection.clear_selection();
-                                self.active_layer_index = Some(0);
-                                self.current_project_path = Some(load_path);
-                                self.needs_structural_sync = true;
-                                self.needs_rebuild = true;
-                                log::info!("Loaded project from drop");
-                            }
-                            Err(e) => log::error!("Failed to load dropped project: {e}"),
-                        }
+                        log::info!("[ProjectIO] Project file dropped: {}", path_str);
+                        self.open_project_from_path(path.clone());
+                        self.needs_structural_sync = true;
                     }
                     // Audio files → import as audio lane
                     "wav" | "mp3" | "flac" | "aiff" | "ogg" => {

@@ -1,13 +1,15 @@
 mod app;
-mod window_registry;
+mod dialog_path_memory;
+mod editing_host;
 mod frame_timer;
-mod ui_root;
-mod ui_bridge;
+mod input_handler;
+mod input_host;
 mod text_input;
 mod transport_state;
-mod input_handler;
-mod editing_host;
-mod input_host;
+mod ui_bridge;
+mod ui_root;
+mod user_prefs;
+mod window_registry;
 
 fn main() {
     env_logger::init();

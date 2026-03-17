@@ -1341,15 +1341,19 @@ pub fn dispatch(
             DispatchResult::handled()
         }
 
-        // ── File operations (stubs — no I/O yet) ───────────────────
+        // File operations intercepted in app.rs action loop — should not reach here.
+        // Export stubs remain until export pipeline is ported.
         PanelAction::NewProject
         | PanelAction::OpenProject
         | PanelAction::OpenRecent
         | PanelAction::SaveProject
-        | PanelAction::SaveProjectAs
-        | PanelAction::ExportVideo
+        | PanelAction::SaveProjectAs => {
+            log::warn!("File action {:?} reached ui_bridge (should be intercepted in app.rs)", action);
+            DispatchResult::handled()
+        }
+        PanelAction::ExportVideo
         | PanelAction::ExportXml => {
-            log::info!("File action: {:?} (not yet wired)", action);
+            log::info!("Export action: {:?} (not yet wired)", action);
             DispatchResult::handled()
         }
 

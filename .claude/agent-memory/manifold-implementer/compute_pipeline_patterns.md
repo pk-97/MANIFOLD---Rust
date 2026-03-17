@@ -50,3 +50,15 @@ Private structs in other generator modules (e.g., `BlurUniforms` in `fluid_simul
 ## Parameter Reading Pattern
 
 Use `fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32` helper to eliminate repetitive bounds-checking boilerplate. Underscore-prefix unused param bindings (e.g., `let _scale = ...`).
+
+## GeneratorContext Field Name
+
+The delta-time field is `ctx.dt` (NOT `ctx.delta_time`). Available fields: `time`, `beat`, `dt`, `width`, `height`, `param_count`, `params`, `trigger_count`, `anim_progress`.
+
+## fluid_scatter.wgsl Group Indices
+
+`splat_main` uses `@group(0)`, `resolve_main` uses `@group(1)`. When creating separate compute pipelines from this shader, each pipeline layout has ONE BGL. The resolve pipeline is bound at `set_bind_group(0, ...)` — wgpu is lenient about the group mismatch at runtime (FluidSim pattern confirmed working).
+
+## Attractor Scatter Pattern
+
+ComputeStrangeAttractor reuses `fluid_scatter.wgsl` for the SplatKernel+ResolveKernel scatter pipeline. Particle buffer size = 2M × 48B = 96MB (under Metal 128MB limit). Scatter resolution = half of output (InternalResolutionScale = 0.5). Energy formula: `0.005 * splatSize / 3.0 * (1_000_000 / activeCount) * 4096`.
