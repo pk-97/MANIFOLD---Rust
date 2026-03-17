@@ -1040,18 +1040,25 @@ impl Application {
                 let logical_w = (surface_w as f64 / scale) as u32;
                 let logical_h = (surface_h as f64 / scale) as u32;
 
-                // Pass 1: Layer bitmap textures (BEFORE UI so dropdown covers them)
-                if let Some(bitmap_gpu) = &mut self.layer_bitmap_gpu {
-                    let mut rects = self.ui_root.viewport.layer_bitmap_rects();
-                    // When dropdown is open, skip bitmaps that overlap it
-                    // so the dropdown isn't occluded by track content.
+                // Pass 1: UITree (track backgrounds, ruler + ruler markers,
+                // overview strip, export markers, all chrome panels)
+                if let Some(ui) = &mut self.ui_renderer {
                     if self.ui_root.dropdown.is_open() {
-                        let dd = self.ui_root.dropdown.container_bounds();
-                        rects.retain(|(_, r)| {
-                            !(r.x < dd.x + dd.width && r.x + r.width > dd.x
-                              && r.y < dd.y + dd.height && r.y + r.height > dd.y)
-                        });
+                        let start = Some(self.ui_root.dropdown.first_node());
+                        let bounds = Some(self.ui_root.dropdown.container_bounds());
+                        ui.render_tree_with_overlay(&self.ui_root.tree, start, bounds);
+                    } else {
+                        ui.render_tree(&self.ui_root.tree);
                     }
+                    ui.render(
+                        &gpu.device, &gpu.queue, &mut encoder, &surface_view,
+                        logical_w, logical_h, scale,
+                    );
+                }
+
+                // Pass 2: Layer bitmap textures (alpha-blend over track BGs)
+                if let Some(bitmap_gpu) = &mut self.layer_bitmap_gpu {
+                    let rects = self.ui_root.viewport.layer_bitmap_rects();
                     if !rects.is_empty() {
                         bitmap_gpu.render_layers(
                             &gpu.device, &gpu.queue, &mut encoder, &surface_view,
@@ -1060,13 +1067,8 @@ impl Application {
                     }
                 }
 
-                // Pass 2: Full UITree + playhead — ONE ui.render() call to avoid
-                // glyphon text atlas overwrite across multiple prepare() calls.
-                // Dropdown nodes are at the end of the tree (highest draw order)
-                // so they render on top of all base UI panels.
+                // Pass 3: Playhead track-area line ONLY (on top of bitmap textures)
                 if let Some(ui) = &mut self.ui_renderer {
-                    ui.render_tree(&self.ui_root.tree);
-                    // Playhead on top of tree
                     if let Some(px) = self.ui_root.viewport.playhead_pixel() {
                         let tr = self.ui_root.viewport.get_tracks_rect();
                         ui.draw_rect(
@@ -1074,11 +1076,24 @@ impl Application {
                             manifold_ui::color::PLAYHEAD_WIDTH, tr.height,
                             manifold_ui::color::PLAYHEAD_RED.to_f32(),
                         );
+                        ui.render(
+                            &gpu.device, &gpu.queue, &mut encoder, &surface_view,
+                            logical_w, logical_h, scale,
+                        );
                     }
-                    ui.render(
-                        &gpu.device, &gpu.queue, &mut encoder, &surface_view,
-                        logical_w, logical_h, scale,
-                    );
+                }
+
+                // Pass 4: Dropdown overlay — renders ON TOP of layer bitmaps and playhead.
+                // Must be a separate pass so dropdowns aren't occluded by bitmap textures.
+                if self.ui_root.dropdown.is_open() {
+                    if let Some(ui) = &mut self.ui_renderer {
+                        let start = self.ui_root.dropdown.first_node();
+                        ui.render_overlay(&self.ui_root.tree, start);
+                        ui.render(
+                            &gpu.device, &gpu.queue, &mut encoder, &surface_view,
+                            logical_w, logical_h, scale,
+                        );
+                    }
                 }
             }
 
