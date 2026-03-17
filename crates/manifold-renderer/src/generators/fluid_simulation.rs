@@ -814,6 +814,8 @@ impl Generator for FluidSimulationGenerator {
             self.init_resources(device, queue, ctx.width, ctx.height, desired_count, density_res);
             // Seed particles on first init (Unity: InitParticles fills NativeArray, then uploads)
             self.dispatch_seed(queue, encoder, device, 0, ctx.trigger_count);
+            log::info!("[FluidSim] init: active_count={} scatter={}x{} density_res={}",
+                desired_count, self.scatter_width, self.scatter_height, density_res);
         }
 
         let sw = self.scatter_width;
@@ -1177,6 +1179,11 @@ impl Generator for FluidSimulationGenerator {
         // Normalize intensity by density buffer area (Unity: 3f * areaScale)
         let area_scale = (sw as f32 * sh as f32) / SCATTER_REFERENCE_AREA;
         let intensity = 3.0 * area_scale;
+
+        if self.frame_count < 3 {
+            log::info!("[FluidSim] frame={} sw={} sh={} bw={} bh={} active={} energy={} intensity={:.4} contrast={:.2} slope={:.4}",
+                self.frame_count, sw, sh, bw, bh, active_count, scaled_energy, intensity, contrast, slope);
+        }
 
         let display_uniforms = DisplayUniforms {
             intensity,
