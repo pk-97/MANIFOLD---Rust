@@ -248,7 +248,11 @@ impl UIRoot {
                             }
                         }
                         DropdownAction::Dismissed => {
-                            self.dropdown_context = None;
+                            // Only clear context if dropdown actually closed
+                            // (disabled item clicks send Dismissed but keep dropdown open)
+                            if !self.dropdown.is_open() {
+                                self.dropdown_context = None;
+                            }
                         }
                     }
                     continue; // Event consumed by dropdown.
@@ -376,13 +380,9 @@ impl UIRoot {
                     .map(|r| DropdownItem::new(&r.dropdown_label()))
                     .collect();
 
-                // Add separator + display resolutions (Unity: Footer.CollectDisplayResolutions)
+                // Add display resolutions below presets (Unity: Footer.CollectDisplayResolutions)
                 if has_displays {
-                    // Add separator on last preset item
-                    if let Some(last) = items.last_mut() {
-                        last.separator_after = true;
-                    }
-                    // Separator label (disabled, non-selectable)
+                    // Separator label (disabled, non-selectable) — matches Unity format
                     items.push(DropdownItem::disabled("\u{2500}\u{2500}  Displays  \u{2500}\u{2500}"));
                     for (w, h, label) in &self.display_resolutions {
                         items.push(DropdownItem::new(&format!("{}  ({}x{})", label, w, h)));

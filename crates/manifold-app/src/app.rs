@@ -1044,9 +1044,11 @@ impl Application {
                 // overview strip, export markers, all chrome panels)
                 if let Some(ui) = &mut self.ui_renderer {
                     if self.ui_root.dropdown.is_open() {
+                        // Skip overlay nodes here — they render in Pass 4 on top of everything.
+                        // No overlay_bounds needed: dropdown's opaque background in Pass 4
+                        // naturally covers base text, so no text occlusion required.
                         let start = Some(self.ui_root.dropdown.first_node());
-                        let bounds = Some(self.ui_root.dropdown.container_bounds());
-                        ui.render_tree_with_overlay(&self.ui_root.tree, start, bounds);
+                        ui.render_tree_with_overlay(&self.ui_root.tree, start, None);
                     } else {
                         ui.render_tree(&self.ui_root.tree);
                     }
