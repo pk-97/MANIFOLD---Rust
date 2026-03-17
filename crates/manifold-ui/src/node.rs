@@ -75,6 +75,7 @@ impl Rect {
 // ── Color32 ──────────────────────────────────────────────────────────
 
 /// 8-bit RGBA color — matches Unity's Color32.
+#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color32 {
     pub r: u8,

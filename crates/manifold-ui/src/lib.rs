@@ -6,6 +6,8 @@ pub mod text;
 pub mod layout;
 pub mod slider;
 pub mod panels;
+pub mod bitmap_painter;
+pub mod bitmap_renderer;
 pub mod snap;
 pub mod trim;
 pub mod cursor_nav;
@@ -13,6 +15,7 @@ pub mod scroll_container;
 pub mod coordinate_mapper;
 pub mod ui_state;
 pub mod cursors;
+pub mod clip_hit_tester;
 
 pub use node::*;
 pub use tree::UITree;
@@ -34,3 +37,4 @@ pub use panels::viewport::{TimelineViewportPanel, ViewportClip, SelectionRegion,
 pub use panels::dropdown::{DropdownPanel, DropdownItem, DropdownAction};
 pub use coordinate_mapper::CoordinateMapper;
 pub use ui_state::UIState;
+pub use bitmap_renderer::{LayerBitmapRenderer, BitmapRepaintState};

@@ -136,6 +136,16 @@ pub struct UIRenderer {
     viewport: Viewport,
     text_buffers: Vec<TextBuffer>,
 
+    /// Cached TextBuffers keyed by (text_content, font_size).
+    /// Matches Unity's approach: Font.GetCharacterInfo() serves cached glyph data
+    /// from the font atlas; only new glyphs trigger rasterization. Here, we cache
+    /// shaped TextBuffers so identical text across frames avoids re-shaping.
+    text_buffer_cache: std::collections::HashMap<(String, u16), TextBuffer>,
+    /// Frame generation counter for cache eviction.
+    text_cache_generation: u64,
+    /// Per-entry generation (tracks last-used frame for eviction).
+    text_cache_used: std::collections::HashMap<(String, u16), u64>,
+
     // Draw queues
     rect_commands: Vec<RectCommand>,
     text_commands: Vec<TextCommand>,
@@ -277,6 +287,9 @@ impl UIRenderer {
             text_renderer,
             viewport,
             text_buffers: Vec::new(),
+            text_buffer_cache: std::collections::HashMap::with_capacity(256),
+            text_cache_generation: 0,
+            text_cache_used: std::collections::HashMap::with_capacity(256),
             rect_commands: Vec::with_capacity(256),
             text_commands: Vec::with_capacity(128),
             overlay_occlude_rect: None,
@@ -472,7 +485,9 @@ impl UIRenderer {
         // Text
         if let Some(text) = &node.text {
             if !text.is_empty() {
-                let text_size = self.measure_text_internal(text, style.font_size, style.font_weight);
+                // Cached measurement — only shapes on first encounter or content change.
+                // Matches Unity's Font.GetCharacterInfo() which returns cached glyph metrics.
+                let text_size = self.measure_text_cached(text, style.font_size);
                 let text_y = bounds.y + (bounds.height - text_size.y) * 0.5;
 
                 let text_x = match style.text_align {
@@ -506,8 +521,28 @@ impl UIRenderer {
         }
     }
 
-    /// Internal text measurement using glyphon/cosmic-text.
-    fn measure_text_internal(&mut self, text: &str, font_size: u16, _font_weight: FontWeight) -> Vec2 {
+    /// Text measurement using cached TextBuffer.
+    /// Matches Unity's approach: Font.GetCharacterInfo() returns cached glyph metrics
+    /// from the font atlas. Here, we cache shaped TextBuffers so the same text
+    /// across frames is measured without re-shaping.
+    fn measure_text_cached(&mut self, text: &str, font_size: u16) -> Vec2 {
+        let key = (text.to_string(), font_size);
+
+        // Mark as used this frame
+        self.text_cache_used.insert(key.clone(), self.text_cache_generation);
+
+        // Check cache
+        if let Some(buffer) = self.text_buffer_cache.get(&key) {
+            let mut width = 0.0f32;
+            let mut height = 0.0f32;
+            for run in buffer.layout_runs() {
+                width = width.max(run.line_w);
+                height = height.max(run.line_y + font_size as f32 * 0.2);
+            }
+            return Vec2::new(width, height.max(font_size as f32));
+        }
+
+        // Cache miss — create and shape new TextBuffer
         let metrics = Metrics::new(font_size as f32, font_size as f32 * 1.2);
         let mut buffer = TextBuffer::new(&mut self.font_system, metrics);
         buffer.set_size(&mut self.font_system, Some(10000.0), Some(font_size as f32 * 2.0));
@@ -515,7 +550,7 @@ impl UIRenderer {
             &mut self.font_system,
             text,
             &Attrs::new().family(Family::SansSerif),
-            Shaping::Advanced,
+            Shaping::Basic,
             None,
         );
         buffer.shape_until_scroll(&mut self.font_system, false);
@@ -527,7 +562,9 @@ impl UIRenderer {
             height = height.max(run.line_y + font_size as f32 * 0.2);
         }
 
-        Vec2::new(width, height.max(font_size as f32))
+        let result = Vec2::new(width, height.max(font_size as f32));
+        self.text_buffer_cache.insert(key, buffer);
+        result
     }
 
     // ── Render pass ─────────────────────────────────────────────────
@@ -603,26 +640,55 @@ impl UIRenderer {
             ]);
         }
 
-        // Prepare text buffers for glyphon
+        // Prepare text buffers for glyphon — reuse cached buffers where possible.
+        // Matches Unity's glyph atlas: pre-rasterized glyphs served from cache,
+        // only new characters trigger shaping/rasterization.
         self.text_buffers.clear();
         let mut text_areas = Vec::new();
+        let mut cache_misses = 0u32;
 
         for cmd in &self.text_commands {
-            let mut buffer = TextBuffer::new(
-                &mut self.font_system,
-                Metrics::new(cmd.font_size, cmd.font_size * 1.2),
-            );
-            buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
-            buffer.set_text(
-                &mut self.font_system,
-                &cmd.text,
-                &Attrs::new().family(Family::SansSerif),
-                Shaping::Advanced,
-                None,
-            );
-            buffer.shape_until_scroll(&mut self.font_system, false);
-            self.text_buffers.push(buffer);
+            let key = (cmd.text.clone(), cmd.font_size as u16);
+
+            if let Some(buffer) = self.text_buffer_cache.get(&key) {
+                // Cache hit — clone the pre-shaped buffer (cheap: no re-shaping)
+                self.text_buffers.push(buffer.clone());
+            } else {
+                // Cache miss — create and shape new TextBuffer
+                let mut buffer = TextBuffer::new(
+                    &mut self.font_system,
+                    Metrics::new(cmd.font_size, cmd.font_size * 1.2),
+                );
+                buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+                buffer.set_text(
+                    &mut self.font_system,
+                    &cmd.text,
+                    &Attrs::new().family(Family::SansSerif),
+                    Shaping::Basic,
+                    None,
+                );
+                buffer.shape_until_scroll(&mut self.font_system, false);
+                self.text_buffer_cache.insert(key, buffer.clone());
+                self.text_buffers.push(buffer);
+                cache_misses += 1;
+            }
         }
+
+        // Evict stale cache entries every 60 frames
+        self.text_cache_generation += 1;
+        if self.text_cache_generation % 60 == 0 {
+            let gen = self.text_cache_generation;
+            let stale: Vec<_> = self.text_cache_used.iter()
+                .filter(|(_, &last_used)| gen - last_used > 120)
+                .map(|(k, _)| k.clone())
+                .collect();
+            for key in stale {
+                self.text_buffer_cache.remove(&key);
+                self.text_cache_used.remove(&key);
+            }
+        }
+
+        let _ = cache_misses; // used only for debugging
 
         let sf = scale_factor as f32;
         for (i, cmd) in self.text_commands.iter().enumerate() {

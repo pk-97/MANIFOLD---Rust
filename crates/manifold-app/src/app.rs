@@ -129,6 +129,7 @@ pub struct Application {
     compositor: Option<Box<dyn Compositor>>,
     blit_pipeline: Option<BlitPipeline>,
     ui_renderer: Option<UIRenderer>,
+    layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
     surface_format: wgpu::TextureFormat,
 
     // UI
@@ -207,6 +208,7 @@ impl Application {
             compositor: None,
             blit_pipeline: None,
             ui_renderer: None,
+            layer_bitmap_gpu: None,
             surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
             ui_root: UIRoot::new(),
             frame_timer: FrameTimer::new(60.0),
@@ -717,6 +719,42 @@ impl Application {
         // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)
         self.ui_root.update();
 
+        // 6b. Repaint dirty layer bitmaps (CPU pixel painting).
+        // Build BitmapRepaintState from current selection/hover.
+        {
+            let hovered = self.ui_root.viewport.hovered_clip_id().map(|s| s.to_string());
+            let sel_region = self.ui_root.viewport.selection_region_ref().cloned();
+            let has_region = sel_region.is_some();
+            let insert_cursor_beat = self.ui_root.viewport.insert_cursor_beat();
+            let insert_layer = self.selection.insert_cursor_layer_index;
+            let has_insert = self.selection.has_insert_cursor();
+            let ppb = self.ui_root.viewport.pixels_per_beat();
+            let sel_ver = self.selection.selection_version;
+
+            let state = manifold_ui::BitmapRepaintState {
+                selection_version: sel_ver,
+                is_selected: &|id: &str| self.selection.is_selected(id),
+                hovered_clip_id: hovered.as_deref(),
+                has_region,
+                region: sel_region.as_ref(),
+                has_insert_cursor: has_insert,
+                insert_cursor_beat,
+                insert_cursor_layer: insert_layer,
+                pixels_per_beat: ppb,
+            };
+            self.ui_root.viewport.repaint_dirty_layers(&state);
+        }
+
+        // 6c. Upload dirty layer textures to GPU
+        if let (Some(gpu), Some(bitmap_gpu)) = (&self.gpu, &mut self.layer_bitmap_gpu) {
+            for (layer_idx, pixels, tw, th) in self.ui_root.viewport.dirty_layer_iter() {
+                bitmap_gpu.upload_layer(
+                    &gpu.device, &gpu.queue,
+                    layer_idx, pixels, tw as u32, th as u32,
+                );
+            }
+        }
+
         // tick_result was computed at the top of tick_and_render (engine ticked first)
 
         let gpu = match &self.gpu {
@@ -941,11 +979,12 @@ impl Application {
             // Draw UI overlay on workspace window using the UITree
             // Pass logical pixel dimensions — the tree is built in logical coords
             if is_workspace {
+                let logical_w = (surface_w as f64 / scale) as u32;
+                let logical_h = (surface_h as f64 / scale) as u32;
+
+                // Pass 1: UITree (track backgrounds, ruler + ruler markers,
+                // overview strip, export markers, all chrome panels)
                 if let Some(ui) = &mut self.ui_renderer {
-                    let logical_w = (surface_w as f64 / scale) as u32;
-                    let logical_h = (surface_h as f64 / scale) as u32;
-                    // When dropdown is open, pass its bounds so base text behind
-                    // it is hidden (prevents text bleed-through).
                     if self.ui_root.dropdown.is_open() {
                         let start = Some(self.ui_root.dropdown.first_node());
                         let bounds = Some(self.ui_root.dropdown.container_bounds());
@@ -954,14 +993,36 @@ impl Application {
                         ui.render_tree(&self.ui_root.tree);
                     }
                     ui.render(
-                        &gpu.device,
-                        &gpu.queue,
-                        &mut encoder,
-                        &surface_view,
-                        logical_w,
-                        logical_h,
-                        scale,
+                        &gpu.device, &gpu.queue, &mut encoder, &surface_view,
+                        logical_w, logical_h, scale,
                     );
+                }
+
+                // Pass 2: Layer bitmap textures (alpha-blend over track BGs)
+                if let Some(bitmap_gpu) = &mut self.layer_bitmap_gpu {
+                    let rects = self.ui_root.viewport.layer_bitmap_rects();
+                    if !rects.is_empty() {
+                        bitmap_gpu.render_layers(
+                            &gpu.device, &gpu.queue, &mut encoder, &surface_view,
+                            logical_w, logical_h, &rects,
+                        );
+                    }
+                }
+
+                // Pass 3: Playhead track-area line ONLY (on top of bitmap textures)
+                if let Some(ui) = &mut self.ui_renderer {
+                    if let Some(px) = self.ui_root.viewport.playhead_pixel() {
+                        let tr = self.ui_root.viewport.get_tracks_rect();
+                        ui.draw_rect(
+                            px - 1.0, tr.y,
+                            manifold_ui::color::PLAYHEAD_WIDTH, tr.height,
+                            manifold_ui::color::PLAYHEAD_RED.to_f32(),
+                        );
+                        ui.render(
+                            &gpu.device, &gpu.queue, &mut encoder, &surface_view,
+                            logical_w, logical_h, scale,
+                        );
+                    }
                 }
             }
 
@@ -1174,6 +1235,9 @@ impl ApplicationHandler for Application {
 
             // Create UI renderer (renders directly to surface in surface format)
             self.ui_renderer = Some(UIRenderer::new(&device, &queue, format));
+
+            // Create layer bitmap GPU (textured quad pipeline for per-layer bitmaps)
+            self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(&device, format));
 
             // Create generator renderer and compositor
             let output_w = 1920u32;

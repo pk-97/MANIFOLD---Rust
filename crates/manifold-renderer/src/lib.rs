@@ -14,3 +14,4 @@ pub mod effect_chain;
 pub mod effects;
 pub mod wet_dry_lerp;
 pub mod ui_renderer;
+pub mod layer_bitmap_gpu;

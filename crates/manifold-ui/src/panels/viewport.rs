@@ -121,6 +121,11 @@ pub struct TimelineViewportPanel {
 
     // Clip data
     clips: Vec<ViewportClip>,
+    clips_by_layer: Vec<Vec<ViewportClip>>,
+
+    // Per-layer bitmap renderers (None for group layers)
+    bitmap_renderers: Vec<Option<crate::bitmap_renderer::LayerBitmapRenderer>>,
+    render_scale: f32,
 
     // Playback state
     playhead_beat: f32,
@@ -139,10 +144,10 @@ pub struct TimelineViewportPanel {
     bg_panel_id: i32,
     ruler_bg_id: i32,
     playhead_ruler_id: i32,
-    playhead_track_id: i32,
+    // playhead_track_id: removed — rendered as overlay quad in app.rs
     insert_cursor_ruler_id: i32,
-    insert_cursor_track_id: i32,
-    selection_region_id: i32,
+    // insert_cursor_track_id: removed — painted into bitmap
+    // selection_region_id: removed — painted into bitmap
 
     // Export range
     export_in_beat: f32,
@@ -156,12 +161,9 @@ pub struct TimelineViewportPanel {
     // Node IDs — dynamic elements (rebuilt on scroll/zoom)
     ruler_tick_ids: Vec<i32>,
     ruler_label_ids: Vec<i32>,
-    grid_line_ids: Vec<i32>,
+    // grid_line_ids: removed — grid painted into bitmap
     track_bg_ids: Vec<i32>,
-    clip_bg_ids: Vec<i32>,
-    clip_label_ids: Vec<i32>,
-    clip_border_ids: Vec<i32>,
-    clip_trim_handle_ids: Vec<i32>,
+    // clip_bg_ids, clip_label_ids, clip_border_ids, clip_trim_handle_ids: removed — painted into bitmap
 
     // Node range
     first_node: usize,
@@ -196,6 +198,9 @@ impl TimelineViewportPanel {
             track_y_offsets: Vec::new(),
             total_tracks_height: 0.0,
             clips: Vec::new(),
+            clips_by_layer: Vec::new(),
+            bitmap_renderers: Vec::new(),
+            render_scale: 2.0, // default HiDPI (macOS Retina)
             playhead_beat: 0.0,
             insert_cursor_beat: 0.0,
             is_playing: false,
@@ -208,10 +213,7 @@ impl TimelineViewportPanel {
             bg_panel_id: -1,
             ruler_bg_id: -1,
             playhead_ruler_id: -1,
-            playhead_track_id: -1,
             insert_cursor_ruler_id: -1,
-            insert_cursor_track_id: -1,
-            selection_region_id: -1,
             export_in_beat: 0.0,
             export_out_beat: 0.0,
             export_range_id: -1,
@@ -219,12 +221,7 @@ impl TimelineViewportPanel {
             export_out_marker_id: -1,
             ruler_tick_ids: Vec::new(),
             ruler_label_ids: Vec::new(),
-            grid_line_ids: Vec::new(),
             track_bg_ids: Vec::new(),
-            clip_bg_ids: Vec::new(),
-            clip_label_ids: Vec::new(),
-            clip_border_ids: Vec::new(),
-            clip_trim_handle_ids: Vec::new(),
             first_node: 0,
             node_count: 0,
             drag_mode: ViewportDragMode::None,
@@ -287,6 +284,23 @@ impl TimelineViewportPanel {
             y += track.height;
         }
         self.total_tracks_height = y;
+
+        // Create/resize bitmap renderers (one per non-group layer)
+        self.bitmap_renderers.clear();
+        for (i, track) in self.tracks.iter().enumerate() {
+            if track.is_group || track.height <= 0.0 {
+                self.bitmap_renderers.push(None);
+            } else {
+                self.bitmap_renderers.push(Some(
+                    crate::bitmap_renderer::LayerBitmapRenderer::new(
+                        i,
+                        self.render_scale,
+                        track.height,
+                        CLIP_VERTICAL_PAD,
+                    ),
+                ));
+            }
+        }
     }
 
     /// Rebuild the CoordinateMapper's Y-layout from layer data.
@@ -302,7 +316,128 @@ impl TimelineViewportPanel {
     }
 
     pub fn set_clips(&mut self, clips: Vec<ViewportClip>) {
+        // Bucket clips by layer for per-layer bitmap rendering
+        self.clips_by_layer.clear();
+        self.clips_by_layer.resize(self.tracks.len(), Vec::new());
+        for clip in &clips {
+            if clip.layer_index < self.clips_by_layer.len() {
+                self.clips_by_layer[clip.layer_index].push(clip.clone());
+            }
+        }
         self.clips = clips;
+    }
+
+    pub fn set_render_scale(&mut self, scale: f32) {
+        self.render_scale = scale.max(1.0);
+        for renderer in &mut self.bitmap_renderers {
+            if let Some(r) = renderer {
+                r.set_render_scale(self.render_scale);
+            }
+        }
+    }
+
+    /// Playhead pixel X position in the tracks area (for overlay rendering in app.rs).
+    /// Returns None if the playhead is outside the visible viewport.
+    pub fn playhead_pixel(&self) -> Option<f32> {
+        let px = self.beat_to_pixel(self.playhead_beat);
+        if px >= self.tracks_rect.x && px <= self.tracks_rect.x_max() {
+            Some(px)
+        } else {
+            None
+        }
+    }
+
+    /// Tracks area rect (screen-space). Used by app.rs for overlay rendering.
+    pub fn get_tracks_rect(&self) -> Rect {
+        self.tracks_rect
+    }
+
+    /// Current hovered clip ID (for bitmap dirty-checking).
+    pub fn hovered_clip_id(&self) -> Option<&str> {
+        self.hovered_clip_id.as_deref()
+    }
+
+    /// Current selection region reference (for bitmap dirty-checking).
+    pub fn selection_region_ref(&self) -> Option<&SelectionRegion> {
+        self.selection_region.as_ref()
+    }
+
+    /// Current insert cursor beat (for bitmap painting).
+    pub fn insert_cursor_beat(&self) -> f32 {
+        self.insert_cursor_beat
+    }
+
+    /// Repaint all dirty layer bitmaps (CPU pixel painting).
+    /// Call once per frame before GPU upload.
+    pub fn repaint_dirty_layers(
+        &mut self,
+        state: &crate::bitmap_renderer::BitmapRepaintState,
+    ) {
+        let (min_beat, max_beat) = self.visible_beat_range();
+        let viewport_width_px = self.tracks_rect.width;
+        let time_sig = self.beats_per_bar;
+
+        for (i, renderer_opt) in self.bitmap_renderers.iter_mut().enumerate() {
+            if let Some(renderer) = renderer_opt {
+                let clips = if i < self.clips_by_layer.len() {
+                    &self.clips_by_layer[i]
+                } else {
+                    &[] as &[ViewportClip]
+                };
+                let is_muted = i < self.tracks.len() && self.tracks[i].is_muted;
+                renderer.repaint(
+                    clips,
+                    min_beat,
+                    max_beat,
+                    viewport_width_px,
+                    is_muted,
+                    time_sig,
+                    state,
+                );
+            }
+        }
+    }
+
+    /// Iterate layer bitmaps that were repainted (for GPU upload).
+    /// Yields (layer_index, pixels, tex_w, tex_h) for dirty layers.
+    pub fn dirty_layer_iter(&self) -> impl Iterator<Item = (usize, &[crate::node::Color32], usize, usize)> {
+        self.bitmap_renderers.iter().enumerate().filter_map(|(i, opt)| {
+            opt.as_ref().and_then(|r| {
+                if r.was_dirty() && r.tex_w() > 0 && r.tex_h() > 0 {
+                    Some((i, r.pixels(), r.tex_w(), r.tex_h()))
+                } else {
+                    None
+                }
+            })
+        })
+    }
+
+    /// Get screen-space rects for each layer bitmap texture (for GPU rendering).
+    /// Returns (layer_index, rect) for each active bitmap renderer.
+    pub fn layer_bitmap_rects(&self) -> Vec<(usize, Rect)> {
+        let mut rects = Vec::new();
+        for (i, renderer_opt) in self.bitmap_renderers.iter().enumerate() {
+            if renderer_opt.is_some() && i < self.tracks.len() {
+                let track_y = self.track_y(i);
+                let track_h = self.track_height(i);
+                // Only include layers that are visible in the viewport
+                if track_y + track_h >= self.tracks_rect.y
+                    && track_y < self.tracks_rect.y + self.tracks_rect.height
+                    && track_h > 0.0
+                {
+                    // Clamp to tracks rect bounds
+                    let y = track_y.max(self.tracks_rect.y);
+                    let y_end = (track_y + track_h).min(self.tracks_rect.y + self.tracks_rect.height);
+                    rects.push((i, Rect::new(
+                        self.tracks_rect.x,
+                        y,
+                        self.tracks_rect.width,
+                        y_end - y,
+                    )));
+                }
+            }
+        }
+        rects
     }
 
     pub fn set_zoom(&mut self, pixels_per_beat: f32) {
@@ -599,23 +734,12 @@ impl TimelineViewportPanel {
 
     // ── Sync methods ──────────────────────────────────────────────
 
-    /// Update playhead position in the tree without rebuilding.
-    pub fn sync_playhead(&self, tree: &mut UITree) {
-        let px = self.beat_to_pixel(self.playhead_beat);
-        let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();
-
-        if self.playhead_track_id >= 0 {
-            tree.set_visible(self.playhead_track_id as u32, in_view);
-            if in_view {
-                tree.set_bounds(
-                    self.playhead_track_id as u32,
-                    Rect::new(centered_line_x(px, PLAYHEAD_WIDTH), self.tracks_rect.y,
-                              PLAYHEAD_WIDTH, self.tracks_rect.height),
-                );
-            }
-        }
-
+    /// Update playhead ruler marker position without rebuilding.
+    /// Track-area playhead is rendered as overlay in app.rs.
+    fn sync_playhead_ruler(&self, tree: &mut UITree) {
         if self.playhead_ruler_id >= 0 {
+            let px = self.beat_to_pixel(self.playhead_beat);
+            let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();
             tree.set_visible(self.playhead_ruler_id as u32, in_view);
             if in_view {
                 tree.set_bounds(
@@ -627,23 +751,12 @@ impl TimelineViewportPanel {
         }
     }
 
-    /// Update insert cursor position without rebuilding.
-    pub fn sync_insert_cursor(&self, tree: &mut UITree) {
-        let px = self.beat_to_pixel(self.insert_cursor_beat);
-        let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();
-
-        if self.insert_cursor_track_id >= 0 {
-            tree.set_visible(self.insert_cursor_track_id as u32, in_view);
-            if in_view {
-                tree.set_bounds(
-                    self.insert_cursor_track_id as u32,
-                    Rect::new(centered_line_x(px, INSERT_CURSOR_WIDTH), self.tracks_rect.y,
-                              INSERT_CURSOR_WIDTH, self.tracks_rect.height),
-                );
-            }
-        }
-
+    /// Update insert cursor ruler marker position without rebuilding.
+    /// Track-area cursor is painted into bitmap.
+    fn sync_insert_cursor_ruler(&self, tree: &mut UITree) {
         if self.insert_cursor_ruler_id >= 0 {
+            let px = self.beat_to_pixel(self.insert_cursor_beat);
+            let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();
             tree.set_visible(self.insert_cursor_ruler_id as u32, in_view);
             if in_view {
                 let marker_s = color::INSERT_CURSOR_RULER_MARKER_SIZE;
@@ -735,33 +848,28 @@ impl Panel for TimelineViewportPanel {
         // Build track backgrounds
         self.build_track_backgrounds(tree);
 
-        // Build grid lines
-        self.build_grid_lines(tree);
+        // Grid lines: painted into per-layer bitmap (not UITree nodes)
+        // Clips: painted into per-layer bitmap (not UITree nodes)
+        // Selection region: painted into per-layer bitmap (not UITree nodes)
 
         // Build ruler ticks and labels
         self.build_ruler(tree);
 
-        // Build clips
-        self.build_clips(tree);
-
-        // Selection region overlay
-        self.build_selection_region(tree);
-
         // Export range markers
         self.build_export_markers(tree);
 
-        // Insert cursor (below playhead in draw order)
-        self.build_insert_cursor(tree);
+        // Insert cursor ruler marker only (track cursor painted into bitmap)
+        self.build_insert_cursor_ruler(tree);
 
-        // Playhead (on top of everything)
-        self.build_playhead(tree);
+        // Playhead ruler marker only (track playhead rendered as overlay in app.rs)
+        self.build_playhead_ruler(tree);
 
         self.node_count = tree.count() - self.first_node;
     }
 
     fn update(&mut self, tree: &mut UITree) {
-        self.sync_playhead(tree);
-        self.sync_insert_cursor(tree);
+        self.sync_playhead_ruler(tree);
+        self.sync_insert_cursor_ruler(tree);
     }
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
@@ -1068,8 +1176,12 @@ impl TimelineViewportPanel {
         let row_h = overview_rect.height / layer_count as f32;
         let palette = &color::LAYER_PALETTE;
 
-        // Clip miniatures
+        // Clip miniatures — cap to avoid thousands of nodes at low zoom.
+        // At 1258 clips, uncapped overview creates 1258 panel nodes.
+        const MAX_OVERVIEW_CLIPS: usize = 200;
+        let mut overview_count = 0;
         for clip in &self.clips {
+            if overview_count >= MAX_OVERVIEW_CLIPS { break; }
             let start_norm = clip.start_beat / max_beat;
             let end_norm = (clip.start_beat + clip.duration_beats) / max_beat;
             let x = overview_rect.x + start_norm * overview_rect.width;
@@ -1081,6 +1193,7 @@ impl TimelineViewportPanel {
             tree.add_panel(-1, x, y, w, row_h,
                 UIStyle { bg_color: clip_color, ..UIStyle::default() },
             );
+            overview_count += 1;
         }
 
         // Viewport indicator (semi-transparent blue showing visible portion)
@@ -1200,54 +1313,8 @@ impl TimelineViewportPanel {
         }
     }
 
-    fn build_grid_lines(&mut self, tree: &mut UITree) {
-        self.grid_line_ids.clear();
-        let (min_beat, max_beat) = self.visible_beat_range();
-        let subdiv = self.grid_subdivision();
-        let bpb = self.beats_per_bar as f32;
-
-        // Determine step size
-        let step = match subdiv {
-            GridSubdivision::Bar => bpb,
-            GridSubdivision::Beat => 1.0,
-            GridSubdivision::Eighth => 0.5,
-            GridSubdivision::Sixteenth => 0.25,
-        };
-
-        let start = (min_beat / step).floor() * step;
-        let mut beat = start;
-        let mut count = 0;
-
-        while beat <= max_beat && count < MAX_GRID_LINES {
-            let px = self.beat_to_pixel(beat);
-            if px >= self.tracks_rect.x && px <= self.tracks_rect.x_max() {
-                let is_bar = (beat % bpb).abs() < 0.001;
-                let is_beat = (beat % 1.0).abs() < 0.001;
-
-                let line_color = if is_bar {
-                    color::GRID_BAR_LINE
-                } else if is_beat {
-                    color::GRID_BEAT_LINE
-                } else if (beat * 2.0).fract().abs() < 0.01 {
-                    color::GRID_SUBDIVISION_LINE
-                } else {
-                    color::GRID_SIXTEENTH_LINE
-                };
-
-                // Bar lines are 2px wide, all others 1px.
-                // From Unity LayerBitmapRenderer.PaintGridLines.
-                let line_w = if is_bar { 2.0 } else { GRID_LINE_W };
-                let id = tree.add_panel(
-                    -1, px, self.tracks_rect.y,
-                    line_w, self.tracks_rect.height,
-                    UIStyle { bg_color: line_color, ..UIStyle::default() },
-                ) as i32;
-                self.grid_line_ids.push(id);
-                count += 1;
-            }
-            beat += step;
-        }
-    }
+    // build_grid_lines: REMOVED — grid lines are now painted into per-layer bitmaps
+    // by LayerBitmapRenderer.paint_grid_lines() (matching Unity exactly).
 
     fn build_ruler(&mut self, tree: &mut UITree) {
         self.ruler_tick_ids.clear();
@@ -1328,187 +1395,11 @@ impl TimelineViewportPanel {
         }
     }
 
-    fn build_clips(&mut self, tree: &mut UITree) {
-        self.clip_bg_ids.clear();
-        self.clip_label_ids.clear();
-        self.clip_border_ids.clear();
-        self.clip_trim_handle_ids.clear();
+    // build_clips: REMOVED — clips are now painted into per-layer bitmaps
+    // by LayerBitmapRenderer (matching Unity's LayerBitmapPainter.DrawClip exactly).
 
-        let (min_beat, max_beat) = self.visible_beat_range();
-        let mut count = 0;
-
-        for clip in &self.clips {
-            if count >= MAX_VISIBLE_CLIPS { break; }
-
-            let clip_end = clip.start_beat + clip.duration_beats;
-
-            // Skip clips outside visible range
-            if clip_end < min_beat || clip.start_beat > max_beat {
-                continue;
-            }
-
-            // Skip clips on non-existent layers
-            if clip.layer_index >= self.tracks.len() {
-                continue;
-            }
-
-            let track_y = self.track_y(clip.layer_index);
-            let track_h = self.track_height(clip.layer_index);
-
-            // Skip if track is off-screen vertically
-            if track_y + track_h < self.tracks_rect.y || track_y > self.tracks_rect.y_max() {
-                continue;
-            }
-
-            let x1 = self.beat_to_pixel(clip.start_beat).max(self.tracks_rect.x);
-            let x2 = self.beat_to_pixel(clip_end).min(self.tracks_rect.x_max());
-            let clip_w = x2 - x1;
-
-            if clip_w < 1.0 { continue; }
-
-            let raw_clip_y = track_y + CLIP_VERTICAL_PAD;
-            let raw_clip_h = track_h - CLIP_VERTICAL_PAD * 2.0;
-            // Clamp clip rect to tracks_rect bounds (prevent bleeding into video area)
-            let clip_y = raw_clip_y.max(self.tracks_rect.y);
-            let clip_bottom = (raw_clip_y + raw_clip_h).min(self.tracks_rect.y + self.tracks_rect.height);
-            let clip_h = clip_bottom - clip_y;
-            if clip_h <= 0.0 { continue; }
-
-            // Determine clip color
-            let is_selected = self.selected_clip_ids.contains(&clip.clip_id);
-            let is_hovered = self.hovered_clip_id.as_ref() == Some(&clip.clip_id);
-            let clip_color = get_clip_color(clip, is_selected, is_hovered);
-
-            // ── Clip rendering (matches Unity LayerBitmapRenderer.DrawClip) ──
-
-            // Determine border width: 2px when selected, 1px otherwise.
-            // From Unity DrawClip lines 72-77.
-            let border_w = if is_selected { 2.0 } else { 1.0 };
-
-            // Clip background with top/bottom borders always drawn.
-            // Left/right borders only when clip_w >= 12px (prevents "caterpillar" at low zoom).
-            let border_color = if is_selected { color::ACCENT_BLUE } else {
-                Color32::new(
-                    clip_color.r.saturating_sub(30),
-                    clip_color.g.saturating_sub(30),
-                    clip_color.b.saturating_sub(30),
-                    clip_color.a,
-                )
-            };
-            let bg_id = tree.add_button(
-                -1, x1, clip_y, clip_w, clip_h,
-                UIStyle {
-                    bg_color: clip_color,
-                    hover_bg_color: if is_selected { clip_color } else {
-                        Color32::new(
-                            clip_color.r.saturating_add(10),
-                            clip_color.g.saturating_add(10),
-                            clip_color.b.saturating_add(10),
-                            clip_color.a,
-                        )
-                    },
-                    pressed_bg_color: Color32::new(
-                        clip_color.r.saturating_sub(10),
-                        clip_color.g.saturating_sub(10),
-                        clip_color.b.saturating_sub(10),
-                        clip_color.a,
-                    ),
-                    corner_radius: CLIP_CORNER_RADIUS,
-                    border_color,
-                    border_width: border_w,
-                    ..UIStyle::default()
-                },
-                "",
-            ) as i32;
-            self.clip_bg_ids.push(bg_id);
-
-            // 1px dark separator at clip left edge (only when clip_w >= 4px).
-            // From Unity DrawClip line 67-68.
-            if clip_w >= 4.0 {
-                tree.add_panel(
-                    -1, x1, clip_y, 1.0, clip_h,
-                    UIStyle {
-                        bg_color: color::CLIP_SEPARATOR,
-                        ..UIStyle::default()
-                    },
-                );
-            }
-
-            // Clip name label (if wide enough)
-            if clip_w > CLIP_MIN_WIDTH_PX + CLIP_LABEL_PAD * 2.0 {
-                let label_x = x1 + CLIP_LABEL_PAD + 1.0; // past 1px separator
-                let label_w = clip_w - CLIP_LABEL_PAD * 2.0 - 1.0;
-                let text_color = if clip.is_generator {
-                    color::CLIP_LABEL_BG
-                } else {
-                    color::CLIP_LABEL_BG_HOVER
-                };
-
-                let label_id = tree.add_label(
-                    -1, label_x, clip_y + 2.0, label_w.max(1.0), clip_h - 4.0,
-                    &clip.name,
-                    UIStyle {
-                        text_color,
-                        font_size: FONT_SIZE,
-                        text_align: TextAlign::Left,
-                        ..UIStyle::default()
-                    },
-                ) as i32;
-                self.clip_label_ids.push(label_id);
-            }
-
-            // Trim hint indicators: 6px inset at each end on hover OR selected.
-            // Color: ACCENT_BLUE_DIM. From Unity DrawClip lines 82-91.
-            if (is_selected || is_hovered) && clip_w > 12.0 {
-                let hint_w = 6.0_f32.min(clip_w * 0.25);
-                let trim_style = UIStyle {
-                    bg_color: color::ACCENT_BLUE_DIM,
-                    ..UIStyle::default()
-                };
-
-                // Left trim hint
-                let left_id = tree.add_panel(
-                    -1, x1, clip_y, hint_w, clip_h, trim_style,
-                ) as i32;
-                self.clip_trim_handle_ids.push(left_id);
-
-                // Right trim hint
-                let right_id = tree.add_panel(
-                    -1, x2 - hint_w, clip_y, hint_w, clip_h, trim_style,
-                ) as i32;
-                self.clip_trim_handle_ids.push(right_id);
-            }
-
-            count += 1;
-        }
-    }
-
-    fn build_selection_region(&mut self, tree: &mut UITree) {
-        if let Some(ref sel) = self.selection_region {
-            let x1 = self.beat_to_pixel(sel.start_beat).max(self.tracks_rect.x);
-            let x2 = self.beat_to_pixel(sel.end_beat).min(self.tracks_rect.x_max());
-
-            let y1 = self.track_y(sel.start_layer);
-            let y2_layer = sel.end_layer.min(self.tracks.len().saturating_sub(1));
-            let y2 = self.track_y(y2_layer) + self.track_height(y2_layer);
-
-            if x2 > x1 && y2 > y1 {
-                self.selection_region_id = tree.add_panel(
-                    -1, x1, y1, x2 - x1, y2 - y1,
-                    UIStyle {
-                        bg_color: color::ACCENT_BLUE_SELECTION,
-                        border_color: color::ACCENT_BLUE,
-                        border_width: 1.0,
-                        ..UIStyle::default()
-                    },
-                ) as i32;
-            } else {
-                self.selection_region_id = -1;
-            }
-        } else {
-            self.selection_region_id = -1;
-        }
-    }
+    // build_selection_region: REMOVED — selection region is now painted into
+    // per-layer bitmaps by LayerBitmapRenderer (matching Unity exactly).
 
     fn build_export_markers(&mut self, tree: &mut UITree) {
         let has_range = self.export_in_beat < self.export_out_beat;
@@ -1561,21 +1452,12 @@ impl TimelineViewportPanel {
         }
     }
 
-    fn build_playhead(&mut self, tree: &mut UITree) {
+    /// Build playhead ruler marker only. Track-area playhead is rendered as
+    /// an overlay quad in app.rs (after bitmap textures).
+    fn build_playhead_ruler(&mut self, tree: &mut UITree) {
         let px = self.beat_to_pixel(self.playhead_beat);
         let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();
 
-        // Track playhead
-        self.playhead_track_id = tree.add_panel(
-            -1, centered_line_x(px, PLAYHEAD_WIDTH), self.tracks_rect.y,
-            PLAYHEAD_WIDTH, self.tracks_rect.height,
-            UIStyle { bg_color: color::PLAYHEAD_RED, ..UIStyle::default() },
-        ) as i32;
-        if !in_view {
-            tree.set_visible(self.playhead_track_id as u32, false);
-        }
-
-        // Ruler playhead
         self.playhead_ruler_id = tree.add_panel(
             -1, centered_line_x(px, PLAYHEAD_WIDTH), self.ruler_rect.y,
             PLAYHEAD_WIDTH, self.ruler_rect.height,
@@ -1586,21 +1468,12 @@ impl TimelineViewportPanel {
         }
     }
 
-    fn build_insert_cursor(&mut self, tree: &mut UITree) {
+    /// Build insert cursor ruler marker only. Track-area cursor is painted
+    /// into the per-layer bitmap by LayerBitmapRenderer.
+    fn build_insert_cursor_ruler(&mut self, tree: &mut UITree) {
         let px = self.beat_to_pixel(self.insert_cursor_beat);
         let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();
 
-        // Track cursor line
-        self.insert_cursor_track_id = tree.add_panel(
-            -1, centered_line_x(px, INSERT_CURSOR_WIDTH), self.tracks_rect.y,
-            INSERT_CURSOR_WIDTH, self.tracks_rect.height,
-            UIStyle { bg_color: color::INSERT_CURSOR_BLUE, ..UIStyle::default() },
-        ) as i32;
-        if !in_view {
-            tree.set_visible(self.insert_cursor_track_id as u32, false);
-        }
-
-        // Ruler marker (small triangle/rect)
         let marker_s = color::INSERT_CURSOR_RULER_MARKER_SIZE;
         self.insert_cursor_ruler_id = tree.add_panel(
             -1, px - marker_s * 0.5, self.ruler_rect.y + self.ruler_rect.height - marker_s,
@@ -1717,12 +1590,13 @@ mod tests {
         panel.set_clips(test_clips());
         panel.build(&mut tree, &layout);
 
-        // Should have clip nodes
-        assert!(!panel.clip_bg_ids.is_empty());
-        // Should have track backgrounds
+        // Clips and grid lines are painted into bitmaps, not UITree nodes.
+        // Track backgrounds should still exist as UITree nodes.
         assert!(!panel.track_bg_ids.is_empty());
-        // Should have grid lines
-        assert!(!panel.grid_line_ids.is_empty());
+        // Bitmap renderers should be created (one per non-group layer)
+        assert_eq!(panel.bitmap_renderers.len(), 2);
+        assert!(panel.bitmap_renderers[0].is_some());
+        assert!(panel.bitmap_renderers[1].is_some());
     }
 
     #[test]
@@ -1844,24 +1718,24 @@ mod tests {
     }
 
     #[test]
-    fn sync_playhead_moves_node() {
+    fn sync_playhead_ruler_moves_node() {
         let mut tree = UITree::new();
         let mut panel = TimelineViewportPanel::new();
         let layout = test_layout();
         panel.set_tracks(test_tracks());
         panel.build(&mut tree, &layout);
 
-        let original_bounds = tree.get_bounds(panel.playhead_track_id as u32);
+        let original_bounds = tree.get_bounds(panel.playhead_ruler_id as u32);
 
         panel.playhead_beat = 8.0;
-        panel.sync_playhead(&mut tree);
+        panel.sync_playhead_ruler(&mut tree);
 
-        let new_bounds = tree.get_bounds(panel.playhead_track_id as u32);
+        let new_bounds = tree.get_bounds(panel.playhead_ruler_id as u32);
         assert!(new_bounds.x != original_bounds.x);
     }
 
     #[test]
-    fn offscreen_clips_not_rendered() {
+    fn offscreen_clips_bucketed_but_not_rendered_as_nodes() {
         let mut tree = UITree::new();
         let mut panel = TimelineViewportPanel::new();
         let layout = test_layout();
@@ -1883,38 +1757,19 @@ mod tests {
         ]);
         panel.build(&mut tree, &layout);
 
-        // No clip nodes should be created for off-screen clips
-        assert!(panel.clip_bg_ids.is_empty());
-    }
-
-    #[test]
-    fn selection_region_renders() {
-        let mut tree = UITree::new();
-        let mut panel = TimelineViewportPanel::new();
-        let layout = test_layout();
-        panel.set_tracks(test_tracks());
-        panel.set_selection_region(Some(SelectionRegion {
-            start_beat: 0.0,
-            end_beat: 4.0,
-            start_layer: 0,
-            end_layer: 1,
-        }));
-        panel.build(&mut tree, &layout);
-
-        assert!(panel.selection_region_id >= 0);
+        // Clips are now painted into bitmaps, not UITree nodes.
+        // They should be bucketed by layer.
+        assert_eq!(panel.clips_by_layer[0].len(), 1);
     }
 
     #[test]
     fn clip_color_states() {
-        let clip = ViewportClip {
-            clip_id: "test".into(), layer_index: 0, start_beat: 0.0, duration_beats: 1.0,
-            name: "Test".into(), color: color::CLIP_NORMAL,
-            is_muted: false, is_locked: false, is_generator: false,
-        };
+        // Clip color testing now uses bitmap_painter::get_clip_color
+        use crate::bitmap_painter;
 
-        let normal = get_clip_color(&clip, false, false);
-        let selected = get_clip_color(&clip, true, false);
-        let hovered = get_clip_color(&clip, false, true);
+        let normal = bitmap_painter::get_clip_color(false, false, false, false, false);
+        let selected = bitmap_painter::get_clip_color(true, false, false, false, false);
+        let hovered = bitmap_painter::get_clip_color(false, true, false, false, false);
 
         assert_eq!(normal, color::CLIP_NORMAL);
         assert_eq!(selected, color::CLIP_SELECTED);
