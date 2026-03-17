@@ -1,21 +1,19 @@
-// Display shader for ComputeStrangeAttractor: decay + splat + tone mapping.
-// Reuses CPU trajectory integration; adds contrast, invert, tilt, splat size.
+// Display shader for ComputeStrangeAttractor.
+// Reads scatter density texture, applies extended Reinhard tone mapping.
+// Port of Unity GeneratorFluidParticleDisplay.shader (mono path only).
+//
+// Extended Reinhard: lum = x * (1 + x/9) / (1 + x)  where x = density * intensity * contrast
 
-struct Uniforms {
-    decay: f32,
-    brightness: f32,
-    particle_size: f32,
-    particle_count: f32,
-    texel_x: f32,
-    texel_y: f32,
+struct DisplayUniforms {
+    intensity: f32,
     contrast: f32,
     invert: f32,
+    uv_scale: f32,
 };
 
-@group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var state_tex: texture_2d<f32>;
-@group(0) @binding(2) var state_sampler: sampler;
-@group(0) @binding(3) var position_tex: texture_2d<f32>;
+@group(0) @binding(0) var<uniform> params: DisplayUniforms;
+@group(0) @binding(1) var t_density: texture_2d<f32>;
+@group(0) @binding(2) var s_density: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -34,37 +32,16 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let uv = in.uv;
+    // UV scale: >1 zooms in — Unity: uv = (i.uv - 0.5) / max(_UVScale, 0.001) + 0.5
+    let uv = (in.uv - 0.5) / max(params.uv_scale, 0.001) + 0.5;
 
-    // Decay previous state
-    let prev = textureSample(state_tex, state_sampler, uv);
-    var accum = prev.r * u.decay;
+    let density = textureSample(t_density, s_density, uv).r;
 
-    let count = i32(u.particle_count);
-    let r = u.particle_size * u.texel_x;
+    // Extended Reinhard: x * (1 + x/9) / (1 + x)
+    let x   = density * params.intensity * params.contrast;
+    var lum = x * (1.0 + x / 9.0) / (1.0 + x);
 
-    // Gaussian splat accumulation
-    for (var i = 0; i < count; i++) {
-        let pos = textureLoad(position_tex, vec2<i32>(i, 0), 0);
-        let px = pos.r;
-        let py = pos.g;
-
-        let dx = (uv.x - px) / r;
-        let dy = (uv.y - py) / r;
-        let d2 = dx * dx + dy * dy;
-
-        if d2 < 1.0 {
-            let falloff = (1.0 - d2);
-            accum += falloff * falloff * 0.12;
-        }
-    }
-
-    // Extended Reinhard tone mapping with contrast
-    let x_val = accum * u.brightness * u.contrast;
-    var lum = x_val * (1.0 + x_val / 9.0) / (1.0 + x_val);
-
-    // Invert
-    if u.invert > 0.5 {
+    if params.invert > 0.5 {
         lum = 1.0 - lum;
     }
 

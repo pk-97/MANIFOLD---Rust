@@ -1,150 +1,294 @@
-// ComputeStrangeAttractor: Extended CPU StrangeAttractor with more particles,
-// contrast/invert tone mapping, tilt, splat size, and diffusion params.
-// Full GPU compute version deferred to later pass.
+// ComputeStrangeAttractorGenerator — GPU compute port of Unity ComputeStrangeAttractorGenerator.
+//
+// Pipeline per frame:
+//   SeedKernel (on attractor type change) → CSMain (8-step RK2 ODE integration)
+//   → SplatKernel (atomic density scatter) → ResolveKernel (uint → float density)
+//   → Display pass (extended Reinhard tone mapping)
+//
+// Particle layout (48 bytes): float3 velocity = 3D attractor state;
+//                              float3 position.xy = projected UV (0-1).
+// MAX_PARTICLES = 2_000_000 matching Unity.
+// Active count: clamp(param * 1_000_000, 100_000, MAX_PARTICLES).
 
 use manifold_core::GeneratorType;
-use crate::blit::BlitPipeline;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
-use super::stateful_base::StatefulState;
+use crate::render_target::RenderTarget;
 
-// Parameter indices matching types.rs param_defs
-const TYPE: usize = 0;
-const CONTRAST: usize = 1;
-const CHAOS: usize = 2;
-const SPEED: usize = 3;
-const SCALE: usize = 4;
-// SNAP (index 5) handled at app layer
+// Parameter indices matching GeneratorDefinitionRegistry order
+const TYPE: usize      = 0;
+const CONTRAST: usize  = 1;
+const CHAOS: usize     = 2;
+const SPEED: usize     = 3;
+const SCALE: usize     = 4;
+const SNAP: usize      = 5;
 const PARTICLES: usize = 6;
 const DIFFUSION: usize = 7;
-const TILT: usize = 8;
+const TILT: usize      = 8;
 const SPLAT_SIZE: usize = 9;
-const INVERT: usize = 10;
+const INVERT: usize    = 10;
 
-const MAX_PARTICLES: usize = 2048;
-const RK2_STEPS: usize = 8;
-const STATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const MAX_PARTICLES: u32     = 2_000_000;
+const THREAD_GROUP_SIZE: u32 = 256;
+const ATTRACTOR_COUNT: u32   = 5;
 
-const CENTERS: [[f32; 3]; 5] = [
-    [0.0, 0.0, 25.0],
-    [0.0, 0.0, 2.0],
-    [0.0, 0.0, 0.5],
-    [0.0, 0.0, 0.0],
-    [0.0, 0.0, 0.0],
+/// 12 floats × 4 bytes = 48 bytes per particle.
+const PARTICLE_STRIDE: u64 = 48;
+
+/// Reference area for intensity normalization (1080p), matching Unity SCATTER_REFERENCE_AREA.
+const SCATTER_REFERENCE_AREA: f32 = 1920.0 * 1080.0;
+
+// Per-type attractor constants — matches Unity AttractorCenter/Scale/Dt lookup tables
+const ATTRACTOR_CENTERS: [[f32; 3]; 5] = [
+    [0.0, 0.0, 25.0],  // Lorenz
+    [0.0, 0.0, 2.0],   // Rossler
+    [0.0, 0.0, 0.5],   // Aizawa
+    [0.0, 0.0, 0.0],   // Thomas
+    [0.0, 0.0, 0.0],   // Halvorsen
 ];
-const SCALES: [f32; 5] = [25.0, 10.0, 1.2, 4.0, 12.0];
-const DTS: [f32; 5] = [0.003, 0.008, 0.008, 0.03, 0.004];
+const ATTRACTOR_SCALES: [f32; 5] = [25.0, 10.0, 1.2, 4.0, 12.0];
+const ATTRACTOR_DTS: [f32; 5]    = [0.003, 0.008, 0.008, 0.03, 0.004];
+
+fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
+    if ctx.param_count > idx as u32 { ctx.params[idx] } else { default }
+}
+
+// ── Uniform structs ──
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct AttractorUniforms {
-    decay: f32,
-    brightness: f32,
-    particle_size: f32,
-    particle_count: f32,
-    texel_x: f32,
-    texel_y: f32,
+struct SimUniforms {
+    time: f32,
+    delta_time: f32,
+    beat: f32,
+    particle_count: u32,
+    anim_speed: f32,
+    uv_scale: f32,
+    attractor_type: u32,
+    chaos: f32,
+    cam_angle: f32,
+    cam_tilt: f32,
+    aspect: f32,
+    diffusion: f32,
+    frame_count: u32,
+    attractor_dt: f32,
+    center_x: f32,
+    center_y: f32,
+    center_z: f32,
+    attractor_scale: f32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct SplatUniforms {
+    active_count: u32,
+    width: u32,
+    height: u32,
+    scaled_energy: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct ResolveUniforms {
+    width: u32,
+    height: u32,
+    _pad0: u32,
+    _pad1: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct DisplayUniforms {
+    intensity: f32,
     contrast: f32,
     invert: f32,
+    uv_scale: f32,
 }
 
 pub struct ComputeStrangeAttractorGenerator {
-    state: Option<StatefulState>,
-    pipeline: wgpu::RenderPipeline,
-    bgl: wgpu::BindGroupLayout,
-    uniform_buffer: wgpu::Buffer,
+    // Simulate pipeline — cs_main and seed_kernel from same shader module
+    sim_pipeline: wgpu::ComputePipeline,
+    seed_pipeline: wgpu::ComputePipeline,
+    sim_bgl: wgpu::BindGroupLayout,
+
+    // Scatter pipelines — reuse fluid_scatter.wgsl splat_main + resolve_main
+    splat_pipeline: wgpu::ComputePipeline,
+    splat_bgl: wgpu::BindGroupLayout,
+    resolve_pipeline: wgpu::ComputePipeline,
+    resolve_bgl: wgpu::BindGroupLayout,
+
+    // Display pipeline — fragment shader reads density texture
+    display_pipeline: wgpu::RenderPipeline,
+    display_bgl: wgpu::BindGroupLayout,
+
+    // Uniform buffers
+    sim_uniform_buf: wgpu::Buffer,
+    splat_uniform_buf: wgpu::Buffer,
+    resolve_uniform_buf: wgpu::Buffer,
+    display_uniform_buf: wgpu::Buffer,
+
     sampler: wgpu::Sampler,
-    blit: BlitPipeline,
-    trajectories: Vec<[f32; 3]>,
-    position_texture: Option<wgpu::Texture>,
-    position_view: Option<wgpu::TextureView>,
-    position_data: Vec<f32>,
-    current_type: i32,
-    active_particles: usize,
-    // Diffusion RNG state (deterministic per-particle)
-    diffusion_seed: u32,
+
+    // GPU resources (lazy-init at first render, rebuilt on resolution change)
+    particle_buffer: Option<wgpu::Buffer>,
+    scatter_accum: Option<wgpu::Buffer>,
+    density_rt: Option<RenderTarget>,
+
+    // State
+    scatter_width: u32,
+    scatter_height: u32,
+    frame_count: u32,
+    last_attractor_type: i32,
+    last_trigger_count: i32,
 }
 
 impl ComputeStrangeAttractorGenerator {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("ComputeAttractor Sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            ..Default::default()
+        // ── Simulate + Seed compute pipelines ──
+        let sim_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("AttractorSimulate Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("shaders/strange_attractor_simulate.wgsl").into(),
+            ),
         });
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("ComputeAttractor Shader"),
+        let sim_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("AttractorSimulate BGL"),
+            entries: &[
+                bgl_storage_rw(0, wgpu::ShaderStages::COMPUTE),
+                bgl_uniform(1, wgpu::ShaderStages::COMPUTE),
+            ],
+        });
+
+        let sim_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("AttractorSimulate Layout"),
+            bind_group_layouts: &[&sim_bgl],
+            immediate_size: 0,
+        });
+
+        let sim_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Attractor CSMain"),
+            layout: Some(&sim_layout),
+            module: &sim_shader,
+            entry_point: Some("cs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        let seed_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Attractor SeedKernel"),
+            layout: Some(&sim_layout),
+            module: &sim_shader,
+            entry_point: Some("seed_kernel"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        // ── Scatter pipelines — reuse fluid_scatter.wgsl ──
+        // splat_main uses @group(0), resolve_main uses @group(1).
+        // Each gets a separate pipeline layout with one BGL.
+        // At dispatch time both are bound at set_bind_group(0, ...) matching FluidSim pattern.
+        let scatter_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("AttractorScatter Shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("shaders/fluid_scatter.wgsl").into(),
+            ),
+        });
+
+        let splat_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("AttractorSplat BGL"),
+            entries: &[
+                bgl_storage_ro(0, wgpu::ShaderStages::COMPUTE),
+                bgl_storage_rw(1, wgpu::ShaderStages::COMPUTE),
+                bgl_uniform(2, wgpu::ShaderStages::COMPUTE),
+            ],
+        });
+
+        let splat_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("AttractorSplat Layout"),
+            bind_group_layouts: &[&splat_bgl],
+            immediate_size: 0,
+        });
+
+        let splat_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Attractor SplatKernel"),
+            layout: Some(&splat_layout),
+            module: &scatter_shader,
+            entry_point: Some("splat_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        let resolve_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("AttractorResolve BGL"),
+            entries: &[
+                bgl_storage_rw(0, wgpu::ShaderStages::COMPUTE),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                bgl_uniform(2, wgpu::ShaderStages::COMPUTE),
+            ],
+        });
+
+        let resolve_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("AttractorResolve Layout"),
+            bind_group_layouts: &[&resolve_bgl],
+            immediate_size: 0,
+        });
+
+        let resolve_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Attractor ResolveKernel"),
+            layout: Some(&resolve_layout),
+            module: &scatter_shader,
+            entry_point: Some("resolve_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        // ── Display pipeline ──
+        let display_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("AttractorDisplay Shader"),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("shaders/compute_strange_attractor.wgsl").into(),
             ),
         });
 
-        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("ComputeAttractor BGL"),
+        let display_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("AttractorDisplay BGL"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                bgl_uniform(0, wgpu::ShaderStages::FRAGMENT),
+                bgl_texture_filterable(1, wgpu::ShaderStages::FRAGMENT),
+                bgl_sampler(2, wgpu::ShaderStages::FRAGMENT),
             ],
         });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("ComputeAttractor Pipeline Layout"),
-            bind_group_layouts: &[&bgl],
+        let display_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("AttractorDisplay Layout"),
+            bind_group_layouts: &[&display_bgl],
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("ComputeAttractor Pipeline"),
-            layout: Some(&pipeline_layout),
+        let display_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("AttractorDisplay Pipeline"),
+            layout: Some(&display_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: &display_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: &display_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: STATE_FORMAT,
+                    format: target_format,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -160,321 +304,115 @@ impl ComputeStrangeAttractorGenerator {
             cache: None,
         });
 
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ComputeAttractor Uniforms"),
-            size: std::mem::size_of::<AttractorUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        // ── Uniform buffers ──
+        let sim_uniform_buf     = create_uniform_buf(device, std::mem::size_of::<SimUniforms>(),     "Attractor Sim Uniforms");
+        let splat_uniform_buf   = create_uniform_buf(device, std::mem::size_of::<SplatUniforms>(),   "Attractor Splat Uniforms");
+        let resolve_uniform_buf = create_uniform_buf(device, std::mem::size_of::<ResolveUniforms>(), "Attractor Resolve Uniforms");
+        let display_uniform_buf = create_uniform_buf(device, std::mem::size_of::<DisplayUniforms>(), "Attractor Display Uniforms");
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Attractor Sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
         });
-
-        let blit = BlitPipeline::new(device, target_format);
-
-        let mut trajectories = Vec::with_capacity(MAX_PARTICLES);
-        for i in 0..MAX_PARTICLES {
-            let fi = i as f32;
-            let hash = ((fi * 127.1).sin() * 43758.5453).fract();
-            let hash2 = ((fi * 269.5).sin() * 43758.5453).fract();
-            let hash3 = ((fi * 419.2).sin() * 43758.5453).fract();
-            trajectories.push([
-                CENTERS[0][0] + (hash - 0.5) * 0.1,
-                CENTERS[0][1] + (hash2 - 0.5) * 0.1,
-                CENTERS[0][2] + (hash3 - 0.5) * 0.1,
-            ]);
-        }
-
-        let position_data = vec![0.0f32; MAX_PARTICLES * 4];
 
         Self {
-            state: None,
-            pipeline,
-            bgl,
-            uniform_buffer,
+            sim_pipeline,
+            seed_pipeline,
+            sim_bgl,
+            splat_pipeline,
+            splat_bgl,
+            resolve_pipeline,
+            resolve_bgl,
+            display_pipeline,
+            display_bgl,
+            sim_uniform_buf,
+            splat_uniform_buf,
+            resolve_uniform_buf,
+            display_uniform_buf,
             sampler,
-            blit,
-            trajectories,
-            position_texture: None,
-            position_view: None,
-            position_data,
-            current_type: 0,
-            active_particles: 500,
-            diffusion_seed: 0,
+            particle_buffer: None,
+            scatter_accum: None,
+            density_rt: None,
+            scatter_width: 0,
+            scatter_height: 0,
+            frame_count: 0,
+            last_attractor_type: -1,
+            last_trigger_count: -1,
         }
     }
 
-    fn ensure_state(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        let iw = (width / 2).max(1);
-        let ih = (height / 2).max(1);
-        if self.state.is_none() {
-            self.state = Some(StatefulState::new(
-                device, iw, ih, STATE_FORMAT, "ComputeAttractor",
+    fn active_particle_count(ctx: &GeneratorContext) -> u32 {
+        let millions = param(ctx, PARTICLES, 0.5);
+        ((millions * 1_000_000.0) as u32).clamp(100_000, MAX_PARTICLES)
+    }
+
+    /// Ensure GPU resources are allocated. No-ops if dimensions unchanged.
+    fn ensure_resources(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        // Scatter resolution: half of output, matching Unity InternalResolutionScale = 0.5
+        let sw = (width / 2).max(16);
+        let sh = (height / 2).max(16);
+
+        // Particle buffer — allocated once, resolution-independent
+        if self.particle_buffer.is_none() {
+            self.particle_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Attractor Particles"),
+                size: MAX_PARTICLES as u64 * PARTICLE_STRIDE,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+        }
+
+        // Scatter resources — rebuilt on resolution change
+        if self.scatter_accum.is_none() || self.scatter_width != sw || self.scatter_height != sh {
+            self.scatter_accum = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Attractor ScatterAccum"),
+                size: (sw * sh) as u64 * std::mem::size_of::<u32>() as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            self.density_rt = Some(RenderTarget::new(
+                device, sw, sh,
+                wgpu::TextureFormat::Rgba16Float,
+                "Attractor DensityRT",
             ));
+            self.scatter_width  = sw;
+            self.scatter_height = sh;
         }
     }
 
-    fn ensure_position_texture(&mut self, device: &wgpu::Device) {
-        if self.position_texture.is_some() {
-            return;
-        }
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("ComputeAttractor Positions"),
-            size: wgpu::Extent3d {
-                width: MAX_PARTICLES as u32,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        self.position_texture = Some(tex);
-        self.position_view = Some(view);
-    }
-
-    fn reinit_trajectories(&mut self, attractor_type: i32) {
-        let idx = (attractor_type as usize).min(4);
-        let center = CENTERS[idx];
-        for i in 0..MAX_PARTICLES {
-            let fi = i as f32;
-            let hash = ((fi * 127.1).sin() * 43758.5453).fract();
-            let hash2 = ((fi * 269.5).sin() * 43758.5453).fract();
-            let hash3 = ((fi * 419.2).sin() * 43758.5453).fract();
-            self.trajectories[i] = [
-                center[0] + (hash - 0.5) * 0.1,
-                center[1] + (hash2 - 0.5) * 0.1,
-                center[2] + (hash3 - 0.5) * 0.1,
-            ];
-        }
-    }
-
-    // Deterministic pseudo-random float in [-1, 1]
-    fn next_rand(&mut self) -> f32 {
-        self.diffusion_seed = self.diffusion_seed.wrapping_mul(1103515245).wrapping_add(12345);
-        (self.diffusion_seed as f32 / u32::MAX as f32) * 2.0 - 1.0
-    }
-
-    fn advance_trajectories(&mut self, attractor_type: i32, chaos: f32, speed: f32, diffusion: f32) {
-        let idx = (attractor_type as usize).min(4);
-        let base_dt = DTS[idx] * speed;
-
-        for i in 0..self.active_particles {
-            let mut p = self.trajectories[i];
-
-            for _ in 0..RK2_STEPS {
-                let dp = ode(attractor_type, p, chaos);
-                let mid = [
-                    p[0] + dp[0] * base_dt * 0.5,
-                    p[1] + dp[1] * base_dt * 0.5,
-                    p[2] + dp[2] * base_dt * 0.5,
-                ];
-                let dp2 = ode(attractor_type, mid, chaos);
-                p = [
-                    p[0] + dp2[0] * base_dt,
-                    p[1] + dp2[1] * base_dt,
-                    p[2] + dp2[2] * base_dt,
-                ];
-
-                // Diffusion: random displacement
-                if diffusion > 0.0 {
-                    p[0] += self.next_rand() * diffusion;
-                    p[1] += self.next_rand() * diffusion;
-                    p[2] += self.next_rand() * diffusion;
-                }
-
-                let mag2 = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
-                if mag2 > 10000.0 {
-                    let s = 100.0 / mag2.sqrt();
-                    p[0] *= s;
-                    p[1] *= s;
-                    p[2] *= s;
-                }
-            }
-
-            self.trajectories[i] = p;
-        }
-    }
-
-    fn project_and_upload(
-        &mut self,
+    fn write_sim_uniforms(
+        &self,
         queue: &wgpu::Queue,
-        attractor_type: i32,
         time: f32,
-        scale_param: f32,
-        tilt: f32,
+        delta_time: f32,
+        beat: f32,
+        particle_count: u32,
+        anim_speed: f32,
+        uv_scale: f32,
+        attractor_type: u32,
+        chaos: f32,
+        cam_angle: f32,
+        cam_tilt: f32,
+        aspect: f32,
+        diffusion: f32,
+        frame_count: u32,
+        attractor_dt: f32,
+        center: [f32; 3],
+        attractor_scale: f32,
     ) {
-        let idx = (attractor_type as usize).min(4);
-        let center = CENTERS[idx];
-        let att_scale = SCALES[idx];
-        let uv_scale = if scale_param > 0.0 { 1.0 / scale_param } else { 1.0 };
-
-        let cam_angle = time * 0.3;
-        let cam_dist = att_scale * 2.5;
-        let cam_x = cam_dist * cam_angle.cos();
-        let cam_z_offset = cam_dist * cam_angle.sin();
-        let cam_y = att_scale * tilt; // Tilt param replaces hardcoded 0.5
-
-        let cam_pos = [cam_x + center[0], cam_y + center[1], cam_z_offset + center[2]];
-
-        let fwd = [
-            center[0] - cam_pos[0],
-            center[1] - cam_pos[1],
-            center[2] - cam_pos[2],
-        ];
-        let fwd_len = (fwd[0] * fwd[0] + fwd[1] * fwd[1] + fwd[2] * fwd[2]).sqrt();
-        let fwd = [fwd[0] / fwd_len, fwd[1] / fwd_len, fwd[2] / fwd_len];
-
-        let up = [0.0f32, 1.0, 0.0];
-        let right = [
-            fwd[1] * up[2] - fwd[2] * up[1],
-            fwd[2] * up[0] - fwd[0] * up[2],
-            fwd[0] * up[1] - fwd[1] * up[0],
-        ];
-        let right_len = (right[0] * right[0] + right[1] * right[1] + right[2] * right[2]).sqrt();
-        let right = if right_len > 0.001 {
-            [right[0] / right_len, right[1] / right_len, right[2] / right_len]
-        } else {
-            [1.0, 0.0, 0.0]
+        let u = SimUniforms {
+            time, delta_time, beat, particle_count, anim_speed, uv_scale,
+            attractor_type, chaos, cam_angle, cam_tilt, aspect, diffusion,
+            frame_count, attractor_dt,
+            center_x: center[0], center_y: center[1], center_z: center[2],
+            attractor_scale,
         };
-
-        let actual_up = [
-            right[1] * fwd[2] - right[2] * fwd[1],
-            right[2] * fwd[0] - right[0] * fwd[2],
-            right[0] * fwd[1] - right[1] * fwd[0],
-        ];
-
-        let fov_scale = 1.0 / (0.5f32).tan();
-
-        for i in 0..self.active_particles {
-            let p = self.trajectories[i];
-            let rel = [
-                p[0] - cam_pos[0],
-                p[1] - cam_pos[1],
-                p[2] - cam_pos[2],
-            ];
-
-            let z = rel[0] * fwd[0] + rel[1] * fwd[1] + rel[2] * fwd[2];
-            if z < 0.01 {
-                self.position_data[i * 4] = -10.0;
-                self.position_data[i * 4 + 1] = -10.0;
-                self.position_data[i * 4 + 2] = 0.0;
-                self.position_data[i * 4 + 3] = 0.0;
-                continue;
-            }
-
-            let x = rel[0] * right[0] + rel[1] * right[1] + rel[2] * right[2];
-            let y = rel[0] * actual_up[0] + rel[1] * actual_up[1] + rel[2] * actual_up[2];
-
-            let proj_x = (x / z) * fov_scale * uv_scale;
-            let proj_y = (y / z) * fov_scale * uv_scale;
-
-            self.position_data[i * 4] = proj_x * 0.5 + 0.5;
-            self.position_data[i * 4 + 1] = 0.5 - proj_y * 0.5;
-            self.position_data[i * 4 + 2] = 0.0;
-            self.position_data[i * 4 + 3] = 0.0;
-        }
-
-        // Zero out remaining positions
-        for i in self.active_particles..MAX_PARTICLES {
-            self.position_data[i * 4] = -10.0;
-            self.position_data[i * 4 + 1] = -10.0;
-            self.position_data[i * 4 + 2] = 0.0;
-            self.position_data[i * 4 + 3] = 0.0;
-        }
-
-        if let Some(ref tex) = self.position_texture {
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: tex,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                bytemuck::cast_slice(&self.position_data),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(MAX_PARTICLES as u32 * 16),
-                    rows_per_image: None,
-                },
-                wgpu::Extent3d {
-                    width: MAX_PARTICLES as u32,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
+        queue.write_buffer(&self.sim_uniform_buf, 0, bytemuck::bytes_of(&u));
     }
-}
-
-// ── ODE systems (same as StrangeAttractor) ──
-
-fn ode(attractor_type: i32, p: [f32; 3], chaos: f32) -> [f32; 3] {
-    match attractor_type {
-        0 => lorenz(p, chaos),
-        1 => rossler(p, chaos),
-        2 => aizawa(p, chaos),
-        3 => thomas(p, chaos),
-        4 => halvorsen(p, chaos),
-        _ => lorenz(p, chaos),
-    }
-}
-
-fn lorenz(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let sigma = 10.0 + chaos * 5.0;
-    let rho = 28.0 + chaos * 10.0;
-    let beta = 8.0 / 3.0;
-    [
-        sigma * (p[1] - p[0]),
-        p[0] * (rho - p[2]) - p[1],
-        p[0] * p[1] - beta * p[2],
-    ]
-}
-
-fn rossler(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let a = 0.2 + chaos * 0.15;
-    let b = 0.2;
-    let c = 5.7 + chaos * 3.0;
-    [
-        -(p[1] + p[2]),
-        p[0] + a * p[1],
-        b + p[2] * (p[0] - c),
-    ]
-}
-
-fn aizawa(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let a = 0.95;
-    let b = 0.7;
-    let c = 0.6;
-    let d = 3.5 + chaos * 1.5;
-    let e = 0.25;
-    let f = 0.1;
-    [
-        (p[2] - b) * p[0] - d * p[1],
-        d * p[0] + (p[2] - b) * p[1],
-        c + a * p[2] - p[2].powi(3) / 3.0
-            - (p[0] * p[0] + p[1] * p[1]) * (1.0 + e * p[2])
-            + f * p[2] * p[0].powi(3),
-    ]
-}
-
-fn thomas(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let b = 0.208186 + chaos * 0.1;
-    [
-        p[1].sin() - b * p[0],
-        p[2].sin() - b * p[1],
-        p[0].sin() - b * p[2],
-    ]
-}
-
-fn halvorsen(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let a = 1.89 + chaos * 0.5;
-    [
-        -a * p[0] - 4.0 * p[1] - 4.0 * p[2] - p[1] * p[1],
-        -a * p[1] - 4.0 * p[2] - 4.0 * p[0] - p[2] * p[2],
-        -a * p[2] - 4.0 * p[0] - 4.0 * p[1] - p[0] * p[0],
-    ]
 }
 
 impl Generator for ComputeStrangeAttractorGenerator {
@@ -490,88 +428,213 @@ impl Generator for ComputeStrangeAttractorGenerator {
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
     ) -> f32 {
-        let iw = (ctx.width / 2).max(1);
-        let ih = (ctx.height / 2).max(1);
-        self.ensure_state(device, iw, ih);
-        self.ensure_position_texture(device);
+        self.ensure_resources(device, ctx.width, ctx.height);
 
-        let attractor_type = if ctx.param_count > TYPE as u32 {
-            ctx.params[TYPE].round() as i32
-        } else { 0 };
-        let contrast = if ctx.param_count > CONTRAST as u32 { ctx.params[CONTRAST] } else { 3.5 };
-        let chaos = if ctx.param_count > CHAOS as u32 { ctx.params[CHAOS] } else { 0.0 };
-        let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 1.0 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
-        let particles_param = if ctx.param_count > PARTICLES as u32 { ctx.params[PARTICLES] } else { 0.5 };
-        let diffusion = if ctx.param_count > DIFFUSION as u32 { ctx.params[DIFFUSION] } else { 0.0 };
-        let tilt = if ctx.param_count > TILT as u32 { ctx.params[TILT] } else { 0.3 };
-        let splat_size = if ctx.param_count > SPLAT_SIZE as u32 { ctx.params[SPLAT_SIZE] } else { 3.0 };
-        let invert = if ctx.param_count > INVERT as u32 { ctx.params[INVERT] } else { 0.0 };
+        // ── Resolve parameters ──
+        let snap     = param(ctx, SNAP, 0.0);
+        let trigger  = ctx.trigger_count as i32;
 
-        // Particles param: 0.1-2.0 maps to 100-2000 particles
-        self.active_particles = ((particles_param * 1000.0) as usize).clamp(100, MAX_PARTICLES);
+        // SNAP cycling: attractor type advances on each trigger (Unity lines 90-111)
+        let attractor_type = if snap > 0.5 {
+            (trigger as u32) % ATTRACTOR_COUNT
+        } else {
+            let raw = param(ctx, TYPE, 0.0).round() as i32;
+            (raw.clamp(0, ATTRACTOR_COUNT as i32 - 1)) as u32
+        };
 
-        if attractor_type != self.current_type {
-            self.reinit_trajectories(attractor_type);
-            self.current_type = attractor_type;
+        let chaos      = param(ctx, CHAOS, 0.0);
+        let anim_speed = param(ctx, SPEED, 1.0);
+        let scale      = param(ctx, SCALE, 1.0);
+        let diffusion  = param(ctx, DIFFUSION, 0.0);
+        let tilt       = param(ctx, TILT, 0.3);
+        let splat_size = param(ctx, SPLAT_SIZE, 3.0);
+        let contrast   = param(ctx, CONTRAST, 3.5);
+        let invert     = param(ctx, INVERT, 0.0);
+
+        let active_count  = Self::active_particle_count(ctx);
+        let idx           = (attractor_type as usize).min(4);
+        let center        = ATTRACTOR_CENTERS[idx];
+        let att_scale     = ATTRACTOR_SCALES[idx];
+        let att_dt        = ATTRACTOR_DTS[idx] * anim_speed;
+        let uv_scale      = if scale > 0.0 { 1.0 / scale } else { 1.0 };
+        let aspect        = ctx.width as f32 / ctx.height.max(1) as f32;
+        // cam_angle = time * animSpeed * 0.25 (Unity line 123)
+        let cam_angle     = ctx.time * anim_speed * 0.25;
+        let sw            = self.scatter_width;
+        let sh            = self.scatter_height;
+
+        let particle_buffer = self.particle_buffer.as_ref().unwrap();
+        let scatter_accum   = self.scatter_accum.as_ref().unwrap();
+        let density_rt      = self.density_rt.as_ref().unwrap();
+
+        // ── SeedKernel on attractor type change (Unity lines 133-137) ──
+        if attractor_type as i32 != self.last_attractor_type {
+            // Seed with cam_angle=0, cam_tilt=0.3, uv_scale=1.0, chaos=0.0 (Unity DispatchSeedKernel)
+            self.write_sim_uniforms(
+                queue,
+                ctx.time, ctx.dt, ctx.beat,
+                active_count,
+                anim_speed, 1.0,           // uv_scale = 1.0 for seed
+                attractor_type,
+                0.0, 0.0, 0.3,             // chaos=0, cam_angle=0, cam_tilt=0.3
+                aspect, 0.0,               // diffusion=0
+                self.frame_count,
+                ATTRACTOR_DTS[idx],        // no animSpeed multiplier for seed
+                center, att_scale,
+            );
+
+            let seed_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Attractor Seed BG"),
+                layout: &self.sim_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: particle_buffer.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: self.sim_uniform_buf.as_entire_binding() },
+                ],
+            });
+
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Attractor SeedKernel"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.seed_pipeline);
+                pass.set_bind_group(0, &seed_bg, &[]);
+                let groups = (active_count + THREAD_GROUP_SIZE - 1) / THREAD_GROUP_SIZE;
+                pass.dispatch_workgroups(groups, 1, 1);
+            }
+
+            self.last_attractor_type = attractor_type as i32;
         }
 
-        self.advance_trajectories(attractor_type, chaos, speed, diffusion);
-        self.project_and_upload(queue, attractor_type, ctx.time, scale, tilt);
+        if trigger != self.last_trigger_count {
+            self.last_trigger_count = trigger;
+        }
 
-        let state = self.state.as_mut().unwrap();
-        let texel_x = 1.0 / iw as f32;
-        let texel_y = 1.0 / ih as f32;
+        // ── Phase 1: Simulate (CSMain) ──
+        self.write_sim_uniforms(
+            queue,
+            ctx.time, ctx.dt, ctx.beat,
+            active_count,
+            anim_speed, uv_scale,
+            attractor_type,
+            chaos, cam_angle, tilt,
+            aspect, diffusion,
+            self.frame_count,
+            att_dt,
+            center, att_scale,
+        );
 
-        // Trail decay: 0.98 is a good default for longer trails with more particles
-        let decay = 0.985;
+        let sim_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Attractor Sim BG"),
+            layout: &self.sim_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: particle_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: self.sim_uniform_buf.as_entire_binding() },
+            ],
+        });
 
-        let uniforms = AttractorUniforms {
-            decay,
-            brightness: 2.0,
-            particle_size: splat_size,
-            particle_count: self.active_particles as f32,
-            texel_x,
-            texel_y,
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Attractor CSMain"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.sim_pipeline);
+            pass.set_bind_group(0, &sim_bg, &[]);
+            let groups = (active_count + THREAD_GROUP_SIZE - 1) / THREAD_GROUP_SIZE;
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+
+        // ── Phase 2: Scatter (SplatKernel) ──
+        // Energy normalized by particle count (1M reference) — Unity DispatchScatter lines 473-474
+        let energy        = 0.005 * splat_size / 3.0 * (1_000_000.0 / active_count as f32);
+        let scaled_energy = (energy * 4096.0 + 0.5) as u32;
+
+        queue.write_buffer(&self.splat_uniform_buf, 0, bytemuck::bytes_of(&SplatUniforms {
+            active_count,
+            width: sw,
+            height: sh,
+            scaled_energy,
+        }));
+
+        let splat_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Attractor Splat BG"),
+            layout: &self.splat_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: particle_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: scatter_accum.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: self.splat_uniform_buf.as_entire_binding() },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Attractor SplatKernel"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.splat_pipeline);
+            pass.set_bind_group(0, &splat_bg, &[]);
+            let groups = (active_count + THREAD_GROUP_SIZE - 1) / THREAD_GROUP_SIZE;
+            pass.dispatch_workgroups(groups, 1, 1);
+        }
+
+        // ── Phase 3: Resolve (ResolveKernel) ──
+        queue.write_buffer(&self.resolve_uniform_buf, 0, bytemuck::bytes_of(&ResolveUniforms {
+            width: sw, height: sh, _pad0: 0, _pad1: 0,
+        }));
+
+        let resolve_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Attractor Resolve BG"),
+            layout: &self.resolve_bgl,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: scatter_accum.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&density_rt.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: self.resolve_uniform_buf.as_entire_binding() },
+            ],
+        });
+
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Attractor ResolveKernel"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.resolve_pipeline);
+            pass.set_bind_group(0, &resolve_bg, &[]);
+            let gx = (sw + 15) / 16;
+            let gy = (sh + 15) / 16;
+            pass.dispatch_workgroups(gx, gy, 1);
+        }
+
+        // ── Phase 4: Display pass — extended Reinhard tone mapping ──
+        // Normalize intensity by density buffer area (Unity lines 156-157)
+        let area_scale = (sw * sh) as f32 / SCATTER_REFERENCE_AREA;
+        let intensity  = 3.0 * area_scale;
+
+        queue.write_buffer(&self.display_uniform_buf, 0, bytemuck::bytes_of(&DisplayUniforms {
+            intensity,
             contrast,
             invert,
-        };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+            uv_scale: scale,  // display uses raw scale, not 1/scale
+        }));
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ComputeAttractor BG"),
-            layout: &self.bgl,
+        let display_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Attractor Display BG"),
+            layout: &self.display_bgl,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(state.read_view()),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(
-                        self.position_view.as_ref().unwrap(),
-                    ),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: self.display_uniform_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&density_rt.view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
             ],
         });
 
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("ComputeAttractor Splat Pass"),
+                label: Some("Attractor Display"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: state.write_view(),
+                    view: target,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -580,22 +643,90 @@ impl Generator for ComputeStrangeAttractorGenerator {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_pipeline(&self.display_pipeline);
+            pass.set_bind_group(0, &display_bg, &[]);
             pass.draw(0..3, 0..1);
         }
 
-        state.swap();
-        self.blit.blit(device, encoder, state.read_view(), target);
-
+        self.frame_count += 1;
         ctx.anim_progress
     }
 
-    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        let iw = (width / 2).max(1);
-        let ih = (height / 2).max(1);
-        if let Some(ref mut state) = self.state {
-            state.resize(device, iw, ih);
-        }
+    fn resize(&mut self, _device: &wgpu::Device, _width: u32, _height: u32) {
+        // Force scatter resource rebuild on next render
+        self.scatter_width  = 0;
+        self.scatter_height = 0;
     }
+}
+
+// ── BGL helpers — matching fluid_simulation.rs pattern ──
+
+fn bgl_uniform(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn bgl_storage_rw(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: false },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn bgl_storage_ro(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+fn bgl_texture_filterable(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
+}
+
+fn bgl_sampler(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    }
+}
+
+fn create_uniform_buf(device: &wgpu::Device, size: usize, label: &str) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: size as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
 }
