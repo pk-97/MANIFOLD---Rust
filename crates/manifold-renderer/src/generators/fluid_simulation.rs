@@ -816,8 +816,9 @@ impl Generator for FluidSimulationGenerator {
 
         if needs_reinit {
             self.init_resources(device, queue, ctx.width, ctx.height, desired_count, density_res);
-            // Seed particles on first init (Unity: InitParticles fills NativeArray, then uploads)
-            self.dispatch_seed(queue, encoder, device, 0, ctx.trigger_count);
+            // Seed particles on first init (Unity: InitParticles fills uniform random positions)
+            // Pattern index 255 hits the default branch = uniform random (matching Unity's CPU init)
+            self.dispatch_seed(queue, encoder, device, 255, 42);
             eprintln!("[FluidSim] init: active_count={} scatter={}x{} density_res={}",
                 desired_count, self.scatter_width, self.scatter_height, density_res);
         }
