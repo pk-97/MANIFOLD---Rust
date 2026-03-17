@@ -812,6 +812,8 @@ impl Generator for FluidSimulationGenerator {
 
         if needs_reinit {
             self.init_resources(device, queue, ctx.width, ctx.height, desired_count, density_res);
+            // Seed particles on first init (Unity: InitParticles fills NativeArray, then uploads)
+            self.dispatch_seed(queue, encoder, device, 0, ctx.trigger_count);
         }
 
         let sw = self.scatter_width;
@@ -922,6 +924,10 @@ impl Generator for FluidSimulationGenerator {
         let particle_buffer = self.particle_buffer.as_ref().unwrap();
         let scatter_accum = self.scatter_accum.as_ref().unwrap();
 
+        // Clear scatter accum to zero before each frame's splat
+        // (atomicAdd compounds; must reset per-frame)
+        encoder.clear_buffer(scatter_accum, 0, None);
+
         let splat_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim Splat BG"),
             layout: &self.splat_bgl,
@@ -971,6 +977,10 @@ impl Generator for FluidSimulationGenerator {
         // ================================================================
 
         if color_mode > 0 {
+            // Clear color accum before splat
+            let color_accum = self.color_accum.as_ref().unwrap();
+            encoder.clear_buffer(color_accum, 0, None);
+
             let splat_color_uniforms = SplatColorUniforms {
                 active_count,
                 width: sw,
