@@ -1077,6 +1077,19 @@ impl Application {
                         );
                     }
                 }
+
+                // Pass 4: Dropdown overlay — renders ON TOP of layer bitmaps and playhead.
+                // Must be a separate pass so dropdowns aren't occluded by bitmap textures.
+                if self.ui_root.dropdown.is_open() {
+                    if let Some(ui) = &mut self.ui_renderer {
+                        let start = self.ui_root.dropdown.first_node();
+                        ui.render_overlay(&self.ui_root.tree, start);
+                        ui.render(
+                            &gpu.device, &gpu.queue, &mut encoder, &surface_view,
+                            logical_w, logical_h, scale,
+                        );
+                    }
+                }
             }
 
             gpu.queue.submit(std::iter::once(encoder.finish()));

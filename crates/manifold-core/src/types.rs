@@ -1091,17 +1091,24 @@ impl ResolutionPreset {
         }
     }
 
+    /// Short label for footer display. Matches Unity ProjectSettings.GetResolutionLabel().
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::HD720p => "720p",
             Self::FHD1080p => "1080p",
             Self::QHD1440p => "1440p",
             Self::UHD4K => "4K",
-            Self::Square1080 => "1080×1080",
-            Self::Portrait720 => "720×1280",
-            Self::Portrait1080 => "1080×1920",
-            Self::Portrait1440 => "1440×2560",
+            Self::Square1080 => "1080sq",
+            Self::Portrait720 => "720v",
+            Self::Portrait1080 => "1080v",
+            Self::Portrait1440 => "1440v",
         }
+    }
+
+    /// Dropdown label with dimensions. Matches Unity: "{label}  ({w}x{h})".
+    pub fn dropdown_label(&self) -> String {
+        let (w, h) = self.dimensions();
+        format!("{}  ({}x{})", self.display_name(), w, h)
     }
 
     pub fn from_index(i: usize) -> Option<Self> {

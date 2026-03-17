@@ -371,8 +371,8 @@ impl UIRenderer {
     /// - `overlay_bounds`: the dropdown container rect
     ///
     /// Base text overlapping `overlay_bounds` is hidden via zero-area clip.
-    /// Dropdown text renders normally. ALL rects render in insertion order
-    /// (dropdown rects on top since they're added last to the tree).
+    /// Overlay nodes are SKIPPED here — call `render_overlay` separately
+    /// after layer bitmaps / playhead so the dropdown renders on top of everything.
     pub fn render_tree_with_overlay(
         &mut self,
         tree: &UITree,
@@ -386,11 +386,10 @@ impl UIRenderer {
 
         tree.traverse(|event| match event {
             TraversalEvent::Node(node) => {
-                if !self.in_overlay {
-                    if let Some(start) = self.overlay_start_node {
-                        if node.id as usize >= start {
-                            self.in_overlay = true;
-                        }
+                // Skip overlay nodes — they render in a separate pass via render_overlay().
+                if let Some(start) = self.overlay_start_node {
+                    if node.id as usize >= start {
+                        return;
                     }
                 }
                 self.draw_node(node);
@@ -406,6 +405,25 @@ impl UIRenderer {
             TraversalEvent::PopClip => {
                 self.clip_stack.pop();
             }
+        });
+    }
+
+    /// Render only the overlay/dropdown nodes (from `start_node` onwards).
+    /// Call this AFTER layer bitmaps and playhead so the dropdown sits on top.
+    pub fn render_overlay(&mut self, tree: &UITree, start_node: usize) {
+        self.clip_stack.clear();
+        self.overlay_occlude_rect = None;
+        self.overlay_start_node = None;
+        self.in_overlay = true;
+
+        tree.traverse(|event| match event {
+            TraversalEvent::Node(node) => {
+                if (node.id as usize) >= start_node {
+                    self.draw_node(node);
+                }
+            }
+            TraversalEvent::PushClip(_) => {}
+            TraversalEvent::PopClip => {}
         });
     }
 

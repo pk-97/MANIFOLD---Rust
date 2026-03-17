@@ -361,7 +361,7 @@ impl UIRoot {
             PanelAction::ResolutionClicked => {
                 use manifold_core::types::ResolutionPreset;
                 let items: Vec<DropdownItem> = ResolutionPreset::ALL.iter()
-                    .map(|r| DropdownItem::new(r.display_name()))
+                    .map(|r| DropdownItem::new(&r.dropdown_label()))
                     .collect();
                 self.open_dropdown_at(DropdownContext::Resolution, items, trigger);
                 true
