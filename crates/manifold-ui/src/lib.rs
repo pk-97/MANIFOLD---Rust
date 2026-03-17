@@ -16,6 +16,8 @@ pub mod coordinate_mapper;
 pub mod ui_state;
 pub mod cursors;
 pub mod clip_hit_tester;
+pub mod timeline_editing_host;
+pub mod interaction_overlay;
 
 pub use node::*;
 pub use tree::UITree;

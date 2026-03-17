@@ -195,6 +195,21 @@ impl CoordinateMapper {
         self.layer_y_offsets.len()
     }
 
+    /// Set Y layout from raw height values. Test utility — bypasses Layer struct.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn set_layout(&mut self, heights: &[f32]) {
+        let count = heights.len();
+        self.layer_y_offsets.resize(count, 0.0);
+        self.layer_heights.resize(count, 0.0);
+        let mut y = 0.0f32;
+        for i in 0..count {
+            self.layer_y_offsets[i] = y;
+            self.layer_heights[i] = heights[i];
+            y += heights[i];
+        }
+        self.total_content_height = y;
+    }
+
     // ── Grid snapping ───────────────────────────────────────────────
 
     /// Returns the finest musically meaningful grid interval (in beats) for the current zoom.

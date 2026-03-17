@@ -507,6 +507,14 @@ impl TimelineViewportPanel {
     pub fn first_node(&self) -> usize { self.first_node }
     pub fn node_count(&self) -> usize { self.node_count }
 
+    /// Read-only access to the flat clip list (for hit testing and rendering).
+    pub fn clips(&self) -> &[ViewportClip] { &self.clips }
+
+    /// Whether a layer is a group track (not directly renderable).
+    pub fn is_group_layer(&self, layer_index: usize) -> bool {
+        self.tracks.get(layer_index).map_or(false, |t| t.is_group)
+    }
+
     // ── Coordinate mapping ────────────────────────────────────────
 
     /// Convert beat position to pixel X in the tracks area (screen-space).
