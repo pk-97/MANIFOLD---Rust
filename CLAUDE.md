@@ -65,6 +65,23 @@ This is NOT a reimplementation. This is NOT "Rust-inspired-by-Unity." This is a 
 
 Every porting task follows this exact sequence. No shortcuts. No skipping steps.
 
+### Step 0: PRE-PORT CHECK (before touching any code)
+
+This step is automatic — do it every time, not just when `/pre-port` is invoked.
+
+1. **Check `docs/PORT_STATUS.md`**: Is the target already `ported`? If so, this is a parity verification task, not a port. Read the existing Rust file and compare against Unity.
+
+2. **Dependency analysis**: Read the Unity source and list its dependencies:
+   - What services does it call? Are they ported as units in Rust?
+   - What infrastructure does it need? (UserPrefs, DialogPathMemory, FileDialogService, etc.) Is that ported?
+   - What interfaces does it implement? Do the Rust traits exist with the same surface?
+
+3. **Port dependencies FIRST**: If the target depends on a service/infrastructure that isn't ported, port that first. Do NOT scatter the service's logic inline.
+
+4. **Check for existing inline copies**: Search Rust for any ad-hoc implementations of this logic in `app.rs`, `ui_bridge.rs`, or event handlers. If found, the port must consolidate into a service, not add another copy.
+
+5. **Check `docs/KNOWN_DIVERGENCES.md`**: Are there approved divergences for this area? If so, apply them. If you need a new divergence, document it there with justification.
+
 ### Step 1: READ the Unity Source
 
 ```
@@ -125,6 +142,12 @@ Re-read the Unity source. Walk through the Rust code line by line and confirm 1:
 - Every dispatch size / workgroup size matches Unity's compute dispatch
 
 **If ANY value differs from Unity without explicit approval, fix it before proceeding.**
+
+### Step 6: UPDATE TRACKING
+
+1. Update `docs/PORT_STATUS.md` — change the file's status to `ported` (or `partial` if incomplete)
+2. If you introduced any intentional divergence, add it to `docs/KNOWN_DIVERGENCES.md`
+3. If the port consolidated inline code from `app.rs`/`ui_bridge.rs`, remove the old inline copies
 
 ---
 
@@ -535,3 +558,22 @@ YOU MUST COMMIT AND PUSH CODE CHANGES TO THE RELEVANT REPO AFTER COMPLETING FEAT
 - `#[derive(Clone, Debug, Serialize, Deserialize)]` on data models
 - `serde(rename = "camelCase")` on serialized fields to match Unity JSON format
 - Comments only where logic isn't self-evident — same standard as Unity
+
+## KEY DOCS IN THIS REPO
+
+```
+docs/PORT_STATUS.md          — File-level parity tracker (what's ported, partial, missing)
+docs/KNOWN_DIVERGENCES.md    — Approved intentional divergences from Unity (if not listed, it's a bug)
+docs/UNITY_PARITY_AUDIT.md   — Gap analysis
+docs/INTERACTION_CONTRACT.md  — Behavioral spec (reference only, NOT source of truth)
+docs/PORTING_STRATEGY.md     — Testing strategy
+docs/MIGRATION_PLAN.md       — Phase execution plan
+```
+
+## AVAILABLE SKILLS
+
+Invoke with `/skill-name` in the CLI:
+- `/rust-port [file]` — Mechanical translation of a Unity file to Rust
+- `/rust-verify [file]` — Compare Rust implementation against Unity source
+- `/pre-port [file]` — Dependency analysis before porting
+- `/audit-parity [files]` — Batch post-port verification of recently changed files
