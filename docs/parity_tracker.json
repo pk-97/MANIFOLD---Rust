@@ -92,9 +92,9 @@
       "title": "Wire live_slots in sync_clips_to_time",
       "severity": "critical",
       "est_loc": 10,
-      "status": "todo",
-      "commit": null,
-      "notes": "engine.rs line ~605: live_slots passed as empty array."
+      "status": "done",
+      "commit": "pending",
+      "notes": "live_slots now passed from LiveClipManager to scheduler.compute_sync()."
     },
     {
       "number": 7,
@@ -104,9 +104,9 @@
       "title": "Add 5ms NoteOn/NoteOff timing guard",
       "severity": "critical",
       "est_loc": 30,
-      "status": "todo",
-      "commit": null,
-      "notes": "Without this, MIDI controllers that send NoteOff quickly cancel phantom clips."
+      "status": "done",
+      "commit": "pending",
+      "notes": "5ms time guard + sequence guard in commit_live_clip(). Creation timestamps tracked per slot."
     },
     {
       "number": 8,

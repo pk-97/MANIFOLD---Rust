@@ -38,6 +38,10 @@ struct PendingLiveLaunch {
     midi_note: i32,
 }
 
+/// 5ms timing guard threshold (seconds). Reject NoteOff within this window of NoteOn.
+/// Port of C# ClipLauncher STALE_NOTE_OFF_THRESHOLD (lines 129-143).
+const NOTE_OFF_TIMING_GUARD: f64 = 0.005;
+
 /// Manages phantom (live-triggered) clips for MIDI performance.
 /// Port of C# LiveClipManager.
 pub struct LiveClipManager {
@@ -53,6 +57,11 @@ pub struct LiveClipManager {
 
     // Tracking
     last_live_trigger_at: f64,
+
+    // Per-slot creation timestamps for 5ms NoteOff timing guard.
+    // Port of C# ClipLauncher.TrackedNote.CreationTime / CreationSequence.
+    slot_creation_times: HashMap<i32, f64>,
+    slot_creation_sequences: HashMap<i32, i32>,
 }
 
 impl LiveClipManager {
@@ -65,6 +74,8 @@ impl LiveClipManager {
             pending_by_layer: HashMap::with_capacity(4),
             pending_by_tick: BTreeMap::new(),
             last_live_trigger_at: 0.0,
+            slot_creation_times: HashMap::with_capacity(8),
+            slot_creation_sequences: HashMap::with_capacity(8),
         }
     }
 
@@ -85,6 +96,8 @@ impl LiveClipManager {
         self.pending_by_clip_id.clear();
         self.pending_by_layer.clear();
         self.pending_by_tick.clear();
+        self.slot_creation_times.clear();
+        self.slot_creation_sequences.clear();
     }
 
     /// Clear live slots on large seek. Only clears when seek_delta > 1.0.
@@ -396,6 +409,12 @@ impl LiveClipManager {
             self.activate_live_slot_now(layer_index, clip.clone());
         }
 
+        // Record creation timestamps for 5ms NoteOff timing guard
+        self.slot_creation_times.insert(layer_index, realtime_now);
+        if event_absolute_tick >= 0 {
+            self.slot_creation_sequences.insert(layer_index, event_absolute_tick);
+        }
+
         self.last_live_trigger_at = realtime_now;
         Some(clip)
     }
@@ -452,6 +471,12 @@ impl LiveClipManager {
             self.activate_live_slot_now(layer_index, clip.clone());
         }
 
+        // Record creation timestamps for 5ms NoteOff timing guard
+        self.slot_creation_times.insert(layer_index, realtime_now);
+        if event_absolute_tick >= 0 {
+            self.slot_creation_sequences.insert(layer_index, event_absolute_tick);
+        }
+
         self.last_live_trigger_at = realtime_now;
         Some(clip)
     }
@@ -491,6 +516,7 @@ impl LiveClipManager {
     // ─── Commit ───
 
     /// Commit a live clip (NoteOff). If recording, adds to timeline.
+    /// Port of C# ClipLauncher.HandleNoteOff with 5ms timing guard.
     pub fn commit_live_clip(
         &mut self,
         project: &mut Project,
@@ -499,7 +525,26 @@ impl LiveClipManager {
         clip_id: Option<&str>,
         beat_stamp: Option<f32>,
         event_absolute_tick: i32,
+        realtime_now: f64,
     ) {
+        // 5ms timing guard: reject NoteOff that arrives within 5ms of NoteOn.
+        // Port of C# ClipLauncher.cs lines 129-143.
+        // Some MIDI controllers (Minis) send NoteOff very quickly after NoteOn.
+        if let Some(&creation_time) = self.slot_creation_times.get(&layer_index) {
+            // Time-based guard: reject if no native tick and within 5ms window
+            if event_absolute_tick < 0 && (realtime_now - creation_time) < NOTE_OFF_TIMING_GUARD {
+                return;
+            }
+            // Sequence-based guard: reject if NoteOff tick <= NoteOn tick (out of order)
+            if event_absolute_tick > 0 {
+                if let Some(&creation_seq) = self.slot_creation_sequences.get(&layer_index) {
+                    if creation_seq > 0 && event_absolute_tick <= creation_seq {
+                        return;
+                    }
+                }
+            }
+        }
+
         // Check for pending launch cancellation
         if !self.live_slots.contains_key(&layer_index) {
             if let Some(pending_id) = self.pending_by_layer.get(&layer_index).cloned() {
@@ -553,11 +598,13 @@ impl LiveClipManager {
             }
         };
 
-        // Remove live slot
+        // Remove live slot and creation tracking
         host.stop_clip(&live_clip.id);
         self.live_slots.remove(&layer_index);
         self.live_slots_list.retain(|(l, _)| *l != layer_index);
         self.live_slot_clip_ids.remove(&live_clip.id);
+        self.slot_creation_times.remove(&layer_index);
+        self.slot_creation_sequences.remove(&layer_index);
 
         // If recording, commit to timeline
         if host.is_recording() {

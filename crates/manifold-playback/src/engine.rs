@@ -630,11 +630,17 @@ impl PlaybackEngine {
             MIN_START_REMAINING_TIME
         };
 
+        let live_slots = if let Some(mgr) = &self.live_clip_manager {
+            mgr.live_slots_list()
+        } else {
+            &[]
+        };
+
         let sync_result = self.scheduler.compute_sync(
             self.current_time,
             self.current_beat,
             &self.timeline_active_scratch,
-            &[],  // live_slots — wired in Phase 3D
+            live_slots,
             &self.active_clip_ids,
             &self.looping_clip_ids,
             min_remaining_beats,

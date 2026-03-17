@@ -171,7 +171,7 @@ fn commit_with_recording_adds_to_timeline() {
     let clip_id = clip.id.clone();
 
     host.beat = 4.0; // held for 4 beats
-    mgr.commit_live_clip(&mut project, &mut host, 0, Some(&clip_id), Some(4.0), -1);
+    mgr.commit_live_clip(&mut project, &mut host, 0, Some(&clip_id), Some(4.0), -1, 1.0);
 
     // Clip should be committed to timeline
     assert_eq!(project.timeline.layers[0].clips.len(), 1);
@@ -192,7 +192,7 @@ fn commit_without_recording_discards() {
         None, -1, 0.0,
     ).unwrap();
 
-    mgr.commit_live_clip(&mut project, &mut host, 0, Some(&clip.id), Some(4.0), -1);
+    mgr.commit_live_clip(&mut project, &mut host, 0, Some(&clip.id), Some(4.0), -1, 1.0);
 
     // Clip should NOT be in timeline
     assert_eq!(project.timeline.layers[0].clips.len(), 0);
