@@ -364,47 +364,10 @@ If the service doesn't exist in Rust yet, port it as a whole unit FIRST.
 
 ---
 
-## UNITY SOURCE LOCATIONS
+## UNITY SOURCE → RUST CRATE MAPPING
 
-The Unity project is at: `/Users/peterkiemann/MANIFOLD - Render Engine/`
-
-```
-Assets/Scripts/Data/                        → Data models (Project, Timeline, Layer, Clip, Effects)
-Assets/Scripts/Data/IEffectContainer.cs     → Shared effect container interface
-Assets/Scripts/Data/IParamSource.cs         → Parameter source abstraction
-Assets/Scripts/Data/EffectDefinitionRegistry.cs
-Assets/Scripts/Data/GeneratorDefinitionRegistry.cs
-Assets/Scripts/Editing/                     → Commands, UndoRedoManager
-Assets/Scripts/UI/Timeline/EditingService.cs → Mutation gateway (plain C#, not MonoBehaviour)
-Assets/Scripts/Playback/                    → PlaybackEngine, ClipScheduler
-Assets/Scripts/Playback/IClipRenderer.cs    → Clip renderer interface
-Assets/Scripts/Playback/ILiveClipHost.cs    → Live recording host interface
-Assets/Scripts/Playback/Generators/         → ALL generator implementations
-Assets/Scripts/Playback/Generators/IGenerator.cs
-Assets/Scripts/Playback/Generators/ShaderGeneratorBase.cs
-Assets/Scripts/Playback/Generators/LineGeneratorBase.cs
-Assets/Scripts/Playback/Generators/StatefulShaderGeneratorBase.cs
-Assets/Scripts/Playback/Generators/ComputeVolumeGeneratorBase.cs
-Assets/Scripts/Playback/Generators/ComputeParticleGeneratorBase.cs
-Assets/Scripts/Compositing/                 → CompositorStack, Effects
-Assets/Scripts/Compositing/Effects/IPostProcessEffect.cs
-Assets/Scripts/Compositing/Effects/IStatefulEffect.cs
-Assets/Scripts/Compositing/Effects/SimpleBlitEffect.cs
-Assets/Scripts/UI/Timeline/                 → WorkspaceController, InputHandler
-Assets/Scripts/UI/Timeline/Core/            → UIState, UIConstants, CoordinateMapper
-Assets/Scripts/UI/Timeline/IInspectorPanel.cs
-Assets/Scripts/UI/Bitmap/                   → UIInputSystem, UIBitmapRoot, panels
-Assets/Scripts/Sync/                        → ISyncSource, LinkSync, MidiClockSync, OscSync
-Assets/Scripts/Export/                      → VideoExporter, ProjectArchive
-Assets/Scripts/LED/                         → IExternalOutput, ArtNetOutput
-Assets/Shaders/                             → ALL HLSL shaders
-Assets/Resources/Compute/                   → ALL compute shaders
-Assets/Tests/EditMode/                      → Tests
-```
-
----
-
-## UNITY → RUST CRATE MAPPING
+Unity project: `/Users/peterkiemann/MANIFOLD - Render Engine/`
+Full file-level mapping: see `docs/PORT_STATUS.md`
 
 | Unity Directory | Rust Crate | What It Contains |
 |---|---|---|
@@ -561,13 +524,20 @@ YOU MUST COMMIT AND PUSH CODE CHANGES TO THE RELEVANT REPO AFTER COMPLETING FEAT
 
 ## KEY DOCS IN THIS REPO
 
+**Read before porting:**
 ```
-docs/PORT_STATUS.md          — File-level parity tracker (what's ported, partial, missing)
-docs/KNOWN_DIVERGENCES.md    — Approved intentional divergences from Unity (if not listed, it's a bug)
-docs/UNITY_PARITY_AUDIT.md   — Gap analysis
-docs/INTERACTION_CONTRACT.md  — Behavioral spec (reference only, NOT source of truth)
-docs/PORTING_STRATEGY.md     — Testing strategy
-docs/MIGRATION_PLAN.md       — Phase execution plan
+docs/PORT_STATUS.md              — File-level parity tracker (check FIRST — is it already ported?)
+docs/KNOWN_DIVERGENCES.md        — Approved intentional divergences (if not listed, it's a bug)
+docs/RUST_TRANSLATION_PATTERNS.md — C# → Rust patterns (inheritance, borrows, observers, serde)
+docs/UNITY_API_MAPPING.md        — Every Unity API → Rust equivalent (Time, Math, Texture, Compute, Material)
+```
+
+**Reference (load when relevant):**
+```
+docs/UNITY_PARITY_AUDIT.md      — Gap analysis
+docs/INTERACTION_CONTRACT.md     — Behavioral spec (reference only, NOT source of truth)
+docs/PORTING_STRATEGY.md        — Testing strategy
+docs/MIGRATION_PLAN.md          — Phase execution plan
 ```
 
 ## AVAILABLE SKILLS
