@@ -411,7 +411,7 @@ impl InteractionOverlay {
 
         if self.drag_mode == DragMode::Move {
             // Unity lines 370-386: finalize move snap + record commands
-            self.finalize_move_snap(viewport);
+            self.finalize_move_snap(host, viewport);
 
             for snapshot in &self.drag_snapshots {
                 if let Some(clip) = host.find_clip_by_id(&snapshot.clip_id) {
@@ -561,12 +561,10 @@ impl InteractionOverlay {
         beat_delta = beat_delta.max(-self.drag_selection_min_start_beat);
 
         // Apply beat delta to all clips (direct mutation during drag — committed in OnEndDrag)
+        // Unity line 533: movingClip.StartBeat = Max(0, snapshot.StartBeat + beatDelta)
         for snapshot in &self.drag_snapshots {
             let new_start = (snapshot.start_beat + beat_delta).max(0.0);
-            // The host applies this to the actual clip data
-            // For now, we track it — the app layer applies during dispatch
-            // TODO: host.set_clip_start_beat(&snapshot.clip_id, new_start);
-            let _ = new_start; // Applied by dispatch layer
+            host.set_clip_start_beat(&snapshot.clip_id, new_start);
         }
 
         host.invalidate_all_layer_bitmaps();
@@ -588,9 +586,11 @@ impl InteractionOverlay {
         let original_end = ui_state.trim_original_start_beat + ui_state.trim_original_duration_beats;
         let min_duration = 0.25; // 1/16 note minimum (Unity line 544)
 
+        // Get the clip's actual layer for snap context
+        let clip_layer = host.find_clip_by_id(&trim_id).map_or(0, |c| c.layer_index);
         let snapped = viewport.magnetic_snap(
             mouse_beat,
-            ui_state.trim_original_start_beat as usize, // layer for snap context
+            clip_layer,
             &[trim_id.clone()],
         );
 
@@ -608,10 +608,8 @@ impl InteractionOverlay {
         let new_duration = original_end - new_start;
         let new_in_point = (ui_state.trim_original_in_point + beat_delta * host.get_seconds_per_beat()).max(0.0);
 
-        // The actual clip mutation happens in the dispatch layer
-        // TODO: host.set_clip_trim(&trim_id, new_start, new_duration, new_in_point);
-        let _ = (new_start, new_duration, new_in_point);
-
+        // Unity lines 554-557: direct mutation during drag
+        host.set_clip_trim(&trim_id, new_start, new_duration, new_in_point);
         host.invalidate_all_layer_bitmaps();
     }
 
@@ -619,7 +617,7 @@ impl InteractionOverlay {
     fn handle_trim_right_drag(
         &mut self,
         mouse_beat: f32,
-        host: &dyn TimelineEditingHost,
+        host: &mut dyn TimelineEditingHost,
         ui_state: &UIState,
         viewport: &TimelineViewportPanel,
     ) {
@@ -652,10 +650,10 @@ impl InteractionOverlay {
             }
         }
 
-        // TODO: host.set_clip_duration(&trim_id, new_duration);
-        let _ = new_duration;
-
-        // host.invalidate_all_layer_bitmaps(); // called by dispatch
+        // Unity line 580: trimClip.DurationBeats = newDurationBeats
+        let in_point = clip.as_ref().map_or(0.0, |c| c.in_point);
+        host.set_clip_trim(&trim_id, start_beat, new_duration, in_point);
+        host.invalidate_all_layer_bitmaps();
     }
 
     // ────────────────────────────────────────────────────────────
@@ -844,7 +842,7 @@ impl InteractionOverlay {
     }
 
     /// Port of Unity InteractionOverlay.FinalizeMoveSnap (lines 756-772).
-    fn finalize_move_snap(&mut self, viewport: &TimelineViewportPanel) {
+    fn finalize_move_snap(&mut self, host: &mut dyn TimelineEditingHost, viewport: &TimelineViewportPanel) {
         if self.drag_snapshots.is_empty() || self.drag_anchor_clip_id.is_none() {
             return;
         }
@@ -865,9 +863,13 @@ impl InteractionOverlay {
             if snap_delta.abs() < 0.0001 {
                 return;
             }
-            // Apply snap delta to all clips
-            // TODO: host.apply_snap_delta(&self.drag_snapshots, snap_delta);
-            let _ = snap_delta;
+            // Unity lines 764-768: apply snap delta to all clips
+            for snapshot in &self.drag_snapshots {
+                if let Some(clip) = host.find_clip_by_id(&snapshot.clip_id) {
+                    host.set_clip_start_beat(&snapshot.clip_id, (clip.start_beat + snap_delta).max(0.0));
+                }
+            }
+            host.invalidate_all_layer_bitmaps();
         }
     }
 

@@ -186,6 +186,16 @@ pub trait TimelineEditingHost {
     /// Commit the current command batch as a single undo entry.
     fn commit_command_batch(&mut self, description: &str);
 
+    // ── Live clip mutation (during drag — committed to undo on EndDrag) ──
+
+    /// Set a clip's start beat. Used during move drag to update position live.
+    /// Unity: movingClip.StartBeat = ... (InteractionOverlay line 533).
+    fn set_clip_start_beat(&mut self, clip_id: &str, beat: f32);
+
+    /// Set a clip's trim state. Used during trim drag to update live.
+    /// Unity: trimClip.StartBeat/DurationBeats/InPoint = ... (lines 554-557).
+    fn set_clip_trim(&mut self, clip_id: &str, start_beat: f32, duration_beats: f32, in_point: f32);
+
     // ── Video metadata ──────────────────────────────────────────────
 
     /// Maximum clip duration in beats based on video source length and InPoint.

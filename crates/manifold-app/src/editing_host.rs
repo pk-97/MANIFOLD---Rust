@@ -322,6 +322,28 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         *self.needs_structural_sync = true;
     }
 
+    // ── Live clip mutation ──────────────────────────────────────
+
+    fn set_clip_start_beat(&mut self, clip_id: &str, beat: f32) {
+        if let Some(project) = self.engine.project_mut() {
+            if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
+                clip.start_beat = beat;
+            }
+            project.timeline.mark_clip_lookup_dirty();
+        }
+    }
+
+    fn set_clip_trim(&mut self, clip_id: &str, start_beat: f32, duration_beats: f32, in_point: f32) {
+        if let Some(project) = self.engine.project_mut() {
+            if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
+                clip.start_beat = start_beat;
+                clip.duration_beats = duration_beats;
+                clip.in_point = in_point;
+            }
+            project.timeline.mark_clip_lookup_dirty();
+        }
+    }
+
     // ── Video metadata ──────────────────────────────────────────
 
     fn get_max_duration_beats(&self, clip_id: &str) -> f32 {
