@@ -6,6 +6,7 @@ use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::render_target::RenderTarget;
+use super::dual_texture_blit_helper::DualTextureBlitHelper;
 use super::simple_blit_helper::SimpleBlitHelper;
 
 // StylizedFeedbackFX.cs line 34 — Mathf.Deg2Rad
@@ -42,168 +43,47 @@ struct StylizedFeedbackUniforms {
 }
 
 /// Per-owner state: the previous frame's feedback buffer.
-/// StylizedFeedbackFX.cs line 13 — Dictionary<int, RenderTexture> stateBuffers
 struct StylizedFeedbackState {
     buffer: RenderTarget,
     initialized: bool,
 }
 
 /// Stylized feedback effect — zoom/rotate/blend current frame with previous frame's state buffer.
-/// Stateful: maintains one state buffer per owner (clip/layer/master).
-/// StylizedFeedbackFX.cs line 7 — StylizedFeedbackFX : SimpleBlitEffect, IStatefulEffect
 pub struct StylizedFeedbackFX {
-    pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    uniform_buffer: wgpu::Buffer,
+    helper: DualTextureBlitHelper,
     /// Passthrough blit for copying result into feedback state buffer.
     copy_blit: SimpleBlitHelper,
-    // StylizedFeedbackFX.cs line 13 — Dictionary<int, RenderTexture> stateBuffers
     states: HashMap<i64, StylizedFeedbackState>,
-    // StylizedFeedbackFX.cs lines 12 — _width, _height
     width: u32,
     height: u32,
 }
 
 impl StylizedFeedbackFX {
     pub fn new(device: &wgpu::Device) -> Self {
-        let format = wgpu::TextureFormat::Rgba16Float;
-
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("StylizedFeedback"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/fx_stylized_feedback.wgsl").into(),
-            ),
-        });
-
-        // Bind group layout: uniforms + main_tex + sampler + prev_tex
-        // Matches StylizedFeedbackEffect.shader: _MainTex, _PrevTex, uniforms
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("StylizedFeedback BGL"),
-            entries: &[
-                // binding 0: uniforms
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 1: main_tex (_MainTex — current frame)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // binding 2: sampler (shared for both textures)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                // binding 3: prev_tex (_PrevTex — previous frame state)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("StylizedFeedback Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            immediate_size: 0,
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("StylizedFeedback Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("StylizedFeedback Sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("StylizedFeedback Uniforms"),
-            size: std::mem::size_of::<StylizedFeedbackUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let copy_blit = SimpleBlitHelper::new(
-            device,
-            PASSTHROUGH_SHADER,
-            "StylizedFeedback Copy",
-            16, // vec4 pad
-        );
-
         Self {
-            pipeline,
-            bind_group_layout,
-            sampler,
-            uniform_buffer,
-            copy_blit,
+            helper: DualTextureBlitHelper::new(
+                device,
+                include_str!("shaders/fx_stylized_feedback.wgsl"),
+                "StylizedFeedback",
+                std::mem::size_of::<StylizedFeedbackUniforms>() as u64,
+            ),
+            copy_blit: SimpleBlitHelper::new(
+                device,
+                PASSTHROUGH_SHADER,
+                "StylizedFeedback Copy",
+                16, // vec4 pad
+            ),
             states: HashMap::new(),
             width: 0,
             height: 0,
         }
     }
 
-    // StylizedFeedbackFX.cs lines 21-29 — GetOrCreateState
     fn ensure_state(&mut self, device: &wgpu::Device, owner_key: i64) {
         if !self.states.contains_key(&owner_key) && self.width > 0 && self.height > 0 {
             let format = wgpu::TextureFormat::Rgba16Float;
             self.states.insert(owner_key, StylizedFeedbackState {
-                buffer: RenderTarget::new(
-                    device,
-                    self.width,
-                    self.height,
-                    format,
-                    "StylizedFeedback State",
-                ),
+                buffer: RenderTarget::new(device, self.width, self.height, format, "StylizedFeedback State"),
                 initialized: false,
             });
         }
@@ -232,103 +112,40 @@ impl PostProcessEffect for StylizedFeedbackFX {
         let state = self.states.get(&ctx.owner_key).unwrap();
 
         if !state.initialized {
-            // First frame: blit source to target (passthrough) and prime the state buffer.
-            self.copy_blit.draw(
-                device, queue, encoder,
-                source, target,
-                &[0u8; 16],
-                "StylizedFeedback Init",
-            );
-            self.copy_blit.draw(
-                device, queue, encoder,
-                source, &state.buffer.view,
-                &[0u8; 16],
-                "StylizedFeedback Init State",
-            );
-
+            // First frame: passthrough + prime state buffer
+            self.copy_blit.draw(device, queue, encoder, source, target, &[0u8; 16], "StylizedFeedback Init");
+            self.copy_blit.draw(device, queue, encoder, source, &state.buffer.view, &[0u8; 16], "StylizedFeedback Init State");
             let state = self.states.get_mut(&ctx.owner_key).unwrap();
             state.initialized = true;
             return;
         }
 
-        // StylizedFeedbackFX.cs lines 34-37 — SetUniforms
-        // param 0 → _FeedbackAmount: Mathf.Min(param, 0.98f)
+        // StylizedFeedbackFX.cs lines 34-37
         let feedback_amount = fx.param_values.first().copied().unwrap_or(0.0).min(0.98);
-        // param 1 → _Zoom
         let zoom = fx.param_values.get(1).copied().unwrap_or(1.02);
-        // param 2 → _Rotation: param * Mathf.Deg2Rad
         let rotation = fx.param_values.get(2).copied().unwrap_or(0.0) * DEG_TO_RAD;
-        // param 3 → _Mode: Mathf.Round
         let mode = fx.param_values.get(3).copied().unwrap_or(0.0).round();
 
         let uniforms = StylizedFeedbackUniforms { feedback_amount, zoom, rotation, mode };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("StylizedFeedback BG"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(source),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&state.buffer.view),
-                },
-            ],
-        });
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("StylizedFeedback Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-
-        // StylizedFeedbackFX.cs lines 40-44 — PostBlit: copy result → state buffer.
-        // Graphics.CopyTexture(result, stateBuffer) — render-based blit since we only have TextureViews.
-        let state = self.states.get(&ctx.owner_key).unwrap();
-        self.copy_blit.draw(
+        // main_tex = source (current frame), secondary_tex = state buffer (previous frame)
+        self.helper.draw(
             device, queue, encoder,
-            target, &state.buffer.view,
-            &[0u8; 16],
-            "StylizedFeedback State Copy",
+            source, &state.buffer.view, target,
+            bytemuck::bytes_of(&uniforms),
+            "StylizedFeedback Pass",
         );
+
+        // PostBlit: copy result → state buffer
+        let state = self.states.get(&ctx.owner_key).unwrap();
+        self.copy_blit.draw(device, queue, encoder, target, &state.buffer.view, &[0u8; 16], "StylizedFeedback State Copy");
     }
 
     fn clear_state(&mut self) {
-        // StylizedFeedbackFX.cs lines 46-50 — ClearState (all owners)
-        for state in self.states.values_mut() {
-            state.initialized = false;
-        }
+        for state in self.states.values_mut() { state.initialized = false; }
     }
 
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        // StylizedFeedbackFX.cs lines 15-19 — InitializeState
         self.width = width;
         self.height = height;
         for state in self.states.values_mut() {
@@ -340,14 +157,7 @@ impl PostProcessEffect for StylizedFeedbackFX {
 
 impl StatefulEffect for StylizedFeedbackFX {
     fn clear_state_for_owner(&mut self, owner_key: i64) {
-        // StylizedFeedbackFX.cs lines 52-56 — ClearState(int ownerKey)
-        if let Some(state) = self.states.get_mut(&owner_key) {
-            state.initialized = false;
-        }
+        if let Some(state) = self.states.get_mut(&owner_key) { state.initialized = false; }
     }
-
-    fn cleanup_owner(&mut self, owner_key: i64) {
-        // StylizedFeedbackFX.cs lines 58-65 — CleanupOwner
-        self.states.remove(&owner_key);
-    }
+    fn cleanup_owner(&mut self, owner_key: i64) { self.states.remove(&owner_key); }
 }
