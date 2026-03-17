@@ -113,6 +113,10 @@ pub struct Application {
     // split-borrow it alongside ui_root.viewport and create AppEditingHost.
     overlay: manifold_ui::interaction_overlay::InteractionOverlay,
 
+    // Detected display resolutions: (width, height, label).
+    // Populated from winit monitors at startup. Matches Unity Footer.CollectDisplayResolutions.
+    display_resolutions: Vec<(u32, u32, String)>,
+
     // State
     initialized: bool,
     needs_rebuild: bool,
@@ -174,6 +178,7 @@ impl Application {
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
                 manifold_ui::color::CLIP_VERTICAL_PAD,
             ),
+            display_resolutions: Vec::new(),
             initialized: false,
             needs_rebuild: false,
             needs_scroll_rebuild: false,
@@ -1203,6 +1208,21 @@ impl ApplicationHandler for Application {
         let size = window.inner_size();
         let scale = window.scale_factor();
 
+        // Detect connected display resolutions (Unity: Footer.CollectDisplayResolutions)
+        self.display_resolutions.clear();
+        for (i, monitor) in event_loop.available_monitors().enumerate() {
+            let mon_size = monitor.size();
+            let label = monitor.name().unwrap_or_else(|| format!("Display {}", i + 1));
+            if mon_size.width > 0 && mon_size.height > 0 {
+                log::info!("Detected monitor: {} ({}x{})", label, mon_size.width, mon_size.height);
+                self.display_resolutions.push((mon_size.width, mon_size.height, label));
+            }
+        }
+        // Rename to "Display N" for consistent UI (Unity uses 1-indexed "Display N")
+        for (i, entry) in self.display_resolutions.iter_mut().enumerate() {
+            entry.2 = format!("Display {}", i + 1);
+        }
+
         // Create GPU context with primary window's surface for adapter compatibility
         let gpu = {
             let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
@@ -1332,6 +1352,9 @@ impl ApplicationHandler for Application {
         };
 
         self.gpu = Some(gpu);
+
+        // Pass detected display resolutions to UI
+        self.ui_root.set_display_resolutions(self.display_resolutions.clone());
 
         // Build UI at initial window size (logical pixels)
         let logical_w = size.width as f32 / scale as f32;

@@ -52,6 +52,10 @@ pub struct UIRoot {
     /// Context for the currently-open dropdown (set before open, read on selection).
     dropdown_context: Option<DropdownContext>,
 
+    /// Detected display resolutions from winit monitors: (w, h, label).
+    /// Set by Application after monitor enumeration.
+    display_resolutions: Vec<(u32, u32, String)>,
+
     // Inspector resize state
     pub inspector_resize_dragging: bool,
     inspector_drag_start_x: f32,
@@ -86,12 +90,18 @@ impl UIRoot {
             time_accumulator: 0.0,
             scroll_panels_start: 0,
             dropdown_context: None,
+            display_resolutions: Vec::new(),
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
             cursor_hover_actions: Vec::new(),
             viewport_events: Vec::new(),
         }
+    }
+
+    /// Set detected display resolutions from winit monitors.
+    pub fn set_display_resolutions(&mut self, resolutions: Vec<(u32, u32, String)>) {
+        self.display_resolutions = resolutions;
     }
 
     /// Apply saved layout from project settings. Called after project load.
@@ -232,7 +242,7 @@ impl UIRoot {
                     match dd_action {
                         DropdownAction::Selected(index) => {
                             if let Some(ctx) = self.dropdown_context.take() {
-                                if let Some(action) = Self::dropdown_to_action(ctx, index) {
+                                if let Some(action) = self.dropdown_to_action(ctx, index) {
                                     actions.push(action);
                                 }
                             }
@@ -360,9 +370,25 @@ impl UIRoot {
             }
             PanelAction::ResolutionClicked => {
                 use manifold_core::types::ResolutionPreset;
-                let items: Vec<DropdownItem> = ResolutionPreset::ALL.iter()
+                let has_displays = !self.display_resolutions.is_empty();
+
+                let mut items: Vec<DropdownItem> = ResolutionPreset::ALL.iter()
                     .map(|r| DropdownItem::new(&r.dropdown_label()))
                     .collect();
+
+                // Add separator + display resolutions (Unity: Footer.CollectDisplayResolutions)
+                if has_displays {
+                    // Add separator on last preset item
+                    if let Some(last) = items.last_mut() {
+                        last.separator_after = true;
+                    }
+                    // Separator label (disabled, non-selectable)
+                    items.push(DropdownItem::disabled("\u{2500}\u{2500}  Displays  \u{2500}\u{2500}"));
+                    for (w, h, label) in &self.display_resolutions {
+                        items.push(DropdownItem::new(&format!("{}  ({}x{})", label, w, h)));
+                    }
+                }
+
                 self.open_dropdown_at(DropdownContext::Resolution, items, trigger);
                 true
             }
@@ -404,7 +430,7 @@ impl UIRoot {
     }
 
     /// Convert a dropdown selection into the appropriate PanelAction based on context.
-    fn dropdown_to_action(ctx: DropdownContext, index: usize) -> Option<PanelAction> {
+    fn dropdown_to_action(&self, ctx: DropdownContext, index: usize) -> Option<PanelAction> {
         match ctx {
             DropdownContext::BlendMode(layer_idx) => {
                 use manifold_core::types::BlendMode;
@@ -419,7 +445,17 @@ impl UIRoot {
                 Some(PanelAction::SetMidiChannel(layer_idx, index as i32 + 1))
             }
             DropdownContext::Resolution => {
-                Some(PanelAction::SetResolution(index))
+                use manifold_core::types::ResolutionPreset;
+                let preset_count = ResolutionPreset::ALL.len();
+                if index < preset_count {
+                    // Preset selection (undoable)
+                    Some(PanelAction::SetResolution(index))
+                } else {
+                    // Skip separator (preset_count = separator index)
+                    let display_idx = index.checked_sub(preset_count + 1)?;
+                    let (w, h, _) = self.display_resolutions.get(display_idx)?;
+                    Some(PanelAction::SetDisplayResolution(*w as i32, *h as i32))
+                }
             }
             DropdownContext::AddEffect(tab) => {
                 Some(PanelAction::AddEffect(tab, index))

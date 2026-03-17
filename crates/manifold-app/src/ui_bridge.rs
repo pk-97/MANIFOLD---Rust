@@ -1385,6 +1385,14 @@ pub fn dispatch(
             }
             DispatchResult::resolution()
         }
+        PanelAction::SetDisplayResolution(w, h) => {
+            // Direct mutation — no undo, matches Unity display resolution selection.
+            if let Some(project) = engine.project_mut() {
+                project.settings.output_width = *w;
+                project.settings.output_height = *h;
+            }
+            DispatchResult::resolution()
+        }
         PanelAction::AddEffect(tab, effect_type_idx) => {
             use manifold_core::types::EffectType;
             let Some(effect_type) = EffectType::from_index(*effect_type_idx) else {

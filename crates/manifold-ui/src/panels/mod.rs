@@ -195,6 +195,7 @@ pub enum PanelAction {
     SetMidiNote(usize, i32),       // layer_index, note (0-127)
     SetMidiChannel(usize, i32),    // layer_index, channel (1-16)
     SetResolution(usize),          // preset index
+    SetDisplayResolution(i32, i32), // direct width, height (no undo, matches Unity)
     AddEffect(InspectorTab, usize), // tab, effect_type index
     SetGenType(usize, usize),      // layer_index, gen_type index
 
