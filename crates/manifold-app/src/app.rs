@@ -41,70 +41,8 @@ use crate::window_registry::{WindowRegistry, WindowRole, WindowState};
 /// - IsLayerActive unified check across 4 interaction paths
 pub type SelectionState = UIState;
 
-/// Active drag mode for timeline clip interaction.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ClipDragMode {
-    None,
-    Move,
-    TrimLeft,
-    TrimRight,
-    RegionSelect,
-}
-
-/// Snapshot of a clip's state at drag start (for undo).
-#[derive(Debug, Clone)]
-pub struct ClipDragSnapshot {
-    pub clip_id: String,
-    pub original_start_beat: f32,
-    pub original_layer_index: i32,
-}
-
-/// State for an active clip drag operation.
-/// From Unity InteractionOverlay drag fields.
-pub struct ClipDragState {
-    pub mode: ClipDragMode,
-    pub anchor_clip_id: String,
-    pub anchor_beat: f32,
-    pub snapshots: Vec<ClipDragSnapshot>,
-    // For move — cross-layer tracking (from Unity InteractionOverlay):
-    pub drag_start_layer_index: usize,
-    pub drag_selection_min_layer: usize,
-    pub drag_selection_max_layer: usize,
-    pub drag_offset_beats: f32,       // mouse beat - clip start beat at drag begin
-    pub drag_layer_blocked: bool,     // true when video↔generator mismatch
-    // For trim:
-    pub trim_old_start: f32,
-    pub trim_old_duration: f32,
-    pub trim_old_in_point: f32,
-    // For region select:
-    pub region_anchor_beat: f32,
-    pub region_anchor_layer: usize,
-}
-
-impl ClipDragState {
-    pub fn new() -> Self {
-        Self {
-            mode: ClipDragMode::None,
-            anchor_clip_id: String::new(),
-            anchor_beat: 0.0,
-            snapshots: Vec::new(),
-            drag_start_layer_index: 0,
-            drag_selection_min_layer: 0,
-            drag_selection_max_layer: 0,
-            drag_offset_beats: 0.0,
-            drag_layer_blocked: false,
-            trim_old_start: 0.0,
-            trim_old_duration: 0.0,
-            trim_old_in_point: 0.0,
-            region_anchor_beat: 0.0,
-            region_anchor_layer: 0,
-        }
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.mode != ClipDragMode::None
-    }
-}
+// ClipDragMode, ClipDragSnapshot, ClipDragState — REMOVED.
+// All drag state now lives in InteractionOverlay (interaction_overlay.rs).
 
 pub struct Application {
     // GPU
@@ -118,11 +56,12 @@ pub struct Application {
     engine: PlaybackEngine,
     editing_service: EditingService,
 
-    // Selection + drag state
+    // Selection
     selection: SelectionState,
-    clip_drag: ClipDragState,
     active_layer_index: Option<usize>,
-    drag_snapshot: Option<f32>,
+    /// Slider drag snapshot for undo (opacity, slip, etc.). Stores the old value
+    /// on snapshot, committed on release. NOT related to clip drag state.
+    slider_snapshot: Option<f32>,
 
     // Rendering
     generator_renderer: Option<GeneratorRenderer>,
@@ -209,9 +148,8 @@ impl Application {
             engine,
             editing_service: EditingService::new(),
             selection: UIState::new(),
-            clip_drag: ClipDragState::new(),
             active_layer_index: None,
-            drag_snapshot: None,
+            slider_snapshot: None,
             generator_renderer: None,
             compositor: None,
             blit_pipeline: None,
@@ -686,9 +624,8 @@ impl Application {
                 &mut self.editing_service,
                 &mut self.ui_root,
                 &mut self.selection,
-                &mut self.clip_drag,
                 &mut self.active_layer_index,
-                &mut self.drag_snapshot,
+                &mut self.slider_snapshot,
             );
             if result.structural_change {
                 needs_structural_sync = true;
@@ -726,34 +663,7 @@ impl Application {
                 );
             }
         }
-        // Legacy drag polling (dead code — overlay handles drag polling above).
-        // Kept temporarily for compilation; will be removed with ClipDragState cleanup.
-        if false && self.clip_drag.mode == ClipDragMode::Move && !self.clip_drag.snapshots.is_empty() {
-            let tracks_rect = self.ui_root.viewport.tracks_rect();
-            if tracks_rect.width > 0.0 {
-                // From Unity WorkspaceController.cs lines 58-60
-                let edge_zone_px = manifold_ui::color::DRAG_EDGE_ZONE_PX;
-                let scroll_speed_px_per_sec = manifold_ui::color::DRAG_SCROLL_SPEED_PX_PER_SEC;
-                let ppb = self.ui_root.viewport.pixels_per_beat();
-                let dt = self.frame_timer.last_dt() as f32;
-                let scroll_speed_beats = (scroll_speed_px_per_sec * dt) / ppb;
-
-                let local_x = self.cursor_pos.x - tracks_rect.x;
-                if local_x > tracks_rect.width - edge_zone_px {
-                    // Near right edge — scroll right, speed proportional to proximity
-                    let factor = 1.0 - (tracks_rect.width - local_x) / edge_zone_px;
-                    let new_scroll = self.ui_root.viewport.scroll_x_beats() + scroll_speed_beats * factor;
-                    self.ui_root.viewport.set_scroll(new_scroll, self.ui_root.viewport.scroll_y_px());
-                    needs_structural_sync = true;
-                } else if local_x < edge_zone_px && local_x >= 0.0 {
-                    // Near left edge — scroll left
-                    let factor = 1.0 - local_x / edge_zone_px;
-                    let new_scroll = (self.ui_root.viewport.scroll_x_beats() - scroll_speed_beats * factor).max(0.0);
-                    self.ui_root.viewport.set_scroll(new_scroll, self.ui_root.viewport.scroll_y_px());
-                    needs_structural_sync = true;
-                }
-            }
-        }
+        // Legacy drag polling removed — overlay.poll_move_drag() handles it above.
 
         // 2b. Auto-scroll check for playback (BEFORE build so rebuild includes new scroll)
         let auto_scroll_changed = crate::ui_bridge::check_auto_scroll(&mut self.ui_root, &self.engine);
