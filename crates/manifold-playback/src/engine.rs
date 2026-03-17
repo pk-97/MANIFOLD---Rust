@@ -21,6 +21,17 @@ pub const LIVE_RECENTLY_STARTED_TIME: f32 = 0.02;
 pub const COMPOSITOR_DIRTY_TIME: f32 = 0.05;
 pub const MIN_START_REMAINING_TIME: f32 = 0.02;
 
+// Lookahead pre-warm constants. Port of C# PlaybackEngine lines 84-98.
+pub const LOOKAHEAD_PREWARM_AHEAD_TIME: f32 = 8.0;
+pub const LOOKAHEAD_PREWARM_BEHIND_TIME: f32 = 0.25;
+pub const LOOKAHEAD_PREWARM_INTERVAL: f32 = 0.5;
+pub const LIVE_PREWARM_INTERVAL: f32 = 0.1;
+pub const LIVE_PREWARM_BURST_TIME: f32 = 3.0;
+pub const LOOKAHEAD_PREWARM_MAX_UNIQUE_CLIPS: usize = 12;
+pub const LIVE_PREWARM_MAX_UNIQUE_CLIPS: usize = 12;
+pub const LIVE_PREWARM_RECENT_PRIORITY_COUNT: usize = 4;
+pub const COMBINED_PREWARM_MAX_UNIQUE_CLIPS: usize = 20;
+
 // ─── Engine I/O ───
 
 /// Input context for a single engine tick.
@@ -102,6 +113,14 @@ pub struct PlaybackEngine {
     stop_buffer: Vec<String>,
     ready_clips_list: Vec<TimelineClip>,
     timeline_active_scratch: Vec<TimelineClip>,
+    became_ready_list: Vec<String>,
+    clips_to_stop_drift: Vec<String>,
+    prewarm_candidates: Vec<TimelineClip>,
+    compositor_fallback_clips: Vec<TimelineClip>,
+
+    // Prewarm state. Port of C# PlaybackEngine prewarm fields.
+    next_prewarm_at: f64,
+    last_prewarm_ids: HashSet<String>,
 
     // Re-entrancy guard
     is_ticking: bool,
@@ -144,6 +163,12 @@ impl PlaybackEngine {
             stop_buffer: Vec::with_capacity(16),
             ready_clips_list: Vec::with_capacity(32),
             timeline_active_scratch: Vec::with_capacity(32),
+            became_ready_list: Vec::with_capacity(8),
+            clips_to_stop_drift: Vec::with_capacity(8),
+            prewarm_candidates: Vec::with_capacity(32),
+            compositor_fallback_clips: Vec::with_capacity(32),
+            next_prewarm_at: 0.0,
+            last_prewarm_ids: HashSet::with_capacity(16),
             is_ticking: false,
             log: None,
             log_warning: None,
@@ -845,5 +870,568 @@ impl PlaybackEngine {
         !self.preparing_clips.is_empty()
             || !self.pending_pauses.is_empty()
             || !self.recently_started_times.is_empty()
+    }
+
+    // ─── Clip time/rate methods ───
+    // Port of C# PlaybackEngine lines 1449-1588.
+
+    /// Get clip start time in timeline seconds.
+    /// Port of C# PlaybackEngine.GetClipStartTimeSeconds (lines 1449-1453).
+    pub fn get_clip_start_time_seconds(&mut self, clip: &TimelineClip) -> f32 {
+        self.beat_to_timeline_time(clip.start_beat)
+    }
+
+    /// Get clip end time in timeline seconds.
+    /// Port of C# PlaybackEngine.GetClipEndTimeSeconds (lines 1456-1460).
+    pub fn get_clip_end_time_seconds(&mut self, clip: &TimelineClip) -> f32 {
+        self.beat_to_timeline_time(clip.end_beat())
+    }
+
+    /// Get clip duration in timeline seconds.
+    /// Port of C# PlaybackEngine.GetClipDurationSeconds (lines 1463-1468).
+    pub fn get_clip_duration_seconds(&mut self, clip: &TimelineClip) -> f32 {
+        let duration = self.get_clip_end_time_seconds(clip) - self.get_clip_start_time_seconds(clip);
+        duration.max(0.0)
+    }
+
+    /// Get clip loop duration in timeline seconds.
+    /// Port of C# PlaybackEngine.GetClipLoopDurationSeconds (lines 1471-1477).
+    pub fn get_clip_loop_duration_seconds(&mut self, clip: &TimelineClip) -> f32 {
+        if clip.loop_duration_beats <= 0.0 { return 0.0; }
+        let loop_end = self.beat_to_timeline_time(clip.start_beat + clip.loop_duration_beats);
+        let loop_start = self.get_clip_start_time_seconds(clip);
+        (loop_end - loop_start).max(0.0)
+    }
+
+    /// Resolve the effective recorded BPM for a clip.
+    /// Checks per-clip BPM first, then project recording provenance, else 0.
+    /// Port of C# PlaybackEngine.ResolveClipRecordedBpm (lines 1480-1492).
+    pub fn resolve_clip_recorded_bpm(&self, clip: &TimelineClip) -> f32 {
+        if clip.recorded_bpm > 0.0 {
+            return clip.recorded_bpm;
+        }
+        if let Some(project) = &self.project {
+            if project.recording_provenance.has_recorded_project_bpm {
+                let bpm = project.recording_provenance.recorded_project_bpm;
+                return bpm.clamp(20.0, 300.0);
+            }
+        }
+        0.0
+    }
+
+    /// Get playback rate for BPM time-stretching.
+    /// Returns 1.0 for generators or clips without recorded BPM.
+    /// Port of C# PlaybackEngine.GetClipPlaybackRate (lines 1495-1505).
+    pub fn get_clip_playback_rate(&mut self, clip: &TimelineClip) -> f32 {
+        if clip.is_generator() { return 1.0; }
+
+        let recorded_bpm = self.resolve_clip_recorded_bpm(clip);
+        if recorded_bpm <= 0.0 { return 1.0; }
+
+        let timeline_bpm = self.get_bpm_at_beat(self.current_beat).clamp(20.0, 300.0);
+        let rate = timeline_bpm / recorded_bpm;
+        rate.clamp(MIN_CLIP_PLAYBACK_RATE, MAX_CLIP_PLAYBACK_RATE)
+    }
+
+    /// Try to get the recorded seconds-per-beat for a clip.
+    /// Port of C# PlaybackEngine.TryGetClipRecordedSpb (lines 1508-1516).
+    pub fn try_get_clip_recorded_spb(&self, clip: &TimelineClip) -> Option<f32> {
+        let recorded_bpm = self.resolve_clip_recorded_bpm(clip);
+        if recorded_bpm <= 0.0 { return None; }
+        let spb = TempoMapConverter::seconds_per_beat_from_bpm(recorded_bpm);
+        if spb > 0.0 { Some(spb) } else { None }
+    }
+
+    /// Get elapsed source-time seconds for a clip at the current playhead.
+    /// Port of C# PlaybackEngine.GetClipSourceElapsedSeconds (lines 1519-1532).
+    pub fn get_clip_source_elapsed_seconds(&mut self, clip: &TimelineClip) -> f32 {
+        if let Some(recorded_spb) = self.try_get_clip_recorded_spb(clip) {
+            let elapsed_beats = (self.current_beat - clip.start_beat).max(0.0);
+            return elapsed_beats * recorded_spb;
+        }
+        let clip_start_time = self.get_clip_start_time_seconds(clip);
+        let clip_local_time = (self.current_time - clip_start_time).max(0.0);
+        clip_local_time * self.get_clip_playback_rate(clip)
+    }
+
+    /// Get total source duration in seconds for a clip.
+    /// Port of C# PlaybackEngine.GetClipSourceDurationSeconds (lines 1535-1543).
+    pub fn get_clip_source_duration_seconds(&mut self, clip: &TimelineClip) -> f32 {
+        if let Some(recorded_spb) = self.try_get_clip_recorded_spb(clip) {
+            return (clip.duration_beats * recorded_spb).max(0.0);
+        }
+        (self.get_clip_duration_seconds(clip) * self.get_clip_playback_rate(clip)).max(0.0)
+    }
+
+    /// Get source-time loop duration in seconds for a clip.
+    /// Port of C# PlaybackEngine.GetClipSourceLoopDurationSeconds (lines 1546-1554).
+    pub fn get_clip_source_loop_duration_seconds(&mut self, clip: &TimelineClip) -> f32 {
+        if clip.loop_duration_beats <= 0.0 { return 0.0; }
+        if let Some(recorded_spb) = self.try_get_clip_recorded_spb(clip) {
+            return (clip.loop_duration_beats * recorded_spb).max(0.0);
+        }
+        (self.get_clip_loop_duration_seconds(clip) * self.get_clip_playback_rate(clip)).max(0.0)
+    }
+
+    /// Compute video time for a clip (beat-domain, with looping).
+    /// Uses source-elapsed and in-point. Port of C# PlaybackEngine.ComputeVideoTime
+    /// (lines 1561-1581).
+    pub fn compute_video_time(&mut self, clip: &TimelineClip, clip_id: &str) -> f32 {
+        let source_elapsed = self.get_clip_source_elapsed_seconds(clip);
+
+        // Get media length from renderer if looping
+        let media_length = if clip.is_looping {
+            self.get_clip_media_length(clip_id)
+        } else {
+            0.0
+        };
+
+        if clip.is_looping && media_length > 0.01 {
+            let source_available = (media_length - clip.in_point).max(0.0);
+            let loop_len_sec = if clip.loop_duration_beats > 0.0 {
+                self.get_clip_source_loop_duration_seconds(clip).min(source_available)
+            } else {
+                media_length
+            };
+
+            if loop_len_sec > 0.01 {
+                return clip.in_point + (source_elapsed % loop_len_sec);
+            }
+        }
+
+        clip.in_point + source_elapsed
+    }
+
+    /// Apply the playback rate to a renderer for a clip.
+    /// Port of C# PlaybackEngine.ApplyClipPlaybackRate (lines 1584-1588).
+    pub fn apply_clip_playback_rate(&mut self, clip_id: &str, clip: &TimelineClip) {
+        let rate = self.get_clip_playback_rate(clip);
+        if let Some(&idx) = self.active_clip_renderers.get(clip_id) {
+            self.renderers[idx].set_clip_playback_rate(clip_id, rate);
+        }
+    }
+
+    /// Get media length from the active renderer for a clip.
+    fn get_clip_media_length(&self, clip_id: &str) -> f32 {
+        if let Some(&idx) = self.active_clip_renderers.get(clip_id) {
+            self.renderers[idx].get_clip_media_length(clip_id)
+        } else {
+            0.0
+        }
+    }
+
+    // ─── Clip maintenance methods ───
+
+    /// Poll preparing clips for readiness. When ready: seek, resume, track as
+    /// recently-started. Port of C# PlaybackEngine.CheckPreparingClips (lines 758-815).
+    pub fn check_preparing_clips(&mut self) {
+        if self.preparing_clips.is_empty() { return; }
+
+        self.became_ready_list.clear();
+
+        let preparing_list: Vec<String> = self.preparing_clips.iter().cloned().collect();
+        for clip_id in &preparing_list {
+            let renderer_idx = match self.active_clip_renderers.get(clip_id.as_str()) {
+                Some(&idx) => idx,
+                None => {
+                    // Clip was stopped while preparing — clean up
+                    self.became_ready_list.push(clip_id.clone());
+                    continue;
+                }
+            };
+
+            if !self.renderers[renderer_idx].is_clip_ready(clip_id) {
+                continue;
+            }
+
+            // Clip is prepared!
+            self.became_ready_list.push(clip_id.clone());
+
+            let clip = match self.find_timeline_clip(clip_id).cloned() {
+                Some(c) => c,
+                None => continue,
+            };
+
+            // Apply rate and seek
+            let rate = self.get_clip_playback_rate(&clip);
+            self.renderers[renderer_idx].set_clip_playback_rate(clip_id, rate);
+            let video_time = self.compute_video_time(&clip, clip_id);
+            self.renderers[renderer_idx].seek_clip(clip_id, video_time);
+
+            if self.looping_clip_ids.contains(clip_id) {
+                self.renderers[renderer_idx].set_clip_looping(clip_id, true);
+            }
+
+            self.renderers[renderer_idx].resume_clip(clip_id);
+
+            // Exclude from compositor until first frame decodes
+            self.recently_started_times.insert(clip_id.clone(), self.last_realtime_now);
+
+            if self.current_state != PlaybackState::Playing
+                && self.renderers[renderer_idx].needs_pending_pause()
+            {
+                let deadline = self.last_realtime_now + PENDING_PAUSE_DELAY as f64;
+                self.pending_pauses.insert(clip_id.clone(), deadline);
+            }
+
+            self.compositor_dirty_deadline =
+                self.last_realtime_now + PENDING_PAUSE_DELAY as f64 + COMPOSITOR_DIRTY_TIME as f64;
+        }
+
+        for id in &self.became_ready_list {
+            self.preparing_clips.remove(id.as_str());
+        }
+    }
+
+    /// Enforce custom loop boundaries for looping clips with custom loop durations.
+    /// Port of C# PlaybackEngine.CheckCustomLoopBoundaries (lines 820-854).
+    pub fn check_custom_loop_boundaries(&mut self) {
+        let looping_list: Vec<String> = self.looping_clip_ids.iter().cloned().collect();
+        for clip_id in &looping_list {
+            let renderer_idx = match self.active_clip_renderers.get(clip_id.as_str()) {
+                Some(&idx) => idx,
+                None => continue,
+            };
+
+            if !self.renderers[renderer_idx].needs_prepare_phase() { continue; }
+            if self.preparing_clips.contains(clip_id) { continue; }
+            if !self.renderers[renderer_idx].is_clip_ready(clip_id) { continue; }
+
+            let clip = match self.find_timeline_clip(clip_id).cloned() {
+                Some(c) => c,
+                None => continue,
+            };
+            if clip.loop_duration_beats <= 0.0 { continue; }
+
+            let media_length = self.renderers[renderer_idx].get_clip_media_length(clip_id);
+            let source_available = (media_length - clip.in_point).max(0.0);
+            let loop_len_sec = self.get_clip_source_loop_duration_seconds(&clip).min(source_available);
+
+            if loop_len_sec < 0.01 { continue; }
+
+            let boundary = clip.in_point + loop_len_sec;
+
+            if self.renderers[renderer_idx].get_clip_playback_time(clip_id) >= boundary {
+                self.renderers[renderer_idx].pause_clip(clip_id);
+                self.renderers[renderer_idx].seek_clip(clip_id, clip.in_point);
+                let rate = self.get_clip_playback_rate(&clip);
+                self.renderers[renderer_idx].set_clip_playback_rate(clip_id, rate);
+                self.renderers[renderer_idx].resume_clip(clip_id);
+            }
+        }
+    }
+
+    /// Correct video drift: re-seek players that have drifted from expected position,
+    /// stop clips past their out-point, restart stopped players.
+    /// Port of C# PlaybackEngine.CorrectVideoDrift (lines 859-947).
+    pub fn correct_video_drift(&mut self) {
+        if self.project.is_none() { return; }
+
+        self.clips_to_stop_drift.clear();
+
+        let active_list: Vec<(String, usize)> = self.active_clip_renderers
+            .iter()
+            .map(|(k, &v)| (k.clone(), v))
+            .collect();
+
+        for (clip_id, renderer_idx) in &active_list {
+            if !self.renderers[*renderer_idx].needs_drift_correction() { continue; }
+            if self.preparing_clips.contains(clip_id) { continue; }
+            if !self.renderers[*renderer_idx].is_clip_ready(clip_id) { continue; }
+
+            let clip = match self.find_timeline_clip(clip_id).cloned() {
+                Some(c) => c,
+                None => continue,
+            };
+
+            let rate = self.get_clip_playback_rate(&clip);
+            self.renderers[*renderer_idx].set_clip_playback_rate(clip_id, rate);
+
+            // Looping clips managed by native looping — skip drift correction
+            if self.looping_clip_ids.contains(clip_id) { continue; }
+
+            let expected_video_time = clip.in_point + self.get_clip_source_elapsed_seconds(&clip);
+            let out_point = clip.in_point + self.get_clip_source_duration_seconds(&clip);
+
+            let playback_time = self.renderers[*renderer_idx].get_clip_playback_time(clip_id);
+            let media_length = self.renderers[*renderer_idx].get_clip_media_length(clip_id);
+
+            let is_live_slot = self.live_clip_manager.as_ref()
+                .is_some_and(|mgr| mgr.is_live_slot_clip(clip_id));
+
+            // Out-point enforcement
+            if !is_live_slot && playback_time >= out_point {
+                self.clips_to_stop_drift.push(clip_id.clone());
+                continue;
+            }
+
+            // Video reached natural end of file
+            if media_length > 0.0 && playback_time >= media_length - 0.1 {
+                if is_live_slot {
+                    self.renderers[*renderer_idx].seek_clip(clip_id, clip.in_point);
+                    self.renderers[*renderer_idx].set_clip_playback_rate(clip_id, rate);
+                    if self.current_state == PlaybackState::Playing
+                        && !self.renderers[*renderer_idx].is_clip_playing(clip_id)
+                    {
+                        self.renderers[*renderer_idx].resume_clip(clip_id);
+                    }
+                } else if self.renderers[*renderer_idx].is_clip_playing(clip_id) {
+                    self.renderers[*renderer_idx].pause_clip(clip_id);
+                }
+                continue;
+            }
+
+            // Live slots: avoid seek-based drift correction
+            if is_live_slot {
+                if !self.renderers[*renderer_idx].is_clip_playing(clip_id)
+                    && self.current_state == PlaybackState::Playing
+                {
+                    self.renderers[*renderer_idx].resume_clip(clip_id);
+                }
+                continue;
+            }
+
+            // Player stopped unexpectedly — restart it
+            let reached_end = media_length > 0.0 && expected_video_time >= media_length - 0.1;
+            if !self.renderers[*renderer_idx].is_clip_playing(clip_id)
+                && self.current_state == PlaybackState::Playing
+                && !reached_end
+            {
+                self.renderers[*renderer_idx].seek_clip(clip_id, expected_video_time);
+                self.renderers[*renderer_idx].set_clip_playback_rate(clip_id, rate);
+                self.renderers[*renderer_idx].resume_clip(clip_id);
+                if let Some(ref log_warn) = self.log_warning {
+                    log_warn(&format!("[PlaybackEngine] Restarted stopped player: {clip_id}"));
+                }
+                continue;
+            }
+
+            // Drift correction
+            let drift = (playback_time - expected_video_time).abs();
+            if drift > 0.1 {
+                self.renderers[*renderer_idx].seek_clip(clip_id, expected_video_time);
+                self.renderers[*renderer_idx].set_clip_playback_rate(clip_id, rate);
+                self.drift_correction_count += 1;
+                if let Some(ref log_warn) = self.log_warning {
+                    log_warn(&format!("[PlaybackEngine] Drift correction: {clip_id} ({drift:.3}s)"));
+                }
+            }
+        }
+
+        // Stop clips that exceeded their out-point (deferred to avoid borrow conflict)
+        let to_stop: Vec<String> = self.clips_to_stop_drift.drain(..).collect();
+        for clip_id in &to_stop {
+            self.stop_clip(clip_id);
+        }
+    }
+
+    /// Re-apply playback rates to all active clips.
+    /// Port of C# PlaybackEngine.UpdateActiveClipPlaybackRates (lines 952-962).
+    pub fn update_active_clip_playback_rates(&mut self) {
+        let active_list: Vec<(String, usize)> = self.active_clip_renderers
+            .iter()
+            .map(|(k, &v)| (k.clone(), v))
+            .collect();
+
+        for (clip_id, renderer_idx) in &active_list {
+            let clip = match self.find_timeline_clip(clip_id).cloned() {
+                Some(c) => c,
+                None => continue,
+            };
+            let rate = self.get_clip_playback_rate(&clip);
+            self.renderers[*renderer_idx].set_clip_playback_rate(clip_id, rate);
+        }
+    }
+
+    /// Re-seek all active seekable clips to current playhead position.
+    /// Port of C# PlaybackEngine.SeekActiveClips (lines 967-987).
+    pub fn seek_active_clips(&mut self) {
+        let active_list: Vec<(String, usize)> = self.active_clip_renderers
+            .iter()
+            .map(|(k, &v)| (k.clone(), v))
+            .collect();
+
+        for (clip_id, renderer_idx) in &active_list {
+            if !self.renderers[*renderer_idx].needs_prepare_phase() { continue; }
+            if self.preparing_clips.contains(clip_id.as_str()) { continue; }
+            if !self.renderers[*renderer_idx].is_clip_ready(clip_id) { continue; }
+
+            let clip = match self.find_timeline_clip(clip_id).cloned() {
+                Some(c) => c,
+                None => continue,
+            };
+
+            let rate = self.get_clip_playback_rate(&clip);
+            self.renderers[*renderer_idx].set_clip_playback_rate(clip_id, rate);
+            let video_time = self.compute_video_time(&clip, clip_id);
+            self.renderers[*renderer_idx].seek_clip(clip_id, video_time);
+        }
+
+        self.compositor_dirty_deadline = self.last_realtime_now + COMPOSITOR_DIRTY_TIME as f64;
+    }
+
+    /// Check if a recently-started clip should be excluded from compositor output.
+    /// Port of C# PlaybackEngine.ShouldExcludeRecentlyStarted (lines 1090-1105).
+    fn should_exclude_recently_started(
+        &self,
+        clip_id: &str,
+        clip_end_time_seconds: f32,
+        is_live_clip: bool,
+    ) -> bool {
+        let start_time = match self.recently_started_times.get(clip_id) {
+            Some(&t) => t,
+            None => return false,
+        };
+
+        let mut gate_time = if is_live_clip {
+            LIVE_RECENTLY_STARTED_TIME
+        } else {
+            RECENTLY_STARTED_TIME
+        };
+        let remaining = clip_end_time_seconds - self.current_time;
+        if remaining > 0.0 {
+            gate_time = gate_time.min(remaining * 0.4);
+        }
+
+        (self.last_realtime_now - start_time) < gate_time as f64
+    }
+
+    /// Filter active clips to only those ready for compositing.
+    /// Applies recently-started gate for video clips.
+    /// Port of C# PlaybackEngine.FilterReadyClips (lines 1193-1239).
+    pub fn filter_ready_clips(&mut self, pre_render_dt: f32) -> Vec<TimelineClip> {
+        // Resolve should-be-active clips (timeline + live slots)
+        self.compositor_fallback_clips.clear();
+        self.query_active_timeline_clips();
+        self.compositor_fallback_clips.extend(self.timeline_active_scratch.iter().cloned());
+        if let Some(mgr) = &self.live_clip_manager {
+            for (_, clip) in mgr.live_slots_list() {
+                self.compositor_fallback_clips.push(clip.clone());
+            }
+        }
+
+        // Pre-render all renderers (generators blit shaders, video is no-op)
+        for renderer in &mut self.renderers {
+            renderer.pre_render(self.current_time, self.current_beat, pre_render_dt);
+        }
+
+        // Filter to ready clips (index-based to avoid borrow conflict)
+        self.ready_clips_list.clear();
+        for i in 0..self.compositor_fallback_clips.len() {
+            let clip = &self.compositor_fallback_clips[i];
+            let clip_id = clip.id.clone();
+            let renderer_idx = match self.active_clip_renderers.get(clip_id.as_str()) {
+                Some(&idx) => idx,
+                None => continue,
+            };
+            if !self.renderers[renderer_idx].is_clip_ready(&clip_id) { continue; }
+
+            // Skip clips whose RenderTexture hasn't had time to decode (video-specific)
+            if self.renderers[renderer_idx].needs_prepare_phase() {
+                let is_live_clip = self.live_clip_manager.as_ref()
+                    .is_some_and(|mgr| mgr.is_live_slot_clip(&clip_id));
+                // Inline beat_to_timeline_time to avoid &mut self borrow
+                let clip_end_time = if let Some(project) = &self.project {
+                    TempoMapConverter::beat_to_seconds_immut(
+                        &project.tempo_map,
+                        clip.end_beat(),
+                        project.settings.bpm,
+                    )
+                } else {
+                    clip.end_beat() * 0.5
+                };
+                if self.should_exclude_recently_started(&clip_id, clip_end_time, is_live_clip) {
+                    continue;
+                }
+            }
+
+            self.ready_clips_list.push(self.compositor_fallback_clips[i].clone());
+        }
+
+        // Sort by layer index descending (back to front for compositing)
+        self.ready_clips_list.sort_by(|a, b| b.layer_index.cmp(&a.layer_index));
+
+        // Clear expired recently-started entries that passed the gate
+        let last_rt = self.last_realtime_now;
+        self.recently_started_times.retain(|_id, &mut start_time| {
+            last_rt - start_time < RECENTLY_STARTED_TIME as f64
+        });
+
+        self.ready_clips_list.clone()
+    }
+
+    /// Compute pre-warm candidates: clips near the playhead that should have decoders started.
+    /// Port of C# PlaybackEngine.ComputePrewarmCandidates (lines 1251-1330).
+    pub fn compute_prewarm_candidates(&mut self, force: bool) -> Option<HashMap<String, crate::video_time::PrewarmCandidate>> {
+        if self.project.as_ref().map_or(true, |p| p.video_library.clips.is_empty()) {
+            return None;
+        }
+
+        if !force && self.last_realtime_now < self.next_prewarm_at { return None; }
+
+        let in_live_burst = if let Some(mgr) = &self.live_clip_manager {
+            (self.last_realtime_now - mgr.last_live_trigger_at()) <= LIVE_PREWARM_BURST_TIME as f64
+        } else {
+            false
+        };
+        self.next_prewarm_at = self.last_realtime_now
+            + if in_live_burst { LIVE_PREWARM_INTERVAL } else { LOOKAHEAD_PREWARM_INTERVAL } as f64;
+
+        let window_start = self.current_time - LOOKAHEAD_PREWARM_BEHIND_TIME;
+        let window_end = self.current_time + LOOKAHEAD_PREWARM_AHEAD_TIME;
+
+        // Collect candidate clips (use immutable beat_to_seconds to avoid &mut self borrow)
+        self.prewarm_candidates.clear();
+        if let Some(project) = &self.project {
+            let any_solo = project.timeline.layers.iter().any(|l| l.is_solo);
+            let fallback_bpm = project.settings.bpm;
+
+            for layer in &project.timeline.layers {
+                if layer.is_muted { continue; }
+                if any_solo && !layer.is_solo { continue; }
+
+                for clip in &layer.clips {
+                    if clip.is_generator() || clip.is_muted { continue; }
+                    if clip.video_clip_id.is_empty() { continue; }
+
+                    let clip_start = TempoMapConverter::beat_to_seconds_immut(
+                        &project.tempo_map, clip.start_beat, fallback_bpm);
+                    let clip_end = TempoMapConverter::beat_to_seconds_immut(
+                        &project.tempo_map, clip.end_beat(), fallback_bpm);
+                    if clip_end < window_start { continue; }
+                    if clip_start > window_end { continue; }
+                    self.prewarm_candidates.push(clip.clone());
+                }
+            }
+        }
+
+        self.prewarm_candidates.sort_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Build prewarm set from candidates
+        let mut prewarm_set: HashMap<String, crate::video_time::PrewarmCandidate> = HashMap::new();
+        if let Some(project) = &self.project {
+            for clip in &self.prewarm_candidates {
+                if prewarm_set.len() >= LOOKAHEAD_PREWARM_MAX_UNIQUE_CLIPS { break; }
+                if prewarm_set.contains_key(&clip.video_clip_id) { continue; }
+
+                if let Some(vc) = project.video_library.find_clip_by_id(&clip.video_clip_id) {
+                    prewarm_set.insert(clip.video_clip_id.clone(), crate::video_time::PrewarmCandidate {
+                        video_clip_id: vc.id.clone(),
+                        file_path: vc.file_path.clone(),
+                    });
+                }
+            }
+        }
+
+        // Change detection
+        let changed = prewarm_set.len() != self.last_prewarm_ids.len()
+            || prewarm_set.keys().any(|k| !self.last_prewarm_ids.contains(k));
+
+        if !changed { return None; }
+
+        self.last_prewarm_ids.clear();
+        self.last_prewarm_ids.extend(prewarm_set.keys().cloned());
+
+        Some(prewarm_set)
     }
 }

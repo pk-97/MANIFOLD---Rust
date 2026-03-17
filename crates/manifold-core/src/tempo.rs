@@ -172,6 +172,39 @@ impl TempoMapConverter {
         seconds
     }
 
+    /// Immutable version of beat_to_seconds. Assumes tempo map is already sorted
+    /// (guaranteed after on_after_deserialize / ensure_valid).
+    pub fn beat_to_seconds_immut(tempo_map: &TempoMap, beat: f32, fallback_bpm: f32) -> f32 {
+        let points = &tempo_map.points;
+
+        if points.is_empty() {
+            return beat * Self::seconds_per_beat_from_bpm(fallback_bpm);
+        }
+
+        let mut seconds = 0.0f32;
+        let mut prev_beat = 0.0f32;
+        let mut current_bpm = fallback_bpm;
+
+        for point in points {
+            if point.beat >= beat {
+                break;
+            }
+            let segment_beats = point.beat - prev_beat;
+            if segment_beats > 0.0 {
+                seconds += segment_beats * Self::seconds_per_beat_from_bpm(current_bpm);
+            }
+            current_bpm = point.bpm;
+            prev_beat = point.beat;
+        }
+
+        let remaining = beat - prev_beat;
+        if remaining > 0.0 {
+            seconds += remaining * Self::seconds_per_beat_from_bpm(current_bpm);
+        }
+
+        seconds
+    }
+
     /// Convert seconds to beat position using tempo map.
     pub fn seconds_to_beat(tempo_map: &mut TempoMap, seconds: f32, fallback_bpm: f32) -> f32 {
         tempo_map.ensure_sorted();

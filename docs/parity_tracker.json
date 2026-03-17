@@ -9,12 +9,12 @@
   "subsystems": {
     "core": { "pct": 65, "audit_section": 1 },
     "editing": { "pct": 75, "audit_section": 2 },
-    "playback": { "pct": 45, "audit_section": 3 },
+    "playback": { "pct": 55, "audit_section": 3 },
     "effects": { "pct": 53, "audit_section": 4 },
     "generators": { "pct": 90, "audit_section": 6 },
     "compositor": { "pct": 50, "audit_section": 5 },
     "ui": { "pct": 65, "audit_section": 7 },
-    "io": { "pct": 25, "audit_section": 8 },
+    "io": { "pct": 35, "audit_section": 8 },
     "app": { "pct": 55, "audit_section": 9 },
     "audio_percussion": { "pct": 0, "audit_section": 10 },
     "midi_input": { "pct": 0, "audit_section": 11 },
@@ -128,9 +128,9 @@
       "title": "Port PlaybackEngine clip time/rate methods",
       "severity": "high",
       "est_loc": 300,
-      "status": "todo",
-      "commit": null,
-      "notes": "Missing: GetClipPlaybackRate, GetClipStartTimeSeconds, ComputeVideoTime, prewarm system, ~10 constants."
+      "status": "done",
+      "commit": "pending",
+      "notes": "Ported: 15 clip time/rate methods (GetClipPlaybackRate, ResolveClipRecordedBpm, ComputeVideoTime, etc.), 6 clip maintenance methods (CheckPreparingClips, CheckCustomLoopBoundaries, CorrectVideoDrift, UpdateActiveClipPlaybackRates, SeekActiveClips, FilterReadyClips with ShouldExcludeRecentlyStarted), prewarm system (ComputePrewarmCandidates + 9 constants), PrewarmCandidate struct. Fixed video_time.rs to match Unity exactly (Max(0,.) clamps, 0.01 threshold, mediaLength-inPoint). Added beat_to_seconds_immut for immutable tempo conversion."
     },
     {
       "number": 10,
@@ -164,9 +164,9 @@
       "title": "Add post-load validation pipeline",
       "severity": "high",
       "est_loc": 100,
-      "status": "todo",
-      "commit": null,
-      "notes": "6 Unity post-load steps not performed: BPM sync, DurationMode migration, PathResolver, Validate, etc."
+      "status": "done",
+      "commit": "pending",
+      "notes": "Ported 5 of 6 post-load steps: (1) on_after_deserialize (was present), (2) BPM sync with clamp 20-300, (3) DurationMode migration (force NoteOff), (4) Project.validate() structural check, (5) VideoLibrary.validate_clips() missing file detection, (6) Project.purge_orphaned_references() cascading cleanup. Step 3 (PathResolver.ResolveAll) deferred — requires GAP-CORE-7. Added has_clip() to VideoLibrary, ValidationResult struct."
     },
     {
       "number": 13,

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use crate::timeline::Timeline;
 use crate::video::VideoLibrary;
 use crate::midi::MidiMappingConfig;
@@ -6,6 +7,7 @@ use crate::settings::ProjectSettings;
 use crate::tempo::TempoMap;
 use crate::recording::RecordingProvenance;
 use crate::percussion::PercussionImportState;
+use crate::types::ClipDurationMode;
 
 /// Root project aggregate. Contains all project data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +111,94 @@ impl Project {
 
     pub fn total_clip_count(&self) -> usize {
         self.timeline.total_clip_count()
+    }
+
+    /// Migrate old projects: force all layers to NoteOff duration mode.
+    /// Port of C# ProjectSerializer.cs lines 45-50.
+    pub fn migrate_duration_modes(&mut self) {
+        for layer in &mut self.timeline.layers {
+            if layer.duration_mode != Some(ClipDurationMode::NoteOff) {
+                layer.duration_mode = Some(ClipDurationMode::NoteOff);
+            }
+        }
+    }
+
+    /// Sync BPM from tempo map beat 0, clamped to 20-300.
+    /// Port of C# ProjectSerializer.cs lines 39-43.
+    pub fn sync_bpm_from_tempo_map(&mut self) {
+        let start_bpm = self.tempo_map.get_bpm_at_beat(0.0, self.settings.bpm);
+        self.settings.bpm = start_bpm.clamp(20.0, 300.0);
+    }
+
+    /// Validate project structure. Returns list of error strings.
+    /// Port of C# Project.Validate (lines 245-286).
+    pub fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        // Validate timeline clip references
+        for layer in &self.timeline.layers {
+            for clip in &layer.clips {
+                if clip.is_generator() || clip.video_clip_id.is_empty() {
+                    continue;
+                }
+                if !self.video_library.has_clip(&clip.video_clip_id) {
+                    errors.push(format!(
+                        "Timeline clip {} references missing video {}",
+                        clip.id, clip.video_clip_id
+                    ));
+                }
+            }
+        }
+
+        errors
+    }
+
+    /// Purge orphaned references: timeline clips pointing at missing library entries,
+    /// stale MIDI mappings. Port of C# Project.PurgeOrphanedReferences (lines 305-358).
+    pub fn purge_orphaned_references(&mut self) -> PurgeResult {
+        let mut result = PurgeResult::default();
+
+        // Build set of all valid video clip IDs in the library
+        let valid_ids: HashSet<String> = self.video_library.clips
+            .iter()
+            .map(|c| c.id.clone())
+            .collect();
+
+        // Stage 1: Remove timeline clips referencing missing library entries
+        for layer in &mut self.timeline.layers {
+            let before = layer.clips.len();
+            layer.clips.retain(|clip| {
+                // Keep generators — they have no video reference
+                if clip.is_generator() { return true; }
+                if clip.video_clip_id.is_empty() { return true; }
+                valid_ids.contains(&clip.video_clip_id)
+            });
+            result.timeline_clips_removed += before - layer.clips.len();
+        }
+
+        // Stage 2: Purge stale clip IDs from MIDI mappings
+        result.midi_mappings_removed = self.midi_config.purge_orphaned_clip_ids(&valid_ids);
+
+        // Stage 3: Rebuild clip lookup cache if anything changed
+        if result.total_removed() > 0 {
+            self.timeline.rebuild_clip_lookup();
+        }
+
+        result
+    }
+}
+
+/// Result of purge_orphaned_references().
+/// Port of C# Project.PurgeResult.
+#[derive(Debug, Clone, Default)]
+pub struct PurgeResult {
+    pub timeline_clips_removed: usize,
+    pub midi_mappings_removed: usize,
+}
+
+impl PurgeResult {
+    pub fn total_removed(&self) -> usize {
+        self.timeline_clips_removed + self.midi_mappings_removed
     }
 }
 
