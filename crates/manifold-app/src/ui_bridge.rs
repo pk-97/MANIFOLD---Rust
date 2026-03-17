@@ -1978,7 +1978,14 @@ pub fn push_state(
 
         // Footer — quantize mode, resolution, FPS
         ui.footer.set_quantize_text(tree, project.settings.quantize_mode.display_name());
-        ui.footer.set_resolution_text(tree, project.settings.resolution_preset.display_name());
+        // Show preset label if dimensions match, otherwise show "WxH" (Unity: UpdateFooterResolutionText)
+        let (preset_w, preset_h) = project.settings.resolution_preset.dimensions();
+        let res_label = if preset_w == project.settings.output_width && preset_h == project.settings.output_height {
+            project.settings.resolution_preset.display_name().to_string()
+        } else {
+            format!("{}x{}", project.settings.output_width, project.settings.output_height)
+        };
+        ui.footer.set_resolution_text(tree, &res_label);
         ui.footer.set_fps_text(tree, &format!("{:.0} FPS", project.settings.frame_rate));
     }
 
