@@ -1,8 +1,11 @@
+// parametric_surface_raymarch.wgsl — Raymarch the pre-baked volume.
+// Mechanical translation of GeneratorParametricSurface.shader fragment pass.
+
 struct Uniforms {
     time_val: f32,
     speed: f32,
     aspect_ratio: f32,
-    _pad0: f32,
+    uv_scale: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -24,16 +27,23 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     return out;
 }
 
+// Volume covers [-4*0.7, +4*0.7]^3 = [-2.8, +2.8]^3
 const HALF_EXTENT: f32 = 4.0;
-const MAX_STEPS: i32 = 96;
-const SURFACE_THRESH: f32 = 0.02;
-const NORMAL_EPS: f32 = 0.005;
+const VOL_SCALE: f32 = 0.7;
+const MAX_STEPS: i32 = 80;
+const SURFACE_THRESH: f32 = 0.01;
+const NORMAL_EPS: f32 = 0.001;
+const MAX_DIST: f32 = 20.0;
+const MIN_STEP: f32 = 0.005;
+const CAM_DIST: f32 = 6.0;
 
-// Sample volume texture, converting world-space to [0,1]^3 UVW
+// Sample volume texture, converting world-space to [0,1]^3 UVW.
+// Volume was baked at p * 0.7 scale so extent is HALF_EXTENT * VOL_SCALE.
 fn sample_volume(p: vec3<f32>) -> f32 {
-    let uvw = p / (HALF_EXTENT * 2.0 * 0.7) + 0.5;
+    let extent = HALF_EXTENT * VOL_SCALE;
+    let uvw = p / (extent * 2.0) + 0.5;
     if any(uvw < vec3<f32>(0.0)) || any(uvw > vec3<f32>(1.0)) {
-        return 10.0; // Outside volume
+        return 10.0;
     }
     return textureSampleLevel(volume_tex, volume_sampler, uvw, 0.0).r;
 }
@@ -63,50 +73,50 @@ fn calc_normal(p: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let uv = in.uv * 2.0 - 1.0;
-    let t = u.time_val * u.speed;
+    // Matches Unity: uv = (i.uv - 0.5) * _UVScale; uv.x *= _AspectRatio;
+    var uv = (in.uv - 0.5) * u.uv_scale;
+    uv.x *= u.aspect_ratio;
 
-    // Orbiting camera
-    let cam_x = cos(t * 0.5) * 6.0;
-    let cam_y = sin(t * 0.35) * 2.1;
-    let cam_z = sin(t * 0.5) * 6.0;
-    let ro = vec3<f32>(cam_x, cam_y, cam_z);
+    // t = _Time2 * _AnimSpeed * 0.3
+    let t = u.time_val * u.speed * 0.3;
 
-    // Look-at camera
+    // Orbiting camera — matches Unity exactly
+    let ro = vec3<f32>(cos(t) * CAM_DIST, sin(t * 0.7) * 2.0, sin(t) * CAM_DIST);
     let target = vec3<f32>(0.0);
     let fwd = normalize(target - ro);
-    let world_up = vec3<f32>(0.0, 1.0, 0.0);
-    let right = normalize(cross(fwd, world_up));
-    let up = cross(right, fwd);
-
-    let rd = normalize(fwd + right * uv.x * u.aspect_ratio * 0.8 + up * uv.y * 0.8);
+    // Unity: right = normalize(cross(float3(0,1,0), fwd))
+    let right = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), fwd));
+    let up = cross(fwd, right);
+    // Unity: rd = normalize(fwd + uv.x * right + uv.y * up)
+    let rd = normalize(fwd + uv.x * right + uv.y * up);
 
     // Ray-box intersection
-    let extent = HALF_EXTENT * 0.7;
+    let extent = HALF_EXTENT * VOL_SCALE;
     let box_t = ray_box(ro, rd, extent);
 
     if box_t.x > box_t.y {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
 
-    // Sphere tracing through volume
+    // Sphere tracing — matches Unity loop
     var ray_t = box_t.x;
     var hit = false;
     var hit_pos = vec3<f32>(0.0);
 
-    for (var i = 0; i < MAX_STEPS; i++) {
+    for (var j = 0; j < MAX_STEPS; j++) {
         let p = ro + rd * ray_t;
         let d = sample_volume(p);
+        let abs_d = abs(d);
 
-        if abs(d) < SURFACE_THRESH {
+        if abs_d < SURFACE_THRESH {
             hit = true;
             hit_pos = p;
             break;
         }
 
-        // Step by distance (clamped to avoid overshooting)
-        ray_t += max(abs(d) * 0.5, 0.01);
-        if ray_t > box_t.y {
+        // Step by absolute distance — matches Unity: max(absd * 0.5, 0.005)
+        ray_t += max(abs_d * 0.5, MIN_STEP);
+        if ray_t > MAX_DIST {
             break;
         }
     }
@@ -115,17 +125,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
     }
 
-    // Lighting
+    // Lighting — matches Unity exactly
     let n = calc_normal(hit_pos);
     let light_dir = normalize(vec3<f32>(0.5, 0.8, -0.3));
-    let diffuse = max(dot(n, light_dir), 0.0);
+    let diff = max(dot(n, light_dir), 0.0) * 0.6;
 
-    // Rim lighting
-    let view_dir = normalize(ro - hit_pos);
-    let rim = pow(1.0 - max(dot(n, view_dir), 0.0), 3.0);
+    // Rim: pow(1.0 - abs(dot(n, -rd)), 3.0) * 0.5
+    let rim = pow(1.0 - abs(dot(n, -rd)), 3.0) * 0.5;
 
-    let ambient = 0.12;
-    let lum = ambient + diffuse * 0.7 + rim * 0.35;
+    let ambient = 0.15;
+    let lum = clamp(diff + rim + ambient, 0.0, 1.0);
 
     return vec4<f32>(lum, lum, lum, 1.0);
 }

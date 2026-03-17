@@ -2,26 +2,23 @@ use manifold_core::GeneratorType;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 
-// Parameter indices matching types.rs param_defs
+// Parameter indices matching Unity ComputeParametricSurfaceGenerator
 const SHAPE: usize = 0;
 const MORPH: usize = 1;
 const SPEED: usize = 2;
 const SCALE: usize = 3;
-// SNAP (index 4) handled at app layer via trigger_count
+const SNAP: usize = 4;
+const SURFACE_COUNT: u32 = 5;
 
 const VOL_SIZE: u32 = 128;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BakeUniforms {
-    shape_a: f32,
-    shape_b: f32,
+    shape: f32,
     morph: f32,
-    time_val: f32,
-    speed: f32,
-    scale: f32,
+    vol_res: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 #[repr(C)]
@@ -30,7 +27,7 @@ struct RaymarchUniforms {
     time_val: f32,
     speed: f32,
     aspect_ratio: f32,
-    _pad0: f32,
+    uv_scale: f32,
 }
 
 pub struct ParametricSurfaceGenerator {
@@ -47,17 +44,16 @@ pub struct ParametricSurfaceGenerator {
     raymarch_bgl: wgpu::BindGroupLayout,
     raymarch_uniform_buffer: wgpu::Buffer,
     volume_sampler: wgpu::Sampler,
-    // Dirty tracking: only re-bake when shape/morph/scale changes
+    // Dirty tracking: only re-bake when shape or morph changes (matches Unity ShouldRebake)
     last_shape: f32,
     last_morph: f32,
-    last_scale: f32,
-    last_speed: f32,
-    last_time: f32,
 }
 
 impl ParametricSurfaceGenerator {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
         // ── 3D Volume Texture ──
+        // Unity: RenderTextureFormat.RHalf. Use Rgba16Float for filterable storage on all backends.
+        // Bake writes vec4(d, 0, 0, 0); raymarch reads .r channel only.
         let volume_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("ParametricSurface Volume"),
             size: wgpu::Extent3d {
@@ -232,21 +228,25 @@ impl ParametricSurfaceGenerator {
             raymarch_bgl,
             raymarch_uniform_buffer,
             volume_sampler,
-            last_shape: -1.0,
-            last_morph: -1.0,
-            last_scale: -1.0,
-            last_speed: -1.0,
-            last_time: -1.0,
+            last_shape: f32::MIN,
+            last_morph: f32::MIN,
         }
     }
 
-    fn needs_rebake(&self, shape: f32, morph: f32, scale: f32, speed: f32, time: f32) -> bool {
-        // Re-bake every frame since animation depends on time
-        (self.last_shape - shape).abs() > 0.001
-            || (self.last_morph - morph).abs() > 0.001
-            || (self.last_scale - scale).abs() > 0.001
-            || (self.last_speed - speed).abs() > 0.001
-            || (self.last_time - time).abs() > 0.01
+    // Matches Unity: Mathf.Approximately uses ~0.00001 epsilon
+    fn needs_rebake(&self, shape: f32, morph: f32) -> bool {
+        (self.last_shape - shape).abs() > 0.00001
+            || (self.last_morph - morph).abs() > 0.00001
+    }
+
+    // Matches Unity ResolveShape: when snap > 0.5, shape = trigger_count % SURFACE_COUNT
+    fn resolve_shape(ctx: &GeneratorContext) -> f32 {
+        let snap = if ctx.param_count > SNAP as u32 { ctx.params[SNAP] } else { 0.0 };
+        if snap > 0.5 {
+            (ctx.trigger_count % SURFACE_COUNT) as f32
+        } else {
+            if ctx.param_count > SHAPE as u32 { ctx.params[SHAPE] } else { 0.0 }
+        }
     }
 }
 
@@ -263,26 +263,21 @@ impl Generator for ParametricSurfaceGenerator {
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
     ) -> f32 {
-        let shape = if ctx.param_count > SHAPE as u32 { ctx.params[SHAPE] } else { 0.0 };
+        let shape = Self::resolve_shape(ctx);
         let morph = if ctx.param_count > MORPH as u32 { ctx.params[MORPH] } else { 0.0 };
         let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 1.0 };
         let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
 
-        let shape_a = shape.floor().max(0.0).min(4.0);
-        let shape_b = (shape_a + 1.0).min(4.0);
-        let morph_frac = shape.fract().max(0.0) + morph;
+        // UV scale: matches Unity base class — rawScale > 0 ? 1/rawScale : 1
+        let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
 
-        // Compute bake pass (only when params change)
-        if self.needs_rebake(shape, morph, scale, speed, ctx.time) {
+        // Compute bake pass — only when shape or morph change (static per shape/morph)
+        if self.needs_rebake(shape, morph) {
             let bake_uniforms = BakeUniforms {
-                shape_a,
-                shape_b,
-                morph: morph_frac.min(1.0),
-                time_val: ctx.time,
-                speed,
-                scale: if scale > 0.0 { 1.0 / scale } else { 1.0 },
+                shape: shape.clamp(0.0, 4.0),
+                morph: morph.clamp(0.0, 1.0),
+                vol_res: VOL_SIZE as f32,
                 _pad0: 0.0,
-                _pad1: 0.0,
             };
             queue.write_buffer(&self.bake_uniform_buffer, 0, bytemuck::bytes_of(&bake_uniforms));
 
@@ -308,23 +303,20 @@ impl Generator for ParametricSurfaceGenerator {
                 });
                 pass.set_pipeline(&self.compute_pipeline);
                 pass.set_bind_group(0, &compute_bg, &[]);
-                // 128/4 = 32 workgroups per dimension (workgroup_size is 4,4,4 for Metal compat)
+                // 128 / 4 workgroup_size = 32 workgroups per axis
                 pass.dispatch_workgroups(32, 32, 32);
             }
 
             self.last_shape = shape;
             self.last_morph = morph;
-            self.last_scale = scale;
-            self.last_speed = speed;
-            self.last_time = ctx.time;
         }
 
-        // Raymarch pass
+        // Raymarch pass — every frame (camera orbits with time)
         let raymarch_uniforms = RaymarchUniforms {
             time_val: ctx.time,
             speed,
             aspect_ratio: ctx.aspect,
-            _pad0: 0.0,
+            uv_scale,
         };
         queue.write_buffer(&self.raymarch_uniform_buffer, 0, bytemuck::bytes_of(&raymarch_uniforms));
 
