@@ -1,10 +1,19 @@
-// ColorGrade effect — HSV hue shift, saturation, gain, contrast.
+// Mechanical port of Unity ColorGradeEffect.shader.
+// K-matrix HSV, luma-based saturation, colorize pipeline, amount blend.
 
 struct Uniforms {
-    hue_shift: f32,    // param[0]: -1..1 → -180..180 degrees
-    saturation: f32,   // param[1]: 0..2 (1=neutral)
-    gain: f32,         // param[2]: 0..3 (1=neutral)
-    contrast: f32,     // param[3]: 0..3 (1=neutral)
+    amount: f32,                // _Amount
+    gain: f32,                  // _Gain
+    saturation: f32,            // _Saturation
+    hue: f32,                   // _Hue (degrees, -180..180)
+    contrast: f32,              // _Contrast
+    colorize: f32,              // _Colorize
+    colorize_hue: f32,          // _ColorizeHue (degrees, 0..360)
+    colorize_saturation: f32,   // _ColorizeSaturation
+    colorize_focus: f32,        // _ColorizeFocus
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -26,64 +35,71 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     return out;
 }
 
+// ColorGradeEffect.shader lines 66-74 — RGB → HSV (K-matrix method)
 fn rgb_to_hsv(c: vec3<f32>) -> vec3<f32> {
-    let mx = max(c.r, max(c.g, c.b));
-    let mn = min(c.r, min(c.g, c.b));
-    let d = mx - mn;
-    var h = 0.0;
-    if d > 0.0001 {
-        if mx == c.r {
-            h = (c.g - c.b) / d;
-            if h < 0.0 { h += 6.0; }
-        } else if mx == c.g {
-            h = (c.b - c.r) / d + 2.0;
-        } else {
-            h = (c.r - c.g) / d + 4.0;
-        }
-        h /= 6.0;
-    }
-    let s = select(0.0, d / mx, mx > 0.0);
-    return vec3<f32>(h, s, mx);
+    let K = vec4<f32>(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+    let p = mix(vec4<f32>(c.b, c.g, K.w, K.z), vec4<f32>(c.g, c.b, K.x, K.y), step(c.b, c.g));
+    let q = mix(vec4<f32>(p.x, p.y, p.w, c.r), vec4<f32>(c.r, p.y, p.z, p.x), step(p.x, c.r));
+    let d = q.x - min(q.w, q.y);
+    let e = 1e-10;
+    return vec3<f32>(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
 }
 
-fn hsv_to_rgb(hsv: vec3<f32>) -> vec3<f32> {
-    let h = hsv.x * 6.0;
-    let s = hsv.y;
-    let v = hsv.z;
-    let c = v * s;
-    let x = c * (1.0 - abs(h % 2.0 - 1.0));
-    let m = v - c;
-    var rgb: vec3<f32>;
-    if h < 1.0 { rgb = vec3<f32>(c, x, 0.0); }
-    else if h < 2.0 { rgb = vec3<f32>(x, c, 0.0); }
-    else if h < 3.0 { rgb = vec3<f32>(0.0, c, x); }
-    else if h < 4.0 { rgb = vec3<f32>(0.0, x, c); }
-    else if h < 5.0 { rgb = vec3<f32>(x, 0.0, c); }
-    else { rgb = vec3<f32>(c, 0.0, x); }
-    return rgb + vec3<f32>(m);
+// ColorGradeEffect.shader lines 77-82 — HSV → RGB (K-matrix method)
+fn hsv_to_rgb(c: vec3<f32>) -> vec3<f32> {
+    let K = vec4<f32>(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+    let p = abs(fract(vec3<f32>(c.x, c.x, c.x) + K.xyz) * 6.0 - K.www);
+    return c.z * mix(K.xxx, clamp(p - K.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let color = textureSample(source_tex, tex_sampler, in.uv);
+    // ColorGradeEffect.shader lines 86-87
+    let src = textureSample(source_tex, tex_sampler, in.uv);
+    var c = src.rgb;
 
-    // Convert to HSV
-    var hsv = rgb_to_hsv(color.rgb);
+    // line 90: Gain (exposure)
+    c *= uniforms.gain;
 
-    // Hue shift
-    hsv.x = (hsv.x + uniforms.hue_shift + 1.0) % 1.0;
+    // lines 93-94: Saturation — lerp toward luminance
+    let luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+    c = mix(vec3<f32>(luma, luma, luma), c, uniforms.saturation);
 
-    // Saturation
-    hsv.y = clamp(hsv.y * uniforms.saturation, 0.0, 1.0);
+    // lines 98-103: Hue shift — rotate in HSV space (skip when hue ~0)
+    if abs(uniforms.hue) > 0.01 {
+        var hsv = rgb_to_hsv(c);
+        hsv.x = fract(hsv.x + uniforms.hue / 360.0);
+        c = hsv_to_rgb(hsv);
+    }
 
-    // Convert back to RGB
-    var rgb = hsv_to_rgb(hsv);
+    // line 106: Contrast — pivot around 0.5
+    c = (c - 0.5) * uniforms.contrast + 0.5;
 
-    // Gain (multiply)
-    rgb *= uniforms.gain;
+    // lines 110-128: Colorize pass
+    let colorize = clamp(uniforms.colorize, 0.0, 1.0);
+    if colorize > 1e-4 {
+        // line 113: tint HSV → RGB
+        let tint_h = fract(uniforms.colorize_hue / 360.0);
+        let tint_hsv = vec3<f32>(
+            tint_h,
+            clamp(uniforms.colorize_saturation, 0.0, 1.0),
+            1.0);
+        let tint_rgb = hsv_to_rgb(tint_hsv);
 
-    // Contrast (around 0.5 midpoint)
-    rgb = (rgb - 0.5) * uniforms.contrast + 0.5;
+        // lines 120-125: highlight/neutral masks
+        let graded_luma = dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let graded_sat = rgb_to_hsv(clamp(c, vec3<f32>(0.0), vec3<f32>(1.0))).y;
+        let highlight_mask = smoothstep(0.18, 0.95, graded_luma);
+        let neutral_mask = 1.0 - smoothstep(0.10, 0.80, graded_sat);
+        let focus = clamp(uniforms.colorize_focus, 0.0, 1.0);
+        let element_mask = mix(1.0, highlight_mask * neutral_mask, focus);
 
-    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), color.a);
+        // lines 126-127: tinted blend
+        let tinted = tint_rgb * graded_luma;
+        c = mix(c, tinted, colorize * element_mask);
+    }
+
+    // line 130: Final amount blend
+    let result = mix(src.rgb, c, uniforms.amount);
+    return vec4<f32>(result, src.a);
 }
