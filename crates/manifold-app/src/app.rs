@@ -1344,6 +1344,7 @@ impl ApplicationHandler for Application {
             ));
 
             self.compositor = Some(Box::new(LayerCompositor::new(&device, output_w, output_h)));
+            log::warn!("[GPU INIT] generator/compositor resolution: {}x{}", output_w, output_h);
 
             GpuContext {
                 instance,
