@@ -10,12 +10,16 @@ pub mod settings;
 pub mod video;
 pub mod tempo;
 pub mod effects;
+pub mod effect_definition_registry;
+pub mod effect_category_registry;
 pub mod midi;
 pub mod generator;
+pub mod generator_definition_registry;
 pub mod recording;
 pub mod percussion;
 
 pub use types::*;
 pub use color::Color;
 pub use math::{BeatQuantizer, MathUtils, short_id};
-pub use selection::SelectionRegion;
+pub use selection::{SelectionRegion, SelectionRegionTarget};
+pub use effects::{EffectContainer, ParamSource};

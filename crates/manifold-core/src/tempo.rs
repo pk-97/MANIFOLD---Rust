@@ -47,9 +47,13 @@ impl TempoMap {
     }
 
     /// Get BPM at a given beat (step-change lookup).
+    /// Unity TempoMap.cs lines 198-214: initializes from points[0].bpm, not fallback.
     pub fn get_bpm_at_beat(&mut self, beat: f32, fallback: f32) -> f32 {
         self.ensure_sorted();
-        let mut bpm = fallback;
+        if self.points.is_empty() {
+            return fallback.clamp(20.0, 300.0);
+        }
+        let mut bpm = self.points[0].bpm;
         for point in &self.points {
             if point.beat <= beat {
                 bpm = point.bpm;
@@ -129,116 +133,174 @@ impl TempoMap {
 }
 
 /// Pure tempo math — beat↔seconds conversion via piecewise integration.
+/// Port of Unity TempoMapConverter.cs.
 pub struct TempoMapConverter;
 
 impl TempoMapConverter {
+    /// Unity TempoMapConverter.cs line 111-113: clamps BPM to 20-300.
     pub fn seconds_per_beat_from_bpm(bpm: f32) -> f32 {
-        if bpm <= 0.0 { return 0.5; }
-        60.0 / bpm
+        60.0 / bpm.clamp(20.0, 300.0)
+    }
+
+    /// Get BPM at beat 0 from tempo map, with fallback.
+    /// Unity TempoMapConverter.cs lines 116-121.
+    fn get_bpm_at_beat_zero(tempo_map: &mut TempoMap, fallback_bpm: f32) -> f32 {
+        if tempo_map.points.is_empty() {
+            return fallback_bpm.clamp(20.0, 300.0);
+        }
+        tempo_map.get_bpm_at_beat(0.0, fallback_bpm)
     }
 
     /// Convert beat position to seconds using tempo map.
+    /// Unity TempoMapConverter.cs lines 14-56.
     pub fn beat_to_seconds(tempo_map: &mut TempoMap, beat: f32, fallback_bpm: f32) -> f32 {
         tempo_map.ensure_sorted();
-        let points = &tempo_map.points;
+        let bpm_at_zero = Self::get_bpm_at_beat_zero(tempo_map, fallback_bpm);
+        let spb_at_zero = Self::seconds_per_beat_from_bpm(bpm_at_zero);
 
-        if points.is_empty() {
-            return beat * Self::seconds_per_beat_from_bpm(fallback_bpm);
+        if tempo_map.points.is_empty() {
+            return beat * spb_at_zero;
         }
 
-        let mut seconds = 0.0f32;
-        let mut prev_beat = 0.0f32;
-        let mut current_bpm = fallback_bpm;
+        // Negative-beat conversion uses beat-0 tempo
+        if beat <= 0.0 {
+            return beat * spb_at_zero;
+        }
 
-        for point in points {
+        let mut total_seconds = 0.0f32;
+        let mut current_beat = 0.0f32;
+        let mut current_bpm = bpm_at_zero;
+
+        for point in &tempo_map.points {
+            // Skip points at or before beat 0 (absorb their BPM)
+            if point.beat <= 0.0 {
+                current_bpm = point.bpm;
+                continue;
+            }
+
             if point.beat >= beat {
                 break;
             }
-            // Accumulate time from prev_beat to this point
-            let segment_beats = point.beat - prev_beat;
-            if segment_beats > 0.0 {
-                seconds += segment_beats * Self::seconds_per_beat_from_bpm(current_bpm);
+
+            let delta_beats = point.beat - current_beat;
+            if delta_beats > 0.0 {
+                total_seconds += delta_beats * Self::seconds_per_beat_from_bpm(current_bpm);
             }
+
+            current_beat = point.beat;
             current_bpm = point.bpm;
-            prev_beat = point.beat;
         }
 
-        // Final segment from last point to target beat
-        let remaining = beat - prev_beat;
-        if remaining > 0.0 {
-            seconds += remaining * Self::seconds_per_beat_from_bpm(current_bpm);
+        let tail_beats = beat - current_beat;
+        if tail_beats > 0.0 {
+            total_seconds += tail_beats * Self::seconds_per_beat_from_bpm(current_bpm);
         }
 
-        seconds
+        total_seconds
     }
 
     /// Immutable version of beat_to_seconds. Assumes tempo map is already sorted
     /// (guaranteed after on_after_deserialize / ensure_valid).
     pub fn beat_to_seconds_immut(tempo_map: &TempoMap, beat: f32, fallback_bpm: f32) -> f32 {
-        let points = &tempo_map.points;
+        let bpm_at_zero = if tempo_map.points.is_empty() {
+            fallback_bpm.clamp(20.0, 300.0)
+        } else {
+            // Inline get_bpm_at_beat logic for immutable access
+            let mut bpm = tempo_map.points[0].bpm;
+            for point in &tempo_map.points {
+                if point.beat <= 0.0 {
+                    bpm = point.bpm;
+                } else {
+                    break;
+                }
+            }
+            bpm.clamp(20.0, 300.0)
+        };
+        let spb_at_zero = Self::seconds_per_beat_from_bpm(bpm_at_zero);
 
-        if points.is_empty() {
-            return beat * Self::seconds_per_beat_from_bpm(fallback_bpm);
+        if tempo_map.points.is_empty() {
+            return beat * spb_at_zero;
         }
 
-        let mut seconds = 0.0f32;
-        let mut prev_beat = 0.0f32;
-        let mut current_bpm = fallback_bpm;
+        if beat <= 0.0 {
+            return beat * spb_at_zero;
+        }
 
-        for point in points {
+        let mut total_seconds = 0.0f32;
+        let mut current_beat = 0.0f32;
+        let mut current_bpm = bpm_at_zero;
+
+        for point in &tempo_map.points {
+            if point.beat <= 0.0 {
+                current_bpm = point.bpm;
+                continue;
+            }
             if point.beat >= beat {
                 break;
             }
-            let segment_beats = point.beat - prev_beat;
-            if segment_beats > 0.0 {
-                seconds += segment_beats * Self::seconds_per_beat_from_bpm(current_bpm);
+            let delta_beats = point.beat - current_beat;
+            if delta_beats > 0.0 {
+                total_seconds += delta_beats * Self::seconds_per_beat_from_bpm(current_bpm);
             }
+            current_beat = point.beat;
             current_bpm = point.bpm;
-            prev_beat = point.beat;
         }
 
-        let remaining = beat - prev_beat;
-        if remaining > 0.0 {
-            seconds += remaining * Self::seconds_per_beat_from_bpm(current_bpm);
+        let tail_beats = beat - current_beat;
+        if tail_beats > 0.0 {
+            total_seconds += tail_beats * Self::seconds_per_beat_from_bpm(current_bpm);
         }
 
-        seconds
+        total_seconds
     }
 
     /// Convert seconds to beat position using tempo map.
+    /// Unity TempoMapConverter.cs lines 61-109.
     pub fn seconds_to_beat(tempo_map: &mut TempoMap, seconds: f32, fallback_bpm: f32) -> f32 {
         tempo_map.ensure_sorted();
-        let points = &tempo_map.points;
+        let bpm_at_zero = Self::get_bpm_at_beat_zero(tempo_map, fallback_bpm);
+        let spb_at_zero = Self::seconds_per_beat_from_bpm(bpm_at_zero);
 
-        if points.is_empty() {
-            let spb = Self::seconds_per_beat_from_bpm(fallback_bpm);
-            return if spb > 0.0 { seconds / spb } else { 0.0 };
+        if tempo_map.points.is_empty() {
+            return if spb_at_zero > 0.0 { seconds / spb_at_zero } else { 0.0 };
         }
 
-        let mut accumulated_seconds = 0.0f32;
-        let mut prev_beat = 0.0f32;
-        let mut current_bpm = fallback_bpm;
+        // Negative-time conversion uses beat-0 tempo
+        if seconds <= 0.0 {
+            return if spb_at_zero > 0.0 { seconds / spb_at_zero } else { 0.0 };
+        }
 
-        for point in points {
-            let segment_beats = point.beat - prev_beat;
-            let segment_seconds = segment_beats * Self::seconds_per_beat_from_bpm(current_bpm);
+        let mut remaining_seconds = seconds;
+        let mut current_beat = 0.0f32;
+        let mut current_bpm = bpm_at_zero;
 
-            if accumulated_seconds + segment_seconds >= seconds {
-                // Target is within this segment
-                let remaining_seconds = seconds - accumulated_seconds;
-                let spb = Self::seconds_per_beat_from_bpm(current_bpm);
-                return prev_beat + if spb > 0.0 { remaining_seconds / spb } else { 0.0 };
+        for point in &tempo_map.points {
+            // Skip points at or before beat 0 (absorb their BPM)
+            if point.beat <= 0.0 {
+                current_bpm = point.bpm;
+                continue;
             }
 
-            accumulated_seconds += segment_seconds;
+            let segment_beats = point.beat - current_beat;
+            if segment_beats <= 0.0 {
+                current_beat = point.beat;
+                current_bpm = point.bpm;
+                continue;
+            }
+
+            let segment_seconds = segment_beats * Self::seconds_per_beat_from_bpm(current_bpm);
+            if remaining_seconds <= segment_seconds {
+                let spb = Self::seconds_per_beat_from_bpm(current_bpm);
+                return if spb > 0.0 { current_beat + remaining_seconds / spb } else { current_beat };
+            }
+
+            remaining_seconds -= segment_seconds;
+            current_beat = point.beat;
             current_bpm = point.bpm;
-            prev_beat = point.beat;
         }
 
-        // Past last point
-        let remaining_seconds = seconds - accumulated_seconds;
-        let spb = Self::seconds_per_beat_from_bpm(current_bpm);
-        prev_beat + if spb > 0.0 { remaining_seconds / spb } else { 0.0 }
+        let tail_spb = Self::seconds_per_beat_from_bpm(current_bpm);
+        if tail_spb > 0.0 { current_beat + remaining_seconds / tail_spb } else { current_beat }
     }
 }
 

@@ -243,6 +243,41 @@ impl Timeline {
         None
     }
 
+    /// Find layer by persistent ID. Unity Timeline.cs lines 225-234.
+    pub fn find_layer_by_id(&self, layer_id: &str) -> Option<(usize, &Layer)> {
+        self.layers.iter().enumerate().find(|(_, l)| l.layer_id == layer_id)
+    }
+
+    /// Move layer from one index to another. Unity Timeline.cs lines 250-266.
+    pub fn move_layer(&mut self, from: usize, to: usize) {
+        if from >= self.layers.len() || to >= self.layers.len() || from == to {
+            return;
+        }
+        let layer = self.layers.remove(from);
+        self.layers.insert(to, layer);
+        self.reindex_layers();
+    }
+
+    /// Get duration in seconds. Unity Timeline.cs lines 105-108.
+    pub fn get_duration_seconds(&self, seconds_per_beat: f32) -> f32 {
+        self.duration_beats() * seconds_per_beat
+    }
+
+    /// Clear all clips on all layers. Unity Timeline.cs lines 439-445.
+    pub fn clear_all_clips(&mut self) {
+        for layer in &mut self.layers {
+            layer.clear_clips();
+        }
+        self.mark_clip_lookup_dirty();
+    }
+
+    /// Insert an existing pre-built layer at index. Unity Timeline.cs lines 190-196.
+    pub fn insert_existing_layer(&mut self, index: usize, layer: Layer) {
+        let idx = index.min(self.layers.len());
+        self.layers.insert(idx, layer);
+        self.reindex_layers();
+    }
+
     /// Get the earliest clip start beat across all layers.
     /// From Unity Timeline.cs GetStartBeat.
     pub fn get_start_beat(&self) -> f32 {

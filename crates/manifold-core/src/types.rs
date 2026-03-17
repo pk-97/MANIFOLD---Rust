@@ -1258,6 +1258,33 @@ impl<'de> Deserialize<'de> for BeatDivision {
 }
 
 impl BeatDivision {
+    /// Convert integer value to BeatDivision. Returns None if invalid.
+    pub fn from_i32(val: i32) -> Option<Self> {
+        match val {
+            0 => Some(Self::ThirtySecond),
+            1 => Some(Self::Sixteenth),
+            2 => Some(Self::Eighth),
+            3 => Some(Self::Quarter),
+            4 => Some(Self::Half),
+            5 => Some(Self::Whole),
+            6 => Some(Self::TwoWhole),
+            7 => Some(Self::FourWhole),
+            8 => Some(Self::EightWhole),
+            9 => Some(Self::SixteenWhole),
+            10 => Some(Self::ThirtyTwoWhole),
+            11 => Some(Self::EighthDotted),
+            12 => Some(Self::QuarterDotted),
+            13 => Some(Self::HalfDotted),
+            14 => Some(Self::WholeDotted),
+            15 => Some(Self::TwoWholeDotted),
+            16 => Some(Self::EighthTriplet),
+            17 => Some(Self::QuarterTriplet),
+            18 => Some(Self::HalfTriplet),
+            19 => Some(Self::WholeTriplet),
+            _ => None,
+        }
+    }
+
     /// Duration in beats for this division.
     pub fn beats(&self) -> f32 {
         match self {

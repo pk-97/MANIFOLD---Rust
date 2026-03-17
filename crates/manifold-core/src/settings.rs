@@ -168,12 +168,99 @@ impl ProjectSettings {
         (beat / interval).round() * interval
     }
 
+    // ── Clamped setters matching Unity ProjectSettings.cs ──
+
+    pub fn set_bpm(&mut self, v: f32) { self.bpm = v.clamp(20.0, 300.0); }
+    pub fn set_output_width(&mut self, v: i32) { self.output_width = v.max(1); }
+    pub fn set_output_height(&mut self, v: i32) { self.output_height = v.max(1); }
+    pub fn set_frame_rate(&mut self, v: f32) { self.frame_rate = v.max(1.0); }
+    pub fn set_time_sig_numerator(&mut self, v: i32) { self.time_signature_numerator = v.clamp(1, 16); }
+    pub fn set_time_sig_denominator(&mut self, v: i32) { self.time_signature_denominator = v.clamp(1, 16); }
+    pub fn set_master_opacity(&mut self, v: f32) { self.master_opacity = v.clamp(0.0, 1.0); }
+    pub fn set_video_player_pool_size(&mut self, v: i32) { self.video_player_pool_size = v.max(1); }
+    pub fn set_max_layers(&mut self, v: i32) { self.max_layers = v.max(1); }
+    pub fn set_default_recording_layer(&mut self, v: i32) { self.default_recording_layer = v.max(0); }
+    pub fn set_osc_send_port(&mut self, v: i32) { self.osc_send_port = v.clamp(1024, 65535); }
+
+    // ── Computed properties ──
+
+    pub fn seconds_per_beat(&self) -> f32 { 60.0 / self.bpm }
+    pub fn seconds_per_bar(&self) -> f32 { self.seconds_per_beat() * self.time_signature_numerator as f32 }
+    pub fn get_frame_duration(&self) -> f32 { 1.0 / self.frame_rate }
+    pub fn time_to_frame(&self, seconds: f32) -> i32 { (seconds * self.frame_rate).floor() as i32 }
+    pub fn frame_to_time(&self, frame: i32) -> f32 { frame as f32 / self.frame_rate }
+
+    /// Check if any master effect is active. Unity ProjectSettings.cs lines 200-213.
+    pub fn has_any_master_effect(&self) -> bool {
+        if self.master_opacity < 1.0 { return true; }
+        self.master_effects.iter().any(|e| e.enabled)
+    }
+
+    /// Find master effect by type. Unity ProjectSettings.cs lines 230-239.
+    pub fn find_master_effect(&self, effect_type: crate::types::EffectType) -> Option<&crate::effects::EffectInstance> {
+        self.master_effects.iter().find(|e| e.effect_type == effect_type)
+    }
+
+    /// Find master effect group by ID. Unity ProjectSettings.cs lines 252-258.
+    pub fn find_master_effect_group(&self, group_id: &str) -> Option<&crate::effects::EffectGroup> {
+        self.master_effect_groups.as_ref()?.iter().find(|g| g.id == group_id)
+    }
+
+    // ── Video library paths ──
+
+    pub fn add_video_library_path(&mut self, path: String) {
+        if !self.video_library_paths.contains(&path) {
+            self.video_library_paths.push(path);
+        }
+    }
+    pub fn remove_video_library_path(&mut self, path: &str) {
+        self.video_library_paths.retain(|p| p != path);
+    }
+    pub fn clear_video_library_paths(&mut self) {
+        self.video_library_paths.clear();
+    }
+
     /// Get effects list mutably, creating if None on master.
     pub fn master_effect_groups_mut(&mut self) -> &mut Vec<EffectGroup> {
         if self.master_effect_groups.is_none() {
             self.master_effect_groups = Some(Vec::new());
         }
         self.master_effect_groups.as_mut().unwrap()
+    }
+}
+
+impl crate::effects::EffectContainer for ProjectSettings {
+    fn effects(&self) -> &[crate::effects::EffectInstance] {
+        &self.master_effects
+    }
+    fn effects_mut(&mut self) -> &mut Vec<crate::effects::EffectInstance> {
+        &mut self.master_effects
+    }
+    fn effect_groups(&self) -> &[crate::effects::EffectGroup] {
+        self.master_effect_groups.as_deref().unwrap_or(&[])
+    }
+    fn effect_groups_mut(&mut self) -> &mut Vec<crate::effects::EffectGroup> {
+        self.master_effect_groups_mut()
+    }
+    fn has_modular_effects(&self) -> bool {
+        !self.master_effects.is_empty()
+    }
+    fn find_effect(&self, effect_type: crate::types::EffectType) -> Option<&crate::effects::EffectInstance> {
+        self.master_effects.iter().find(|e| e.effect_type == effect_type)
+    }
+    fn find_effect_group(&self, group_id: &str) -> Option<&crate::effects::EffectGroup> {
+        self.master_effect_groups.as_ref()?.iter().find(|g| g.id == group_id)
+    }
+    fn envelopes(&self) -> &[crate::effects::ParamEnvelope] {
+        &[]
+    }
+    fn envelopes_mut(&mut self) -> &mut Vec<crate::effects::ParamEnvelope> {
+        // ProjectSettings doesn't have envelopes in Unity
+        // This is needed for trait completeness
+        panic!("ProjectSettings does not have envelopes");
+    }
+    fn has_envelopes(&self) -> bool {
+        false
     }
 }
 

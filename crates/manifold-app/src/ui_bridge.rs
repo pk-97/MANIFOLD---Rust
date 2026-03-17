@@ -860,6 +860,7 @@ pub fn dispatch(
                                         trim_min: 0.0,
                                         trim_max: 1.0,
                                         reversed: false,
+                                        is_paused_by_user: false,
                                     };
                                     let cmd = AddDriverCommand::new(target, driver);
                                     editing.execute(Box::new(cmd), project);
@@ -897,6 +898,7 @@ pub fn dispatch(
                                     sustain_level: 1.0,
                                     release_beats: 0.25,
                                     target_normalized: 1.0,
+                                    current_level: 0.0,
                                 });
                             }
                         }
@@ -1182,6 +1184,7 @@ pub fn dispatch(
                                     trim_min: 0.0,
                                     trim_max: 1.0,
                                     reversed: false,
+                                    is_paused_by_user: false,
                                 };
                                 let cmd = AddDriverCommand::new(target, driver);
                                 editing.execute(Box::new(cmd), project);
@@ -1212,6 +1215,7 @@ pub fn dispatch(
                                     sustain_level: 1.0,
                                     release_beats: 0.25,
                                     target_normalized: 1.0,
+                                    current_level: 0.0,
                                 });
                             }
                         }

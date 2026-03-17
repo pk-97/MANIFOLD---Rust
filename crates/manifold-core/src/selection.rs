@@ -58,3 +58,10 @@ impl SelectionRegion {
         (min, max)
     }
 }
+
+/// Narrow interface for setting/clearing the selection region.
+/// Port of Unity ISelectionRegionTarget (SelectionRegion.cs lines 22-26).
+pub trait SelectionRegionTarget {
+    fn set_region(&mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32);
+    fn clear_region(&mut self);
+}

@@ -664,6 +664,7 @@ fn add_driver_effect_undo_roundtrip() {
         trim_min: 0.0,
         trim_max: 1.0,
         reversed: false,
+        is_paused_by_user: false,
     };
 
     let mut cmd = AddDriverCommand::new(target, driver);
@@ -770,6 +771,7 @@ fn add_param_envelope_undo_roundtrip() {
         sustain_level: 0.8,
         release_beats: 0.5,
         target_normalized: 1.0,
+        current_level: 0.0,
     };
 
     let mut cmd = AddParamEnvelopeCommand::new(clip_id.clone(), envelope);
@@ -887,6 +889,7 @@ fn make_driver() -> ParameterDriver {
         trim_min: 0.0,
         trim_max: 1.0,
         reversed: false,
+        is_paused_by_user: false,
     }
 }
 
@@ -900,5 +903,6 @@ fn make_envelope() -> ParamEnvelope {
         sustain_level: 1.0,
         release_beats: 0.25,
         target_normalized: 1.0,
+        current_level: 0.0,
     }
 }

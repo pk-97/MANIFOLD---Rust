@@ -16,6 +16,11 @@ impl BeatQuantizer {
     }
 
     pub fn quantize_time_seconds(seconds: f32) -> f32 {
+        // Keep negative sentinel values (e.g. -1 for unknown) as-is.
+        // Unity BeatQuantizer.cs lines 30-36.
+        if seconds < 0.0 {
+            return seconds;
+        }
         (seconds / Self::TIME_SECONDS_STEP).round() * Self::TIME_SECONDS_STEP
     }
 }

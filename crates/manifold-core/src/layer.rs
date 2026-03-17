@@ -378,6 +378,32 @@ impl Layer {
         gp.envelopes = envelopes;
     }
 
+    /// Set opacity with clamp. Unity Layer.cs line 140.
+    pub fn set_opacity(&mut self, v: f32) {
+        self.opacity = v.clamp(0.0, 1.0);
+    }
+
+    /// Set MIDI note. Unity Layer.cs lines 264-265.
+    pub fn set_midi_note(&mut self, v: i32) {
+        self.midi_note = if v < 0 { -1 } else { v.clamp(0, 127) };
+    }
+
+    /// Set MIDI channel. Unity Layer.cs line 271.
+    pub fn set_midi_channel(&mut self, v: i32) {
+        self.midi_channel = if v < 0 { -1 } else { v.clamp(0, 15) };
+    }
+
+    /// Clear all clips. Unity Layer.cs line 445.
+    pub fn clear_clips(&mut self) {
+        self.clips.clear();
+        self.mark_clips_unsorted();
+    }
+
+    /// Get duration in beats (max end_beat across all clips). Unity Layer.cs line 530.
+    pub fn get_duration_beats(&self) -> f32 {
+        self.clips.iter().map(|c| c.end_beat()).fold(0.0f32, f32::max)
+    }
+
     /// Set a generator param base value at index.
     pub fn set_gen_param_base(&mut self, index: usize, value: f32) {
         if let Some(gp) = &mut self.gen_params {
@@ -393,6 +419,39 @@ impl Layer {
             }
             gp.param_values[index] = value;
         }
+    }
+}
+
+impl crate::effects::EffectContainer for Layer {
+    fn effects(&self) -> &[crate::effects::EffectInstance] {
+        self.effects.as_deref().unwrap_or(&[])
+    }
+    fn effects_mut(&mut self) -> &mut Vec<crate::effects::EffectInstance> {
+        Layer::effects_mut(self)
+    }
+    fn effect_groups(&self) -> &[crate::effects::EffectGroup] {
+        self.effect_groups.as_deref().unwrap_or(&[])
+    }
+    fn effect_groups_mut(&mut self) -> &mut Vec<crate::effects::EffectGroup> {
+        Layer::effect_groups_mut(self)
+    }
+    fn has_modular_effects(&self) -> bool {
+        self.effects.as_ref().is_some_and(|e| !e.is_empty())
+    }
+    fn find_effect(&self, effect_type: crate::types::EffectType) -> Option<&crate::effects::EffectInstance> {
+        self.effects.as_ref()?.iter().find(|e| e.effect_type == effect_type)
+    }
+    fn find_effect_group(&self, group_id: &str) -> Option<&crate::effects::EffectGroup> {
+        self.effect_groups.as_ref()?.iter().find(|g| g.id == group_id)
+    }
+    fn envelopes(&self) -> &[crate::effects::ParamEnvelope] {
+        self.envelopes.as_deref().unwrap_or(&[])
+    }
+    fn envelopes_mut(&mut self) -> &mut Vec<crate::effects::ParamEnvelope> {
+        Layer::envelopes_mut(self)
+    }
+    fn has_envelopes(&self) -> bool {
+        self.envelopes.as_ref().is_some_and(|e| !e.is_empty())
     }
 }
 

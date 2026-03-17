@@ -219,6 +219,59 @@ impl TimelineClip {
         }
         self.envelopes.as_mut().unwrap()
     }
+
+    /// Set scale with clamp. Unity TimelineClip.cs line 179.
+    pub fn set_scale(&mut self, v: f32) {
+        self.scale = v.max(0.01);
+    }
+
+    /// Set loop duration with clamp. Unity TimelineClip.cs line 201.
+    pub fn set_loop_duration_beats(&mut self, v: f32) {
+        self.loop_duration_beats = v.max(0.0);
+    }
+
+    /// Find effect by type. Unity TimelineClip.cs line 230.
+    pub fn find_effect(&self, effect_type: crate::types::EffectType) -> Option<&crate::effects::EffectInstance> {
+        self.effects.iter().find(|e| e.effect_type == effect_type)
+    }
+
+    /// Find effect group by ID. Unity TimelineClip.cs line 249.
+    pub fn find_effect_group(&self, group_id: &str) -> Option<&crate::effects::EffectGroup> {
+        self.effect_groups.as_ref()?.iter().find(|g| g.id == group_id)
+    }
+}
+
+impl crate::effects::EffectContainer for TimelineClip {
+    fn effects(&self) -> &[crate::effects::EffectInstance] {
+        &self.effects
+    }
+    fn effects_mut(&mut self) -> &mut Vec<crate::effects::EffectInstance> {
+        &mut self.effects
+    }
+    fn effect_groups(&self) -> &[crate::effects::EffectGroup] {
+        self.effect_groups.as_deref().unwrap_or(&[])
+    }
+    fn effect_groups_mut(&mut self) -> &mut Vec<crate::effects::EffectGroup> {
+        self.effect_groups_mut()
+    }
+    fn has_modular_effects(&self) -> bool {
+        !self.effects.is_empty()
+    }
+    fn find_effect(&self, effect_type: crate::types::EffectType) -> Option<&crate::effects::EffectInstance> {
+        self.effects.iter().find(|e| e.effect_type == effect_type)
+    }
+    fn find_effect_group(&self, group_id: &str) -> Option<&crate::effects::EffectGroup> {
+        self.effect_groups.as_ref()?.iter().find(|g| g.id == group_id)
+    }
+    fn envelopes(&self) -> &[crate::effects::ParamEnvelope] {
+        self.envelopes.as_deref().unwrap_or(&[])
+    }
+    fn envelopes_mut(&mut self) -> &mut Vec<crate::effects::ParamEnvelope> {
+        TimelineClip::envelopes_mut(self)
+    }
+    fn has_envelopes(&self) -> bool {
+        self.envelopes.as_ref().is_some_and(|e| !e.is_empty())
+    }
 }
 
 impl Default for TimelineClip {
