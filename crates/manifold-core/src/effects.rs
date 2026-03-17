@@ -240,6 +240,64 @@ pub struct ParamEnvelope {
     pub target_normalized: f32,
 }
 
+impl ParamEnvelope {
+    /// Calculate ADSR envelope level [0, 1] at given position within clip.
+    /// Port of C# EnvelopeEvaluator.CalculateADSR().
+    pub fn calculate_adsr(
+        local_beat: f32,
+        clip_duration: f32,
+        attack: f32,
+        decay: f32,
+        sustain: f32,
+        release: f32,
+    ) -> f32 {
+        if clip_duration <= 0.0 || local_beat < 0.0 {
+            return 0.0;
+        }
+
+        let mut a = attack.max(0.0);
+        let mut d = decay.max(0.0);
+        let mut r = release.max(0.0);
+        let s = sustain.clamp(0.0, 1.0);
+
+        // If A+D+R > clipDuration, compress all three proportionally (no sustain phase)
+        let total_adr = a + d + r;
+        if total_adr > clip_duration && total_adr > 0.0 {
+            let scale = clip_duration / total_adr;
+            a *= scale;
+            d *= scale;
+            r *= scale;
+        }
+
+        let release_start = clip_duration - r;
+
+        // Attack phase [0, a)
+        if local_beat < a {
+            return if a > 0.0 { local_beat / a } else { 1.0 };
+        }
+
+        // Decay phase [a, a+d)
+        let decay_start = a;
+        if local_beat < decay_start + d {
+            let t = if d > 0.0 { (local_beat - decay_start) / d } else { 1.0 };
+            return 1.0 - (1.0 - s) * t;
+        }
+
+        // Release phase [releaseStart, clipDuration]
+        if local_beat >= release_start {
+            let t = if r > 0.0 {
+                ((local_beat - release_start) / r).min(1.0)
+            } else {
+                1.0
+            };
+            return s * (1.0 - t);
+        }
+
+        // Sustain phase (between decay and release)
+        s
+    }
+}
+
 // ─── Default helpers ───
 
 fn default_true() -> bool { true }

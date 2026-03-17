@@ -29,11 +29,30 @@ impl GeneratorParamState {
         }
     }
 
+    /// Reset effective param values to base — ONLY for params with active drivers or envelopes.
+    /// Port of C# GeneratorParamState.ResetEffectives().
+    /// Unity resets selectively to preserve user-adjusted params that have no modulation.
     pub fn reset_effectives(&mut self) {
-        if let Some(base) = &self.base_param_values {
-            for (i, &val) in base.iter().enumerate() {
-                if i < self.param_values.len() {
-                    self.param_values[i] = val;
+        self.ensure_base_values();
+        let base = match &self.base_param_values {
+            Some(b) => b,
+            None => return,
+        };
+
+        if let Some(drivers) = &self.drivers {
+            for driver in drivers {
+                let idx = driver.param_index as usize;
+                if driver.enabled && idx < self.param_values.len() && idx < base.len() {
+                    self.param_values[idx] = base[idx];
+                }
+            }
+        }
+
+        if let Some(envelopes) = &self.envelopes {
+            for env in envelopes {
+                let idx = env.param_index as usize;
+                if env.enabled && idx < self.param_values.len() && idx < base.len() {
+                    self.param_values[idx] = base[idx];
                 }
             }
         }

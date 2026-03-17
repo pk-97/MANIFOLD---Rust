@@ -399,15 +399,26 @@ impl PlaybackEngine {
         // 4. Sync clips to current time (start/stop as needed)
         self.sync_clips_to_time();
 
-        // 5. Process pending pauses
+        // 5. Evaluate modulation pipeline (LFO drivers + ADSR envelopes)
+        // Port of C# DriverController.Update() [execution order 50]
+        let modulation_dirty = if let Some(project) = &mut self.project {
+            crate::modulation::evaluate_modulation(project, self.current_beat)
+        } else {
+            false
+        };
+        if modulation_dirty {
+            self.mark_compositor_dirty(ctx.realtime_now);
+        }
+
+        // 6. Process pending pauses
         self.process_pending_pauses(ctx.realtime_now);
 
-        // 6. Clear expired recently-started entries
+        // 7. Clear expired recently-started entries
         self.recently_started_times.retain(|_, &mut start_time| {
             ctx.realtime_now - start_time < RECENTLY_STARTED_TIME as f64
         });
 
-        // 7. Build ready clips for compositor
+        // 8. Build ready clips for compositor
         self.build_ready_clips_list();
 
         let compositor_dirty = !self.ready_clips_list.is_empty()
@@ -426,6 +437,13 @@ impl PlaybackEngine {
         // Paused/Stopped: sync only if dirty flag set (deferred MIDI events)
         if self.consume_sync_dirty() {
             self.sync_clips_to_time();
+        }
+
+        // Evaluate modulation pipeline even when stopped (for scrub preview / inspector)
+        if let Some(project) = &mut self.project {
+            if crate::modulation::evaluate_modulation(project, self.current_beat) {
+                self.mark_compositor_dirty(ctx.realtime_now);
+            }
         }
 
         // Process pending pauses (needed in all states for scrub preview)

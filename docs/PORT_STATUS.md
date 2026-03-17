@@ -78,9 +78,9 @@ Agents: CHECK THIS FILE before porting. If a file is already `ported`, verify pa
 | VideoPlayerPool.cs | — | missing (platform-specific) |
 | VideoTimeCalculator.cs | video_time.rs | ported |
 | TransportController.cs | transport_controller.rs | ported |
-| DriverController.cs | engine.rs (integrated) | ported |
-| EnvelopeEvaluator.cs | engine.rs (integrated) | ported |
-| ParameterDriverManager.cs | engine.rs (integrated) | ported |
+| DriverController.cs | modulation.rs (evaluate_modulation) | ported |
+| EnvelopeEvaluator.cs | modulation.rs (evaluate_all_envelopes, calculate_adsr) | ported |
+| ParameterDriverManager.cs | modulation.rs (evaluate_all_drivers) | ported |
 | PerfLogger.cs | — | partial (log crate) |
 | TempoRecorder.cs | — | missing (diagnostics) |
 

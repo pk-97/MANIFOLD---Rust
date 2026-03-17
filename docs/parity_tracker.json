@@ -9,7 +9,7 @@
   "subsystems": {
     "core": { "pct": 65, "audit_section": 1 },
     "editing": { "pct": 75, "audit_section": 2 },
-    "playback": { "pct": 30, "audit_section": 3 },
+    "playback": { "pct": 45, "audit_section": 3 },
     "effects": { "pct": 53, "audit_section": 4 },
     "generators": { "pct": 90, "audit_section": 6 },
     "compositor": { "pct": 50, "audit_section": 5 },
@@ -32,9 +32,9 @@
       "title": "Port DriverController + ParameterDriverManager + EnvelopeEvaluator (modulation pipeline)",
       "severity": "catastrophic",
       "est_loc": 600,
-      "status": "todo",
-      "commit": null,
-      "notes": "Entire modulation pipeline is dead. Every LFO and ADSR envelope silently broken."
+      "status": "done",
+      "commit": "pending",
+      "notes": "Full modulation pipeline: reset_all_effectives, evaluate_all_drivers (LFO), evaluate_all_envelopes (ADSR), evaluate_gen_param_envelopes. Wired into tick_playing + tick_non_playing."
     },
     {
       "number": 2,
@@ -116,9 +116,9 @@
       "title": "Fix reset_effectives() to only reset driven params",
       "severity": "high",
       "est_loc": 20,
-      "status": "todo",
-      "commit": null,
-      "notes": "Rust resets ALL params unconditionally. Unity resets ONLY params with active drivers/envelopes."
+      "status": "done",
+      "commit": "pending",
+      "notes": "Fixed: GeneratorParamState::reset_effectives() now resets only params with active drivers/envelopes, matching Unity."
     },
     {
       "number": 9,
