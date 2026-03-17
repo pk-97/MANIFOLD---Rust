@@ -503,7 +503,15 @@ Static analysis is for compile errors and obvious logic bugs. For anything invol
 
 ## COMMIT AND PUSH
 
-YOU MUST COMMIT AND PUSH CODE CHANGES TO THE RELEVANT REPO AFTER COMPLETING FEATURES OR FIXES.
+YOU MUST COMMIT AND PUSH CODE CHANGES TO THE RELEVANT RUST REPO AFTER COMPLETING ANY FEATURE, FIX, OR CODE-CHANGING TASK UNLESS THE USER EXPLICITLY SAYS NOT TO.
+
+For this repo, a task is NOT fully complete until:
+1. The requested code/doc/config changes are made
+2. Reasonable validation has been run or any gap is explicitly reported
+3. The changes are committed in git
+4. The commit is pushed to the remote branch
+
+Do not treat "implemented locally" as done. If you changed files for the user's task, finish the git step too.
 
 ## PERFORMANCE INVARIANTS
 
@@ -563,10 +571,20 @@ When completing a gap:
 6. Update `docs/PORT_STATUS.md` if file-level status changed
 7. Update subsystem `pct` in the tracker if the gap materially changes completion
 
-## AVAILABLE SKILLS
+## CODEX WORKSPACE RESOURCES
 
-Invoke with `/skill-name` in the CLI:
-- `/rust-port [file]` — Mechanical translation of a Unity file to Rust
-- `/rust-verify [file]` — Compare Rust implementation against Unity source
-- `/pre-port [file]` — Dependency analysis before porting
-- `/audit-parity [files]` — Batch post-port verification of recently changed files
+Codex should treat the repo-local `.codex/` directory as its reusable working set:
+- `.codex/README.md` — start here for the Codex-specific workflow, command shortcuts, and repo operating notes
+- `.codex/context/project_map.md` — condensed crate map, hot files, and where specific Unity concepts land in Rust
+- `.codex/context/porting_workflow.md` — Codex-tailored execution checklist for pre-port, translation, self-audit, and closeout
+- `.codex/context/validation_playbook.md` — what to run after edits, when to prefer targeted checks, and how to report unverified work
+- `.codex/memory/stable_patterns.md` — durable implementation notes discovered while working; update this when you learn a stable repo-specific pattern worth preserving
+- `.codex/prompts/*.md` — reusable task frames for pre-port analysis, mechanical translation, parity review, and runtime investigation
+- `.codex/bin/pre_port_scan.sh` — fast grep-based dependency and inline-copy scan before porting
+- `.codex/bin/validate.sh` — targeted cargo validation wrapper for workspace or package checks
+
+When starting non-trivial work in Codex:
+1. Read this file completely
+2. Read `.codex/README.md`
+3. Load only the specific `.codex/context/*` or `.codex/prompts/*` files relevant to the task
+4. Update `.codex/memory/stable_patterns.md` if you discover a durable workflow or architectural pattern not already captured

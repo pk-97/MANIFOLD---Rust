@@ -1,3 +1,6 @@
 /target
 *.manifold
 **/.DS_Store
+.codex/tmp/
+.codex/scratch/
+.codex/*.local.md
