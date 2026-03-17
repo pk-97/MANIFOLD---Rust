@@ -170,6 +170,9 @@ pub struct Application {
     // of Ctrl+C/X/V, Delete, Ctrl+G shortcuts to effect vs. clip operations.
     inspector_has_focus: bool,
 
+    // Keyboard/zoom handler — port of Unity InputHandler.cs
+    input_handler: crate::input_handler::InputHandler,
+
     // State
     initialized: bool,
     needs_rebuild: bool,
@@ -229,6 +232,7 @@ impl Application {
             text_input: crate::text_input::TextInputState::new(),
             transport_controller: manifold_playback::transport_controller::TransportController::new(),
             inspector_has_focus: false,
+            input_handler: crate::input_handler::InputHandler::new(),
             initialized: false,
             needs_rebuild: false,
             needs_scroll_rebuild: false,

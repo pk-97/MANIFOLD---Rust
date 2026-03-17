@@ -366,6 +366,7 @@ pub const RULER_HEIGHT: f32 = 40.0;
 pub const LAYER_CONTROLS_WIDTH: f32 = 200.0;
 pub const PLAYHEAD_WIDTH: f32 = 2.0;
 pub const CLIP_MIN_WIDTH: f32 = 10.0;
+pub const CLIP_VERTICAL_PAD: f32 = 12.0;
 pub const OVERVIEW_STRIP_HEIGHT: f32 = 16.0;
 pub const MIN_INSPECTOR_WIDTH: f32 = 196.0;
 pub const MAX_INSPECTOR_WIDTH: f32 = 500.0;
