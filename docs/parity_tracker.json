@@ -129,7 +129,7 @@
       "severity": "high",
       "est_loc": 300,
       "status": "done",
-      "commit": "pending",
+      "commit": "c2a6504",
       "notes": "Ported: 15 clip time/rate methods (GetClipPlaybackRate, ResolveClipRecordedBpm, ComputeVideoTime, etc.), 6 clip maintenance methods (CheckPreparingClips, CheckCustomLoopBoundaries, CorrectVideoDrift, UpdateActiveClipPlaybackRates, SeekActiveClips, FilterReadyClips with ShouldExcludeRecentlyStarted), prewarm system (ComputePrewarmCandidates + 9 constants), PrewarmCandidate struct. Fixed video_time.rs to match Unity exactly (Max(0,.) clamps, 0.01 threshold, mediaLength-inPoint). Added beat_to_seconds_immut for immutable tempo conversion."
     },
     {
@@ -165,7 +165,7 @@
       "severity": "high",
       "est_loc": 100,
       "status": "done",
-      "commit": "pending",
+      "commit": "c2a6504",
       "notes": "Ported 5 of 6 post-load steps: (1) on_after_deserialize (was present), (2) BPM sync with clamp 20-300, (3) DurationMode migration (force NoteOff), (4) Project.validate() structural check, (5) VideoLibrary.validate_clips() missing file detection, (6) Project.purge_orphaned_references() cascading cleanup. Step 3 (PathResolver.ResolveAll) deferred — requires GAP-CORE-7. Added has_clip() to VideoLibrary, ValidationResult struct."
     },
     {
