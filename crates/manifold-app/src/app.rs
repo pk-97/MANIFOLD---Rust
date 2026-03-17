@@ -1276,9 +1276,16 @@ impl ApplicationHandler for Application {
 
         log::info!("Creating primary window...");
 
+        let fallback_size = winit::dpi::LogicalSize::new(1280u32, 720u32);
+        let startup_size = event_loop
+            .primary_monitor()
+            .map(|monitor| monitor.size())
+            .unwrap_or_else(|| fallback_size.to_physical(1.0));
+
         let attrs = winit::window::Window::default_attributes()
             .with_title("MANIFOLD")
-            .with_inner_size(winit::dpi::LogicalSize::new(1280u32, 720u32));
+            .with_inner_size(startup_size)
+            .with_maximized(true);
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),

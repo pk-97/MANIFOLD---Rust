@@ -38,21 +38,16 @@ const SAVE_BUTTON_W: f32 = 42.0;
 const SAVE_AS_W: f32 = 55.0;
 const EXPORT_BUTTON_W: f32 = 55.0;
 const HDR_BUTTON_W: f32 = 35.0;
-const XML_BUTTON_W: f32 = 40.0;
-const EXPORT_LABEL_W: f32 = 120.0;
 const PERC_BUTTON_W: f32 = 48.0;
 
 // ── Panel-specific colors ──────────────────────────────────────────
 
 const BUTTON_HOVER_C: Color32 = color::TRANSPORT_BUTTON_HOVER;
 const SAVE_DIRTY_BG: Color32 = color::TRANSPORT_SAVE_DIRTY_BG;
-const EXPORT_MARKER_C: Color32 = color::EXPORT_MARKER_COLOR;
 const BPM_FIELD_HOVER: Color32 = color::TRANSPORT_BPM_FIELD_HOVER;
 
 const BUTTON_FONT: u16 = 12;
 const STATUS_FONT: u16 = 10;
-const EXPORT_LABEL_FONT: u16 = 9;
-
 // ── Style helpers ──────────────────────────────────────────────────
 
 fn lighten(c: Color32, amount: u8) -> Color32 {
@@ -117,7 +112,7 @@ struct TransportLayout {
     bpm_label: Rect, bpm_field: Rect, bpm_reset: Rect, bpm_clear: Rect,
     new_button: Rect, open_button: Rect, open_recent: Rect,
     save_button: Rect, save_as: Rect, export_button: Rect,
-    hdr_button: Rect, xml_button: Rect, export_label: Rect, perc_button: Rect,
+    hdr_button: Rect, perc_button: Rect,
 }
 
 impl TransportLayout {
@@ -201,10 +196,6 @@ impl TransportLayout {
         x += EXPORT_BUTTON_W + RIGHT_SPACING;
         self.hdr_button = Rect::new(x, ey, HDR_BUTTON_W, eh);
         x += HDR_BUTTON_W + RIGHT_SPACING;
-        self.xml_button = Rect::new(x, ey, XML_BUTTON_W, eh);
-        x += XML_BUTTON_W + RIGHT_SPACING + RIGHT_SPACING;
-        self.export_label = Rect::new(x, ey, EXPORT_LABEL_W, eh);
-        x += EXPORT_LABEL_W + RIGHT_SPACING;
         self.perc_button = Rect::new(x, ey, PERC_BUTTON_W, eh);
     }
 
@@ -235,8 +226,6 @@ impl TransportLayout {
             + SAVE_AS_W + RIGHT_SPACING + SECTION_SPACER
             + EXPORT_BUTTON_W + RIGHT_SPACING
             + HDR_BUTTON_W + RIGHT_SPACING
-            + XML_BUTTON_W + RIGHT_SPACING + RIGHT_SPACING
-            + EXPORT_LABEL_W + RIGHT_SPACING
             + PERC_BUTTON_W
     }
 }
@@ -254,7 +243,7 @@ pub struct TransportPanel {
     bpm_label_id: i32, bpm_field_id: i32, bpm_reset_id: i32, bpm_clear_id: i32,
     new_button_id: i32, open_button_id: i32, open_recent_id: i32,
     save_button_id: i32, save_as_id: i32, export_button_id: i32,
-    hdr_button_id: i32, xml_button_id: i32, export_label_id: i32, perc_button_id: i32,
+    hdr_button_id: i32, perc_button_id: i32,
 
     // Dynamic state
     clock_authority_text: String,
@@ -281,7 +270,6 @@ pub struct TransportPanel {
     bpm_reset_active: bool,
     bpm_clear_active: bool,
     save_text: String,
-    export_label_text: String,
     export_active: bool,
     hdr_active: bool,
 }
@@ -297,7 +285,7 @@ impl TransportPanel {
             bpm_label_id: -1, bpm_field_id: -1, bpm_reset_id: -1, bpm_clear_id: -1,
             new_button_id: -1, open_button_id: -1, open_recent_id: -1,
             save_button_id: -1, save_as_id: -1, export_button_id: -1,
-            hdr_button_id: -1, xml_button_id: -1, export_label_id: -1, perc_button_id: -1,
+            hdr_button_id: -1, perc_button_id: -1,
             clock_authority_text: "SRC:INT".into(),
             clock_authority_color: color::BUTTON_INACTIVE_C32,
             link_enabled: false,
@@ -322,7 +310,6 @@ impl TransportPanel {
             bpm_reset_active: false,
             bpm_clear_active: false,
             save_text: "SAVE".into(),
-            export_label_text: String::new(),
             export_active: false,
             hdr_active: false,
         }
@@ -478,8 +465,7 @@ impl TransportPanel {
     }
 
     pub fn set_export_label(&mut self, tree: &mut UITree, text: &str) {
-        self.export_label_text = text.into();
-        if self.export_label_id >= 0 { tree.set_text(self.export_label_id as u32, text); }
+        let _ = (tree, text);
     }
 
     pub fn set_export_active(&mut self, tree: &mut UITree, active: bool) {
@@ -648,7 +634,6 @@ impl TransportPanel {
 
     fn build_right(&mut self, tree: &mut UITree, bg: i32) {
         let save_text = self.save_text.clone();
-        let export_label = self.export_label_text.clone();
 
         self.new_button_id = tree.add_button(
             bg, self.layout.new_button.x, self.layout.new_button.y,
@@ -704,23 +689,6 @@ impl TransportPanel {
             button_style(hdr_bg), "HDR",
         ) as i32;
 
-        self.xml_button_id = tree.add_button(
-            bg, self.layout.xml_button.x, self.layout.xml_button.y,
-            self.layout.xml_button.width, self.layout.xml_button.height,
-            button_style(color::BUTTON_INACTIVE_C32), "XML",
-        ) as i32;
-
-        self.export_label_id = tree.add_node(
-            bg, self.layout.export_label, UINodeType::Label,
-            UIStyle {
-                text_color: EXPORT_MARKER_C,
-                font_size: EXPORT_LABEL_FONT,
-                text_align: TextAlign::Left,
-                ..UIStyle::default()
-            },
-            Some(&export_label), UIFlags::empty(),
-        ) as i32;
-
         self.perc_button_id = tree.add_button(
             bg, self.layout.perc_button.x, self.layout.perc_button.y,
             self.layout.perc_button.width, self.layout.perc_button.height,
@@ -748,7 +716,6 @@ impl TransportPanel {
         if id == self.save_as_id { return vec![PanelAction::SaveProjectAs]; }
         if id == self.export_button_id { return vec![PanelAction::ExportVideo]; }
         if id == self.hdr_button_id { return vec![PanelAction::ToggleHdr]; }
-        if id == self.xml_button_id { return vec![PanelAction::ExportXml]; }
         if id == self.perc_button_id { return vec![PanelAction::TogglePercussion]; }
         Vec::new()
     }

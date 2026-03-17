@@ -2185,17 +2185,19 @@ pub fn push_state(
 /// Triggers a full UI rebuild afterward.
 pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option<usize>) {
     if let Some(project) = engine.project() {
-        // Layer data → LayerHeaderPanel
-        let mut cumulative_y: f32 = 0.0;
+        // Rebuild CoordinateMapper Y-layout FIRST so layer headers and viewport share
+        // the same Y offsets. Unity: LayerHeaderPanel reads from CoordinateMapper.
+        ui.viewport.rebuild_mapper_layout(&project.timeline.layers);
+
+        // Layer data → LayerHeaderPanel (Y from mapper — matches viewport exactly)
         let layers: Vec<LayerInfo> = project.timeline.layers.iter().enumerate().map(|(i, layer)| {
-            let track_h = if layer.is_collapsed { 48.0 } else { 140.0 };
-            let y = cumulative_y;
-            cumulative_y += track_h;
+            let y = ui.viewport.mapper().get_layer_y_offset(i);
+            let track_h = ui.viewport.mapper().get_layer_height(i);
             LayerInfo {
                 name: layer.name.clone(),
                 layer_id: layer.layer_id.clone(),
                 is_collapsed: layer.is_collapsed,
-                is_group: false,
+                is_group: layer.is_group(),
                 is_generator: layer.layer_type == LayerType::Generator,
                 is_muted: layer.is_muted,
                 is_solo: layer.is_solo,
@@ -2276,8 +2278,7 @@ pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer:
         }).collect();
         ui.viewport.set_tracks(tracks);
 
-        // Rebuild CoordinateMapper Y-layout from layers (shared with layer headers)
-        ui.viewport.rebuild_mapper_layout(&project.timeline.layers);
+        // (CoordinateMapper Y-layout already rebuilt above, before layer headers)
 
         // Clip data → TimelineViewportPanel
         let mut viewport_clips = Vec::new();
