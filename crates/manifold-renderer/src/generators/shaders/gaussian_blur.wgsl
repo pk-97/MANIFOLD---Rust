@@ -1,6 +1,7 @@
-// Separable Gaussian blur with bilinear-filtered taps.
-// Called twice per blur operation (H then V), used for both
-// density blur and vector field blur.
+// Separable Gaussian blur with bilinear tap pairing.
+// Pairs adjacent integer offsets (j, j+1) into a single weighted-midpoint
+// fetch, halving the sample count. Called twice per blur (H then V).
+// Unity ref: Assets/Shaders/GaussianBlur.shader
 
 struct BlurUniforms {
     direction: vec2<f32>,
@@ -34,24 +35,42 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = in.uv;
-    let texel_size = vec2<f32>(params.texel_x, params.texel_y);
+    let texel_step = params.direction * vec2<f32>(params.texel_x, params.texel_y);
     let sigma = max(params.radius / 3.0, 1.0);
-    let two_sigma_sq = 2.0 * sigma * sigma;
+    let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
 
     // Center tap
-    var center_weight = 1.0;
-    var result = textureSample(t_source, s_source, uv) * center_weight;
-    var total_weight = center_weight;
+    var result = textureSample(t_source, s_source, uv);
+    var total_weight = 1.0;
 
-    // Gaussian taps at integer offsets (bilinear filtering gives sub-pixel quality)
+    // Bilinear tap trick: pair adjacent samples (j, j+1) into a single
+    // bilinear-filtered fetch at their weighted midpoint. Hardware
+    // interpolation computes the same weighted sum — halves sample count.
     let radius_int = i32(params.radius);
-    for (var j: i32 = 1; j <= radius_int; j = j + 1) {
+    var j: i32 = 1;
+    loop {
+        if j > radius_int { break; }
+
         let fj = f32(j);
-        let w = exp(-(fj * fj) / two_sigma_sq);
-        let sample_offset = params.direction * fj * texel_size;
-        result += textureSample(t_source, s_source, uv + sample_offset) * w;
-        result += textureSample(t_source, s_source, uv - sample_offset) * w;
-        total_weight += w * 2.0;
+        let w_a = exp(-(fj * fj) * inv_two_sigma_sq);
+
+        if j + 1 <= radius_int {
+            let fj1 = f32(j + 1);
+            let w_b = exp(-(fj1 * fj1) * inv_two_sigma_sq);
+            let w_ab = w_a + w_b;
+            let offset = fj + w_b / w_ab;
+
+            result += textureSample(t_source, s_source, uv + texel_step * offset) * w_ab;
+            result += textureSample(t_source, s_source, uv - texel_step * offset) * w_ab;
+            total_weight += w_ab * 2.0;
+        } else {
+            // Unpaired last tap (odd radius)
+            result += textureSample(t_source, s_source, uv + texel_step * fj) * w_a;
+            result += textureSample(t_source, s_source, uv - texel_step * fj) * w_a;
+            total_weight += w_a * 2.0;
+        }
+
+        j += 2;
     }
 
     return result / total_weight;

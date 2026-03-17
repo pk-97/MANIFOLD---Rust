@@ -1,6 +1,14 @@
 /// Shared projection scale for line generators.
 pub const PROJ_SCALE: f32 = 0.25;
 
+/// Pseudo-random hash keyed to beat index.
+/// Returns a value in [0, 1). Used by OscilloscopeXY for beat-grid ratio changes.
+/// Unity ref: GeneratorMath.HashBeat
+#[inline]
+pub fn hash_beat(n: f32) -> f32 {
+    ((n * 127.1).sin() * 43758.5453).abs().fract()
+}
+
 /// Default dot radius in normalized screen space.
 pub const DEFAULT_DOT_RADIUS: f32 = 0.005;
 

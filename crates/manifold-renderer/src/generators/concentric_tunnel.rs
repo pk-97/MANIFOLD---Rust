@@ -5,12 +5,17 @@ use crate::generator_context::GeneratorContext;
 // Parameter indices matching Unity's ConcentricTunnelGenerator.cs
 const SHAPE: usize = 0;
 const LINE: usize = 1;
-const RATE: usize = 2;
+const SPEED: usize = 2;
 const SCALE: usize = 3;
-// const SNAP: usize = 4;  // handled at app layer (trigger_count cycling)
+const SNAP: usize = 4;
 const SNAP_MODE: usize = 5;
+const SHAPE_COUNT: u32 = 6;
 
-// Rate param (0-4 integer) maps to beat fractions
+const MODE_SHAPE: i32 = 0;
+const MODE_SPAWN: i32 = 1;
+const MODE_BOTH: i32 = 2;
+
+// Speed param (0-4 integer) maps to beat fractions
 const BEAT_VALUES: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
 
 #[repr(C)]
@@ -120,14 +125,40 @@ impl Generator for ConcentricTunnelGenerator {
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
     ) -> f32 {
-        let shape = if ctx.param_count > SHAPE as u32 { ctx.params[SHAPE].round() } else { 0.0 };
-        let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.008 };
-        let rate_idx = if ctx.param_count > RATE as u32 { ctx.params[RATE].round() as usize } else { 2 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
-        let snap_mode = if ctx.param_count > SNAP_MODE as u32 { ctx.params[SNAP_MODE].round() } else { 0.0 };
+        if ctx.param_count == 0 {
+            return ctx.anim_progress;
+        }
 
-        // Map Rate integer (0-4) to beat fraction value
-        let anim_speed = BEAT_VALUES[rate_idx.min(BEAT_VALUES.len() - 1)];
+        let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.008 };
+        let speed_idx = if ctx.param_count > SPEED as u32 {
+            (ctx.params[SPEED].round() as usize).min(BEAT_VALUES.len() - 1)
+        } else { 2 };
+        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
+        let snap_on = ctx.param_count > SNAP as u32 && ctx.params[SNAP] > 0.5;
+        let mode = if ctx.param_count > SNAP_MODE as u32 {
+            (ctx.params[SNAP_MODE].round() as i32).clamp(MODE_SHAPE, MODE_BOTH)
+        } else { MODE_SHAPE };
+
+        let anim_speed = BEAT_VALUES[speed_idx];
+
+        // SNAP logic (Unity: ConcentricTunnelGenerator.cs lines 46-68)
+        let mut snap_mode_shader = 0.0_f32;
+        let shape = if snap_on {
+            let cycle_shape = mode == MODE_SHAPE || mode == MODE_BOTH;
+            let spawn_rings = mode == MODE_SPAWN || mode == MODE_BOTH;
+
+            if spawn_rings {
+                snap_mode_shader = if mode == MODE_BOTH { 2.0 } else { 1.0 };
+            }
+
+            if cycle_shape {
+                (ctx.trigger_count % SHAPE_COUNT) as f32
+            } else {
+                if ctx.param_count > SHAPE as u32 { ctx.params[SHAPE].round() } else { 0.0 }
+            }
+        } else {
+            if ctx.param_count > SHAPE as u32 { ctx.params[SHAPE].round() } else { 0.0 }
+        };
 
         let uniforms = ConcentricTunnelUniforms {
             time: ctx.time,
@@ -137,7 +168,7 @@ impl Generator for ConcentricTunnelGenerator {
             anim_speed,
             uv_scale: if scale > 0.0 { 1.0 / scale } else { 1.0 },
             shape_type: shape,
-            snap_mode,
+            snap_mode: snap_mode_shader,
             trigger_count: ctx.trigger_count as f32,
             _pad: [0.0; 3],
         };

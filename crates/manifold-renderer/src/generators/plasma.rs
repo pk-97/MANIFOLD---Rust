@@ -8,7 +8,8 @@ const COMPLEXITY: usize = 1;
 const CONTRAST: usize = 2;
 const SPEED: usize = 3;
 const SCALE: usize = 4;
-// const SNAP: usize = 5;  // handled at app layer (trigger_count cycling)
+const SNAP: usize = 5;
+const PATTERN_COUNT: u32 = 5;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -117,8 +118,20 @@ impl Generator for PlasmaGenerator {
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
     ) -> f32 {
+        if ctx.param_count == 0 {
+            return ctx.anim_progress;
+        }
+
         let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 1.0 };
         let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
+        let snap = ctx.param_count > SNAP as u32 && ctx.params[SNAP] > 0.5;
+
+        // SNAP cycling: auto-cycle pattern on trigger (Unity: PlasmaGenerator.cs lines 30-34)
+        let pattern_type = if snap {
+            (ctx.trigger_count % PATTERN_COUNT) as f32
+        } else {
+            if ctx.param_count > PATTERN as u32 { ctx.params[PATTERN].round() } else { 0.0 }
+        };
 
         let uniforms = PlasmaUniforms {
             time: ctx.time,
@@ -126,7 +139,7 @@ impl Generator for PlasmaGenerator {
             aspect_ratio: ctx.aspect,
             anim_speed: speed,
             uv_scale: if scale > 0.0 { 1.0 / scale } else { 1.0 },
-            pattern_type: if ctx.param_count > PATTERN as u32 { ctx.params[PATTERN].round() } else { 0.0 },
+            pattern_type,
             complexity: if ctx.param_count > COMPLEXITY as u32 { ctx.params[COMPLEXITY] } else { 0.5 },
             contrast: if ctx.param_count > CONTRAST as u32 { ctx.params[CONTRAST] } else { 0.5 },
             trigger_count: ctx.trigger_count as f32,

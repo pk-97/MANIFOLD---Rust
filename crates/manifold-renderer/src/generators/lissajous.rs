@@ -19,15 +19,13 @@ const SNAP: usize = 10;
 
 const VERTEX_COUNT: usize = 256;
 
-// Snap presets for integer frequency ratios
+// Snap presets for integer frequency ratios — matches Unity snapA/snapB arrays
 const SNAP_A: [f32; 10] = [1.0, 1.0, 2.0, 3.0, 3.0, 4.0, 5.0, 5.0, 7.0, 3.0];
-const SNAP_B: [f32; 10] = [1.0, 3.0, 3.0, 4.0, 5.0, 5.0, 6.0, 8.0, 8.0, 7.0];
+const SNAP_B: [f32; 10] = [2.0, 3.0, 3.0, 4.0, 5.0, 5.0, 6.0, 8.0, 8.0, 7.0];
 
 pub struct LissajousGenerator {
     line_pipeline: LinePipeline,
     helper: LineGeneratorHelper,
-    // Free-running time accumulator for smooth frequency evolution
-    free_time: f32,
 }
 
 impl LissajousGenerator {
@@ -46,7 +44,6 @@ impl LissajousGenerator {
         Self {
             line_pipeline,
             helper,
-            free_time: 0.0,
         }
     }
 }
@@ -68,43 +65,58 @@ impl Generator for LissajousGenerator {
         let freq_y_rate = if ctx.param_count > FREQ_Y as u32 { ctx.params[FREQ_Y] } else { 0.09 };
         let phase_rate = if ctx.param_count > PHASE as u32 { ctx.params[PHASE] } else { 0.07 };
         let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.002 };
-        let show_verts = if ctx.param_count > VERTS as u32 { ctx.params[VERTS] > 0.5 } else { false };
-        let vert_size = if ctx.param_count > VSIZE as u32 { ctx.params[VSIZE] } else { 0.5 };
-        let animate = if ctx.param_count > ANIM as u32 { ctx.params[ANIM] > 0.5 } else { true };
-        let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 2.67 };
-        let window = if ctx.param_count > WINDOW as u32 { ctx.params[WINDOW] } else { 0.74 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.55 };
-        let snap = if ctx.param_count > SNAP as u32 { ctx.params[SNAP] > 0.5 } else { true };
+        let show_verts = if ctx.param_count > VERTS as u32 { ctx.params[VERTS] > 0.5 } else { true };
+        let vert_size = if ctx.param_count > VSIZE as u32 { ctx.params[VSIZE] } else { 1.0 };
+        let animate = if ctx.param_count > ANIM as u32 { ctx.params[ANIM] > 0.5 } else { false };
+        let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 1.0 };
+        let window = if ctx.param_count > WINDOW as u32 { ctx.params[WINDOW] } else { 0.1 };
+        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
+        let snap = if ctx.param_count > SNAP as u32 { ctx.params[SNAP] > 0.5 } else { false };
 
-        self.free_time += ctx.dt;
-        let t = self.free_time;
+        // Use clip-relative time from context (matches Unity ctx.Time)
+        let time = ctx.time;
 
-        let (a, b, delta) = if snap {
+        let (a, b, phase) = if snap {
             // Snap mode: use trigger_count to select from preset table
             let idx = (ctx.trigger_count as usize) % SNAP_A.len();
             let a = SNAP_A[idx];
             let b = SNAP_B[idx];
-            let delta = std::f32::consts::FRAC_PI_2; // pi/2 offset
-            (a, b, delta)
+            // Phase evolves over time at param-driven rate (Unity line 70-71)
+            let phase = time * phase_rate;
+            (a, b, phase)
         } else {
-            // Free-running: smoothly evolving frequencies
-            let a_raw = 2.0 + 1.5 * (t * freq_x_rate).sin();
-            let b_raw = 3.0 + 2.0 * (t * freq_y_rate).sin();
-            // Interpolate toward nearest integer for cleaner shapes
-            let a = a_raw;
-            let b = b_raw;
-            let delta = t * phase_rate;
-            (a, b, delta)
+            // Free-running: smoothly evolving frequencies (Unity lines 75-80)
+            let a = 2.0 + 1.5 * (time * freq_x_rate).sin();
+            let b = 3.0 + 2.0 * (time * freq_y_rate).sin();
+            let phase = time * phase_rate;
+            (a, b, phase)
         };
 
-        let proj_scale = PROJ_SCALE * scale;
-        let step = std::f32::consts::TAU / VERTEX_COUNT as f32;
+        // Interpolate between integer Lissajous curves for smooth closed shapes
+        // Matches Unity lines 84-110
+        let a_lo = a.floor();
+        let a_hi = a.ceil();
+        let a_lerp = a - a_lo;
+
+        let b_lo = b.floor();
+        let b_hi = b.ceil();
+        let b_lerp = b - b_lo;
+
         for i in 0..VERTEX_COUNT {
-            let theta = i as f32 * step;
-            let x = (a * theta + delta).sin();
-            let y = (b * theta).sin();
-            self.helper.projected_x[i] = x * proj_scale;
-            self.helper.projected_y[i] = y * proj_scale;
+            let t = i as f32 / VERTEX_COUNT as f32 * std::f32::consts::TAU;
+
+            // Sample both integer-parameter curves and interpolate
+            let x_lo = (a_lo * t + phase).sin();
+            let x_hi = (a_hi * t + phase).sin();
+            let x = x_lo + (x_hi - x_lo) * a_lerp;
+
+            let y_lo = (b_lo * t).sin();
+            let y_hi = (b_hi * t).sin();
+            let y = y_lo + (y_hi - y_lo) * b_lerp;
+
+            self.helper.projected_x[i] = x * PROJ_SCALE;
+            self.helper.projected_y[i] = y * PROJ_SCALE;
+            self.helper.projected_z[i] = i as f32 / VERTEX_COUNT as f32;
         }
 
         let verts = self.helper.build_vertices(

@@ -293,6 +293,9 @@ pub struct LineGeneratorHelper {
     pub edge_b: Vec<usize>,
     pub anim_progress: f32,
     vertices: Vec<LineVertex>,
+    // Depth sorting scratch buffers (Unity: LineMeshUtil.edgeDepth/edgeSortedIdx)
+    edge_depth: Vec<f32>,
+    edge_sorted_idx: Vec<usize>,
 }
 
 impl LineGeneratorHelper {
@@ -305,6 +308,8 @@ impl LineGeneratorHelper {
             edge_b: Vec::with_capacity(edge_count),
             anim_progress: 0.0,
             vertices: Vec::with_capacity((edge_count + vertex_count) * 6),
+            edge_depth: vec![0.0; edge_count],
+            edge_sorted_idx: vec![0; edge_count],
         }
     }
 
@@ -325,7 +330,7 @@ impl LineGeneratorHelper {
     /// `speed`: animation speed multiplier
     /// `window`: animation window (fraction of total edges visible)
     /// `dt`: delta time
-    /// `scale`: projection scale multiplier
+    /// `scale`: projection scale multiplier (applied to projected_x/y before building quads)
     pub fn build_vertices(
         &mut self,
         rt_width: f32,
@@ -337,33 +342,56 @@ impl LineGeneratorHelper {
         speed: f32,
         window: f32,
         dt: f32,
-        _scale: f32,
+        scale: f32,
     ) -> &[LineVertex] {
         self.vertices.clear();
         let half_thick = line_thickness * rt_height * 0.5;
         let edge_count = self.edge_a.len();
 
+        // Apply scale to projected positions (Unity: LineGeneratorBase.Render lines 92-103)
+        let s = if scale <= 0.0 { 1.0 } else { scale };
+        if s != 1.0 {
+            let vert_count = self.projected_x.len();
+            for i in 0..vert_count {
+                self.projected_x[i] *= s;
+                self.projected_y[i] *= s;
+            }
+        }
+
         if animate && edge_count > 0 {
-            self.anim_progress += speed * dt;
+            // Depth sort edges back-to-front (Unity: LineMeshUtil.BuildEdgeQuads lines 87-97)
+            self.ensure_sort_buffers(edge_count);
+            for i in 0..edge_count {
+                let a = self.edge_a[i];
+                let b = self.edge_b[i];
+                self.edge_depth[i] = (self.projected_z[a] + self.projected_z[b]) * 0.5;
+                self.edge_sorted_idx[i] = i;
+            }
+            let depths = &self.edge_depth;
+            self.edge_sorted_idx[..edge_count].sort_by(|&a, &b| {
+                depths[a].partial_cmp(&depths[b]).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+            self.anim_progress += speed * (edge_count as f32 / 100.0);
             let total = edge_count as f32;
             if self.anim_progress >= total {
                 self.anim_progress -= total;
             }
-            let win = (window * total).max(1.0);
-            for i in 0..edge_count {
-                let fi = i as f32;
-                let dist = (fi - self.anim_progress).rem_euclid(total);
-                let alpha = if dist < win { 1.0 - dist / win } else { 0.0 };
-                if alpha > 0.001 {
-                    let a = self.edge_a[i];
-                    let b = self.edge_b[i];
-                    let ax = self.projected_x[a] + 0.5;
-                    let ay = self.projected_y[a] + 0.5;
-                    let bx = self.projected_x[b] + 0.5;
-                    let by = self.projected_y[b] + 0.5;
-                    let quad = build_edge_quad(ax, ay, bx, by, half_thick, rt_width, rt_height, alpha);
-                    self.vertices.extend_from_slice(&quad);
-                }
+            let window_edges = ((edge_count as f32 * window).ceil() as usize).max(1);
+            let window_start = (self.anim_progress / (edge_count as f32 / 100.0).max(1.0)).floor() as usize % edge_count;
+
+            for offset in 0..window_edges {
+                let sort_pos = (window_start + offset) % edge_count;
+                let edge_idx = self.edge_sorted_idx[sort_pos];
+                let fade = 1.0 - offset as f32 / window_edges as f32;
+                let a = self.edge_a[edge_idx];
+                let b = self.edge_b[edge_idx];
+                let ax = self.projected_x[a] + 0.5;
+                let ay = self.projected_y[a] + 0.5;
+                let bx = self.projected_x[b] + 0.5;
+                let by = self.projected_y[b] + 0.5;
+                let quad = build_edge_quad(ax, ay, bx, by, half_thick, rt_width, rt_height, fade);
+                self.vertices.extend_from_slice(&quad);
             }
         } else {
             for i in 0..edge_count {
@@ -389,6 +417,24 @@ impl LineGeneratorHelper {
             }
         }
 
+        // Undo scale so projected arrays are not permanently mutated
+        if s != 1.0 {
+            let inv = 1.0 / s;
+            let vert_count = self.projected_x.len();
+            for i in 0..vert_count {
+                self.projected_x[i] *= inv;
+                self.projected_y[i] *= inv;
+            }
+        }
+
         &self.vertices
+    }
+
+    /// Ensure sort scratch buffers are large enough.
+    fn ensure_sort_buffers(&mut self, edge_count: usize) {
+        if self.edge_depth.len() < edge_count {
+            self.edge_depth.resize(edge_count, 0.0);
+            self.edge_sorted_idx.resize(edge_count, 0);
+        }
     }
 }
