@@ -279,10 +279,12 @@ impl PlaybackEngine {
         };
 
         // Run scheduler (Fix 2: pass looping_clip_ids for bypass)
+        // TODO Phase 3: pass live_clip_manager.live_slots_list() instead of empty slice
         let sync_result = self.scheduler.compute_sync(
             self.current_time,
             self.current_beat,
             &self.timeline_active_scratch,
+            &[],  // live_slots — wired in Phase 3
             &self.active_clip_ids,
             &self.looping_clip_ids,
             min_remaining_beats,
@@ -459,10 +461,12 @@ impl PlaybackEngine {
             MIN_START_REMAINING_TIME
         };
 
+        // TODO Phase 3: pass live_clip_manager.live_slots_list() instead of empty slice
         let sync_result = self.scheduler.compute_sync(
             self.current_time,
             self.current_beat,
             &self.timeline_active_scratch,
+            &[],  // live_slots — wired in Phase 3
             &self.active_clip_ids,
             &self.looping_clip_ids,
             min_remaining_beats,

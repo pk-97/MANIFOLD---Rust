@@ -129,6 +129,47 @@ impl TimelineClip {
         cloned
     }
 
+    // ── Clamped setters (match Unity TimelineClip property setters) ──
+
+    /// Set duration with non-negative clamp. Unity TimelineClip.cs line 82.
+    pub fn set_duration_beats(&mut self, v: f32) {
+        self.duration_beats = v.max(0.0);
+    }
+
+    /// Set in-point with non-negative clamp. Unity TimelineClip.cs line 114.
+    pub fn set_in_point(&mut self, v: f32) {
+        self.in_point = v.max(0.0);
+    }
+
+    /// Resolved recorded BPM: clamped to 20-300 if > 0, else 0.
+    /// Unity TimelineClip.cs lines 122-123.
+    pub fn recorded_bpm_resolved(&self) -> f32 {
+        if self.recorded_bpm > 0.0 {
+            self.recorded_bpm.clamp(20.0, 300.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// Set recorded BPM with clamping. Unity TimelineClip.cs lines 126-133.
+    pub fn set_recorded_bpm(&mut self, v: f32) {
+        if v <= 0.0 {
+            self.recorded_bpm = 0.0;
+        } else {
+            self.recorded_bpm = v.clamp(20.0, 300.0);
+        }
+    }
+
+    /// Resolved start absolute tick: -1 when not available, else max(0, val).
+    /// Unity TimelineClip.cs lines 94-95.
+    pub fn start_absolute_tick_resolved(&self) -> i32 {
+        if self.has_start_absolute_tick {
+            self.start_absolute_tick.max(0)
+        } else {
+            -1
+        }
+    }
+
     /// Create a new video clip.
     pub fn new_video(
         video_clip_id: String,
@@ -141,8 +182,8 @@ impl TimelineClip {
             video_clip_id,
             layer_index,
             start_beat,
-            duration_beats,
-            in_point,
+            duration_beats: duration_beats.max(0.0),
+            in_point: in_point.max(0.0),
             ..Default::default()
         }
     }
@@ -158,7 +199,7 @@ impl TimelineClip {
             generator_type: gen_type,
             layer_index,
             start_beat,
-            duration_beats,
+            duration_beats: duration_beats.max(0.0),
             ..Default::default()
         }
     }
@@ -215,3 +256,107 @@ impl Default for TimelineClip {
 }
 
 fn default_one() -> f32 { 1.0 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_set_duration_beats_clamps_negative() {
+        let mut clip = TimelineClip::default();
+        clip.set_duration_beats(-5.0);
+        assert_eq!(clip.duration_beats, 0.0);
+    }
+
+    #[test]
+    fn test_set_duration_beats_preserves_positive() {
+        let mut clip = TimelineClip::default();
+        clip.set_duration_beats(4.0);
+        assert_eq!(clip.duration_beats, 4.0);
+    }
+
+    #[test]
+    fn test_set_in_point_clamps_negative() {
+        let mut clip = TimelineClip::default();
+        clip.set_in_point(-2.0);
+        assert_eq!(clip.in_point, 0.0);
+    }
+
+    #[test]
+    fn test_recorded_bpm_resolved_zero_passthrough() {
+        let clip = TimelineClip { recorded_bpm: 0.0, ..Default::default() };
+        assert_eq!(clip.recorded_bpm_resolved(), 0.0);
+    }
+
+    #[test]
+    fn test_recorded_bpm_resolved_clamps_low() {
+        let clip = TimelineClip { recorded_bpm: 10.0, ..Default::default() };
+        assert_eq!(clip.recorded_bpm_resolved(), 20.0);
+    }
+
+    #[test]
+    fn test_recorded_bpm_resolved_clamps_high() {
+        let clip = TimelineClip { recorded_bpm: 500.0, ..Default::default() };
+        assert_eq!(clip.recorded_bpm_resolved(), 300.0);
+    }
+
+    #[test]
+    fn test_recorded_bpm_resolved_normal() {
+        let clip = TimelineClip { recorded_bpm: 120.0, ..Default::default() };
+        assert_eq!(clip.recorded_bpm_resolved(), 120.0);
+    }
+
+    #[test]
+    fn test_set_recorded_bpm_clamps() {
+        let mut clip = TimelineClip::default();
+        clip.set_recorded_bpm(-1.0);
+        assert_eq!(clip.recorded_bpm, 0.0);
+        clip.set_recorded_bpm(10.0);
+        assert_eq!(clip.recorded_bpm, 20.0);
+        clip.set_recorded_bpm(500.0);
+        assert_eq!(clip.recorded_bpm, 300.0);
+    }
+
+    #[test]
+    fn test_start_absolute_tick_resolved_not_available() {
+        let clip = TimelineClip {
+            has_start_absolute_tick: false,
+            start_absolute_tick: 42,
+            ..Default::default()
+        };
+        assert_eq!(clip.start_absolute_tick_resolved(), -1);
+    }
+
+    #[test]
+    fn test_start_absolute_tick_resolved_available() {
+        let clip = TimelineClip {
+            has_start_absolute_tick: true,
+            start_absolute_tick: 48,
+            ..Default::default()
+        };
+        assert_eq!(clip.start_absolute_tick_resolved(), 48);
+    }
+
+    #[test]
+    fn test_start_absolute_tick_resolved_clamps_negative() {
+        let clip = TimelineClip {
+            has_start_absolute_tick: true,
+            start_absolute_tick: -5,
+            ..Default::default()
+        };
+        assert_eq!(clip.start_absolute_tick_resolved(), 0);
+    }
+
+    #[test]
+    fn test_new_video_clamps_duration() {
+        let clip = TimelineClip::new_video("v1".into(), 0, 0.0, -3.0, -1.0);
+        assert_eq!(clip.duration_beats, 0.0);
+        assert_eq!(clip.in_point, 0.0);
+    }
+
+    #[test]
+    fn test_new_generator_clamps_duration() {
+        let clip = TimelineClip::new_generator(GeneratorType::None, 0, 0.0, -2.0);
+        assert_eq!(clip.duration_beats, 0.0);
+    }
+}
