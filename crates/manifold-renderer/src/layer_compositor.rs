@@ -6,6 +6,7 @@ use crate::effect::EffectContext;
 use crate::effect_chain::EffectChain;
 use crate::effect_registry::EffectRegistry;
 use crate::render_target::RenderTarget;
+use crate::tonemap::TonemapPipeline;
 use crate::wet_dry_lerp::WetDryLerpPipeline;
 use crate::compositor::{Compositor, CompositorFrame};
 
@@ -318,6 +319,9 @@ pub struct LayerCompositor {
     effect_registry: EffectRegistry,
     /// Wet/dry lerp pipeline for effect group blending.
     wet_dry_lerp: WetDryLerpPipeline,
+    /// ACES tonemapping pipeline. Matches Unity's CompositorStack.tonemapMaterial +
+    /// tonemappedOutput. Applied as the final step after master effects.
+    tonemap: TonemapPipeline,
 }
 
 impl LayerCompositor {
@@ -329,6 +333,7 @@ impl LayerCompositor {
             effect_chain: EffectChain::new(),
             effect_registry: EffectRegistry::new(device),
             wet_dry_lerp: WetDryLerpPipeline::new(device),
+            tonemap: TonemapPipeline::new(device, width, height),
         }
     }
 
@@ -613,11 +618,18 @@ impl Compositor for LayerCompositor {
     ) -> &wgpu::TextureView {
         if frame.clips.is_empty() {
             self.main.clear_source(encoder, true);
-            return self.main.source_view();
+        } else {
+            self.composite(device, queue, encoder, frame);
         }
 
-        self.composite(device, queue, encoder, frame);
-        self.main.source_view()
+        // PreTonemapOutput = main.source_view() (preserved — tonemap writes to its own RT)
+        // ApplyTonemap(finalBuffer) → tonemap.output
+        self.tonemap.apply(
+            device, queue, encoder,
+            self.main.source_view(),
+            &frame.tonemap,
+        );
+        &self.tonemap.output.view
     }
 
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
@@ -627,9 +639,14 @@ impl Compositor for LayerCompositor {
         }
         self.effect_chain.resize(device, width, height);
         self.effect_registry.resize_all(device, width, height);
+        self.tonemap.resize(device, width, height);
     }
 
     fn dimensions(&self) -> (u32, u32) {
         (self.main.width(), self.main.height())
+    }
+
+    fn pre_tonemap_output(&self) -> &wgpu::TextureView {
+        self.main.source_view()
     }
 }

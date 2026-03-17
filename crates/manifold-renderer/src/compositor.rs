@@ -1,4 +1,5 @@
 use crate::layer_compositor::CompositeClipDescriptor;
+use crate::tonemap::TonemapSettings;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::BlendMode;
 
@@ -24,12 +25,15 @@ pub struct CompositorFrame<'a> {
     pub layers: &'a [CompositeLayerDescriptor<'a>],
     pub master_effects: &'a [EffectInstance],
     pub master_effect_groups: &'a [EffectGroup],
+    /// Tonemap settings for this frame. Matches Unity CompositorStack properties:
+    /// TonemapExposure, HDROutputEnabled, PaperWhiteNits, MaxDisplayNits.
+    pub tonemap: TonemapSettings,
 }
 
 /// Trait for compositing layers into a final output.
 pub trait Compositor {
     /// Render into the compositor's internal render targets.
-    /// Returns the texture view to present.
+    /// Returns the tonemapped texture view to present.
     fn render(
         &mut self,
         device: &wgpu::Device,
@@ -43,5 +47,10 @@ pub trait Compositor {
 
     /// Get current output dimensions.
     fn dimensions(&self) -> (u32, u32);
+
+    /// Pre-tonemap HDR output. Returns the linear HDR buffer from before
+    /// tonemapping was applied. Used by the export pipeline.
+    /// Matches Unity CompositorStack.PreTonemapOutput.
+    fn pre_tonemap_output(&self) -> &wgpu::TextureView;
 }
 

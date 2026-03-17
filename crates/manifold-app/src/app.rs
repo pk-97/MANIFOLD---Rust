@@ -16,6 +16,7 @@ use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::renderer::StubRenderer;
 use manifold_renderer::blit::BlitPipeline;
 use manifold_renderer::compositor::{Compositor, CompositeLayerDescriptor, CompositorFrame};
+use manifold_renderer::tonemap::TonemapSettings;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu::GpuContext;
 use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
@@ -905,6 +906,7 @@ impl Application {
             layers: &layer_descs,
             master_effects,
             master_effect_groups,
+            tonemap: TonemapSettings::default(),
         };
 
         let output_view = compositor.render(&gpu.device, &gpu.queue, &mut encoder, &frame);
