@@ -93,7 +93,7 @@
       "severity": "critical",
       "est_loc": 10,
       "status": "done",
-      "commit": "pending",
+      "commit": "9714286",
       "notes": "live_slots now passed from LiveClipManager to scheduler.compute_sync()."
     },
     {
@@ -105,7 +105,7 @@
       "severity": "critical",
       "est_loc": 30,
       "status": "done",
-      "commit": "pending",
+      "commit": "9714286",
       "notes": "5ms time guard + sequence guard in commit_live_clip(). Creation timestamps tracked per slot."
     },
     {
