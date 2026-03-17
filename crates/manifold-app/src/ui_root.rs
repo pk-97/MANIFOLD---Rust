@@ -39,9 +39,6 @@ pub struct UIRoot {
     pub dropdown: DropdownPanel,
     pub perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel,
 
-    // Interaction — port of Unity InteractionOverlay
-    pub overlay: manifold_ui::interaction_overlay::InteractionOverlay,
-
     // State
     built: bool,
     screen_width: f32,
@@ -78,9 +75,6 @@ impl UIRoot {
             viewport: TimelineViewportPanel::new(),
             dropdown: DropdownPanel::new(),
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
-            overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
-                manifold_ui::color::CLIP_VERTICAL_PAD,
-            ),
             built: false,
             screen_width: 1280.0,
             screen_height: 720.0,

@@ -173,6 +173,11 @@ pub struct Application {
     // Keyboard/zoom handler — port of Unity InputHandler.cs
     input_handler: crate::input_handler::InputHandler,
 
+    // Interaction overlay — port of Unity InteractionOverlay.cs
+    // Owns all drag state. Lives on Application (not UIRoot) so we can
+    // split-borrow it alongside ui_root.viewport and create AppEditingHost.
+    overlay: manifold_ui::interaction_overlay::InteractionOverlay,
+
     // State
     initialized: bool,
     needs_rebuild: bool,
@@ -233,6 +238,9 @@ impl Application {
             transport_controller: manifold_playback::transport_controller::TransportController::new(),
             inspector_has_focus: false,
             input_handler: crate::input_handler::InputHandler::new(),
+            overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
+                manifold_ui::color::CLIP_VERTICAL_PAD,
+            ),
             initialized: false,
             needs_rebuild: false,
             needs_scroll_rebuild: false,
@@ -1365,6 +1373,27 @@ impl ApplicationHandler for Application {
                             PointerAction::Move,
                             self.time_since_start,
                         );
+
+                        // Route hover through InteractionOverlay (port of Unity OnPointerMove).
+                        // This handles: CursorBeat/CursorLayerIndex tracking, per-layer bitmap
+                        // invalidation on hover change, and cursor shape feedback.
+                        {
+                            let mut host = crate::editing_host::AppEditingHost::new(
+                                &mut self.engine,
+                                &mut self.editing_service,
+                                &mut self.cursor_manager,
+                                &mut self.active_layer_index,
+                                &mut self.needs_rebuild,
+                                &mut self.needs_structural_sync,
+                                &mut self.needs_scroll_rebuild,
+                            );
+                            self.overlay.on_pointer_move(
+                                self.cursor_pos,
+                                &mut host,
+                                &mut self.selection,
+                                &self.ui_root.viewport,
+                            );
+                        }
 
                         // Update cursor based on current interaction state.
                         // From Unity: Cursors.SetMove/SetBlocked/SetResizeHorizontal/SetDefault
