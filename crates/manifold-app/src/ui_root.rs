@@ -59,6 +59,11 @@ pub struct UIRoot {
 
     /// Hover actions produced by continuous cursor movement, drained in process_events.
     cursor_hover_actions: Vec<PanelAction>,
+
+    /// Viewport-area events stashed for InteractionOverlay processing by app.rs.
+    /// Events in the tracks area that need host trait access are stored here
+    /// during process_events() and drained by app.rs to route through the overlay.
+    viewport_events: Vec<manifold_ui::input::UIEvent>,
 }
 
 impl UIRoot {
@@ -85,6 +90,7 @@ impl UIRoot {
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
             cursor_hover_actions: Vec::new(),
+            viewport_events: Vec::new(),
         }
     }
 
@@ -257,8 +263,16 @@ impl UIRoot {
             panel_actions = self.inspector.handle_event(event, &self.tree);
             actions.append(&mut panel_actions);
 
+            // Viewport: ruler events handled by viewport panel (Seek/scrub).
+            // Tracks-area events stashed for InteractionOverlay in app.rs.
             panel_actions = self.viewport.handle_event(event, &self.tree);
             actions.append(&mut panel_actions);
+
+            // Stash events in the tracks area for overlay processing.
+            // The overlay needs &mut TimelineEditingHost which UIRoot can't provide.
+            if self.is_event_in_tracks_area(event) {
+                self.viewport_events.push(event.clone());
+            }
         }
 
         // Route Drag/DragEnd to inspector directly (needs &mut tree for slider feedback).
@@ -478,6 +492,31 @@ impl UIRoot {
     /// End inspector resize drag.
     pub fn end_inspector_resize(&mut self) {
         self.inspector_resize_dragging = false;
+    }
+
+    /// Drain viewport-area events stashed during process_events().
+    /// App.rs routes these through the InteractionOverlay with a host trait.
+    pub fn drain_viewport_events(&mut self) -> Vec<manifold_ui::input::UIEvent> {
+        std::mem::take(&mut self.viewport_events)
+    }
+
+    /// Check if a UI event's position falls within the tracks area.
+    fn is_event_in_tracks_area(&self, event: &manifold_ui::input::UIEvent) -> bool {
+        use manifold_ui::input::UIEvent;
+        let pos = match event {
+            UIEvent::Click { pos, .. } => *pos,
+            UIEvent::DoubleClick { pos, .. } => *pos,
+            UIEvent::RightClick { pos, .. } => *pos,
+            UIEvent::DragBegin { origin, .. } => *origin,
+            UIEvent::Drag { pos, .. } => *pos,
+            UIEvent::DragEnd { pos, .. } => *pos,
+            UIEvent::HoverEnter { pos, .. } => *pos,
+            UIEvent::PointerDown { pos, .. } => *pos,
+            // HoverExit has no position — treat as viewport event if overlay is dragging
+            UIEvent::HoverExit { .. } => return true,
+            _ => return false,
+        };
+        self.viewport.tracks_rect().contains(pos)
     }
 
     /// Per-frame update — push state changes to panels.

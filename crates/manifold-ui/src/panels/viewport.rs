@@ -177,13 +177,11 @@ pub struct TimelineViewportPanel {
     cached_fingerprint: u64,
 }
 
+/// Viewport-local drag mode. Only tracks ruler scrub — all clip interaction
+/// (move, trim, region) is handled by InteractionOverlay.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ViewportDragMode {
     None,
-    Move,
-    TrimLeft,
-    TrimRight,
-    RegionSelect,
     RulerScrub,
 }
 
@@ -881,281 +879,49 @@ impl Panel for TimelineViewportPanel {
     }
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
+        // Tracks-area interaction (click, drag, hover) is handled by
+        // InteractionOverlay in app.rs — NOT here. This method only
+        // handles ruler events (seek/scrub) which are viewport-specific.
         match event {
-            // ── Click ────────────────────────────────────────────
-            // Mirrors Unity InteractionOverlay.OnPointerClick exactly.
-            // UIInputSystem never emits Click after DragEnd, but guard
-            // against edge cases by checking drag_mode.
-            UIEvent::Click { pos, modifiers, .. } => {
-                if self.drag_mode != ViewportDragMode::None {
-                    return Vec::new();
-                }
-
-                // Ruler click → seek
+            // ── Click: ruler only ────────────────────────────────
+            UIEvent::Click { pos, .. } => {
                 if self.ruler_rect.contains(*pos) {
                     let beat = self.pixel_to_beat(pos.x).max(0.0);
                     return vec![PanelAction::Seek(beat)];
                 }
-
-                if !self.tracks_rect.contains(*pos) {
-                    return Vec::new();
-                }
-
-                let hit = self.hit_test_clip(*pos);
-
-                if let Some(ref hit) = hit {
-                    // ── HIT: clip was clicked ──
-                    // Locked clips: ignore
-                    if self.clip_is_locked(&hit.clip_id) {
-                        return Vec::new();
-                    }
-
-                    // Right-click handled via RightClick event, not here.
-
-                    let mut actions = Vec::new();
-
-                    if modifiers.shift {
-                        // Shift+click: extend region to clip
-                        actions.push(PanelAction::ClipClicked(
-                            hit.clip_id.clone(),
-                            Modifiers { shift: true, ..*modifiers },
-                        ));
-                    } else if modifiers.ctrl || modifiers.command {
-                        // Cmd/Ctrl+click: toggle multi-select
-                        actions.push(PanelAction::ClipClicked(
-                            hit.clip_id.clone(),
-                            Modifiers { ctrl: true, command: true, ..*modifiers },
-                        ));
-                    } else {
-                        // Plain click: select single
-                        actions.push(PanelAction::ClipClicked(
-                            hit.clip_id.clone(),
-                            Modifiers::default(),
-                        ));
-                    }
-
-                    actions
-                } else {
-                    // ── NO HIT: empty area clicked ──
-                    let beat = self.pixel_to_beat(pos.x);
-
-                    if let Some(layer) = self.layer_at_y(pos.y) {
-                        let snapped = self.snap_to_grid(beat);
-
-                        if modifiers.shift {
-                            // Shift+click on empty area: extend region
-                            vec![PanelAction::TrackClicked(snapped, layer, *modifiers)]
-                        } else {
-                            // Plain click: set insert cursor + inspect layer
-                            vec![PanelAction::SetInsertCursor(snapped)]
-                        }
-                    } else {
-                        Vec::new()
-                    }
-                }
+                Vec::new()
             }
 
-            // ── DoubleClick ──────────────────────────────────────
-            // Mirrors Unity InteractionOverlay: double-click on clip
-            // or double-click on empty area to create clip.
-            UIEvent::DoubleClick { pos, .. } => {
-                if !self.tracks_rect.contains(*pos) {
-                    return Vec::new();
-                }
-
-                if let Some(hit) = self.hit_test_clip(*pos) {
-                    vec![PanelAction::ClipDoubleClicked(hit.clip_id)]
-                } else {
-                    let beat = self.pixel_to_beat(pos.x);
-                    if let Some(layer) = self.layer_at_y(pos.y) {
-                        vec![PanelAction::TrackDoubleClicked(beat, layer)]
-                    } else {
-                        Vec::new()
-                    }
-                }
-            }
-
-            // ── RightClick ───────────────────────────────────────
-            // Mirrors Unity InteractionOverlay.OnPointerClick right-click path:
-            // if clip hit and not selected, select it first (app layer handles
-            // that via ClipClicked before showing menu).
-            UIEvent::RightClick { pos, .. } => {
-                if !self.tracks_rect.contains(*pos) {
-                    return Vec::new();
-                }
-
-                let beat = self.pixel_to_beat(pos.x);
-                if let Some(hit) = self.hit_test_clip(*pos) {
-                    if self.clip_is_locked(&hit.clip_id) {
-                        return Vec::new();
-                    }
-
-                    let mut actions = Vec::new();
-                    // If not already selected, select first (app layer checks)
-                    if !self.selected_clip_ids.contains(&hit.clip_id) {
-                        actions.push(PanelAction::ClipClicked(
-                            hit.clip_id.clone(),
-                            Modifiers::default(),
-                        ));
-                    }
-                    actions.push(PanelAction::ClipRightClicked(hit.clip_id));
-                    actions
-                } else if let Some(layer) = self.layer_at_y(pos.y) {
-                    vec![PanelAction::TrackRightClicked(beat, layer)]
-                } else {
-                    Vec::new()
-                }
-            }
-
-            // ── DragBegin ────────────────────────────────────────
-            // Mirrors Unity InteractionOverlay.OnBeginDrag:
-            // MUST use origin (press position) for hit testing, not pos.
+            // ── DragBegin: ruler scrub only ─────────────────────
             UIEvent::DragBegin { origin, .. } => {
-                // Ruler drag → scrub
                 if self.ruler_rect.contains(*origin) {
                     self.drag_mode = ViewportDragMode::RulerScrub;
                     let beat = self.pixel_to_beat(origin.x).max(0.0);
                     return vec![PanelAction::Seek(beat)];
                 }
-
-                if !self.tracks_rect.contains(*origin) {
-                    return Vec::new();
-                }
-
-                let hit = self.hit_test_clip(*origin);
-
-                if let Some(hit) = hit {
-                    // Locked clips: ignore drag
-                    if self.clip_is_locked(&hit.clip_id) {
-                        return Vec::new();
-                    }
-
-                    let beat = self.pixel_to_beat(origin.x);
-                    let mut actions = Vec::new();
-
-                    match hit.region {
-                        HitRegion::TrimLeft => {
-                            // Select if not selected
-                            if !self.selected_clip_ids.contains(&hit.clip_id) {
-                                actions.push(PanelAction::ClipClicked(
-                                    hit.clip_id.clone(),
-                                    Modifiers::default(),
-                                ));
-                            }
-                            self.drag_mode = ViewportDragMode::TrimLeft;
-                            actions.push(PanelAction::ClipDragStarted(
-                                hit.clip_id, HitRegion::TrimLeft, beat,
-                            ));
-                        }
-                        HitRegion::TrimRight => {
-                            if !self.selected_clip_ids.contains(&hit.clip_id) {
-                                actions.push(PanelAction::ClipClicked(
-                                    hit.clip_id.clone(),
-                                    Modifiers::default(),
-                                ));
-                            }
-                            self.drag_mode = ViewportDragMode::TrimRight;
-                            actions.push(PanelAction::ClipDragStarted(
-                                hit.clip_id, HitRegion::TrimRight, beat,
-                            ));
-                        }
-                        HitRegion::Body => {
-                            // Select if not already selected (unless multi-selected)
-                            if !self.selected_clip_ids.contains(&hit.clip_id) {
-                                actions.push(PanelAction::ClipClicked(
-                                    hit.clip_id.clone(),
-                                    Modifiers::default(),
-                                ));
-                            }
-                            self.drag_mode = ViewportDragMode::Move;
-                            actions.push(PanelAction::ClipDragStarted(
-                                hit.clip_id, HitRegion::Body, beat,
-                            ));
-                        }
-                    }
-
-                    actions
-                } else {
-                    // Empty area drag → region select
-                    let beat = self.pixel_to_beat(origin.x);
-                    if let Some(layer) = self.layer_at_y(origin.y) {
-                        self.drag_mode = ViewportDragMode::RegionSelect;
-                        vec![PanelAction::RegionDragStarted(beat, layer)]
-                    } else {
-                        Vec::new()
-                    }
-                }
+                Vec::new()
             }
 
-            // ── Drag ─────────────────────────────────────────────
-            // Mirrors Unity InteractionOverlay.OnDrag switch on dragMode.
+            // ── Drag: ruler scrub continuation ──────────────────
             UIEvent::Drag { pos, .. } => {
-                let beat = self.pixel_to_beat(pos.x);
-                let layer = self.layer_at_y(pos.y);
-
-                match self.drag_mode {
-                    ViewportDragMode::Move => {
-                        vec![PanelAction::ClipDragMoved(beat, layer)]
-                    }
-                    ViewportDragMode::TrimLeft | ViewportDragMode::TrimRight => {
-                        // Trim drags pass beat only, no layer target
-                        vec![PanelAction::ClipDragMoved(beat, None)]
-                    }
-                    ViewportDragMode::RegionSelect => {
-                        if let Some(layer) = layer {
-                            vec![PanelAction::RegionDragMoved(beat, layer)]
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                    ViewportDragMode::RulerScrub => {
-                        vec![PanelAction::Seek(beat.max(0.0))]
-                    }
-                    ViewportDragMode::None => Vec::new(),
+                if self.drag_mode == ViewportDragMode::RulerScrub {
+                    let beat = self.pixel_to_beat(pos.x).max(0.0);
+                    return vec![PanelAction::Seek(beat)];
                 }
+                Vec::new()
             }
 
-            // ── DragEnd ──────────────────────────────────────────
-            // Mirrors Unity InteractionOverlay.OnEndDrag:
-            // emit appropriate end action, reset drag mode.
+            // ── DragEnd: reset ruler scrub mode ─────────────────
             UIEvent::DragEnd { .. } => {
-                let was = self.drag_mode;
-                self.drag_mode = ViewportDragMode::None;
-
-                match was {
-                    ViewportDragMode::Move
-                    | ViewportDragMode::TrimLeft
-                    | ViewportDragMode::TrimRight => {
-                        vec![PanelAction::ClipDragEnded]
-                    }
-                    ViewportDragMode::RegionSelect => {
-                        vec![PanelAction::RegionDragEnded]
-                    }
-                    ViewportDragMode::RulerScrub | ViewportDragMode::None => Vec::new(),
-                }
-            }
-
-            // ── Hover ────────────────────────────────────────────
-            UIEvent::HoverEnter { pos, .. } | UIEvent::PointerDown { pos, .. } => {
-                if self.tracks_rect.contains(*pos) {
-                    let hit = self.hit_test_clip(*pos);
-                    let new_id = hit.map(|h| h.clip_id);
-                    if new_id != self.hovered_clip_id {
-                        self.hovered_clip_id = new_id.clone();
-                        return vec![PanelAction::ViewportHoverChanged(new_id)];
-                    }
-                }
-                Vec::new()
-            }
-            UIEvent::HoverExit { .. } => {
-                if self.hovered_clip_id.is_some() {
-                    self.hovered_clip_id = None;
-                    return vec![PanelAction::ViewportHoverChanged(None)];
+                if self.drag_mode == ViewportDragMode::RulerScrub {
+                    self.drag_mode = ViewportDragMode::None;
                 }
                 Vec::new()
             }
 
-            _ => Vec::new(),
+            // All other events (DoubleClick, RightClick, Hover) handled
+            // by InteractionOverlay — return empty.
+            _ => Vec::new()
         }
     }
 }
@@ -1680,14 +1446,15 @@ mod tests {
     }
 
     #[test]
-    fn click_empty_tracks_sets_insert_cursor() {
+    fn click_empty_tracks_handled_by_overlay() {
+        // Tracks-area clicks are now handled by InteractionOverlay (not viewport).
+        // Viewport.handle_event returns empty for tracks clicks.
         let mut tree = UITree::new();
         let mut panel = TimelineViewportPanel::new();
         let layout = test_layout();
         panel.set_tracks(test_tracks());
         panel.build(&mut tree, &layout);
 
-        // Plain click in tracks area (no clips) → SetInsertCursor (matches Unity)
         let tracks_pos = Vec2::new(
             panel.tracks_rect.x + 100.0,
             panel.tracks_rect.y + 50.0,
@@ -1696,19 +1463,18 @@ mod tests {
             &UIEvent::Click { node_id: 0, pos: tracks_pos, modifiers: Modifiers::default() },
             &tree,
         );
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::SetInsertCursor(_)));
+        assert!(actions.is_empty(), "tracks clicks handled by overlay, not viewport");
     }
 
     #[test]
-    fn shift_click_empty_tracks_emits_track_clicked() {
+    fn shift_click_empty_tracks_handled_by_overlay() {
+        // Tracks-area Shift+clicks are now handled by InteractionOverlay.
         let mut tree = UITree::new();
         let mut panel = TimelineViewportPanel::new();
         let layout = test_layout();
         panel.set_tracks(test_tracks());
         panel.build(&mut tree, &layout);
 
-        // Shift+click in tracks area → TrackClicked with shift (extends region)
         let tracks_pos = Vec2::new(
             panel.tracks_rect.x + 100.0,
             panel.tracks_rect.y + 50.0,
@@ -1721,8 +1487,7 @@ mod tests {
             },
             &tree,
         );
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::TrackClicked(_, _, _)));
+        assert!(actions.is_empty(), "tracks clicks handled by overlay, not viewport");
     }
 
     #[test]

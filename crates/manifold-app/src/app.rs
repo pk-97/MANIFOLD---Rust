@@ -560,6 +560,67 @@ impl Application {
 
         // 2. Process UI events and dispatch actions
         let actions = self.ui_root.process_events();
+
+        // 2a. Route viewport tracks-area events through InteractionOverlay.
+        // These events were stashed by process_events() because the overlay
+        // needs &mut TimelineEditingHost which UIRoot can't provide.
+        {
+            let viewport_events = self.ui_root.drain_viewport_events();
+            if !viewport_events.is_empty() {
+                let mut host = crate::editing_host::AppEditingHost::new(
+                    &mut self.engine,
+                    &mut self.editing_service,
+                    &mut self.cursor_manager,
+                    &mut self.active_layer_index,
+                    &mut self.needs_rebuild,
+                    &mut self.needs_structural_sync,
+                    &mut self.needs_scroll_rebuild,
+                );
+                for event in &viewport_events {
+                    use manifold_ui::input::UIEvent;
+                    match event {
+                        UIEvent::Click { pos, modifiers, .. } => {
+                            self.overlay.on_pointer_click(
+                                *pos, modifiers.shift, modifiers.ctrl || modifiers.command,
+                                1, false,
+                                &mut host, &mut self.selection, &self.ui_root.viewport,
+                            );
+                        }
+                        UIEvent::DoubleClick { pos, modifiers, .. } => {
+                            self.overlay.on_pointer_click(
+                                *pos, modifiers.shift, modifiers.ctrl || modifiers.command,
+                                2, false,
+                                &mut host, &mut self.selection, &self.ui_root.viewport,
+                            );
+                        }
+                        UIEvent::RightClick { pos, .. } => {
+                            self.overlay.on_pointer_click(
+                                *pos, false, false,
+                                1, true,
+                                &mut host, &mut self.selection, &self.ui_root.viewport,
+                            );
+                        }
+                        UIEvent::DragBegin { origin, .. } => {
+                            self.overlay.on_begin_drag(
+                                *origin, &mut host, &mut self.selection, &self.ui_root.viewport,
+                            );
+                        }
+                        UIEvent::Drag { pos, .. } => {
+                            self.overlay.on_drag(
+                                *pos, &mut host, &mut self.selection, &self.ui_root.viewport,
+                            );
+                        }
+                        UIEvent::DragEnd { .. } => {
+                            self.overlay.on_end_drag(
+                                &mut host, &mut self.selection, &self.ui_root.viewport,
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         // Consume deferred structural sync flag (set by keyboard shortcuts)
         let mut needs_structural_sync = self.needs_structural_sync;
         self.needs_structural_sync = false;
@@ -651,6 +712,25 @@ impl Application {
             needs_structural_sync = true; // Inspector content changed — needs rebuild
         }
         // 2a. Per-frame drag polling with auto-scroll.
+        // InteractionOverlay.PollMoveDrag — continues edge auto-scroll when mouse is stationary.
+        {
+            use manifold_ui::interaction_overlay::DragMode;
+            if self.overlay.drag_mode() == DragMode::Move {
+                let mut host = crate::editing_host::AppEditingHost::new(
+                    &mut self.engine,
+                    &mut self.editing_service,
+                    &mut self.cursor_manager,
+                    &mut self.active_layer_index,
+                    &mut self.needs_rebuild,
+                    &mut self.needs_structural_sync,
+                    &mut self.needs_scroll_rebuild,
+                );
+                self.overlay.poll_move_drag(
+                    self.cursor_pos, &mut host, &mut self.selection, &self.ui_root.viewport,
+                );
+            }
+        }
+        // Legacy drag polling (old ClipDragState path — will be removed).
         // From Unity InteractionOverlay.PollMoveDrag (lines 116-124):
         // When mouse is stationary at viewport edge during Move drag,
         // OnDrag stops firing but auto-scroll must continue.
