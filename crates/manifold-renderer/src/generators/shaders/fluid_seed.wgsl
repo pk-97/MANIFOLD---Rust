@@ -131,7 +131,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         // Unity: cluster = i % 7; cr = cluster == 0 ? 0.0 : 0.28
         let cluster = i % 7u;
         let cluster_angle = f32(cluster) * (TAU / 7.0);
-        let cr = select(0.28f32, 0.0f32, cluster == 0u);
+        let cr = select(0.28, 0.0, cluster == 0u);
         let cx = 0.5 + cos(cluster_angle) * cr;
         let cy = 0.5 + sin(cluster_angle) * cr;
         px = cx + tri_rand(seed) * 0.025;
