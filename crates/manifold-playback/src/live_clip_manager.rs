@@ -87,24 +87,32 @@ impl LiveClipManager {
         self.pending_by_tick.clear();
     }
 
-    pub fn clear_on_seek(&mut self, _seek_delta: f32) {
-        self.clear_all();
+    /// Clear live slots on large seek. Only clears when seek_delta > 1.0.
+    /// Port of C# LiveClipManager.ClearOnSeek (lines 92-106).
+    /// `stop_clip_fn` is called for each live slot clip before clearing (avoids
+    /// self-referential borrow with LiveClipHost trait).
+    pub fn clear_on_seek(&mut self, seek_delta: f32, stop_clip_fn: &mut dyn FnMut(&str)) {
+        if seek_delta > 1.0 && !self.live_slots.is_empty() {
+            for (_, clip) in &self.live_slots_list {
+                stop_clip_fn(&clip.id);
+            }
+            self.live_slots.clear();
+            self.live_slots_list.clear();
+            self.live_slot_clip_ids.clear();
+        }
+        if seek_delta > 1.0 {
+            self.pending_by_clip_id.clear();
+            self.pending_by_layer.clear();
+            self.pending_by_tick.clear();
+        }
     }
 
+    /// Notify that a clip was stopped by the engine.
+    /// Port of C# LiveClipManager.NotifyClipStopped (lines 108-111).
+    /// Unity only removes from liveSlotClipIds — the slot entry persists
+    /// so NoteOff can still commit the correct held duration.
     pub fn notify_clip_stopped(&mut self, clip_id: &str) {
-        // Remove from live slots if present
-        let mut remove_layer = None;
-        for (&layer, clip) in &self.live_slots {
-            if clip.id == clip_id {
-                remove_layer = Some(layer);
-                break;
-            }
-        }
-        if let Some(layer) = remove_layer {
-            self.live_slots.remove(&layer);
-            self.live_slots_list.retain(|(l, _)| *l != layer);
-            self.live_slot_clip_ids.remove(clip_id);
-        }
+        self.live_slot_clip_ids.remove(clip_id);
     }
 
     pub fn is_live_slot_clip(&self, clip_id: &str) -> bool {
@@ -244,9 +252,20 @@ impl LiveClipManager {
 
     // ─── Activation ───
 
-    fn activate_live_slot_now(&mut self, layer_index: i32, clip: TimelineClip) {
-        // Remove existing live slot on this layer
+    /// Activate a live slot, stopping any existing slot on the same layer.
+    /// Port of C# LiveClipManager.ActivateLiveSlotNow (lines 315-351).
+    /// `stop_clip_fn` stops the old clip's renderer if replacing with a different ID.
+    fn activate_live_slot_now_with_stop(
+        &mut self,
+        layer_index: i32,
+        clip: TimelineClip,
+        stop_clip_fn: &mut dyn FnMut(&str),
+    ) {
+        // Remove existing live slot on this layer — stop its renderer if different clip
         if let Some(old_clip) = self.live_slots.remove(&layer_index) {
+            if old_clip.id != clip.id {
+                stop_clip_fn(&old_clip.id);
+            }
             self.live_slot_clip_ids.remove(&old_clip.id);
             self.live_slots_list.retain(|(l, _)| *l != layer_index);
         }
@@ -254,6 +273,13 @@ impl LiveClipManager {
         self.live_slot_clip_ids.insert(clip.id.clone());
         self.live_slots_list.push((layer_index, clip.clone()));
         self.live_slots.insert(layer_index, clip);
+    }
+
+    /// Internal activation without host stop callback (used by trigger methods
+    /// that manage their own host interaction).
+    fn activate_live_slot_now(&mut self, layer_index: i32, clip: TimelineClip) {
+        let mut noop = |_: &str| {};
+        self.activate_live_slot_now_with_stop(layer_index, clip, &mut noop);
     }
 
     /// Process pending launches that have reached their target tick.

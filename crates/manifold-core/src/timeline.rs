@@ -166,29 +166,38 @@ impl Timeline {
         self.mark_clip_lookup_dirty();
     }
 
+    /// Ensure all layers have up-to-date sort caches. Call before `get_active_clips_at_beat_ref`.
+    pub fn ensure_layers_sorted(&mut self) {
+        for layer in &mut self.layers {
+            layer.ensure_sorted();
+        }
+    }
+
     /// Get active clips at a given beat (respecting mute/solo with group hierarchy).
+    /// This &mut self variant ensures sort caches are up-to-date before querying.
     /// From Unity Timeline.cs GetActiveClipsAtBeat (lines 331-374).
-    /// Group layers are skipped (they have no clips).
-    /// Children of muted groups are excluded.
-    /// Solo logic: child solo, parent group solo, or no solo active.
     pub fn get_active_clips_at_beat(&mut self, beat: f32) -> Vec<(usize, usize)> {
-        // Pre-scan: check if any layer is solo'd
+        self.ensure_layers_sorted();
+        self.get_active_clips_at_beat_ref(beat)
+    }
+
+    /// Get active clips at a given beat (&self variant).
+    /// IMPORTANT: Caller must ensure sort caches are current via `ensure_layers_sorted()`
+    /// before calling this. Use `get_active_clips_at_beat()` if unsure.
+    pub fn get_active_clips_at_beat_ref(&self, beat: f32) -> Vec<(usize, usize)> {
         let any_solo = self.layers.iter().any(|l| l.is_solo);
         let mut results = Vec::new();
 
         for li in 0..self.layers.len() {
-            // Group layers have no clips — skip
             if self.layers[li].is_group() {
                 continue;
             }
 
-            // Individual layer mute
             if self.layers[li].is_muted {
                 continue;
             }
 
             if self.layers[li].parent_layer_id.is_some() {
-                // Child layer — check parent group state
                 let parent_muted = self.find_group_parent(li)
                     .map(|(_, p)| p.is_muted)
                     .unwrap_or(false);
@@ -200,12 +209,10 @@ impl Timeline {
                     .map(|(_, p)| p.is_solo)
                     .unwrap_or(false);
 
-                // Solo check: render if child is solo, or parent group is solo, or no solo active
                 if any_solo && !self.layers[li].is_solo && !parent_solo {
                     continue;
                 }
             } else {
-                // Root layer solo check
                 if any_solo && !self.layers[li].is_solo {
                     continue;
                 }

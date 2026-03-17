@@ -159,15 +159,23 @@ impl Layer {
         self.clips_by_end_sorted = false;
     }
 
+    /// Eagerly sort clip caches. Call after mutations so queries can be &self.
+    pub fn ensure_sorted(&mut self) {
+        self.ensure_clip_ordering_caches();
+    }
+
     /// Collect clips active at a given beat using dual sorted indexes.
     /// From Unity Layer.cs CollectActiveClipsAtBeat (lines 388-431).
     /// Uses the smaller of two candidate sets (started-by-beat vs ending-after-beat)
     /// to minimize per-frame work.
-    pub fn collect_active_clips_at_beat(&mut self, beat: f32, results: &mut Vec<usize>) {
+    ///
+    /// IMPORTANT: Caches must be up-to-date before calling. Either call
+    /// `ensure_sorted()` first, or use `collect_active_clips_at_beat_mut()`.
+    pub fn collect_active_clips_at_beat(&self, beat: f32, results: &mut Vec<usize>) {
         if self.clips.is_empty() {
             return;
         }
-        self.ensure_clip_ordering_caches();
+        // Caches must already be sorted (caller's responsibility via ensure_sorted)
 
         // Count of clips with start_beat <= beat (sorted by start)
         let started_count = Self::upper_bound_start_beat(&self.clips, beat);
@@ -257,6 +265,13 @@ impl Layer {
         a.end_beat().partial_cmp(&b.end_beat())
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal))
+    }
+
+    /// Convenience: ensure caches + collect active clips in one &mut self call.
+    /// Use when you don't need to split the borrow.
+    pub fn collect_active_clips_at_beat_mut(&mut self, beat: f32, results: &mut Vec<usize>) {
+        self.ensure_clip_ordering_caches();
+        self.collect_active_clips_at_beat(beat, results);
     }
 
     pub fn add_clip(&mut self, clip: TimelineClip) {

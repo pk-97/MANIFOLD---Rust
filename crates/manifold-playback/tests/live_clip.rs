@@ -233,7 +233,22 @@ fn pending_launch_queue_activates_at_tick() {
 // ─── Clear ───
 
 #[test]
-fn clear_on_seek_removes_all_slots() {
+fn clear_on_seek_small_delta_no_clear() {
+    let mut project = make_project();
+    let host = MockHost::new();
+    let mut mgr = LiveClipManager::new();
+
+    mgr.trigger_live_clip(&mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0);
+    assert_eq!(mgr.live_slots().len(), 1);
+
+    // Small seek delta (< 1.0) should NOT clear
+    let mut noop = |_: &str| {};
+    mgr.clear_on_seek(0.5, &mut noop);
+    assert_eq!(mgr.live_slots().len(), 1);
+}
+
+#[test]
+fn clear_on_seek_large_delta_clears() {
     let mut project = make_project();
     let host = MockHost::new();
     let mut mgr = LiveClipManager::new();
@@ -242,13 +257,16 @@ fn clear_on_seek_removes_all_slots() {
     mgr.trigger_live_clip(&mut project, &host, "v2".into(), 1, 2.0, 0.0, None, -1, 0.0);
     assert_eq!(mgr.live_slots().len(), 2);
 
-    mgr.clear_on_seek(0.0);
+    // Large seek delta (> 1.0) should clear and call stop for each
+    let mut stopped = Vec::new();
+    mgr.clear_on_seek(2.0, &mut |id: &str| stopped.push(id.to_string()));
     assert_eq!(mgr.live_slots().len(), 0);
     assert!(mgr.live_slot_clip_ids().is_empty());
+    assert_eq!(stopped.len(), 2);
 }
 
 #[test]
-fn notify_clip_stopped_removes_slot() {
+fn notify_clip_stopped_removes_only_clip_id() {
     let mut project = make_project();
     let host = MockHost::new();
     let mut mgr = LiveClipManager::new();
@@ -258,8 +276,10 @@ fn notify_clip_stopped_removes_slot() {
     ).unwrap();
 
     mgr.notify_clip_stopped(&clip.id);
-    assert_eq!(mgr.live_slots().len(), 0);
-    assert!(!mgr.is_live_slot_clip(&clip.id));
+    // Unity behavior: only removes from liveSlotClipIds, NOT from liveSlots dict.
+    // The slot persists so NoteOff can still commit the correct held duration.
+    assert_eq!(mgr.live_slots().len(), 1); // slot still present
+    assert!(!mgr.is_live_slot_clip(&clip.id)); // but clip ID removed from tracking set
 }
 
 // ─── Quantize math (pure functions) ───
