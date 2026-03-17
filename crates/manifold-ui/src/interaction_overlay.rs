@@ -199,8 +199,8 @@ impl InteractionOverlay {
             // Unity lines 152-162: double-click on empty area → create clip
             if click_count >= 2 {
                 if let Some(layer) = layer_index {
-                    let beat = viewport.pixel_to_beat(pos.x);
-                    if let Some(clip_id) = host.create_clip_at_position(beat, layer) {
+                    let beat = viewport.floor_to_grid(viewport.pixel_to_beat(pos.x));
+                    if let Some(clip_id) = host.create_clip_at_position(beat, layer, viewport.grid_step()) {
                         ui_state.select_clip(clip_id.clone(), layer);
                         host.on_clip_selected(&clip_id);
                     }

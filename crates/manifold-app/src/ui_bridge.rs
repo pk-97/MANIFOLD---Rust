@@ -174,7 +174,7 @@ pub fn dispatch(
             let grid_step = ui.viewport.grid_step();
             let snapped = manifold_ui::snap::floor_beat_to_grid(*beat, grid_step);
             if let Some(project) = engine.project_mut() {
-                let cmd = EditingService::create_clip_at_position(project, snapped, *layer, 4.0);
+                let (cmd, _clip_id) = EditingService::create_clip_at_position(project, snapped, *layer, 4.0);
                 editing.execute(cmd, project);
                 // Enforce non-overlap for the newly created clip
                 if let Some(new_layer) = project.timeline.layers.get(*layer) {
@@ -388,7 +388,7 @@ pub fn dispatch(
         PanelAction::NewClipClicked(idx) => {
             let beat = engine.current_beat();
             if let Some(project) = engine.project_mut() {
-                let cmd = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
+                let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
                 editing.execute(cmd, project);
             }
             DispatchResult::structural()
@@ -396,7 +396,7 @@ pub fn dispatch(
         PanelAction::AddGenClipClicked(idx) => {
             let beat = engine.current_beat();
             if let Some(project) = engine.project_mut() {
-                let cmd = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
+                let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
                 editing.execute(cmd, project);
             }
             DispatchResult::structural()
@@ -1495,7 +1495,8 @@ pub fn dispatch(
                     region.end_beat = clip.start_beat + clip.duration_beats;
                     region.is_active = true;
                 }
-                let commands = EditingService::duplicate_clips(project, &[clip_id.clone()], &region);
+                let spb = 60.0 / project.settings.bpm.max(1.0);
+                let commands = EditingService::duplicate_clips(project, &[clip_id.clone()], &region, spb);
                 if !commands.is_empty() {
                     editing.execute_batch(commands, "Duplicate clip".into(), project);
                 }

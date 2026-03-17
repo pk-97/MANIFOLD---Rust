@@ -96,8 +96,10 @@ pub trait TimelineEditingHost {
     // ── Clip operations ─────────────────────────────────────────────
 
     /// Create a clip at the given beat and layer. Returns clip ID or None.
+    /// Beat should be pre-snapped by the caller. `grid_step` is the current
+    /// grid interval in beats (used as the new clip's default duration).
     /// Unity: CreateClipAtPosition(float, int).
-    fn create_clip_at_position(&mut self, beat: f32, layer: usize) -> Option<String>;
+    fn create_clip_at_position(&mut self, beat: f32, layer: usize, grid_step: f32) -> Option<String>;
 
     /// Move a clip to a different layer (cross-layer drag).
     /// Unity: MoveClipToLayer(TimelineClip, int).

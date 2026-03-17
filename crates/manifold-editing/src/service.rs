@@ -234,8 +234,52 @@ impl EditingService {
     // ─── Clipboard ───
 
     /// Copy clips to the clipboard.
-    pub fn copy_clips(&mut self, project: &Project, clip_ids: &[String]) {
+    /// Copy clips to clipboard. When `region` is active, clips are trimmed to
+    /// region boundaries and offsets are relative to the region origin (matching
+    /// Unity CopySelectedClips region mode). Otherwise clips are copied as-is
+    /// with offsets relative to the earliest clip.
+    pub fn copy_clips(
+        &mut self,
+        project: &Project,
+        clip_ids: &[String],
+        region: Option<&SelectionRegion>,
+        spb: f32,
+    ) {
         self.clipboard.clear();
+
+        // Region mode: trim clips at boundaries, use region origin
+        if let Some(region) = region {
+            if region.is_active {
+                // Find overlapping clips in region (matching Unity CopySelectedClips)
+                let overlapping: Vec<&TimelineClip> = project.timeline.layers.iter()
+                    .flat_map(|l| l.clips.iter())
+                    .filter(|c| {
+                        c.start_beat < region.end_beat
+                            && c.end_beat() > region.start_beat
+                            && clip_ids.contains(&c.id)
+                    })
+                    .collect();
+
+                if overlapping.is_empty() {
+                    return;
+                }
+
+                let origin_beat = region.start_beat;
+                let (min_layer, _) = region.layer_range();
+
+                for clip in overlapping {
+                    let trimmed = Self::trim_clip_to_region(clip, region, spb);
+                    self.clipboard.push(ClipboardEntry {
+                        beat_offset: trimmed.start_beat - origin_beat,
+                        layer_offset: trimmed.layer_index - min_layer as i32,
+                        source_clip: trimmed,
+                    });
+                }
+                return;
+            }
+        }
+
+        // Individual mode: copy full clips, earliest-clip origin
         if clip_ids.is_empty() {
             return;
         }
@@ -427,15 +471,42 @@ impl EditingService {
         commands
     }
 
+    // ─── Trim clip to region ───
+
+    /// Create a clone of a clip trimmed to fit within region boundaries.
+    /// Does NOT modify the original. Used for region-aware copy/duplicate.
+    /// Port of Unity EditingService.TrimClipToRegion.
+    pub fn trim_clip_to_region(
+        clip: &TimelineClip,
+        region: &SelectionRegion,
+        spb: f32,
+    ) -> TimelineClip {
+        let new_start = clip.start_beat.max(region.start_beat);
+        let new_end = clip.end_beat().min(region.end_beat);
+        let new_duration = (new_end - new_start).max(0.0);
+
+        let mut trimmed = clip.clone_with_new_id();
+        trimmed.start_beat = new_start;
+        trimmed.duration_beats = new_duration;
+
+        // Adjust in_point for video clips (generators have no in_point)
+        if !clip.is_generator() {
+            trimmed.in_point = clip.in_point + (new_start - clip.start_beat) * spb;
+        }
+
+        trimmed
+    }
+
     // ─── Create clip ───
 
     /// Create a new clip at the given beat and layer.
+    /// Returns (command, clip_id) so the caller can track the new clip.
     pub fn create_clip_at_position(
         project: &mut Project,
         beat: f32,
         layer_index: usize,
         duration_beats: f32,
-    ) -> Box<dyn Command> {
+    ) -> (Box<dyn Command>, String) {
         let layer = project.timeline.layers.get(layer_index);
         let is_generator = layer.is_some_and(|l| l.layer_type == LayerType::Generator);
 
@@ -451,26 +522,65 @@ impl EditingService {
             }
         };
 
-        Box::new(AddClipCommand::new(clip, layer_index as i32))
+        let clip_id = clip.id.clone();
+        (Box::new(AddClipCommand::new(clip, layer_index as i32)), clip_id)
     }
 
     // ─── Duplicate ───
 
-    /// Duplicate selected clips, shifting them forward by the region duration.
+    /// Duplicate selected clips, shifting them forward.
+    /// Region mode: trims clips to region boundaries, places copies after region end.
+    /// Individual mode: places copies offset by the selected clips' span.
+    /// Matches Unity DuplicateSelectedClips.
     pub fn duplicate_clips(
         project: &Project,
         clip_ids: &[String],
         region: &SelectionRegion,
+        spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
-        let shift = if region.is_active { region.duration_beats() } else { 1.0 };
 
-        for layer in &project.timeline.layers {
-            for clip in &layer.clips {
-                if clip_ids.contains(&clip.id) {
-                    let mut new_clip = clip.clone_with_new_id();
-                    new_clip.start_beat += shift;
+        if region.is_active {
+            // Region mode: trim clips to region, place copies after region end
+            let offset = region.duration_beats();
+
+            for layer in &project.timeline.layers {
+                for clip in &layer.clips {
+                    if !clip_ids.contains(&clip.id) {
+                        continue;
+                    }
+                    // Only include clips that overlap the region
+                    if clip.start_beat >= region.end_beat || clip.end_beat() <= region.start_beat {
+                        continue;
+                    }
+                    let trimmed = Self::trim_clip_to_region(clip, region, spb);
+                    let mut new_clip = trimmed;
+                    new_clip.start_beat += offset;
+                    // clone_with_new_id was already called by trim_clip_to_region
                     commands.push(Box::new(AddClipCommand::new(new_clip, clip.layer_index)));
+                }
+            }
+        } else {
+            // Individual mode: offset by the clips' own span
+            let mut min_beat = f32::MAX;
+            let mut max_end = f32::MIN;
+            for layer in &project.timeline.layers {
+                for clip in &layer.clips {
+                    if clip_ids.contains(&clip.id) {
+                        min_beat = min_beat.min(clip.start_beat);
+                        max_end = max_end.max(clip.end_beat());
+                    }
+                }
+            }
+            let shift = if max_end > min_beat { max_end - min_beat } else { 1.0 };
+
+            for layer in &project.timeline.layers {
+                for clip in &layer.clips {
+                    if clip_ids.contains(&clip.id) {
+                        let mut new_clip = clip.clone_with_new_id();
+                        new_clip.start_beat += shift;
+                        commands.push(Box::new(AddClipCommand::new(new_clip, clip.layer_index)));
+                    }
                 }
             }
         }

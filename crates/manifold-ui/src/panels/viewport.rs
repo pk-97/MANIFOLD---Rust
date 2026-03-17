@@ -707,6 +707,14 @@ impl TimelineViewportPanel {
         false
     }
 
+    /// Floor-snap a beat to the current grid subdivision.
+    /// Unlike `snap_to_grid` (rounds to nearest), this floors to the grid line
+    /// at or before the beat. Used for clip creation (Unity: FloorBeatToGrid).
+    pub fn floor_to_grid(&self, beat: f32) -> f32 {
+        let step = self.grid_step();
+        (beat / step).floor() * step
+    }
+
     /// Current grid step size in beats.
     pub fn grid_step(&self) -> f32 {
         match self.grid_subdivision() {

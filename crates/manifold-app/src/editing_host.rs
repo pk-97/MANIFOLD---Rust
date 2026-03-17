@@ -9,6 +9,7 @@
 
 use std::collections::HashSet;
 
+use manifold_core::clip::TimelineClip;
 use manifold_core::selection::SelectionRegion;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::service::EditingService;
@@ -151,16 +152,61 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Clip operations ─────────────────────────────────────────
 
-    fn create_clip_at_position(&mut self, beat: f32, layer: usize) -> Option<String> {
-        // TODO: wire to EditingService.create_clip_at_position
-        // For now, return None (clip creation not yet implemented via this path)
-        log::debug!("create_clip_at_position({}, {}) — stub", beat, layer);
-        None
+    fn create_clip_at_position(&mut self, beat: f32, layer: usize, grid_step: f32) -> Option<String> {
+        // Port of Unity EditingService.CreateClipAtPosition.
+        // Beat arrives pre-snapped from the overlay. grid_step is the clip duration.
+        let duration = grid_step.max(0.25); // minimum 1/16th note
+        let clip_id = {
+            let project = self.engine.project_mut()?;
+            let (cmd, id) = EditingService::create_clip_at_position(project, beat, layer, duration);
+            self.editing.execute(cmd, project);
+            id
+        };
+        // Enforce non-overlap on the newly created clip
+        let overlap_cmds = {
+            let project = self.engine.project()?;
+            let spb = self.get_seconds_per_beat();
+            // Linear scan — find_clip_by_id requires &mut for cache healing
+            let mut found: Option<(TimelineClip, usize)> = None;
+            for layer in &project.timeline.layers {
+                if let Some(clip) = layer.clips.iter().find(|c| c.id == clip_id) {
+                    found = Some((clip.clone(), clip.layer_index as usize));
+                    break;
+                }
+            }
+            if let Some((clip_clone, layer_idx)) = found {
+                let empty = HashSet::new();
+                EditingService::enforce_non_overlap(
+                    project, &clip_clone, layer_idx, &empty, spb,
+                )
+            } else {
+                Vec::new()
+            }
+        };
+        if !overlap_cmds.is_empty() {
+            if let Some(project) = self.engine.project_mut() {
+                self.editing.execute_batch(overlap_cmds, "Enforce overlap".into(), project);
+            }
+        }
+        *self.needs_structural_sync = true;
+        Some(clip_id)
     }
 
     fn move_clip_to_layer(&mut self, clip_id: &str, target_layer: usize) {
+        // Live mutation for drag preview — undo is tracked separately via record_move.
+        // Port of Unity EditingService.MoveClipToLayer: validates gen↔video type
+        // compatibility, blocks group layers, adopts generator type.
         if let Some(project) = self.engine.project_mut() {
-            // Find and move the clip
+            if target_layer >= project.timeline.layers.len() {
+                return;
+            }
+
+            // Block group layers
+            if project.timeline.layers[target_layer].is_group() {
+                return;
+            }
+
+            // Find the clip and its source layer
             let mut found = None;
             for (li, layer) in project.timeline.layers.iter().enumerate() {
                 if let Some(ci) = layer.clips.iter().position(|c| c.id == clip_id) {
@@ -168,12 +214,31 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                     break;
                 }
             }
+
             if let Some((src_layer, clip_idx)) = found {
-                if src_layer != target_layer && target_layer < project.timeline.layers.len() {
-                    let clip = project.timeline.layers[src_layer].clips.remove(clip_idx);
-                    project.timeline.layers[target_layer].clips.push(clip);
-                    project.timeline.mark_clip_lookup_dirty();
+                if src_layer == target_layer {
+                    return;
                 }
+
+                // Gen↔video type mismatch: block
+                let clip_is_gen = project.timeline.layers[src_layer].clips[clip_idx].is_generator();
+                let target_is_gen = project.timeline.layers[target_layer].layer_type
+                    == manifold_core::types::LayerType::Generator;
+                if clip_is_gen != target_is_gen {
+                    return;
+                }
+
+                // Move clip between layers
+                let mut clip = project.timeline.layers[src_layer].clips.remove(clip_idx);
+                clip.layer_index = target_layer as i32;
+
+                // Gen→gen with different type: adopt target layer's generator type
+                if target_is_gen && clip.generator_type != project.timeline.layers[target_layer].generator_type() {
+                    clip.generator_type = project.timeline.layers[target_layer].generator_type();
+                }
+
+                project.timeline.layers[target_layer].clips.push(clip);
+                project.timeline.mark_clip_lookup_dirty();
             }
         }
     }
@@ -247,21 +312,84 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Overlap enforcement ─────────────────────────────────────
 
-    fn enforce_non_overlap(&mut self, clip_id: &str, _ignore_ids: &HashSet<String>) {
-        // TODO: wire to EditingService.enforce_non_overlap
-        // Commands get added to self.command_batch
-        log::debug!("enforce_non_overlap({}) — stub", clip_id);
+    fn enforce_non_overlap(&mut self, clip_id: &str, ignore_ids: &HashSet<String>) {
+        // Port of Unity InteractionOverlay overlap enforcement during drag.
+        // Commands are executed immediately (model consistency) and stored in
+        // command_batch for composite undo on commit_command_batch.
+        let spb = self.get_seconds_per_beat();
+        let overlap_cmds = {
+            if let Some(project) = self.engine.project() {
+                // Linear scan — find_clip_by_id requires &mut for cache healing
+                let mut found: Option<(TimelineClip, usize)> = None;
+                for layer in &project.timeline.layers {
+                    if let Some(clip) = layer.clips.iter().find(|c| c.id == clip_id) {
+                        found = Some((clip.clone(), clip.layer_index as usize));
+                        break;
+                    }
+                }
+                if let Some((clip_clone, layer_idx)) = found {
+                    EditingService::enforce_non_overlap(
+                        project, &clip_clone, layer_idx, ignore_ids, spb,
+                    )
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        };
+        if !overlap_cmds.is_empty() {
+            if let Some(project) = self.engine.project_mut() {
+                // Execute overlap commands immediately for model consistency,
+                // then store in batch for composite undo on commit.
+                for mut cmd in overlap_cmds {
+                    cmd.execute(project);
+                    self.command_batch.push(cmd);
+                }
+            }
+        }
     }
 
     // ── Region-partial move ─────────────────────────────────────
 
-    fn split_clips_for_region_move(&mut self, _region: &SelectionRegion) -> RegionSplitResult {
-        // TODO: wire to EditingService.split_clips_for_region_move
-        log::debug!("split_clips_for_region_move — stub");
-        RegionSplitResult {
-            interior_clip_ids: Vec::new(),
-            split_count: 0,
+    fn split_clips_for_region_move(&mut self, region: &SelectionRegion) -> RegionSplitResult {
+        // Port of Unity EditingService.SplitClipsForRegionMove.
+        // 1. Split clips at region boundaries (executed immediately)
+        // 2. Store split commands in batch for composite undo
+        // 3. Return interior clips (the drag set)
+        let spb = self.get_seconds_per_beat();
+
+        // Step 1: Build split commands (immutable borrow)
+        let split_cmds = {
+            if let Some(project) = self.engine.project() {
+                EditingService::split_clips_at_region_boundaries(project, region, spb)
+            } else {
+                return RegionSplitResult { interior_clip_ids: Vec::new(), split_count: 0 };
+            }
+        };
+        let split_count = split_cmds.len();
+
+        // Step 2: Execute split commands immediately (mutable borrow)
+        if !split_cmds.is_empty() {
+            if let Some(project) = self.engine.project_mut() {
+                for mut cmd in split_cmds {
+                    cmd.execute(project);
+                    self.command_batch.push(cmd);
+                }
+            }
         }
+
+        // Step 3: Get clips now fully inside region (immutable borrow)
+        let interior_clip_ids = if let Some(project) = self.engine.project() {
+            EditingService::get_clips_in_region(project, region)
+                .into_iter()
+                .map(|(_, id)| id)
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        RegionSplitResult { interior_clip_ids, split_count }
     }
 
     // ── Command batching ────────────────────────────────────────

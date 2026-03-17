@@ -142,10 +142,10 @@ fn copy_paste_roundtrip() {
     let id2 = add_clip(&mut project, 0, 4.0, 4.0);
 
     let mut service = EditingService::new();
-    service.copy_clips(&project, &[id1.clone(), id2.clone()]);
+    service.copy_clips(&project, &[id1.clone(), id2.clone()], None, 0.5);
     assert!(service.has_clipboard());
 
-    let result = service.paste_clips(&mut project, 10.0, 0);
+    let result = service.paste_clips(&mut project, 10.0, 0, 0.5);
     assert_eq!(result.pasted_clip_ids.len(), 2);
 
     // Execute all paste commands
@@ -171,9 +171,9 @@ fn paste_preserves_relative_offsets() {
     let id3 = add_clip(&mut project, 1, 2.0, 2.0);
 
     let mut service = EditingService::new();
-    service.copy_clips(&project, &[id1, id2, id3]);
+    service.copy_clips(&project, &[id1, id2, id3], None, 0.5);
 
-    let result = service.paste_clips(&mut project, 10.0, 0);
+    let result = service.paste_clips(&mut project, 10.0, 0, 0.5);
     for mut cmd in result.commands {
         cmd.execute(&mut project);
     }
@@ -212,7 +212,7 @@ fn duplicate_region_shifts_forward() {
         is_active: true,
     };
 
-    let cmds = EditingService::duplicate_clips(&project, &[id1.clone()], &region);
+    let cmds = EditingService::duplicate_clips(&project, &[id1.clone()], &region, 0.5);
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -234,7 +234,7 @@ fn delete_clips_removes() {
     let id1 = add_clip(&mut project, 0, 0.0, 4.0);
     let _id2 = add_clip(&mut project, 0, 4.0, 4.0);
 
-    let cmds = EditingService::delete_clips(&project, &[id1.clone()]);
+    let cmds = EditingService::delete_clips(&project, &[id1.clone()], None, 0.5);
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -251,7 +251,7 @@ fn create_clip_at_position() {
     let mut project = make_project();
     let initial = project.timeline.layers[0].clips.len();
 
-    let mut cmd = EditingService::create_clip_at_position(&mut project, 2.0, 0, 4.0);
+    let (mut cmd, _clip_id) = EditingService::create_clip_at_position(&mut project, 2.0, 0, 4.0);
     cmd.execute(&mut project);
     project.timeline.rebuild_clip_lookup();
 
@@ -268,7 +268,7 @@ fn nudge_selected_clips() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 2.0, 4.0);
 
-    let cmds = EditingService::nudge_clips(&project, &[id1.clone()], 1.0);
+    let cmds = EditingService::nudge_clips(&project, &[id1.clone()], 1.0, 0.5);
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
@@ -287,7 +287,7 @@ fn multi_step_undo_redo() {
 
     // Execute 5 operations
     for i in 0..5 {
-        let cmd = EditingService::create_clip_at_position(
+        let (cmd, _) = EditingService::create_clip_at_position(
             &mut project, i as f32 * 4.0, 0, 4.0,
         );
         service.execute(cmd, &mut project);
@@ -315,7 +315,7 @@ fn data_version_increments() {
     let mut service = EditingService::new();
     assert_eq!(service.data_version(), 0);
 
-    let cmd = EditingService::create_clip_at_position(&mut project, 0.0, 0, 4.0);
+    let (cmd, _) = EditingService::create_clip_at_position(&mut project, 0.0, 0, 4.0);
     service.execute(cmd, &mut project);
     assert_eq!(service.data_version(), 1);
 
@@ -333,7 +333,7 @@ fn dirty_flag_tracks_saves() {
 
     assert!(!service.is_dirty());
 
-    let cmd = EditingService::create_clip_at_position(&mut project, 0.0, 0, 4.0);
+    let (cmd, _) = EditingService::create_clip_at_position(&mut project, 0.0, 0, 4.0);
     service.execute(cmd, &mut project);
     assert!(service.is_dirty());
 
@@ -442,4 +442,139 @@ fn get_clips_in_region() {
     assert!(result_ids.contains(&&id1));
     assert!(result_ids.contains(&&id3));
     assert_eq!(results.len(), 2);
+}
+
+// ─── Trim clip to region ───
+
+#[test]
+fn trim_clip_to_region_fully_inside() {
+    let mut project = make_project();
+    let _id = add_clip(&mut project, 0, 2.0, 4.0); // beats 2..6
+
+    let region = SelectionRegion {
+        start_beat: 0.0, end_beat: 8.0,
+        start_layer_index: 0, end_layer_index: 0, is_active: true,
+    };
+    let clip = &project.timeline.layers[0].clips[0];
+    let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
+
+    // Fully inside region — no trimming
+    assert!((trimmed.start_beat - 2.0).abs() < 0.001);
+    assert!((trimmed.duration_beats - 4.0).abs() < 0.001);
+}
+
+#[test]
+fn trim_clip_to_region_straddles_start() {
+    let mut project = make_project();
+    let _id = add_clip(&mut project, 0, 0.0, 8.0); // beats 0..8
+
+    let region = SelectionRegion {
+        start_beat: 2.0, end_beat: 10.0,
+        start_layer_index: 0, end_layer_index: 0, is_active: true,
+    };
+    let clip = &project.timeline.layers[0].clips[0];
+    let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
+
+    // Trimmed at start: should start at 2.0, duration 6.0
+    assert!((trimmed.start_beat - 2.0).abs() < 0.001);
+    assert!((trimmed.duration_beats - 6.0).abs() < 0.001);
+    // InPoint adjusted by (2.0 - 0.0) * 0.5 = 1.0 seconds
+    assert!((trimmed.in_point - 1.0).abs() < 0.001);
+}
+
+#[test]
+fn trim_clip_to_region_straddles_end() {
+    let mut project = make_project();
+    let _id = add_clip(&mut project, 0, 4.0, 8.0); // beats 4..12
+
+    let region = SelectionRegion {
+        start_beat: 0.0, end_beat: 8.0,
+        start_layer_index: 0, end_layer_index: 0, is_active: true,
+    };
+    let clip = &project.timeline.layers[0].clips[0];
+    let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
+
+    // Trimmed at end: should start at 4.0, duration 4.0
+    assert!((trimmed.start_beat - 4.0).abs() < 0.001);
+    assert!((trimmed.duration_beats - 4.0).abs() < 0.001);
+}
+
+#[test]
+fn trim_clip_to_region_straddles_both() {
+    let mut project = make_project();
+    let _id = add_clip(&mut project, 0, 0.0, 16.0); // beats 0..16
+
+    let region = SelectionRegion {
+        start_beat: 4.0, end_beat: 12.0,
+        start_layer_index: 0, end_layer_index: 0, is_active: true,
+    };
+    let clip = &project.timeline.layers[0].clips[0];
+    let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
+
+    // Trimmed at both: 4.0..12.0
+    assert!((trimmed.start_beat - 4.0).abs() < 0.001);
+    assert!((trimmed.duration_beats - 8.0).abs() < 0.001);
+    assert!((trimmed.in_point - 2.0).abs() < 0.001); // (4.0 - 0.0) * 0.5
+}
+
+// ─── Region-aware copy ───
+
+#[test]
+fn copy_clips_region_mode_trims() {
+    let mut project = make_project();
+    let id1 = add_clip(&mut project, 0, 0.0, 8.0); // beats 0..8
+
+    let region = SelectionRegion {
+        start_beat: 2.0, end_beat: 6.0,
+        start_layer_index: 0, end_layer_index: 0, is_active: true,
+    };
+
+    let mut service = EditingService::new();
+    service.copy_clips(&project, &[id1], Some(&region), 0.5);
+    assert!(service.has_clipboard());
+
+    // Paste to verify trimmed content
+    let result = service.paste_clips(&mut project, 10.0, 0, 0.5);
+    assert_eq!(result.pasted_clip_ids.len(), 1);
+
+    for mut cmd in result.commands {
+        cmd.execute(&mut project);
+    }
+    project.timeline.rebuild_clip_lookup();
+
+    // Find the pasted clip
+    let pasted = project.timeline.layers[0].clips.iter()
+        .find(|c| c.id == result.pasted_clip_ids[0])
+        .unwrap();
+    // Should be trimmed: start=10.0 (paste target + 0 offset), duration=4.0 (6-2)
+    assert!((pasted.start_beat - 10.0).abs() < 0.001);
+    assert!((pasted.duration_beats - 4.0).abs() < 0.001);
+}
+
+// ─── Region-aware duplicate ───
+
+#[test]
+fn duplicate_clips_region_mode_trims() {
+    let mut project = make_project();
+    let id1 = add_clip(&mut project, 0, 0.0, 8.0); // beats 0..8
+
+    let region = SelectionRegion {
+        start_beat: 2.0, end_beat: 6.0,
+        start_layer_index: 0, end_layer_index: 0, is_active: true,
+    };
+
+    let cmds = EditingService::duplicate_clips(&project, &[id1], &region, 0.5);
+    assert_eq!(cmds.len(), 1);
+
+    let mut service = EditingService::new();
+    service.execute_batch(cmds, "dup".into(), &mut project);
+
+    // Should have 2 clips: original (0..8) + trimmed duplicate (6..10)
+    assert_eq!(project.timeline.layers[0].clips.len(), 2);
+    let dup = project.timeline.layers[0].clips.iter()
+        .find(|c| c.start_beat > 5.0)
+        .unwrap();
+    // Region duration is 4.0, so duplicate starts at 2.0 + 4.0 = 6.0
+    assert!((dup.start_beat - 6.0).abs() < 0.001);
+    assert!((dup.duration_beats - 4.0).abs() < 0.001);
 }

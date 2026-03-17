@@ -213,15 +213,28 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn copy_clips(&mut self, clip_ids: &[String]) {
+        // Region-aware copy: trim clips at region boundaries (Unity CopySelectedClips)
+        let region = if self.selection.has_region() {
+            Some(self.selection.get_region().clone())
+        } else {
+            None
+        };
         if let Some(project) = self.engine.project() {
-            self.editing.copy_clips(project, clip_ids);
+            let spb = 60.0 / project.settings.bpm.max(1.0);
+            self.editing.copy_clips(project, clip_ids, region.as_ref(), spb);
         }
     }
 
     fn cut_clips(&mut self, clip_ids: &[String], has_region: bool) {
-        // Unity: copy first, then delete (region-aware)
+        // Unity: copy first (region-aware), then delete
+        let region = if has_region {
+            Some(self.selection.get_region().clone())
+        } else {
+            None
+        };
         if let Some(project) = self.engine.project() {
-            self.editing.copy_clips(project, clip_ids);
+            let spb = 60.0 / project.settings.bpm.max(1.0);
+            self.editing.copy_clips(project, clip_ids, region.as_ref(), spb);
         }
         if let Some(project) = self.engine.project_mut() {
             let spb = 60.0 / project.settings.bpm;
@@ -285,7 +298,8 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
                 .collect();
 
-            let commands = EditingService::duplicate_clips(project, clip_ids, &region);
+            let spb = 60.0 / project.settings.bpm.max(1.0);
+            let commands = EditingService::duplicate_clips(project, clip_ids, &region, spb);
             if !commands.is_empty() {
                 self.editing.execute_batch(commands, "Duplicate clips".into(), project);
 
@@ -422,11 +436,97 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn group_selected_layers(&mut self) {
-        log::debug!("Group selected layers (stub)");
+        // Port of Unity EditingService.GroupSelectedLayers.
+        // Requires >= 2 selected, none nested or already groups.
+        if self.selection.layer_selection_count() < 2 {
+            return;
+        }
+
+        let selected_ids: Vec<String> = self.selection.selected_layer_ids.iter().cloned().collect();
+
+        if let Some(project) = self.engine.project() {
+            // Validate: none are nested (have parent) or group layers
+            let mut layers_to_group = Vec::new();
+            for layer in &project.timeline.layers {
+                if selected_ids.contains(&layer.layer_id) {
+                    if layer.parent_layer_id.is_some() || layer.is_group() {
+                        return; // Validation failure
+                    }
+                    layers_to_group.push(layer.layer_id.clone());
+                }
+            }
+            if layers_to_group.len() < 2 {
+                return;
+            }
+
+            // Snapshot current order for undo
+            let original_order = project.timeline.layers.clone();
+            let cmd = manifold_editing::commands::layer::GroupLayersCommand::new(
+                layers_to_group, original_order,
+            );
+
+            if let Some(project) = self.engine.project_mut() {
+                self.editing.execute(Box::new(cmd), project);
+            }
+        }
+
+        self.selection.clear_selection();
+        self.engine.mark_compositor_dirty(0.0);
+        *self.needs_rebuild = true;
+        *self.needs_structural_sync = true;
     }
 
     fn delete_selected_layers(&mut self) {
-        log::debug!("Delete selected layers (stub)");
+        // Port of Unity EditingService.DeleteSelectedLayers.
+        // Deletes selected layers in reverse index order, preserves at least 1 layer.
+        if self.selection.layer_selection_count() == 0 {
+            return;
+        }
+
+        let selected_ids: Vec<String> = self.selection.selected_layer_ids.iter().cloned().collect();
+
+        if let Some(project) = self.engine.project_mut() {
+            // Find indices to delete (in reverse order for safe removal)
+            let mut indices: Vec<usize> = Vec::new();
+            for (i, layer) in project.timeline.layers.iter().enumerate() {
+                if selected_ids.contains(&layer.layer_id) {
+                    indices.push(i);
+                }
+            }
+
+            // Don't delete all layers — keep at least one
+            if indices.len() >= project.timeline.layers.len() {
+                indices.pop();
+            }
+
+            if indices.is_empty() {
+                return;
+            }
+
+            // Delete in reverse order (highest index first) for correct indexing
+            indices.sort_unstable();
+            indices.reverse();
+
+            let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
+            for &idx in &indices {
+                if idx < project.timeline.layers.len() {
+                    let layer_clone = project.timeline.layers[idx].clone();
+                    let cmd = manifold_editing::commands::layer::DeleteLayerCommand::new(
+                        layer_clone, idx,
+                    );
+                    commands.push(Box::new(cmd));
+                }
+            }
+
+            if !commands.is_empty() {
+                self.editing.execute_batch(commands, "Delete layers".into(), project);
+            }
+        }
+
+        self.selection.clear_selection();
+        self.engine.mark_compositor_dirty(0.0);
+        *self.needs_rebuild = true;
+        *self.needs_structural_sync = true;
     }
 
     fn layer_count(&self) -> usize {
