@@ -414,12 +414,16 @@ impl FluidSimulationGenerator {
             entries: &[
                 // binding 0: particles (read_write)
                 bgl_storage_rw(0, wgpu::ShaderStages::COMPUTE),
-                // binding 1: vector field texture (textureLoad, no sampler)
-                bgl_texture_unfilterable(1, wgpu::ShaderStages::COMPUTE),
-                // binding 2: density texture (textureLoad, no sampler)
-                bgl_texture_unfilterable(2, wgpu::ShaderStages::COMPUTE),
-                // binding 3: uniforms
-                bgl_uniform(3, wgpu::ShaderStages::COMPUTE),
+                // binding 1: vector field texture (bilinear sampling — Unity: SampleLevel)
+                bgl_texture_filterable(1, wgpu::ShaderStages::COMPUTE),
+                // binding 2: vector field sampler
+                bgl_sampler(2, wgpu::ShaderStages::COMPUTE),
+                // binding 3: density texture (bilinear sampling — Unity: SampleLevel)
+                bgl_texture_filterable(3, wgpu::ShaderStages::COMPUTE),
+                // binding 4: density sampler
+                bgl_sampler(4, wgpu::ShaderStages::COMPUTE),
+                // binding 5: uniforms
+                bgl_uniform(5, wgpu::ShaderStages::COMPUTE),
             ],
         });
         let sim_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1049,26 +1053,41 @@ impl Generator for FluidSimulationGenerator {
         let res_scale = bw as f32 / 640.0;
         let scaled_radius = (blur_radius * res_scale).max(1.0);
 
-        // Blur 1: density_rt → blur_density_rt (H), blur_density_rt → density_rt (V)
-        // Unity: Blit source → blurredDensityRT, then ApplyGaussianBlur in-place
+        // Blur texel sizes — all blur operations happen at blur resolution (bw×bh)
+        let blur_texel_x = 1.0 / bw as f32;
+        let blur_texel_y = 1.0 / bh as f32;
+
+        // Unity: Graphics.Blit(densitySource, blurredDensityRT) — downsample to blur res
+        // Then: ApplyGaussianBlur(blurredDensityRT, blurTempRT, scaledRadius) — in-place
+        //   H: blurredDensityRT → blurTempRT, V: blurTempRT → blurredDensityRT
+
+        // Step 1: Downsample density_rt (sw×sh) → blur_density_rt (bw×bh)
+        // Use blur pass with radius=0 as a bilinear downsample blit
         let density_rt = self.density_rt.as_ref().unwrap();
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &density_rt.view, &blur_density_rt.view,
-            &self.blur_pipeline, [1.0, 0.0], scaled_radius, 1.0 / sw as f32, 1.0 / sh as f32);
-        let density_rt = self.density_rt.as_ref().unwrap();
-        let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
-        self.run_blur_pass(device, queue, encoder, &blur_density_rt.view, &density_rt.view,
-            &self.blur_pipeline, [0.0, 1.0], scaled_radius, 1.0 / bw as f32, 1.0 / bh as f32);
+            &self.blur_pipeline, [0.0, 0.0], 0.0, blur_texel_x, blur_texel_y);
 
-        // Gradient + Rotate: blurred density → vector field
-        // Resolution-independent slope: slopeStrength * densityAreaScale
+        // Step 2: H blur: blur_density_rt → blur_temp_rt
+        let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
+        let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
+        self.run_blur_pass(device, queue, encoder, &blur_density_rt.view, &blur_temp_rt.view,
+            &self.blur_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y);
+
+        // Step 3: V blur: blur_temp_rt → blur_density_rt (in-place result)
+        let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
+        let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
+        self.run_blur_pass(device, queue, encoder, &blur_temp_rt.view, &blur_density_rt.view,
+            &self.blur_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y);
+
+        // Gradient + Rotate: blurredDensity → vector field
         // Unity: densityAreaScale = (trailWidth * trailHeight) / SCATTER_REFERENCE_AREA
         let density_area_scale = (sw as f32 * sh as f32) / SCATTER_REFERENCE_AREA;
         let rot_rad = rotation_deg_snap * std::f32::consts::PI / 180.0;
 
         let gradient_uniforms = GradientUniforms {
-            texel_x: 1.0 / bw as f32,
-            texel_y: 1.0 / bh as f32,
+            texel_x: blur_texel_x,
+            texel_y: blur_texel_y,
             slope_strength: slope_snap * density_area_scale,
             rot_cos: rot_rad.cos(),
             rot_sin: rot_rad.sin(),
@@ -1078,14 +1097,15 @@ impl Generator for FluidSimulationGenerator {
         };
         queue.write_buffer(&self.gradient_uniform_buf, 0, bytemuck::bytes_of(&gradient_uniforms));
 
-        let density_rt = self.density_rt.as_ref().unwrap();
+        // Unity: Graphics.Blit(blurredDensityRT, vectorFieldRT, gradientMat)
+        let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
         let gradient_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim GradientRotate BG"),
             layout: &self.gradient_rotate_bgl,
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: self.gradient_uniform_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&density_rt.view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&blur_density_rt.view) },
             ],
         });
         {
@@ -1110,19 +1130,16 @@ impl Generator for FluidSimulationGenerator {
             pass.draw(0..3, 0..1);
         }
 
-        // Blur 2: vector_field (H+V) in-place via blur_temp
-        let vector_texel_x = 1.0 / bw as f32;
-        let vector_texel_y = 1.0 / bh as f32;
-        let vector_blur_radius = scaled_radius * 0.5;
-
+        // Blur 2: vector field (H+V) in-place via blur_temp
+        // Unity: ApplyGaussianBlur(vectorFieldRT, blurTempRT, scaledRadius) — SAME radius
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &vector_field_rt.view, &blur_temp_rt.view,
-            &self.blur_vector_pipeline, [1.0, 0.0], vector_blur_radius, vector_texel_x, vector_texel_y);
+            &self.blur_vector_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y);
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &blur_temp_rt.view, &vector_field_rt.view,
-            &self.blur_vector_pipeline, [0.0, 1.0], vector_blur_radius, vector_texel_x, vector_texel_y);
+            &self.blur_vector_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y);
 
         // ================================================================
         // PHASE 3: Position Integration — simulate shader
@@ -1150,7 +1167,8 @@ impl Generator for FluidSimulationGenerator {
 
         let particle_buffer = self.particle_buffer.as_ref().unwrap();
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
-        let density_rt = self.density_rt.as_ref().unwrap();
+        // Unity: SetSimulationParams binds blurredDensityRT to _DensityTex
+        let blurred_density_rt = self.blur_density_rt.as_ref().unwrap();
 
         let sim_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim Simulate BG"),
@@ -1158,8 +1176,10 @@ impl Generator for FluidSimulationGenerator {
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: particle_buffer.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&vector_field_rt.view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&density_rt.view) },
-                wgpu::BindGroupEntry { binding: 3, resource: self.sim_uniform_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&blurred_density_rt.view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler) },
+                wgpu::BindGroupEntry { binding: 5, resource: self.sim_uniform_buf.as_entire_binding() },
             ],
         });
         {

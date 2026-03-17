@@ -7,34 +7,23 @@
 //   3. This shader samples the final blurred vector field at each particle's UV
 //   4. Direct Euler integration: P_next = P_current + force * speed
 //   5. Tiny noise advection prevents static clumping
-//   6. Toroidal wrap: fract(P.xy + 1.0)
+//   6. Toroidal wrap: frac(P.xy + 1.0)
 
 struct SimUniforms {
     active_count: u32,
     field_width: u32,
     field_height: u32,
     speed: f32,
-    // noise amplitude (NoiseAmplitude)
     noise_amplitude: f32,
-    // density noise gain (DensityNoiseGain)
     density_noise_gain: f32,
-    // diffusion amount (Diffusion)
     diffusion: f32,
-    // per-frame respawn probability (RefreshRate)
     refresh_rate: f32,
-    // extra respawn in dense regions (DensityRefreshScale)
     density_refresh_scale: f32,
-    // color mode: 0=mono, >0=inject
     color_mode: u32,
-    // monotonic frame counter
     frame_count: u32,
-    // -1 = off, 0-3 = active zone index
     inject_index: i32,
-    // injection force strength
     inject_force: f32,
-    // injection burst progress 0->1
     inject_phase: f32,
-    // clip-relative time for noise evolution
     time_val: f32,
     _pad: f32,
 };
@@ -49,8 +38,10 @@ struct Particle {
 
 @group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
 @group(0) @binding(1) var t_field: texture_2d<f32>;
-@group(0) @binding(2) var t_density: texture_2d<f32>;
-@group(0) @binding(3) var<uniform> params: SimUniforms;
+@group(0) @binding(2) var s_field: sampler;
+@group(0) @binding(3) var t_density: texture_2d<f32>;
+@group(0) @binding(4) var s_density: sampler;
+@group(0) @binding(5) var<uniform> params: SimUniforms;
 
 const PI: f32 = 3.14159265;
 
@@ -59,6 +50,8 @@ const INJECT_POINTS_X: array<f32, 4> = array<f32, 4>(0.5, 0.8, 0.5, 0.2);
 const INJECT_POINTS_Y: array<f32, 4> = array<f32, 4>(0.2, 0.5, 0.8, 0.5);
 const INJECT_COLOR_RADIUS: f32 = 0.04;
 const INJECT_FORCE_RADIUS: f32 = 0.25;
+
+// ---- Hash functions (port of ParticleCommon.cginc) ----
 
 fn wang_hash(seed_in: u32) -> u32 {
     var seed = seed_in;
@@ -80,34 +73,60 @@ fn hash_float2(seed: u32) -> vec2<f32> {
     return vec2<f32>(f32(h1), f32(h2)) / 4294967296.0;
 }
 
-fn simplex_noise_2d(p: vec2<f32>) -> f32 {
-    let K1: f32 = 0.366025403784;
-    let K2: f32 = 0.211324865405;
+// ---- SimplexNoise2D (mechanical port of ParticleCommon.cginc lines 72-120) ----
+// 8 evenly-spaced unit gradient directions (no trig)
+// Unity: static const float2 SIMPLEX_GRAD2[8]
+const SIMPLEX_GRAD2_X: array<f32, 8> = array<f32, 8>(
+     1.0,  0.7071,  0.0, -0.7071,
+    -1.0, -0.7071,  0.0,  0.7071
+);
+const SIMPLEX_GRAD2_Y: array<f32, 8> = array<f32, 8>(
+     0.0,  0.7071,  1.0,  0.7071,
+     0.0, -0.7071, -1.0, -0.7071
+);
 
-    let i = floor(p + (p.x + p.y) * K1);
-    let a = p - i + (i.x + i.y) * K2;
-    let o = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), a.x > a.y);
-    let b = a - o + K2;
-    let c = a - 1.0 + 2.0 * K2;
+fn simplex_noise_2d(v: vec2<f32>) -> f32 {
+    let F2: f32 = 0.36602540378; // (sqrt(3)-1)/2
+    let G2: f32 = 0.21132486540; // (3-sqrt(3))/6
 
-    let h = max(vec3<f32>(0.5) - vec3<f32>(dot(a, a), dot(b, b), dot(c, c)), vec3<f32>(0.0));
-    let h4 = h * h * h * h;
+    // Skew to simplex cell
+    let s = (v.x + v.y) * F2;
+    let i = floor(v + s);
+    let t = (i.x + i.y) * G2;
+    let x0 = v - (i - t);
 
-    // WangHash-based gradient (matches Unity ParticleCommon.cginc)
-    let seed0 = wang_hash(u32(i.x * 73856093.0 + i.y * 19349663.0));
-    let seed1 = wang_hash(u32((i.x + o.x) * 73856093.0 + (i.y + o.y) * 19349663.0));
-    let seed2 = wang_hash(u32((i.x + 1.0) * 73856093.0 + (i.y + 1.0) * 19349663.0));
+    // Which simplex triangle?
+    // Unity: float2 i1 = (x0.x > x0.y) ? float2(1.0, 0.0) : float2(0.0, 1.0);
+    let i1 = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), x0.x > x0.y);
+    let x1 = x0 - i1 + G2;
+    let x2 = x0 - 1.0 + 2.0 * G2;
 
-    let h2a = vec2<f32>(f32(wang_hash(seed0)), f32(wang_hash(wang_hash(seed0)))) / 4294967296.0;
-    let h2b = vec2<f32>(f32(wang_hash(seed1)), f32(wang_hash(wang_hash(seed1)))) / 4294967296.0;
-    let h2c = vec2<f32>(f32(wang_hash(seed2)), f32(wang_hash(wang_hash(seed2)))) / 4294967296.0;
+    // Hash corners (offset by 10000 to avoid negative-to-uint issues)
+    // Unity: uint h0 = WangHash(uint(i.x + 10000.0) * 73856093u ^ uint(i.y + 10000.0) * 19349663u);
+    let h0 = wang_hash(u32(i.x + 10000.0) * 73856093u ^ u32(i.y + 10000.0) * 19349663u);
+    let h1 = wang_hash(u32(i.x + i1.x + 10000.0) * 73856093u ^ u32(i.y + i1.y + 10000.0) * 19349663u);
+    let h2 = wang_hash(u32(i.x + 1.0 + 10000.0) * 73856093u ^ u32(i.y + 1.0 + 10000.0) * 19349663u);
 
-    let g0 = h2a * 2.0 - 1.0;
-    let g1 = h2b * 2.0 - 1.0;
-    let g2 = h2c * 2.0 - 1.0;
+    // Gradient from hash table (8 directions, no trig)
+    // Unity: float2 g0 = SIMPLEX_GRAD2[h0 & 7u];
+    let g0 = vec2<f32>(SIMPLEX_GRAD2_X[h0 & 7u], SIMPLEX_GRAD2_Y[h0 & 7u]);
+    let g1 = vec2<f32>(SIMPLEX_GRAD2_X[h1 & 7u], SIMPLEX_GRAD2_Y[h1 & 7u]);
+    let g2 = vec2<f32>(SIMPLEX_GRAD2_X[h2 & 7u], SIMPLEX_GRAD2_Y[h2 & 7u]);
 
-    let n = vec3<f32>(dot(g0, a), dot(g1, b), dot(g2, c));
-    return dot(h4, n) * 70.0;
+    // Radial falloff contributions
+    // Unity: float t0 = 0.5 - dot(x0, x0);
+    let t0 = 0.5 - dot(x0, x0);
+    let t1 = 0.5 - dot(x1, x1);
+    let t2 = 0.5 - dot(x2, x2);
+
+    // Unity: float n0 = (t0 < 0.0) ? 0.0 : (t0*t0)*(t0*t0)*dot(g0, x0);
+    let n0 = select(t0 * t0 * t0 * t0 * dot(g0, x0), 0.0, t0 < 0.0);
+    let n1 = select(t1 * t1 * t1 * t1 * dot(g1, x1), 0.0, t1 < 0.0);
+    let n2 = select(t2 * t2 * t2 * t2 * dot(g2, x2), 0.0, t2 < 0.0);
+
+    // Scale to [0, 1]
+    // Unity: return clamp((n0 + n1 + n2) * 35.0 + 0.5, 0.0, 1.0);
+    return clamp((n0 + n1 + n2) * 35.0 + 0.5, 0.0, 1.0);
 }
 
 @compute @workgroup_size(256, 1, 1)
@@ -119,16 +138,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var p = particles[id.x];
     let current_uv = p.position.xy;
 
-    // 1. Sample blurred vector field (bilinear with toroidal wrap via modulo)
-    let field_dims = vec2<f32>(textureDimensions(t_field));
-    let field_coord = vec2<u32>(current_uv * field_dims) % vec2<u32>(field_dims);
-    let field_force = textureLoad(t_field, field_coord, 0).rg;
+    // 1. Sample blurred vector field (linear filtering + repeat wrap)
+    // Unity: float2 force = _VectorField.SampleLevel(sampler_linear_repeat, currentUV, 0).rg;
+    let field_force = textureSampleLevel(t_field, s_field, current_uv, 0.0).rg;
 
     // 2. Sample local density for adaptive noise scaling
-    //    High density = flat gradient plateau = particles trapped.
-    let density_dims = vec2<f32>(textureDimensions(t_density));
-    let density_coord = vec2<u32>(current_uv * density_dims) % vec2<u32>(density_dims);
-    let local_density = textureLoad(t_density, density_coord, 0).r;
+    // Unity: float localDensity = _DensityTex.SampleLevel(sampler_linear_repeat, currentUV, 0).r;
+    let local_density = textureSampleLevel(t_density, s_density, current_uv, 0.0).r;
     // Soft clamp: 0->0, 1->0.5, inf->1  (Unity: localDensity / (1.0 + localDensity))
     let capped_density = local_density / (1.0 + local_density);
     let adaptive_amp = params.noise_amplitude * (1.0 + capped_density * params.density_noise_gain);
@@ -154,16 +170,16 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let refresh_seed = id.x * 196613u + params.frame_count * 2891336453u;
     let adaptive_refresh = params.refresh_rate + capped_density * params.density_refresh_scale;
     if hash_float(refresh_seed) < adaptive_refresh {
-        // Respawn at RANDOM UV — not edge-only (Unity: HashFloat2(refreshSeed + 7919u))
+        // Respawn at random UV (Unity: HashFloat2(refreshSeed + 7919u))
         p.position = vec3<f32>(hash_float2(refresh_seed + 7919u), 0.0);
-        p.age = -1.0; // respawned particles start uncolored
+        p.age = -1.0;
         p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);
         particles[id.x] = p;
         return;
     }
 
     // 6. Direct Euler integration + toroidal wrap
-    //    Unity: p.position.xy = frac(currentUV + force * _Speed + 1.0)  — no * dt
+    //    Unity: p.position.xy = frac(currentUV + force * _Speed + 1.0)
     p.position = vec3<f32>(fract(current_uv + force * params.speed + 1.0), 0.0);
 
     // 7. Injection disturbance (applied AFTER integration)
@@ -209,7 +225,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let color_r = INJECT_COLOR_RADIUS;
             let d = p.position.xy - inject_pt;
             if dot(d, d) < color_r * color_r {
-                // age encodes zone as (zoneIndex + 1)
                 p.age = f32(params.inject_index + 1);
             }
         }
