@@ -27,7 +27,7 @@ pub fn grid_interval_for_zoom(ppb: f32, beats_per_bar: f32) -> f32 {
     } else if ppb >= 6.0 {
         1.0
     } else {
-        beats_per_bar
+        beats_per_bar.max(1.0)
     }
 }
 
@@ -133,6 +133,9 @@ mod tests {
 
         // Different time signature
         assert_eq!(grid_interval_for_zoom(3.0, 3.0), 3.0);
+
+        // Zero beats_per_bar clamps to 1.0 (Unity Mathf.Max guard, line 244)
+        assert_eq!(grid_interval_for_zoom(3.0, 0.0), 1.0);
     }
 
     #[test]

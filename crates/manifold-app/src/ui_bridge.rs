@@ -136,7 +136,7 @@ pub fn dispatch(
             if modifiers.shift {
                 // Shift+Click: extend region from anchor to clip end.
                 // From Unity InteractionOverlay.OnPointerClick (line 206-207).
-                selection.select_region_to(clip_end_beat, layer_idx);
+                select_region_to_with_engine(clip_end_beat, layer_idx, selection, engine);
             } else if modifiers.command || modifiers.ctrl {
                 // Cmd/Ctrl+Click: toggle clip in/out of selection, then update region bounds.
                 // From Unity InteractionOverlay.OnPointerClick (line 208-211).
@@ -159,7 +159,7 @@ pub fn dispatch(
                 // Shift+Click on empty area: extend region from anchor to beat/layer.
                 // From Unity InteractionOverlay.OnPointerClick (line 177-180).
                 let snapped = ui.viewport.snap_to_grid(*beat);
-                selection.select_region_to(snapped, *layer);
+                select_region_to_with_engine(snapped, *layer, selection, engine);
             } else {
                 // Plain click: set insert cursor (clears everything, Ableton behavior).
                 // From Unity InteractionOverlay.OnPointerClick (line 183).
@@ -1634,6 +1634,57 @@ pub fn update_region_from_clip_selection_inline(selection: &mut SelectionState, 
 
     if found {
         selection.set_region_from_clip_bounds(min_beat, max_beat, min_layer, max_layer);
+    }
+}
+
+/// Shift+Click region selection with correct anchor precedence.
+/// Port of Unity EditingService.SelectRegionTo (lines 216-262).
+/// Variant for call sites that have engine access instead of TimelineEditingHost trait.
+/// Anchor priority: insert cursor > existing region > primary selected clip > fallback.
+fn select_region_to_with_engine(
+    target_beat: f32,
+    target_layer: usize,
+    selection: &mut SelectionState,
+    engine: &PlaybackEngine,
+) {
+    let layer_count = engine.project()
+        .map(|p| p.timeline.layers.len())
+        .unwrap_or(0);
+    if layer_count == 0 { return; }
+
+    // Determine anchor — Unity priority: insert cursor > region > primary clip > fallback
+    let anchor: Option<(f32, usize)> = if selection.has_insert_cursor() {
+        Some((
+            selection.insert_cursor_beat.unwrap_or(0.0),
+            selection.insert_cursor_layer_index.unwrap_or(0),
+        ))
+    } else if selection.has_region() {
+        let r = selection.get_region();
+        Some((r.start_beat, r.start_layer_index as usize))
+    } else if let Some(ref clip_id) = selection.primary_selected_clip_id.clone() {
+        // Look up primary clip via engine project data
+        engine.project().and_then(|p| {
+            p.timeline.layers.iter()
+                .find_map(|l| l.clips.iter()
+                    .find(|c| c.id == *clip_id)
+                    .map(|c| (c.start_beat, c.layer_index as usize)))
+        })
+    } else {
+        None
+    };
+
+    match anchor {
+        Some((anchor_beat, anchor_layer)) => {
+            let min_beat = anchor_beat.min(target_beat);
+            let max_beat = anchor_beat.max(target_beat);
+            let min_layer = anchor_layer.min(target_layer).min(layer_count - 1) as i32;
+            let max_layer = anchor_layer.max(target_layer).min(layer_count - 1) as i32;
+            selection.set_region(min_beat, max_beat, min_layer, max_layer);
+        }
+        None => {
+            // No anchor — set insert cursor at target (Unity line 247-248)
+            selection.set_insert_cursor(target_beat, target_layer);
+        }
     }
 }
 

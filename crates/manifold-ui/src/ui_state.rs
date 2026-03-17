@@ -204,31 +204,6 @@ impl UIState {
         self.selection_version += 1;
     }
 
-    /// Extend or create a region from the current anchor to the target beat/layer.
-    /// This is the Shift+Click behavior from Unity InteractionOverlay.
-    /// Anchor is determined from: existing region → insert cursor → primary clip → beat 0.
-    pub fn select_region_to(&mut self, target_beat: f32, target_layer: usize) {
-        // Determine anchor position
-        let (anchor_beat, anchor_layer) = if self.selection_region.is_active {
-            // Existing region: extend from the opposite end
-            (self.selection_region.start_beat, self.selection_region.start_layer_index as usize)
-        } else if let Some(beat) = self.insert_cursor_beat {
-            // Insert cursor as anchor
-            (beat, self.insert_cursor_layer_index.unwrap_or(0))
-        } else {
-            // No anchor — start from beat 0, layer 0
-            (0.0, 0)
-        };
-
-        let min_beat = anchor_beat.min(target_beat);
-        let max_beat = anchor_beat.max(target_beat);
-        let min_layer = anchor_layer.min(target_layer) as i32;
-        let max_layer = anchor_layer.max(target_layer) as i32;
-
-        // Set region (clears clip/layer selection, sets region)
-        self.set_region(min_beat, max_beat, min_layer, max_layer);
-    }
-
     /// Whether a region selection is active.
     pub fn has_region(&self) -> bool {
         self.selection_region.is_active

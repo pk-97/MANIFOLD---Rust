@@ -22,6 +22,51 @@ use crate::ui_state::UIState;
 const SNAP_THRESHOLD_PX: f32 = 12.0;
 const MAX_SNAP_BEATS: f32 = 0.5;
 
+// ── Shift+Click region selection ─────────────────────────────────
+// Port of Unity EditingService.SelectRegionTo (lines 216-262).
+// Free function because it needs both UIState and host access.
+
+/// Shift+Click region selection with correct anchor precedence.
+/// Anchor priority: insert cursor > existing region > primary selected clip > fallback.
+fn select_region_to(
+    target_beat: f32,
+    target_layer: usize,
+    ui_state: &mut UIState,
+    host: &dyn TimelineEditingHost,
+) {
+    let layer_count = host.layer_count();
+    if layer_count == 0 { return; }
+
+    // Determine anchor — Unity priority: insert cursor > region > primary clip > fallback
+    let anchor: Option<(f32, usize)> = if ui_state.has_insert_cursor() {
+        Some((
+            ui_state.insert_cursor_beat.unwrap_or(0.0),
+            ui_state.insert_cursor_layer_index.unwrap_or(0),
+        ))
+    } else if ui_state.has_region() {
+        let r = ui_state.get_region();
+        Some((r.start_beat, r.start_layer_index as usize))
+    } else if let Some(clip_id) = ui_state.primary_selected_clip_id.clone() {
+        host.find_clip_by_id(&clip_id).map(|c| (c.start_beat, c.layer_index))
+    } else {
+        None
+    };
+
+    match anchor {
+        Some((anchor_beat, anchor_layer)) => {
+            let min_beat = anchor_beat.min(target_beat);
+            let max_beat = anchor_beat.max(target_beat);
+            let min_layer = anchor_layer.min(target_layer).min(layer_count - 1) as i32;
+            let max_layer = anchor_layer.max(target_layer).min(layer_count - 1) as i32;
+            ui_state.set_region(min_beat, max_beat, min_layer, max_layer);
+        }
+        None => {
+            // No anchor — set insert cursor at target (Unity line 247-248)
+            ui_state.set_insert_cursor(target_beat, target_layer);
+        }
+    }
+}
+
 // ── DragMode ────────────────────────────────────────────────────
 // Unity InteractionOverlay line 37.
 
@@ -170,7 +215,7 @@ impl InteractionOverlay {
 
                 if shift {
                     // Unity line 180: Shift+Click → extend region
-                    host.select_region_to(snapped, layer);
+                    select_region_to(snapped, layer, ui_state, host);
                 } else {
                     // Unity line 184: bare click → set insert cursor
                     ui_state.set_insert_cursor(snapped, layer);
@@ -203,7 +248,7 @@ impl InteractionOverlay {
             // Unity line 207: Shift → extend region to clip end
             let clip = host.find_clip_by_id(&hit.clip_id);
             if let Some(c) = clip {
-                host.select_region_to(c.end_beat, c.layer_index);
+                select_region_to(c.end_beat, c.layer_index, ui_state, host);
             }
         } else if ctrl {
             // Unity lines 208-212: Ctrl → toggle multi-select + auto-compute region

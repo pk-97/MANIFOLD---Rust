@@ -204,11 +204,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         *self.needs_structural_sync = true;
     }
 
-    fn select_region_to(&mut self, _beat: f32, _layer: usize) {
-        // Delegated to UIState.select_region_to() by the overlay
-        // The overlay calls this on ui_state directly
-    }
-
     // ── Auto-scroll ─────────────────────────────────────────────
 
     fn auto_scroll_for_drag(&mut self, _screen_pos: Vec2) {

@@ -115,8 +115,9 @@ pub trait TimelineEditingHost {
     /// Inspect a layer (shows layer inspector). Unity: InspectLayer(int).
     fn inspect_layer(&mut self, layer_index: usize);
 
-    /// Shift-click region selection. Unity: SelectRegionTo(float, int).
-    fn select_region_to(&mut self, beat: f32, layer: usize);
+    // NOTE: select_region_to removed from trait — the overlay implements
+    // the full Unity EditingService.SelectRegionTo logic as a free function
+    // in interaction_overlay.rs, where it has access to both UIState and host.
 
     // ── Auto-scroll ─────────────────────────────────────────────────
 

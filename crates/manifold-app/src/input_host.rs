@@ -193,7 +193,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn select_all_clips(&mut self) {
-        // Unity EditingService.SelectAllClips — iterates all layers/clips
+        // Unity EditingService.SelectAllClips (lines 264-276)
         if let Some(project) = self.engine.project() {
             self.selection.clear_selection();
             for layer in &project.timeline.layers {
@@ -204,6 +204,10 @@ impl TimelineInputHost for AppInputHost<'_> {
             self.selection.primary_selected_clip_id =
                 self.selection.selected_clip_ids.iter().next().cloned();
             self.selection.selection_version += 1;
+
+            // Unity line 275: compute bounding region from all selected clips
+            crate::ui_bridge::update_region_from_clip_selection_inline(
+                self.selection, project);
         }
         *self.needs_structural_sync = true;
     }
