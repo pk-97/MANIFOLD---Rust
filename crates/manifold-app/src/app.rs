@@ -104,12 +104,8 @@ pub struct Application {
     // Transport controller — sync management, BPM editing, playback actions
     transport_controller: manifold_playback::transport_controller::TransportController,
 
-    // Panel focus — set when user clicks in inspector area, cleared on timeline click.
-    // Matches Unity's InputHandler.inspectorHasFocus for context-sensitive routing
-    // of Ctrl+C/X/V, Delete, Ctrl+G shortcuts to effect vs. clip operations.
-    inspector_has_focus: bool,
-
     // Keyboard/zoom handler — port of Unity InputHandler.cs
+    // Owns inspector_has_focus (panel focus for context-sensitive routing).
     input_handler: crate::input_handler::InputHandler,
 
     // Interaction overlay — port of Unity InteractionOverlay.cs
@@ -174,7 +170,6 @@ impl Application {
             current_project_path: None,
             text_input: crate::text_input::TextInputState::new(),
             transport_controller: manifold_playback::transport_controller::TransportController::new(),
-            inspector_has_focus: false,
             input_handler: crate::input_handler::InputHandler::new(),
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
                 manifold_ui::color::CLIP_VERTICAL_PAD,
@@ -1414,9 +1409,9 @@ impl ApplicationHandler for Application {
                                     let inspector_rect = self.ui_root.layout.inspector();
                                     let timeline_rect = self.ui_root.layout.timeline_tracks();
                                     if inspector_rect.contains(self.cursor_pos) {
-                                        self.inspector_has_focus = true;
+                                        self.input_handler.inspector_has_focus = true;
                                     } else if timeline_rect.contains(self.cursor_pos) {
-                                        self.inspector_has_focus = false;
+                                        self.input_handler.inspector_has_focus = false;
                                     }
 
                                     // If a dropdown is open and the click lands outside it,
@@ -1646,6 +1641,7 @@ impl ApplicationHandler for Application {
                             engine: &mut self.engine,
                             editing: &mut self.editing_service,
                             ui_root: &mut self.ui_root,
+                            selection: &mut self.selection,
                             active_layer: &mut self.active_layer_index,
                             needs_rebuild: &mut self.needs_rebuild,
                             needs_structural_sync: &mut self.needs_structural_sync,
@@ -1654,74 +1650,18 @@ impl ApplicationHandler for Application {
                         };
                         if self.input_handler.handle_keyboard_input(
                             &logical_key, self.modifiers,
-                            &mut host, &mut self.selection,
+                            &mut host,
                         ) {
                             consumed = true;
                         }
                     }
 
-                    // Legacy shortcut dispatch (kept as fallback for shortcuts
-                    // not yet in InputHandler: save/open/new with rfd dialogs).
-                    //   is_none()          = no modifiers held
-                    //   is_command_only()   = only Cmd (macOS) / Ctrl (Windows)
-                    //   is_shift_only()     = only Shift
-                    //   is_alt_only()       = only Alt
-                    //   is_command_shift()  = only Cmd+Shift
+                    // File operations: Save/Open/New require rfd dialogs and window
+                    // handles not available to AppInputHost. InputHandler returns false
+                    // for these, so they fall through here.
+                    if !consumed {
                     let m = self.modifiers;
                     match &logical_key {
-
-                        // ── Backtick — toggle performance HUD ──
-                        // From Unity InputHandler — toggles PerformanceHUDPanel visibility.
-                        Key::Character(ref c) if c.as_str() == "`" && m.is_none() => {
-                            self.ui_root.perf_hud.toggle();
-                            self.needs_rebuild = true;
-                            consumed = true;
-                        }
-
-                        // ── Escape — 4-level priority chain (Unity InputHandler line 224-232) ──
-                        Key::Named(NamedKey::Escape) => {
-                            // Level 1: dismiss context menu / dropdown
-                            if self.ui_root.dropdown.is_open() {
-                                self.ui_root.dropdown.close(&mut self.ui_root.tree);
-                            }
-                            // Level 2: monitor output active → no-op
-                            else if self.window_registry.has_output_window() {
-                                // Matches Unity: if (host.IsMonitorOutputActive) return;
-                            }
-                            // Level 3: inspector has focus → clear effect selection + clear focus
-                            else if self.inspector_has_focus {
-                                // Future: clear effect selection when effect system is implemented
-                                self.inspector_has_focus = false;
-                            }
-                            // Level 4: clear all selection + insert cursor
-                            else {
-                                self.selection.clear_selection();
-                            }
-                            consumed = true;
-                        }
-
-                        // ── Undo: Cmd+Shift+Z ──
-                        Key::Character(ref c) if c.as_str() == "z" && m.is_command_shift() => {
-                            crate::ui_bridge::redo(&mut self.engine, &mut self.editing_service);
-                            self.engine.mark_compositor_dirty(self.frame_timer.realtime_since_start());
-                            self.needs_structural_sync = true;
-                            consumed = true;
-                        }
-                        // ── Undo: Cmd+Z ──
-                        Key::Character(ref c) if c.as_str() == "z" && m.is_command_only() => {
-                            crate::ui_bridge::undo(&mut self.engine, &mut self.editing_service);
-                            self.engine.mark_compositor_dirty(self.frame_timer.realtime_since_start());
-                            self.needs_structural_sync = true;
-                            consumed = true;
-                        }
-                        // ── Redo: Cmd+Y ──
-                        Key::Character(ref c) if c.as_str() == "y" && m.is_command_only() => {
-                            crate::ui_bridge::redo(&mut self.engine, &mut self.editing_service);
-                            self.engine.mark_compositor_dirty(self.frame_timer.realtime_since_start());
-                            self.needs_structural_sync = true;
-                            consumed = true;
-                        }
-
                         // ── Save: Cmd+S ──
                         Key::Character(ref c) if c.as_str() == "s" && m.is_command_only() => {
                             self.save_project();
@@ -1744,459 +1684,16 @@ impl ApplicationHandler for Application {
                             consumed = true;
                         }
 
-                        // ── Select all: Cmd+A ──
-                        Key::Character(ref c) if c.as_str() == "a" && m.is_command_only() => {
-                            if let Some(project) = self.engine.project() {
-                                // Clear everything first, then add all clips
-                                self.selection.clear_selection();
-                                for layer in &project.timeline.layers {
-                                    for clip in &layer.clips {
-                                        self.selection.selected_clip_ids.insert(clip.id.clone());
-                                    }
-                                }
-                                self.selection.primary_selected_clip_id = self.selection.selected_clip_ids.iter().next().cloned();
-                                self.selection.selection_version += 1;
-                            }
-                            self.needs_structural_sync = true;
-                            consumed = true;
-                        }
-
-                        // ── Copy: Cmd+C (context-sensitive: effects vs clips) ──
-                        Key::Character(ref c) if c.as_str() == "c" && m.is_command_only() => {
-                            if self.inspector_has_focus {
-                                // Future: effect copy when effect system is implemented
-                                log::debug!("Inspector focused — effect copy (stub)");
-                            } else {
-                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                                if !ids.is_empty() {
-                                    if let Some(project) = self.engine.project() {
-                                        self.editing_service.copy_clips(project, &ids);
-                                    }
-                                }
-                            }
-                            consumed = true;
-                        }
-                        // ── Cut: Cmd+X (context-sensitive: effects vs clips) ──
-                        Key::Character(ref c) if c.as_str() == "x" && m.is_command_only() => {
-                            if self.inspector_has_focus {
-                                // Future: effect cut when effect system is implemented
-                                log::debug!("Inspector focused — effect cut (stub)");
-                            } else {
-                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                                if !ids.is_empty() {
-                                    if let Some(project) = self.engine.project_mut() {
-                                        self.editing_service.copy_clips(project, &ids);
-                                        // Region-aware cut (Fix #6)
-                                        let spb = 60.0 / project.settings.bpm;
-                                        let region = if self.selection.has_region() {
-                                            Some(self.selection.get_region().clone())
-                                        } else {
-                                            None
-                                        };
-                                        let commands = EditingService::delete_clips(
-                                            project, &ids, region.as_ref(), spb,
-                                        );
-                                        self.editing_service.execute_batch(commands, "Cut clips".into(), project);
-                                    }
-                                    self.selection.clear_selection();
-                                }
-                            }
-                            consumed = true;
-                        }
-                        // ── Paste: Cmd+V (context-sensitive: effects vs clips) ──
-                        Key::Character(ref c) if c.as_str() == "v" && m.is_command_only() => {
-                            if self.inspector_has_focus {
-                                // Future: effect paste when effect system is implemented
-                                log::debug!("Inspector focused — effect paste (stub)");
-                            } else {
-                                let target_beat = self.selection.insert_cursor_beat
-                                    .unwrap_or(self.engine.current_beat());
-                                let target_layer = self.selection.insert_cursor_layer_index
-                                    .or(self.active_layer_index)
-                                    .unwrap_or(0) as i32;
-                                if let Some(project) = self.engine.project_mut() {
-                                    let spb = 60.0 / project.settings.bpm;
-                                    let result = self.editing_service.paste_clips(project, target_beat, target_layer, spb);
-                                    if !result.commands.is_empty() {
-                                        self.editing_service.execute_batch(result.commands, "Paste clips".into(), project);
-                                        // Select all pasted clips and create region (Fix #5)
-                                        // From Unity EditingService.PasteClips (line 660-667)
-                                        self.selection.clear_selection();
-                                        for id in result.pasted_clip_ids {
-                                            self.selection.selected_clip_ids.insert(id);
-                                        }
-                                        self.selection.primary_selected_clip_id = self.selection.selected_clip_ids.iter().next().cloned();
-                                        self.selection.selection_version += 1;
-                                        // Update region to encompass pasted clips
-                                        crate::ui_bridge::update_region_from_clip_selection_inline(
-                                            &mut self.selection, project);
-                                    }
-                                }
-                            }
-                            consumed = true;
-                        }
-
-                        // ── Duplicate: Cmd+D ──
-                        // From Unity EditingService.DuplicateSelectedClips (line 767-778):
-                        // After duplicate, select the new clips and update region.
-                        Key::Character(ref c) if c.as_str() == "d" && m.is_command_only() => {
-                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                            if !ids.is_empty() {
-                                if let Some(project) = self.engine.project_mut() {
-                                    let mut min_beat = f32::MAX;
-                                    let mut max_beat = f32::MIN;
-                                    for layer in &project.timeline.layers {
-                                        for clip in &layer.clips {
-                                            if ids.contains(&clip.id) {
-                                                min_beat = min_beat.min(clip.start_beat);
-                                                max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
-                                            }
-                                        }
-                                    }
-                                    let mut region = manifold_core::selection::SelectionRegion::default();
-                                    if max_beat > min_beat {
-                                        region.is_active = true;
-                                        region.start_beat = min_beat;
-                                        region.end_beat = max_beat;
-                                    }
-                                    // Count clips before to identify new ones after
-                                    let before_ids: std::collections::HashSet<String> = project.timeline.layers.iter()
-                                        .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
-                                        .collect();
-
-                                    let commands = EditingService::duplicate_clips(project, &ids, &region);
-                                    if !commands.is_empty() {
-                                        self.editing_service.execute_batch(commands, "Duplicate clips".into(), project);
-
-                                        // Find newly created clips (IDs that didn't exist before)
-                                        let new_ids: Vec<String> = project.timeline.layers.iter()
-                                            .flat_map(|l| l.clips.iter()
-                                                .filter(|c| !before_ids.contains(&c.id))
-                                                .map(|c| c.id.clone()))
-                                            .collect();
-
-                                        // Select the duplicates (Fix #4)
-                                        self.selection.clear_selection();
-                                        for id in &new_ids {
-                                            self.selection.selected_clip_ids.insert(id.clone());
-                                        }
-                                        self.selection.primary_selected_clip_id = new_ids.first().cloned();
-                                        self.selection.selection_version += 1;
-
-                                        // Update region to encompass duplicates
-                                        crate::ui_bridge::update_region_from_clip_selection_inline(
-                                            &mut self.selection, project);
-                                    }
-                                }
-                            }
-                            self.needs_structural_sync = true;
-                            consumed = true;
-                        }
-
-                        // ── Ungroup: Cmd+Shift+G (context-sensitive) ──
-                        Key::Character(ref c) if c.as_str() == "g" && m.is_command_shift() => {
-                            if self.inspector_has_focus {
-                                // Future: effect ungroup when effect system is implemented
-                                log::debug!("Inspector focused — effect ungroup (stub)");
-                            }
-                            consumed = true;
-                        }
-                        // ── Group: Cmd+G (context-sensitive) ──
-                        Key::Character(ref c) if c.as_str() == "g" && m.is_command_only() => {
-                            if self.inspector_has_focus {
-                                // Future: effect group when effect system is implemented
-                                log::debug!("Inspector focused — effect group (stub)");
-                            } else {
-                                // Future: group selected layers
-                                log::debug!("Group selected layers (stub)");
-                            }
-                            consumed = true;
-                        }
-
-                        // ── Delete/Backspace (context-sensitive: effects → layers → clips) ──
-                        Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace)
-                            if m.is_none() =>
-                        {
-                            // Priority 1: inspector focused → delete effects
-                            if self.inspector_has_focus {
-                                // Future: effect delete when effect system is implemented
-                                log::debug!("Inspector focused — effect delete (stub)");
-                            }
-                            // Priority 2: active layer selected, no clips → delete layer
-                            else if self.selection.selected_clip_ids.is_empty() {
-                                if let Some(idx) = self.active_layer_index {
-                                    if let Some(project) = self.engine.project_mut() {
-                                        if project.timeline.layers.len() > 1 {
-                                            if let Some(layer) = project.timeline.layers.get(idx) {
-                                                let layer_clone = layer.clone();
-                                                let cmd = DeleteLayerCommand::new(layer_clone, idx);
-                                                self.editing_service.execute(Box::new(cmd), project);
-                                                let new_count = project.timeline.layers.len();
-                                                if idx >= new_count {
-                                                    self.active_layer_index = Some(new_count.saturating_sub(1));
-                                                }
-                                                self.needs_rebuild = true;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            // Priority 3: delete selected clips (region-aware)
-                            // From Unity EditingService.DeleteSelectedClips: if region active,
-                            // split at boundaries and delete interior only.
-                            else {
-                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                                if let Some(project) = self.engine.project_mut() {
-                                    let spb = 60.0 / project.settings.bpm;
-                                    // Pass the region if active (Fix #6)
-                                    let region = if self.selection.has_region() {
-                                        Some(self.selection.get_region().clone())
-                                    } else {
-                                        None
-                                    };
-                                    let commands = EditingService::delete_clips(
-                                        project, &ids, region.as_ref(), spb,
-                                    );
-                                    self.editing_service.execute_batch(commands, "Delete clips".into(), project);
-                                }
-                                self.selection.clear_selection();
-                            }
-                            consumed = true;
-                        }
-
-                        // ── Space — Play/Pause (seek to insert cursor if paused) ──
-                        Key::Named(NamedKey::Space) if m.is_none() => {
-                            if self.engine.is_playing() {
-                                self.engine.pause();
-                            } else {
-                                // Unity: if paused and insert cursor exists, seek to cursor beat first
-                                // Use beat_to_timeline_time (goes through tempo map) not simple BPM division
-                                if let Some(cursor_beat) = self.selection.insert_cursor_beat {
-                                    let time = self.engine.beat_to_timeline_time(cursor_beat);
-                                    self.engine.seek_to(time);
-                                }
-                                self.engine.play();
-                            }
-                            consumed = true;
-                        }
-
-                        // ── Home — seek to start ──
-                        Key::Named(NamedKey::Home) if m.is_none() => {
-                            self.engine.seek_to(0.0);
-                            consumed = true;
-                        }
-                        // ── End — seek to end of last clip ──
-                        Key::Named(NamedKey::End) if m.is_none() => {
-                            if let Some(project) = self.engine.project() {
-                                let mut max_beat: f32 = 0.0;
-                                for layer in &project.timeline.layers {
-                                    for clip in &layer.clips {
-                                        let end = clip.start_beat + clip.duration_beats;
-                                        if end > max_beat { max_beat = end; }
-                                    }
-                                }
-                                let time = max_beat * (60.0 / project.settings.bpm);
-                                self.engine.seek_to(time);
-                            }
-                            consumed = true;
-                        }
-
-                        // ── S — split at playhead (bare S only, no modifiers) ──
-                        Key::Character(ref c) if c.as_str() == "s" && m.is_none() => {
-                            let beat = self.engine.current_beat();
-                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                            if !ids.is_empty() {
-                                if let Some(project) = self.engine.project_mut() {
-                                    let spb = 60.0 / project.settings.bpm;
-                                    let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
-                                    for id in &ids {
-                                        if let Some(cmd) = EditingService::split_clip_at_beat(project, id, beat, spb) {
-                                            commands.push(cmd);
-                                        }
-                                    }
-                                    if !commands.is_empty() {
-                                        self.editing_service.execute_batch(commands, "Split clips".into(), project);
-                                    }
-                                }
-                            }
-                            consumed = true;
-                        }
-
-                        // ── Shift+E — shrink by grid step (check before bare E) ──
-                        // winit reports Shift+E as "E" (uppercase) on most platforms
-                        Key::Character(ref c) if (c.as_str() == "E" || c.as_str() == "e") && m.is_shift_only() => {
-                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                            if !ids.is_empty() {
-                                let step = self.ui_root.viewport.grid_step();
-                                if let Some(project) = self.engine.project_mut() {
-                                    let commands = EditingService::shrink_clips_by_grid(project, &ids, step);
-                                    if !commands.is_empty() {
-                                        self.editing_service.execute_batch(commands, "Shrink clips".into(), project);
-                                    }
-                                }
-                            }
-                            consumed = true;
-                        }
-                        // ── E — extend by grid step (bare E only) ──
-                        Key::Character(ref c) if c.as_str() == "e" && m.is_none() => {
-                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                            if !ids.is_empty() {
-                                let step = self.ui_root.viewport.grid_step();
-                                if let Some(project) = self.engine.project_mut() {
-                                    let commands = EditingService::extend_clips_by_grid(project, &ids, step);
-                                    if !commands.is_empty() {
-                                        self.editing_service.execute_batch(commands, "Extend clips".into(), project);
-                                    }
-                                }
-                            }
-                            consumed = true;
-                        }
-
-                        // ── F — zoom to fit (bare F only) ──
-                        Key::Character(ref c) if c.as_str() == "f" && m.is_none() => {
-                            if let Some(project) = self.engine.project() {
-                                let mut min_beat = f32::MAX;
-                                let mut max_beat = f32::MIN;
-                                let mut has_clips = false;
-                                for layer in &project.timeline.layers {
-                                    for clip in &layer.clips {
-                                        min_beat = min_beat.min(clip.start_beat);
-                                        max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
-                                        has_clips = true;
-                                    }
-                                }
-                                if has_clips {
-                                    let margin = 0.1 * (max_beat - min_beat).max(1.0);
-                                    let range = max_beat - min_beat + 2.0 * margin;
-                                    let tracks_w = self.ui_root.layout.timeline_tracks().width;
-                                    let required_ppb = tracks_w / range;
-                                    let levels = &manifold_ui::color::ZOOM_LEVELS;
-                                    let mut best_idx = 0;
-                                    let mut best_diff = f32::MAX;
-                                    for (i, &lvl) in levels.iter().enumerate() {
-                                        let diff = (lvl - required_ppb).abs();
-                                        if diff < best_diff {
-                                            best_diff = diff;
-                                            best_idx = i;
-                                        }
-                                    }
-                                    let ppb = levels[best_idx];
-                                    self.ui_root.viewport.set_zoom(ppb);
-                                    self.ui_root.viewport.set_scroll(
-                                        (min_beat - margin).max(0.0),
-                                        0.0,
-                                    );
-                                    self.needs_scroll_rebuild = true;
-                                }
-                            }
-                            consumed = true;
-                        }
-
-                        // ── 0 — toggle mute (bare 0 only) ──
-                        Key::Character(ref c) if c.as_str() == "0" && m.is_none() => {
-                            let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                            if let Some(project) = self.engine.project_mut() {
-                                for id in &ids {
-                                    if let Some(clip) = project.timeline.find_clip_by_id_mut(id) {
-                                        clip.is_muted = !clip.is_muted;
-                                    }
-                                }
-                            }
-                            self.needs_structural_sync = true;
-                            self.needs_rebuild = true;
-                            consumed = true;
-                        }
-
-                        // ── Arrow keys — nudge clips when selected, navigate cursor otherwise ──
-                        // Left/Right with Shift: fine nudge (1/16 beat)
-                        // Left/Right without Shift: grid step nudge
-                        // Up/Down: navigate layers (no-op with clips selected in Unity)
-                        Key::Named(NamedKey::ArrowLeft) if !m.command && !m.alt => {
-                            let grid = self.ui_root.viewport.grid_step();
-                            let step = if m.shift { 1.0 / 16.0 } else { grid };
-                            if !self.selection.selected_clip_ids.is_empty() {
-                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                                if let Some(project) = self.engine.project_mut() {
-                                    let spb = 60.0 / project.settings.bpm;
-                                    let commands = EditingService::nudge_clips(project, &ids, -step, spb);
-                                    if !commands.is_empty() {
-                                        self.editing_service.execute_batch(commands, "Nudge clips left".into(), project);
-                                    }
-                                }
-                            } else {
-                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Left);
-                            }
-                            consumed = true;
-                        }
-                        Key::Named(NamedKey::ArrowRight) if !m.command && !m.alt => {
-                            let grid = self.ui_root.viewport.grid_step();
-                            let step = if m.shift { 1.0 / 16.0 } else { grid };
-                            if !self.selection.selected_clip_ids.is_empty() {
-                                let ids: Vec<String> = self.selection.selected_clip_ids.iter().cloned().collect();
-                                if let Some(project) = self.engine.project_mut() {
-                                    let spb = 60.0 / project.settings.bpm;
-                                    let commands = EditingService::nudge_clips(project, &ids, step, spb);
-                                    if !commands.is_empty() {
-                                        self.editing_service.execute_batch(commands, "Nudge clips right".into(), project);
-                                    }
-                                }
-                            } else {
-                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Right);
-                            }
-                            consumed = true;
-                        }
-                        Key::Named(NamedKey::ArrowUp) if m.is_none() => {
-                            if self.selection.selected_clip_ids.is_empty() {
-                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Up);
-                            }
-                            // Unity: Up/Down with clips selected = no-op
-                            consumed = true;
-                        }
-                        Key::Named(NamedKey::ArrowDown) if m.is_none() => {
-                            if self.selection.selected_clip_ids.is_empty() {
-                                self.navigate_cursor(manifold_ui::cursor_nav::Direction::Down);
-                            }
-                            // Unity: Up/Down with clips selected = no-op
-                            consumed = true;
-                        }
-
-                        // ── Export markers: Alt variants first (exact match) ──
-                        Key::Character(ref c) if c.as_str() == "i" && m.is_alt_only() => {
-                            if let Some(project) = self.engine.project_mut() {
-                                project.timeline.export_in_beat = 0.0;
-                                project.timeline.export_range_enabled = false;
-                            }
-                            consumed = true;
-                        }
-                        Key::Character(ref c) if c.as_str() == "o" && m.is_alt_only() => {
-                            if let Some(project) = self.engine.project_mut() {
-                                project.timeline.export_out_beat = 0.0;
-                                project.timeline.export_range_enabled = false;
-                            }
-                            consumed = true;
-                        }
-                        // ── I — set export in point (bare I only) ──
-                        Key::Character(ref c) if c.as_str() == "i" && m.is_none() => {
-                            let beat = self.engine.current_beat();
-                            if let Some(project) = self.engine.project_mut() {
-                                project.timeline.export_in_beat = beat;
-                                project.timeline.export_range_enabled = true;
-                            }
-                            consumed = true;
-                        }
-                        // ── O — set export out point (bare O only) ──
-                        Key::Character(ref c) if c.as_str() == "o" && m.is_none() => {
-                            let beat = self.engine.current_beat();
-                            if let Some(project) = self.engine.project_mut() {
-                                project.timeline.export_out_beat = beat;
-                                project.timeline.export_range_enabled = true;
-                            }
-                            consumed = true;
-                        }
-
                         _ => {}
                     }
-                }
+                    } // end if !consumed (file operations)
+                } // end if is_primary
+
+                // All other shortcuts handled by InputHandler → AppInputHost.
+
+                // (Legacy shortcut block deleted — was ~500 lines of duplicated dispatch.
+                // All shortcuts now go through InputHandler → TimelineInputHost trait.
+                // Only save/open/new remain as direct fallbacks above.)
 
                 // If any keyboard shortcut mutated project data, trigger structural sync
                 if self.editing_service.data_version() != data_version_before {

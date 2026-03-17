@@ -4,29 +4,35 @@
 //! Same split-borrow pattern as AppEditingHost — borrows individual fields
 //! so InputHandler, UIState, and viewport can be borrowed separately.
 
+use manifold_editing::commands::clip::MuteClipCommand;
 use manifold_editing::service::EditingService;
 use manifold_playback::engine::PlaybackEngine;
 use manifold_ui::timeline_input_host::TimelineInputHost;
+use manifold_ui::ui_state::UIState;
 use manifold_ui::cursor_nav;
 
 use crate::ui_root::UIRoot;
 
 /// Wrapper implementing TimelineInputHost by borrowing Application fields.
+///
+/// Selection (UIState) is available for host methods that need to read/write
+/// selection state (paste, duplicate, navigate_cursor, select_all, etc.).
 pub struct AppInputHost<'a> {
     pub engine: &'a mut PlaybackEngine,
     pub editing: &'a mut EditingService,
     pub ui_root: &'a mut UIRoot,
+    pub selection: &'a mut UIState,
     pub active_layer: &'a mut Option<usize>,
     pub needs_rebuild: &'a mut bool,
     pub needs_structural_sync: &'a mut bool,
     pub needs_scroll_rebuild: &'a mut bool,
     pub current_project_path: &'a Option<std::path::PathBuf>,
-    // Selection is passed separately to handle_keyboard_input, not through the host
 }
 
 impl TimelineInputHost for AppInputHost<'_> {
     fn handle_inspector_keyboard(&mut self) -> bool {
-        // Future: inspector arrow key stepping for loop duration
+        // Future: inspector arrow key stepping for loop duration.
+        // Stub returns false — correct until clip inspector is ported.
         false
     }
 
@@ -36,7 +42,12 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn is_monitor_output_active(&self) -> bool {
-        // Future: check if output window is active
+        // In Unity this checks monitorOutputSection.IsActive (a UI panel).
+        // In Rust the output is a separate window — checking window existence
+        // is the correct equivalent for the Escape L2 guard.
+        // Note: window_registry is not available here (not borrowed).
+        // For now return false — the legacy block's Escape already handles
+        // output window close at the app level.
         false
     }
 
@@ -45,12 +56,21 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn on_undo_redo(&mut self) {
-        self.engine.mark_compositor_dirty(0.0); // realtime will be set by caller
+        // Unity: needsRebuild = true; RefreshAllInspectors();
+        // playbackController.RefreshActiveClips(); playbackController.MarkCompositorDirty();
+        self.engine.mark_compositor_dirty(0.0);
         *self.needs_structural_sync = true;
+        *self.needs_rebuild = true;
     }
 
     fn on_selection_cleared(&mut self) {
+        // Unity WorkspaceController.OnSelectionCleared (lines 388-393):
+        //   InvalidateAllLayerBitmaps();
+        //   ResetAllInspectors();
+        //   masterInspector?.Show();
+        *self.needs_rebuild = true;
         *self.needs_structural_sync = true;
+        *self.needs_scroll_rebuild = true;
     }
 
     fn mark_compositor_dirty(&mut self) {
@@ -87,6 +107,9 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_structural_sync = true;
     }
 
+    // ── Effect shortcuts: stubs until effect system is ported ────
+    // These return false, so InputHandler falls through to clip operations.
+    // Correct infrastructure — just needs implementations when effects land.
     fn handle_effect_copy(&mut self) -> bool { false }
     fn handle_effect_cut(&mut self) -> bool { false }
     fn handle_effect_paste(&mut self) -> bool { false }
@@ -108,16 +131,23 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn save_project(&mut self) {
-        // Save is handled at Application level — set flag for app to pick up
-        // For now, log (actual save uses rfd dialog which needs window handle)
+        // Save requires the rfd dialog and window handle, which are owned by
+        // Application (not borrowed here). For now, the actual save logic
+        // stays in the legacy block in app.rs. InputHandler returns false
+        // for Cmd+S so it falls through to the legacy handler.
+        //
+        // TODO: When the legacy block is deleted, refactor save to use a
+        // flag that Application picks up after the host call returns.
         log::info!("Save requested via keyboard shortcut");
     }
 
     fn open_project(&mut self) {
+        // Same as save — needs rfd dialog + window handle.
         log::info!("Open requested via keyboard shortcut");
     }
 
     fn new_project(&mut self) {
+        // Same as save — needs to create project + initialize engine.
         log::info!("New project requested via keyboard shortcut");
     }
 
@@ -125,6 +155,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if self.engine.is_playing() {
             self.engine.pause();
         } else {
+            // Unity: if paused and insert cursor exists, seek to cursor first (Ableton behavior)
             if let Some(beat) = insert_cursor_beat {
                 let time = self.engine.beat_to_timeline_time(beat);
                 self.engine.seek_to(time);
@@ -135,7 +166,8 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn seek_to(&mut self, time: f32) {
         if time == f32::MAX {
-            // Sentinel for "seek to end"
+            // Sentinel for "seek to end" — Unity InputHandler line 380-390
+            // Uses beat_to_timeline_time for tempo map consistency (Step 8 fix)
             if let Some(project) = self.engine.project() {
                 let mut max_beat: f32 = 0.0;
                 for layer in &project.timeline.layers {
@@ -144,8 +176,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                         if end > max_beat { max_beat = end; }
                     }
                 }
-                let bpm = project.settings.bpm;
-                let end_time = max_beat * (60.0 / bpm);
+                let end_time = self.engine.beat_to_timeline_time(max_beat);
                 self.engine.seek_to(end_time);
             }
         } else {
@@ -162,8 +193,19 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn select_all_clips(&mut self) {
-        // Handled directly on UIState by the caller
-        // (InputHandler accesses ui_state directly)
+        // Unity EditingService.SelectAllClips — iterates all layers/clips
+        if let Some(project) = self.engine.project() {
+            self.selection.clear_selection();
+            for layer in &project.timeline.layers {
+                for clip in &layer.clips {
+                    self.selection.selected_clip_ids.insert(clip.id.clone());
+                }
+            }
+            self.selection.primary_selected_clip_id =
+                self.selection.selected_clip_ids.iter().next().cloned();
+            self.selection.selection_version += 1;
+        }
+        *self.needs_structural_sync = true;
     }
 
     fn copy_clips(&mut self, clip_ids: &[String]) {
@@ -173,34 +215,50 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn cut_clips(&mut self, clip_ids: &[String], has_region: bool) {
+        // Unity: copy first, then delete (region-aware)
         if let Some(project) = self.engine.project() {
             self.editing.copy_clips(project, clip_ids);
         }
         if let Some(project) = self.engine.project_mut() {
             let spb = 60.0 / project.settings.bpm;
+            // Step 4i: pass actual region from UIState when active
             let region = if has_region {
-                // TODO: pass region from UIState
-                None
+                Some(self.selection.get_region().clone())
             } else {
                 None
             };
             let commands = EditingService::delete_clips(project, clip_ids, region.as_ref(), spb);
             self.editing.execute_batch(commands, "Cut clips".into(), project);
         }
+        self.selection.clear_selection();
     }
 
     fn paste_clips(&mut self, target_beat: f32, target_layer: i32) {
+        // Unity EditingService.PasteClips (line 660-667):
+        // After paste, select all pasted clips and update region.
         if let Some(project) = self.engine.project_mut() {
             let spb = 60.0 / project.settings.bpm;
             let result = self.editing.paste_clips(project, target_beat, target_layer, spb);
             if !result.commands.is_empty() {
                 self.editing.execute_batch(result.commands, "Paste clips".into(), project);
+                // Step 4g: select pasted clips and update region
+                self.selection.clear_selection();
+                for id in result.pasted_clip_ids {
+                    self.selection.selected_clip_ids.insert(id);
+                }
+                self.selection.primary_selected_clip_id =
+                    self.selection.selected_clip_ids.iter().next().cloned();
+                self.selection.selection_version += 1;
+                crate::ui_bridge::update_region_from_clip_selection_inline(
+                    self.selection, project);
             }
         }
         *self.needs_structural_sync = true;
     }
 
     fn duplicate_clips(&mut self, clip_ids: &[String]) {
+        // Unity EditingService.DuplicateSelectedClips (line 767-778):
+        // After duplicate, select the new clips and update region.
         if let Some(project) = self.engine.project_mut() {
             let mut region = manifold_core::selection::SelectionRegion::default();
             let mut min_beat = f32::MAX;
@@ -218,9 +276,30 @@ impl TimelineInputHost for AppInputHost<'_> {
                 region.start_beat = min_beat;
                 region.end_beat = max_beat;
             }
+            // Snapshot existing IDs to find new ones after execute
+            let before_ids: std::collections::HashSet<String> = project.timeline.layers.iter()
+                .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
+                .collect();
+
             let commands = EditingService::duplicate_clips(project, clip_ids, &region);
             if !commands.is_empty() {
                 self.editing.execute_batch(commands, "Duplicate clips".into(), project);
+
+                // Step 4h: find newly created clips and select them
+                let new_ids: Vec<String> = project.timeline.layers.iter()
+                    .flat_map(|l| l.clips.iter()
+                        .filter(|c| !before_ids.contains(&c.id))
+                        .map(|c| c.id.clone()))
+                    .collect();
+
+                self.selection.clear_selection();
+                for id in &new_ids {
+                    self.selection.selected_clip_ids.insert(id.clone());
+                }
+                self.selection.primary_selected_clip_id = new_ids.first().cloned();
+                self.selection.selection_version += 1;
+                crate::ui_bridge::update_region_from_clip_selection_inline(
+                    self.selection, project);
             }
         }
         *self.needs_structural_sync = true;
@@ -229,8 +308,9 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn delete_clips(&mut self, clip_ids: &[String], has_region: bool) {
         if let Some(project) = self.engine.project_mut() {
             let spb = 60.0 / project.settings.bpm;
+            // Step 4i: pass actual region from UIState when active
             let region = if has_region {
-                None // TODO: pass region from UIState
+                Some(self.selection.get_region().clone())
             } else {
                 None
             };
@@ -299,13 +379,40 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn toggle_mute_clips(&mut self, clip_ids: &[String]) {
+        // Unity EditingService.ToggleMuteSelectedClips (line 418-448):
+        // Group-mute semantics: if ANY unmuted → mute ALL, else unmute ALL.
+        // Records undo via MuteClipCommand. Marks compositor dirty.
         if let Some(project) = self.engine.project_mut() {
-            for id in clip_ids {
-                if let Some(clip) = project.timeline.find_clip_by_id_mut(id) {
-                    clip.is_muted = !clip.is_muted;
+            // First pass: collect current mute state for each clip
+            let mut clip_states: Vec<(String, bool)> = Vec::new();
+            for layer in &project.timeline.layers {
+                for clip in &layer.clips {
+                    if clip_ids.contains(&clip.id) {
+                        clip_states.push((clip.id.clone(), clip.is_muted));
+                    }
                 }
             }
+
+            // Determine target: if ANY unmuted → mute all, else unmute all
+            let any_unmuted = clip_states.iter().any(|(_, muted)| !muted);
+            let new_muted = any_unmuted;
+
+            // Build commands for clips that need to change
+            let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
+            for (id, old_muted) in &clip_states {
+                if *old_muted != new_muted {
+                    commands.push(Box::new(MuteClipCommand::new(
+                        id.clone(), *old_muted, new_muted,
+                    )));
+                }
+            }
+
+            if !commands.is_empty() {
+                let label = if new_muted { "Mute clips" } else { "Unmute clips" };
+                self.editing.execute_batch(commands, label.into(), project);
+            }
         }
+        self.engine.mark_compositor_dirty(0.0);
         *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
     }
@@ -331,6 +438,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn set_export_in_at_playhead(&mut self) {
+        // Unity InputHandler.SetExportInAtPlayhead (lines 615-628):
+        // Snap to grid before applying.
         let beat = self.engine.current_beat();
         if let Some(project) = self.engine.project_mut() {
             let bpb = project.settings.time_signature_numerator.max(1) as u32;
@@ -341,6 +450,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn set_export_out_at_playhead(&mut self) {
+        // Unity InputHandler.SetExportOutAtPlayhead (lines 630-643):
+        // Snap to grid before applying.
         let beat = self.engine.current_beat();
         if let Some(project) = self.engine.project_mut() {
             let bpb = project.settings.time_signature_numerator.max(1) as u32;
@@ -351,14 +462,32 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn clear_export_in(&mut self) {
+        // Unity InputHandler.ClearExportIn (lines 645-662):
+        // If no out-point → clear entire range.
+        // If out-point exists → reset in to 0, keep range enabled.
         if let Some(project) = self.engine.project_mut() {
-            project.timeline.export_in_beat = 0.0;
-            project.timeline.export_range_enabled = false;
+            if project.timeline.export_out_beat <= 0.0 {
+                // No out-point — clear entire range
+                project.timeline.export_in_beat = 0.0;
+                project.timeline.export_out_beat = 0.0;
+                project.timeline.export_range_enabled = false;
+            } else {
+                // Out-point exists — reset in to 0 but keep range
+                project.timeline.export_in_beat = 0.0;
+            }
         }
     }
 
     fn clear_export_out(&mut self) {
+        // Unity InputHandler.ClearExportOut (lines 664-677):
+        // If no range active → no-op.
+        // If range active → clear entire range.
         if let Some(project) = self.engine.project_mut() {
+            if !project.timeline.export_range_enabled {
+                return; // no-op
+            }
+            project.timeline.export_in_beat = 0.0;
+            project.timeline.export_out_beat = 0.0;
             project.timeline.export_range_enabled = false;
         }
     }
@@ -376,7 +505,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn navigate_cursor(&mut self, direction: u8, is_fine: bool, grid_step: f32) {
-        // Delegate to cursor_nav module with layer/clip data from project
+        // Unity InputHandler.NavigateInsertCursor (lines 523-595)
         let dir = match direction {
             0 => cursor_nav::Direction::Left,
             1 => cursor_nav::Direction::Right,
@@ -407,22 +536,117 @@ impl TimelineInputHost for AppInputHost<'_> {
             }
         }
 
-        // Get current cursor position
-        let beat = self.ui_root.viewport.scroll_x_beats(); // fallback
-        let layer = 0usize; // fallback
-        // TODO: read from UIState (passed separately)
+        // Step 4f: read cursor position from UIState (not viewport scroll)
+        let current_beat = self.selection.insert_cursor_beat
+            .unwrap_or(self.engine.current_beat());
+        let current_layer = self.selection.insert_cursor_layer_index
+            .or(*self.active_layer)
+            .unwrap_or(0);
 
-        let result = cursor_nav::navigate_cursor(dir, beat, layer, grid_step, is_fine, &layers, &clips);
+        let result = cursor_nav::navigate_cursor(
+            dir, current_beat, current_layer, grid_step, is_fine, &layers, &clips,
+        );
         match result {
             cursor_nav::NavResult::SetCursor { beat, layer } => {
-                // Applied by caller on UIState
-                log::debug!("Navigate cursor: beat={}, layer={}", beat, layer);
+                self.selection.set_insert_cursor(beat, layer);
+                *self.active_layer = Some(layer);
             }
             cursor_nav::NavResult::SelectClip(clip_id) => {
-                log::debug!("Navigate cursor: auto-select clip {}", clip_id);
+                // Find the clip's layer for proper selection
+                let li = self.engine.project()
+                    .and_then(|p| p.timeline.layers.iter().enumerate()
+                        .find_map(|(i, l)| l.clips.iter()
+                            .any(|c| c.id == clip_id).then_some(i)))
+                    .unwrap_or(0);
+                self.selection.select_clip(clip_id, li);
+                *self.active_layer = Some(li);
             }
             cursor_nav::NavResult::NoChange => {}
         }
+
+        *self.needs_rebuild = true;
+        *self.needs_scroll_rebuild = true;
+    }
+
+    // ── UIState delegation ──────────────────────────────────────
+
+    fn get_selected_clip_ids(&self) -> Vec<String> {
+        self.selection.get_selected_clip_ids()
+    }
+
+    fn selection_count(&self) -> usize {
+        self.selection.selection_count()
+    }
+
+    fn layer_selection_count(&self) -> usize {
+        self.selection.layer_selection_count()
+    }
+
+    fn has_region(&self) -> bool {
+        self.selection.has_region()
+    }
+
+    fn insert_cursor_beat(&self) -> Option<f32> {
+        self.selection.insert_cursor_beat
+    }
+
+    fn insert_cursor_layer_index(&self) -> Option<usize> {
+        self.selection.insert_cursor_layer_index
+    }
+
+    fn clear_selection(&mut self) {
+        self.selection.clear_selection();
+    }
+
+    fn zoom_to_fit(&mut self) {
+        // Unity InputHandler.ZoomToFit (lines 906-957):
+        // Arbitrary ppb, center scroll, no-clips fallback.
+        let viewport_width = self.ui_root.viewport.tracks_rect().width;
+        if viewport_width <= 0.0 { return; }
+
+        let project = match self.engine.project() {
+            Some(p) => p,
+            None => return,
+        };
+
+        let mut min_beat = f32::MAX;
+        let mut max_beat = f32::MIN;
+        let mut clip_count = 0;
+        for layer in &project.timeline.layers {
+            for clip in &layer.clips {
+                if clip.start_beat < min_beat { min_beat = clip.start_beat; }
+                let end = clip.start_beat + clip.duration_beats;
+                if end > max_beat { max_beat = end; }
+                clip_count += 1;
+            }
+        }
+
+        if clip_count == 0 {
+            // No clips — reset to default zoom, scroll to start
+            let levels = &manifold_ui::color::ZOOM_LEVELS;
+            let default_idx = levels.len() / 2; // middle of zoom range
+            self.ui_root.viewport.set_zoom(levels[default_idx]);
+            self.ui_root.viewport.set_scroll(0.0, 0.0);
+            *self.needs_scroll_rebuild = true;
+            return;
+        }
+
+        let extent_beats = max_beat - min_beat;
+        // 10% padding on each side (min 1 beat)
+        let padding = (extent_beats * 0.1).max(1.0);
+        let fit_beats = extent_beats + padding * 2.0;
+
+        // Calculate ideal ppb — arbitrary float, NOT nearest preset
+        let max_ppb = *manifold_ui::color::ZOOM_LEVELS.last().unwrap_or(&200.0);
+        let ideal_ppb = (viewport_width / fit_beats).clamp(1.0, max_ppb);
+
+        self.ui_root.viewport.set_zoom(ideal_ppb);
+
+        // Center-scroll on clip extent
+        let center_beat = min_beat + extent_beats * 0.5;
+        let center_pixel = center_beat * ideal_ppb;
+        let scroll_beat = ((center_pixel - viewport_width * 0.5) / ideal_ppb).max(0.0);
+        self.ui_root.viewport.set_scroll(scroll_beat, 0.0);
 
         *self.needs_scroll_rebuild = true;
     }

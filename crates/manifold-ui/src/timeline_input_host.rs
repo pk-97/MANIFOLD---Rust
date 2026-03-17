@@ -182,4 +182,31 @@ pub trait TimelineInputHost {
     /// `is_fine`: true when Shift is held (1/16 beat step).
     /// Returns true if the navigation resulted in a clip auto-select.
     fn navigate_cursor(&mut self, direction: u8, is_fine: bool, grid_step: f32);
+
+    // ── UIState delegation (InputHandler reads selection through host) ──
+
+    /// Get IDs of all selected clips.
+    fn get_selected_clip_ids(&self) -> Vec<String>;
+
+    /// Number of selected clips.
+    fn selection_count(&self) -> usize;
+
+    /// Number of selected layers.
+    fn layer_selection_count(&self) -> usize;
+
+    /// Whether a selection region is active.
+    fn has_region(&self) -> bool;
+
+    /// Get the insert cursor beat position, if any.
+    fn insert_cursor_beat(&self) -> Option<f32>;
+
+    /// Get the insert cursor layer index, if any.
+    fn insert_cursor_layer_index(&self) -> Option<usize>;
+
+    /// Clear all selection (clips, layers, region, insert cursor).
+    fn clear_selection(&mut self);
+
+    /// Zoom to fit all clips in the viewport.
+    /// Port of Unity InputHandler.ZoomToFit (lines 906-957).
+    fn zoom_to_fit(&mut self);
 }

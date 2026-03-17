@@ -7,7 +7,6 @@
 
 use manifold_ui::input::Modifiers;
 use manifold_ui::timeline_input_host::TimelineInputHost;
-use manifold_ui::ui_state::UIState;
 
 use winit::keyboard::{Key, NamedKey};
 
@@ -58,20 +57,12 @@ impl InputHandler {
     /// Port of Unity InputHandler.HandleKeyboardInput (lines 189-517).
     ///
     /// Returns true if the key was consumed (caller should not process further).
-    /// Calls through the host trait for all operations that need engine/UI access.
-    /// Get the current grid step from the host (delegated from viewport).
-    fn grid_step(host: &dyn TimelineInputHost) -> f32 {
-        // Host provides this via get_viewport_width / zoom level
-        // For now use a reasonable default; host impl reads from viewport
-        0.25 // quarter beat — overridden by host
-    }
-
+    /// All state access goes through the host trait — InputHandler owns no data references.
     pub fn handle_keyboard_input(
         &mut self,
         logical_key: &Key,
         modifiers: Modifiers,
         host: &mut dyn TimelineInputHost,
-        ui_state: &mut UIState,
     ) -> bool {
         let m = modifiers;
 
@@ -104,7 +95,7 @@ impl InputHandler {
                 return true;
             }
             // Level 4: clear all selection + insert cursor
-            ui_state.clear_selection();
+            host.clear_selection();
             host.on_selection_cleared();
             return true;
         }
@@ -128,22 +119,18 @@ impl InputHandler {
             return true;
         }
 
-        // ── Save: Cmd+S (Unity line 255) ──
+        // ── Save/Open/New: Cmd+S, Cmd+O, Cmd+N ──
+        // These require rfd dialogs and window handles that AppInputHost
+        // cannot access. Return false to let the legacy block handle them.
+        // TODO: Move to host when legacy block is deleted (use flag pattern).
         if matches!(logical_key, Key::Character(ref c) if c.as_str() == "s") && m.is_command_only() {
-            host.save_project();
-            return true;
+            return false; // handled by legacy block
         }
-
-        // ── Open: Cmd+O ──
         if matches!(logical_key, Key::Character(ref c) if c.as_str() == "o") && m.is_command_only() {
-            host.open_project();
-            return true;
+            return false; // handled by legacy block
         }
-
-        // ── New: Cmd+N ──
         if matches!(logical_key, Key::Character(ref c) if c.as_str() == "n") && m.is_command_only() {
-            host.new_project();
-            return true;
+            return false; // handled by legacy block
         }
 
         // ── Select all: Cmd+A (Unity line 289) ──
@@ -157,7 +144,7 @@ impl InputHandler {
             if self.inspector_has_focus && host.handle_effect_copy() {
                 return true;
             }
-            let ids: Vec<String> = ui_state.get_selected_clip_ids();
+            let ids: Vec<String> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.copy_clips(&ids);
             }
@@ -169,9 +156,9 @@ impl InputHandler {
             if self.inspector_has_focus && host.handle_effect_cut() {
                 return true;
             }
-            let ids: Vec<String> = ui_state.get_selected_clip_ids();
+            let ids: Vec<String> = host.get_selected_clip_ids();
             if !ids.is_empty() {
-                host.cut_clips(&ids, ui_state.has_region());
+                host.cut_clips(&ids, host.has_region());
             }
             return true;
         }
@@ -181,9 +168,9 @@ impl InputHandler {
             if self.inspector_has_focus && host.handle_effect_paste() {
                 return true;
             }
-            let target_beat = ui_state.insert_cursor_beat
+            let target_beat = host.insert_cursor_beat()
                 .unwrap_or(host.current_beat());
-            let target_layer = ui_state.insert_cursor_layer_index
+            let target_layer = host.insert_cursor_layer_index()
                 .unwrap_or(0) as i32;
             host.paste_clips(target_beat, target_layer);
             return true;
@@ -191,7 +178,7 @@ impl InputHandler {
 
         // ── Duplicate: Cmd+D (Unity line 316) ──
         if matches!(logical_key, Key::Character(ref c) if c.as_str() == "d") && m.is_command_only() {
-            let ids: Vec<String> = ui_state.get_selected_clip_ids();
+            let ids: Vec<String> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.duplicate_clips(&ids);
             }
@@ -228,25 +215,25 @@ impl InputHandler {
             }
             // Priority 2: layer selection active, no clips, no region → delete layers
             // (Unity lines 341-346)
-            if ui_state.layer_selection_count() > 0
-                && !ui_state.has_region()
-                && ui_state.selection_count() == 0
+            if host.layer_selection_count() > 0
+                && !host.has_region()
+                && host.selection_count() == 0
             {
                 host.delete_selected_layers();
                 return true;
             }
             // Priority 3: delete selected clips (region-aware)
-            let ids: Vec<String> = ui_state.get_selected_clip_ids();
+            let ids: Vec<String> = host.get_selected_clip_ids();
             if !ids.is_empty() {
-                host.delete_clips(&ids, ui_state.has_region());
-                ui_state.clear_selection();
+                host.delete_clips(&ids, host.has_region());
+                host.clear_selection();
             }
             return true;
         }
 
         // ── Space — Play/Pause (Unity line 352) ──
         if matches!(logical_key, Key::Named(NamedKey::Space)) && m.is_none() {
-            let cursor_beat = ui_state.insert_cursor_beat;
+            let cursor_beat = host.insert_cursor_beat();
             host.play_pause(cursor_beat);
             return true;
         }
@@ -266,7 +253,7 @@ impl InputHandler {
 
         // ── S — split at playhead (bare S, no modifiers) (Unity line 393) ──
         if matches!(logical_key, Key::Character(ref c) if c.as_str() == "s") && m.is_none() {
-            let ids: Vec<String> = ui_state.get_selected_clip_ids();
+            let ids: Vec<String> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.split_clips_at_playhead(&ids);
             }
@@ -277,7 +264,7 @@ impl InputHandler {
         if matches!(logical_key, Key::Character(ref c) if c.as_str() == "E" || c.as_str() == "e")
             && m.is_shift_only()
         {
-            let ids: Vec<String> = ui_state.get_selected_clip_ids();
+            let ids: Vec<String> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 let step = host.grid_step();
                 host.shrink_clips(&ids, step);
@@ -287,7 +274,7 @@ impl InputHandler {
 
         // ── E — extend by grid step (bare E) (Unity line 405) ──
         if matches!(logical_key, Key::Character(ref c) if c.as_str() == "e") && m.is_none() {
-            let ids: Vec<String> = ui_state.get_selected_clip_ids();
+            let ids: Vec<String> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 let step = host.grid_step();
                 host.extend_clips(&ids, step);
@@ -297,13 +284,14 @@ impl InputHandler {
 
         // ── F — zoom to fit (Unity line 412) ──
         if matches!(logical_key, Key::Character(ref c) if c.as_str() == "f") && m.is_none() {
-            self.zoom_to_fit(host);
+            host.zoom_to_fit();
+            self.needs_zoom_update = true;
             return true;
         }
 
         // ── 0 — toggle mute (Unity line 419) ──
         if matches!(logical_key, Key::Character(ref c) if c.as_str() == "0") && m.is_none() {
-            let ids: Vec<String> = ui_state.get_selected_clip_ids();
+            let ids: Vec<String> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.toggle_mute_clips(&ids);
             }
@@ -317,13 +305,13 @@ impl InputHandler {
             Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowDown))
             && !m.command && !m.alt
         {
-            let has_selected = ui_state.selection_count() > 0;
+            let has_selected = host.selection_count() > 0;
 
             if has_selected {
                 // Nudge selected clips (Unity lines 443-452)
                 let grid = host.grid_step();
                 let step = if m.shift { 1.0 / 16.0 } else { grid };
-                let ids: Vec<String> = ui_state.get_selected_clip_ids();
+                let ids: Vec<String> = host.get_selected_clip_ids();
 
                 match logical_key {
                     Key::Named(NamedKey::ArrowLeft) => host.nudge_clips(&ids, -step),
@@ -369,20 +357,6 @@ impl InputHandler {
     }
 
     // ── Zoom (Unity InputHandler lines 864-1006) ─────────────────
-
-    /// Port of Unity InputHandler.ZoomToFit (lines 906-957).
-    /// Uses SetZoom(idealPpb) directly — NOT nearest zoom level.
-    fn zoom_to_fit(
-        &mut self,
-        host: &mut dyn TimelineInputHost,
-    ) {
-        let viewport_width = host.get_viewport_width();
-        if viewport_width <= 0.0 { return; }
-
-        // Host computes ideal ppb from clip extent and applies zoom
-        self.needs_zoom_update = true;
-        host.update_zoom_label();
-    }
 
     /// Queue a zoom anchor at the playhead position.
     /// Port of Unity InputHandler.QueuePlayheadZoomAnchor (lines 959-966).
