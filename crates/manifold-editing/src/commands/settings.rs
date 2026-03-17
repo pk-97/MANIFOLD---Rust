@@ -146,10 +146,16 @@ impl ChangeResolutionCommand {
 impl Command for ChangeResolutionCommand {
     fn execute(&mut self, project: &mut Project) {
         project.settings.resolution_preset = self.new_preset;
+        let (w, h) = self.new_preset.dimensions();
+        project.settings.output_width = w;
+        project.settings.output_height = h;
     }
 
     fn undo(&mut self, project: &mut Project) {
         project.settings.resolution_preset = self.old_preset;
+        let (w, h) = self.old_preset.dimensions();
+        project.settings.output_width = w;
+        project.settings.output_height = h;
     }
 
     fn description(&self) -> &str { "Change Resolution" }

@@ -200,4 +200,35 @@ impl BlitPipeline {
         pass.set_bind_group(0, &bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
+
+    /// Blit source into target rect, preserving source aspect ratio (letterbox/pillarbox).
+    /// Equivalent to Unity's AspectRatioFitter with FitInParent mode.
+    /// `source_aspect` = source_width / source_height.
+    pub fn blit_to_rect_fit(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        rect_x: f32,
+        rect_y: f32,
+        rect_w: f32,
+        rect_h: f32,
+        source_aspect: f32,
+    ) {
+        if rect_w <= 0.0 || rect_h <= 0.0 || source_aspect <= 0.0 {
+            return;
+        }
+        let rect_aspect = rect_w / rect_h;
+        let (fit_w, fit_h) = if source_aspect > rect_aspect {
+            // Source wider than rect — fit to width, letterbox top/bottom
+            (rect_w, rect_w / source_aspect)
+        } else {
+            // Source taller than rect — fit to height, pillarbox left/right
+            (rect_h * source_aspect, rect_h)
+        };
+        let fit_x = rect_x + (rect_w - fit_w) * 0.5;
+        let fit_y = rect_y + (rect_h - fit_h) * 0.5;
+        self.blit_to_rect(device, encoder, source, target, fit_x, fit_y, fit_w, fit_h);
+    }
 }

@@ -424,16 +424,28 @@ impl Application {
             None => return,
         };
 
+        // Size output window to compositor dimensions (Unity: ResolveSizingTexture)
+        let (comp_w, comp_h) = self.compositor.as_ref()
+            .map(|c| c.dimensions())
+            .unwrap_or((1920, 1080));
+
         let mut attrs = winit::window::Window::default_attributes()
             .with_title(format!("MANIFOLD - {}", name))
-            .with_inner_size(winit::dpi::LogicalSize::new(960u32, 540u32));
+            .with_inner_size(winit::dpi::LogicalSize::new(comp_w, comp_h));
 
         if let Some(idx) = display_index {
             if let Some(monitor) = event_loop.available_monitors().nth(idx) {
                 let pos = monitor.position();
-                attrs = attrs.with_position(winit::dpi::Position::Physical(
-                    winit::dpi::PhysicalPosition::new(pos.x, pos.y),
-                ));
+                let mon_size = monitor.size();
+                log::info!(
+                    "Output window targeting monitor {idx}: {}x{} at ({}, {})",
+                    mon_size.width, mon_size.height, pos.x, pos.y
+                );
+                attrs = attrs
+                    .with_position(winit::dpi::Position::Physical(
+                        winit::dpi::PhysicalPosition::new(pos.x, pos.y),
+                    ))
+                    .with_inner_size(mon_size);
             }
         }
 
@@ -553,6 +565,7 @@ impl Application {
         // Consume deferred structural sync flag (set by keyboard shortcuts)
         let mut needs_structural_sync = self.needs_structural_sync;
         self.needs_structural_sync = false;
+        let mut needs_resolution_resize = false;
         let prev_active_layer = self.active_layer_index;
         let prev_sel_version = self.selection.selection_version;
         for action in &actions {
@@ -625,7 +638,28 @@ impl Application {
             if result.structural_change {
                 needs_structural_sync = true;
             }
+            if result.resolution_changed {
+                needs_resolution_resize = true;
+            }
         }
+
+        // Resize compositor + generator when resolution preset changes
+        if needs_resolution_resize {
+            if let Some(project) = self.engine.project() {
+                let w = project.settings.output_width.max(1) as u32;
+                let h = project.settings.output_height.max(1) as u32;
+                if let Some(gpu) = &self.gpu {
+                    if let Some(compositor) = &mut self.compositor {
+                        compositor.resize(&gpu.device, w, h);
+                    }
+                    if let Some(gen) = &mut self.generator_renderer {
+                        gen.resize(&gpu.device, w, h);
+                    }
+                }
+                log::info!("Resolution changed to {}x{}", w, h);
+            }
+        }
+
         // Selection version change → sync inspector so it shows the newly selected clip
         if self.selection.selection_version != prev_sel_version && !needs_structural_sync {
             crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
@@ -892,6 +926,11 @@ impl Application {
             Some(b) => b,
             None => return,
         };
+        // Compositor aspect ratio for aspect-correct blitting (FitInParent)
+        let (comp_w, comp_h) = self.compositor.as_ref()
+            .map(|c| c.dimensions())
+            .unwrap_or((1920, 1080));
+        let source_aspect = comp_w as f32 / comp_h as f32;
 
         let window_ids: Vec<WindowId> = self.window_registry.iter().map(|(id, _)| *id).collect();
 
@@ -957,14 +996,37 @@ impl Application {
                         multiview_mask: None,
                     });
                 }
-                blit.blit_to_rect(
+                blit.blit_to_rect_fit(
                     &gpu.device, &mut encoder, compositor_output, &surface_view,
                     video_rect.x * sf, video_rect.y * sf,
                     video_rect.width * sf, video_rect.height * sf,
+                    source_aspect,
                 );
             } else {
-                // Output windows: fullscreen blit
-                blit.blit(&gpu.device, &mut encoder, compositor_output, &surface_view);
+                // Output windows: aspect-correct blit with letterbox/pillarbox
+                {
+                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Clear Output"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &surface_view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                }
+                blit.blit_to_rect_fit(
+                    &gpu.device, &mut encoder, compositor_output, &surface_view,
+                    0.0, 0.0, surface_w as f32, surface_h as f32,
+                    source_aspect,
+                );
             }
 
             // Draw UI overlay on workspace window using the UITree
@@ -1230,9 +1292,12 @@ impl ApplicationHandler for Application {
             // Create layer bitmap GPU (textured quad pipeline for per-layer bitmaps)
             self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(&device, format));
 
-            // Create generator renderer and compositor
-            let output_w = 1920u32;
-            let output_h = 1080u32;
+            // Create generator renderer and compositor at project resolution
+            let (output_w, output_h) = if let Some(project) = self.engine.project() {
+                (project.settings.output_width.max(1) as u32, project.settings.output_height.max(1) as u32)
+            } else {
+                (1920u32, 1080u32)
+            };
             let compositor_format = wgpu::TextureFormat::Rgba16Float;
 
             self.generator_renderer = Some(GeneratorRenderer::new(

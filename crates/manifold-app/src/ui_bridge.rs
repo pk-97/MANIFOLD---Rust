@@ -45,12 +45,15 @@ pub struct DispatchResult {
     pub handled: bool,
     /// True if the action changed project structure (needs sync_project_data).
     pub structural_change: bool,
+    /// True if the output resolution changed (needs compositor + generator resize).
+    pub resolution_changed: bool,
 }
 
 impl DispatchResult {
-    fn handled() -> Self { Self { handled: true, structural_change: false } }
-    fn structural() -> Self { Self { handled: true, structural_change: true } }
-    fn unhandled() -> Self { Self { handled: false, structural_change: false } }
+    fn handled() -> Self { Self { handled: true, structural_change: false, resolution_changed: false } }
+    fn structural() -> Self { Self { handled: true, structural_change: true, resolution_changed: false } }
+    fn resolution() -> Self { Self { handled: true, structural_change: true, resolution_changed: true } }
+    fn unhandled() -> Self { Self { handled: false, structural_change: false, resolution_changed: false } }
 }
 
 /// Dispatch a panel action to the engine/editing service.
@@ -1380,7 +1383,7 @@ pub fn dispatch(
                     editing.execute(Box::new(cmd), project);
                 }
             }
-            DispatchResult::handled()
+            DispatchResult::resolution()
         }
         PanelAction::AddEffect(tab, effect_type_idx) => {
             use manifold_core::types::EffectType;
