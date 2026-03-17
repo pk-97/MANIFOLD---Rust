@@ -267,18 +267,14 @@ impl Application {
     /// PanelResizeHandle sets ResizeHorizontal/ResizeVertical on hover,
     /// Cursors.SetDefault() on drag end and pointer exit.
     fn update_cursor_for_position(&mut self) {
-        // Priority 1: Active drag — cursor follows drag mode
-        if self.clip_drag.mode == ClipDragMode::Move {
-            if self.clip_drag.drag_layer_blocked {
-                self.cursor_manager.set(TimelineCursor::Blocked);
-            } else {
-                self.cursor_manager.set(TimelineCursor::Move);
+        // Priority 1: Active drag — cursor set by InteractionOverlay
+        // (overlay calls host.set_cursor() during drag, so we just skip here)
+        {
+            use manifold_ui::interaction_overlay::DragMode;
+            match self.overlay.drag_mode() {
+                DragMode::Move | DragMode::TrimLeft | DragMode::TrimRight | DragMode::RegionSelect => return,
+                DragMode::None => {}
             }
-            return;
-        }
-        if self.clip_drag.mode == ClipDragMode::TrimLeft || self.clip_drag.mode == ClipDragMode::TrimRight {
-            self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
-            return;
         }
 
         // Priority 2: Inspector resize edge hover
@@ -730,11 +726,9 @@ impl Application {
                 );
             }
         }
-        // Legacy drag polling (old ClipDragState path — will be removed).
-        // From Unity InteractionOverlay.PollMoveDrag (lines 116-124):
-        // When mouse is stationary at viewport edge during Move drag,
-        // OnDrag stops firing but auto-scroll must continue.
-        if self.clip_drag.mode == ClipDragMode::Move && !self.clip_drag.snapshots.is_empty() {
+        // Legacy drag polling (dead code — overlay handles drag polling above).
+        // Kept temporarily for compilation; will be removed with ClipDragState cleanup.
+        if false && self.clip_drag.mode == ClipDragMode::Move && !self.clip_drag.snapshots.is_empty() {
             let tracks_rect = self.ui_root.viewport.tracks_rect();
             if tracks_rect.width > 0.0 {
                 // From Unity WorkspaceController.cs lines 58-60
