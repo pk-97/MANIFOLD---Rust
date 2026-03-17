@@ -57,7 +57,7 @@
       "severity": "critical",
       "est_loc": 100,
       "status": "done",
-      "commit": "pending",
+      "commit": "08d93c4",
       "notes": "GeneratorRenderer implements ClipRenderer. Engine owns it via replace_renderer. App uses downcast for GPU ops."
     },
     {
