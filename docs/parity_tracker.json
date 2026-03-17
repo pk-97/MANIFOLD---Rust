@@ -33,7 +33,7 @@
       "severity": "catastrophic",
       "est_loc": 600,
       "status": "done",
-      "commit": "pending",
+      "commit": "c2f9024",
       "notes": "Full modulation pipeline: reset_all_effectives, evaluate_all_drivers (LFO), evaluate_all_envelopes (ADSR), evaluate_gen_param_envelopes. Wired into tick_playing + tick_non_playing."
     },
     {
@@ -117,7 +117,7 @@
       "severity": "high",
       "est_loc": 20,
       "status": "done",
-      "commit": "pending",
+      "commit": "c2f9024",
       "notes": "Fixed: GeneratorParamState::reset_effectives() now resets only params with active drivers/envelopes, matching Unity."
     },
     {
