@@ -425,12 +425,16 @@ impl FluidSimulation3DGenerator {
             ),
         });
 
+        // fluid_display.wgsl requires 5 bindings (uniform, density tex, sampler, color tex, color sampler).
+        // FluidSim3D is mono-only so bindings 3-4 get the same density tex/sampler as a dummy.
         let display_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("FluidSim3D Display BGL"),
             entries: &[
                 bgl_uniform(0, wgpu::ShaderStages::FRAGMENT),
                 bgl_texture_filterable(1, wgpu::ShaderStages::FRAGMENT),
                 bgl_sampler(2, wgpu::ShaderStages::FRAGMENT),
+                bgl_texture_filterable(3, wgpu::ShaderStages::FRAGMENT),
+                bgl_sampler(4, wgpu::ShaderStages::FRAGMENT),
             ],
         });
 
@@ -1327,6 +1331,15 @@ impl Generator for FluidSimulation3DGenerator {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler_3d),
+                },
+                // Dummy color texture/sampler (FluidSim3D is mono-only, color_mode=0)
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&display_density_rt.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
                     resource: wgpu::BindingResource::Sampler(&self.sampler_3d),
                 },
             ],
