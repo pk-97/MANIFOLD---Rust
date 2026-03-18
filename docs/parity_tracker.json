@@ -3,8 +3,8 @@
     "last_updated": "2026-03-18",
     "audit_source": "docs/DEFINITIVE_PARITY_AUDIT.md",
     "audit_date": "2026-03-17",
-    "true_functional_completion_pct": 51,
-    "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context."
+    "true_functional_completion_pct": 53,
+    "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context. Tier 4 fix plan (manifold-ui + manifold-app) completed 2026-03-18: 7 color corrections, WidgetLayout + InspectorLayout constants, InteractionOverlay ctrl_held/finalize_move_snap/preDragSplitCommands, TruncateWithEllipsis, UINode texture, right-click guard, ScrollToReveal, beat_to_time tempo map, context menu items."
   },
   "subsystems": {
     "core": { "pct": 85, "audit_section": 1 },
@@ -13,9 +13,9 @@
     "effects": { "pct": 58, "audit_section": 4 },
     "generators": { "pct": 93, "audit_section": 6 },
     "compositor": { "pct": 60, "audit_section": 5 },
-    "ui": { "pct": 65, "audit_section": 7 },
+    "ui": { "pct": 72, "audit_section": 7 },
     "io": { "pct": 70, "audit_section": 8 },
-    "app": { "pct": 55, "audit_section": 9 },
+    "app": { "pct": 60, "audit_section": 9 },
     "audio_percussion": { "pct": 0, "audit_section": 10 },
     "midi_input": { "pct": 0, "audit_section": 11 },
     "led_external": { "pct": 0, "audit_section": 12 },
