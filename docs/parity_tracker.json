@@ -3,13 +3,13 @@
     "last_updated": "2026-03-18",
     "audit_source": "docs/DEFINITIVE_PARITY_AUDIT.md",
     "audit_date": "2026-03-17",
-    "true_functional_completion_pct": 48,
+    "true_functional_completion_pct": 51,
     "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context."
   },
   "subsystems": {
     "core": { "pct": 85, "audit_section": 1 },
-    "editing": { "pct": 75, "audit_section": 2 },
-    "playback": { "pct": 55, "audit_section": 3 },
+    "editing": { "pct": 80, "audit_section": 2 },
+    "playback": { "pct": 65, "audit_section": 3 },
     "effects": { "pct": 53, "audit_section": 4 },
     "generators": { "pct": 90, "audit_section": 6 },
     "compositor": { "pct": 50, "audit_section": 5 },
@@ -68,9 +68,9 @@
       "title": "Port ClipLauncher (MIDI to clip triggering)",
       "severity": "critical",
       "est_loc": 400,
-      "status": "todo",
-      "commit": null,
-      "notes": "ClipLauncher.cs (629 lines) entirely missing. Contains 5ms timing guard."
+      "status": "done",
+      "commit": "be4c7f0",
+      "notes": "ClipLauncher ported: HandleNoteOn/Off, random clip selection, in-point randomization, 5ms stale NoteOff guard, channel filtering, auto-commit on collision, deterministic seed. All constants exact match."
     },
     {
       "number": 5,
@@ -224,9 +224,9 @@
       "title": "Complete EditingService orchestration methods",
       "severity": "high",
       "est_loc": 400,
-      "status": "todo",
-      "commit": null,
-      "notes": "~16 methods missing. Some moved to app layer (acceptable), but orchestration must be verified."
+      "status": "partial",
+      "commit": "be4c7f0",
+      "notes": "Added 8 methods: get_effective_selected_clips, select_all_clip_ids, compute_region_from_clip_selection, cut_clips, split_clips_for_region_move, split_clips_at_beat_batch, toggle_mute_clips, duplicate_clips_with_region. Also fixed shrink_clips_by_grid min duration. Remaining: select_region_to, on_clip_selected, delete_selected_layers, group_selected_layers (UI-coupled, live in app layer per D-09)."
     },
     {
       "number": 18,
@@ -440,9 +440,9 @@
       "title": "Complete sync controllers (Link, MidiClock, OSC)",
       "severity": "medium",
       "est_loc": 1500,
-      "status": "todo",
-      "commit": null,
-      "notes": "LinkSync ~25% stub, MidiClockSync ~30% stub, OscSync/OscReceiver 0%, 4 OSC bridges 0%."
+      "status": "partial",
+      "commit": "be4c7f0",
+      "notes": "LinkSync: SyncTransportFromLink ported, Update body complete (native FFI stubbed). MidiClockSync: full Update state machine ported, SyncPositionToPlayback + ResetTransportTimeIntegrator ported (native FFI stubbed). OscSyncController: fully ported with SMPTE timecode parsing, transport sync, seek logic. OscReceiver: fully ported with subscription model. OscParameterRegistry: fully ported with singleton pattern. Remaining: 4 OSC bridge classes (MasterEffectOscBridge, LayerEffectOscBridge, LayerOscBridge, GeneratorOscBridge), native AbletonLink/midir/rosc FFI."
     },
     {
       "number": 36,
