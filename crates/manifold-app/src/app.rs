@@ -843,15 +843,15 @@ impl Application {
 
         // Selection version change → sync inspector so it shows the newly selected clip
         if self.selection.selection_version != prev_sel_version && !needs_structural_sync {
-            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
+            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index, &self.selection);
             needs_structural_sync = true;
         }
 
         if needs_structural_sync {
             crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine, self.active_layer_index);
-            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
+            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index, &self.selection);
         } else if self.active_layer_index != prev_active_layer {
-            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
+            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index, &self.selection);
             needs_structural_sync = true; // Inspector content changed — needs rebuild
         }
         // 2a. Per-frame drag polling with auto-scroll.
@@ -1586,7 +1586,7 @@ impl ApplicationHandler for Application {
 
         // Push initial project data (layers, tracks) and rebuild
         crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine, self.active_layer_index);
-        crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index);
+        crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index, &self.selection);
 
         self.initialized = true;
 

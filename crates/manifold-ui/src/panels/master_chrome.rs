@@ -75,6 +75,11 @@ impl MasterChromePanel {
     pub fn first_node(&self) -> usize { self.first_node }
     pub fn node_count(&self) -> usize { self.node_count }
     pub fn is_dragging(&self) -> bool { self.dragging_opacity }
+    pub fn is_collapsed(&self) -> bool { self.is_collapsed }
+
+    pub fn toggle_collapsed(&mut self) {
+        self.is_collapsed = !self.is_collapsed;
+    }
 
     // ── Build ────────────────────────────────────────────────────
 

@@ -226,31 +226,37 @@ impl InspectorCompositePanel {
 
         if self.master_visible {
             h += self.master_chrome.compute_height();
-            for card in &self.master_effects {
-                h += card.compute_height() + SECTION_GAP;
+            if !self.master_chrome.is_collapsed() {
+                for card in &self.master_effects {
+                    h += card.compute_height() + SECTION_GAP;
+                }
+                h += ADD_EFFECT_BTN_H + SECTION_GAP;
             }
-            h += ADD_EFFECT_BTN_H + SECTION_GAP; // add effect button
             h += SECTION_GAP;
         }
 
         if self.layer_visible {
             h += self.layer_chrome.compute_height();
-            for card in &self.layer_effects {
-                h += card.compute_height() + SECTION_GAP;
+            if !self.layer_chrome.is_collapsed() {
+                for card in &self.layer_effects {
+                    h += card.compute_height() + SECTION_GAP;
+                }
+                h += ADD_EFFECT_BTN_H + SECTION_GAP;
             }
-            h += ADD_EFFECT_BTN_H + SECTION_GAP; // add effect button
             h += SECTION_GAP;
         }
 
         if self.clip_visible {
             h += self.clip_chrome.compute_height();
-            if let Some(ref gp) = self.gen_params {
-                h += gp.compute_height() + SECTION_GAP;
+            if !self.clip_chrome.is_collapsed() {
+                if let Some(ref gp) = self.gen_params {
+                    h += gp.compute_height() + SECTION_GAP;
+                }
+                for card in &self.clip_effects {
+                    h += card.compute_height() + SECTION_GAP;
+                }
+                h += ADD_EFFECT_BTN_H + SECTION_GAP;
             }
-            for card in &self.clip_effects {
-                h += card.compute_height() + SECTION_GAP;
-            }
-            h += ADD_EFFECT_BTN_H + SECTION_GAP; // add effect button
             h += SECTION_GAP;
         }
 
@@ -614,26 +620,28 @@ impl Panel for InspectorCompositePanel {
             self.master_chrome.build(tree, Rect::new(rect.x, cy, content_w, chrome_h));
             cy += chrome_h;
 
-            for card in &mut self.master_effects {
-                let card_h = card.compute_height();
-                card.build(tree, Rect::new(rect.x, cy, content_w, card_h));
-                cy += card_h + SECTION_GAP;
+            if !self.master_chrome.is_collapsed() {
+                for card in &mut self.master_effects {
+                    let card_h = card.compute_height();
+                    card.build(tree, Rect::new(rect.x, cy, content_w, card_h));
+                    cy += card_h + SECTION_GAP;
+                }
+                // "+ Add Effect" button for master
+                self.add_master_effect_btn = tree.add_button(
+                    -1, rect.x + 4.0, cy, content_w - 8.0, ADD_EFFECT_BTN_H,
+                    UIStyle {
+                        bg_color: ADD_EFFECT_BTN_BG,
+                        hover_bg_color: ADD_EFFECT_BTN_HOVER,
+                        text_color: ADD_EFFECT_BTN_TEXT,
+                        corner_radius: 4.0,
+                        text_align: TextAlign::Center,
+                        font_size: 11,
+                        ..UIStyle::default()
+                    },
+                    "+ Add Effect",
+                ) as i32;
+                cy += ADD_EFFECT_BTN_H + SECTION_GAP;
             }
-            // "+ Add Effect" button for master
-            self.add_master_effect_btn = tree.add_button(
-                -1, rect.x + 4.0, cy, content_w - 8.0, ADD_EFFECT_BTN_H,
-                UIStyle {
-                    bg_color: ADD_EFFECT_BTN_BG,
-                    hover_bg_color: ADD_EFFECT_BTN_HOVER,
-                    text_color: ADD_EFFECT_BTN_TEXT,
-                    corner_radius: 4.0,
-                    text_align: TextAlign::Center,
-                    font_size: 11,
-                    ..UIStyle::default()
-                },
-                "+ Add Effect",
-            ) as i32;
-            cy += ADD_EFFECT_BTN_H + SECTION_GAP;
             cy += SECTION_GAP;
         }
 
@@ -643,26 +651,28 @@ impl Panel for InspectorCompositePanel {
             self.layer_chrome.build(tree, Rect::new(rect.x, cy, content_w, chrome_h));
             cy += chrome_h;
 
-            for card in &mut self.layer_effects {
-                let card_h = card.compute_height();
-                card.build(tree, Rect::new(rect.x, cy, content_w, card_h));
-                cy += card_h + SECTION_GAP;
+            if !self.layer_chrome.is_collapsed() {
+                for card in &mut self.layer_effects {
+                    let card_h = card.compute_height();
+                    card.build(tree, Rect::new(rect.x, cy, content_w, card_h));
+                    cy += card_h + SECTION_GAP;
+                }
+                // "+ Add Effect" button for layer
+                self.add_layer_effect_btn = tree.add_button(
+                    -1, rect.x + 4.0, cy, content_w - 8.0, ADD_EFFECT_BTN_H,
+                    UIStyle {
+                        bg_color: ADD_EFFECT_BTN_BG,
+                        hover_bg_color: ADD_EFFECT_BTN_HOVER,
+                        text_color: ADD_EFFECT_BTN_TEXT,
+                        corner_radius: 4.0,
+                        text_align: TextAlign::Center,
+                        font_size: 11,
+                        ..UIStyle::default()
+                    },
+                    "+ Add Effect",
+                ) as i32;
+                cy += ADD_EFFECT_BTN_H + SECTION_GAP;
             }
-            // "+ Add Effect" button for layer
-            self.add_layer_effect_btn = tree.add_button(
-                -1, rect.x + 4.0, cy, content_w - 8.0, ADD_EFFECT_BTN_H,
-                UIStyle {
-                    bg_color: ADD_EFFECT_BTN_BG,
-                    hover_bg_color: ADD_EFFECT_BTN_HOVER,
-                    text_color: ADD_EFFECT_BTN_TEXT,
-                    corner_radius: 4.0,
-                    text_align: TextAlign::Center,
-                    font_size: 11,
-                    ..UIStyle::default()
-                },
-                "+ Add Effect",
-            ) as i32;
-            cy += ADD_EFFECT_BTN_H + SECTION_GAP;
             cy += SECTION_GAP;
         }
 
@@ -672,32 +682,34 @@ impl Panel for InspectorCompositePanel {
             self.clip_chrome.build(tree, Rect::new(rect.x, cy, content_w, chrome_h));
             cy += chrome_h;
 
-            if let Some(ref mut gp) = self.gen_params {
-                let gp_h = gp.compute_height();
-                gp.build(tree, Rect::new(rect.x, cy, content_w, gp_h));
-                cy += gp_h + SECTION_GAP;
-            }
+            if !self.clip_chrome.is_collapsed() {
+                if let Some(ref mut gp) = self.gen_params {
+                    let gp_h = gp.compute_height();
+                    gp.build(tree, Rect::new(rect.x, cy, content_w, gp_h));
+                    cy += gp_h + SECTION_GAP;
+                }
 
-            for card in &mut self.clip_effects {
-                let card_h = card.compute_height();
-                card.build(tree, Rect::new(rect.x, cy, content_w, card_h));
-                cy += card_h + SECTION_GAP;
+                for card in &mut self.clip_effects {
+                    let card_h = card.compute_height();
+                    card.build(tree, Rect::new(rect.x, cy, content_w, card_h));
+                    cy += card_h + SECTION_GAP;
+                }
+                // "+ Add Effect" button for clip
+                self.add_clip_effect_btn = tree.add_button(
+                    -1, rect.x + 4.0, cy, content_w - 8.0, ADD_EFFECT_BTN_H,
+                    UIStyle {
+                        bg_color: ADD_EFFECT_BTN_BG,
+                        hover_bg_color: ADD_EFFECT_BTN_HOVER,
+                        text_color: ADD_EFFECT_BTN_TEXT,
+                        corner_radius: 4.0,
+                        text_align: TextAlign::Center,
+                        font_size: 11,
+                        ..UIStyle::default()
+                    },
+                    "+ Add Effect",
+                ) as i32;
+                cy += ADD_EFFECT_BTN_H + SECTION_GAP;
             }
-            // "+ Add Effect" button for clip
-            self.add_clip_effect_btn = tree.add_button(
-                -1, rect.x + 4.0, cy, content_w - 8.0, ADD_EFFECT_BTN_H,
-                UIStyle {
-                    bg_color: ADD_EFFECT_BTN_BG,
-                    hover_bg_color: ADD_EFFECT_BTN_HOVER,
-                    text_color: ADD_EFFECT_BTN_TEXT,
-                    corner_radius: 4.0,
-                    text_align: TextAlign::Center,
-                    font_size: 11,
-                    ..UIStyle::default()
-                },
-                "+ Add Effect",
-            ) as i32;
-            cy += ADD_EFFECT_BTN_H + SECTION_GAP;
         }
 
         // Scrollbar track + thumb

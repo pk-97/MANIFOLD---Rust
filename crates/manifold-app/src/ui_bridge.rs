@@ -525,7 +525,11 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::MasterCollapseToggle | PanelAction::MasterExitPathClicked => {
+        PanelAction::MasterCollapseToggle => {
+            ui.inspector.master_chrome_mut().toggle_collapsed();
+            DispatchResult::structural()
+        }
+        PanelAction::MasterExitPathClicked => {
             DispatchResult::handled()
         }
         PanelAction::MasterOpacityRightClick => {
@@ -579,7 +583,8 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::LayerChromeCollapseToggle => {
-            DispatchResult::handled()
+            ui.inspector.layer_chrome_mut().toggle_collapsed();
+            DispatchResult::structural()
         }
         PanelAction::LayerOpacityRightClick => {
             // Reset layer opacity to 1.0
@@ -600,8 +605,8 @@ pub fn dispatch(
 
         // ── Clip chrome ────────────────────────────────────────────
         PanelAction::ClipChromeCollapseToggle => {
-            // Handled by inspector rebuild (toggle state on clip_chrome panel).
-            DispatchResult::handled()
+            ui.inspector.clip_chrome_mut().toggle_collapsed();
+            DispatchResult::structural()
         }
         PanelAction::ClipBpmClicked => {
             log::debug!("Clip BPM clicked (text input not yet implemented)");
@@ -2406,6 +2411,7 @@ pub fn sync_inspector_data(
     ui: &mut UIRoot,
     engine: &PlaybackEngine,
     active_layer: Option<usize>,
+    selection: &SelectionState,
 ) {
     let Some(project) = engine.project() else { return };
 
@@ -2434,6 +2440,21 @@ pub fn sync_inspector_data(
     } else {
         ui.inspector.configure_layer_effects(&[]);
         ui.inspector.configure_gen_params(None);
+    }
+
+    // Clip effects → inspector
+    if let Some(clip_id) = &selection.primary_selected_clip_id {
+        let clip = project.timeline.layers.iter()
+            .flat_map(|l| l.clips.iter())
+            .find(|c| c.id == *clip_id);
+        if let Some(clip) = clip {
+            let clip_configs = effects_to_configs(&clip.effects);
+            ui.inspector.configure_clip_effects(&clip_configs);
+        } else {
+            ui.inspector.configure_clip_effects(&[]);
+        }
+    } else {
+        ui.inspector.configure_clip_effects(&[]);
     }
 }
 
