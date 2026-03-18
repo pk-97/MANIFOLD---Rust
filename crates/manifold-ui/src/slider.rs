@@ -264,10 +264,14 @@ fn compute_fill_width(track_width: f32, normalized_value: f32) -> f32 {
 fn compute_thumb_rect(track_rect: Rect, normalized_value: f32) -> Rect {
     let usable = track_rect.width - FILL_INSET * 2.0;
     let thumb_x = track_rect.x + FILL_INSET + normalized_value * usable - THUMB_WIDTH * 0.5;
-    let thumb_x = thumb_x.clamp(
-        track_rect.x + FILL_INSET,
-        track_rect.x_max() - FILL_INSET - THUMB_WIDTH,
-    );
+    let clamp_min = track_rect.x + FILL_INSET;
+    let clamp_max = track_rect.x_max() - FILL_INSET - THUMB_WIDTH;
+    // Guard against tracks too narrow for the thumb
+    let thumb_x = if clamp_min <= clamp_max {
+        thumb_x.clamp(clamp_min, clamp_max)
+    } else {
+        clamp_min
+    };
     Rect::new(
         thumb_x,
         track_rect.y + THUMB_INSET,
