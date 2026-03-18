@@ -251,6 +251,189 @@ impl BitmapSlider {
     }
 }
 
+// ── Slider drag state machine ────────────────────────────────────────
+//
+// Single source of truth for slider interaction. Every panel that has
+// a draggable slider delegates to SliderDragState instead of managing
+// its own dragging flag, cache, and sync logic. This eliminates the
+// class of bugs where:
+// - cache isn't updated during drag → sync_values snaps back
+// - dragging flag isn't cleared on PointerUp → is_dragging() blocks rebuilds
+// - visual isn't updated during pointer_down → one-frame delay
+//
+// Intentional divergence from Unity: Unity reimplements this pattern
+// per-panel. We consolidate it because we're actively debugging it.
+// See docs/KNOWN_DIVERGENCES.md.
+
+/// Owns the drag state machine, value cache, and visual sync for one slider.
+#[derive(Debug, Clone)]
+pub struct SliderDragState {
+    ids: Option<SliderNodeIds>,
+    cached_value: f32,
+    dragging: bool,
+    pub min: f32,
+    pub max: f32,
+    pub whole_numbers: bool,
+}
+
+impl Default for SliderDragState {
+    fn default() -> Self {
+        Self {
+            ids: None,
+            cached_value: f32::NAN,
+            dragging: false,
+            min: 0.0,
+            max: 1.0,
+            whole_numbers: false,
+        }
+    }
+}
+
+impl SliderDragState {
+    /// Create with explicit range.
+    pub fn with_range(min: f32, max: f32, whole_numbers: bool) -> Self {
+        Self { min, max, whole_numbers, ..Self::default() }
+    }
+
+    /// Store node IDs after build.
+    pub fn set_ids(&mut self, ids: SliderNodeIds) { self.ids = Some(ids); }
+
+    /// Clear node IDs (panel teardown / rebuild).
+    pub fn clear(&mut self) {
+        self.ids = None;
+        self.dragging = false;
+        self.cached_value = f32::NAN;
+    }
+
+    /// Update range (e.g. when clip_chrome recalculates max_slip).
+    pub fn set_range(&mut self, min: f32, max: f32, whole_numbers: bool) {
+        self.min = min;
+        self.max = max;
+        self.whole_numbers = whole_numbers;
+    }
+
+    /// Node IDs (for panels that need to read track_rect, etc.).
+    pub fn ids(&self) -> Option<&SliderNodeIds> { self.ids.as_ref() }
+
+    /// Track node ID for hit-testing.
+    pub fn track_id(&self) -> Option<u32> { self.ids.as_ref().map(|ids| ids.track) }
+
+    pub fn is_dragging(&self) -> bool { self.dragging }
+    pub fn cached_value(&self) -> f32 { self.cached_value }
+
+    // ── Drag lifecycle ──────────────────────────────────────────
+
+    /// Check if `node_id` is this slider's track. If so, begin drag,
+    /// compute value from `pos_x`, update cache, and return the value.
+    /// The caller emits Snapshot + Changed actions.
+    pub fn try_start_drag(&mut self, node_id: u32, pos_x: f32) -> Option<f32> {
+        let ids = self.ids.as_ref()?;
+        if node_id != ids.track { return None; }
+        self.dragging = true;
+        let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
+        let val = BitmapSlider::normalized_to_value(norm, self.min, self.max);
+        let val = if self.whole_numbers { val.round() } else { val };
+        self.cached_value = val;
+        Some(val)
+    }
+
+    /// Continue drag. Computes value, updates visual + cache.
+    /// Returns `Some(value)` if currently dragging, `None` otherwise.
+    /// `fmt` converts the actual value to display text.
+    pub fn apply_drag(
+        &mut self,
+        pos_x: f32,
+        tree: &mut UITree,
+        fmt: &dyn Fn(f32) -> String,
+    ) -> Option<f32> {
+        if !self.dragging { return None; }
+        let ids = self.ids.as_ref()?;
+        let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos_x);
+        let val = BitmapSlider::normalized_to_value(norm, self.min, self.max);
+        let val = if self.whole_numbers { val.round() } else { val };
+        let display_norm = BitmapSlider::value_to_normalized(val, self.min, self.max);
+        BitmapSlider::update_value(tree, ids, display_norm, &fmt(val));
+        self.cached_value = val;
+        Some(val)
+    }
+
+    /// Continue drag with caller-computed value (for custom snapping etc.).
+    /// `norm` is the display-normalized value, `val` is the actual value.
+    pub fn apply_drag_custom(
+        &mut self,
+        val: f32,
+        norm: f32,
+        tree: &mut UITree,
+        text: &str,
+    ) -> bool {
+        if !self.dragging { return false; }
+        if let Some(ref ids) = self.ids {
+            BitmapSlider::update_value(tree, ids, norm, text);
+            self.cached_value = val;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get raw normalized value from position (for callers that need custom
+    /// value computation, e.g. snap_quarter_note).
+    pub fn raw_norm(&self, pos_x: f32) -> f32 {
+        self.ids.as_ref()
+            .map(|ids| BitmapSlider::x_to_normalized(ids.track_rect, pos_x))
+            .unwrap_or(0.0)
+    }
+
+    /// End drag. Returns `true` if this slider was dragging (caller should
+    /// emit Commit). Returns `false` if not dragging (no-op).
+    pub fn end_drag(&mut self) -> bool {
+        if self.dragging {
+            self.dragging = false;
+            true
+        } else {
+            false
+        }
+    }
+
+    // ── Sync ────────────────────────────────────────────────────
+
+    /// Sync from model value. Dirty-checks against cache. Updates visual
+    /// only if value changed. `fmt` converts value to display text.
+    pub fn sync(
+        &mut self,
+        tree: &mut UITree,
+        value: f32,
+        fmt: &dyn Fn(f32) -> String,
+    ) {
+        if (self.cached_value - value).abs() < f32::EPSILON && !self.cached_value.is_nan() {
+            return;
+        }
+        self.cached_value = value;
+        if let Some(ref ids) = self.ids {
+            let norm = BitmapSlider::value_to_normalized(value, self.min, self.max);
+            BitmapSlider::update_value(tree, ids, norm, &fmt(value));
+        }
+    }
+
+    /// Sync with explicit normalized value (for sliders where norm != value,
+    /// e.g. slip where value is seconds but norm is value/max_slip).
+    pub fn sync_with_norm(
+        &mut self,
+        tree: &mut UITree,
+        value: f32,
+        norm: f32,
+        text: &str,
+    ) {
+        if (self.cached_value - value).abs() < f32::EPSILON && !self.cached_value.is_nan() {
+            return;
+        }
+        self.cached_value = value;
+        if let Some(ref ids) = self.ids {
+            BitmapSlider::update_value(tree, ids, norm, text);
+        }
+    }
+}
+
 // ── Internal ────────────────────────────────────────────────────────
 
 fn compute_fill_width(track_width: f32, normalized_value: f32) -> f32 {

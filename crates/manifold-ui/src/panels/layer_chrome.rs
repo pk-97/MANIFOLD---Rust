@@ -1,6 +1,6 @@
 use crate::color;
 use crate::node::*;
-use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
+use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
 use crate::tree::UITree;
 use super::PanelAction;
 
@@ -18,6 +18,8 @@ const OPACITY_LABEL_W: f32 = 50.0;
 const FONT_SIZE: u16 = 10;
 const NAME_FONT_SIZE: u16 = 12;
 
+fn fmt_opacity(v: f32) -> String { format!("{:.2}", v) }
+
 // ── LayerChromePanel ─────────────────────────────────────────────
 
 pub struct LayerChromePanel {
@@ -25,17 +27,17 @@ pub struct LayerChromePanel {
     header_label_id: i32,
     chevron_btn_id: i32,
     name_label_id: i32,
-    opacity_slider: Option<SliderNodeIds>,
     divider_ids: [i32; 3],
+
+    // Slider — single source of truth
+    opacity: SliderDragState,
 
     // State
     is_collapsed: bool,
-    dragging_opacity: bool,
     show_name: bool,
     show_opacity: bool,
     cached_header_text: String,
     cached_name: String,
-    cached_opacity: f32,
 
     // Node range
     first_node: usize,
@@ -48,15 +50,13 @@ impl LayerChromePanel {
             header_label_id: -1,
             chevron_btn_id: -1,
             name_label_id: -1,
-            opacity_slider: None,
             divider_ids: [-1; 3],
+            opacity: SliderDragState::default(),
             is_collapsed: false,
-            dragging_opacity: false,
             show_name: true,
             show_opacity: true,
             cached_header_text: "Layer".into(),
             cached_name: String::new(),
-            cached_opacity: 1.0,
             first_node: 0,
             node_count: 0,
         }
@@ -79,7 +79,7 @@ impl LayerChromePanel {
 
     pub fn first_node(&self) -> usize { self.first_node }
     pub fn node_count(&self) -> usize { self.node_count }
-    pub fn is_dragging(&self) -> bool { self.dragging_opacity }
+    pub fn is_dragging(&self) -> bool { self.opacity.is_dragging() }
     pub fn is_collapsed(&self) -> bool { self.is_collapsed }
 
     pub fn toggle_collapsed(&mut self) {
@@ -106,7 +106,8 @@ impl LayerChromePanel {
 
         let header_text = self.cached_header_text.clone();
         let name = self.cached_name.clone();
-        let opacity = self.cached_opacity;
+        let opacity_val = self.opacity.cached_value();
+        let opacity = if opacity_val.is_nan() { 1.0 } else { opacity_val };
 
         // Header row
         let label_w = content_w - CHEVRON_W - GAP;
@@ -140,6 +141,7 @@ impl LayerChromePanel {
         cy += HEADER_ROW_H;
 
         if self.is_collapsed {
+            self.opacity.clear();
             self.node_count = tree.count() - self.first_node;
             return;
         }
@@ -180,16 +182,17 @@ impl LayerChromePanel {
             cy += DIVIDER_H;
 
             let slider_rect = Rect::new(cx, cy, content_w, SLIDER_ROW_H);
-            let val_text = format!("{:.2}", opacity);
-            self.opacity_slider = Some(BitmapSlider::build(
+            let val_text = fmt_opacity(opacity);
+            let ids = BitmapSlider::build(
                 tree, -1, slider_rect,
                 Some("Opacity"), opacity,
                 &val_text, &SliderColors::default_slider(),
                 FONT_SIZE, OPACITY_LABEL_W,
-            ));
+            );
+            self.opacity.set_ids(ids);
             cy += SLIDER_ROW_H;
         } else {
-            self.opacity_slider = None;
+            self.opacity.clear();
         }
 
         // Final divider
@@ -218,12 +221,7 @@ impl LayerChromePanel {
     }
 
     pub fn sync_opacity(&mut self, tree: &mut UITree, value: f32) {
-        if (self.cached_opacity - value).abs() < f32::EPSILON { return; }
-        self.cached_opacity = value;
-        if let Some(ref ids) = self.opacity_slider {
-            let text = format!("{:.2}", value);
-            BitmapSlider::update_value(tree, ids, value, &text);
-        }
+        self.opacity.sync(tree, value, &fmt_opacity);
     }
 
     pub fn sync_collapsed(&mut self, tree: &mut UITree, collapsed: bool) {
@@ -247,45 +245,32 @@ impl LayerChromePanel {
     }
 
     pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
-        if let Some(ref ids) = self.opacity_slider {
-            if node_id == ids.track {
-                self.dragging_opacity = true;
-                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
-                return vec![
-                    PanelAction::LayerOpacitySnapshot,
-                    PanelAction::LayerOpacityChanged(norm),
-                ];
-            }
+        if let Some(val) = self.opacity.try_start_drag(node_id, pos.x) {
+            return vec![
+                PanelAction::LayerOpacitySnapshot,
+                PanelAction::LayerOpacityChanged(val),
+            ];
         }
         Vec::new()
     }
 
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
-        if self.dragging_opacity {
-            if let Some(ref ids) = self.opacity_slider {
-                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
-                self.cached_opacity = norm;
-                let text = format!("{:.2}", norm);
-                BitmapSlider::update_value(tree, ids, norm, &text);
-                return vec![PanelAction::LayerOpacityChanged(norm)];
-            }
+        if let Some(val) = self.opacity.apply_drag(pos.x, tree, &fmt_opacity) {
+            return vec![PanelAction::LayerOpacityChanged(val)];
         }
         Vec::new()
     }
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
-        if self.dragging_opacity {
-            self.dragging_opacity = false;
+        if self.opacity.end_drag() {
             return vec![PanelAction::LayerOpacityCommit];
         }
         Vec::new()
     }
 
     pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
-        if let Some(ref ids) = self.opacity_slider {
-            if node_id == ids.track {
-                return vec![PanelAction::LayerOpacityRightClick];
-            }
+        if self.opacity.ids().map_or(false, |ids| node_id == ids.track) {
+            return vec![PanelAction::LayerOpacityRightClick];
         }
         Vec::new()
     }
@@ -309,7 +294,7 @@ mod tests {
         assert!(panel.header_label_id >= 0);
         assert!(panel.chevron_btn_id >= 0);
         assert!(panel.name_label_id >= 0);
-        assert!(panel.opacity_slider.is_some());
+        assert!(panel.opacity.ids().is_some());
         assert!(panel.node_count > 0);
     }
 

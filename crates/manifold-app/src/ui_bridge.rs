@@ -792,12 +792,9 @@ pub fn dispatch(
                 let (effects_mut, target) = resolve_effects_mut(tab, project, *active_layer, selection);
                 if let Some(effects) = effects_mut {
                     if let Some(fx) = effects.get_mut(*fx_idx) {
-                        let old = fx.param_values.get(*param_idx).copied().unwrap_or(0.0);
+                        let old = fx.get_base_param(*param_idx);
                         if (old - *default_val).abs() > f32::EPSILON {
-                            while fx.param_values.len() <= *param_idx {
-                                fx.param_values.push(0.0);
-                            }
-                            fx.param_values[*param_idx] = *default_val;
+                            fx.set_base_param(*param_idx, *default_val);
                             let cmd = ChangeEffectParamCommand::new(
                                 target, *fx_idx, *param_idx, old, *default_val,
                             );
@@ -813,9 +810,7 @@ pub fn dispatch(
             if let Some(project) = engine.project() {
                 let effects = resolve_effects_ref(tab, project, *active_layer, selection);
                 if let Some(fx) = effects.and_then(|e| e.get(*fx_idx)) {
-                    *drag_snapshot = Some(
-                        fx.param_values.get(*param_idx).copied().unwrap_or(0.0)
-                    );
+                    *drag_snapshot = Some(fx.get_base_param(*param_idx));
                 }
             }
             DispatchResult::handled()
@@ -826,10 +821,7 @@ pub fn dispatch(
                 let (effects_mut, _target) = resolve_effects_mut(tab, project, *active_layer, selection);
                 if let Some(effects) = effects_mut {
                     if let Some(fx) = effects.get_mut(*fx_idx) {
-                        while fx.param_values.len() <= *param_idx {
-                            fx.param_values.push(0.0);
-                        }
-                        fx.param_values[*param_idx] = *val;
+                        fx.set_base_param(*param_idx, *val);
                     }
                 }
             }
@@ -841,8 +833,7 @@ pub fn dispatch(
                 if let Some(project) = engine.project() {
                     let effects = resolve_effects_ref(tab, project, *active_layer, selection);
                     if let Some(fx) = effects.and_then(|e| e.get(*fx_idx)) {
-                        let new_val = fx.param_values.get(*param_idx)
-                            .copied().unwrap_or(0.0);
+                        let new_val = fx.get_base_param(*param_idx);
                         if (old_val - new_val).abs() > f32::EPSILON {
                             let target = resolve_effect_target(tab, *active_layer);
                             let cmd = ChangeEffectParamCommand::new(
@@ -1351,9 +1342,7 @@ pub fn dispatch(
                 if let Some(project) = engine.project() {
                     if let Some(layer) = project.timeline.layers.get(layer_idx) {
                         if let Some(gp) = &layer.gen_params {
-                            *drag_snapshot = Some(
-                                gp.param_values.get(*param_idx).copied().unwrap_or(0.0)
-                            );
+                            *drag_snapshot = Some(gp.get_param_base(*param_idx));
                         }
                     }
                 }
@@ -1365,10 +1354,7 @@ pub fn dispatch(
                 if let Some(project) = engine.project_mut() {
                     if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
                         if let Some(gp) = &mut layer.gen_params {
-                            while gp.param_values.len() <= *param_idx {
-                                gp.param_values.push(0.0);
-                            }
-                            gp.param_values[*param_idx] = *val;
+                            gp.set_param_base(*param_idx, *val);
                         }
                     }
                 }
@@ -1381,14 +1367,15 @@ pub fn dispatch(
                     if let Some(project) = engine.project() {
                         if let Some(layer) = project.timeline.layers.get(layer_idx) {
                             if let Some(gp) = &layer.gen_params {
-                                let new_val = gp.param_values.get(*param_idx)
-                                    .copied().unwrap_or(0.0);
+                                let new_val = gp.get_param_base(*param_idx);
                                 if (old_val - new_val).abs() > f32::EPSILON {
-                                    let mut old_params = gp.param_values.clone();
+                                    let base = gp.base_param_values.as_ref()
+                                        .unwrap_or(&gp.param_values);
+                                    let mut old_params = base.clone();
                                     if *param_idx < old_params.len() {
                                         old_params[*param_idx] = old_val;
                                     }
-                                    let new_params = gp.param_values.clone();
+                                    let new_params = base.clone();
                                     let cmd = ChangeGeneratorParamsCommand::new(
                                         layer_idx, old_params, new_params,
                                     );
@@ -1406,11 +1393,8 @@ pub fn dispatch(
                 if let Some(project) = engine.project_mut() {
                     if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
                         if let Some(gp) = &mut layer.gen_params {
-                            while gp.param_values.len() <= *param_idx {
-                                gp.param_values.push(0.0);
-                            }
-                            let cur = gp.param_values[*param_idx];
-                            gp.param_values[*param_idx] = if cur > 0.5 { 0.0 } else { 1.0 };
+                            let cur = gp.get_param_base(*param_idx);
+                            gp.set_param_base(*param_idx, if cur > 0.5 { 0.0 } else { 1.0 });
                         }
                     }
                 }
@@ -1423,14 +1407,14 @@ pub fn dispatch(
                 if let Some(project) = engine.project_mut() {
                     if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
                         if let Some(gp) = &mut layer.gen_params {
-                            let old = gp.param_values.get(*param_idx).copied().unwrap_or(0.0);
+                            let old = gp.get_param_base(*param_idx);
                             if (old - *default_val).abs() > f32::EPSILON {
-                                while gp.param_values.len() <= *param_idx {
-                                    gp.param_values.push(0.0);
-                                }
-                                let old_params = gp.param_values.clone();
-                                gp.param_values[*param_idx] = *default_val;
-                                let new_params = gp.param_values.clone();
+                                let base = gp.base_param_values.as_ref()
+                                    .unwrap_or(&gp.param_values);
+                                let old_params = base.clone();
+                                gp.set_param_base(*param_idx, *default_val);
+                                let new_params = gp.base_param_values.as_ref()
+                                    .unwrap_or(&gp.param_values).clone();
                                 let cmd = ChangeGeneratorParamsCommand::new(
                                     layer_idx, old_params, new_params,
                                 );

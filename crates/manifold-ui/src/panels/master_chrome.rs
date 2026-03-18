@@ -1,6 +1,6 @@
 use crate::color;
 use crate::node::*;
-use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
+use crate::slider::{BitmapSlider, SliderColors, SliderDragState};
 use crate::tree::UITree;
 use super::PanelAction;
 
@@ -22,6 +22,8 @@ const FONT_SIZE: u16 = 10;
 
 use crate::color::{EXIT_PATH_BG, EXIT_PATH_HOVER, EXIT_PATH_PRESSED};
 
+fn fmt_opacity(v: f32) -> String { format!("{:.2}", v) }
+
 // ── MasterChromePanel ────────────────────────────────────────────
 
 pub struct MasterChromePanel {
@@ -30,13 +32,13 @@ pub struct MasterChromePanel {
     chevron_btn_id: i32,
     exit_path_label_id: i32,
     exit_path_btn_id: i32,
-    opacity_slider: Option<SliderNodeIds>,
     divider_ids: [i32; 3],
+
+    // Slider — single source of truth for drag state + cache
+    opacity: SliderDragState,
 
     // State
     is_collapsed: bool,
-    dragging_opacity: bool,
-    cached_opacity: f32,
     cached_exit_path: String,
 
     // Node range for ownership checking
@@ -51,11 +53,9 @@ impl MasterChromePanel {
             chevron_btn_id: -1,
             exit_path_label_id: -1,
             exit_path_btn_id: -1,
-            opacity_slider: None,
             divider_ids: [-1; 3],
+            opacity: SliderDragState::default(), // min=0, max=1
             is_collapsed: false,
-            dragging_opacity: false,
-            cached_opacity: 1.0,
             cached_exit_path: "Default".into(),
             first_node: 0,
             node_count: 0,
@@ -74,7 +74,7 @@ impl MasterChromePanel {
 
     pub fn first_node(&self) -> usize { self.first_node }
     pub fn node_count(&self) -> usize { self.node_count }
-    pub fn is_dragging(&self) -> bool { self.dragging_opacity }
+    pub fn is_dragging(&self) -> bool { self.opacity.is_dragging() }
     pub fn is_collapsed(&self) -> bool { self.is_collapsed }
 
     pub fn toggle_collapsed(&mut self) {
@@ -89,7 +89,8 @@ impl MasterChromePanel {
         let cx = rect.x + PAD_H;
         let mut cy = rect.y + PAD_V;
 
-        let opacity = self.cached_opacity;
+        let opacity_val = self.opacity.cached_value();
+        let opacity = if opacity_val.is_nan() { 1.0 } else { opacity_val };
         let exit_path = self.cached_exit_path.clone();
 
         // Header row
@@ -124,6 +125,7 @@ impl MasterChromePanel {
         cy += HEADER_ROW_H;
 
         if self.is_collapsed {
+            self.opacity.clear();
             self.node_count = tree.count() - self.first_node;
             return;
         }
@@ -174,13 +176,14 @@ impl MasterChromePanel {
 
         // Opacity slider
         let slider_rect = Rect::new(cx, cy, content_w, SLIDER_ROW_H);
-        let val_text = format!("{:.2}", opacity);
-        self.opacity_slider = Some(BitmapSlider::build(
+        let val_text = fmt_opacity(opacity);
+        let ids = BitmapSlider::build(
             tree, -1, slider_rect,
             Some("Opacity"), opacity,
             &val_text, &SliderColors::default_slider(),
             FONT_SIZE, OPACITY_LABEL_W,
-        ));
+        );
+        self.opacity.set_ids(ids);
         cy += SLIDER_ROW_H;
 
         // Divider 2
@@ -195,12 +198,7 @@ impl MasterChromePanel {
     // ── Sync methods ─────────────────────────────────────────────
 
     pub fn sync_opacity(&mut self, tree: &mut UITree, value: f32) {
-        if (self.cached_opacity - value).abs() < f32::EPSILON { return; }
-        self.cached_opacity = value;
-        if let Some(ref ids) = self.opacity_slider {
-            let text = format!("{:.2}", value);
-            BitmapSlider::update_value(tree, ids, value, &text);
-        }
+        self.opacity.sync(tree, value, &fmt_opacity);
     }
 
     pub fn sync_exit_path(&mut self, tree: &mut UITree, path: &str) {
@@ -234,45 +232,32 @@ impl MasterChromePanel {
     }
 
     pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
-        if let Some(ref ids) = self.opacity_slider {
-            if node_id == ids.track {
-                self.dragging_opacity = true;
-                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
-                return vec![
-                    PanelAction::MasterOpacitySnapshot,
-                    PanelAction::MasterOpacityChanged(norm),
-                ];
-            }
+        if let Some(val) = self.opacity.try_start_drag(node_id, pos.x) {
+            return vec![
+                PanelAction::MasterOpacitySnapshot,
+                PanelAction::MasterOpacityChanged(val),
+            ];
         }
         Vec::new()
     }
 
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
-        if self.dragging_opacity {
-            if let Some(ref ids) = self.opacity_slider {
-                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
-                self.cached_opacity = norm;
-                let text = format!("{:.2}", norm);
-                BitmapSlider::update_value(tree, ids, norm, &text);
-                return vec![PanelAction::MasterOpacityChanged(norm)];
-            }
+        if let Some(val) = self.opacity.apply_drag(pos.x, tree, &fmt_opacity) {
+            return vec![PanelAction::MasterOpacityChanged(val)];
         }
         Vec::new()
     }
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
-        if self.dragging_opacity {
-            self.dragging_opacity = false;
+        if self.opacity.end_drag() {
             return vec![PanelAction::MasterOpacityCommit];
         }
         Vec::new()
     }
 
     pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
-        if let Some(ref ids) = self.opacity_slider {
-            if node_id == ids.track {
-                return vec![PanelAction::MasterOpacityRightClick];
-            }
+        if self.opacity.ids().map_or(false, |ids| node_id == ids.track) {
+            return vec![PanelAction::MasterOpacityRightClick];
         }
         Vec::new()
     }
@@ -304,7 +289,7 @@ mod tests {
         assert!(panel.header_label_id >= 0);
         assert!(panel.chevron_btn_id >= 0);
         assert!(panel.exit_path_btn_id >= 0);
-        assert!(panel.opacity_slider.is_some());
+        assert!(panel.opacity.ids().is_some());
         assert!(panel.node_count > 0);
     }
 
@@ -367,5 +352,52 @@ mod tests {
             tree.get_node(panel.exit_path_btn_id as u32).text.as_deref(),
             Some("Additive"),
         );
+    }
+
+    #[test]
+    fn drag_lifecycle() {
+        let mut tree = UITree::new();
+        let mut panel = MasterChromePanel::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let track_id = panel.opacity.track_id().unwrap();
+        let track_rect = panel.opacity.ids().unwrap().track_rect;
+        let mid_x = track_rect.x + track_rect.width * 0.5;
+
+        // Pointer down → starts drag
+        let actions = panel.handle_pointer_down(track_id, Vec2::new(mid_x, 10.0));
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], PanelAction::MasterOpacitySnapshot));
+        assert!(panel.is_dragging());
+
+        // Drag
+        let actions = panel.handle_drag(Vec2::new(mid_x + 10.0, 10.0), &mut tree);
+        assert_eq!(actions.len(), 1);
+
+        // Drag end → clears drag
+        let actions = panel.handle_drag_end(&mut tree);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], PanelAction::MasterOpacityCommit));
+        assert!(!panel.is_dragging());
+    }
+
+    #[test]
+    fn click_without_drag_clears_state() {
+        let mut tree = UITree::new();
+        let mut panel = MasterChromePanel::new();
+        panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 200.0));
+
+        let track_id = panel.opacity.track_id().unwrap();
+        let track_rect = panel.opacity.ids().unwrap().track_rect;
+        let mid_x = track_rect.x + track_rect.width * 0.5;
+
+        // Pointer down → starts drag
+        panel.handle_pointer_down(track_id, Vec2::new(mid_x, 10.0));
+        assert!(panel.is_dragging());
+
+        // Pointer up without drag → end_drag clears it
+        let actions = panel.handle_drag_end(&mut tree);
+        assert!(matches!(actions[0], PanelAction::MasterOpacityCommit));
+        assert!(!panel.is_dragging());
     }
 }

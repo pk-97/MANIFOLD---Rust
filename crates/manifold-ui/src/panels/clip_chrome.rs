@@ -1,6 +1,5 @@
 use crate::color;
 use crate::node::*;
-use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
 use super::PanelAction;
 
@@ -10,7 +9,6 @@ const HEADER_ROW_H: f32 = 27.5;
 const NAME_ROW_H: f32 = 20.0;
 const SECTION_LABEL_H: f32 = 18.0;
 const SMALL_ROW_H: f32 = 18.0;
-const SLIDER_ROW_H: f32 = 22.5;
 const BPM_ROW_H: f32 = 22.5;
 const LOOP_BUTTON_H: f32 = 24.0;
 const DIVIDER_H: f32 = 1.0;
@@ -37,11 +35,9 @@ pub struct ClipChromePanel {
     name_label_id: i32,
     source_section_label_id: i32,
     source_name_label_id: i32,
-    slip_slider: Option<SliderNodeIds>,
     bpm_label_id: i32,
     bpm_value_btn_id: i32,
     loop_toggle_btn_id: i32,
-    loop_slider: Option<SliderNodeIds>,
     gen_type_label_id: i32,
     effects_label_id: i32,
     divider_ids: [i32; 3],
@@ -52,19 +48,13 @@ pub struct ClipChromePanel {
     mode_video: bool,
     mode_generator: bool,
     mode_looping: bool,
-    dragging_slip: bool,
-    dragging_loop: bool,
 
     // Cached values
     cached_name: String,
     cached_source_name: String,
     cached_bpm_text: String,
     cached_gen_type: String,
-    cached_slip: f32,
-    cached_loop_duration: f32,
     cached_loop_enabled: bool,
-    max_slip: f32,
-    max_loop_beats: f32,
 
     // Node range
     first_node: usize,
@@ -79,11 +69,9 @@ impl ClipChromePanel {
             name_label_id: -1,
             source_section_label_id: -1,
             source_name_label_id: -1,
-            slip_slider: None,
             bpm_label_id: -1,
             bpm_value_btn_id: -1,
             loop_toggle_btn_id: -1,
-            loop_slider: None,
             gen_type_label_id: -1,
             effects_label_id: -1,
             divider_ids: [-1; 3],
@@ -92,17 +80,11 @@ impl ClipChromePanel {
             mode_video: false,
             mode_generator: false,
             mode_looping: false,
-            dragging_slip: false,
-            dragging_loop: false,
             cached_name: String::new(),
             cached_source_name: String::new(),
             cached_bpm_text: "Auto".into(),
             cached_gen_type: String::new(),
-            cached_slip: 0.0,
-            cached_loop_duration: 0.0,
             cached_loop_enabled: false,
-            max_slip: 1.0,
-            max_loop_beats: 1.0,
             first_node: 0,
             node_count: 0,
         }
@@ -116,10 +98,7 @@ impl ClipChromePanel {
         if self.has_clip {
             h += DIVIDER_H;
             if self.mode_video {
-                h += SECTION_LABEL_H + SMALL_ROW_H + SLIDER_ROW_H + BPM_ROW_H + LOOP_BUTTON_H;
-                if self.mode_looping {
-                    h += SLIDER_ROW_H;
-                }
+                h += SECTION_LABEL_H + SMALL_ROW_H + BPM_ROW_H + LOOP_BUTTON_H;
             } else if self.mode_generator {
                 h += SMALL_ROW_H;
             }
@@ -131,7 +110,7 @@ impl ClipChromePanel {
 
     pub fn first_node(&self) -> usize { self.first_node }
     pub fn node_count(&self) -> usize { self.node_count }
-    pub fn is_dragging(&self) -> bool { self.dragging_slip || self.dragging_loop }
+    pub fn is_dragging(&self) -> bool { false }
     pub fn is_collapsed(&self) -> bool { self.is_collapsed }
 
     pub fn toggle_collapsed(&mut self) {
@@ -152,8 +131,9 @@ impl ClipChromePanel {
         true
     }
 
-    pub fn set_slip_range(&mut self, max: f32) { self.max_slip = max.max(0.001); }
-    pub fn set_loop_range(&mut self, max_beats: f32) { self.max_loop_beats = max_beats.max(0.001); }
+    // Kept as no-ops for callers that still reference them
+    pub fn set_slip_range(&mut self, _max: f32) {}
+    pub fn set_loop_range(&mut self, _max_beats: f32) {}
 
     // ── Build ────────────────────────────────────────────────────
 
@@ -167,8 +147,6 @@ impl ClipChromePanel {
         let source_name = self.cached_source_name.clone();
         let bpm_text = self.cached_bpm_text.clone();
         let gen_type = self.cached_gen_type.clone();
-        let slip = self.cached_slip;
-        let loop_dur = self.cached_loop_duration;
 
         // Header row
         let label_w = content_w - CHEVRON_W - GAP;
@@ -239,7 +217,7 @@ impl ClipChromePanel {
             cy += DIVIDER_H;
 
             if self.mode_video {
-                cy = self.build_video_section(tree, cx, cy, content_w, &source_name, &bpm_text, slip, loop_dur);
+                cy = self.build_video_section(tree, cx, cy, content_w, &source_name, &bpm_text);
             } else if self.mode_generator {
                 cy = self.build_gen_type_row(tree, cx, cy, content_w, &gen_type);
             }
@@ -273,7 +251,7 @@ impl ClipChromePanel {
     fn build_video_section(
         &mut self, tree: &mut UITree,
         cx: f32, mut cy: f32, w: f32,
-        source_name: &str, bpm_text: &str, slip: f32, loop_dur: f32,
+        source_name: &str, bpm_text: &str,
     ) -> f32 {
         // "Source" section label
         self.source_section_label_id = tree.add_label(
@@ -302,18 +280,6 @@ impl ClipChromePanel {
             },
         ) as i32;
         cy += SMALL_ROW_H;
-
-        // Slip slider
-        let slip_norm = if self.max_slip > 0.0 { (slip / self.max_slip).clamp(0.0, 1.0) } else { 0.0 };
-        let slip_text = format!("{:.2}s", slip);
-        let slip_rect = Rect::new(cx, cy, w, SLIDER_ROW_H);
-        self.slip_slider = Some(BitmapSlider::build(
-            tree, -1, slip_rect,
-            Some("Slip"), slip_norm,
-            &slip_text, &SliderColors::default_slider(),
-            FONT_SIZE, SOURCE_LABEL_W,
-        ));
-        cy += SLIDER_ROW_H;
 
         // BPM row
         self.bpm_label_id = tree.add_label(
@@ -363,24 +329,6 @@ impl ClipChromePanel {
         ) as i32;
         cy += LOOP_BUTTON_H;
 
-        // Loop slider (only if looping)
-        if self.mode_looping {
-            let loop_norm = if self.max_loop_beats > 0.0 {
-                (loop_dur / self.max_loop_beats).clamp(0.0, 1.0)
-            } else { 0.0 };
-            let loop_text = format_beat_value(loop_dur);
-            let loop_rect = Rect::new(cx, cy, w, SLIDER_ROW_H);
-            self.loop_slider = Some(BitmapSlider::build(
-                tree, -1, loop_rect,
-                Some("Loop"), loop_norm,
-                &loop_text, &SliderColors::default_slider(),
-                FONT_SIZE, SOURCE_LABEL_W,
-            ));
-            cy += SLIDER_ROW_H;
-        } else {
-            self.loop_slider = None;
-        }
-
         cy
     }
 
@@ -428,15 +376,9 @@ impl ClipChromePanel {
         }
     }
 
-    pub fn sync_slip(&mut self, tree: &mut UITree, value: f32) {
-        if (self.cached_slip - value).abs() < f32::EPSILON { return; }
-        self.cached_slip = value;
-        if let Some(ref ids) = self.slip_slider {
-            let norm = if self.max_slip > 0.0 { (value / self.max_slip).clamp(0.0, 1.0) } else { 0.0 };
-            let text = format!("{:.2}s", value);
-            BitmapSlider::update_value(tree, ids, norm, &text);
-        }
-    }
+    // Kept as no-ops for callers
+    pub fn sync_slip(&mut self, _tree: &mut UITree, _value: f32) {}
+    pub fn sync_loop_duration(&mut self, _tree: &mut UITree, _beats: f32) {}
 
     pub fn sync_bpm(&mut self, tree: &mut UITree, text: &str) {
         self.cached_bpm_text = text.into();
@@ -474,18 +416,6 @@ impl ClipChromePanel {
         }
     }
 
-    pub fn sync_loop_duration(&mut self, tree: &mut UITree, beats: f32) {
-        if (self.cached_loop_duration - beats).abs() < f32::EPSILON { return; }
-        self.cached_loop_duration = beats;
-        if let Some(ref ids) = self.loop_slider {
-            let norm = if self.max_loop_beats > 0.0 {
-                (beats / self.max_loop_beats).clamp(0.0, 1.0)
-            } else { 0.0 };
-            let text = format_beat_value(beats);
-            BitmapSlider::update_value(tree, ids, norm, &text);
-        }
-    }
-
     // ── Event handling ───────────────────────────────────────────
 
     pub fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
@@ -502,80 +432,19 @@ impl ClipChromePanel {
         Vec::new()
     }
 
-    pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
-        if self.mode_video {
-            if let Some(ref ids) = self.slip_slider {
-                if node_id == ids.track {
-                    self.dragging_slip = true;
-                    let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
-                    let val = norm * self.max_slip;
-                    return vec![
-                        PanelAction::ClipSlipSnapshot,
-                        PanelAction::ClipSlipChanged(val),
-                    ];
-                }
-            }
-            if self.mode_looping {
-                if let Some(ref ids) = self.loop_slider {
-                    if node_id == ids.track {
-                        self.dragging_loop = true;
-                        let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
-                        let beats = snap_quarter_note(norm * self.max_loop_beats);
-                        return vec![
-                            PanelAction::ClipLoopSnapshot,
-                            PanelAction::ClipLoopChanged(beats),
-                        ];
-                    }
-                }
-            }
-        }
+    pub fn handle_pointer_down(&mut self, _node_id: u32, _pos: Vec2) -> Vec<PanelAction> {
         Vec::new()
     }
 
-    pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
-        if self.dragging_slip {
-            if let Some(ref ids) = self.slip_slider {
-                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
-                let val = norm * self.max_slip;
-                self.cached_slip = val;
-                let text = format!("{:.2}s", val);
-                BitmapSlider::update_value(tree, ids, norm, &text);
-                return vec![PanelAction::ClipSlipChanged(val)];
-            }
-        }
-        if self.dragging_loop {
-            if let Some(ref ids) = self.loop_slider {
-                let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
-                let beats = snap_quarter_note(norm * self.max_loop_beats);
-                self.cached_loop_duration = beats;
-                let text = format_beat_value(beats);
-                let snapped_norm = if self.max_loop_beats > 0.0 { beats / self.max_loop_beats } else { 0.0 };
-                BitmapSlider::update_value(tree, ids, snapped_norm, &text);
-                return vec![PanelAction::ClipLoopChanged(beats)];
-            }
-        }
+    pub fn handle_drag(&mut self, _pos: Vec2, _tree: &mut UITree) -> Vec<PanelAction> {
         Vec::new()
     }
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
-        if self.dragging_slip {
-            self.dragging_slip = false;
-            return vec![PanelAction::ClipSlipCommit];
-        }
-        if self.dragging_loop {
-            self.dragging_loop = false;
-            return vec![PanelAction::ClipLoopCommit];
-        }
         Vec::new()
     }
 
-    pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
-        if let Some(ref ids) = self.slip_slider {
-            if node_id == ids.track { return vec![PanelAction::ClipSlipRightClick]; }
-        }
-        if let Some(ref ids) = self.loop_slider {
-            if node_id == ids.track { return vec![PanelAction::ClipLoopRightClick]; }
-        }
+    pub fn handle_right_click(&self, _node_id: u32) -> Vec<PanelAction> {
         Vec::new()
     }
 
@@ -593,23 +462,6 @@ impl Default for ClipChromePanel {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
-
-/// Snap to nearest quarter-note subdivision.
-fn snap_quarter_note(beats: f32) -> f32 {
-    (beats * 4.0).round() / 4.0
-}
-
-/// Format beat duration as user-friendly string.
-fn format_beat_value(beats: f32) -> String {
-    if beats <= 0.0 { return "Full".into(); }
-    let quarter_notes = (beats * 4.0).round() as i32;
-    match quarter_notes {
-        4 => "1b".into(),
-        2 => "1/2b".into(),
-        1 => "1/4b".into(),
-        _ => format!("{:.2}", beats),
-    }
-}
 
 fn lighten(c: Color32, amount: u8) -> Color32 {
     Color32::new(
@@ -652,7 +504,6 @@ mod tests {
         panel.set_mode(true, true, false, false);
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        assert!(panel.slip_slider.is_some());
         assert!(panel.bpm_value_btn_id >= 0);
         assert!(panel.loop_toggle_btn_id >= 0);
         assert!(panel.effects_label_id >= 0);
@@ -668,7 +519,6 @@ mod tests {
 
         assert!(panel.gen_type_label_id >= 0);
         assert!(panel.effects_label_id >= 0);
-        assert!(panel.slip_slider.is_none());
     }
 
     #[test]
@@ -704,17 +554,8 @@ mod tests {
     }
 
     #[test]
-    fn format_beat_value_common() {
-        assert_eq!(format_beat_value(1.0), "1b");
-        assert_eq!(format_beat_value(0.5), "1/2b");
-        assert_eq!(format_beat_value(0.25), "1/4b");
-        assert_eq!(format_beat_value(0.0), "Full");
-    }
-
-    #[test]
-    fn snap_quarter_note_values() {
-        assert!((snap_quarter_note(0.3) - 0.25).abs() < 0.01);
-        assert!((snap_quarter_note(0.6) - 0.5).abs() < 0.01);
-        assert!((snap_quarter_note(1.1) - 1.0).abs() < 0.01);
+    fn is_dragging_always_false() {
+        let panel = ClipChromePanel::new();
+        assert!(!panel.is_dragging());
     }
 }
