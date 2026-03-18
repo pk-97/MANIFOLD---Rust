@@ -80,9 +80,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var blended: vec3<f32>;
 
     switch u.blend_mode {
-        // 0: Normal — standard alpha compositing
+        // 0: Normal — premultiplied alpha-over (Unity VideoCompositor.shader lines 218-221)
         case 0u: {
-            blended = f_val;
+            let out_a = bl_a + ba * (1.0 - bl_a);
+            var out_rgb = f_val + b * (1.0 - bl_a);
+            if u.invert_colors > 0.5 {
+                out_rgb = max(vec3<f32>(1.0) - out_rgb, vec3<f32>(0.0));
+            }
+            let result = vec4<f32>(out_rgb, out_a);
+            return mix(base, result, u.opacity);
         }
         // 1: Additive
         case 1u: {
@@ -92,21 +98,30 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         case 2u: {
             blended = b * f_val;
         }
-        // 3: Screen
+        // 3: Screen — HDR-safe (Unity VideoCompositor.shader lines 92-102)
         case 3u: {
-            blended = b + f_val - b * f_val;
+            let sb = clamp(b, vec3<f32>(0.0), vec3<f32>(1.0));
+            let sf = clamp(f_val, vec3<f32>(0.0), vec3<f32>(1.0));
+            blended = vec3<f32>(1.0) - (vec3<f32>(1.0) - sb) * (vec3<f32>(1.0) - sf)
+                    + max(vec3<f32>(0.0), b - vec3<f32>(1.0))
+                    + max(vec3<f32>(0.0), f_val - vec3<f32>(1.0));
         }
-        // 4: Overlay
+        // 4: Overlay — HDR-safe (Unity VideoCompositor.shader lines 104-117)
         case 4u: {
-            let lo = 2.0 * b * f_val;
-            let hi = vec3<f32>(1.0) - 2.0 * (vec3<f32>(1.0) - b) * (vec3<f32>(1.0) - f_val);
-            blended = select(hi, lo, b <= vec3<f32>(0.5));
+            let sb = clamp(b, vec3<f32>(0.0), vec3<f32>(1.0));
+            let sf = clamp(f_val, vec3<f32>(0.0), vec3<f32>(1.0));
+            let lo = 2.0 * sb * sf;
+            let hi = vec3<f32>(1.0) - 2.0 * (vec3<f32>(1.0) - sb) * (vec3<f32>(1.0) - sf);
+            blended = select(hi, lo, sb < vec3<f32>(0.5))
+                    + max(vec3<f32>(0.0), b - vec3<f32>(1.0))
+                    + max(vec3<f32>(0.0), f_val - vec3<f32>(1.0));
         }
-        // 5: Stencil — blend texture's alpha masks the base
+        // 5: Stencil — blend alpha masks base (Unity VideoCompositor.shader lines 222-227)
         case 5u: {
-            blended = b;
-            let out_a = ba * bl_a * u.opacity;
-            return vec4<f32>(b * out_a, out_a);
+            let stencil_rgb = b * bl_a;
+            let stencil_a = ba * bl_a;
+            let stencil_result = vec4<f32>(stencil_rgb, stencil_a);
+            return mix(base, stencil_result, u.opacity);
         }
         // 6: Opaque — fully replace, ignore alpha
         case 6u: {
@@ -116,20 +131,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         case 7u: {
             blended = abs(b - f_val);
         }
-        // 8: Exclusion
+        // 8: Exclusion — clamp negative (Unity VideoCompositor.shader line 131)
         case 8u: {
-            blended = b + f_val - 2.0 * b * f_val;
+            blended = max(vec3<f32>(0.0), b + f_val - 2.0 * b * f_val);
         }
         // 9: Subtract
         case 9u: {
             blended = max(b - f_val, vec3<f32>(0.0));
         }
-        // 10: ColorDodge
+        // 10: ColorDodge — unclamped HDR, cap at 100.0 (Unity VideoCompositor.shader lines 144-153)
         case 10u: {
             blended = vec3<f32>(
-                select(min(b.r / max(1.0 - f_val.r, 0.001), 1.0), 1.0, f_val.r >= 1.0),
-                select(min(b.g / max(1.0 - f_val.g, 0.001), 1.0), 1.0, f_val.g >= 1.0),
-                select(min(b.b / max(1.0 - f_val.b, 0.001), 1.0), 1.0, f_val.b >= 1.0),
+                select(b.r / (1.0 - f_val.r), 100.0, f_val.r >= 0.999),
+                select(b.g / (1.0 - f_val.g), 100.0, f_val.g >= 0.999),
+                select(b.b / (1.0 - f_val.b), 100.0, f_val.b >= 0.999),
             );
         }
         // 11: Lighten

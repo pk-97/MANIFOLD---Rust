@@ -104,8 +104,10 @@ impl Generator for DuocylinderGenerator {
             let [mut x, mut y, mut z, mut w] = self.base_verts[i];
             rotate_4d(&mut x, &mut y, &mut z, &mut w, angle_xy, angle_zw, angle_xw);
             let (px, py, _pz) = project_4d(x, y, z, w, dist);
-            self.helper.projected_x[i] = px * scale;
-            self.helper.projected_y[i] = py * scale;
+            // Store raw projected values — scale is applied ONCE by build_vertices
+            // (Unity: DuocylinderGenerator.Project() stores raw; scale applied by LineGeneratorBase.Render)
+            self.helper.projected_x[i] = px;
+            self.helper.projected_y[i] = py;
         }
 
         let verts = self.helper.build_vertices(
@@ -119,6 +121,7 @@ impl Generator for DuocylinderGenerator {
             window,
             ctx.dt,
             scale,
+            1.0, // dot_scale: default
         );
 
         self.line_pipeline.draw(device, queue, encoder, target, verts, ctx.beat);

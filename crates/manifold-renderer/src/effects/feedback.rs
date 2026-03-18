@@ -314,4 +314,5 @@ impl StatefulEffect for FeedbackFX {
     fn cleanup_owner(&mut self, owner_key: i64) {
         self.states.remove(&owner_key);
     }
+    fn cleanup_all_owners(&mut self, _device: &wgpu::Device) { self.states.clear(); }
 }

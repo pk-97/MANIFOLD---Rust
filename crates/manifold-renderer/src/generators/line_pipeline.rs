@@ -331,6 +331,8 @@ impl LineGeneratorHelper {
     /// `window`: animation window (fraction of total edges visible)
     /// `dt`: delta time
     /// `scale`: projection scale multiplier (applied to projected_x/y before building quads)
+    /// `dot_scale`: extra dot radius multiplier (Unity: LineGeneratorBase.GetDotScale).
+    ///              Default 1.0, Lissajous and OscilloscopeXY use 0.5.
     pub fn build_vertices(
         &mut self,
         rt_width: f32,
@@ -343,6 +345,7 @@ impl LineGeneratorHelper {
         window: f32,
         dt: f32,
         scale: f32,
+        dot_scale: f32,
     ) -> &[LineVertex] {
         self.vertices.clear();
         let half_thick = line_thickness * rt_height * 0.5;
@@ -407,7 +410,7 @@ impl LineGeneratorHelper {
         }
 
         if show_verts {
-            let base_radius = DEFAULT_DOT_RADIUS * rt_height * vert_size;
+            let base_radius = DEFAULT_DOT_RADIUS * rt_height * vert_size * dot_scale;
             let vert_count = self.projected_x.len();
             for i in 0..vert_count {
                 let cx = self.projected_x[i] + 0.5;

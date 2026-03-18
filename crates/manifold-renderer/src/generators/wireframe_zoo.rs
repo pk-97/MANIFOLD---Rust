@@ -111,6 +111,19 @@ const MAX_VERTS: usize = 20;
 /// Maximum edge count across all shapes (icosa/dodeca = 30)
 const MAX_EDGES: usize = 30;
 
+/// Normalize shape vertices to unit distance from origin.
+/// Unity ref: WireframeZooGenerator.NormalizeShape()
+fn normalize_shape(verts: &[[f32; 3]]) -> Vec<[f32; 3]> {
+    let max_dist = verts.iter()
+        .map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
+        .fold(0.0f32, f32::max);
+    if max_dist < 0.001 {
+        return verts.to_vec();
+    }
+    let inv = 1.0 / max_dist;
+    verts.iter().map(|v| [v[0] * inv, v[1] * inv, v[2] * inv]).collect()
+}
+
 pub struct WireframeZooGenerator {
     line_pipeline: LinePipeline,
     helper: LineGeneratorHelper,
@@ -153,14 +166,16 @@ impl Generator for WireframeZooGenerator {
         // Shape selection via trigger_count (param is ignored in favor of trigger cycling)
         let shape_idx = (ctx.trigger_count % SHAPE_COUNT) as usize;
 
-        // Get shape data
-        let (verts_3d, edges): (&[[f32; 3]], &[[usize; 2]]) = match shape_idx {
+        // Get shape data and normalize vertices to unit sphere
+        // (Unity: WireframeZooGenerator.NormalizeShape() applied at init)
+        let (raw_verts, edges): (&[[f32; 3]], &[[usize; 2]]) = match shape_idx {
             0 => (&TETRA_VERTS, &TETRA_EDGES),
             1 => (&CUBE_VERTS, &CUBE_EDGES),
             2 => (&OCTA_VERTS, &OCTA_EDGES),
             3 => (&ICOSA_VERTS, &ICOSA_EDGES),
             _ => (&DODECA_VERTS, &DODECA_EDGES),
         };
+        let verts_3d = normalize_shape(raw_verts);
 
         let vert_count = verts_3d.len();
         let _edge_count = edges.len();
@@ -186,13 +201,14 @@ impl Generator for WireframeZooGenerator {
 
         let proj_scale = PROJ_SCALE * scale;
 
-        // Rotate and project (orthographic — no perspective)
+        // Rotate and project
         for i in 0..vert_count {
             let [mut x, mut y, mut z] = verts_3d[i];
             rotate_3d(&mut x, &mut y, &mut z, cos_x, sin_x, cos_y, sin_y, cos_z, sin_z);
             self.helper.projected_x[i] = x * proj_scale;
             self.helper.projected_y[i] = y * proj_scale;
-            self.helper.projected_z[i] = z * proj_scale;
+            // Raw z depth, NOT scaled by proj_scale (Unity stores raw z)
+            self.helper.projected_z[i] = z;
         }
 
         // No animation for wireframe zoo (no anim param)
@@ -207,6 +223,7 @@ impl Generator for WireframeZooGenerator {
             0.0,
             ctx.dt,
             scale,
+            1.0, // dot_scale: default
         );
 
         self.line_pipeline.draw(device, queue, encoder, target, verts, ctx.beat);

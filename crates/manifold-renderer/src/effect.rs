@@ -2,6 +2,7 @@ use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
 
 /// Per-frame context for effects.
+/// Unity ref: EffectContext.cs
 pub struct EffectContext {
     pub time: f32,
     pub beat: f32,
@@ -12,6 +13,28 @@ pub struct EffectContext {
     /// 0 = master, layer_index+1 = layer, hash(clip_id) = clip.
     pub owner_key: i64,
     pub is_clip_level: bool,
+}
+
+/// Find a parameter value from another effect in a chain.
+/// Returns the param value if an enabled effect of the given type exists
+/// in the chain, otherwise returns the default value.
+/// Unity ref: EffectContext.cs FindChainParam()
+pub fn find_chain_param(
+    chain: &[EffectInstance],
+    effect_type: EffectType,
+    param_index: usize,
+    default: f32,
+) -> f32 {
+    chain.iter()
+        .find(|fx| fx.effect_type == effect_type && fx.enabled)
+        .and_then(|fx| fx.param_values.get(param_index).copied())
+        .unwrap_or(default)
+}
+
+/// Default skip check: returns true when param[0] <= 0 (effect has no amount).
+/// Unity ref: SimpleBlitEffect.cs line 37
+pub fn should_skip_default(fx: &EffectInstance) -> bool {
+    fx.param_values.first().copied().unwrap_or(0.0) <= 0.0
 }
 
 /// GPU-aware post-process effect processor.
@@ -42,10 +65,16 @@ pub trait PostProcessEffect: Send {
 }
 
 /// Extension for effects that maintain per-owner state (e.g., Feedback, Bloom).
+/// Unity ref: IStatefulEffect.cs
 pub trait StatefulEffect: PostProcessEffect {
     /// Clear state for a specific owner (e.g., when a clip is removed).
     fn clear_state_for_owner(&mut self, owner_key: i64);
 
     /// Clean up all resources for a specific owner.
     fn cleanup_owner(&mut self, owner_key: i64);
+
+    /// Release ALL per-owner GPU state. Called during Clear() (stop playback),
+    /// ResizeBuffers(), and WarmupShaders().
+    /// Unity ref: IStatefulEffect.cs line 18
+    fn cleanup_all_owners(&mut self, device: &wgpu::Device);
 }

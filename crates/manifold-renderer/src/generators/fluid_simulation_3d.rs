@@ -40,8 +40,11 @@ const CAM_DIST: usize = 23;
 const CAM_TILT: usize = 24;
 const FLATTEN: usize = 25;
 
-const DENSITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-const DENSITY_3D_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+// 2D projected density: R32Float (Unity: RFloat)
+const DENSITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+// 3D volume density: R16Float (Unity: RHalf)
+const DENSITY_3D_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+// 3D volume vector field: Rgba16Float (Unity: ARGBHalf)
 const VECTOR_3D_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const PARTICLE_SIZE_BYTES: u64 = std::mem::size_of::<Particle>() as u64;
 
@@ -874,8 +877,8 @@ impl Generator for FluidSimulation3DGenerator {
         let cam_tilt = param(ctx, CAM_TILT, 0.3);
         let flatten = param(ctx, FLATTEN, 0.0);
 
-        // Metal max_storage_buffer_binding_size is 128MB. 2M × 48 bytes = 96MB (safe).
-        let desired_count = ((particles_param * 1_000_000.0) as u32).clamp(1000, 2_000_000);
+        // Unity: MAX_PARTICLES = 8_000_000 (FM-11: match Unity exactly)
+        let desired_count = ((particles_param * 1_000_000.0) as u32).clamp(1000, 8_000_000);
         let desired_vol_res = vol_res_from_param(vol_res_param);
 
         // Lazy-init or reinit on particle count / volume resolution change

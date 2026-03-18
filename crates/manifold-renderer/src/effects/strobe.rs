@@ -12,6 +12,10 @@ struct StrobeUniforms {
     beat: f32,
 }
 
+/// NoteRates lookup table mapping param index to strobes-per-beat.
+/// Unity ref: StrobeFX.cs lines 12-27
+const NOTE_RATES: [f32; 9] = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
+
 /// Strobe effect — beat-synced square wave flash.
 pub struct StrobeFX {
     helper: SimpleBlitHelper,
@@ -46,10 +50,13 @@ impl PostProcessEffect for StrobeFX {
         ctx: &EffectContext,
     ) {
         let p = &fx.param_values;
+        // Map rate index through NoteRates lookup table (Unity: StrobeFX.cs lines 24-26)
+        let rate_idx = p.get(1).copied().unwrap_or(6.0).round().max(0.0) as usize;
+        let rate = NOTE_RATES[rate_idx.min(NOTE_RATES.len() - 1)];
         let uniforms = StrobeUniforms {
             amount: p.first().copied().unwrap_or(0.0),
-            rate: p.get(1).copied().unwrap_or(4.0),
-            mode: (p.get(2).copied().unwrap_or(0.0) as u32).min(2),
+            rate,
+            mode: (p.get(2).copied().unwrap_or(0.0).round() as u32).min(2),
             beat: ctx.beat,
         };
 

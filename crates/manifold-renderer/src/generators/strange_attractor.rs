@@ -16,6 +16,7 @@ const SCALE: usize = 6;
 
 const PARTICLE_COUNT: usize = 384;
 const RK2_STEPS: usize = 8;
+const WARMUP_STEPS: usize = 50;
 const STATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 // Per-attractor constants
@@ -163,20 +164,8 @@ impl StrangeAttractorGenerator {
 
         let blit = BlitPipeline::new(device, target_format);
 
-        // Initialize trajectories with small random perturbations around center
-        let mut trajectories = Vec::with_capacity(PARTICLE_COUNT);
-        for i in 0..PARTICLE_COUNT {
-            let fi = i as f32;
-            // Deterministic pseudo-random spread
-            let hash = ((fi * 127.1).sin() * 43758.5453).fract();
-            let hash2 = ((fi * 269.5).sin() * 43758.5453).fract();
-            let hash3 = ((fi * 419.2).sin() * 43758.5453).fract();
-            trajectories.push([
-                CENTERS[0][0] + (hash - 0.5) * 0.1,
-                CENTERS[0][1] + (hash2 - 0.5) * 0.1,
-                CENTERS[0][2] + (hash3 - 0.5) * 0.1,
-            ]);
-        }
+        // Initialize trajectories — will be re-seeded properly on first render
+        let trajectories = vec![[0.0f32; 3]; PARTICLE_COUNT];
 
         let position_data = vec![0.0f32; PARTICLE_COUNT * 4]; // RGBA per pixel
 
@@ -191,7 +180,7 @@ impl StrangeAttractorGenerator {
             position_texture: None,
             position_view: None,
             position_data,
-            current_type: 0,
+            current_type: -1, // Force reinit on first render
         }
     }
 
@@ -228,19 +217,40 @@ impl StrangeAttractorGenerator {
         self.position_view = Some(view);
     }
 
+    /// Seed trajectories and run warmup steps.
+    /// Unity ref: StrangeAttractorGenerator.cs SeedTrajectories()
     fn reinit_trajectories(&mut self, attractor_type: i32) {
         let idx = (attractor_type as usize).min(4);
         let center = CENTERS[idx];
+        let att_scale = SCALES[idx];
+        let dt = DTS[idx] * 2.0; // Unity uses dt * 2 for warmup
+
         for i in 0..PARTICLE_COUNT {
-            let fi = i as f32;
-            let hash = ((fi * 127.1).sin() * 43758.5453).fract();
-            let hash2 = ((fi * 269.5).sin() * 43758.5453).fract();
-            let hash3 = ((fi * 419.2).sin() * 43758.5453).fract();
-            self.trajectories[i] = [
-                center[0] + (hash - 0.5) * 0.1,
-                center[1] + (hash2 - 0.5) * 0.1,
-                center[2] + (hash3 - 0.5) * 0.1,
+            // Hash seeding matching Unity's Hash31 function
+            let seed = hash31(i as f32 * 7.13 + 0.5);
+            let mut p = [
+                center[0] + seed[0] * att_scale * 0.15,
+                center[1] + seed[1] * att_scale * 0.15,
+                center[2] + seed[2] * att_scale * 0.15,
             ];
+
+            // Warmup: 50 steps to escape transient (Unity: WARMUP_STEPS = 50)
+            for _ in 0..WARMUP_STEPS {
+                let dp = ode(attractor_type, p, 0.0);
+                let mid = [
+                    p[0] + dp[0] * dt * 0.5,
+                    p[1] + dp[1] * dt * 0.5,
+                    p[2] + dp[2] * dt * 0.5,
+                ];
+                let dp2 = ode(attractor_type, mid, 0.0);
+                p = [
+                    p[0] + dp2[0] * dt,
+                    p[1] + dp2[1] * dt,
+                    p[2] + dp2[2] * dt,
+                ];
+            }
+
+            self.trajectories[i] = p;
         }
     }
 
@@ -265,101 +275,66 @@ impl StrangeAttractorGenerator {
                     p[2] + dp2[2] * base_dt,
                 ];
 
-                // Clamp to prevent divergence
-                let mag2 = p[0] * p[0] + p[1] * p[1] + p[2] * p[2];
-                if mag2 > 10000.0 {
-                    let scale = 100.0 / mag2.sqrt();
-                    p[0] *= scale;
-                    p[1] *= scale;
-                    p[2] *= scale;
-                }
+                // Clamp to prevent blow-up (Unity: Clamp(p.x, -1000, 1000))
+                p[0] = p[0].clamp(-1000.0, 1000.0);
+                p[1] = p[1].clamp(-1000.0, 1000.0);
+                p[2] = p[2].clamp(-1000.0, 1000.0);
             }
 
             self.trajectories[i] = p;
         }
     }
 
+    /// Project trajectories to 2D and upload to position texture.
+    /// Uses Unity's simple orbiting camera with Y-axis rotation + tilt.
+    /// Unity ref: StrangeAttractorGenerator.cs ProjectPoint()
     fn project_and_upload(
         &mut self,
         queue: &wgpu::Queue,
         attractor_type: i32,
-        time: f32,
+        cam_angle: f32,
         scale_param: f32,
+        aspect: f32,
     ) {
         let idx = (attractor_type as usize).min(4);
         let center = CENTERS[idx];
         let att_scale = SCALES[idx];
         let uv_scale = if scale_param > 0.0 { 1.0 / scale_param } else { 1.0 };
 
-        // Orbiting perspective camera
-        let cam_angle = time * 0.3;
-        let cam_dist = att_scale * 2.5;
-        let cam_x = cam_dist * cam_angle.cos();
-        let cam_z_offset = cam_dist * cam_angle.sin();
-        let cam_y = att_scale * 0.5;
+        // Tilt constant (Unity: const float tilt = 0.3f)
+        let tilt = 0.3f32;
+        let ct = tilt.cos();
+        let st = tilt.sin();
 
-        let cam_pos = [cam_x + center[0], cam_y + center[1], cam_z_offset + center[2]];
-
-        // Look-at direction
-        let fwd = [
-            center[0] - cam_pos[0],
-            center[1] - cam_pos[1],
-            center[2] - cam_pos[2],
-        ];
-        let fwd_len = (fwd[0] * fwd[0] + fwd[1] * fwd[1] + fwd[2] * fwd[2]).sqrt();
-        let fwd = [fwd[0] / fwd_len, fwd[1] / fwd_len, fwd[2] / fwd_len];
-
-        // Right = fwd cross up
-        let up = [0.0f32, 1.0, 0.0];
-        let right = [
-            fwd[1] * up[2] - fwd[2] * up[1],
-            fwd[2] * up[0] - fwd[0] * up[2],
-            fwd[0] * up[1] - fwd[1] * up[0],
-        ];
-        let right_len = (right[0] * right[0] + right[1] * right[1] + right[2] * right[2]).sqrt();
-        let right = if right_len > 0.001 {
-            [right[0] / right_len, right[1] / right_len, right[2] / right_len]
-        } else {
-            [1.0, 0.0, 0.0]
-        };
-
-        // Actual up = right cross fwd
-        let actual_up = [
-            right[1] * fwd[2] - right[2] * fwd[1],
-            right[2] * fwd[0] - right[0] * fwd[2],
-            right[0] * fwd[1] - right[1] * fwd[0],
-        ];
-
-        let fov_scale = 1.0 / (0.5f32).tan(); // ~45 degree FOV
+        let ca = cam_angle.cos();
+        let sa = cam_angle.sin();
 
         for i in 0..PARTICLE_COUNT {
             let p = self.trajectories[i];
-            let rel = [
-                p[0] - cam_pos[0],
-                p[1] - cam_pos[1],
-                p[2] - cam_pos[2],
-            ];
 
-            // Project onto camera axes
-            let z = rel[0] * fwd[0] + rel[1] * fwd[1] + rel[2] * fwd[2];
-            if z < 0.01 {
-                // Behind camera
-                self.position_data[i * 4] = -10.0;
-                self.position_data[i * 4 + 1] = -10.0;
-                self.position_data[i * 4 + 2] = 0.0;
-                self.position_data[i * 4 + 3] = 0.0;
-                continue;
-            }
+            // Normalize to attractor scale
+            let qx = (p[0] - center[0]) / att_scale;
+            let qy = (p[1] - center[1]) / att_scale;
+            let qz = (p[2] - center[2]) / att_scale;
 
-            let x = rel[0] * right[0] + rel[1] * right[1] + rel[2] * right[2];
-            let y = rel[0] * actual_up[0] + rel[1] * actual_up[1] + rel[2] * actual_up[2];
+            // Rotate around Y axis
+            let rx = qx * ca - qz * sa;
+            let mut rz = qx * sa + qz * ca;
 
-            let proj_x = (x / z) * fov_scale * uv_scale;
-            let proj_y = (y / z) * fov_scale * uv_scale;
+            // Tilt slightly for better 3D view
+            let ry = qy * ct - rz * st;
+            rz = qy * st + rz * ct;
+
+            // Perspective projection
+            let depth = rz + 2.5;
+            let persp_scale = 2.0 / (uv_scale * depth.max(0.3));
+
+            let sx = rx * persp_scale / aspect;
+            let sy = ry * persp_scale;
 
             // Map to [0,1] UV space
-            self.position_data[i * 4] = proj_x * 0.5 + 0.5;
-            self.position_data[i * 4 + 1] = 0.5 - proj_y * 0.5; // Flip Y
+            self.position_data[i * 4] = sx * 0.5 + 0.5;
+            self.position_data[i * 4 + 1] = sy * 0.5 + 0.5;
             self.position_data[i * 4 + 2] = 0.0;
             self.position_data[i * 4 + 3] = 0.0;
         }
@@ -389,6 +364,26 @@ impl StrangeAttractorGenerator {
     }
 }
 
+/// Hash function matching Unity's StrangeAttractorGenerator.Hash31 / Frac
+fn hash31(p: f32) -> [f32; 3] {
+    let frac = |x: f32| x - x.floor();
+
+    let mut px = frac(p * 0.1031);
+    let mut py = frac(p * 0.1030);
+    let mut pz = frac(p * 0.0973);
+
+    let d = px * (py + 33.33) + py * (pz + 33.33) + pz * (px + 33.33);
+    px += d;
+    py += d;
+    pz += d;
+
+    [
+        frac((px * px + py * pz) * pz) * 2.0 - 1.0,
+        frac((px * py + py * py) * px) * 2.0 - 1.0,
+        frac((px * pz + pz * pz) * py) * 2.0 - 1.0,
+    ]
+}
+
 // ── ODE systems ──
 
 fn ode(attractor_type: i32, p: [f32; 3], chaos: f32) -> [f32; 3] {
@@ -402,10 +397,11 @@ fn ode(attractor_type: i32, p: [f32; 3], chaos: f32) -> [f32; 3] {
     }
 }
 
+// ODE constants matching Unity StrangeAttractorGenerator.cs EXACTLY
 fn lorenz(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let sigma = 10.0 + chaos * 5.0;
-    let rho = 28.0 + chaos * 10.0;
-    let beta = 8.0 / 3.0;
+    let sigma = 10.0 + chaos * 4.0;    // Unity: 10 + c * 4
+    let rho = 28.0 + chaos * 8.0;      // Unity: 28 + c * 8
+    let beta = 8.0 / 3.0 + chaos * 0.5; // Unity: 8/3 + c * 0.5
     [
         sigma * (p[1] - p[0]),
         p[0] * (rho - p[2]) - p[1],
@@ -414,9 +410,9 @@ fn lorenz(p: [f32; 3], chaos: f32) -> [f32; 3] {
 }
 
 fn rossler(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let a = 0.2 + chaos * 0.15;
-    let b = 0.2;
-    let c = 5.7 + chaos * 3.0;
+    let a = 0.2 + chaos * 0.15;       // Unity: 0.2 + c * 0.15
+    let b = 0.2 + chaos * 0.1;        // Unity: 0.2 + c * 0.1
+    let c = 5.7 + chaos * 3.0;        // Unity: 5.7 + c * 3
     [
         -(p[1] + p[2]),
         p[0] + a * p[1],
@@ -425,10 +421,10 @@ fn rossler(p: [f32; 3], chaos: f32) -> [f32; 3] {
 }
 
 fn aizawa(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let a = 0.95;
-    let b = 0.7;
+    let a = 0.95 + chaos * 0.1;       // Unity: 0.95 + c * 0.1
+    let b = 0.7 + chaos * 0.2;        // Unity: 0.7 + c * 0.2
     let c = 0.6;
-    let d = 3.5 + chaos * 1.5;
+    let d = 3.5 + chaos * 1.0;        // Unity: 3.5 + c * 1 (NOT 1.5)
     let e = 0.25;
     let f = 0.1;
     [
@@ -441,7 +437,7 @@ fn aizawa(p: [f32; 3], chaos: f32) -> [f32; 3] {
 }
 
 fn thomas(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let b = 0.208186 + chaos * 0.1;
+    let b = 0.208186 - chaos * 0.05;   // Unity: 0.208186 - c * 0.05 (SUBTRACT, not add)
     [
         p[1].sin() - b * p[0],
         p[2].sin() - b * p[1],
@@ -499,7 +495,10 @@ impl Generator for StrangeAttractorGenerator {
         self.advance_trajectories(attractor_type, chaos, speed);
 
         // CPU: project 3D positions to 2D and upload to position texture
-        self.project_and_upload(queue, attractor_type, ctx.time, scale);
+        // Camera angle matches Unity: time * animSpeed * 0.25
+        let cam_angle = ctx.time * speed * 0.25;
+        let aspect = ctx.width as f32 / ctx.height.max(1) as f32;
+        self.project_and_upload(queue, attractor_type, cam_angle, scale, aspect);
 
         let state = self.state.as_mut().unwrap();
         let texel_x = 1.0 / iw as f32;

@@ -44,8 +44,9 @@ const PRE_SHRINK: u32 = 2;
 const INJECT_FRAMES_PER_ZONE: i32 = 120; // ~2 sec at 60fps
 const SCATTER_REFERENCE_AREA: f32 = 1920.0 * 1080.0; // reference for intensity normalization
 
-const DENSITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-const VECTOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+// Texture formats matching Unity (FM-10): RFloat density, RGFloat vector field
+const DENSITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+const VECTOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
 const PARTICLE_SIZE_BYTES: u64 = std::mem::size_of::<Particle>() as u64;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
@@ -805,8 +806,8 @@ impl Generator for FluidSimulationGenerator {
 
         let color_mode = color_mode_f.round() as i32;
 
-        // Metal max_storage_buffer_binding_size is 128MB. 2M × 48 bytes = 96MB (safe).
-        let desired_count = ((particles_param * 1_000_000.0) as u32).clamp(100_000, 2_000_000);
+        // Unity: ParticleCount => 8_000_000 (FM-11: match Unity exactly)
+        let desired_count = ((particles_param * 1_000_000.0) as u32).clamp(100_000, 8_000_000);
 
         // --- Dynamic density resolution ---
         // Unity: if densityRes != currentDensityRes -> Resize(rt.width, rt.height)

@@ -24,7 +24,8 @@ const AGENTS: usize = 9;
 const SCALE: usize = 10;
 const SEEDS: usize = 11;
 
-const TRAIL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+// Trail format: R32Float (Unity: RFloat — single-channel density storage)
+const TRAIL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 const MAX_AGENTS: u32 = 500_000;
 const MIN_AGENTS: u32 = 10_000;
 

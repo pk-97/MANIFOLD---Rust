@@ -285,10 +285,11 @@ fn clip_id_owner_key(clip_id: &str) -> i64 {
     hasher.finish() as i64
 }
 
-/// Check if an effect slice has any enabled effects.
+/// Check if an effect slice has any enabled effects with non-zero amount.
+/// Unity ref: CompositorStack.cs lines 965-974 — checks enabled && GetParam(0) > 0.
 fn has_enabled_effects(effects: &[EffectInstance]) -> bool {
     for fx in effects {
-        if fx.enabled {
+        if fx.enabled && fx.param_values.first().copied().unwrap_or(0.0) > 0.0 {
             return true;
         }
     }
@@ -420,8 +421,12 @@ impl LayerCompositor {
             let layer_blend = layer_desc.map_or(BlendMode::Normal, |l| l.blend_mode);
             let layer_opacity = layer_desc.map_or(1.0, |l| l.opacity);
 
-            if group.len() == 1 {
-                // Single clip: blit directly into main with layer blend mode
+            // Check if this layer has layer-level effects (Unity: CompositorStack.cs lines 414-449)
+            let has_layer_effects = layer_desc
+                .map_or(false, |ld| has_enabled_effects(ld.effects));
+
+            if group.len() == 1 && !has_layer_effects {
+                // Single clip with NO layer effects: blit directly into main with layer blend mode
                 let clip = &group[0];
 
                 // Apply clip-level effects if present

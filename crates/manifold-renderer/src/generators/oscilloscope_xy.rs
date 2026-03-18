@@ -158,6 +158,7 @@ impl Generator for OscilloscopeXYGenerator {
             window,
             ctx.dt,
             scale,
+            0.5, // dot_scale: Unity OscilloscopeXYGenerator.GetDotScale() returns 0.5
         );
 
         self.line_pipeline.draw(device, queue, encoder, target, verts, ctx.beat);

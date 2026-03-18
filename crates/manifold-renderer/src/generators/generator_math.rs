@@ -40,16 +40,28 @@ pub fn rotate_4d(
     *w = nw;
 }
 
-/// 4D -> 2D perspective projection via 3D intermediate.
-/// Returns (projected_x, projected_y, depth_z) in [-PROJ_SCALE, PROJ_SCALE].
+/// 4D -> 2D perspective projection via 3D intermediate (two-stage).
+/// Returns (projected_x, projected_y, raw_depth_z).
+/// Unity ref: GeneratorMath.cs Project4D
+///
+/// Stage 1: 4D→3D perspective: f = projDist / (projDist - w); p3 = xyz * f
+/// Stage 2: 3D→2D perspective: s = projDist / (projDist + p3z); px = p3x * s * PROJ_SCALE
+/// pz is raw p3z (NOT scaled by s or PROJ_SCALE).
 #[inline]
 pub fn project_4d(x: f32, y: f32, z: f32, w: f32, proj_dist: f32) -> (f32, f32, f32) {
-    let denom = proj_dist - w;
-    let scale = if denom.abs() > 0.001 { proj_dist / denom } else { proj_dist / 0.001 };
-    let px = x * scale;
-    let py = y * scale;
-    let pz = z * scale;
-    (px * PROJ_SCALE, py * PROJ_SCALE, pz * PROJ_SCALE)
+    // Stage 1: 4D → 3D
+    let f = proj_dist / (proj_dist - w);
+    let p3x = x * f;
+    let p3y = y * f;
+    let p3z = z * f;
+
+    // Stage 2: 3D → 2D
+    let s = proj_dist / (proj_dist + p3z);
+    let px = p3x * s * PROJ_SCALE;
+    let py = p3y * s * PROJ_SCALE;
+    let pz = p3z; // raw depth, NOT scaled
+
+    (px, py, pz)
 }
 
 /// 3D rotation around X, Y, Z axes (in-place).

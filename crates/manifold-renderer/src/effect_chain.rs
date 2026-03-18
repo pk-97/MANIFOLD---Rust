@@ -232,6 +232,9 @@ impl EffectChain {
     ///
     /// If the chain is empty or has no enabled effects, returns `None` (caller
     /// should use the original input).
+    ///
+    /// `mid_chain_tap`: Optional callback index for external output (LED walls).
+    /// Unity ref: CompositorStack.cs lines 864-865, 918-920
     #[allow(clippy::too_many_arguments)]
     pub fn apply_chain(
         &mut self,

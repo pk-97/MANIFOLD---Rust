@@ -10,9 +10,9 @@
     "core": { "pct": 85, "audit_section": 1 },
     "editing": { "pct": 80, "audit_section": 2 },
     "playback": { "pct": 65, "audit_section": 3 },
-    "effects": { "pct": 53, "audit_section": 4 },
-    "generators": { "pct": 90, "audit_section": 6 },
-    "compositor": { "pct": 50, "audit_section": 5 },
+    "effects": { "pct": 58, "audit_section": 4 },
+    "generators": { "pct": 93, "audit_section": 6 },
+    "compositor": { "pct": 60, "audit_section": 5 },
     "ui": { "pct": 65, "audit_section": 7 },
     "io": { "pct": 70, "audit_section": 8 },
     "app": { "pct": 55, "audit_section": 9 },
@@ -272,9 +272,9 @@
       "title": "Fix project_4d for Tesseract/Duocylinder",
       "severity": "high",
       "est_loc": 50,
-      "status": "todo",
-      "commit": null,
-      "notes": "Missing second projection stage (3D to 2D). Tesseract discards _pz."
+      "status": "done",
+      "commit": "pending",
+      "notes": "Tier 3 Phase 7A: Two-stage projection (4D→3D→2D), raw pz depth. Phase 8A-8B: removed double-scale. Phase 11A-11B: WireframeZoo vertex normalization + projected_z fix."
     },
     {
       "number": 22,
@@ -284,9 +284,9 @@
       "title": "Fix FluidSim2D (particle cap, texture formats, rounding)",
       "severity": "medium",
       "est_loc": 50,
-      "status": "todo",
-      "commit": null,
-      "notes": "Particle cap 2M vs 8M (FM-9), Rgba16Float vs R32Float/Rg32Float (FM-10), blur radius truncation."
+      "status": "done",
+      "commit": "pending",
+      "notes": "Tier 3 Phase 10A-10D: FluidSim density R32Float, vector Rg32Float, 8M particle cap. FluidSim3D density R16Float, 8M cap. Mycelium trail R32Float."
     },
     {
       "number": 23,

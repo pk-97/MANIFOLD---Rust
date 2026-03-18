@@ -9,11 +9,11 @@ struct FilmGrainUniforms {
     amount: f32,
     grain_size: f32,
     luma_weight: f32,
+    color_grain: f32,
     time: f32,
     resolution_x: f32,
     resolution_y: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 /// FilmGrain effect — hash-based temporal noise with luma-weighted intensity.
@@ -54,11 +54,11 @@ impl PostProcessEffect for FilmGrainFX {
             amount: p.first().copied().unwrap_or(0.0),
             grain_size: p.get(1).copied().unwrap_or(1.5).max(0.5),
             luma_weight: p.get(2).copied().unwrap_or(0.5),
+            color_grain: p.get(3).copied().unwrap_or(0.0),
             time: ctx.time,
             resolution_x: ctx.width as f32,
             resolution_y: ctx.height as f32,
             _pad0: 0.0,
-            _pad1: 0.0,
         };
 
         self.helper.draw(

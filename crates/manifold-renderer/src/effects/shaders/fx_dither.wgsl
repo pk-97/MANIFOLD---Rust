@@ -26,26 +26,24 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     return out;
 }
 
-// Bayer 8x8 — computed procedurally to avoid array indexing issues
+// Bayer 8x8 ordered dither — explicit lookup table matching Unity DitherEffect.shader
 fn bayer_threshold(pixel_pos: vec2<f32>) -> f32 {
-    let p = vec2<i32>(i32(pixel_pos.x) % 8, i32(pixel_pos.y) % 8);
-    // Compute bayer value using bit-reversal interleave
-    var val = 0;
-    var x = p.x;
-    var y = p.y;
-    // 3-bit interleave
-    val = val | ((x & 1) << 0) | ((y & 1) << 1);
-    val = val | (((x >> 1) & 1) << 2) | (((y >> 1) & 1) << 3);
-    val = val | (((x >> 2) & 1) << 4) | (((y >> 2) & 1) << 5);
-    // Reverse bits for proper Bayer pattern
-    var r = 0;
-    r = r | ((val >> 5) & 1) << 0;
-    r = r | ((val >> 4) & 1) << 1;
-    r = r | ((val >> 3) & 1) << 2;
-    r = r | ((val >> 2) & 1) << 3;
-    r = r | ((val >> 1) & 1) << 4;
-    r = r | ((val >> 0) & 1) << 5;
-    return f32(r) / 64.0;
+    let px = i32(abs(pixel_pos.x)) % 8;
+    let py = i32(abs(pixel_pos.y)) % 8;
+    let idx = py * 8 + px;
+    // Standard Bayer 8x8 matrix (Unity: DitherEffect.shader lines 56-65)
+    // Row-major: bayer8x8[y*8+x] / 64.0
+    var bayer = array<f32, 64>(
+         0.0/64.0, 32.0/64.0,  8.0/64.0, 40.0/64.0,  2.0/64.0, 34.0/64.0, 10.0/64.0, 42.0/64.0,
+        48.0/64.0, 16.0/64.0, 56.0/64.0, 24.0/64.0, 50.0/64.0, 18.0/64.0, 58.0/64.0, 26.0/64.0,
+        12.0/64.0, 44.0/64.0,  4.0/64.0, 36.0/64.0, 14.0/64.0, 46.0/64.0,  6.0/64.0, 38.0/64.0,
+        60.0/64.0, 28.0/64.0, 52.0/64.0, 20.0/64.0, 62.0/64.0, 30.0/64.0, 54.0/64.0, 22.0/64.0,
+         3.0/64.0, 35.0/64.0, 11.0/64.0, 43.0/64.0,  1.0/64.0, 33.0/64.0,  9.0/64.0, 41.0/64.0,
+        51.0/64.0, 19.0/64.0, 59.0/64.0, 27.0/64.0, 49.0/64.0, 17.0/64.0, 57.0/64.0, 25.0/64.0,
+        15.0/64.0, 47.0/64.0,  7.0/64.0, 39.0/64.0, 13.0/64.0, 45.0/64.0,  5.0/64.0, 37.0/64.0,
+        63.0/64.0, 31.0/64.0, 55.0/64.0, 23.0/64.0, 61.0/64.0, 29.0/64.0, 53.0/64.0, 21.0/64.0
+    );
+    return bayer[idx];
 }
 
 // Halftone dots
