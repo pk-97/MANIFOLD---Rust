@@ -417,8 +417,8 @@
       "severity": "medium",
       "est_loc": 1200,
       "status": "done",
-      "commit": "cf499ae",
-      "notes": "1,870 lines across 8 files. Ported all 7 Unity files: WaveformRenderer (MIP chain + spectral coloring), ImportedAudioWaveformLane (bitmap panel + scrub/drag handlers), StemWaveformLane + StemLaneGroup (4-stem lanes with mute/solo), DriverWaveformIcons (procedural SDF), WaveformLaneScrollForwarder, ImportedAudioWaveformScrubHandler, ImportedAudioWaveformDragHandler. Adapted from Unity tile-based rendering to Rust bitmap pixel-buffer painting. 16 unit tests. Wired into UIRoot, UIBridge, ScreenLayout. Stem audio playback stubbed (needs GAP-AUDIO-7b)."
+      "commit": "ece97aa",
+      "notes": "1,870 lines across 8 files. Ported all 7 Unity files: WaveformRenderer (MIP chain + spectral coloring), ImportedAudioWaveformLane (bitmap panel + scrub/drag handlers), StemWaveformLane + StemLaneGroup (4-stem lanes with mute/solo), DriverWaveformIcons (procedural SDF), WaveformLaneScrollForwarder, ImportedAudioWaveformScrubHandler, ImportedAudioWaveformDragHandler. Adapted from Unity tile-based rendering to Rust bitmap pixel-buffer painting. 16 unit tests. Full GPU pipeline: symphonia PCM decoder → MIP chain → spectral coloring → pixel buffer → wgpu texture upload → render pass. Wired into UIRoot, UIBridge, ScreenLayout. track_header_height() invariant established. Stem audio playback stubbed (needs GAP-AUDIO-7b)."
     },
     {
       "number": 33,
