@@ -145,8 +145,20 @@ pub enum PanelAction {
     EffectEnvelopeToggle(usize, usize),
     EffectDriverConfig(usize, usize, DriverConfigAction),
     EffectEnvParamChanged(usize, usize, EnvelopeParam, f32),
+    /// Snapshot ADSR state before drag (for undo). Unity: onEnvConfigSnapshot.
+    EffectEnvParamSnapshot(usize, usize),
+    /// Commit ADSR drag (record undo command). Unity: onEnvConfigCommit.
+    EffectEnvParamCommit(usize, usize),
     EffectTrimChanged(usize, usize, f32, f32),
+    /// Snapshot trim state before drag (for undo). Unity: onTrimSnapshot.
+    EffectTrimSnapshot(usize, usize),
+    /// Commit trim drag (record undo command). Unity: onTrimCommit.
+    EffectTrimCommit(usize, usize),
     EffectTargetChanged(usize, usize, f32),
+    /// Snapshot target state before drag (for undo). Unity: onTargetSnapshot.
+    EffectTargetSnapshot(usize, usize),
+    /// Commit target drag (record undo command). Unity: onTargetCommit.
+    EffectTargetCommit(usize, usize),
 
     // Generator params
     GenTypeClicked,

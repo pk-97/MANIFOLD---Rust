@@ -65,6 +65,12 @@ pub struct Application {
     /// Slider drag snapshot for undo (opacity, slip, etc.). Stores the old value
     /// on snapshot, committed on release. NOT related to clip drag state.
     slider_snapshot: Option<f32>,
+    /// Trim drag snapshot (min, max) for undo. Unity: onTrimSnapshot/onTrimCommit.
+    trim_snapshot: Option<(f32, f32)>,
+    /// ADSR drag snapshot (attack, decay, sustain, release) for undo.
+    adsr_snapshot: Option<(f32, f32, f32, f32)>,
+    /// Envelope target drag snapshot for undo.
+    target_snapshot: Option<f32>,
 
     // Rendering
     compositor: Option<Box<dyn Compositor>>,
@@ -160,6 +166,9 @@ impl Application {
             selection: UIState::new(),
             active_layer_index: None,
             slider_snapshot: None,
+            trim_snapshot: None,
+            adsr_snapshot: None,
+            target_snapshot: None,
             compositor: None,
             blit_pipeline: None,
             ui_renderer: None,
@@ -809,6 +818,9 @@ impl Application {
                 &mut self.selection,
                 &mut self.active_layer_index,
                 &mut self.slider_snapshot,
+                &mut self.trim_snapshot,
+                &mut self.adsr_snapshot,
+                &mut self.target_snapshot,
             );
             if result.structural_change {
                 needs_structural_sync = true;

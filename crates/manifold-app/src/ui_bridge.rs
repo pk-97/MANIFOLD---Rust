@@ -65,6 +65,9 @@ pub fn dispatch(
     selection: &mut SelectionState,
     active_layer: &mut Option<usize>,
     drag_snapshot: &mut Option<f32>,
+    trim_snapshot: &mut Option<(f32, f32)>,
+    adsr_snapshot: &mut Option<(f32, f32, f32, f32)>,
+    target_snapshot: &mut Option<f32>,
 ) -> DispatchResult {
     match action {
         // ── Transport ──────────────────────────────────────────────
@@ -1093,6 +1096,107 @@ pub fn dispatch(
                     }
                 }
             }
+            DispatchResult::handled()
+        }
+
+        // ── Modulation undo: snapshot/commit ────────────────────────
+        // Unity: onTrimSnapshot/onTrimCommit, onTargetSnapshot/onTargetCommit,
+        //        onEnvConfigSnapshot/onEnvConfigCommit
+        PanelAction::EffectTrimSnapshot(ei, pi) => {
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project() {
+                let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                if let Some(fx) = effects.and_then(|e| e.get(*ei)) {
+                    if let Some(driver) = fx.drivers.as_ref()
+                        .and_then(|ds| ds.iter().find(|d| d.param_index == *pi as i32))
+                    {
+                        *trim_snapshot = Some((driver.trim_min, driver.trim_max));
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::EffectTrimCommit(_ei, _pi) => {
+            // Trim commit: for now consume the snapshot. Full undo command
+            // (ChangeTrimCommand) can be added when the command exists.
+            trim_snapshot.take();
+            DispatchResult::handled()
+        }
+        PanelAction::EffectTargetSnapshot(ei, pi) => {
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project() {
+                let effect_type = {
+                    let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                };
+                if let Some(et) = effect_type {
+                    let envs: Option<&[ParamEnvelope]> = match tab {
+                        InspectorTab::Layer => active_layer.and_then(|idx|
+                            project.timeline.layers.get(idx)
+                                .and_then(|l| l.envelopes.as_deref())
+                        ),
+                        InspectorTab::Clip => selection.primary_selected_clip_id.as_ref().and_then(|cid|
+                            project.timeline.layers.iter()
+                                .flat_map(|l| l.clips.iter())
+                                .find(|c| c.id == *cid)
+                                .and_then(|c| c.envelopes.as_deref())
+                        ),
+                        InspectorTab::Master => None,
+                    };
+                    if let Some(envs) = envs {
+                        if let Some(env) = envs.iter().find(|e|
+                            e.target_effect_type == et && e.param_index == *pi as i32
+                        ) {
+                            *target_snapshot = Some(env.target_normalized);
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::EffectTargetCommit(_ei, _pi) => {
+            target_snapshot.take();
+            DispatchResult::handled()
+        }
+        PanelAction::EffectEnvParamSnapshot(ei, pi) => {
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project() {
+                let effect_type = {
+                    let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                };
+                if let Some(et) = effect_type {
+                    let envs: Option<&[ParamEnvelope]> = match tab {
+                        InspectorTab::Layer => active_layer.and_then(|idx|
+                            project.timeline.layers.get(idx)
+                                .and_then(|l| l.envelopes.as_deref())
+                        ),
+                        InspectorTab::Clip => selection.primary_selected_clip_id.as_ref().and_then(|cid|
+                            project.timeline.layers.iter()
+                                .flat_map(|l| l.clips.iter())
+                                .find(|c| c.id == *cid)
+                                .and_then(|c| c.envelopes.as_deref())
+                        ),
+                        InspectorTab::Master => None,
+                    };
+                    if let Some(envs) = envs {
+                        if let Some(env) = envs.iter().find(|e|
+                            e.target_effect_type == et && e.param_index == *pi as i32
+                        ) {
+                            *adsr_snapshot = Some((
+                                env.attack_beats,
+                                env.decay_beats,
+                                env.sustain_level,
+                                env.release_beats,
+                            ));
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::EffectEnvParamCommit(_ei, _pi) => {
+            adsr_snapshot.take();
             DispatchResult::handled()
         }
 

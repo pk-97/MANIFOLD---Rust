@@ -929,7 +929,7 @@ impl EffectCardPanel {
             if let Some(ref t) = target {
                 if node_id as i32 == t.target_bar_id {
                     self.dragging_target_param = pi as i32;
-                    return Vec::new();
+                    return vec![PanelAction::EffectTargetSnapshot(ei, pi)];
                 }
             }
         }
@@ -940,12 +940,12 @@ impl EffectCardPanel {
                 if node_id as i32 == t.min_bar_id {
                     self.dragging_trim_param = pi as i32;
                     self.dragging_trim_is_min = true;
-                    return Vec::new();
+                    return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
                 }
                 if node_id as i32 == t.max_bar_id {
                     self.dragging_trim_param = pi as i32;
                     self.dragging_trim_is_min = false;
-                    return Vec::new();
+                    return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
                 }
             }
         }
@@ -957,25 +957,25 @@ impl EffectCardPanel {
                     self.dragging_env_param = pi as i32;
                     self.dragging_env_slot = 0;
                     let norm = BitmapSlider::x_to_normalized(c.attack_slider.track_rect, pos.x);
-                    return vec![PanelAction::EffectEnvParamChanged(ei, pi, EnvelopeParam::Attack, norm * ENV_ADR_MAX)];
+                    return vec![PanelAction::EffectEnvParamSnapshot(ei, pi), PanelAction::EffectEnvParamChanged(ei, pi, EnvelopeParam::Attack, norm * ENV_ADR_MAX)];
                 }
                 if node_id == c.decay_slider.track {
                     self.dragging_env_param = pi as i32;
                     self.dragging_env_slot = 1;
                     let norm = BitmapSlider::x_to_normalized(c.decay_slider.track_rect, pos.x);
-                    return vec![PanelAction::EffectEnvParamChanged(ei, pi, EnvelopeParam::Decay, norm * ENV_ADR_MAX)];
+                    return vec![PanelAction::EffectEnvParamSnapshot(ei, pi), PanelAction::EffectEnvParamChanged(ei, pi, EnvelopeParam::Decay, norm * ENV_ADR_MAX)];
                 }
                 if node_id == c.sustain_slider.track {
                     self.dragging_env_param = pi as i32;
                     self.dragging_env_slot = 2;
                     let norm = BitmapSlider::x_to_normalized(c.sustain_slider.track_rect, pos.x);
-                    return vec![PanelAction::EffectEnvParamChanged(ei, pi, EnvelopeParam::Sustain, norm * ENV_S_MAX)];
+                    return vec![PanelAction::EffectEnvParamSnapshot(ei, pi), PanelAction::EffectEnvParamChanged(ei, pi, EnvelopeParam::Sustain, norm * ENV_S_MAX)];
                 }
                 if node_id == c.release_slider.track {
                     self.dragging_env_param = pi as i32;
                     self.dragging_env_slot = 3;
                     let norm = BitmapSlider::x_to_normalized(c.release_slider.track_rect, pos.x);
-                    return vec![PanelAction::EffectEnvParamChanged(ei, pi, EnvelopeParam::Release, norm * ENV_ADR_MAX)];
+                    return vec![PanelAction::EffectEnvParamSnapshot(ei, pi), PanelAction::EffectEnvParamChanged(ei, pi, EnvelopeParam::Release, norm * ENV_ADR_MAX)];
                 }
             }
         }
@@ -1012,13 +1012,13 @@ impl EffectCardPanel {
                             if dist_min < hit_zone && dist_min <= dist_max {
                                 self.dragging_trim_param = pi as i32;
                                 self.dragging_trim_is_min = true;
-                                let _ = trim; // suppress unused warning
-                                return Vec::new();
+                                let _ = trim;
+                                return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
                             }
                             if dist_max < hit_zone {
                                 self.dragging_trim_param = pi as i32;
                                 self.dragging_trim_is_min = false;
-                                return Vec::new();
+                                return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
                             }
                         }
                     }
@@ -1033,7 +1033,7 @@ impl EffectCardPanel {
 
                         if (pos.x - target_center).abs() < hit_zone {
                             self.dragging_target_param = pi as i32;
-                            return Vec::new();
+                            return vec![PanelAction::EffectTargetSnapshot(ei, pi)];
                         }
                     }
 
@@ -1160,16 +1160,19 @@ impl EffectCardPanel {
         let ei = self.effect_index;
 
         if self.dragging_target_param >= 0 {
+            let pi = self.dragging_target_param as usize;
             self.dragging_target_param = -1;
-            return Vec::new(); // target changes are auto-committed
+            return vec![PanelAction::EffectTargetCommit(ei, pi)];
         }
         if self.dragging_trim_param >= 0 {
+            let pi = self.dragging_trim_param as usize;
             self.dragging_trim_param = -1;
-            return Vec::new(); // trim changes are auto-committed
+            return vec![PanelAction::EffectTrimCommit(ei, pi)];
         }
         if self.dragging_env_param >= 0 {
+            let pi = self.dragging_env_param as usize;
             self.dragging_env_param = -1;
-            return Vec::new(); // ADSR changes are auto-committed
+            return vec![PanelAction::EffectEnvParamCommit(ei, pi)];
         }
         if self.dragging_param >= 0 {
             let pi = self.dragging_param as usize;
