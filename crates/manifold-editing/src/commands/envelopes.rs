@@ -315,6 +315,100 @@ impl Command for RemoveLayerEnvelopeCommand {
     fn description(&self) -> &str { "Remove Layer Envelope" }
 }
 
+/// Change ADSR values on a layer envelope.
+#[derive(Debug)]
+pub struct ChangeLayerEnvelopeADSRCommand {
+    layer_index: usize,
+    env_index: usize,
+    old_attack: f32,
+    old_decay: f32,
+    old_sustain: f32,
+    old_release: f32,
+    new_attack: f32,
+    new_decay: f32,
+    new_sustain: f32,
+    new_release: f32,
+}
+
+impl ChangeLayerEnvelopeADSRCommand {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        layer_index: usize,
+        env_index: usize,
+        old_attack: f32, old_decay: f32, old_sustain: f32, old_release: f32,
+        new_attack: f32, new_decay: f32, new_sustain: f32, new_release: f32,
+    ) -> Self {
+        Self {
+            layer_index, env_index,
+            old_attack, old_decay, old_sustain, old_release,
+            new_attack, new_decay, new_sustain, new_release,
+        }
+    }
+
+    fn apply(layer: &mut manifold_core::layer::Layer, idx: usize, a: f32, d: f32, s: f32, r: f32) {
+        let envs = layer.envelopes_mut();
+        if let Some(env) = envs.get_mut(idx) {
+            env.attack_beats = a;
+            env.decay_beats = d;
+            env.sustain_level = s;
+            env.release_beats = r;
+        }
+    }
+}
+
+impl Command for ChangeLayerEnvelopeADSRCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+            Self::apply(layer, self.env_index, self.new_attack, self.new_decay, self.new_sustain, self.new_release);
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+            Self::apply(layer, self.env_index, self.old_attack, self.old_decay, self.old_sustain, self.old_release);
+        }
+    }
+
+    fn description(&self) -> &str { "Change Layer Envelope ADSR" }
+}
+
+/// Change layer envelope target_normalized value.
+#[derive(Debug)]
+pub struct ChangeLayerEnvelopeTargetCommand {
+    layer_index: usize,
+    env_index: usize,
+    old_target: f32,
+    new_target: f32,
+}
+
+impl ChangeLayerEnvelopeTargetCommand {
+    pub fn new(layer_index: usize, env_index: usize, old_target: f32, new_target: f32) -> Self {
+        Self { layer_index, env_index, old_target, new_target }
+    }
+}
+
+impl Command for ChangeLayerEnvelopeTargetCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+            let envs = layer.envelopes_mut();
+            if let Some(env) = envs.get_mut(self.env_index) {
+                env.target_normalized = self.new_target;
+            }
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+            let envs = layer.envelopes_mut();
+            if let Some(env) = envs.get_mut(self.env_index) {
+                env.target_normalized = self.old_target;
+            }
+        }
+    }
+
+    fn description(&self) -> &str { "Change Layer Envelope Target" }
+}
+
 /// Atomically capture/restore ALL envelope state (ADSR + target + enabled).
 /// Port of Unity SettingsCommands.cs lines 715-770: ChangeParamEnvelopeCommand.
 /// Unity has ONE command that captures everything; Rust previously split this

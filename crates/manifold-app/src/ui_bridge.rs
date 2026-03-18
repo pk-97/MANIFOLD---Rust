@@ -16,6 +16,10 @@ use manifold_editing::commands::settings::{
 use manifold_editing::commands::effects::{
     ToggleEffectCommand, ChangeEffectParamCommand, RemoveEffectCommand,
 };
+use manifold_editing::commands::envelopes::{
+    ChangeEnvelopeADSRCommand, ChangeLayerEnvelopeADSRCommand,
+    ChangeLayerEnvelopeTargetCommand, ChangeEnvelopeTargetNormalizedCommand,
+};
 use manifold_editing::commands::effect_target::{EffectTarget, DriverTarget};
 use manifold_editing::commands::drivers::{
     AddDriverCommand, ToggleDriverEnabledCommand,
