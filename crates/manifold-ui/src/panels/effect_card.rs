@@ -1057,7 +1057,7 @@ impl EffectCardPanel {
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         let ei = self.effect_index;
 
-        // Target bar drag
+        // Target bar drag — update state, reposition bar node, dispatch action
         if self.dragging_target_param >= 0 {
             let pi = self.dragging_target_param as usize;
             if let Some(ref slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
@@ -1065,11 +1065,24 @@ impl EffectCardPanel {
                 if let Some(ref mut state) = self.state.target_norm.get_mut(pi) {
                     **state = norm;
                 }
+
+                // Visual update: reposition target bar node in the tree
+                if let Some(ref t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
+                    let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
+                    let base_x = slider.track_rect.x + OVERLAY_INSET;
+                    let bar_x = base_x + norm * usable - TARGET_BAR_W * 0.5;
+                    let bar_h = slider.track_rect.height + 4.0;
+                    let bar_y = slider.track_rect.y - 2.0;
+                    tree.set_bounds(t.target_bar_id as u32, Rect::new(
+                        bar_x, bar_y, TARGET_BAR_W, bar_h,
+                    ));
+                }
+
                 return vec![PanelAction::EffectTargetChanged(ei, pi, norm)];
             }
         }
 
-        // Trim bar drag
+        // Trim bar drag — update state, reposition bar nodes, dispatch action
         if self.dragging_trim_param >= 0 {
             let pi = self.dragging_trim_param as usize;
             if let Some(ref slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
@@ -1083,6 +1096,27 @@ impl EffectCardPanel {
                 };
                 if let Some(v) = self.state.trim_min.get_mut(pi) { *v = new_min; }
                 if let Some(v) = self.state.trim_max.get_mut(pi) { *v = new_max; }
+
+                // Visual update: reposition trim bar nodes in the tree
+                if let Some(ref t) = self.trim_ids.get(pi).and_then(|t| t.as_ref()) {
+                    let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
+                    let base_x = slider.track_rect.x + OVERLAY_INSET;
+                    let fill_x = base_x + new_min * usable;
+                    let fill_w = (new_max - new_min) * usable;
+                    let fill_h = slider.track_rect.height - OVERLAY_INSET * 2.0;
+                    tree.set_bounds(t.fill_id as u32, Rect::new(
+                        fill_x, slider.track_rect.y + OVERLAY_INSET, fill_w, fill_h,
+                    ));
+                    tree.set_bounds(t.min_bar_id as u32, Rect::new(
+                        base_x + new_min * usable - TRIM_BAR_W * 0.5,
+                        slider.track_rect.y, TRIM_BAR_W, slider.track_rect.height,
+                    ));
+                    tree.set_bounds(t.max_bar_id as u32, Rect::new(
+                        base_x + new_max * usable - TRIM_BAR_W * 0.5,
+                        slider.track_rect.y, TRIM_BAR_W, slider.track_rect.height,
+                    ));
+                }
+
                 return vec![PanelAction::EffectTrimChanged(ei, pi, new_min, new_max)];
             }
         }
