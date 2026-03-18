@@ -438,7 +438,7 @@ impl LayerCompositor {
                         width,
                         height,
                         owner_key: clip_id_owner_key(clip.clip_id),
-                        is_clip_level: true,
+                        is_clip_level: true, edge_stretch_width: 0.5625,
                     };
                     Self::apply_effects(
                         &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
@@ -488,7 +488,7 @@ impl LayerCompositor {
                             width,
                             height,
                             owner_key: clip_id_owner_key(clip.clip_id),
-                            is_clip_level: true,
+                            is_clip_level: true, edge_stretch_width: 0.5625,
                         };
                         Self::apply_effects(
                             &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
@@ -531,7 +531,7 @@ impl LayerCompositor {
                             width,
                             height,
                             owner_key: (layer_idx as i64) + 1,
-                            is_clip_level: false,
+                            is_clip_level: false, edge_stretch_width: 0.5625,
                         };
                         let layer_buf = self.layer_buf.as_ref().unwrap();
                         Self::apply_effects(
@@ -580,7 +580,7 @@ impl LayerCompositor {
                 width,
                 height,
                 owner_key: 0, // master
-                is_clip_level: false,
+                is_clip_level: false, edge_stretch_width: 0.5625,
             };
             if let Some(processed) = Self::apply_effects(
                 &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,

@@ -16,3 +16,6 @@ pub mod quad_mirror;
 pub mod strobe;
 pub mod crt;
 pub mod stylized_feedback;
+pub mod edge_glow;
+pub mod transform;
+pub mod infrared;

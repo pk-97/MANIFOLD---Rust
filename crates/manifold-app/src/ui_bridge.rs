@@ -1172,10 +1172,55 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectTargetCommit(_ei, _pi) => {
-            // TODO: ChangeEnvelopeTargetNormalizedCommand is clip-only (uses clip_id).
-            // Layer envelope target undo needs a generalized command. For now, consume snapshot.
-            target_snapshot.take();
+        PanelAction::EffectTargetCommit(ei, pi) => {
+            // Unity: CommitEnvelopeTargetUndo — records ChangeParamEnvelopeCommand.
+            if let Some(old_target) = target_snapshot.take() {
+                let tab = ui.inspector.last_effect_tab();
+                if let Some(project) = engine.project() {
+                    let effect_type = {
+                        let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                        effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                    };
+                    if let Some(et) = effect_type {
+                        match tab {
+                            InspectorTab::Layer => {
+                                if let Some(idx) = *active_layer {
+                                    if let Some(layer) = project.timeline.layers.get(idx) {
+                                        let envs = layer.envelopes.as_deref().unwrap_or(&[]);
+                                        if let Some((env_idx, env)) = envs.iter().enumerate()
+                                            .find(|(_, e)| e.target_effect_type == et && e.param_index == *pi as i32)
+                                        {
+                                            if (old_target - env.target_normalized).abs() > f32::EPSILON {
+                                                let cmd = ChangeLayerEnvelopeTargetCommand::new(idx, env_idx, old_target, env.target_normalized);
+                                                editing.record(Box::new(cmd));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            InspectorTab::Clip => {
+                                if let Some(clip_id) = &selection.primary_selected_clip_id {
+                                    let clip = project.timeline.layers.iter()
+                                        .flat_map(|l| l.clips.iter())
+                                        .find(|c| c.id == *clip_id);
+                                    if let Some(clip) = clip {
+                                        let envs = clip.envelopes.as_deref().unwrap_or(&[]);
+                                        if let Some((env_idx, env)) = envs.iter().enumerate()
+                                            .find(|(_, e)| e.target_effect_type == et && e.param_index == *pi as i32)
+                                        {
+                                            if (old_target - env.target_normalized).abs() > f32::EPSILON {
+                                                let cmd = ChangeEnvelopeTargetNormalizedCommand::new(clip_id.clone(), env_idx, old_target, env.target_normalized);
+                                                editing.record(Box::new(cmd));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            InspectorTab::Master => {}
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
         PanelAction::EffectEnvParamSnapshot(ei, pi) => {
@@ -1215,10 +1260,61 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectEnvParamCommit(_ei, _pi) => {
-            // TODO: ChangeEnvelopeADSRCommand is clip-only (uses clip_id).
-            // Layer envelope ADSR undo needs a generalized command. For now, consume snapshot.
-            adsr_snapshot.take();
+        PanelAction::EffectEnvParamCommit(ei, pi) => {
+            // Unity: CommitEnvelopeConfigUndo — records ChangeParamEnvelopeCommand.
+            if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take() {
+                let tab = ui.inspector.last_effect_tab();
+                if let Some(project) = engine.project() {
+                    let effect_type = {
+                        let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                        effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                    };
+                    if let Some(et) = effect_type {
+                        match tab {
+                            InspectorTab::Layer => {
+                                if let Some(idx) = *active_layer {
+                                    if let Some(layer) = project.timeline.layers.get(idx) {
+                                        let envs = layer.envelopes.as_deref().unwrap_or(&[]);
+                                        if let Some((env_idx, env)) = envs.iter().enumerate()
+                                            .find(|(_, e)| e.target_effect_type == et && e.param_index == *pi as i32)
+                                        {
+                                            let (na, nd, ns, nr) = (env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats);
+                                            if (old_a - na).abs() > f32::EPSILON || (old_d - nd).abs() > f32::EPSILON
+                                                || (old_s - ns).abs() > f32::EPSILON || (old_r - nr).abs() > f32::EPSILON
+                                            {
+                                                let cmd = ChangeLayerEnvelopeADSRCommand::new(idx, env_idx, old_a, old_d, old_s, old_r, na, nd, ns, nr);
+                                                editing.record(Box::new(cmd));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            InspectorTab::Clip => {
+                                if let Some(clip_id) = &selection.primary_selected_clip_id {
+                                    let clip = project.timeline.layers.iter()
+                                        .flat_map(|l| l.clips.iter())
+                                        .find(|c| c.id == *clip_id);
+                                    if let Some(clip) = clip {
+                                        let envs = clip.envelopes.as_deref().unwrap_or(&[]);
+                                        if let Some((env_idx, env)) = envs.iter().enumerate()
+                                            .find(|(_, e)| e.target_effect_type == et && e.param_index == *pi as i32)
+                                        {
+                                            let (na, nd, ns, nr) = (env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats);
+                                            if (old_a - na).abs() > f32::EPSILON || (old_d - nd).abs() > f32::EPSILON
+                                                || (old_s - ns).abs() > f32::EPSILON || (old_r - nr).abs() > f32::EPSILON
+                                            {
+                                                let cmd = ChangeEnvelopeADSRCommand::new(clip_id.clone(), env_idx, old_a, old_d, old_s, old_r, na, nd, ns, nr);
+                                                editing.record(Box::new(cmd));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            InspectorTab::Master => {}
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
 
