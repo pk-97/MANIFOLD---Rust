@@ -273,7 +273,7 @@
       "severity": "high",
       "est_loc": 50,
       "status": "done",
-      "commit": "pending",
+      "commit": "6ffdfe9",
       "notes": "Tier 3 Phase 7A: Two-stage projection (4D→3D→2D), raw pz depth. Phase 8A-8B: removed double-scale. Phase 11A-11B: WireframeZoo vertex normalization + projected_z fix."
     },
     {
@@ -285,7 +285,7 @@
       "severity": "medium",
       "est_loc": 50,
       "status": "done",
-      "commit": "pending",
+      "commit": "6ffdfe9",
       "notes": "Tier 3 Phase 10A-10D: FluidSim density R32Float, vector Rg32Float, 8M particle cap. FluidSim3D density R16Float, 8M cap. Mycelium trail R32Float."
     },
     {
