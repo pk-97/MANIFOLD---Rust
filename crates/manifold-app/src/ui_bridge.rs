@@ -762,7 +762,21 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectCollapseToggle(_) | PanelAction::EffectCardClicked(_) => {
+        PanelAction::EffectCollapseToggle(fx_idx) => {
+            // Unity: EffectCardPresenter.OnToggleCardCollapse — mutates effect.collapsed
+            // on the data model, then requests rebuild so card height recalculates.
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project_mut() {
+                let (effects_mut, _target) = resolve_effects_mut(tab, project, *active_layer, selection);
+                if let Some(effects) = effects_mut {
+                    if let Some(fx) = effects.get_mut(*fx_idx) {
+                        fx.collapsed = !fx.collapsed;
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::EffectCardClicked(_) => {
             DispatchResult::handled()
         }
         PanelAction::EffectParamRightClick(fx_idx, param_idx, default_val) => {
@@ -836,41 +850,42 @@ pub fn dispatch(
         }
 
         // ── Effect modulation ──────────────────────────────────────
+        // Unity: EffectCardPresenter.ToggleEffectDriverConfig — routes via
+        // IEffectCardHost which resolves to Master/Layer/Clip context.
         PanelAction::EffectDriverToggle(ei, pi) => {
-            if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
-                    let target = DriverTarget::Effect {
-                        effect_target: EffectTarget::Layer { layer_index: layer_idx },
-                        effect_index: *ei,
-                    };
-                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
-                        if let Some(effects) = &layer.effects {
-                            if let Some(fx) = effects.get(*ei) {
-                                let driver_idx = fx.drivers.as_ref()
-                                    .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32));
-                                if let Some(di) = driver_idx {
-                                    let old = fx.drivers.as_ref().unwrap()[di].enabled;
-                                    let cmd = ToggleDriverEnabledCommand::new(
-                                        target, di, old, !old,
-                                    );
-                                    editing.execute(Box::new(cmd), project);
-                                } else {
-                                    let driver = ParameterDriver {
-                                        param_index: *pi as i32,
-                                        beat_division: BeatDivision::Quarter,
-                                        waveform: DriverWaveform::Sine,
-                                        enabled: true,
-                                        phase: 0.0,
-                                        base_value: fx.param_values.get(*pi).copied().unwrap_or(0.0),
-                                        trim_min: 0.0,
-                                        trim_max: 1.0,
-                                        reversed: false,
-                                        is_paused_by_user: false,
-                                    };
-                                    let cmd = AddDriverCommand::new(target, driver);
-                                    editing.execute(Box::new(cmd), project);
-                                }
-                            }
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project_mut() {
+                let effect_target = resolve_effect_target(tab, *active_layer);
+                let (effects_ref, _) = resolve_effects_read(tab, project, *active_layer, selection);
+                if let Some(effects) = effects_ref {
+                    if let Some(fx) = effects.get(*ei) {
+                        let driver_target = DriverTarget::Effect {
+                            effect_target,
+                            effect_index: *ei,
+                        };
+                        let driver_idx = fx.drivers.as_ref()
+                            .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32));
+                        if let Some(di) = driver_idx {
+                            let old = fx.drivers.as_ref().unwrap()[di].enabled;
+                            let cmd = ToggleDriverEnabledCommand::new(
+                                driver_target, di, old, !old,
+                            );
+                            editing.execute(Box::new(cmd), project);
+                        } else {
+                            let driver = ParameterDriver {
+                                param_index: *pi as i32,
+                                beat_division: BeatDivision::Quarter,
+                                waveform: DriverWaveform::Sine,
+                                enabled: true,
+                                phase: 0.0,
+                                base_value: fx.param_values.get(*pi).copied().unwrap_or(0.0),
+                                trim_min: 0.0,
+                                trim_max: 1.0,
+                                reversed: false,
+                                is_paused_by_user: false,
+                            };
+                            let cmd = AddDriverCommand::new(driver_target, driver);
+                            editing.execute(Box::new(cmd), project);
                         }
                     }
                 }
@@ -878,34 +893,54 @@ pub fn dispatch(
             DispatchResult::structural()
         }
         PanelAction::EffectEnvelopeToggle(ei, pi) => {
-            // Envelopes live on the layer, not on the effect instance.
-            // Toggle enabled if one exists for this effect+param, otherwise add.
-            if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
-                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
-                        let effect_type = layer.effects.as_ref()
-                            .and_then(|fx| fx.get(*ei))
-                            .map(|fx| fx.effect_type);
-                        if let Some(et) = effect_type {
-                            let envs = layer.envelopes_mut();
-                            let env_idx = envs.iter().position(|e|
-                                e.target_effect_type == et && e.param_index == *pi as i32
-                            );
-                            if let Some(idx) = env_idx {
-                                envs[idx].enabled = !envs[idx].enabled;
-                            } else {
-                                envs.push(ParamEnvelope {
-                                    target_effect_type: et,
-                                    param_index: *pi as i32,
-                                    enabled: true,
-                                    attack_beats: 0.25,
-                                    decay_beats: 0.25,
-                                    sustain_level: 1.0,
-                                    release_beats: 0.25,
-                                    target_normalized: 1.0,
-                                    current_level: 0.0,
-                                });
-                            }
+            // Unity: EffectCardPresenter.ToggleEffectEnvelopeConfig
+            // Envelopes live on the container (layer/clip), not the effect instance.
+            // Route via last_effect_tab to support master/layer/clip.
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project_mut() {
+                // Get the effect type first (immutable access)
+                let effect_type = {
+                    let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                };
+                if let Some(et) = effect_type {
+                    // Get the envelope container (mutable access)
+                    // Master doesn't have envelopes in Unity — only layer and clip do.
+                    let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
+                        InspectorTab::Layer => {
+                            active_layer.and_then(|idx| {
+                                project.timeline.layers.get_mut(idx)
+                                    .map(|l| l.envelopes_mut())
+                            })
+                        }
+                        InspectorTab::Clip => {
+                            selection.primary_selected_clip_id.as_ref().and_then(|clip_id| {
+                                project.timeline.layers.iter_mut()
+                                    .flat_map(|l| l.clips.iter_mut())
+                                    .find(|c| c.id == *clip_id)
+                                    .map(|c| c.envelopes_mut())
+                            })
+                        }
+                        InspectorTab::Master => None, // Master has no envelopes
+                    };
+                    if let Some(envs) = envs {
+                        let env_idx = envs.iter().position(|e|
+                            e.target_effect_type == et && e.param_index == *pi as i32
+                        );
+                        if let Some(idx) = env_idx {
+                            envs[idx].enabled = !envs[idx].enabled;
+                        } else {
+                            envs.push(ParamEnvelope {
+                                target_effect_type: et,
+                                param_index: *pi as i32,
+                                enabled: true,
+                                attack_beats: 0.25,
+                                decay_beats: 0.25,
+                                sustain_level: 1.0,
+                                release_beats: 0.25,
+                                target_normalized: 1.0,
+                                current_level: 0.0,
+                            });
                         }
                     }
                 }
@@ -913,59 +948,58 @@ pub fn dispatch(
             DispatchResult::structural()
         }
         PanelAction::EffectDriverConfig(ei, pi, cfg) => {
-            if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
-                    let target = DriverTarget::Effect {
-                        effect_target: EffectTarget::Layer { layer_index: layer_idx },
-                        effect_index: *ei,
-                    };
-                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
-                        if let Some(effects) = &layer.effects {
-                            if let Some(fx) = effects.get(*ei) {
-                                if let Some(di) = fx.drivers.as_ref()
-                                    .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32))
-                                {
-                                    let driver = &fx.drivers.as_ref().unwrap()[di];
-                                    match cfg {
-                                        DriverConfigAction::BeatDiv(idx) => {
-                                            if let Some(new_div) = BeatDivision::from_button_index(*idx) {
-                                                let cmd = ChangeDriverBeatDivCommand::new(
-                                                    target, di, driver.beat_division, new_div,
-                                                );
-                                                editing.execute(Box::new(cmd), project);
-                                            }
-                                        }
-                                        DriverConfigAction::Wave(idx) => {
-                                            if let Some(new_wave) = DriverWaveform::from_index(*idx) {
-                                                let cmd = ChangeDriverWaveformCommand::new(
-                                                    target, di, driver.waveform, new_wave,
-                                                );
-                                                editing.execute(Box::new(cmd), project);
-                                            }
-                                        }
-                                        DriverConfigAction::Dot => {
-                                            if let Some(new_div) = driver.beat_division.toggle_dotted() {
-                                                let cmd = ChangeDriverBeatDivCommand::new(
-                                                    target, di, driver.beat_division, new_div,
-                                                );
-                                                editing.execute(Box::new(cmd), project);
-                                            }
-                                        }
-                                        DriverConfigAction::Triplet => {
-                                            if let Some(new_div) = driver.beat_division.toggle_triplet() {
-                                                let cmd = ChangeDriverBeatDivCommand::new(
-                                                    target, di, driver.beat_division, new_div,
-                                                );
-                                                editing.execute(Box::new(cmd), project);
-                                            }
-                                        }
-                                        DriverConfigAction::Reverse => {
-                                            let cmd = ToggleDriverReversedCommand::new(
-                                                target, di, driver.reversed, !driver.reversed,
-                                            );
-                                            editing.execute(Box::new(cmd), project);
-                                        }
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project_mut() {
+                let effect_target = resolve_effect_target(tab, *active_layer);
+                let target = DriverTarget::Effect {
+                    effect_target,
+                    effect_index: *ei,
+                };
+                {
+                    let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                    if let Some(fx) = effects.and_then(|e| e.get(*ei)) {
+                        if let Some(di) = fx.drivers.as_ref()
+                            .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32))
+                        {
+                            let driver = &fx.drivers.as_ref().unwrap()[di];
+                            match cfg {
+                                DriverConfigAction::BeatDiv(idx) => {
+                                    if let Some(new_div) = BeatDivision::from_button_index(*idx) {
+                                        let cmd = ChangeDriverBeatDivCommand::new(
+                                            target, di, driver.beat_division, new_div,
+                                        );
+                                        editing.execute(Box::new(cmd), project);
                                     }
+                                }
+                                DriverConfigAction::Wave(idx) => {
+                                    if let Some(new_wave) = DriverWaveform::from_index(*idx) {
+                                        let cmd = ChangeDriverWaveformCommand::new(
+                                            target, di, driver.waveform, new_wave,
+                                        );
+                                        editing.execute(Box::new(cmd), project);
+                                    }
+                                }
+                                DriverConfigAction::Dot => {
+                                    if let Some(new_div) = driver.beat_division.toggle_dotted() {
+                                        let cmd = ChangeDriverBeatDivCommand::new(
+                                            target, di, driver.beat_division, new_div,
+                                        );
+                                        editing.execute(Box::new(cmd), project);
+                                    }
+                                }
+                                DriverConfigAction::Triplet => {
+                                    if let Some(new_div) = driver.beat_division.toggle_triplet() {
+                                        let cmd = ChangeDriverBeatDivCommand::new(
+                                            target, di, driver.beat_division, new_div,
+                                        );
+                                        editing.execute(Box::new(cmd), project);
+                                    }
+                                }
+                                DriverConfigAction::Reverse => {
+                                    let cmd = ToggleDriverReversedCommand::new(
+                                        target, di, driver.reversed, !driver.reversed,
+                                    );
+                                    editing.execute(Box::new(cmd), project);
                                 }
                             }
                         }
@@ -2415,16 +2449,17 @@ pub fn sync_inspector_data(
 ) {
     let Some(project) = engine.project() else { return };
 
-    // Master effects → inspector
-    let master_configs = effects_to_configs(&project.settings.master_effects);
+    // Master effects → inspector (master has no envelopes)
+    let master_configs = effects_to_configs(&project.settings.master_effects, &[]);
     ui.inspector.configure_master_effects(&master_configs);
 
     // Active layer effects + gen params → inspector
     if let Some(idx) = active_layer {
         if let Some(layer) = project.timeline.layers.get(idx) {
-            // Layer effects
+            // Layer effects — envelopes live on the layer
+            let envs = layer.envelopes.as_deref().unwrap_or(&[]);
             let layer_effects = layer.effects.as_ref()
-                .map(|e| effects_to_configs(e))
+                .map(|e| effects_to_configs(e, envs))
                 .unwrap_or_default();
             ui.inspector.configure_layer_effects(&layer_effects);
 
@@ -2448,7 +2483,8 @@ pub fn sync_inspector_data(
             .flat_map(|l| l.clips.iter())
             .find(|c| c.id == *clip_id);
         if let Some(clip) = clip {
-            let clip_configs = effects_to_configs(&clip.effects);
+            let clip_envs = clip.envelopes.as_deref().unwrap_or(&[]);
+            let clip_configs = effects_to_configs(&clip.effects, clip_envs);
             ui.inspector.configure_clip_effects(&clip_configs);
         } else {
             ui.inspector.configure_clip_effects(&[]);
@@ -2461,9 +2497,12 @@ pub fn sync_inspector_data(
 // ── Helpers ──────────────────────────────────────────────────────
 
 /// Convert a slice of `EffectInstance` into `EffectCardConfig` for the UI.
-fn effects_to_configs(effects: &[EffectInstance]) -> Vec<EffectCardConfig> {
+/// Build EffectCardConfig from EffectInstance + envelopes.
+/// Unity: EffectCardState.SyncFromDataModel — populates all data-derived visual state.
+fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -> Vec<EffectCardConfig> {
     effects.iter().enumerate().map(|(i, fx)| {
         let defs = fx.effect_type.param_defs();
+        let n = defs.len();
         let params: Vec<EffectParamInfo> = defs.iter().map(|&(name, min, max, default, whole)| {
             EffectParamInfo {
                 name: name.to_string(),
@@ -2474,12 +2513,64 @@ fn effects_to_configs(effects: &[EffectInstance]) -> Vec<EffectCardConfig> {
             }
         }).collect();
 
+        // Per-param driver state (Unity: SyncFromDataModel driver loop)
+        let mut has_drv = false;
+        let mut driver_active = vec![false; n];
+        let mut trim_min = vec![0.0f32; n];
+        let mut trim_max = vec![1.0f32; n];
+        if let Some(ref drivers) = fx.drivers {
+            for d in drivers {
+                let pi = d.param_index as usize;
+                if pi < n && d.enabled {
+                    has_drv = true;
+                    driver_active[pi] = true;
+                    trim_min[pi] = d.trim_min;
+                    trim_max[pi] = d.trim_max;
+                }
+            }
+        }
+
+        // Per-param envelope state (Unity: SyncFromDataModel envelope loop)
+        let mut has_env = false;
+        let mut envelope_active = vec![false; n];
+        let mut target_norm = vec![1.0f32; n];
+        let mut env_attack = vec![0.0f32; n];
+        let mut env_decay = vec![0.0f32; n];
+        let mut env_sustain = vec![0.0f32; n];
+        let mut env_release = vec![0.0f32; n];
+        for env in envelopes {
+            if env.target_effect_type == fx.effect_type && env.enabled {
+                let pi = env.param_index as usize;
+                if pi < n {
+                    has_env = true;
+                    envelope_active[pi] = true;
+                    target_norm[pi] = env.target_normalized;
+                    env_attack[pi] = env.attack_beats;
+                    env_decay[pi] = env.decay_beats;
+                    env_sustain[pi] = env.sustain_level;
+                    env_release[pi] = env.release_beats;
+                }
+            }
+        }
+
         EffectCardConfig {
             effect_index: i,
             name: fx.effect_type.display_name().to_string(),
             enabled: fx.enabled,
+            collapsed: fx.collapsed,
             supports_envelopes: true,
             params,
+            has_drv,
+            has_env,
+            driver_active,
+            envelope_active,
+            trim_min,
+            trim_max,
+            target_norm,
+            env_attack,
+            env_decay,
+            env_sustain,
+            env_release,
         }
     }).collect()
 }

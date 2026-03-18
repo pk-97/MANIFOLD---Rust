@@ -69,17 +69,44 @@ pub struct EffectParamInfo {
 }
 
 /// Configuration for creating an effect card.
+/// Unity: EffectCardState.SyncFromDataModel — all data-derived visual state in one struct.
 #[derive(Debug, Clone)]
 pub struct EffectCardConfig {
     pub effect_index: usize,
     pub name: String,
     pub enabled: bool,
+    pub collapsed: bool,
     pub supports_envelopes: bool,
     pub params: Vec<EffectParamInfo>,
+    /// Aggregate: true if ANY param has an active driver.
+    pub has_drv: bool,
+    /// Aggregate: true if ANY param has an active envelope.
+    pub has_env: bool,
+    /// Per-param: true if driver exists and is enabled (Unity: driverExpanded[]).
+    pub driver_active: Vec<bool>,
+    /// Per-param: true if envelope exists and is enabled (Unity: envelopeExpanded[]).
+    pub envelope_active: Vec<bool>,
+    /// Per-param driver trim min (normalized). Defaults to 0.0.
+    pub trim_min: Vec<f32>,
+    /// Per-param driver trim max (normalized). Defaults to 1.0.
+    pub trim_max: Vec<f32>,
+    /// Per-param envelope target (normalized). Defaults to 1.0.
+    pub target_norm: Vec<f32>,
+    /// Per-param envelope ADSR values (beats).
+    pub env_attack: Vec<f32>,
+    pub env_decay: Vec<f32>,
+    pub env_sustain: Vec<f32>,
+    pub env_release: Vec<f32>,
 }
 
 /// Per-parameter expansion and modulation state.
+/// Unity: EffectCardState — presenter-owned, single source of truth for
+/// all data-derived visual state. Panels read from this.
 pub struct EffectCardState {
+    /// Aggregate: any param has active driver. Used for DRV badge.
+    pub has_drv: bool,
+    /// Aggregate: any param has active envelope. Used for ENV badge.
+    pub has_env: bool,
     pub driver_expanded: Vec<bool>,
     pub envelope_expanded: Vec<bool>,
     pub trim_min: Vec<f32>,
@@ -94,6 +121,8 @@ pub struct EffectCardState {
 impl EffectCardState {
     pub fn new(param_count: usize) -> Self {
         Self {
+            has_drv: false,
+            has_env: false,
             driver_expanded: vec![false; param_count],
             envelope_expanded: vec![false; param_count],
             trim_min: vec![0.0; param_count],
@@ -157,6 +186,11 @@ pub struct EffectCardPanel {
     border_id: i32,
     inner_bg_id: i32,
 
+    // Dirty-check cache (Unity: EffectCardBitmapPanel.cachedEnabled/cachedHasEnv/cachedHasDrv)
+    cached_enabled: bool,
+    cached_has_env: bool,
+    cached_has_drv: bool,
+
     // Node IDs — header
     header_bg_id: i32,
     drag_icon_id: i32,
@@ -164,7 +198,9 @@ pub struct EffectCardPanel {
     toggle_btn_id: i32,
     chevron_btn_id: i32,
     env_badge_bg_id: i32,
+    env_badge_text_id: i32,
     drv_badge_bg_id: i32,
+    drv_badge_text_id: i32,
 
     // Node IDs — per-param
     slider_ids: Vec<Option<SliderNodeIds>>,
@@ -202,6 +238,9 @@ impl EffectCardPanel {
             supports_envelopes: true,
             param_info: Vec::new(),
             state: EffectCardState::new(0),
+            cached_enabled: true,
+            cached_has_env: false,
+            cached_has_drv: false,
             border_id: -1,
             inner_bg_id: -1,
             header_bg_id: -1,
@@ -210,7 +249,9 @@ impl EffectCardPanel {
             toggle_btn_id: -1,
             chevron_btn_id: -1,
             env_badge_bg_id: -1,
+            env_badge_text_id: -1,
             drv_badge_bg_id: -1,
+            drv_badge_text_id: -1,
             slider_ids: Vec::new(),
             driver_btn_ids: Vec::new(),
             envelope_btn_ids: Vec::new(),
@@ -231,15 +272,33 @@ impl EffectCardPanel {
     }
 
     /// Configure with effect metadata. Call before build.
+    /// Unity: EffectCardPresenter creates EffectCard with state.SyncFromDataModel().
+    /// All data-derived visual state is populated from the config (which was built from
+    /// EffectInstance + envelopes + drivers in the app layer).
     pub fn configure(&mut self, config: &EffectCardConfig) {
         self.effect_index = config.effect_index;
         self.effect_name = config.name.clone();
         self.enabled = config.enabled;
+        self.is_collapsed = config.collapsed;
         self.supports_envelopes = config.supports_envelopes;
         self.param_info = config.params.clone();
 
         let n = config.params.len();
         self.state = EffectCardState::new(n);
+        // Sync modulation state from config (Unity: SyncFromDataModel)
+        self.state.has_drv = config.has_drv;
+        self.state.has_env = config.has_env;
+        for i in 0..n {
+            self.state.driver_expanded[i] = config.driver_active.get(i).copied().unwrap_or(false);
+            self.state.envelope_expanded[i] = config.envelope_active.get(i).copied().unwrap_or(false);
+            self.state.trim_min[i] = config.trim_min.get(i).copied().unwrap_or(0.0);
+            self.state.trim_max[i] = config.trim_max.get(i).copied().unwrap_or(1.0);
+            self.state.target_norm[i] = config.target_norm.get(i).copied().unwrap_or(1.0);
+            self.state.env_attack[i] = config.env_attack.get(i).copied().unwrap_or(0.0);
+            self.state.env_decay[i] = config.env_decay.get(i).copied().unwrap_or(0.0);
+            self.state.env_sustain[i] = config.env_sustain.get(i).copied().unwrap_or(0.0);
+            self.state.env_release[i] = config.env_release.get(i).copied().unwrap_or(0.0);
+        }
         self.slider_ids = vec![None; n];
         self.driver_btn_ids = vec![-1; n];
         self.envelope_btn_ids = vec![-1; n];
@@ -382,7 +441,8 @@ impl EffectCardPanel {
             },
         ) as i32;
 
-        // ENV badge (hidden initially)
+        // ENV badge — visibility synced from state.has_env via sync_badges()
+        let show_env = self.state.has_env;
         self.env_badge_bg_id = tree.add_panel(
             self.header_bg_id, env_x, badge_y, BADGE_W, BADGE_H,
             UIStyle {
@@ -391,9 +451,22 @@ impl EffectCardPanel {
                 ..UIStyle::default()
             },
         ) as i32;
-        tree.set_visible(self.env_badge_bg_id as u32, false);
+        self.env_badge_text_id = tree.add_label(
+            self.env_badge_bg_id, env_x, badge_y, BADGE_W, BADGE_H,
+            "ENV",
+            UIStyle {
+                text_color: color::TEXT_WHITE_C32,
+                font_size: 7,
+                font_weight: FontWeight::Bold,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+        ) as i32;
+        tree.set_visible(self.env_badge_bg_id as u32, show_env);
+        tree.set_visible(self.env_badge_text_id as u32, show_env);
 
-        // DRV badge (hidden initially)
+        // DRV badge — visibility synced from state.has_drv via sync_badges()
+        let show_drv = self.state.has_drv;
         self.drv_badge_bg_id = tree.add_panel(
             self.header_bg_id, drv_x, badge_y, BADGE_W, BADGE_H,
             UIStyle {
@@ -402,7 +475,22 @@ impl EffectCardPanel {
                 ..UIStyle::default()
             },
         ) as i32;
-        tree.set_visible(self.drv_badge_bg_id as u32, false);
+        self.drv_badge_text_id = tree.add_label(
+            self.drv_badge_bg_id, drv_x, badge_y, BADGE_W, BADGE_H,
+            "DRV",
+            UIStyle {
+                text_color: color::TEXT_WHITE_C32,
+                font_size: 7,
+                font_weight: FontWeight::Bold,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+        ) as i32;
+        tree.set_visible(self.drv_badge_bg_id as u32, show_drv);
+        tree.set_visible(self.drv_badge_text_id as u32, show_drv);
+        self.cached_has_env = show_env;
+        self.cached_has_drv = show_drv;
+        self.cached_enabled = self.enabled;
 
         // Toggle button (ON/OFF)
         let toggle_style = toggle_btn_style(self.enabled);
@@ -737,7 +825,30 @@ impl EffectCardPanel {
     // ── Sync methods ─────────────────────────────────────────────
 
     /// Push param values from the engine. Updates sliders on change.
+    /// Unity: EffectCardBitmapPanel.SyncValues — dirty-checks enabled, badges,
+    /// and per-param values. Only updates tree when values actually changed.
     pub fn sync_values(&mut self, tree: &mut UITree, values: &[f32]) {
+        // Toggle state dirty-check (Unity: state.enabled != cachedEnabled)
+        if self.enabled != self.cached_enabled {
+            self.cached_enabled = self.enabled;
+            tree.set_style(self.toggle_btn_id as u32, toggle_btn_style(self.enabled));
+            tree.set_text(self.toggle_btn_id as u32, if self.enabled { "ON" } else { "OFF" });
+        }
+
+        // Badge visibility dirty-check (Unity: ApplyModulationVisuals)
+        if self.state.has_env != self.cached_has_env || self.state.has_drv != self.cached_has_drv {
+            self.cached_has_env = self.state.has_env;
+            self.cached_has_drv = self.state.has_drv;
+            tree.set_visible(self.env_badge_bg_id as u32, self.cached_has_env);
+            tree.set_visible(self.env_badge_text_id as u32, self.cached_has_env);
+            tree.set_visible(self.drv_badge_bg_id as u32, self.cached_has_drv);
+            tree.set_visible(self.drv_badge_text_id as u32, self.cached_has_drv);
+        }
+
+        // Skip slider sync if collapsed (Unity: if (state.collapsed) return)
+        if self.is_collapsed { return; }
+
+        // Per-param slider values (dirty-check via param_cache)
         for (i, &val) in values.iter().enumerate().take(self.param_info.len()) {
             if val != self.param_cache[i] || self.param_cache[i].is_nan() {
                 self.param_cache[i] = val;
@@ -758,12 +869,10 @@ impl EffectCardPanel {
         }
     }
 
-    pub fn sync_enabled(&mut self, tree: &mut UITree, enabled: bool) {
+    pub fn sync_enabled(&mut self, _tree: &mut UITree, enabled: bool) {
+        // Just update the field — actual tree update happens in sync_values() dirty-check.
+        // Unity: SyncValues() handles enabled state via dirty-checking.
         self.enabled = enabled;
-        if self.toggle_btn_id >= 0 {
-            tree.set_style(self.toggle_btn_id as u32, toggle_btn_style(enabled));
-            tree.set_text(self.toggle_btn_id as u32, if enabled { "ON" } else { "OFF" });
-        }
     }
 
     // ── Event handling ───────────────────────────────────────────
@@ -1080,15 +1189,28 @@ mod tests {
     use crate::tree::UITree;
 
     fn test_config() -> EffectCardConfig {
+        let n = 2;
         EffectCardConfig {
             effect_index: 0,
             name: "Blur".into(),
             enabled: true,
+            collapsed: false,
             supports_envelopes: true,
             params: vec![
                 EffectParamInfo { name: "Radius".into(), min: 0.0, max: 100.0, default: 10.0, whole_numbers: true },
                 EffectParamInfo { name: "Strength".into(), min: 0.0, max: 1.0, default: 0.5, whole_numbers: false },
             ],
+            has_drv: false,
+            has_env: false,
+            driver_active: vec![false; n],
+            envelope_active: vec![false; n],
+            trim_min: vec![0.0; n],
+            trim_max: vec![1.0; n],
+            target_norm: vec![1.0; n],
+            env_attack: vec![0.0; n],
+            env_decay: vec![0.0; n],
+            env_sustain: vec![0.0; n],
+            env_release: vec![0.0; n],
         }
     }
 

@@ -211,6 +211,19 @@ impl UITree {
         }
     }
 
+    /// Reparent all root-level nodes (parent_id == -1) in the index range
+    /// [from_index..from_index+count) under the given parent.
+    /// Used by the inspector to wrap built sub-panel nodes under a ClipRegion.
+    pub fn reparent_root_nodes(&mut self, from_index: usize, count: usize, new_parent: i32) {
+        let end = (from_index + count).min(self.count);
+        for i in from_index..end {
+            if self.parent_index[i] == -1 {
+                self.parent_index[i] = new_parent;
+                self.link_child(i as i32, new_parent);
+            }
+        }
+    }
+
     // ── Mutation (O(1), marks dirty) ────────────────────────────────
 
     pub fn set_bounds(&mut self, id: u32, bounds: Rect) {

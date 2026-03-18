@@ -612,6 +612,21 @@ impl Panel for InspectorCompositePanel {
             UIStyle { bg_color: color::INSPECTOR_BG, ..UIStyle::default() },
         ) as i32;
 
+        // ClipRegion — clips all scrolled content to the inspector viewport.
+        // Unity: InspectorCompositeBitmapPanel uses a viewport-sized RT for natural clipping.
+        // Rust equivalent: a ClipRegion node with CLIPS_CHILDREN flag.
+        let clip_id = tree.add_node(
+            -1,
+            rect,
+            crate::node::UINodeType::ClipRegion,
+            UIStyle::default(),
+            None,
+            UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
+        ) as i32;
+
+        // Track the start index so we can reparent all content nodes under the clip region
+        let content_start = tree.count();
+
         let mut cy = rect.y - self.scroll_offset;
 
         // Master section
@@ -712,7 +727,13 @@ impl Panel for InspectorCompositePanel {
             }
         }
 
-        // Scrollbar track + thumb
+        // Reparent all content nodes (chrome + cards + buttons) under the clip region.
+        // This ensures scrolled content is clipped to the inspector viewport and
+        // doesn't bleed over the transport bar when scroll_offset > 0.
+        let content_count = tree.count() - content_start;
+        tree.reparent_root_nodes(content_start, content_count, clip_id);
+
+        // Scrollbar track + thumb (NOT clipped — always visible at viewport edge)
         let sb_x = rect.x + content_w;
         self.scrollbar_track_id = tree.add_button(
             -1, sb_x, rect.y, SCROLLBAR_W, rect.height,

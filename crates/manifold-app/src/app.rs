@@ -886,9 +886,23 @@ impl Application {
         // Partial rebuild: only scroll/zoom changed — rebuild viewport + layer_headers,
         // preserve transport, header, footer, inspector nodes.
         // From Unity: CheckScrollAndInvalidate only repaints affected layers.
+        //
+        // GUARD: If the inspector has an active drag (slider being dragged), defer
+        // the rebuild to prevent node destruction mid-drag which causes snap-back.
+        // Unity avoids this because rebuilds only happen on structural changes and
+        // SyncValues() dirty-checks against the data model without rebuilding.
+        let inspector_dragging = self.ui_root.inspector.is_dragging();
         if self.needs_rebuild || needs_structural_sync {
-            self.needs_rebuild = false;
-            self.ui_root.build();
+            if inspector_dragging {
+                // Defer — keep needs_rebuild set so it fires after drag ends
+                // But still rebuild scroll panels if needed (they're separate from inspector)
+                if scroll_changed {
+                    self.ui_root.rebuild_scroll_panels();
+                }
+            } else {
+                self.needs_rebuild = false;
+                self.ui_root.build();
+            }
         } else if scroll_changed {
             self.ui_root.rebuild_scroll_panels();
         }
