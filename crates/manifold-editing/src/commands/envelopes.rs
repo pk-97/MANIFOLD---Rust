@@ -314,3 +314,78 @@ impl Command for RemoveLayerEnvelopeCommand {
 
     fn description(&self) -> &str { "Remove Layer Envelope" }
 }
+
+/// Atomically capture/restore ALL envelope state (ADSR + target + enabled).
+/// Port of Unity SettingsCommands.cs lines 715-770: ChangeParamEnvelopeCommand.
+/// Unity has ONE command that captures everything; Rust previously split this
+/// into separate ADSR/target/enabled commands. This atomic version matches Unity.
+#[derive(Debug)]
+pub struct ChangeParamEnvelopeCommand {
+    clip_id: String,
+    env_index: usize,
+    old_attack: f32,
+    old_decay: f32,
+    old_sustain: f32,
+    old_release: f32,
+    old_target_normalized: f32,
+    old_enabled: bool,
+    new_attack: f32,
+    new_decay: f32,
+    new_sustain: f32,
+    new_release: f32,
+    new_target_normalized: f32,
+    new_enabled: bool,
+}
+
+impl ChangeParamEnvelopeCommand {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        clip_id: String,
+        env_index: usize,
+        old_attack: f32, old_decay: f32, old_sustain: f32, old_release: f32,
+        old_target_normalized: f32, old_enabled: bool,
+        new_attack: f32, new_decay: f32, new_sustain: f32, new_release: f32,
+        new_target_normalized: f32, new_enabled: bool,
+    ) -> Self {
+        Self {
+            clip_id, env_index,
+            old_attack, old_decay, old_sustain, old_release,
+            old_target_normalized, old_enabled,
+            new_attack, new_decay, new_sustain, new_release,
+            new_target_normalized, new_enabled,
+        }
+    }
+
+    fn apply(clip: &mut manifold_core::clip::TimelineClip, idx: usize,
+             a: f32, d: f32, s: f32, r: f32, target: f32, enabled: bool) {
+        let envs = clip.envelopes_mut();
+        if let Some(env) = envs.get_mut(idx) {
+            env.attack_beats = a;
+            env.decay_beats = d;
+            env.sustain_level = s;
+            env.release_beats = r;
+            env.target_normalized = target;
+            env.enabled = enabled;
+        }
+    }
+}
+
+impl Command for ChangeParamEnvelopeCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
+            Self::apply(clip, self.env_index,
+                self.new_attack, self.new_decay, self.new_sustain, self.new_release,
+                self.new_target_normalized, self.new_enabled);
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
+            Self::apply(clip, self.env_index,
+                self.old_attack, self.old_decay, self.old_sustain, self.old_release,
+                self.old_target_normalized, self.old_enabled);
+        }
+    }
+
+    fn description(&self) -> &str { "Change Param Envelope" }
+}

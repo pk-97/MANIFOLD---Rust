@@ -1,5 +1,6 @@
 use std::any::Any;
 use manifold_core::clip::TimelineClip;
+use manifold_core::project::Project;
 
 /// Abstraction over clip renderers (video player pool, generator renderer, etc.).
 /// Port of C# IClipRenderer interface.
@@ -8,6 +9,11 @@ pub trait ClipRenderer: Any {
     fn start_clip(&mut self, clip: &TimelineClip, current_time: f32) -> bool;
     fn stop_clip(&mut self, clip_id: &str);
     fn release_all(&mut self);
+
+    /// Called when a project is loaded/changed.
+    /// Port of C# IClipRenderer.OnProjectLoaded (lines 16-17).
+    fn on_project_loaded(&mut self, _project: &Project) {}
+
 
     fn is_clip_ready(&self, clip_id: &str) -> bool;
     fn is_active(&self, clip_id: &str) -> bool;

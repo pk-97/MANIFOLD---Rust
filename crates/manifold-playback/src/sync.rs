@@ -1,7 +1,22 @@
-use manifold_core::types::ClockAuthority;
+use manifold_core::types::{ClockAuthority, PlaybackState};
 use manifold_core::project::Project;
 
-/// Target interface for SyncArbiter to call into.
+/// Read-only view of playback state for sync controllers.
+/// Sync controllers hold this instead of PlaybackController to enforce
+/// structural separation: reads go through SyncTarget, writes go through SyncArbiter.
+/// Port of C# ISyncTarget.cs lines 8-16.
+pub trait SyncTarget {
+    fn current_state(&self) -> PlaybackState;
+    fn current_time(&self) -> f32;
+    fn is_playing(&self) -> bool;
+    fn timeline_beat_to_time(&self, beat: f32) -> f32;
+    fn current_project(&self) -> Option<&Project>;
+}
+
+/// Write surface for SyncArbiter to forward gated commands.
+/// Implemented by PlaybackController. Separated from SyncTarget so that
+/// sync controllers cannot access mutation methods directly.
+/// Port of C# ISyncArbiterTarget.cs lines 20-30.
 pub trait SyncArbiterTarget {
     fn current_project(&self) -> Option<&Project>;
     fn external_time_sync(&self) -> bool;

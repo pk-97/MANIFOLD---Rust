@@ -56,12 +56,17 @@ impl LiveClipHost for MockHost {
     fn current_time(&self) -> f32 { self.time }
     fn is_recording(&self) -> bool { self.recording }
     fn is_playing(&self) -> bool { self.playing }
+    fn show_debug_logs(&self) -> bool { false }
     fn get_bpm_at_beat(&self, _beat: f32) -> f32 { self.bpm }
+    fn get_tempo_source_at_beat(&self, _beat: f32) -> manifold_core::types::TempoPointSource {
+        manifold_core::types::TempoPointSource::Unknown
+    }
     fn get_beat_snapped_beat(&self) -> f32 { self.beat }
     fn get_current_absolute_tick(&self) -> i32 { self.current_tick }
     fn stop_clip(&mut self, clip_id: &str) { self.stopped_clips.push(clip_id.to_string()); }
     fn mark_sync_dirty(&mut self) { self.sync_dirty = true; }
     fn mark_compositor_dirty(&mut self) { self.compositor_dirty = true; }
+    fn invalidate_lookahead_prewarm(&mut self) {}
     fn register_clip_lookup(&mut self, clip_id: &str, clip: &TimelineClip) {
         self.registered_clips.insert(clip_id.to_string(), clip.clone());
     }

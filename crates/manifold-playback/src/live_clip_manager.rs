@@ -1,6 +1,6 @@
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
-use manifold_core::types::{GeneratorType, QuantizeMode};
+use manifold_core::types::{GeneratorType, QuantizeMode, TempoPointSource};
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::AddClipCommand;
 
@@ -12,17 +12,21 @@ pub const MIDI_CLOCK_TICKS_PER_BEAT: i32 = 24;
 const TICKS_PER_SIXTEENTH: i32 = MIDI_CLOCK_TICKS_PER_BEAT / 4; // 6
 
 /// Host interface for LiveClipManager.
+/// Port of C# ILiveClipHost.cs.
 pub trait LiveClipHost {
     fn current_beat(&self) -> f32;
     fn current_time(&self) -> f32;
     fn is_recording(&self) -> bool;
     fn is_playing(&self) -> bool;
+    fn show_debug_logs(&self) -> bool;
     fn get_bpm_at_beat(&self, beat: f32) -> f32;
+    fn get_tempo_source_at_beat(&self, beat: f32) -> TempoPointSource;
     fn get_beat_snapped_beat(&self) -> f32;
     fn get_current_absolute_tick(&self) -> i32;
     fn stop_clip(&mut self, clip_id: &str);
     fn mark_sync_dirty(&mut self);
     fn mark_compositor_dirty(&mut self);
+    fn invalidate_lookahead_prewarm(&mut self);
     fn register_clip_lookup(&mut self, clip_id: &str, clip: &TimelineClip);
     fn record_command(&mut self, cmd: Box<dyn Command>);
     fn beat_to_timeline_time(&self, beat: f32) -> f32;
@@ -613,8 +617,9 @@ impl LiveClipManager {
             let mut committed = live_clip;
             committed.duration_beats = held_beats;
 
-            // If held longer than original, enable looping
-            if held_beats > original_duration {
+            // If held longer than original + epsilon, enable looping.
+            // Port of C# LiveClipManager commit: heldBeats > liveClip.DurationBeats + 0.001f
+            if held_beats > original_duration + 0.001 {
                 committed.is_looping = true;
                 committed.loop_duration_beats = original_duration;
             }
@@ -632,6 +637,71 @@ impl LiveClipManager {
 
         host.mark_sync_dirty();
         host.mark_compositor_dirty();
+    }
+
+    // ─── Recording provenance (Phase 7C) ───
+
+    /// Track recording clip start for tempo/provenance metadata.
+    /// Port of C# LiveClipManager.TrackRecordingClipStart (lines 820-834).
+    /// Requires TempoRecorder (not yet ported) — stubbed.
+    pub fn track_recording_clip_start(
+        &self,
+        _host: &dyn LiveClipHost,
+        _clip: &TimelineClip,
+        _midi_note: i32,
+    ) {
+        // TODO: Port TempoRecorder.TrackClipStart() when RecordingProvenance is ported.
+        // Unity tracks: clip ID, video clip ID, layer index, MIDI note, start beat,
+        // start absolute tick, timeline time, BPM, tempo source, MIDI clock PPQ.
+    }
+
+    /// Finalize recording clip provenance metadata.
+    /// Port of C# LiveClipManager.FinalizeRecordingClip (lines 836-849).
+    pub fn finalize_recording_clip(
+        &self,
+        _host: &dyn LiveClipHost,
+        _live_clip: &TimelineClip,
+        _recorded_clip: &TimelineClip,
+        _end_beat: f32,
+        _end_absolute_tick: i32,
+        _midi_note: i32,
+    ) {
+        // TODO: Port TempoRecorder.FinalizeClip() when RecordingProvenance is ported.
+    }
+
+    /// Remove a recording clip start tracking entry.
+    /// Port of C# LiveClipManager.RemoveRecordingClipStart (lines 851-858).
+    pub fn remove_recording_clip_start(&self, _clip_id: &str) {
+        // TODO: Port when RecordingProvenance is ported.
+    }
+
+    // ─── Prewarm candidates (Phase 7D) ───
+
+    /// Append live clip prewarm candidates for video decoding.
+    /// Port of C# LiveClipManager.AppendLivePrewarmCandidates (lines 860-965).
+    ///
+    /// This populates prewarmed clip candidates based on:
+    /// - Currently active live slots
+    /// - Recently triggered clips (recency priority)
+    /// - MIDI-mapped layer source clips
+    ///
+    /// Requires MidiMapping and VideoLibrary infrastructure (not yet ported) — stubbed.
+    pub fn append_live_prewarm_candidates(
+        &self,
+        _candidates: &mut Vec<TimelineClip>,
+        _max_unique: usize,
+        _existing_ids: &HashSet<String>,
+    ) {
+        // TODO: Port full prewarm logic when MidiMapping and VideoLibrary are ported.
+        // For now, add currently active live slot clips as prewarm candidates.
+        for (_, clip) in &self.live_slots {
+            if _candidates.len() >= _max_unique {
+                break;
+            }
+            if !_existing_ids.contains(&clip.id) {
+                _candidates.push(clip.clone());
+            }
+        }
     }
 }
 

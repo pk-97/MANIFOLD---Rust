@@ -1,4 +1,5 @@
-use manifold_core::types::{ClockAuthority, LayerType, PlaybackState, TempoPointSource};
+use manifold_core::layer::Layer;
+use manifold_core::types::{ClockAuthority, GeneratorType, LayerType, PlaybackState, TempoPointSource};
 use manifold_core::clip::TimelineClip;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
@@ -10,6 +11,15 @@ use crate::active_window::ActiveTimelineClipWindow;
 use crate::live_clip_manager::LiveClipManager;
 
 use std::collections::{HashMap, HashSet};
+
+// ─── Playback notification trait ───
+
+/// Callback interface for playback events that affect the compositor/UI.
+/// Port of C# IPlaybackNotifier.cs lines 9-18.
+pub trait PlaybackNotifier {
+    fn mark_compositor_dirty(&mut self);
+    fn notify_generator_type_changed(&mut self, layer: &Layer, new_type: GeneratorType);
+}
 
 // ─── Constants ───
 
@@ -125,9 +135,28 @@ pub struct PlaybackEngine {
     // Re-entrancy guard
     is_ticking: bool,
 
-    // Logging (optional)
+    // Logging (optional). Port of C# PlaybackEngine lines 248-253.
     pub log: Option<Box<dyn Fn(&str)>>,
     pub log_warning: Option<Box<dyn Fn(&str)>>,
+    pub log_error: Option<Box<dyn Fn(&str)>>,
+
+    // Callback delegates. Port of C# PlaybackEngine lines 254-275.
+    pub replenish_warm_cache: Option<Box<dyn Fn(&[TimelineClip])>>,
+    pub on_drift_corrected: Option<Box<dyn Fn(&str, f32)>>,
+    pub beat_snapped_beat_resolver: Option<Box<dyn Fn() -> f32>>,
+    pub absolute_tick_resolver: Option<Box<dyn Fn() -> i32>>,
+    pub record_command_delegate: Option<Box<dyn Fn(Box<dyn manifold_editing::command::Command>)>>,
+
+    // Debug flag. Port of C# PlaybackEngine.showDebugLogs.
+    pub show_debug_logs: bool,
+
+    // Cached media length resolver. Port of C# PlaybackEngine line 201.
+    cached_get_media_length: HashMap<String, f32>,
+
+    // Sort comparator scratch. Port of C# PlaybackEngine lines 211-214.
+    // Rust uses closures for sorting — no static delegates needed, but
+    // we keep the scratch buffers for zero-alloc iteration.
+    to_pause_list: Vec<String>,
 }
 
 impl PlaybackEngine {
@@ -172,6 +201,15 @@ impl PlaybackEngine {
             is_ticking: false,
             log: None,
             log_warning: None,
+            log_error: None,
+            replenish_warm_cache: None,
+            on_drift_corrected: None,
+            beat_snapped_beat_resolver: None,
+            absolute_tick_resolver: None,
+            record_command_delegate: None,
+            show_debug_logs: false,
+            cached_get_media_length: HashMap::with_capacity(32),
+            to_pause_list: Vec::with_capacity(8),
         }
     }
 
@@ -605,7 +643,7 @@ impl PlaybackEngine {
 
     // ─── Pending pauses ───
 
-    fn process_pending_pauses(&mut self, realtime_now: f64) {
+    pub fn process_pending_pauses(&mut self, realtime_now: f64) {
         let expired: Vec<String> = self.pending_pauses.iter()
             .filter(|(_, &deadline)| realtime_now >= deadline)
             .map(|(id, _)| id.clone())
@@ -635,12 +673,90 @@ impl PlaybackEngine {
         self.compositor_dirty_deadline = realtime_now + COMPOSITOR_DIRTY_TIME as f64;
     }
 
+    // ─── Prewarm ───
+
+    /// Invalidate the prewarm cache so the next tick rebuilds it.
+    /// Port of C# PlaybackEngine.InvalidatePrewarm (line 418).
+    pub fn invalidate_prewarm(&mut self) {
+        self.next_prewarm_at = 0.0;
+        self.last_prewarm_ids.clear();
+    }
+
+    // ─── Clip loop state ───
+
+    /// Update a clip's looping state in the engine's tracking sets and notify its renderer.
+    /// Port of C# PlaybackEngine.SyncClipLoopState (lines 1111-1138).
+    pub fn sync_clip_loop_state(&mut self, clip: &TimelineClip) {
+        let clip_id = &clip.id;
+
+        if clip.is_looping {
+            self.looping_clip_ids.insert(clip_id.clone());
+        } else {
+            self.looping_clip_ids.remove(clip_id);
+        }
+
+        if let Some(&renderer_idx) = self.active_clip_renderers.get(clip_id) {
+            self.renderers[renderer_idx].set_clip_looping(clip_id, clip.is_looping);
+
+            // Apply playback rate after loop change
+            let rate = self.compute_clip_playback_rate(clip);
+            self.renderers[renderer_idx].set_clip_playback_rate(clip_id, rate);
+
+            // Seek to correct loop position if looping enabled
+            if clip.is_looping && clip.loop_duration_beats > 0.0 {
+                let bpm = self.project.as_ref().map(|p| p.settings.bpm).unwrap_or(120.0);
+                let spb = 60.0 / bpm.max(20.0);
+                let clip_start_time = clip.start_beat * spb;
+                let loop_dur_seconds = clip.loop_duration_beats * spb;
+                let media_length = self.renderers[renderer_idx].get_clip_media_length(clip_id);
+                let video_time = crate::video_time::compute_video_time(
+                    self.current_time,
+                    clip_start_time,
+                    clip.in_point,
+                    clip.is_looping,
+                    loop_dur_seconds,
+                    media_length,
+                    rate,
+                );
+                self.renderers[renderer_idx].seek_clip(clip_id, video_time);
+            }
+        }
+    }
+
+    /// Compute clip playback rate matching Unity's ApplyClipPlaybackRate.
+    fn compute_clip_playback_rate(&self, clip: &TimelineClip) -> f32 {
+        if clip.recorded_bpm > 0.0 {
+            let current_bpm = self.project.as_ref().map(|p| p.settings.bpm).unwrap_or(120.0);
+            (current_bpm / clip.recorded_bpm).clamp(MIN_CLIP_PLAYBACK_RATE, MAX_CLIP_PLAYBACK_RATE)
+        } else {
+            1.0
+        }
+    }
+
+    // ─── Pending pause management ───
+
+    /// Clear all pending pauses.
+    /// Port of C# PlaybackEngine.ClearPendingPauses (line 1171).
+    pub fn clear_pending_pauses(&mut self) {
+        self.pending_pauses.clear();
+        self.to_pause_list.clear();
+    }
+
+    // ─── Active clip queries ───
+
+    /// Return timeline active clips at the current beat.
+    /// Port of C# PlaybackEngine.GetTimelineActiveClipsAtCurrentBeat (lines 1031-1056).
+    pub fn get_timeline_active_clips_at_current_beat(&mut self) -> &[TimelineClip] {
+        self.query_active_timeline_clips();
+        &self.timeline_active_scratch
+    }
+
     // ─── Sync ───
 
     /// Re-synchronize active clips to current playback position.
     /// Called by play() and seek_to() for immediate state consistency.
     /// The heart of deterministic playback — idempotent.
-    fn sync_clips_to_time(&mut self) {
+    pub fn sync_clips_to_time(&mut self) {
         if self.project.is_none() {
             return;
         }

@@ -1,3 +1,4 @@
+use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use std::fmt::Debug;
 
@@ -6,6 +7,15 @@ pub trait Command: Debug {
     fn execute(&mut self, project: &mut Project);
     fn undo(&mut self, project: &mut Project);
     fn description(&self) -> &str;
+}
+
+/// Callbacks for layer lifecycle events (add/remove).
+/// Port of C# ILayerLifecycleCallbacks.cs lines 10-14.
+/// Used by layer add/delete commands to notify UI/compositing for
+/// OSC registration, effect cleanup, etc.
+pub trait LayerLifecycleCallbacks {
+    fn on_layer_added(&mut self, layer: &Layer);
+    fn on_layer_removed(&mut self, layer: &Layer);
 }
 
 /// Composite command that groups multiple commands.

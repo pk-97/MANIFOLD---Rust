@@ -96,7 +96,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: f32) -> bool {
                     // Collect driver evaluation results to avoid borrow conflict
                     let results: Vec<(usize, f32)> = drivers
                         .iter()
-                        .filter(|d| d.enabled)
+                        .filter(|d| d.enabled && !d.is_paused_by_user)
                         .filter_map(|driver| {
                             let idx = driver.param_index as usize;
                             if idx >= gen_defs.len() {
@@ -157,7 +157,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: f32) -> bool {
     // Collect results to avoid borrow conflict between drivers and param_values
     let results: Vec<(usize, f32)> = drivers
         .iter()
-        .filter(|d| d.enabled)
+        .filter(|d| d.enabled && !d.is_paused_by_user)
         .filter_map(|driver| {
             let idx = driver.param_index as usize;
             if idx >= effect_defs.len() {
@@ -224,30 +224,54 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
             }
         }
 
-        // Evaluate clip envelopes (each clip may have its own envelopes on its effects)
+        // Evaluate clip envelopes (each clip may have its own envelopes on its effects).
+        // Uses index-based iteration to avoid cloning the envelope list (Phase 9C fix).
         for clip in layer.clips.iter_mut() {
             if clip.is_muted || clip.effects.is_empty() {
                 continue;
             }
 
-            let envelopes = match &clip.envelopes {
-                Some(envs) if !envs.is_empty() => envs.clone(),
-                _ => continue,
-            };
+            let env_count = clip.envelopes.as_ref().map_or(0, |e| e.len());
+            if env_count == 0 {
+                continue;
+            }
 
             let clip_elapsed = current_beat - clip.start_beat;
             if clip_elapsed < 0.0 || clip_elapsed >= clip.duration_beats {
                 continue;
             }
 
-            for env in &envelopes {
-                if !env.enabled {
+            for ei in 0..env_count {
+                // Read envelope data by index (avoids borrow conflict with effects)
+                let (enabled, target_effect_type, param_index, attack, decay, sustain, release, target_norm) = {
+                    let env = &clip.envelopes.as_ref().unwrap()[ei];
+                    (env.enabled, env.target_effect_type, env.param_index, env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats, env.target_normalized)
+                };
+
+                if !enabled {
                     continue;
+                }
+
+                let adsr_value = ParamEnvelope::calculate_adsr(
+                    clip_elapsed,
+                    clip.duration_beats,
+                    attack,
+                    decay,
+                    sustain,
+                    release,
+                );
+
+                // Write back currentLevel for UI visualization (Phase 9B fix).
+                // Port of C# EnvelopeEvaluator line 96: env.currentLevel = adsrValue.
+                if let Some(envs) = &mut clip.envelopes {
+                    if let Some(env) = envs.get_mut(ei) {
+                        env.current_level = adsr_value;
+                    }
                 }
 
                 // Find the target effect on this clip
                 let target_fx = clip.effects.iter_mut().find(|f| {
-                    f.effect_type == env.target_effect_type && f.enabled
+                    f.effect_type == target_effect_type && f.enabled
                 });
                 let fx = match target_fx {
                     Some(f) => f,
@@ -255,25 +279,16 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
                 };
 
                 let effect_defs = fx.effect_type.param_defs();
-                let idx = env.param_index as usize;
+                let idx = param_index as usize;
                 if idx >= effect_defs.len() || idx >= fx.param_values.len() {
                     continue;
                 }
 
                 let (_, min, max, _, _) = effect_defs[idx];
 
-                let adsr_value = ParamEnvelope::calculate_adsr(
-                    clip_elapsed,
-                    clip.duration_beats,
-                    env.attack_beats,
-                    env.decay_beats,
-                    env.sustain_level,
-                    env.release_beats,
-                );
-
                 // Additive composition: push current toward target
                 let current_value = fx.param_values[idx];
-                let target_value = min + (max - min) * env.target_normalized.clamp(0.0, 1.0);
+                let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
                 let offset = (target_value - current_value) * adsr_value;
                 let final_value = (current_value + offset).clamp(min, max);
 
@@ -284,25 +299,52 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
             }
         }
 
-        // Evaluate layer envelopes (use timing from first active clip)
+        // Evaluate layer envelopes (use timing from first active clip).
+        // Uses index-based iteration to avoid cloning (Phase 9C fix).
         if active_elapsed >= 0.0 {
-            let layer_envs = match &layer.envelopes {
-                Some(envs) if !envs.is_empty() => envs.clone(),
-                _ => continue,
-            };
+            let layer_env_count = layer.envelopes.as_ref().map_or(0, |e| e.len());
+            if layer_env_count == 0 {
+                continue;
+            }
 
-            let layer_effects = match &mut layer.effects {
-                Some(effects) => effects,
-                None => continue,
-            };
+            if layer.effects.is_none() {
+                continue;
+            }
 
-            for env in &layer_envs {
-                if !env.enabled {
+            for ei in 0..layer_env_count {
+                let (enabled, target_effect_type, param_index, attack, decay, sustain, release, target_norm) = {
+                    let env = &layer.envelopes.as_ref().unwrap()[ei];
+                    (env.enabled, env.target_effect_type, env.param_index, env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats, env.target_normalized)
+                };
+
+                if !enabled {
                     continue;
                 }
 
+                let adsr_value = ParamEnvelope::calculate_adsr(
+                    active_elapsed,
+                    active_duration,
+                    attack,
+                    decay,
+                    sustain,
+                    release,
+                );
+
+                // Write back currentLevel (Phase 9B).
+                // Port of C# EnvelopeEvaluator line 192.
+                if let Some(envs) = &mut layer.envelopes {
+                    if let Some(env) = envs.get_mut(ei) {
+                        env.current_level = adsr_value;
+                    }
+                }
+
+                let layer_effects = match &mut layer.effects {
+                    Some(effects) => effects,
+                    None => continue,
+                };
+
                 let target_fx = layer_effects.iter_mut().find(|f| {
-                    f.effect_type == env.target_effect_type && f.enabled
+                    f.effect_type == target_effect_type && f.enabled
                 });
                 let fx = match target_fx {
                     Some(f) => f,
@@ -310,24 +352,15 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
                 };
 
                 let effect_defs = fx.effect_type.param_defs();
-                let idx = env.param_index as usize;
+                let idx = param_index as usize;
                 if idx >= effect_defs.len() || idx >= fx.param_values.len() {
                     continue;
                 }
 
                 let (_, min, max, _, _) = effect_defs[idx];
 
-                let adsr_value = ParamEnvelope::calculate_adsr(
-                    active_elapsed,
-                    active_duration,
-                    env.attack_beats,
-                    env.decay_beats,
-                    env.sustain_level,
-                    env.release_beats,
-                );
-
                 let current_value = fx.param_values[idx];
-                let target_value = min + (max - min) * env.target_normalized.clamp(0.0, 1.0);
+                let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
                 let offset = (target_value - current_value) * adsr_value;
                 let final_value = (current_value + offset).clamp(min, max);
 
@@ -362,10 +395,10 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: f32) ->
             None => continue,
         };
 
-        let envelopes = match &gp.envelopes {
-            Some(envs) if !envs.is_empty() => envs.clone(),
-            _ => continue,
-        };
+        let env_count = gp.envelopes.as_ref().map_or(0, |e| e.len());
+        if env_count == 0 {
+            continue;
+        }
 
         let gen_type = gp.generator_type;
         let gen_defs = gen_type.param_defs();
@@ -385,12 +418,18 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: f32) ->
             }
         }
 
-        for env in &envelopes {
-            if !env.enabled {
+        // Index-based iteration to avoid cloning (Phase 9C fix).
+        for ei in 0..env_count {
+            let (enabled, param_index, attack, decay, sustain, release, target_norm) = {
+                let env = &gp.envelopes.as_ref().unwrap()[ei];
+                (env.enabled, env.param_index, env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats, env.target_normalized)
+            };
+
+            if !enabled {
                 continue;
             }
 
-            let idx = env.param_index as usize;
+            let idx = param_index as usize;
             if idx >= gen_defs.len() || idx >= gp.param_values.len() {
                 continue;
             }
@@ -405,15 +444,23 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: f32) ->
             let adsr_level = ParamEnvelope::calculate_adsr(
                 active_elapsed,
                 active_duration,
-                env.attack_beats,
-                env.decay_beats,
-                env.sustain_level,
-                env.release_beats,
+                attack,
+                decay,
+                sustain,
+                release,
             );
+
+            // Write back currentLevel (Phase 9B).
+            // Port of C# EnvelopeEvaluator line 270.
+            if let Some(envs) = &mut gp.envelopes {
+                if let Some(env) = envs.get_mut(ei) {
+                    env.current_level = adsr_level;
+                }
+            }
 
             // Additive composition: push current toward target
             let current_value = gp.param_values[idx];
-            let target_value = min + (max - min) * env.target_normalized.clamp(0.0, 1.0);
+            let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
             let offset = (target_value - current_value) * adsr_level;
             let final_value = (current_value + offset).clamp(min, max);
 

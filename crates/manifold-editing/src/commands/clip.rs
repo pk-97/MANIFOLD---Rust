@@ -13,26 +13,27 @@ pub struct MoveClipCommand {
     new_start_beat: f32,
     old_layer_index: i32,
     new_layer_index: i32,
-    /// Captured on first execute from the clip's current generator_type.
-    old_generator_type: Option<GeneratorType>,
+    /// Captured at construction time from the clip's current generator_type.
+    /// Port of C# MoveClipCommand line 32: captures in constructor.
+    old_generator_type: GeneratorType,
 }
 
 impl MoveClipCommand {
+    /// Create a MoveClipCommand. `old_generator_type` captures the clip's generator type
+    /// at the time the command is created (matching Unity constructor behavior).
+    pub fn new_with_gen_type(clip_id: String, old_start_beat: f32, new_start_beat: f32, old_layer_index: i32, new_layer_index: i32, old_generator_type: GeneratorType) -> Self {
+        Self { clip_id, old_start_beat, new_start_beat, old_layer_index, new_layer_index, old_generator_type }
+    }
+
+    /// Convenience constructor that defaults generator type to None.
+    /// For callers that know the clip isn't a generator or will look it up themselves.
     pub fn new(clip_id: String, old_start_beat: f32, new_start_beat: f32, old_layer_index: i32, new_layer_index: i32) -> Self {
-        Self { clip_id, old_start_beat, new_start_beat, old_layer_index, new_layer_index, old_generator_type: None }
+        Self { clip_id, old_start_beat, new_start_beat, old_layer_index, new_layer_index, old_generator_type: GeneratorType::None }
     }
 }
 
 impl Command for MoveClipCommand {
     fn execute(&mut self, project: &mut Project) {
-        // Capture original generator type on first execute (mirrors Unity constructor capture).
-        if self.old_generator_type.is_none() {
-            let gen_type = project.timeline.find_clip_by_id(&self.clip_id)
-                .map(|c| c.generator_type)
-                .unwrap_or(GeneratorType::None);
-            self.old_generator_type = Some(gen_type);
-        }
-
         if self.old_layer_index != self.new_layer_index {
             let src = self.old_layer_index as usize;
             let dst = self.new_layer_index as usize;
@@ -106,7 +107,7 @@ impl Command for MoveClipCommand {
 
         // Restore generator type and start beat.
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
-            clip.generator_type = self.old_generator_type.unwrap_or(GeneratorType::None);
+            clip.generator_type = self.old_generator_type;
             clip.start_beat = self.old_start_beat;
         }
 

@@ -136,10 +136,114 @@ impl MidiClockSyncController {
         log::info!("[MidiClockSync] Disabled");
     }
 
-    /// Poll MIDI clock state each frame. STUB: no-op until midir available.
-    pub fn update(&mut self, _now: f32) {
+    /// Poll MIDI clock state each frame.
+    /// Port of C# MidiClockSyncController.Update (lines 215-296).
+    /// STUB: native MIDI I/O not yet available via midir.
+    /// Logic is ported; native calls are commented.
+    pub fn update(&mut self, now: f32) {
         if !self.is_midi_clock_enabled { return; }
-        // TODO: Poll MidiClock native plugin via midir
+
+        // TODO: Poll MidiClock native plugin via midir:
+        // let midi_state = midi_clock.get_state();
+        // let absolute_tick = midi_state.absolute_tick;
+        // let is_playing = midi_state.is_playing;
+        // let has_activity = midi_state.has_activity;
+        // let position_sixteenths = midi_state.position_sixteenths;
+
+        // Stubbed native state — no activity until midir is available
+        let _absolute_tick: i32 = 0;
+        let is_playing = false;
+        let has_activity = false;
+        let position_sixteenths: i32 = 0;
+
+        // Detect state changes
+        let was_receiving = self.is_receiving_clock;
+        let was_playing = self.last_is_playing;
+
+        // Activity timeout check
+        if has_activity {
+            self.last_clock_activity_time = now;
+        }
+        self.is_receiving_clock = has_activity
+            || (now - self.last_clock_activity_time < self.clock_signal_timeout);
+
+        // BPM estimation from clock ticks
+        // self.update_bpm_from_clock(now, absolute_tick, is_playing, has_activity);
+
+        // Position display update
+        if position_sixteenths != self.current_position_sixteenths {
+            self.current_position_sixteenths = position_sixteenths;
+            self.update_position_display(position_sixteenths);
+        }
+
+        // Transport sync: detect play/pause transitions
+        if is_playing && !was_playing {
+            // MIDI clock started → tell MANIFOLD to play via SyncArbiter
+            // TODO: sync_arbiter.play(ClockAuthority::MidiClock, authority, target)
+            log::info!("[MidiClockSync] Clock started playing");
+        } else if !is_playing && was_playing && was_receiving {
+            // MIDI clock stopped → tell MANIFOLD to pause via SyncArbiter
+            // TODO: sync_arbiter.pause(ClockAuthority::MidiClock, authority, target)
+            log::info!("[MidiClockSync] Clock stopped playing");
+        }
+
+        // External time sync management
+        if is_playing && self.is_receiving_clock {
+            // TODO: sync_arbiter.set_external_time_sync(ClockAuthority::MidiClock, authority, target, true)
+        } else if !self.is_receiving_clock && was_receiving {
+            // Lost clock signal
+            // TODO: sync_arbiter.clear_external_time_sync(target)
+            self.current_position_display = "---".into();
+            self.cached_display_sixteenths = -1;
+        }
+
+        // Position sync (seek correction) during playback
+        // if is_playing && self.is_receiving_clock {
+        //     self.sync_position_to_playback(now, absolute_tick, position_sixteenths);
+        // }
+
+        self.last_is_playing = is_playing;
+        self.last_position_sixteenths = position_sixteenths;
+    }
+
+    /// Sync MANIFOLD playback position to MIDI clock position.
+    /// Port of C# MidiClockSyncController.SyncPositionToPlayback (lines 368-436).
+    #[allow(dead_code)]
+    fn sync_position_to_playback(&mut self, now: f32, absolute_tick: i32, _position_sixteenths: i32) {
+        // Transport time integrator: convert MIDI clock ticks to continuous time
+        if !self.transport_time_integrator_initialized {
+            self.last_transport_absolute_tick = absolute_tick;
+            self.integrated_clock_time_seconds = 0.0;
+            self.transport_time_integrator_initialized = true;
+            return;
+        }
+
+        let d_ticks = absolute_tick - self.last_transport_absolute_tick;
+        self.last_transport_absolute_tick = absolute_tick;
+
+        if d_ticks <= 0 {
+            return;
+        }
+
+        // Convert ticks to time using current BPM
+        let ticks_per_second = (self.current_clock_bpm / 60.0) * 24.0; // 24 PPQN
+        if ticks_per_second > 0.0 {
+            self.integrated_clock_time_seconds += d_ticks as f32 / ticks_per_second;
+        }
+
+        // TODO: Compare integrated time with MANIFOLD's current time
+        // If delta > seek threshold, issue a seek via SyncArbiter
+        // Otherwise, nudge time for smooth correction
+        let _clock_time = self.integrated_clock_time_seconds;
+        let _ = now; // suppress unused
+    }
+
+    /// Reset transport time integrator.
+    /// Port of C# MidiClockSyncController.ResetTransportTimeIntegrator (lines 357-362).
+    pub fn reset_transport_time_integrator(&mut self) {
+        self.transport_time_integrator_initialized = false;
+        self.last_transport_absolute_tick = -1;
+        self.integrated_clock_time_seconds = 0.0;
     }
 
     // ── BPM estimation ───────────────────────────────────────────────

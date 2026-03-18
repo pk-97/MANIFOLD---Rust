@@ -67,6 +67,24 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Why:** The `ClipRenderer` trait lives in `manifold-playback` (no GPU deps). It cannot carry `wgpu::Queue` or `CommandEncoder` parameters. The GPU rendering must be called on the concrete type.
 - **Files affected:** `manifold-renderer/src/generator_renderer.rs`, `manifold-app/src/app.rs`
 
+### [D-08] EffectClipboard: instance-based vs static singleton
+- **Unity does:** `EffectClipboard` is a static singleton class (lines 11-56)
+- **Rust does:** `EffectClipboard` is an instance-based struct in `clipboard.rs`, requiring callers to pass a mutable reference
+- **Why:** Rust has no global mutable singletons without `unsafe` or `Mutex`. Instance-based pattern is idiomatic and equivalent in behavior — the clipboard is owned by `EditingService`
+- **Files affected:** `manifold-editing/src/clipboard.rs`
+
+### [D-09] EditingService: stateless vs UIState-coupled
+- **Unity does:** `EditingService` reads selection, cursor, layer state directly from `UIState` instance fields
+- **Rust does:** `EditingService` is stateless — all methods take explicit parameters (selection IDs, region, etc.)
+- **Why:** Rust's `EditingService` lives in `manifold-editing` which has no UI dependency. UIState lives in `manifold-ui`. The caller (app layer) bridges by passing explicit parameters. Behavior is equivalent — just the coupling point differs.
+- **Files affected:** `manifold-editing/src/service.rs`
+
+### [D-10] SyncArbiter: explicit authority parameter vs instance field
+- **Unity does:** `SyncArbiter` stores `authority` and `target` as instance fields injected in constructor
+- **Rust does:** All methods take `authority` and `target` as explicit parameters
+- **Why:** Rust's borrow checker makes storing a `&mut dyn SyncArbiterTarget` as a field impractical (lifetime conflicts). Passing explicitly is functionally equivalent — same gating logic, same behavior.
+- **Files affected:** `manifold-playback/src/sync.rs`
+
 ---
 
 ## Add new divergences above this line.
