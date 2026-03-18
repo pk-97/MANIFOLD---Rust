@@ -11,6 +11,7 @@ use std::collections::HashSet;
 
 use crate::clip_hit_tester::{ClipHitTester, ClipHitResult, HitRegion};
 use crate::coordinate_mapper::CoordinateMapper;
+use crate::input::Modifiers;
 use crate::node::Vec2;
 use crate::panels::viewport::{TimelineViewportPanel, ViewportClip};
 use crate::timeline_editing_host::{TimelineEditingHost, TimelineCursor};
@@ -113,6 +114,10 @@ pub struct InteractionOverlay {
     // Click suppression (Unity line 133: if currentDragMode != None return)
     // Set true in on_end_drag, checked+cleared at TOP of on_pointer_click.
     was_dragging: bool,
+
+    // Current modifier state — set by app before each event.
+    // Unity reads Keyboard.current inline; Rust stores latest modifiers here.
+    modifiers: Modifiers,
 }
 
 impl InteractionOverlay {
@@ -132,6 +137,7 @@ impl InteractionOverlay {
             region_drag_start_beat: 0.0,
             region_drag_start_layer: 0,
             was_dragging: false,
+            modifiers: Modifiers::NONE,
         }
     }
 
@@ -143,6 +149,12 @@ impl InteractionOverlay {
     /// Current drag mode (read-only, for external queries like auto-scroll).
     pub fn drag_mode(&self) -> DragMode {
         self.drag_mode
+    }
+
+    /// Update the stored modifier state. Call from app before dispatching events.
+    /// Unity reads Keyboard.current inline; Rust stores the latest state here.
+    pub fn set_modifiers(&mut self, modifiers: Modifiers) {
+        self.modifiers = modifiers;
     }
 
     // ────────────────────────────────────────────────────────────
@@ -349,7 +361,9 @@ impl InteractionOverlay {
         if hit.is_none() {
             // Unity lines 288-291: empty area drag → region selection
             self.drag_mode = DragMode::RegionSelect;
-            self.begin_region_drag(press_pos, ctrl_held(ui_state), ui_state, viewport);
+            // Unity reads Keyboard.current for ctrl/cmd — we use stored modifiers
+            let ctrl = self.modifiers.ctrl || self.modifiers.command;
+            self.begin_region_drag(press_pos, ctrl, ui_state, viewport);
             return;
         }
 
@@ -893,10 +907,9 @@ impl InteractionOverlay {
         }
 
         let anchor_id = self.drag_anchor_clip_id.as_ref().unwrap();
-        // Find current start beat of anchor clip in snapshots
-        let anchor_start = self.drag_snapshots.iter()
-            .find(|s| s.clip_id == *anchor_id)
-            .map(|s| s.start_beat);
+        // Unity line 760: uses dragAnchorClip.StartBeat — the clip's CURRENT position
+        // (after being moved during drag), NOT the snapshot's original start beat.
+        let anchor_start = host.find_clip_by_id(anchor_id).map(|c| c.start_beat);
 
         if let Some(anchor_start) = anchor_start {
             let snapped = viewport.magnetic_snap(
@@ -1026,9 +1039,3 @@ impl InteractionOverlay {
     }
 }
 
-/// Helper: check if Ctrl is held from UIState context.
-/// In practice, the overlay receives modifiers from the event — this is a placeholder.
-fn ctrl_held(_ui_state: &UIState) -> bool {
-    // TODO: modifiers passed through event, not UIState
-    false
-}

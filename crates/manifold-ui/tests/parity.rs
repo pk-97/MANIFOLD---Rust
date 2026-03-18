@@ -46,7 +46,7 @@ fn layout_inspector_width_range() {
 
 #[test]
 fn layout_default_inspector_width() {
-    assert_eq!(color::DEFAULT_INSPECTOR_WIDTH, 280.0);
+    assert_eq!(color::DEFAULT_INSPECTOR_WIDTH, 500.0);
 }
 
 // ── Accent colors (from USER_GUIDE.md §32.3) ───────────────────
@@ -153,21 +153,21 @@ fn color_generator_clip_selected() {
 
 #[test]
 fn color_text_primary() {
-    // Off-white (0.88) = 224, no blue tint
-    assert_eq!(color::TEXT_NORMAL, Color32::new(224, 224, 224, 255));
+    // Unity TextNormal = Color(0.88, 0.88, 0.90, 1) → blue channel 230
+    assert_eq!(color::TEXT_NORMAL, Color32::new(224, 224, 230, 255));
 }
 
 #[test]
 fn color_text_primary_c32() {
-    assert_eq!(color::TEXT_PRIMARY_C32, Color32::new(224, 224, 224, 255));
+    assert_eq!(color::TEXT_PRIMARY_C32, Color32::new(224, 224, 230, 255));
 }
 
 // ── Elevation hierarchy (from USER_GUIDE.md §32.2) ──────────────
 
 #[test]
 fn color_track_background_deep_level() {
-    // Deep (0.10 gray) ≈ 26
-    assert_eq!(color::TRACK_BG, Color32::new(26, 26, 27, 255));
+    // Unity TrackBackground = Color(0.14, 0.14, 0.145, 1) → (36, 36, 37, 255)
+    assert_eq!(color::TRACK_BG, Color32::new(36, 36, 37, 255));
 }
 
 // ── Generator param counts (from GeneratorDefinitionRegistry.cs) ──

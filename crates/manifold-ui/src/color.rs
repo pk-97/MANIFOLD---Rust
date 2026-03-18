@@ -12,7 +12,7 @@ use crate::node::Color32;
 // ── Panel / Background ──────────────────────────────────────────────
 // 6-level elevation: Void → Deep → Base → Surface → Raised → Elevated
 pub const PANEL_BG: Color32 = Color32::new(37, 37, 38, 245);
-pub const TRACK_BG: Color32 = Color32::new(26, 26, 27, 255);
+pub const TRACK_BG: Color32 = Color32::new(36, 36, 37, 255);
 pub const TRACK_BG_ALT: Color32 = Color32::new(27, 27, 28, 255);
 pub const INSPECTOR_BG: Color32 = Color32::new(26, 26, 27, 255);
 pub const INSPECTOR_BG_FOCUSED: Color32 = Color32::new(32, 32, 34, 255);
@@ -72,7 +72,7 @@ pub const CLIP_SEPARATOR: Color32 = Color32::new(20, 20, 22, 255);
 pub const CLIP_GEN_NORMAL: Color32 = Color32::new(101, 252, 255, 255);
 pub const CLIP_GEN_SELECTED: Color32 = Color32::new(102, 140, 224, 255);
 pub const CLIP_GEN_HOVER: Color32 = Color32::new(77, 97, 153, 255);
-pub const GEN_TYPE_LABEL: Color32 = Color32::new(150, 200, 150, 255);
+pub const GEN_TYPE_LABEL: Color32 = Color32::new(140, 179, 242, 255);
 
 // ── Group layer structural colors ───────────────────────────────────
 pub const COLLAPSED_GROUP_OVERLAY_BG: Color32 = Color32::new(20, 20, 28, 255);
@@ -80,7 +80,7 @@ pub const DEFAULT_GROUP_ACCENT: Color32 = Color32::new(115, 115, 191, 255);
 pub const GROUP_BOTTOM_BORDER: Color32 = Color32::new(97, 97, 148, 153);
 
 // ── Text colors ─────────────────────────────────────────────────────
-pub const TEXT_NORMAL: Color32 = Color32::new(224, 224, 224, 255);
+pub const TEXT_NORMAL: Color32 = Color32::new(224, 224, 230, 255);
 pub const TEXT_DIMMED: Color32 = Color32::new(158, 158, 163, 255);
 pub const TEXT_SUBTLE: Color32 = Color32::new(107, 107, 112, 255);
 pub const PLACEHOLDER_TEXT: Color32 = Color32::new(107, 107, 112, 153);
@@ -107,7 +107,7 @@ pub const RECORD_RED: Color32 = Color32::new(107, 38, 38, 255);
 pub const RECORD_ACTIVE: Color32 = Color32::new(209, 46, 46, 255);
 pub const SAVE_FLASH_GREEN: Color32 = Color32::new(64, 158, 89, 255);
 pub const TRANSPORT_FIELD_BG: Color32 = Color32::new(40, 40, 42, 255);
-pub const BPM_RESET_ACTIVE: Color32 = Color32::new(52, 163, 61, 255);
+pub const BPM_RESET_ACTIVE: Color32 = Color32::new(51, 107, 61, 255);
 pub const BPM_CLEAR_ACTIVE: Color32 = Color32::new(133, 51, 51, 255);
 pub const MIDI_POPUP_ACTIVE: Color32 = Color32::new(89, 46, 89, 255);
 
@@ -115,7 +115,7 @@ pub const MIDI_POPUP_ACTIVE: Color32 = Color32::new(89, 46, 89, 255);
 pub const SYNC_ACTIVE: Color32 = Color32::new(56, 158, 133, 255);
 pub const LINK_ORANGE: Color32 = Color32::new(191, 122, 20, 255);
 pub const MIDI_PURPLE: Color32 = Color32::new(148, 77, 148, 255);
-pub const ABLETON_LINK_BLUE: Color32 = Color32::new(89, 173, 232, 255);
+pub const ABLETON_LINK_BLUE: Color32 = Color32::new(56, 133, 179, 255);
 
 // ── Delete / Remove button ──────────────────────────────────────────
 pub const DELETE_BTN_NORMAL: Color32 = Color32::new(97, 46, 46, 255);
@@ -233,7 +233,7 @@ pub const TRANSPARENT: Color32 = Color32::new(0, 0, 0, 0);
 pub const HOVER_OVERLAY: Color32 = Color32::new(255, 255, 255, 15);
 pub const PRESS_OVERLAY: Color32 = Color32::new(255, 255, 255, 25);
 pub const PANEL_BG_DARK: Color32 = Color32::new(26, 26, 27, 255);
-pub const TEXT_PRIMARY_C32: Color32 = Color32::new(224, 224, 224, 255);
+pub const TEXT_PRIMARY_C32: Color32 = Color32::new(224, 224, 230, 255);
 pub const TEXT_WHITE_C32: Color32 = Color32::new(255, 255, 255, 255);
 pub const TEXT_LIGHT_C32: Color32 = Color32::new(220, 220, 225, 255);
 pub const TEXT_DIMMED_C32: Color32 = Color32::new(158, 158, 163, 255);
@@ -370,7 +370,7 @@ pub const CLIP_VERTICAL_PAD: f32 = 12.0;
 pub const OVERVIEW_STRIP_HEIGHT: f32 = 16.0;
 pub const MIN_INSPECTOR_WIDTH: f32 = 196.0;
 pub const MAX_INSPECTOR_WIDTH: f32 = 500.0;
-pub const DEFAULT_INSPECTOR_WIDTH: f32 = 280.0;
+pub const DEFAULT_INSPECTOR_WIDTH: f32 = 500.0;
 pub const INSPECTOR_RESIZE_HANDLE_WIDTH: f32 = 6.0;
 pub const INSPECTOR_GAP: f32 = 4.0;
 

@@ -56,9 +56,17 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn on_undo_redo(&mut self) {
-        // Unity: needsRebuild = true; RefreshAllInspectors();
-        // playbackController.RefreshActiveClips(); playbackController.MarkCompositorDirty();
+        // Unity WorkspaceController lines 378-386:
+        //   needsRebuild = true; RefreshAllInspectors();
+        //   playbackController.RefreshActiveClips(); playbackController.MarkCompositorDirty();
+        //   ApplyProjectResolutionFromFooter(); ApplyProjectFpsFromFooter();
         self.engine.mark_compositor_dirty(0.0);
+
+        // TODO: Re-apply resolution/FPS from project settings after undo/redo.
+        // Unity calls ApplyProjectResolutionFromFooter() and ApplyProjectFpsFromFooter()
+        // to sync render pipeline with potentially changed settings.
+        // Requires PlaybackEngine.set_resolution()/set_fps() (not yet ported).
+
         *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
     }

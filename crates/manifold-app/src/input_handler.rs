@@ -289,7 +289,8 @@ impl InputHandler {
             return true;
         }
 
-        // ── 0 — toggle mute (Unity line 419) ──
+        // ── 0 / Numpad0 — toggle mute (Unity line 419-420) ──
+        // winit: Numpad0 with numlock on produces Key::Character("0"), same as main row.
         if matches!(logical_key, Key::Character(ref c) if c.as_str() == "0") && m.is_none() {
             let ids: Vec<String> = host.get_selected_clip_ids();
             if !ids.is_empty() {

@@ -12,6 +12,8 @@ pub mod snap;
 pub mod trim;
 pub mod cursor_nav;
 pub mod scroll_container;
+pub mod widget_layout;
+pub mod inspector_layout;
 pub mod coordinate_mapper;
 pub mod ui_state;
 pub mod cursors;

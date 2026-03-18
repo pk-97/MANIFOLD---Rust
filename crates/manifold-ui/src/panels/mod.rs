@@ -210,6 +210,10 @@ pub enum PanelAction {
     ContextAddVideoLayer(usize),                     // after_layer
     ContextAddGeneratorLayer(usize),                 // after_layer
     ContextDeleteLayer(usize),                       // layer_index
+    ContextPasteAtLayer(usize),                      // layer_index
+    ContextImportMidi(usize),                        // layer_index
+    ContextGroupSelectedLayers,
+    ContextUngroup(usize),                           // layer_index
 
     // Generic dropdown fallback (should not normally reach dispatch)
     DropdownSelected(usize),

@@ -228,6 +228,10 @@ impl Default for UIStyle {
 
 // ── UINode ──────────────────────────────────────────────────────────
 
+/// Opaque texture handle for image nodes.
+/// Matches Unity UINode.Texture field — the renderer resolves this to a GPU texture.
+pub type TextureHandle = u64;
+
 /// A single node in the UI tree.
 ///
 /// Invariant: `id` == array index in `UITree.nodes`.
@@ -239,6 +243,9 @@ pub struct UINode {
     pub flags: UIFlags,
     pub style: UIStyle,
     pub text: Option<String>,
+    /// Optional texture for Image nodes (thumbnails, icons).
+    /// Port of Unity UINode.Texture field.
+    pub texture: Option<TextureHandle>,
     pub draw_order: i32,
 }
 

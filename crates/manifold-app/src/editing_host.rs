@@ -39,6 +39,11 @@ pub struct AppEditingHost<'a> {
 
     // Command batch accumulator (for begin_command_batch / commit_command_batch)
     command_batch: Vec<Box<dyn Command>>,
+
+    // Pre-drag split commands — persists at Application level across host instances.
+    // Unity: InteractionOverlay.preDragSplitCommands (lines 69, 430-433).
+    // Populated by split_clips_for_region_move, prepended on commit_command_batch.
+    pub pre_drag_commands: &'a mut Vec<Box<dyn Command>>,
 }
 
 impl<'a> AppEditingHost<'a> {
@@ -50,6 +55,7 @@ impl<'a> AppEditingHost<'a> {
         needs_rebuild: &'a mut bool,
         needs_structural_sync: &'a mut bool,
         needs_scroll_rebuild: &'a mut bool,
+        pre_drag_commands: &'a mut Vec<Box<dyn Command>>,
     ) -> Self {
         Self {
             engine,
@@ -60,6 +66,7 @@ impl<'a> AppEditingHost<'a> {
             needs_structural_sync,
             needs_scroll_rebuild,
             command_batch: Vec::new(),
+            pre_drag_commands,
         }
     }
 }
@@ -141,13 +148,16 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     }
 
     fn beat_to_time(&self, beat: f32) -> f32 {
-        // Simple BPM-based conversion (immutable version).
-        // engine.beat_to_timeline_time requires &mut self for tempo map access,
-        // but the trait correctly requires &self here.
-        let bpm = self.engine.project()
-            .map(|p| p.settings.bpm)
-            .unwrap_or(120.0);
-        if bpm > 0.0 { beat * 60.0 / bpm } else { 0.0 }
+        // Unity delegates to playbackController.TimelineBeatToTime() which uses
+        // the full tempo map. Use the immutable version of beat_to_seconds.
+        if let Some(project) = self.engine.project() {
+            let bpm = project.settings.bpm;
+            manifold_core::tempo::TempoMapConverter::beat_to_seconds_immut(
+                &project.tempo_map, beat, bpm,
+            )
+        } else {
+            0.0
+        }
     }
 
     // ── Clip operations ─────────────────────────────────────────
@@ -355,7 +365,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     fn split_clips_for_region_move(&mut self, region: &SelectionRegion) -> RegionSplitResult {
         // Port of Unity EditingService.SplitClipsForRegionMove.
         // 1. Split clips at region boundaries (executed immediately)
-        // 2. Store split commands in batch for composite undo
+        // 2. Store split commands in pre_drag_commands for composite undo
+        //    (Unity: preDragSplitCommands, lines 69, 430-433)
         // 3. Return interior clips (the drag set)
         let spb = self.get_seconds_per_beat();
 
@@ -369,12 +380,15 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         };
         let split_count = split_cmds.len();
 
-        // Step 2: Execute split commands immediately (mutable borrow)
+        // Step 2: Execute split commands immediately, store in pre_drag_commands
+        // (not command_batch — these persist across host instances and get prepended
+        // on commit so CompositeCommand.Undo() reverses them AFTER undoing the move)
         if !split_cmds.is_empty() {
+            self.pre_drag_commands.clear();
             if let Some(project) = self.engine.project_mut() {
                 for mut cmd in split_cmds {
                     cmd.execute(project);
-                    self.command_batch.push(cmd);
+                    self.pre_drag_commands.push(cmd);
                 }
             }
         }
@@ -429,10 +443,18 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     }
 
     fn commit_command_batch(&mut self, description: &str) {
-        if self.command_batch.is_empty() {
+        // Unity lines 428-434: prepend pre-drag split commands so
+        // CompositeCommand.Undo() reverses them AFTER undoing the move.
+        let pre_cmds: Vec<Box<dyn Command>> = self.pre_drag_commands.drain(..).collect();
+        let batch_cmds: Vec<Box<dyn Command>> = self.command_batch.drain(..).collect();
+
+        let mut commands = Vec::with_capacity(pre_cmds.len() + batch_cmds.len());
+        commands.extend(pre_cmds);
+        commands.extend(batch_cmds);
+
+        if commands.is_empty() {
             return;
         }
-        let commands: Vec<Box<dyn Command>> = self.command_batch.drain(..).collect();
         // Commands are already applied (drag mutated data live).
         // Use record() not execute() — just push to undo stack.
         if commands.len() == 1 {

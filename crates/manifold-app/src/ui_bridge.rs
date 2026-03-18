@@ -1587,6 +1587,28 @@ pub fn dispatch(
             DispatchResult::handled()
         }
 
+        // Context menu items — not yet wired to subsystems
+        PanelAction::ContextPasteAtLayer(layer_idx) => {
+            // TODO: Wire to EditingService.Paste when clipboard is ported
+            log::warn!("Paste at layer {} — not yet implemented", layer_idx);
+            DispatchResult::handled()
+        }
+        PanelAction::ContextImportMidi(layer_idx) => {
+            // TODO: Wire to MIDI import when subsystem is ported
+            log::warn!("Import MIDI to layer {} — not yet implemented", layer_idx);
+            DispatchResult::handled()
+        }
+        PanelAction::ContextGroupSelectedLayers => {
+            // TODO: Wire to EditingService.GroupSelectedLayers
+            log::warn!("Group selected layers — not yet implemented");
+            DispatchResult::handled()
+        }
+        PanelAction::ContextUngroup(layer_idx) => {
+            // TODO: Wire to EditingService.Ungroup
+            log::warn!("Ungroup layer {} — not yet implemented", layer_idx);
+            DispatchResult::handled()
+        }
+
         // Generic dropdown fallback (should not normally fire)
         PanelAction::DropdownSelected(index) => {
             log::debug!("Dropdown selected: {} (no context)", index);

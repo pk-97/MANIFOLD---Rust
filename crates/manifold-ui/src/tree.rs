@@ -69,6 +69,7 @@ impl UITree {
             flags: UIFlags::VISIBLE | UIFlags::DIRTY | extra_flags,
             style,
             text: text.map(String::from),
+            texture: None,
             draw_order: self.count as i32,
         };
 

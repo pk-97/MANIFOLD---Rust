@@ -112,6 +112,12 @@ pub struct Application {
     // split-borrow it alongside ui_root.viewport and create AppEditingHost.
     overlay: manifold_ui::interaction_overlay::InteractionOverlay,
 
+    // Pre-drag split commands — persists between AppEditingHost instances.
+    // Unity stores these on InteractionOverlay; Rust stores them here because
+    // the overlay can't depend on manifold-editing Command types.
+    // Populated by split_clips_for_region_move, prepended on commit_command_batch.
+    pre_drag_commands: Vec<Box<dyn manifold_editing::command::Command>>,
+
     // Detected display resolutions: (width, height, label).
     // Populated from winit monitors at startup. Matches Unity Footer.CollectDisplayResolutions.
     display_resolutions: Vec<(u32, u32, String)>,
@@ -176,6 +182,7 @@ impl Application {
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
                 manifold_ui::color::CLIP_VERTICAL_PAD,
             ),
+            pre_drag_commands: Vec::new(),
             display_resolutions: Vec::new(),
             initialized: false,
             needs_rebuild: false,
@@ -614,6 +621,8 @@ impl Application {
         {
             let viewport_events = self.ui_root.drain_viewport_events();
             if !viewport_events.is_empty() {
+                // Sync modifier state to overlay (Unity reads Keyboard.current inline)
+                self.overlay.set_modifiers(self.modifiers);
                 let mut host = crate::editing_host::AppEditingHost::new(
                     &mut self.engine,
                     &mut self.editing_service,
@@ -622,6 +631,7 @@ impl Application {
                     &mut self.needs_rebuild,
                     &mut self.needs_structural_sync,
                     &mut self.needs_scroll_rebuild,
+                    &mut self.pre_drag_commands,
                 );
                 for event in &viewport_events {
                     use manifold_ui::input::UIEvent;
@@ -799,6 +809,7 @@ impl Application {
                     &mut self.needs_rebuild,
                     &mut self.needs_structural_sync,
                     &mut self.needs_scroll_rebuild,
+                    &mut self.pre_drag_commands,
                 );
                 self.overlay.poll_move_drag(
                     self.cursor_pos, &mut host, &mut self.selection, &self.ui_root.viewport,
@@ -1342,7 +1353,7 @@ impl ApplicationHandler for Application {
                         &wgpu::DeviceDescriptor {
                             label: Some("MANIFOLD Device"),
                             required_features: wgpu::Features::empty(),
-                            required_limits: wgpu::Limits::default(),
+                            required_limits: adapter.limits(),
                             memory_hints: wgpu::MemoryHints::Performance,
                             trace: wgpu::Trace::Off,
                             ..Default::default()
@@ -1561,6 +1572,7 @@ impl ApplicationHandler for Application {
                                 &mut self.needs_rebuild,
                                 &mut self.needs_structural_sync,
                                 &mut self.needs_scroll_rebuild,
+                                &mut self.pre_drag_commands,
                             );
                             self.overlay.on_pointer_move(
                                 self.cursor_pos,

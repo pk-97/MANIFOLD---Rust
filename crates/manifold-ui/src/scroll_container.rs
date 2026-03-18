@@ -20,7 +20,10 @@ use crate::node::*;
 use crate::tree::UITree;
 
 /// Scroll speed in logical pixels per raw scroll delta unit.
-pub const SCROLL_SPEED: f32 = 12.5;
+/// Scroll speed in logical pixels per normalized scroll unit.
+/// Unity BitmapScrollContainer.cs divides raw delta by 120 then multiplies by 30.
+/// winit provides pre-normalized line units (1.0 per notch), so 30.0 matches.
+pub const SCROLL_SPEED: f32 = 30.0;
 
 pub struct ScrollContainer {
     /// Current scroll offset (pixels from top, 0 = top of content visible).
@@ -116,6 +119,17 @@ impl ScrollContainer {
         let screen_y = local_y - self.scroll_offset;
         let screen_bottom = screen_y + height;
         screen_bottom > 0.0 && screen_y < self.viewport_height
+    }
+
+    /// Scroll to ensure a content Y range is visible.
+    /// Port of Unity BitmapScrollContainer.ScrollToReveal.
+    pub fn scroll_to_reveal(&mut self, content_y: f32, height: f32) {
+        if content_y < self.scroll_offset {
+            self.scroll_offset = content_y;
+        } else if content_y + height > self.scroll_offset + self.viewport_height {
+            self.scroll_offset = content_y + height - self.viewport_height;
+        }
+        self.clamp_scroll();
     }
 
     /// Reset scroll to top.

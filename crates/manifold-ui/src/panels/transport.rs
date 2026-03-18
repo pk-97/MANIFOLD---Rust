@@ -771,7 +771,7 @@ mod tests {
         assert!(panel.new_button_id >= 0);
         assert!(panel.save_button_id >= 0);
         assert!(panel.export_button_id >= 0);
-        assert!(tree.count() > 28); // bg + 28 elements
+        assert!(tree.count() >= 27); // bg + 11 left + 7 center + 8 right = 27
     }
 
     #[test]

@@ -233,9 +233,9 @@ mod tests {
     fn content_area_below_transport() {
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let content = layout.content_area();
-        assert_eq!(content.x, 280.0); // right of default inspector
+        assert_eq!(content.x, 500.0); // right of default inspector
         assert_eq!(content.y, 36.0); // below transport
-        assert_eq!(content.width, 1640.0); // 1920 - 280
+        assert_eq!(content.width, 1420.0); // 1920 - 500
         assert_eq!(content.height, 1044.0); // 1080 - 36
     }
 
@@ -270,7 +270,7 @@ mod tests {
     fn inspector_default_width() {
         let layout = ScreenLayout::new(1920.0, 1080.0);
         let inspector = layout.inspector();
-        assert_eq!(inspector.width, 280.0);
+        assert_eq!(inspector.width, 500.0);
         assert_eq!(inspector.x, 0.0);
         assert_eq!(inspector.y, 36.0);
     }

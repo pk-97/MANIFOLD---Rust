@@ -405,6 +405,7 @@ impl UIRoot {
             PanelAction::TrackRightClicked(beat, layer) => {
                 let items = vec![
                     DropdownItem::new("Paste"),
+                    DropdownItem::new("Import MIDI File"),
                     DropdownItem::new("Insert Video Layer"),
                     DropdownItem::new("Insert Generator Layer"),
                 ];
@@ -414,8 +415,12 @@ impl UIRoot {
             }
             PanelAction::LayerHeaderRightClicked(layer_idx) => {
                 let mut items = vec![
+                    DropdownItem::new("Paste"),
+                    DropdownItem::new("Import MIDI File"),
                     DropdownItem::new("Insert Video Layer"),
                     DropdownItem::new("Insert Generator Layer"),
+                    DropdownItem::new("Group Selected Layers"),
+                    DropdownItem::new("Ungroup"),
                 ];
                 // Only allow delete if more than 1 layer exists
                 if self.layer_headers.layer_count() > 1 {
@@ -474,16 +479,21 @@ impl UIRoot {
             DropdownContext::TrackContext(beat, layer) => {
                 match index {
                     0 => Some(PanelAction::ContextPasteAtTrack(beat, layer)),
-                    1 => Some(PanelAction::ContextAddVideoLayer(layer)),
-                    2 => Some(PanelAction::ContextAddGeneratorLayer(layer)),
+                    1 => Some(PanelAction::ContextImportMidi(layer)),
+                    2 => Some(PanelAction::ContextAddVideoLayer(layer)),
+                    3 => Some(PanelAction::ContextAddGeneratorLayer(layer)),
                     _ => None,
                 }
             }
             DropdownContext::LayerContext(layer_idx) => {
                 match index {
-                    0 => Some(PanelAction::ContextAddVideoLayer(layer_idx)),
-                    1 => Some(PanelAction::ContextAddGeneratorLayer(layer_idx)),
-                    2 => Some(PanelAction::ContextDeleteLayer(layer_idx)),
+                    0 => Some(PanelAction::ContextPasteAtLayer(layer_idx)),
+                    1 => Some(PanelAction::ContextImportMidi(layer_idx)),
+                    2 => Some(PanelAction::ContextAddVideoLayer(layer_idx)),
+                    3 => Some(PanelAction::ContextAddGeneratorLayer(layer_idx)),
+                    4 => Some(PanelAction::ContextGroupSelectedLayers),
+                    5 => Some(PanelAction::ContextUngroup(layer_idx)),
+                    6 => Some(PanelAction::ContextDeleteLayer(layer_idx)),
                     _ => None,
                 }
             }
