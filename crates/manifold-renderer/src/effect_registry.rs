@@ -60,7 +60,7 @@ impl EffectRegistry {
         // BlobTrackingFX needs queue for font atlas upload
         processors.insert(EffectType::BlobTracking, Box::new(BlobTrackingFX::new(device, queue)));
         // WireframeDepthFX needs queue for dummy texture uploads
-        processors.insert(EffectType::WireframeDepth, Box::new(WireframeDepthFX::new(device, queue)));
+        processors.insert(EffectType::WireframeDepth, Box::new(WireframeDepthFX::new(device)));
         Self { processors }
     }
 
