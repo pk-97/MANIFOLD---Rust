@@ -1059,10 +1059,12 @@ impl Generator for FluidSimulationGenerator {
         // Blur 1 (H+V) → Gradient + Rotate → Blur 2 (H+V)
         // ================================================================
 
-        let blur_radius = blur_radius_param.max(2.0);
-        // Resolution-scaled blur radius (Unity: resScale = blurResW / 640.0)
+        // Unity: int baseBlurRadius = Mathf.RoundToInt(layer.GetGenParam(BLUR))
+        let base_blur_radius = blur_radius_param.round() as i32;
+        // Unity: float resScale = (float)blurResW / 640f
         let res_scale = bw as f32 / 640.0;
-        let scaled_radius = (blur_radius * res_scale).max(1.0);
+        // Unity: int scaledRadius = Mathf.Max(1, Mathf.RoundToInt(baseBlurRadius * resScale))
+        let scaled_radius = (base_blur_radius as f32 * res_scale).round().max(1.0);
 
         // Blur texel sizes — all blur operations happen at blur resolution (bw×bh)
         let blur_texel_x = 1.0 / bw as f32;
