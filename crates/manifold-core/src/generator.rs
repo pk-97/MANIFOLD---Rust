@@ -11,15 +11,15 @@ pub struct GeneratorParamState {
     pub generator_type: GeneratorType,
     #[serde(default)]
     pub param_values: Vec<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_param_values: Option<Vec<f32>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drivers: Option<Vec<ParameterDriver>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub envelopes: Option<Vec<ParamEnvelope>>,
 
     // Legacy flat fields from V1.0.0 (before genParams nesting)
-    #[serde(default, rename = "genParamVersion")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genParamVersion")]
     pub legacy_param_version: Option<i32>,
 }
 

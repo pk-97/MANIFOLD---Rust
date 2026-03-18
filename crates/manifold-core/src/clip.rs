@@ -61,21 +61,21 @@ pub struct TimelineClip {
     // ── Effects & modulation ──
     #[serde(default)]
     pub effects: Vec<EffectInstance>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect_groups: Option<Vec<EffectGroup>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub envelopes: Option<Vec<ParamEnvelope>>,
 
     // ── Legacy flat generator params (V1.0.0 clips) ──
-    #[serde(default, rename = "genRotSpeedXY")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genRotSpeedXY")]
     pub legacy_gen_rot_speed_xy: Option<f32>,
-    #[serde(default, rename = "genRotSpeedZW")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genRotSpeedZW")]
     pub legacy_gen_rot_speed_zw: Option<f32>,
-    #[serde(default, rename = "genRotSpeedXW")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genRotSpeedXW")]
     pub legacy_gen_rot_speed_xw: Option<f32>,
-    #[serde(default, rename = "genLineThickness")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genLineThickness")]
     pub legacy_gen_line_thickness: Option<f32>,
-    #[serde(default, rename = "genProjDistance")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genProjDistance")]
     pub legacy_gen_proj_distance: Option<f32>,
 }
 

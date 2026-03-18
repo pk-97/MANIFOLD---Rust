@@ -353,8 +353,8 @@ impl Application {
     fn save_project(&mut self) {
         if let Some(path) = self.current_project_path.clone() {
             self.sync_project_saved_playhead();
-            if let Some(project) = self.engine.project() {
-                match manifold_io::saver::save_project(project, &path) {
+            if let Some(project) = self.engine.project_mut() {
+                match manifold_io::saver::save_project(project, &path, None, false) {
                     Ok(()) => {
                         self.editing_service.mark_clean();
                         log::info!("[ProjectIO] Saved to {}", path.display());
@@ -387,8 +387,8 @@ impl Application {
 
         if let Some(path) = dialog.save_file() {
             self.current_project_path = Some(path.clone());
-            if let Some(project) = self.engine.project() {
-                match manifold_io::saver::save_project(project, &path) {
+            if let Some(project) = self.engine.project_mut() {
+                match manifold_io::saver::save_project(project, &path, None, false) {
                     Ok(()) => {
                         // Persist last opened path (Unity line 218-220)
                         let path_str = path.to_string_lossy();

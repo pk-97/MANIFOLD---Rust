@@ -2,6 +2,7 @@ use std::path::Path;
 use std::io::Read;
 use manifold_core::project::Project;
 use crate::migrate;
+use crate::path_resolver::PathResolver;
 
 /// Load a .manifold project file with full post-load validation.
 ///
@@ -14,33 +15,48 @@ use crate::migrate;
 /// Post-load validation (matches Unity ProjectSerializer.cs + ProjectArchive.cs):
 /// 1. OnAfterDeserialize — rebuild caches, align params
 /// 2. BPM sync from tempo map beat 0 (clamp 20-300)
-/// 3. DurationMode migration — force all layers to NoteOff
-/// 4. Validate — structural integrity check
-/// 5. ValidateClips — missing file detection
-/// 6. PurgeOrphanedReferences — stale clip/MIDI cleanup
+/// 3. DurationMode migration — force all layers to NoteOff (V1 ONLY)
+/// 4. PathResolver.ResolveAll — fix broken file paths
+/// 5. Validate — structural integrity check
+/// 6. ValidateClips — missing file detection
+/// 7. PurgeOrphanedReferences — stale clip/MIDI cleanup
 pub fn load_project(path: &Path) -> Result<Project, LoadError> {
     let file_bytes = std::fs::read(path)
         .map_err(|e| LoadError::Io(e.to_string()))?;
 
     // Try V2 ZIP format first
-    let json = match extract_json_from_zip(&file_bytes) {
-        Ok(json) => {
-            log::info!("Loaded V2 .manifold archive from {}", path.display());
-            json
-        }
+    let (json, is_v2) = match extract_json_from_zip(&file_bytes) {
+        Ok(json) => (json, true),
         Err(_) => {
             // Not a ZIP — treat as plain JSON (V1)
-            String::from_utf8(file_bytes)
-                .map_err(|e| LoadError::Io(format!("Invalid UTF-8: {e}")))?
+            let json = String::from_utf8(file_bytes)
+                .map_err(|e| LoadError::Io(format!("Invalid UTF-8: {e}")))?;
+            (json, false)
         }
     };
 
     let mut project = load_project_from_json(&json)?;
 
+    // Step 3: Duration mode migration — V1 ONLY
+    // Unity: ProjectSerializer.cs lines 46-50 (V1 path only)
+    // Unity: ProjectArchive.cs Load() does NOT call this
+    if !is_v2 {
+        project.migrate_duration_modes();
+        log::info!("[Loader] Loaded V1: {}", path.display());
+    } else {
+        log::info!("[Loader] Loaded V2: {}", path.display());
+    }
+
     // Store the file path for PathResolver and save-back
     project.last_saved_path = path.to_string_lossy().to_string();
 
-    // Post-load validation steps 4-6 (steps 1-3 done in load_project_from_json)
+    // Step 4: Resolve broken file paths (migration support)
+    // Unity: PathResolver.ResolveAll called in BOTH V1 (ProjectSerializer.cs line 55)
+    // and V2 (ProjectArchive.cs line 98) load paths
+    let saved_path = project.last_saved_path.clone();
+    PathResolver::resolve_all(&mut project, &saved_path);
+
+    // Post-load validation steps 5-7 (steps 1-2 done in load_project_from_json)
     run_post_load_validation(&mut project);
 
     Ok(project)
@@ -63,10 +79,10 @@ fn extract_json_from_zip(bytes: &[u8]) -> Result<String, LoadError> {
     Ok(json)
 }
 
-/// Load from raw JSON string. Runs steps 1-3 of post-load validation.
-/// Steps 4-6 (validate, validate_clips, purge) are run by load_project after
-/// the file path is set. Callers using this directly should call
-/// run_post_load_validation() separately.
+/// Load from raw JSON string. Runs steps 1-2 of post-load validation.
+/// Steps 3-7 (duration mode migration, PathResolver, validate, validate_clips, purge)
+/// are run by load_project after the file path is set. Callers using this directly
+/// should call run_post_load_validation() separately.
 pub fn load_project_from_json(json: &str) -> Result<Project, LoadError> {
     // Run version migration
     let migrated = migrate::migrate_if_needed(json)
@@ -84,17 +100,14 @@ pub fn load_project_from_json(json: &str) -> Result<Project, LoadError> {
     // to match Unity's Mathf.Clamp(startBpm, 20f, 300f)
     project.sync_bpm_from_tempo_map();
 
-    // Step 3: Migrate old projects: force all layers to NoteOff duration mode
-    project.migrate_duration_modes();
-
     Ok(project)
 }
 
-/// Run post-load validation steps 4-6: structural validation, missing file
+/// Run post-load validation steps 5-7: structural validation, missing file
 /// detection, and orphaned reference cleanup.
 /// Port of C# ProjectSerializer.cs lines 52-79 / ProjectArchive.cs lines 105-124.
 pub fn run_post_load_validation(project: &mut Project) {
-    // Step 4: Validate project structure
+    // Step 5: Validate project structure
     let errors = project.validate();
     if !errors.is_empty() {
         log::warn!(
@@ -103,7 +116,7 @@ pub fn run_post_load_validation(project: &mut Project) {
         );
     }
 
-    // Step 5: Validate video clips exist
+    // Step 6: Validate video clips exist
     let validation = project.video_library.validate_clips();
     if !validation.is_valid() {
         log::warn!(
@@ -113,7 +126,7 @@ pub fn run_post_load_validation(project: &mut Project) {
         );
     }
 
-    // Step 6: Purge orphaned references
+    // Step 7: Purge orphaned references
     let purge_result = project.purge_orphaned_references();
     if purge_result.total_removed() > 0 {
         log::info!(

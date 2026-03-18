@@ -29,7 +29,7 @@ pub struct Project {
     pub tempo_map: TempoMap,
     #[serde(default)]
     pub recording_provenance: RecordingProvenance,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub percussion_import: Option<PercussionImportState>,
     #[serde(skip)]
     pub last_saved_path: String,
@@ -37,17 +37,17 @@ pub struct Project {
     pub saved_playhead_time: f32,
 
     // ── Legacy top-level fields from V1.0.0 (before percussionImport nesting) ──
-    #[serde(default, rename = "importedPercussionAudioPath")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "importedPercussionAudioPath")]
     pub legacy_perc_audio_path: Option<String>,
-    #[serde(default, rename = "importedPercussionAudioStartBeat")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "importedPercussionAudioStartBeat")]
     pub legacy_perc_audio_start_beat: Option<f32>,
-    #[serde(default, rename = "importedPercussionClipPlacements")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "importedPercussionClipPlacements")]
     pub legacy_perc_clip_placements: Option<serde_json::Value>,
-    #[serde(default, rename = "percussionEnergyEnvelope")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "percussionEnergyEnvelope")]
     pub legacy_perc_energy_envelope: Option<Vec<f32>>,
-    #[serde(default, rename = "importedStemPaths")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "importedStemPaths")]
     pub legacy_imported_stem_paths: Option<Vec<String>>,
-    #[serde(default, rename = "importedPercussionAudioHash")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "importedPercussionAudioHash")]
     pub legacy_perc_audio_hash: Option<String>,
 }
 

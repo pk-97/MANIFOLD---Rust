@@ -9,7 +9,7 @@ pub struct VideoClip {
     pub id: String,
     #[serde(default)]
     pub file_path: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relative_file_path: Option<String>,
     #[serde(default)]
     pub file_name: String,

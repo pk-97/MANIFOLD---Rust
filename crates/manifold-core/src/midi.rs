@@ -11,7 +11,7 @@ pub struct MidiNoteMapping {
     pub video_clip_ids: Vec<String>,
     #[serde(default)]
     pub target_layer_index: i32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_mode: Option<ClipDurationMode>,
 }
 

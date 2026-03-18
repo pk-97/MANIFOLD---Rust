@@ -25,21 +25,21 @@ pub struct ImportedPercussionClipPlacement {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PercussionImportState {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_path: Option<String>,
     #[serde(default)]
     pub audio_start_beat: f32,
     #[serde(default)]
     pub clip_placements: Vec<ImportedPercussionClipPlacement>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub energy_envelope: Option<Vec<f32>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stem_paths: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relative_audio_path: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relative_stem_paths: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_hash: Option<String>,
 }
 

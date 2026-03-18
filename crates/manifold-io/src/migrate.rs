@@ -1,8 +1,18 @@
 use serde_json::Value;
 
 /// Port of C# ProjectJsonMigrator. Pre-processes JSON before deserialization.
+/// Unity: ProjectJsonMigrator.MigrateIfNeeded (lines 16-39)
 pub fn migrate_if_needed(json: &str) -> Result<String, serde_json::Error> {
-    let mut root: Value = serde_json::from_str(json)?;
+    // Unity line 18: if (string.IsNullOrEmpty(json)) return json;
+    if json.trim().is_empty() {
+        return Ok(json.to_string());
+    }
+
+    // Unity lines 22-29: try { JObject.Parse(json) } catch { return json; }
+    let mut root: Value = match serde_json::from_str(json) {
+        Ok(v) => v,
+        Err(_) => return Ok(json.to_string()), // let downstream deserializer handle the error
+    };
 
     let version = root.get("projectVersion")
         .and_then(|v| v.as_str())

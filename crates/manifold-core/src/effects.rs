@@ -17,11 +17,11 @@ pub struct ParamDef {
     pub whole_numbers: bool,
     #[serde(default)]
     pub is_toggle: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_labels: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub format_string: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub osc_suffix: Option<String>,
 }
 
@@ -89,21 +89,21 @@ pub struct EffectInstance {
     pub collapsed: bool,
     #[serde(default)]
     pub param_values: Vec<f32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_param_values: Option<Vec<f32>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drivers: Option<Vec<ParameterDriver>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group_id: Option<String>,
 
     // Legacy flat param fields (V1.0.0 format)
-    #[serde(default, rename = "param0")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "param0")]
     pub legacy_param0: Option<f32>,
-    #[serde(default, rename = "param1")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "param1")]
     pub legacy_param1: Option<f32>,
-    #[serde(default, rename = "param2")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "param2")]
     pub legacy_param2: Option<f32>,
-    #[serde(default, rename = "param3")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "param3")]
     pub legacy_param3: Option<f32>,
 }
 
@@ -339,7 +339,7 @@ pub struct EffectGroup {
     pub collapsed: bool,
     #[serde(default = "default_one")]
     pub wet_dry: f32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_group_id: Option<String>,
 }
 

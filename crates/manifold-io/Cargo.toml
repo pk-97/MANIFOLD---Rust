@@ -9,6 +9,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 zip = "2"
 log = { workspace = true }
+sha2 = "0.10"
+flate2 = "1"
+pathdiff = "0.2"
 
 [dev-dependencies]
 serde_json = { workspace = true }

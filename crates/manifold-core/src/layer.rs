@@ -17,7 +17,7 @@ pub struct Layer {
     pub name: String,
     #[serde(default)]
     pub layer_type: LayerType,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_layer_id: Option<String>,
     #[serde(default)]
     pub is_collapsed: bool,
@@ -37,59 +37,59 @@ pub struct Layer {
     // ── Effects ──
     #[serde(default = "default_one")]
     pub opacity: f32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effects: Option<Vec<EffectInstance>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effect_groups: Option<Vec<EffectGroup>>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub envelopes: Option<Vec<ParamEnvelope>>,
 
     // ── Generator params (V1.1.0+, nested) ──
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gen_params: Option<GeneratorParamState>,
 
     // ── Video/MIDI assignment ──
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video_folder_path: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relative_video_folder_path: Option<String>,
     #[serde(default = "default_neg_one")]
     pub midi_note: i32,
     #[serde(default = "default_neg_one")]
     pub midi_channel: i32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_mode: Option<ClipDurationMode>,
     #[serde(default)]
     pub source_clip_ids: Vec<String>,
 
     // ── Legacy flat generator fields (V1.0.0 format) ──
-    #[serde(default, rename = "generatorType")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "generatorType")]
     pub legacy_generator_type: Option<GeneratorType>,
-    #[serde(default, rename = "genParamValues")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genParamValues")]
     pub legacy_gen_param_values: Option<Vec<f32>>,
-    #[serde(default, rename = "genDrivers")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genDrivers")]
     pub legacy_gen_drivers: Option<serde_json::Value>,
-    #[serde(default, rename = "genParamVersion")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genParamVersion")]
     pub legacy_gen_param_version: Option<i32>,
-    #[serde(default, rename = "genAnimSpeed")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genAnimSpeed")]
     pub legacy_gen_anim_speed: Option<f32>,
-    #[serde(default, rename = "genAnimateEdges")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genAnimateEdges")]
     pub legacy_gen_animate_edges: Option<serde_json::Value>,
-    #[serde(default, rename = "genLineThickness")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genLineThickness")]
     pub legacy_gen_line_thickness: Option<f32>,
-    #[serde(default, rename = "genProjDistance")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genProjDistance")]
     pub legacy_gen_proj_distance: Option<f32>,
-    #[serde(default, rename = "genRotSpeedXY")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genRotSpeedXY")]
     pub legacy_gen_rot_speed_xy: Option<f32>,
-    #[serde(default, rename = "genRotSpeedZW")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genRotSpeedZW")]
     pub legacy_gen_rot_speed_zw: Option<f32>,
-    #[serde(default, rename = "genRotSpeedXW")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genRotSpeedXW")]
     pub legacy_gen_rot_speed_xw: Option<f32>,
-    #[serde(default, rename = "genShowVertices")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genShowVertices")]
     pub legacy_gen_show_vertices: Option<serde_json::Value>,
-    #[serde(default, rename = "genVertexSize")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genVertexSize")]
     pub legacy_gen_vertex_size: Option<f32>,
-    #[serde(default, rename = "genWindowSize")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "genWindowSize")]
     pub legacy_gen_window_size: Option<f32>,
 
     // ── Runtime caches (not serialized) ──

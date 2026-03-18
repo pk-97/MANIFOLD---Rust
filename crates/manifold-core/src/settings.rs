@@ -39,12 +39,12 @@ pub struct ProjectSettings {
     pub master_opacity: f32,
     #[serde(default)]
     pub master_effects: Vec<EffectInstance>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master_effect_groups: Option<Vec<EffectGroup>>,
 
     #[serde(default = "default_neg_one_i32")]
     pub led_exit_index: i32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub midi_clock_source_name: Option<String>,
     #[serde(default)]
     pub clock_authority: ClockAuthority,
@@ -61,41 +61,41 @@ pub struct ProjectSettings {
     pub effect_browser_open: bool,
 
     // ── Legacy flat effect fields (V1.0.0) ──
-    #[serde(default, rename = "bloomAmount")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "bloomAmount")]
     pub legacy_bloom_amount: Option<f32>,
-    #[serde(default, rename = "feedbackAmount")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "feedbackAmount")]
     pub legacy_feedback_amount: Option<f32>,
-    #[serde(default, rename = "pixelSortAmount")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "pixelSortAmount")]
     pub legacy_pixel_sort_amount: Option<f32>,
-    #[serde(default, rename = "kaleidoscopeAmount")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "kaleidoscopeAmount")]
     pub legacy_kaleidoscope_amount: Option<f32>,
-    #[serde(default, rename = "kaleidoscopeSegments")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "kaleidoscopeSegments")]
     pub legacy_kaleidoscope_segments: Option<f32>,
-    #[serde(default, rename = "edgeStretchAmount")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "edgeStretchAmount")]
     pub legacy_edge_stretch_amount: Option<f32>,
-    #[serde(default, rename = "edgeStretchSourceWidth")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "edgeStretchSourceWidth")]
     pub legacy_edge_stretch_source_width: Option<f32>,
-    #[serde(default, rename = "infiniteZoomAmount")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "infiniteZoomAmount")]
     pub legacy_infinite_zoom_amount: Option<f32>,
-    #[serde(default, rename = "infiniteZoomSharpness")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "infiniteZoomSharpness")]
     pub legacy_infinite_zoom_sharpness: Option<f32>,
-    #[serde(default, rename = "voronoiPrismAmount")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "voronoiPrismAmount")]
     pub legacy_voronoi_prism_amount: Option<f32>,
-    #[serde(default, rename = "voronoiPrismCellCount")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "voronoiPrismCellCount")]
     pub legacy_voronoi_prism_cell_count: Option<f32>,
-    #[serde(default, rename = "quadMirrorAmount")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "quadMirrorAmount")]
     pub legacy_quad_mirror_amount: Option<f32>,
-    #[serde(default, rename = "ditherAmount")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "ditherAmount")]
     pub legacy_dither_amount: Option<f32>,
-    #[serde(default, rename = "ditherAlgorithm")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "ditherAlgorithm")]
     pub legacy_dither_algorithm: Option<f32>,
-    #[serde(default, rename = "strobeAmount")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "strobeAmount")]
     pub legacy_strobe_amount: Option<f32>,
-    #[serde(default, rename = "strobeRate")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "strobeRate")]
     pub legacy_strobe_rate: Option<f32>,
-    #[serde(default, rename = "strobeMode")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "strobeMode")]
     pub legacy_strobe_mode: Option<f32>,
-    #[serde(default, rename = "masterEffectOrder")]
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "masterEffectOrder")]
     pub legacy_master_effect_order: Option<serde_json::Value>,
 }
 
