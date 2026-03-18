@@ -11,6 +11,7 @@ use manifold_core::types::{BlendMode, LayerType};
 use manifold_core::layer::Layer;
 use manifold_editing::commands::layer::DeleteLayerCommand;
 use manifold_editing::service::EditingService;
+use manifold_playback::audio_sync::ImportedAudioSyncController;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::renderer::StubRenderer;
 use manifold_renderer::blit::BlitPipeline;
@@ -100,6 +101,10 @@ pub struct Application {
     // Text input
     text_input: crate::text_input::TextInputState,
 
+    // Audio sync — imported audio playback synced to timeline.
+    // Port of Unity ImportedAudioSyncController (owned by WorkspaceController).
+    audio_sync: Option<ImportedAudioSyncController>,
+
     // Transport controller — sync management, BPM editing, playback actions
     transport_controller: manifold_playback::transport_controller::TransportController,
 
@@ -177,6 +182,13 @@ impl Application {
             current_project_path: None,
             user_prefs: UserPrefs::load(),
             text_input: crate::text_input::TextInputState::new(),
+            audio_sync: match ImportedAudioSyncController::new() {
+                Ok(ctrl) => Some(ctrl),
+                Err(e) => {
+                    log::warn!("[Audio] Failed to initialize audio sync: {}", e);
+                    None
+                }
+            },
             transport_controller: manifold_playback::transport_controller::TransportController::new(),
             input_handler: crate::input_handler::InputHandler::new(),
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
@@ -497,6 +509,25 @@ impl Application {
                     eprintln!("[PROJECT LOAD] Resized compositor/generators to {}x{}", w, h);
                 }
 
+                // Load imported audio if present in project.
+                // Port of Unity WorkspaceController: audioSyncController.LoadAudioAsync
+                // called during project open when percussionImport.audioPath is set.
+                if let Some(ref mut audio_sync) = self.audio_sync {
+                    if let Some(proj) = self.engine.project() {
+                        if let Some(ref perc) = proj.percussion_import {
+                            if let Some(ref audio_path) = perc.audio_path {
+                                if !audio_path.is_empty() {
+                                    let start_beat = perc.audio_start_beat;
+                                    let audio_path_owned = audio_path.clone();
+                                    if let Err(e) = audio_sync.load_audio(&audio_path_owned, start_beat) {
+                                        log::warn!("[ProjectIO] Failed to load imported audio: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 self.editing_service.set_project();
                 self.selection.clear_selection();
                 self.active_layer_index = Some(0);
@@ -612,6 +643,12 @@ impl Application {
             export_fixed_dt: 0.0, // non-zero only during video export (GAP-IO-4)
         };
         let tick_result = self.engine.tick(ctx);
+
+        // 1b. Sync imported audio playback to timeline
+        // Port of Unity WorkspaceController.LateUpdate → audioSyncController.UpdateSync
+        if let Some(ref mut audio_sync) = self.audio_sync {
+            audio_sync.update_sync(&mut self.engine);
+        }
 
         // 2. Process UI events and dispatch actions
         let actions = self.ui_root.process_events();

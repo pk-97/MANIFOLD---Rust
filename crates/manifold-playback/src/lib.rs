@@ -15,3 +15,4 @@ pub mod midi_clock_sync;
 pub mod osc_receiver;
 pub mod osc_registry;
 pub mod osc_sync;
+pub mod audio_sync;

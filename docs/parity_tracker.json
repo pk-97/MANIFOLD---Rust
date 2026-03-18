@@ -16,7 +16,7 @@
     "ui": { "pct": 72, "audit_section": 7 },
     "io": { "pct": 70, "audit_section": 8 },
     "app": { "pct": 60, "audit_section": 9 },
-    "audio_percussion": { "pct": 0, "audit_section": 10 },
+    "audio_percussion": { "pct": 10, "audit_section": 10 },
     "midi_input": { "pct": 0, "audit_section": 11 },
     "led_external": { "pct": 0, "audit_section": 12 },
     "external_window": { "pct": 0, "audit_section": 13 },
@@ -380,9 +380,9 @@
       "title": "Port ImportedAudioSyncController (basic audio playback)",
       "severity": "high",
       "est_loc": 400,
-      "status": "todo",
-      "commit": null,
-      "notes": "Basic timeline-synced audio playback from loaded projects. Load audio file from PercussionImportState.audio_path, decode (symphonia/rodio), sync to engine tick (play/pause/seek/stop), hard-resync on drift >0.20s. MP3 encoder delay probe optional (ffprobe fallback to 0). No dependency on percussion analysis pipeline. Split from original GAP-AUDIO-7."
+      "status": "done",
+      "commit": "pending",
+      "notes": "Full port using kira 0.9 (StaticSoundData + AudioManager). All methods translated: load_audio, update_sync (3-state Playing/Paused/Stopped), set_start_beat, get_duration_beats, get_end_beat, try_get_source_seconds_at_playhead, reset_audio. ffprobe encoder delay probing via std::process::Command. Constants match Unity exactly (0.06, 0.20, 0.5). Wired into app tick loop (after engine.tick) and project load (reads PercussionImportState.audio_path). kira stop() is permanent so Stopped state uses pause()+seek_to(0) — same logical behavior."
     },
     {
       "number": 47,

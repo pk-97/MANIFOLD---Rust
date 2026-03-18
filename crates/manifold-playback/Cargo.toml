@@ -7,6 +7,7 @@ edition = "2021"
 manifold-core = { path = "../manifold-core" }
 manifold-editing = { path = "../manifold-editing" }
 log = "0.4"
+kira = { workspace = true }
 
 [dev-dependencies]
 manifold-io = { path = "../manifold-io" }
