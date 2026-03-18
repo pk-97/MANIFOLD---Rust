@@ -97,6 +97,16 @@ pub struct EffectCardConfig {
     pub env_decay: Vec<f32>,
     pub env_sustain: Vec<f32>,
     pub env_release: Vec<f32>,
+    /// Per-param driver beat division button index (0-10). -1 if no driver.
+    pub driver_beat_div_idx: Vec<i32>,
+    /// Per-param driver waveform index (0-4). -1 if no driver.
+    pub driver_waveform_idx: Vec<i32>,
+    /// Per-param driver reversed state.
+    pub driver_reversed: Vec<bool>,
+    /// Per-param driver dotted modifier active.
+    pub driver_dotted: Vec<bool>,
+    /// Per-param driver triplet modifier active.
+    pub driver_triplet: Vec<bool>,
 }
 
 /// Per-parameter expansion and modulation state.
@@ -116,6 +126,16 @@ pub struct EffectCardState {
     pub env_decay: Vec<f32>,
     pub env_sustain: Vec<f32>,
     pub env_release: Vec<f32>,
+    /// Per-param driver visual state — beat division button index (0-10), -1 if no driver.
+    pub driver_beat_div_idx: Vec<i32>,
+    /// Per-param driver visual state — waveform index (0-4), -1 if no driver.
+    pub driver_waveform_idx: Vec<i32>,
+    /// Per-param driver visual state — reversed flag.
+    pub driver_reversed: Vec<bool>,
+    /// Per-param driver visual state — dotted modifier active.
+    pub driver_dotted: Vec<bool>,
+    /// Per-param driver visual state — triplet modifier active.
+    pub driver_triplet: Vec<bool>,
 }
 
 impl EffectCardState {
@@ -132,6 +152,11 @@ impl EffectCardState {
             env_decay: vec![0.3; param_count],
             env_sustain: vec![0.7; param_count],
             env_release: vec![0.5; param_count],
+            driver_beat_div_idx: vec![-1; param_count],
+            driver_waveform_idx: vec![-1; param_count],
+            driver_reversed: vec![false; param_count],
+            driver_dotted: vec![false; param_count],
+            driver_triplet: vec![false; param_count],
         }
     }
 }
@@ -298,6 +323,12 @@ impl EffectCardPanel {
             self.state.env_decay[i] = config.env_decay.get(i).copied().unwrap_or(0.0);
             self.state.env_sustain[i] = config.env_sustain.get(i).copied().unwrap_or(0.0);
             self.state.env_release[i] = config.env_release.get(i).copied().unwrap_or(0.0);
+            // Driver visual state for button highlighting
+            self.state.driver_beat_div_idx[i] = config.driver_beat_div_idx.get(i).copied().unwrap_or(-1);
+            self.state.driver_waveform_idx[i] = config.driver_waveform_idx.get(i).copied().unwrap_or(-1);
+            self.state.driver_reversed[i] = config.driver_reversed.get(i).copied().unwrap_or(false);
+            self.state.driver_dotted[i] = config.driver_dotted.get(i).copied().unwrap_or(false);
+            self.state.driver_triplet[i] = config.driver_triplet.get(i).copied().unwrap_or(false);
         }
         self.slider_ids = vec![None; n];
         self.driver_btn_ids = vec![-1; n];
@@ -651,11 +682,20 @@ impl EffectCardPanel {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn build_driver_config(&self, tree: &mut UITree, parent: i32, x: f32, y: f32, w: f32, _param_idx: usize) -> DriverConfigIds {
+    fn build_driver_config(&self, tree: &mut UITree, parent: i32, x: f32, y: f32, w: f32, param_idx: usize) -> DriverConfigIds {
         let container_id = tree.add_panel(
             parent, x, y, w, DRIVER_CONFIG_HEIGHT,
             UIStyle { bg_color: color::CONFIG_BG_C32, corner_radius: 2.0, ..UIStyle::default() },
         ) as i32;
+
+        // Read current driver state for button highlighting
+        let active_div = self.state.driver_beat_div_idx.get(param_idx).copied().unwrap_or(-1);
+        let active_wave = self.state.driver_waveform_idx.get(param_idx).copied().unwrap_or(-1);
+        let is_reversed = self.state.driver_reversed.get(param_idx).copied().unwrap_or(false);
+        let is_dotted = self.state.driver_dotted.get(param_idx).copied().unwrap_or(false);
+        let is_triplet = self.state.driver_triplet.get(param_idx).copied().unwrap_or(false);
+        // Beat div button is active when: index matches AND no dot/triplet modifier
+        let no_mod = !is_dotted && !is_triplet;
 
         let mut cx = x + DRIVER_PAD_H;
         let row1_y = y + 4.0;
@@ -666,18 +706,10 @@ impl EffectCardPanel {
         let btn_w = (avail_w - BEAT_DIV_SPACING * (BEAT_DIV_COUNT as f32 - 1.0)) / BEAT_DIV_COUNT as f32;
 
         for j in 0..BEAT_DIV_COUNT {
+            let active = j as i32 == active_div && no_mod;
             beat_div_btn_ids[j] = tree.add_button(
                 container_id, cx, row1_y, btn_w, DRIVER_ROW_HEIGHT,
-                UIStyle {
-                    bg_color: color::CONFIG_BTN_INACTIVE_C32,
-                    hover_bg_color: color::CONFIG_BTN_HOVER_C32,
-                    pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
-                    text_color: color::TEXT_DIMMED_C32,
-                    font_size: 8,
-                    corner_radius: 1.0,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
-                },
+                config_btn_style(active),
                 BEAT_DIV_LABELS[j],
             ) as i32;
             cx += btn_w + BEAT_DIV_SPACING;
@@ -689,32 +721,14 @@ impl EffectCardPanel {
 
         let dot_btn_id = tree.add_button(
             container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
-            UIStyle {
-                bg_color: color::CONFIG_BTN_INACTIVE_C32,
-                hover_bg_color: color::CONFIG_BTN_HOVER_C32,
-                pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: FONT_SIZE,
-                corner_radius: 1.0,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
+            config_btn_style(is_dotted),
             ".",
         ) as i32;
         cx += WAVE_BTN_W + BEAT_DIV_SPACING;
 
         let triplet_btn_id = tree.add_button(
             container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
-            UIStyle {
-                bg_color: color::CONFIG_BTN_INACTIVE_C32,
-                hover_bg_color: color::CONFIG_BTN_HOVER_C32,
-                pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: FONT_SIZE,
-                corner_radius: 1.0,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
+            config_btn_style(is_triplet),
             "T",
         ) as i32;
         cx += WAVE_BTN_W + GAP;
@@ -722,18 +736,10 @@ impl EffectCardPanel {
         // Waveform buttons
         let mut wave_btn_ids = [-1i32; WAVEFORM_COUNT];
         for j in 0..WAVEFORM_COUNT {
+            let active = j as i32 == active_wave;
             wave_btn_ids[j] = tree.add_button(
                 container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
-                UIStyle {
-                    bg_color: color::CONFIG_BTN_INACTIVE_C32,
-                    hover_bg_color: color::CONFIG_BTN_HOVER_C32,
-                    pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
-                    text_color: color::TEXT_DIMMED_C32,
-                    font_size: 8,
-                    corner_radius: 1.0,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
-                },
+                config_btn_style(active),
                 WAVEFORM_LABELS[j],
             ) as i32;
             cx += WAVE_BTN_W + BEAT_DIV_SPACING;
@@ -744,16 +750,7 @@ impl EffectCardPanel {
         let reverse_x = x + w - DRIVER_PAD_H - reverse_w;
         let reverse_btn_id = tree.add_button(
             container_id, reverse_x, row2_y, reverse_w, DRIVER_ROW_HEIGHT,
-            UIStyle {
-                bg_color: color::CONFIG_BTN_INACTIVE_C32,
-                hover_bg_color: color::CONFIG_BTN_HOVER_C32,
-                pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: 8,
-                corner_radius: 1.0,
-                text_align: TextAlign::Center,
-                ..UIStyle::default()
-            },
+            config_btn_style(is_reversed),
             "Rev",
         ) as i32;
 
@@ -1183,6 +1180,34 @@ fn de_btn_style(active: bool, active_color: Color32) -> UIStyle {
     }
 }
 
+/// Style for driver config buttons (beat div, waveform, dot, triplet, reverse).
+/// Unity: active buttons use DriverActiveC32, inactive use ConfigBtnInactiveC32.
+fn config_btn_style(active: bool) -> UIStyle {
+    if active {
+        UIStyle {
+            bg_color: color::DRIVER_ACTIVE_C32,
+            hover_bg_color: color::DRIVER_ACTIVE_HOVER_C32,
+            pressed_bg_color: color::DRIVER_ACTIVE_PRESS_C32,
+            text_color: color::TEXT_WHITE_C32,
+            font_size: 8,
+            corner_radius: 1.0,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        }
+    } else {
+        UIStyle {
+            bg_color: color::CONFIG_BTN_INACTIVE_C32,
+            hover_bg_color: color::CONFIG_BTN_HOVER_C32,
+            pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
+            text_color: color::TEXT_DIMMED_C32,
+            font_size: 8,
+            corner_radius: 1.0,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1211,6 +1236,11 @@ mod tests {
             env_decay: vec![0.0; n],
             env_sustain: vec![0.0; n],
             env_release: vec![0.0; n],
+            driver_beat_div_idx: vec![-1; n],
+            driver_waveform_idx: vec![-1; n],
+            driver_reversed: vec![false; n],
+            driver_dotted: vec![false; n],
+            driver_triplet: vec![false; n],
         }
     }
 

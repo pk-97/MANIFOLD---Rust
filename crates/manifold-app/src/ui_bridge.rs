@@ -1009,24 +1009,35 @@ pub fn dispatch(
             DispatchResult::structural()
         }
         PanelAction::EffectEnvParamChanged(ei, pi, param, val) => {
-            // Live ADSR mutation during drag (no undo — commit-less slider).
-            if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
-                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
-                        let effect_type = layer.effects.as_ref()
-                            .and_then(|fx| fx.get(*ei))
-                            .map(|fx| fx.effect_type);
-                        if let Some(et) = effect_type {
-                            let envs = layer.envelopes_mut();
-                            if let Some(env) = envs.iter_mut().find(|e|
-                                e.target_effect_type == et && e.param_index == *pi as i32
-                            ) {
-                                match param {
-                                    manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
-                                    manifold_ui::EnvelopeParam::Decay => env.decay_beats = *val,
-                                    manifold_ui::EnvelopeParam::Sustain => env.sustain_level = *val,
-                                    manifold_ui::EnvelopeParam::Release => env.release_beats = *val,
-                                }
+            // Live ADSR mutation during drag — routes via last_effect_tab.
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project_mut() {
+                let effect_type = {
+                    let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                };
+                if let Some(et) = effect_type {
+                    let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
+                        InspectorTab::Layer => active_layer.and_then(|idx|
+                            project.timeline.layers.get_mut(idx).map(|l| l.envelopes_mut())
+                        ),
+                        InspectorTab::Clip => selection.primary_selected_clip_id.as_ref().and_then(|cid|
+                            project.timeline.layers.iter_mut()
+                                .flat_map(|l| l.clips.iter_mut())
+                                .find(|c| c.id == *cid)
+                                .map(|c| c.envelopes_mut())
+                        ),
+                        InspectorTab::Master => None,
+                    };
+                    if let Some(envs) = envs {
+                        if let Some(env) = envs.iter_mut().find(|e|
+                            e.target_effect_type == et && e.param_index == *pi as i32
+                        ) {
+                            match param {
+                                manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
+                                manifold_ui::EnvelopeParam::Decay => env.decay_beats = *val,
+                                manifold_ui::EnvelopeParam::Sustain => env.sustain_level = *val,
+                                manifold_ui::EnvelopeParam::Release => env.release_beats = *val,
                             }
                         }
                     }
@@ -1035,19 +1046,17 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::EffectTrimChanged(ei, pi, min, max) => {
-            // Live trim mutation during drag.
-            if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
-                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
-                        if let Some(effects) = &mut layer.effects {
-                            if let Some(fx) = effects.get_mut(*ei) {
-                                if let Some(driver) = fx.drivers_mut().iter_mut()
-                                    .find(|d| d.param_index == *pi as i32)
-                                {
-                                    driver.trim_min = *min;
-                                    driver.trim_max = *max;
-                                }
-                            }
+            // Live trim mutation during drag — routes via last_effect_tab.
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project_mut() {
+                let (effects_mut, _) = resolve_effects_mut(tab, project, *active_layer, selection);
+                if let Some(effects) = effects_mut {
+                    if let Some(fx) = effects.get_mut(*ei) {
+                        if let Some(driver) = fx.drivers_mut().iter_mut()
+                            .find(|d| d.param_index == *pi as i32)
+                        {
+                            driver.trim_min = *min;
+                            driver.trim_max = *max;
                         }
                     }
                 }
@@ -1055,20 +1064,31 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::EffectTargetChanged(ei, pi, norm) => {
-            // Live target normalized mutation during drag.
-            if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
-                    if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
-                        let effect_type = layer.effects.as_ref()
-                            .and_then(|fx| fx.get(*ei))
-                            .map(|fx| fx.effect_type);
-                        if let Some(et) = effect_type {
-                            let envs = layer.envelopes_mut();
-                            if let Some(env) = envs.iter_mut().find(|e|
-                                e.target_effect_type == et && e.param_index == *pi as i32
-                            ) {
-                                env.target_normalized = *norm;
-                            }
+            // Live target normalized mutation during drag — routes via last_effect_tab.
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project_mut() {
+                let effect_type = {
+                    let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                };
+                if let Some(et) = effect_type {
+                    let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
+                        InspectorTab::Layer => active_layer.and_then(|idx|
+                            project.timeline.layers.get_mut(idx).map(|l| l.envelopes_mut())
+                        ),
+                        InspectorTab::Clip => selection.primary_selected_clip_id.as_ref().and_then(|cid|
+                            project.timeline.layers.iter_mut()
+                                .flat_map(|l| l.clips.iter_mut())
+                                .find(|c| c.id == *cid)
+                                .map(|c| c.envelopes_mut())
+                        ),
+                        InspectorTab::Master => None,
+                    };
+                    if let Some(envs) = envs {
+                        if let Some(env) = envs.iter_mut().find(|e|
+                            e.target_effect_type == et && e.param_index == *pi as i32
+                        ) {
+                            env.target_normalized = *norm;
                         }
                     }
                 }
@@ -2518,6 +2538,11 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -
         let mut driver_active = vec![false; n];
         let mut trim_min = vec![0.0f32; n];
         let mut trim_max = vec![1.0f32; n];
+        let mut driver_beat_div_idx = vec![-1i32; n];
+        let mut driver_waveform_idx = vec![-1i32; n];
+        let mut driver_reversed = vec![false; n];
+        let mut driver_dotted = vec![false; n];
+        let mut driver_triplet = vec![false; n];
         if let Some(ref drivers) = fx.drivers {
             for d in drivers {
                 let pi = d.param_index as usize;
@@ -2526,6 +2551,12 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -
                     driver_active[pi] = true;
                     trim_min[pi] = d.trim_min;
                     trim_max[pi] = d.trim_max;
+                    // Driver visual state for button highlighting
+                    driver_beat_div_idx[pi] = beat_div_to_button_index(d.beat_division.base_division());
+                    driver_waveform_idx[pi] = d.waveform as i32;
+                    driver_reversed[pi] = d.reversed;
+                    driver_dotted[pi] = d.beat_division.is_dotted();
+                    driver_triplet[pi] = d.beat_division.is_triplet();
                 }
             }
         }
@@ -2571,8 +2602,31 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -
             env_decay,
             env_sustain,
             env_release,
+            driver_beat_div_idx,
+            driver_waveform_idx,
+            driver_reversed,
+            driver_dotted,
+            driver_triplet,
         }
     }).collect()
+}
+
+/// Map a base BeatDivision to its button index (0-10).
+/// Reverse of BeatDivision::from_button_index.
+fn beat_div_to_button_index(div: BeatDivision) -> i32 {
+    match div {
+        BeatDivision::ThirtySecond => -1, // No button for 1/32
+        BeatDivision::Sixteenth => 0,
+        BeatDivision::Eighth | BeatDivision::EighthDotted | BeatDivision::EighthTriplet => 1,
+        BeatDivision::Quarter | BeatDivision::QuarterDotted | BeatDivision::QuarterTriplet => 2,
+        BeatDivision::Half | BeatDivision::HalfDotted | BeatDivision::HalfTriplet => 3,
+        BeatDivision::Whole | BeatDivision::WholeDotted | BeatDivision::WholeTriplet => 4,
+        BeatDivision::TwoWhole | BeatDivision::TwoWholeDotted => 5,
+        BeatDivision::FourWhole => 6,
+        BeatDivision::EightWhole => 7,
+        BeatDivision::SixteenWhole => 8,
+        BeatDivision::ThirtyTwoWhole => 9,
+    }
 }
 
 /// Convert a `GeneratorParamState` into `GenParamConfig` for the UI.
