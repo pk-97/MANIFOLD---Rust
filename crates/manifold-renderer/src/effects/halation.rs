@@ -112,11 +112,8 @@ impl PostProcessEffect for HalationFX {
         fx: &EffectInstance,
         ctx: &EffectContext,
     ) {
-        // HalationFX.cs line 67: if (fx.GetParam(0) <= 0f || material == null) return;
+        // ShouldSkip handles the amount <= 0 check at the chain level now.
         let amount = fx.param_values.first().copied().unwrap_or(0.0);
-        if amount <= 0.0 {
-            return;
-        }
 
         self.width = ctx.width;
         self.height = ctx.height;
@@ -131,8 +128,8 @@ impl PostProcessEffect for HalationFX {
         let threshold = fx.param_values.get(1).copied().unwrap_or(0.5);
         let spread = fx.param_values.get(2).copied().unwrap_or(0.5);
         // HalationFX.cs line 72: Color tint = HsvToRgb(fx.GetParam(3), fx.GetParam(4), 1f)
-        let hue = fx.param_values.get(3).copied().unwrap_or(0.0);
-        let saturation = fx.param_values.get(4).copied().unwrap_or(1.0);
+        let hue = fx.param_values.get(3).copied().unwrap_or(20.0);
+        let saturation = fx.param_values.get(4).copied().unwrap_or(0.6);
         let (tint_r, tint_g, tint_b) = Self::hsv_to_rgb(hue, saturation, 1.0);
 
         let base = HalationUniforms {

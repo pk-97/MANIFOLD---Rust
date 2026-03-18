@@ -113,23 +113,8 @@ impl PostProcessEffect for BloomFX {
         fx: &EffectInstance,
         ctx: &EffectContext,
     ) {
-        // BloomFX.cs line 72: if (fx.GetParam(0) <= 0f || material == null) return;
+        // ShouldSkip handles the amount <= 0 check at the chain level now.
         let amount = fx.param_values.first().copied().unwrap_or(0.187);
-        if amount <= 0.0 {
-            self.helper.draw(
-                device, queue, encoder,
-                source, &self.helper.dummy_view, target,
-                bytemuck::bytes_of(&BloomUniforms {
-                    mode: 3, threshold: 0.0, knee: 0.0, intensity: 0.0,
-                    radius_scale: 1.0, combine_weight: 0.0,
-                    main_texel_size_x: 0.0, main_texel_size_y: 0.0,
-                    bloom_texel_size_x: 0.0, bloom_texel_size_y: 0.0,
-                    _pad0: 0.0, _pad1: 0.0,
-                }),
-                "Bloom Skip",
-            );
-            return;
-        }
 
         self.width = ctx.width;
         self.height = ctx.height;
@@ -271,7 +256,10 @@ impl PostProcessEffect for BloomFX {
 }
 
 impl StatefulEffect for BloomFX {
-    fn clear_state_for_owner(&mut self, owner_key: i64) { self.states.remove(&owner_key); }
+    fn clear_state_for_owner(&mut self, _owner_key: i64) {
+        // Bloom mips are fully overwritten each frame (prefilter → downsample → upsample).
+        // No temporal accumulation, so clearing contents is a no-op. Keep entry alive.
+    }
     fn cleanup_owner(&mut self, owner_key: i64) { self.states.remove(&owner_key); }
     fn cleanup_all_owners(&mut self, _device: &wgpu::Device) { self.states.clear(); }
 }

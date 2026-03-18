@@ -34,7 +34,6 @@ struct FeedbackUniforms {
 /// Per-owner state: the previous frame's feedback buffer.
 struct FeedbackState {
     buffer: RenderTarget,
-    initialized: bool,
 }
 
 /// Feedback effect — lerps current frame with previous frame's state buffer.
@@ -49,6 +48,27 @@ pub struct FeedbackFX {
     states: HashMap<i64, FeedbackState>,
     width: u32,
     height: u32,
+}
+
+/// Clear a RenderTarget to transparent black via a render pass.
+/// Unity ref: RenderTextureUtil.Clear() — zeros texture contents.
+fn clear_render_target(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+    let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Clear RT"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
 }
 
 impl FeedbackFX {
@@ -172,13 +192,16 @@ impl FeedbackFX {
         }
     }
 
-    fn ensure_state(&mut self, device: &wgpu::Device, owner_key: i64) {
+    /// Create state buffer and clear to black.
+    /// Unity ref: GetOrCreateState + RenderTextureUtil.Clear()
+    fn ensure_state(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, owner_key: i64) {
         if !self.states.contains_key(&owner_key) && self.width > 0 && self.height > 0 {
             let format = wgpu::TextureFormat::Rgba16Float;
-            self.states.insert(owner_key, FeedbackState {
-                buffer: RenderTarget::new(device, self.width, self.height, format, "Feedback State"),
-                initialized: false,
-            });
+            let buffer = RenderTarget::new(device, self.width, self.height, format, "Feedback State");
+            // Clear to black so first-frame shader reads black prev buffer,
+            // producing mix(current, black, amount) — matching Unity behavior.
+            clear_render_target(encoder, &buffer.view);
+            self.states.insert(owner_key, FeedbackState { buffer });
         }
     }
 }
@@ -187,6 +210,8 @@ impl PostProcessEffect for FeedbackFX {
     fn effect_type(&self) -> EffectType {
         EffectType::Feedback
     }
+
+    // ShouldSkip: default (param[0] <= 0) — matches Unity SimpleBlitEffect.ShouldSkip.
 
     fn apply(
         &mut self,
@@ -200,29 +225,9 @@ impl PostProcessEffect for FeedbackFX {
     ) {
         self.width = ctx.width;
         self.height = ctx.height;
-        self.ensure_state(device, ctx.owner_key);
+        self.ensure_state(device, encoder, ctx.owner_key);
 
         let state = self.states.get(&ctx.owner_key).unwrap();
-
-        if !state.initialized {
-            // First frame: blit source to target (passthrough) and to state buffer
-            self.copy_blit.draw(
-                device, queue, encoder,
-                source, target,
-                &[0u8; 16],
-                "Feedback Init",
-            );
-            self.copy_blit.draw(
-                device, queue, encoder,
-                source, &state.buffer.view,
-                &[0u8; 16],
-                "Feedback Init State",
-            );
-
-            let state = self.states.get_mut(&ctx.owner_key).unwrap();
-            state.initialized = true;
-            return;
-        }
 
         // FeedbackFX.cs:34 — Mathf.Min(fx.GetParam(0), 0.98f)
         let feedback_amount = fx.param_values.first().copied().unwrap_or(0.0).min(0.98);
@@ -278,7 +283,8 @@ impl PostProcessEffect for FeedbackFX {
             pass.draw(0..3, 0..1);
         }
 
-        // Copy blended result into feedback state buffer for next frame
+        // PostBlit: copy blended result into feedback state buffer for next frame.
+        // Unity ref: Graphics.CopyTexture(result, stateBuffer)
         let state = self.states.get(&ctx.owner_key).unwrap();
         self.copy_blit.draw(
             device, queue, encoder,
@@ -288,27 +294,25 @@ impl PostProcessEffect for FeedbackFX {
         );
     }
 
+    // FeedbackFX.cs lines 42-46 — ClearState: zeros ALL state buffer contents.
+    // Without an encoder, we remove entries so they get re-created (and cleared to
+    // black) on the next ensure_state call.
     fn clear_state(&mut self) {
-        for state in self.states.values_mut() {
-            state.initialized = false;
-        }
+        self.states.clear();
     }
 
-    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    fn resize(&mut self, _device: &wgpu::Device, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        for state in self.states.values_mut() {
-            state.buffer.resize(device, width, height);
-            state.initialized = false;
-        }
+        self.states.clear();
     }
 }
 
 impl StatefulEffect for FeedbackFX {
     fn clear_state_for_owner(&mut self, owner_key: i64) {
-        if let Some(state) = self.states.get_mut(&owner_key) {
-            state.initialized = false;
-        }
+        // Unity: RenderTextureUtil.Clear(rt) — zeros contents.
+        // Remove entry so it re-creates cleared on next ensure_state.
+        self.states.remove(&owner_key);
     }
 
     fn cleanup_owner(&mut self, owner_key: i64) {

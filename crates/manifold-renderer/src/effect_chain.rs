@@ -323,15 +323,18 @@ impl EffectChain {
                 }
             }
 
-            // Apply the effect
+            // Apply the effect (skip if ShouldSkip — no GPU work, no swap)
+            // Unity ref: CompositorStack checks ShouldSkip before Apply + buffer swap.
             if let Some(processor) = registry.get_mut(fx.effect_type) {
-                processor.apply(
-                    device, queue, encoder,
-                    self.source_view(),
-                    self.target_view(),
-                    fx, ctx,
-                );
-                self.swap();
+                if !processor.should_skip(fx) {
+                    processor.apply(
+                        device, queue, encoder,
+                        self.source_view(),
+                        self.target_view(),
+                        fx, ctx,
+                    );
+                    self.swap();
+                }
             }
         }
 

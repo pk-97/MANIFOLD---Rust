@@ -93,11 +93,8 @@ impl PostProcessEffect for CrtFX {
         fx: &EffectInstance,
         ctx: &EffectContext,
     ) {
-        // CrtFX.cs line 56-57: float amount = fx.GetParam(0); if (amount <= 0f) return;
-        let amount = fx.param_values.first().copied().unwrap_or(0.0);
-        if amount <= 0.0 {
-            return;
-        }
+        // ShouldSkip handles the amount <= 0 check at the chain level now.
+        let amount = fx.param_values.first().copied().unwrap_or(1.0);
 
         self.width = ctx.width;
         self.height = ctx.height;
@@ -125,9 +122,9 @@ impl PostProcessEffect for CrtFX {
             bytemuck::bytes_of(&CrtUniforms {
                 mode: 0,
                 amount,
-                scanlines: fx.param_values.get(1).copied().unwrap_or(0.5),
+                scanlines: fx.param_values.get(1).copied().unwrap_or(0.397),
                 glow: fx.param_values.get(2).copied().unwrap_or(0.3),
-                curvature: fx.param_values.get(3).copied().unwrap_or(0.2),
+                curvature: fx.param_values.get(3).copied().unwrap_or(0.0),
                 style,
                 glow_threshold,
                 screen_height: ctx.height as f32,
@@ -153,9 +150,9 @@ impl PostProcessEffect for CrtFX {
             bytemuck::bytes_of(&CrtUniforms {
                 mode: 1,
                 amount,
-                scanlines: fx.param_values.get(1).copied().unwrap_or(0.5),
+                scanlines: fx.param_values.get(1).copied().unwrap_or(0.397),
                 glow: fx.param_values.get(2).copied().unwrap_or(0.3),
-                curvature: fx.param_values.get(3).copied().unwrap_or(0.2),
+                curvature: fx.param_values.get(3).copied().unwrap_or(0.0),
                 style,
                 glow_threshold,
                 screen_height: ctx.height as f32,
@@ -178,9 +175,9 @@ impl PostProcessEffect for CrtFX {
             bytemuck::bytes_of(&CrtUniforms {
                 mode: 2,
                 amount,
-                scanlines: fx.param_values.get(1).copied().unwrap_or(0.5),
+                scanlines: fx.param_values.get(1).copied().unwrap_or(0.397),
                 glow: fx.param_values.get(2).copied().unwrap_or(0.3),
-                curvature: fx.param_values.get(3).copied().unwrap_or(0.2),
+                curvature: fx.param_values.get(3).copied().unwrap_or(0.0),
                 style,
                 glow_threshold,
                 screen_height: ctx.height as f32,

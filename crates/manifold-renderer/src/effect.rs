@@ -43,6 +43,14 @@ pub fn should_skip_default(fx: &EffectInstance) -> bool {
 pub trait PostProcessEffect: Send {
     fn effect_type(&self) -> EffectType;
 
+    /// Returns true when the effect should be skipped entirely (no GPU work,
+    /// no buffer swap). The chain checks this BEFORE calling apply().
+    /// Unity ref: SimpleBlitEffect.ShouldSkip() — checked by CompositorStack.
+    /// Default: skip when param[0] <= 0.
+    fn should_skip(&self, fx: &EffectInstance) -> bool {
+        should_skip_default(fx)
+    }
+
     /// Apply the effect. Reads source, writes to target.
     /// The caller swaps buffers after each effect.
     #[allow(clippy::too_many_arguments)]

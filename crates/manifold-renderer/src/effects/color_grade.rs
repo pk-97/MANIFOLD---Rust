@@ -6,6 +6,9 @@ use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use super::simple_blit_helper::SimpleBlitHelper;
 
+// ColorGradeFX.cs line 11
+const EPSILON: f32 = 0.001;
+
 // ColorGradeEffect.shader Properties (lines 6-14)
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -47,6 +50,25 @@ impl PostProcessEffect for ColorGradeFX {
         EffectType::ColorGrade
     }
 
+    // ColorGradeFX.cs:13-26 — ShouldSkip: skip when amount <= 0 OR all params at identity.
+    fn should_skip(&self, fx: &EffectInstance) -> bool {
+        let p = &fx.param_values;
+        let amount = p.first().copied().unwrap_or(0.0);
+        if amount <= 0.0 { return true; }
+
+        let gain      = p.get(1).copied().unwrap_or(1.0);
+        let saturation = p.get(2).copied().unwrap_or(1.0);
+        let hue        = p.get(3).copied().unwrap_or(0.0);
+        let contrast   = p.get(4).copied().unwrap_or(1.0);
+        let colorize   = p.get(5).copied().unwrap_or(0.0);
+
+        (gain - 1.0).abs() < EPSILON
+            && (saturation - 1.0).abs() < EPSILON
+            && hue.abs() < EPSILON
+            && (contrast - 1.0).abs() < EPSILON
+            && colorize < EPSILON
+    }
+
     fn apply(
         &mut self,
         device: &wgpu::Device,
@@ -60,13 +82,7 @@ impl PostProcessEffect for ColorGradeFX {
         // ColorGradeFX.cs:31-39 — read all 9 params in Unity order
         let p = &fx.param_values;
         let amount = p.first().copied().unwrap_or(0.0);
-
-        // ColorGradeFX.cs:13-26 — ShouldSkip optimization
-        // Skip when amount <= 0 or all processing params are at identity
-        if amount <= 0.0 {
-            // Passthrough — SimpleBlitHelper doesn't support skip, so just apply with amount=0
-            // The shader's final lerp(src, c, 0) = src
-        }
+        // ShouldSkip handles the identity check at the chain level now.
 
         let uniforms = ColorGradeUniforms {
             amount,                                                        // line 31

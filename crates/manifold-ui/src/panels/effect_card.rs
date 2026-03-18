@@ -980,10 +980,64 @@ impl EffectCardPanel {
             }
         }
 
-        // Check param slider tracks
+        // Check param slider tracks.
+        // When a driver is active, check if click is near a trim handle first —
+        // the 4px trim bars are hard to hit precisely, so we use a proximity zone.
+        // Unity: same 4px bars but event system delivers to correct child; we
+        // use a wider hit zone (8px each side) for robustness.
         for (pi, slider) in self.slider_ids.iter().enumerate() {
             if let Some(ref ids) = slider {
-                if node_id == ids.track {
+                if node_id == ids.track || {
+                    // Also accept clicks on trim bar / fill / target nodes that are children of this track
+                    self.trim_ids.get(pi).and_then(|t| t.as_ref()).map_or(false, |t|
+                        node_id as i32 == t.fill_id || node_id as i32 == t.min_bar_id || node_id as i32 == t.max_bar_id
+                    ) || self.target_ids.get(pi).and_then(|t| t.as_ref()).map_or(false, |t|
+                        node_id as i32 == t.target_bar_id
+                    )
+                } {
+                    // If driver is expanded, check proximity to trim handles before falling through to param drag
+                    if self.state.driver_expanded.get(pi).copied().unwrap_or(false) {
+                        if let Some(ref trim) = self.trim_ids.get(pi).and_then(|t| t.as_ref()) {
+                            let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
+                            let base_x = ids.track_rect.x + OVERLAY_INSET;
+                            let tmin = self.state.trim_min.get(pi).copied().unwrap_or(0.0);
+                            let tmax = self.state.trim_max.get(pi).copied().unwrap_or(1.0);
+                            let min_center = base_x + tmin * usable;
+                            let max_center = base_x + tmax * usable;
+                            let hit_zone = 8.0; // px proximity zone for trim handles
+
+                            let dist_min = (pos.x - min_center).abs();
+                            let dist_max = (pos.x - max_center).abs();
+
+                            if dist_min < hit_zone && dist_min <= dist_max {
+                                self.dragging_trim_param = pi as i32;
+                                self.dragging_trim_is_min = true;
+                                let _ = trim; // suppress unused warning
+                                return Vec::new();
+                            }
+                            if dist_max < hit_zone {
+                                self.dragging_trim_param = pi as i32;
+                                self.dragging_trim_is_min = false;
+                                return Vec::new();
+                            }
+                        }
+                    }
+
+                    // If envelope is expanded, check proximity to target bar before falling through
+                    if self.state.envelope_expanded.get(pi).copied().unwrap_or(false) {
+                        let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
+                        let base_x = ids.track_rect.x + OVERLAY_INSET;
+                        let tgt = self.state.target_norm.get(pi).copied().unwrap_or(1.0);
+                        let target_center = base_x + tgt * usable;
+                        let hit_zone = 8.0;
+
+                        if (pos.x - target_center).abs() < hit_zone {
+                            self.dragging_target_param = pi as i32;
+                            return Vec::new();
+                        }
+                    }
+
+                    // No trim/target nearby — normal param slider drag
                     self.dragging_param = pi as i32;
                     let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                     let info = &self.param_info[pi];

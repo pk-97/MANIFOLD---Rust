@@ -104,6 +104,18 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Why:** The 3D density volume uses `R32Float` (D-11), which is not filterable on Metal. Since the density is already 3D Gaussian-blurred before the simulate shader reads it, nearest-neighbor sampling is visually equivalent to bilinear — the blur removes the high-frequency content that filtering would smooth.
 - **Files affected:** `shaders/fluid_simulate_3d.wgsl`
 
+### [D-14] Stateful effect owner key: i64 instead of int (i32)
+- **Unity does:** `Dictionary<int, T>` for per-owner state maps in stateful effects
+- **Rust does:** `HashMap<i64, T>` for per-owner state maps
+- **Why:** Project-wide decision. Clip IDs use hash-based i64 keys. Using i64 consistently avoids narrowing conversions. Unity's `int` values fit within i64 with no data loss.
+- **Files affected:** All stateful effects (Feedback, StylizedFeedback, Bloom, CRT, Halation), `EffectContext::owner_key`
+
+### [D-15] InvertColors: standalone post-process effect vs compositor blend flag
+- **Unity does:** InvertColors is a boolean flag (`GetParam(0) > 0.5`) on the compositor blend shader (`_InvertColors` uniform in `VideoCompositor.shader`). No separate render pass.
+- **Rust does:** InvertColors is a standalone `PostProcessEffect` with its own shader pass and continuous `mix()` blending (0.0..1.0 intensity, not binary threshold).
+- **Why:** Intentional improvement. Continuous blending provides smoother transitions and is more consistent with how all other effects work. The extra render pass cost is negligible.
+- **Files affected:** `manifold-renderer/src/effects/invert_colors.rs`, `shaders/invert_colors.wgsl`
+
 ---
 
 ## Add new divergences above this line.

@@ -12,7 +12,7 @@ use super::simple_blit_helper::SimpleBlitHelper;
 // StylizedFeedbackFX.cs line 34 — Mathf.Deg2Rad
 const DEG_TO_RAD: f32 = std::f32::consts::PI / 180.0;
 
-// Passthrough blit shader: used for state buffer init (first frame).
+// Passthrough blit shader: used for copying result into state buffer.
 const PASSTHROUGH_SHADER: &str = r#"
 struct Uniforms { _pad: vec4<f32>, }
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -45,7 +45,6 @@ struct StylizedFeedbackUniforms {
 /// Per-owner state: the previous frame's feedback buffer.
 struct StylizedFeedbackState {
     buffer: RenderTarget,
-    initialized: bool,
 }
 
 /// Stylized feedback effect — zoom/rotate/blend current frame with previous frame's state buffer.
@@ -56,6 +55,27 @@ pub struct StylizedFeedbackFX {
     states: HashMap<i64, StylizedFeedbackState>,
     width: u32,
     height: u32,
+}
+
+/// Clear a RenderTarget to transparent black via a render pass.
+/// Unity ref: RenderTextureUtil.Clear() — zeros texture contents.
+fn clear_render_target(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+    let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Clear RT"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
 }
 
 impl StylizedFeedbackFX {
@@ -79,13 +99,16 @@ impl StylizedFeedbackFX {
         }
     }
 
-    fn ensure_state(&mut self, device: &wgpu::Device, owner_key: i64) {
+    /// Create state buffer and clear to black.
+    /// Unity ref: GetOrCreateState + RenderTextureUtil.Clear()
+    fn ensure_state(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, owner_key: i64) {
         if !self.states.contains_key(&owner_key) && self.width > 0 && self.height > 0 {
             let format = wgpu::TextureFormat::Rgba16Float;
-            self.states.insert(owner_key, StylizedFeedbackState {
-                buffer: RenderTarget::new(device, self.width, self.height, format, "StylizedFeedback State"),
-                initialized: false,
-            });
+            let buffer = RenderTarget::new(device, self.width, self.height, format, "StylizedFeedback State");
+            // Clear to black so first-frame shader reads black prev buffer,
+            // producing feedback with black → matching Unity behavior.
+            clear_render_target(encoder, &buffer.view);
+            self.states.insert(owner_key, StylizedFeedbackState { buffer });
         }
     }
 }
@@ -94,6 +117,8 @@ impl PostProcessEffect for StylizedFeedbackFX {
     fn effect_type(&self) -> EffectType {
         EffectType::StylizedFeedback
     }
+
+    // ShouldSkip: default (param[0] <= 0) — matches Unity SimpleBlitEffect.ShouldSkip.
 
     fn apply(
         &mut self,
@@ -107,22 +132,13 @@ impl PostProcessEffect for StylizedFeedbackFX {
     ) {
         self.width = ctx.width;
         self.height = ctx.height;
-        self.ensure_state(device, ctx.owner_key);
+        self.ensure_state(device, encoder, ctx.owner_key);
 
         let state = self.states.get(&ctx.owner_key).unwrap();
 
-        if !state.initialized {
-            // First frame: passthrough + prime state buffer
-            self.copy_blit.draw(device, queue, encoder, source, target, &[0u8; 16], "StylizedFeedback Init");
-            self.copy_blit.draw(device, queue, encoder, source, &state.buffer.view, &[0u8; 16], "StylizedFeedback Init State");
-            let state = self.states.get_mut(&ctx.owner_key).unwrap();
-            state.initialized = true;
-            return;
-        }
-
         // StylizedFeedbackFX.cs lines 34-37
-        let feedback_amount = fx.param_values.first().copied().unwrap_or(0.0).min(0.98);
-        let zoom = fx.param_values.get(1).copied().unwrap_or(1.02);
+        let feedback_amount = fx.param_values.first().copied().unwrap_or(0.5).min(0.98);
+        let zoom = fx.param_values.get(1).copied().unwrap_or(0.95);
         let rotation = fx.param_values.get(2).copied().unwrap_or(0.0) * DEG_TO_RAD;
         let mode = fx.param_values.get(3).copied().unwrap_or(0.0).round();
 
@@ -137,27 +153,25 @@ impl PostProcessEffect for StylizedFeedbackFX {
         );
 
         // PostBlit: copy result → state buffer
+        // Unity ref: Graphics.CopyTexture(result, stateBuffer)
         let state = self.states.get(&ctx.owner_key).unwrap();
         self.copy_blit.draw(device, queue, encoder, target, &state.buffer.view, &[0u8; 16], "StylizedFeedback State Copy");
     }
 
     fn clear_state(&mut self) {
-        for state in self.states.values_mut() { state.initialized = false; }
+        self.states.clear();
     }
 
-    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    fn resize(&mut self, _device: &wgpu::Device, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        for state in self.states.values_mut() {
-            state.buffer.resize(device, width, height);
-            state.initialized = false;
-        }
+        self.states.clear();
     }
 }
 
 impl StatefulEffect for StylizedFeedbackFX {
     fn clear_state_for_owner(&mut self, owner_key: i64) {
-        if let Some(state) = self.states.get_mut(&owner_key) { state.initialized = false; }
+        self.states.remove(&owner_key);
     }
     fn cleanup_owner(&mut self, owner_key: i64) { self.states.remove(&owner_key); }
     fn cleanup_all_owners(&mut self, _device: &wgpu::Device) { self.states.clear(); }
