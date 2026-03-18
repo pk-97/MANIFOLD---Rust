@@ -1,13 +1,13 @@
 {
   "metadata": {
-    "last_updated": "2026-03-17",
+    "last_updated": "2026-03-18",
     "audit_source": "docs/DEFINITIVE_PARITY_AUDIT.md",
     "audit_date": "2026-03-17",
-    "true_functional_completion_pct": 45,
+    "true_functional_completion_pct": 48,
     "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context."
   },
   "subsystems": {
-    "core": { "pct": 65, "audit_section": 1 },
+    "core": { "pct": 85, "audit_section": 1 },
     "editing": { "pct": 75, "audit_section": 2 },
     "playback": { "pct": 55, "audit_section": 3 },
     "effects": { "pct": 53, "audit_section": 4 },
@@ -188,9 +188,9 @@
       "title": "Implement IParamSource / IEffectContainer traits",
       "severity": "high",
       "est_loc": 200,
-      "status": "todo",
-      "commit": null,
-      "notes": "5 traits/interfaces not ported. Blocks generic parameter editing UI."
+      "status": "done",
+      "commit": "b59ad6d",
+      "notes": "EffectContainer trait + impls for TimelineClip/Layer/ProjectSettings. ParamSource trait + impl for EffectInstance. SelectionRegionTarget trait. All match Unity interfaces."
     },
     {
       "number": 15,
@@ -200,9 +200,9 @@
       "title": "Add property clamping (systematic)",
       "severity": "high",
       "est_loc": 150,
-      "status": "todo",
-      "commit": null,
-      "notes": "Silent data corruption: Layer.opacity, TimelineClip.scale, ProjectSettings.bpm, etc. unclamped."
+      "status": "done",
+      "commit": "b59ad6d",
+      "notes": "All clamped setters added: ProjectSettings (bpm, output dims, frame_rate, time_sig, master_opacity, pool_size, max_layers, recording_layer, osc_port), Layer (opacity, midi_note, midi_channel), TimelineClip (scale, loop_duration_beats). All clamp ranges match Unity exactly."
     },
     {
       "number": 16,
@@ -464,9 +464,9 @@
       "title": "Port remaining ~40 missing methods across core structs",
       "severity": "medium",
       "est_loc": 600,
-      "status": "todo",
-      "commit": null,
-      "notes": "Spread across Project, Timeline, Layer, TimelineClip, ProjectSettings, EffectInstance, etc."
+      "status": "done",
+      "commit": "b59ad6d",
+      "notes": "80+ methods added: EffectInstance (13 methods + ParamSource impl), GeneratorParamState (13 methods), ParameterDriver (constructor + BeatDivision methods), ParamEnvelope (2 constructors), TimelineClip (5 methods), Layer (8 methods), Timeline (7 methods), ProjectSettings (19 methods), RecordingProvenance (13 methods), PercussionImportState (ensure_valid), VideoLibrary (5 methods), MidiNoteParser (new module). EffectDefinitionRegistry + GeneratorDefinitionRegistry + EffectCategoryRegistry as new modules."
     },
     {
       "number": 38,
@@ -488,9 +488,9 @@
       "title": "Fix ParameterDriver random hash to match Unity's algorithm",
       "severity": "medium",
       "est_loc": 20,
-      "status": "todo",
-      "commit": null,
-      "notes": "Unity: 3-round mixing hash. Rust: single Fibonacci multiply. Different visual output for Random waveform."
+      "status": "done",
+      "commit": "b59ad6d",
+      "notes": "Fixed: Random waveform now uses Unity's 3-round mixing hash (HashToFloat). Also fixed tempo.rs get_bpm_at_beat initial value, negative beat/seconds handling, and quantize_time_seconds sentinel preservation."
     },
     {
       "number": 40,
