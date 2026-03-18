@@ -24,6 +24,7 @@ use crate::effects::voronoi_prism::VoronoiPrismFX;
 use crate::effects::microscope::MicroscopeFX;
 use crate::effects::pixel_sort::PixelSortFX;
 use crate::effects::blob_tracking::BlobTrackingFX;
+use crate::effects::wireframe_depth::WireframeDepthFX;
 
 /// Factory + singleton storage for all effect processors.
 /// One processor per EffectType — per-owner state lives inside each processor.
@@ -58,6 +59,8 @@ impl EffectRegistry {
         processors.insert(EffectType::PixelSort, Box::new(PixelSortFX::new(device)));
         // BlobTrackingFX needs queue for font atlas upload
         processors.insert(EffectType::BlobTracking, Box::new(BlobTrackingFX::new(device, queue)));
+        // WireframeDepthFX needs queue for dummy texture uploads
+        processors.insert(EffectType::WireframeDepth, Box::new(WireframeDepthFX::new(device, queue)));
         Self { processors }
     }
 

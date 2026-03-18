@@ -176,9 +176,9 @@ Agents: CHECK THIS FILE before porting. If a file is already `ported`, verify pa
 | RedactionFX.cs | — | missing |
 | SlitScanFX.cs | — | missing |
 | SurveillanceFX.cs | — | missing |
-| TransformFX.cs | — | missing |
-| VoronoiPrismFX.cs | — | missing |
-| WireframeDepthFX.cs | — | missing |
+| TransformFX.cs | effects/transform.rs | ported |
+| VoronoiPrismFX.cs | effects/voronoi_prism.rs | ported |
+| WireframeDepthFX.cs | effects/wireframe_depth.rs | ported |
 
 ## Compositor (manifold-renderer)
 

@@ -771,6 +771,7 @@ impl GenParamPanel {
                 let val = if info.whole_numbers { val.round() } else { val };
                 let text = format_param_value(val, info.whole_numbers);
                 BitmapSlider::update_value(tree, ids, norm, &text);
+                self.param_cache[pi] = val;
                 return vec![PanelAction::GenParamChanged(pi, val)];
             }
         }

@@ -440,9 +440,9 @@
       "title": "Port 4 complex effects (PixelSort, FluidDistortion, Microscope, WireframeDepth)",
       "severity": "medium",
       "est_loc": 2000,
-      "status": "todo",
+      "status": "partial",
       "commit": null,
-      "notes": "Compute pipelines, DNN backend, native dependencies. WireframeDepth alone is 1,094 lines + 14 render passes."
+      "notes": "PixelSort, Microscope, WireframeDepth ported. FluidDistortion still missing."
     },
     {
       "number": 35,

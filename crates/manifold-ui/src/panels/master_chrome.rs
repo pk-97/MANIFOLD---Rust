@@ -250,6 +250,7 @@ impl MasterChromePanel {
         if self.dragging_opacity {
             if let Some(ref ids) = self.opacity_slider {
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
+                self.cached_opacity = norm;
                 let text = format!("{:.2}", norm);
                 BitmapSlider::update_value(tree, ids, norm, &text);
                 return vec![PanelAction::MasterOpacityChanged(norm)];
@@ -258,13 +259,9 @@ impl MasterChromePanel {
         Vec::new()
     }
 
-    pub fn handle_drag_end(&mut self, tree: &mut UITree) -> Vec<PanelAction> {
+    pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         if self.dragging_opacity {
             self.dragging_opacity = false;
-            if let Some(ref ids) = self.opacity_slider {
-                let text = format!("{:.2}", self.cached_opacity);
-                BitmapSlider::update_value(tree, ids, self.cached_opacity, &text);
-            }
             return vec![PanelAction::MasterOpacityCommit];
         }
         Vec::new()

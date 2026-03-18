@@ -535,6 +535,7 @@ impl ClipChromePanel {
             if let Some(ref ids) = self.slip_slider {
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                 let val = norm * self.max_slip;
+                self.cached_slip = val;
                 let text = format!("{:.2}s", val);
                 BitmapSlider::update_value(tree, ids, norm, &text);
                 return vec![PanelAction::ClipSlipChanged(val)];
@@ -544,6 +545,7 @@ impl ClipChromePanel {
             if let Some(ref ids) = self.loop_slider {
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                 let beats = snap_quarter_note(norm * self.max_loop_beats);
+                self.cached_loop_duration = beats;
                 let text = format_beat_value(beats);
                 let snapped_norm = if self.max_loop_beats > 0.0 { beats / self.max_loop_beats } else { 0.0 };
                 BitmapSlider::update_value(tree, ids, snapped_norm, &text);
@@ -553,25 +555,13 @@ impl ClipChromePanel {
         Vec::new()
     }
 
-    pub fn handle_drag_end(&mut self, tree: &mut UITree) -> Vec<PanelAction> {
+    pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         if self.dragging_slip {
             self.dragging_slip = false;
-            if let Some(ref ids) = self.slip_slider {
-                let norm = if self.max_slip > 0.0 { (self.cached_slip / self.max_slip).clamp(0.0, 1.0) } else { 0.0 };
-                let text = format!("{:.2}s", self.cached_slip);
-                BitmapSlider::update_value(tree, ids, norm, &text);
-            }
             return vec![PanelAction::ClipSlipCommit];
         }
         if self.dragging_loop {
             self.dragging_loop = false;
-            if let Some(ref ids) = self.loop_slider {
-                let norm = if self.max_loop_beats > 0.0 {
-                    (self.cached_loop_duration / self.max_loop_beats).clamp(0.0, 1.0)
-                } else { 0.0 };
-                let text = format_beat_value(self.cached_loop_duration);
-                BitmapSlider::update_value(tree, ids, norm, &text);
-            }
             return vec![PanelAction::ClipLoopCommit];
         }
         Vec::new()

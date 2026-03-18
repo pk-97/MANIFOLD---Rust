@@ -23,3 +23,4 @@ pub mod voronoi_prism;
 pub mod microscope;
 pub mod pixel_sort;
 pub mod blob_tracking;
+pub mod wireframe_depth;
