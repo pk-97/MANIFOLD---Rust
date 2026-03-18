@@ -326,13 +326,13 @@ pub struct LayerCompositor {
 }
 
 impl LayerCompositor {
-    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) -> Self {
         Self {
             main: PingPong::new(device, width, height, "Compositor"),
             layer_buf: None,
             blend: BlendResources::new(device),
             effect_chain: EffectChain::new(),
-            effect_registry: EffectRegistry::new(device),
+            effect_registry: EffectRegistry::new(device, queue),
             wet_dry_lerp: WetDryLerpPipeline::new(device),
             tonemap: TonemapPipeline::new(device, width, height),
         }
@@ -439,6 +439,7 @@ impl LayerCompositor {
                         height,
                         owner_key: clip_id_owner_key(clip.clip_id),
                         is_clip_level: true, edge_stretch_width: 0.5625,
+                        frame_count: frame.frame_count as i64,
                     };
                     Self::apply_effects(
                         &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
@@ -489,6 +490,7 @@ impl LayerCompositor {
                             height,
                             owner_key: clip_id_owner_key(clip.clip_id),
                             is_clip_level: true, edge_stretch_width: 0.5625,
+                            frame_count: frame.frame_count as i64,
                         };
                         Self::apply_effects(
                             &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
@@ -532,6 +534,7 @@ impl LayerCompositor {
                             height,
                             owner_key: (layer_idx as i64) + 1,
                             is_clip_level: false, edge_stretch_width: 0.5625,
+                            frame_count: frame.frame_count as i64,
                         };
                         let layer_buf = self.layer_buf.as_ref().unwrap();
                         Self::apply_effects(
@@ -581,6 +584,7 @@ impl LayerCompositor {
                 height,
                 owner_key: 0, // master
                 is_clip_level: false, edge_stretch_width: 0.5625,
+                frame_count: frame.frame_count as i64,
             };
             if let Some(processed) = Self::apply_effects(
                 &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,

@@ -23,6 +23,7 @@ use crate::effects::infrared::InfraredFX;
 use crate::effects::voronoi_prism::VoronoiPrismFX;
 use crate::effects::microscope::MicroscopeFX;
 use crate::effects::pixel_sort::PixelSortFX;
+use crate::effects::blob_tracking::BlobTrackingFX;
 
 /// Factory + singleton storage for all effect processors.
 /// One processor per EffectType — per-owner state lives inside each processor.
@@ -31,7 +32,7 @@ pub struct EffectRegistry {
 }
 
 impl EffectRegistry {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let mut processors: HashMap<EffectType, Box<dyn PostProcessEffect>> = HashMap::new();
         processors.insert(EffectType::InvertColors, Box::new(InvertColorsFX::new(device)));
         processors.insert(EffectType::ColorGrade, Box::new(ColorGradeFX::new(device)));
@@ -55,6 +56,8 @@ impl EffectRegistry {
         processors.insert(EffectType::VoronoiPrism, Box::new(VoronoiPrismFX::new(device)));
         processors.insert(EffectType::Microscope, Box::new(MicroscopeFX::new(device)));
         processors.insert(EffectType::PixelSort, Box::new(PixelSortFX::new(device)));
+        // BlobTrackingFX needs queue for font atlas upload
+        processors.insert(EffectType::BlobTracking, Box::new(BlobTrackingFX::new(device, queue)));
         Self { processors }
     }
 

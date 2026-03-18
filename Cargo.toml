@@ -8,6 +8,7 @@ members = [
     "crates/manifold-io",
     "crates/manifold-renderer",
     "crates/manifold-app",
+    "crates/manifold-native",
 ]
 
 [workspace.dependencies]

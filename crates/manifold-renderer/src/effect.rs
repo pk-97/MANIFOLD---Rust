@@ -17,6 +17,9 @@ pub struct EffectContext {
     /// Unity ref: EffectContext.FindChainParam(EffectType.EdgeStretch, 1, 0.5625f)
     /// Filled by effect_chain before calling apply. Used by VoronoiPrism.
     pub edge_stretch_width: f32,
+    /// Global frame counter — equivalent to Unity's Time.frameCount.
+    /// Used by BlobTrackingFX to throttle GPU readbacks.
+    pub frame_count: i64,
 }
 
 /// Find a parameter value from another effect in a chain.
