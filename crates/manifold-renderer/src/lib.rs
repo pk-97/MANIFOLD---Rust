@@ -1,5 +1,6 @@
 pub mod gpu;
 pub mod render_target;
+pub mod gpu_readback;
 pub mod surface;
 pub mod blit;
 pub mod compositor;
@@ -13,7 +14,6 @@ pub mod effect_registry;
 pub mod effect_chain;
 pub mod effects;
 pub mod tonemap;
-pub mod gpu_readback;
 pub mod wet_dry_lerp;
 pub mod ui_renderer;
 pub mod layer_bitmap_gpu;

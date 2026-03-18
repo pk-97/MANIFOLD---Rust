@@ -1,154 +1,138 @@
-//! Non-blocking GPU texture readback for native CV/DNN processing.
-//!
-//! Matches Unity's `AsyncGPUReadback.Request()` pattern:
-//! - Frame N: submit readback (copy texture → staging buffer + map_async)
-//! - Frame N+1: poll — if ready, read bytes and return them; if not, skip
-//!
-//! This gives 1-frame latency, matching Unity's 1-3 frame latency from
-//! AsyncGPUReadback. The main thread never stalls.
+// GPU readback infrastructure.
+// Unity equivalent: AsyncGPUReadback.Request() + callback.
+// In wgpu there is no native async readback; we use a staging buffer
+// that the CPU maps after the GPU fence completes.
+//
+// Usage pattern (matching Unity's two-phase approach):
+//   frame N:   readback.submit(device, encoder, &texture, width, height)
+//   frame N+3: if let Some(data) = readback.try_read(device)  { process(data) }
 
-/// A pending GPU readback request.
-///
-/// Created by `submit_readback()`, polled by `try_read()`.
-/// The staging buffer is reusable after `try_read()` returns Some or after drop.
+/// A pending or completed GPU readback of an Rgba8Unorm texture.
 pub struct ReadbackRequest {
-    staging_buffer: wgpu::Buffer,
+    staging_buffer: Option<wgpu::Buffer>,
     width: u32,
     height: u32,
-    bytes_per_row: u32,
-    /// True once map_async has been called and we're waiting for completion.
+    // True between submit() and the first successful try_read().
     pending: bool,
-    /// True once the mapping is complete and data is ready to read.
-    ready: bool,
 }
 
 impl ReadbackRequest {
-    /// Create a new readback request (staging buffer only, no GPU work yet).
-    ///
-    /// Call `submit()` to actually kick off the copy + map.
-    pub fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
-        // wgpu requires bytes_per_row to be aligned to 256 bytes (COPY_BYTES_PER_ROW_ALIGNMENT)
-        let unpadded_bytes_per_row = width * 4; // RGBA8 = 4 bytes/pixel
-        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let bytes_per_row = (unpadded_bytes_per_row + align - 1) / align * align;
+    pub fn new() -> Self {
+        Self {
+            staging_buffer: None,
+            width: 0,
+            height: 0,
+            pending: false,
+        }
+    }
 
-        let staging_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("readback_staging"),
-            size: (bytes_per_row * height) as u64,
+    /// Returns true if a readback has been submitted but not yet consumed.
+    pub fn is_pending(&self) -> bool {
+        self.pending
+    }
+
+    /// Submit a readback of `texture` (must be Rgba8Unorm, COPY_SRC usage).
+    /// Encodes a copy from the texture into a staging buffer.
+    /// Call try_read() on subsequent frames to consume the result.
+    ///
+    /// Unity equivalent: AsyncGPUReadback.Request(rt, 0, TextureFormat.RGBA32, callback)
+    pub fn submit(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) {
+        let bytes_per_row = align_to_256(width * 4);
+        let buffer_size = (bytes_per_row * height) as u64;
+
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Readback Staging"),
+            size: buffer_size,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
 
-        Self {
-            staging_buffer,
-            width,
-            height,
-            bytes_per_row,
-            pending: false,
-            ready: false,
-        }
-    }
-
-    /// Submit the readback: copy texture to staging buffer and request mapping.
-    ///
-    /// Call this once per readback cycle (throttled by the effect's readback interval).
-    /// The encoder must be submitted to the queue after this call.
-    pub fn submit(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        source_texture: &wgpu::Texture,
-    ) {
+        // wgpu 28: ImageCopyTexture → TexelCopyTextureInfo
+        //          ImageCopyBuffer  → TexelCopyBufferInfo
+        //          ImageDataLayout  → TexelCopyBufferLayout
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: source_texture,
+                texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &self.staging_buffer,
+                buffer: &staging,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(self.bytes_per_row),
-                    rows_per_image: Some(self.height),
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: None,
                 },
             },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
         );
 
-        // Request async mapping. The callback just sets an atomic flag.
-        self.staging_buffer
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, |_result| {
-                // Mapping completed (success or failure).
-                // We check via buffer.slice(..).get_mapped_range() on the next poll.
-            });
-
+        self.staging_buffer = Some(staging);
+        self.width = width;
+        self.height = height;
         self.pending = true;
-        self.ready = false;
     }
 
-    /// Poll the readback. Call this once per frame after `device.poll(Maintain::Poll)`.
+    /// Try to read pixel data from the staging buffer.
+    /// Returns Some(pixels) if the GPU has finished writing, None otherwise.
+    /// On success, clears the pending flag and returns tightly-packed RGBA8 rows
+    /// (stride = width * 4), matching Unity's NativeArray<byte> layout.
     ///
-    /// Returns `Some(data)` with RGBA8 pixel bytes if the readback is complete.
-    /// Returns `None` if still pending or no readback was submitted.
-    ///
-    /// The returned Vec has row-major RGBA8 pixels (width * height * 4 bytes),
-    /// with row padding stripped.
-    pub fn try_read(&mut self) -> Option<Vec<u8>> {
-        if !self.pending {
-            return None;
+    /// Unity equivalent: the readback callback receiving request.GetData<byte>().
+    pub fn try_read(&mut self, device: &wgpu::Device) -> Option<Vec<u8>> {
+        let staging = self.staging_buffer.as_ref()?;
+
+        // Poll the device to make completed work visible.
+        // wgpu 28: MaintainBase renamed to PollType.
+        let _ = device.poll(wgpu::PollType::Poll);
+
+        let slice = staging.slice(..);
+        // map_async is non-blocking; we check if it's ready immediately.
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        // Poll once more to flush the map request.
+        let _ = device.poll(wgpu::PollType::Poll);
+
+        match rx.try_recv() {
+            Ok(Ok(())) => {}
+            _ => return None, // Not ready yet
         }
 
-        // Try to get the mapped range. If the mapping isn't done yet, this will panic
-        // in debug or return an error — we catch it by checking the buffer state.
-        let slice = self.staging_buffer.slice(..);
+        let bytes_per_row = align_to_256(self.width * 4) as usize;
+        let row_bytes = (self.width * 4) as usize;
+        let mapped = slice.get_mapped_range();
 
-        // Attempt to read. If the buffer isn't mapped yet, get_mapped_range will panic.
-        // Instead, we use a simpler approach: after poll(Maintain::Poll), if the buffer
-        // is mapped, get_mapped_range succeeds.
-        let mapped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            slice.get_mapped_range()
-        }));
-
-        match mapped {
-            Ok(data) => {
-                // Strip row padding: copy only width*4 bytes per row
-                let unpadded_bytes_per_row = self.width as usize * 4;
-                let padded_bytes_per_row = self.bytes_per_row as usize;
-                let mut pixels = Vec::with_capacity(unpadded_bytes_per_row * self.height as usize);
-
-                for row in 0..self.height as usize {
-                    let start = row * padded_bytes_per_row;
-                    let end = start + unpadded_bytes_per_row;
-                    pixels.extend_from_slice(&data[start..end]);
-                }
-
-                drop(data);
-                self.staging_buffer.unmap();
-                self.pending = false;
-                self.ready = false;
-
-                Some(pixels)
-            }
-            Err(_) => {
-                // Buffer not yet mapped — try again next frame
-                None
-            }
+        // Re-pack: remove alignment padding to match Unity NativeArray<byte> layout.
+        // Unity: NativeArray<byte>.Copy(nativeData, pixelBuffer, copyLen)
+        // where pixelBuffer = new byte[READBACK_WIDTH * READBACK_HEIGHT * 4]
+        let mut out = vec![0u8; row_bytes * self.height as usize];
+        for row in 0..self.height as usize {
+            let src_start = row * bytes_per_row;
+            let dst_start = row * row_bytes;
+            out[dst_start..dst_start + row_bytes]
+                .copy_from_slice(&mapped[src_start..src_start + row_bytes]);
         }
-    }
 
-    /// Whether a readback is currently in-flight.
-    pub fn is_pending(&self) -> bool {
-        self.pending
-    }
+        drop(mapped);
+        staging.unmap();
+        self.staging_buffer = None;
+        self.pending = false;
 
-    /// Dimensions of the readback target.
-    pub fn dimensions(&self) -> (u32, u32) {
-        (self.width, self.height)
+        Some(out)
     }
+}
+
+/// Round up to the next multiple of 256 (wgpu copy_texture_to_buffer alignment).
+fn align_to_256(n: u32) -> u32 {
+    (n + 255) & !255
 }

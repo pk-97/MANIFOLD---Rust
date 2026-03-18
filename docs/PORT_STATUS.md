@@ -163,7 +163,7 @@ Agents: CHECK THIS FILE before porting. If a file is already `ported`, verify pa
 | QuadMirrorFX.cs | quad_mirror.rs | ported |
 | StrobeFX.cs | strobe.rs | ported |
 | StylizedFeedbackFX.cs | stylized_feedback.rs | ported |
-| BlobTrackingFX.cs | — | missing |
+| BlobTrackingFX.cs | effects/blob_tracking.rs | ported |
 | ComputeFluidDistortionFX.cs | — | missing |
 | ComputePixelSortFX.cs | — | missing |
 | CorruptionFX.cs | — | missing |

@@ -1589,7 +1589,7 @@ impl ApplicationHandler for Application {
                 8,
             )));
 
-            self.compositor = Some(Box::new(LayerCompositor::new(&device, output_w, output_h)));
+            self.compositor = Some(Box::new(LayerCompositor::new(&device, &queue, output_w, output_h)));
             eprintln!("[GPU INIT] generator/compositor resolution: {}x{}", output_w, output_h);
 
             GpuContext {

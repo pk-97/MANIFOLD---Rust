@@ -222,7 +222,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Hot spot bloom (bright region glow)
     // hotMask is computed but never used — only hotGlow contributes (matches Unity exactly)
     let hot_mask = smoothstep(0.7, 1.0, lum) * uniforms.hot_spot;
-    let _ = hot_mask;
+    _ = hot_mask;
     let texel = vec2<f32>(uniforms.texel_size_x, uniforms.texel_size_y) * 4.0;
     let hot_l = dot(textureSample(source_tex, tex_sampler, in.uv + vec2<f32>(-texel.x, 0.0)).rgb, vec3<f32>(0.299, 0.587, 0.114));
     let hot_r = dot(textureSample(source_tex, tex_sampler, in.uv + vec2<f32>( texel.x, 0.0)).rgb, vec3<f32>(0.299, 0.587, 0.114));
