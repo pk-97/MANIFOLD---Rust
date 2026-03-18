@@ -20,3 +20,5 @@ pub mod edge_glow;
 pub mod transform;
 pub mod infrared;
 pub mod voronoi_prism;
+pub mod microscope;
+pub mod pixel_sort;

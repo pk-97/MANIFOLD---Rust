@@ -21,6 +21,8 @@ use crate::effects::edge_glow::EdgeGlowFX;
 use crate::effects::transform::TransformFX;
 use crate::effects::infrared::InfraredFX;
 use crate::effects::voronoi_prism::VoronoiPrismFX;
+use crate::effects::microscope::MicroscopeFX;
+use crate::effects::pixel_sort::PixelSortFX;
 
 /// Factory + singleton storage for all effect processors.
 /// One processor per EffectType — per-owner state lives inside each processor.
@@ -51,6 +53,8 @@ impl EffectRegistry {
         processors.insert(EffectType::Transform, Box::new(TransformFX::new(device)));
         processors.insert(EffectType::Infrared, Box::new(InfraredFX::new(device)));
         processors.insert(EffectType::VoronoiPrism, Box::new(VoronoiPrismFX::new(device)));
+        processors.insert(EffectType::Microscope, Box::new(MicroscopeFX::new(device)));
+        processors.insert(EffectType::PixelSort, Box::new(PixelSortFX::new(device)));
         Self { processors }
     }
 
