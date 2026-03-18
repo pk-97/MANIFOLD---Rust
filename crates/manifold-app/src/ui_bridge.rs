@@ -20,7 +20,7 @@ use manifold_editing::commands::effect_target::{EffectTarget, DriverTarget};
 use manifold_editing::commands::drivers::{
     AddDriverCommand, ToggleDriverEnabledCommand,
     ChangeDriverBeatDivCommand, ChangeDriverWaveformCommand,
-    ToggleDriverReversedCommand,
+    ToggleDriverReversedCommand, ChangeTrimCommand,
 };
 use manifold_editing::commands::clip::{
     MoveClipCommand, TrimClipCommand, SlipClipCommand, ChangeClipLoopCommand,
@@ -1116,10 +1116,28 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
-        PanelAction::EffectTrimCommit(_ei, _pi) => {
-            // Trim commit: for now consume the snapshot. Full undo command
-            // (ChangeTrimCommand) can be added when the command exists.
-            trim_snapshot.take();
+        PanelAction::EffectTrimCommit(ei, pi) => {
+            if let Some((old_min, old_max)) = trim_snapshot.take() {
+                let tab = ui.inspector.last_effect_tab();
+                if let Some(project) = engine.project() {
+                    let effect_target = resolve_effect_target(tab, *active_layer);
+                    let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                    if let Some(fx) = effects.and_then(|e| e.get(*ei)) {
+                        if let Some(di) = fx.drivers.as_ref()
+                            .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32))
+                        {
+                            let driver = &fx.drivers.as_ref().unwrap()[di];
+                            let new_min = driver.trim_min;
+                            let new_max = driver.trim_max;
+                            if (old_min - new_min).abs() > f32::EPSILON || (old_max - new_max).abs() > f32::EPSILON {
+                                let target = DriverTarget::Effect { effect_target, effect_index: *ei };
+                                let cmd = ChangeTrimCommand::new(target, di, old_min, old_max, new_min, new_max);
+                                editing.record(Box::new(cmd));
+                            }
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
         PanelAction::EffectTargetSnapshot(ei, pi) => {
@@ -1155,6 +1173,8 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::EffectTargetCommit(_ei, _pi) => {
+            // TODO: ChangeEnvelopeTargetNormalizedCommand is clip-only (uses clip_id).
+            // Layer envelope target undo needs a generalized command. For now, consume snapshot.
             target_snapshot.take();
             DispatchResult::handled()
         }
@@ -1196,6 +1216,8 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::EffectEnvParamCommit(_ei, _pi) => {
+            // TODO: ChangeEnvelopeADSRCommand is clip-only (uses clip_id).
+            // Layer envelope ADSR undo needs a generalized command. For now, consume snapshot.
             adsr_snapshot.take();
             DispatchResult::handled()
         }
