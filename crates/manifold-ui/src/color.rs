@@ -352,6 +352,29 @@ pub const MAX_TIMELINE_SPLIT_RATIO: f32 = 0.70;
 pub const WAVEFORM_LANE_HEIGHT: f32 = 56.0;
 pub const STEM_LANE_HEIGHT: f32 = 56.0;
 
+// ── Waveform lane colors (from UIConstants.cs lines 218-255, 300-301) ──
+pub const WAVEFORM_LANE_BG: Color32 = Color32::new(28, 28, 28, 255); // Color(0.11, 0.11, 0.11, 1)
+pub const WAVEFORM_BTN_NORMAL: Color32 = Color32::new(48, 48, 51, 230); // Color(0.19, 0.19, 0.20, 0.9)
+pub const WAVEFORM_BTN_HIGHLIGHTED: Color32 = Color32::new(77, 97, 122, 255); // Color(0.30, 0.38, 0.48, 1)
+pub const WAVEFORM_BTN_PRESSED: Color32 = Color32::new(64, 115, 140, 255); // Color(0.25, 0.45, 0.55, 1)
+pub const WAVEFORM_REMOVE_HIGHLIGHTED: Color32 = Color32::new(107, 46, 46, 255); // Color(0.42, 0.18, 0.18, 1)
+pub const WAVEFORM_REMOVE_PRESSED: Color32 = Color32::new(140, 38, 38, 255); // Color(0.55, 0.15, 0.15, 1)
+pub const WAVEFORM_EXPAND_HIGHLIGHTED: Color32 = Color32::new(89, 115, 140, 255); // Color(0.35, 0.45, 0.55, 1)
+pub const WAVEFORM_EXPAND_PRESSED: Color32 = Color32::new(64, 140, 166, 255); // Color(0.25, 0.55, 0.65, 1)
+
+// ── Stem lane background colors (subtle per-stem tints, UIConstants.cs lines 247-250) ──
+pub const STEM_LANE_BG_DRUMS: Color32 = Color32::new(29, 26, 26, 255); // Color(0.115, 0.10, 0.10, 1)
+pub const STEM_LANE_BG_BASS: Color32 = Color32::new(26, 28, 26, 255); // Color(0.10, 0.11, 0.10, 1)
+pub const STEM_LANE_BG_OTHER: Color32 = Color32::new(26, 26, 29, 255); // Color(0.10, 0.10, 0.115, 1)
+pub const STEM_LANE_BG_VOCALS: Color32 = Color32::new(29, 26, 29, 255); // Color(0.115, 0.10, 0.115, 1)
+
+// ── Spectral waveform palette (WaveformRenderer.cs lines 37-40) ──
+pub const SPEC_SUB: Color32 = Color32::new(180, 40, 40, 255);
+pub const SPEC_LOW: Color32 = Color32::new(230, 140, 50, 255);
+pub const SPEC_MID: Color32 = Color32::new(200, 230, 180, 255);
+pub const SPEC_HIGH: Color32 = Color32::new(80, 180, 255, 255);
+pub const WAVEFORM_CENTER_LINE: Color32 = Color32::new(60, 60, 60, 80);
+
 // ── Insert cursor marker ───────────────────────────────────────────
 pub const INSERT_CURSOR_RULER_MARKER_SIZE: f32 = 6.0;
 

@@ -4,7 +4,7 @@
     "audit_source": "docs/DEFINITIVE_PARITY_AUDIT.md",
     "audit_date": "2026-03-17",
     "true_functional_completion_pct": 53,
-    "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context. Tier 4 fix plan (manifold-ui + manifold-app) completed 2026-03-18: 7 color corrections, WidgetLayout + InspectorLayout constants, InteractionOverlay ctrl_held/finalize_move_snap/preDragSplitCommands, TruncateWithEllipsis, UINode texture, right-click guard, ScrollToReveal, beat_to_time tempo map, context menu items. GAP-GEN-3 done 2026-03-19: FluidSimulation3D 10 divergences fixed (gradient force, full simulate rewrite, blur radius, cam_tilt, ref_axis, scatter energy, ortho fract, trigger_count, 2D blur removal, amortization)."
+    "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context. Tier 4 fix plan (manifold-ui + manifold-app) completed 2026-03-18: 7 color corrections, WidgetLayout + InspectorLayout constants, InteractionOverlay ctrl_held/finalize_move_snap/preDragSplitCommands, TruncateWithEllipsis, UINode texture, right-click guard, ScrollToReveal, beat_to_time tempo map, context menu items. GAP-GEN-3 done 2026-03-19: FluidSimulation3D 10 divergences fixed (gradient force, full simulate rewrite, blur radius, cam_tilt, ref_axis, scatter energy, ortho fract, trigger_count, 2D blur removal, amortization). GAP-AUDIO-9 done 2026-03-18: waveform UI ported (WaveformRenderer MIP chain, spectral coloring, ImportedAudioWaveformLane, StemLaneGroup, DriverWaveformIcons, scrub/drag handlers, bitmap painting)."
   },
   "subsystems": {
     "core": { "pct": 85, "audit_section": 1 },
@@ -381,7 +381,7 @@
       "severity": "high",
       "est_loc": 400,
       "status": "done",
-      "commit": "pending",
+      "commit": "347a5e8",
       "notes": "Full port using kira 0.9 (StaticSoundData + AudioManager). All methods translated: load_audio, update_sync (3-state Playing/Paused/Stopped), set_start_beat, get_duration_beats, get_end_beat, try_get_source_seconds_at_playhead, reset_audio. ffprobe encoder delay probing via std::process::Command. Constants match Unity exactly (0.06, 0.20, 0.5). Wired into app tick loop (after engine.tick) and project load (reads PercussionImportState.audio_path). kira stop() is permanent so Stopped state uses pause()+seek_to(0) — same logical behavior."
     },
     {
@@ -416,9 +416,9 @@
       "title": "Port waveform UI (WaveformRenderer + lanes)",
       "severity": "medium",
       "est_loc": 1200,
-      "status": "todo",
-      "commit": null,
-      "notes": "1,870 lines across 8 files. Multi-res waveform, stem lanes, drag/scrub handlers."
+      "status": "done",
+      "commit": "pending",
+      "notes": "1,870 lines across 8 files. Ported all 7 Unity files: WaveformRenderer (MIP chain + spectral coloring), ImportedAudioWaveformLane (bitmap panel + scrub/drag handlers), StemWaveformLane + StemLaneGroup (4-stem lanes with mute/solo), DriverWaveformIcons (procedural SDF), WaveformLaneScrollForwarder, ImportedAudioWaveformScrubHandler, ImportedAudioWaveformDragHandler. Adapted from Unity tile-based rendering to Rust bitmap pixel-buffer painting. 16 unit tests. Wired into UIRoot, UIBridge, ScreenLayout. Stem audio playback stubbed (needs GAP-AUDIO-7b)."
     },
     {
       "number": 33,

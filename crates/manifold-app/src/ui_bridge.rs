@@ -1609,6 +1609,61 @@ pub fn dispatch(
             DispatchResult::handled()
         }
 
+        // ── Waveform lane ─────────────────────────────────────────
+        PanelAction::ImportAudioClicked => {
+            log::info!("Import audio clicked — file dialog not yet wired");
+            DispatchResult::handled()
+        }
+        PanelAction::RemoveAudioClicked => {
+            log::info!("Remove audio clicked");
+            ui.waveform_lane.clear_audio();
+            ui.stem_lanes.clear_all_stems();
+            ui.layout.waveform_lane_visible = true; // keep lane visible, just clear waveform
+            DispatchResult::handled()
+        }
+        PanelAction::WaveformScrub(screen_x, _screen_y) => {
+            // Convert screen X to beat via viewport coordinate mapper, then seek
+            let beat = ui.viewport.pixel_to_beat(*screen_x).max(0.0);
+            let time = engine.beat_to_timeline_time(beat);
+            engine.seek_to(time);
+            DispatchResult::handled()
+        }
+        PanelAction::WaveformDragDelta(delta_beats) => {
+            // Move waveform start beat by delta
+            if let Some(project) = engine.project_mut() {
+                if let Some(state) = project.percussion_import.as_mut() {
+                    state.audio_start_beat = (state.audio_start_beat + *delta_beats).max(0.0);
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::WaveformDragEnd(_total_delta) => {
+            // Drag finished — start beat already updated incrementally
+            DispatchResult::handled()
+        }
+        PanelAction::ExpandStemsToggled(expanded) => {
+            ui.waveform_lane.set_expanded_state(*expanded);
+            ui.stem_lanes.set_expanded(*expanded);
+            ui.layout.stem_lanes_expanded = *expanded;
+            DispatchResult::handled()
+        }
+        PanelAction::ReAnalyzeDrums | PanelAction::ReAnalyzeBass
+        | PanelAction::ReAnalyzeSynth | PanelAction::ReAnalyzeVocal
+        | PanelAction::ReImportStems => {
+            log::info!("Re-analyze {:?} — percussion pipeline not yet wired", action);
+            DispatchResult::handled()
+        }
+        PanelAction::StemMuteToggled(stem_index) => {
+            // Toggle mute for stem
+            log::info!("Stem {} mute toggled — stem audio not yet wired", stem_index);
+            DispatchResult::handled()
+        }
+        PanelAction::StemSoloToggled(stem_index) => {
+            // Toggle solo for stem
+            log::info!("Stem {} solo toggled — stem audio not yet wired", stem_index);
+            DispatchResult::handled()
+        }
+
         // Generic dropdown fallback (should not normally fire)
         PanelAction::DropdownSelected(index) => {
             log::debug!("Dropdown selected: {} (no context)", index);

@@ -39,6 +39,10 @@ pub struct UIRoot {
     pub dropdown: DropdownPanel,
     pub perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel,
 
+    // Waveform panels (bitmap-rendered, not UITree-based)
+    pub waveform_lane: WaveformLanePanel,
+    pub stem_lanes: StemLaneGroupPanel,
+
     // State
     built: bool,
     screen_width: f32,
@@ -84,6 +88,8 @@ impl UIRoot {
             viewport: TimelineViewportPanel::new(),
             dropdown: DropdownPanel::new(),
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
+            waveform_lane: WaveformLanePanel::new(),
+            stem_lanes: StemLaneGroupPanel::new(),
             built: false,
             screen_width: 1280.0,
             screen_height: 720.0,

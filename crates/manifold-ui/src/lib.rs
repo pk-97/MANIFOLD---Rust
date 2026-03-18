@@ -21,6 +21,9 @@ pub mod clip_hit_tester;
 pub mod timeline_editing_host;
 pub mod timeline_input_host;
 pub mod interaction_overlay;
+pub mod waveform_renderer;
+pub mod waveform_painter;
+pub mod driver_waveform_icons;
 
 pub use node::*;
 pub use tree::UITree;
@@ -43,3 +46,6 @@ pub use panels::dropdown::{DropdownPanel, DropdownItem, DropdownAction};
 pub use coordinate_mapper::CoordinateMapper;
 pub use ui_state::UIState;
 pub use bitmap_renderer::{LayerBitmapRenderer, BitmapRepaintState};
+pub use waveform_renderer::WaveformRenderer;
+pub use panels::waveform_lane::WaveformLanePanel;
+pub use panels::stem_lane::{StemLaneGroupPanel, STEM_COUNT, STEM_NAMES};

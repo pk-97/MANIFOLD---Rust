@@ -11,6 +11,8 @@ pub mod inspector;
 pub mod viewport;
 pub mod dropdown;
 pub mod perf_hud;
+pub mod waveform_lane;
+pub mod stem_lane;
 
 use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
@@ -214,6 +216,25 @@ pub enum PanelAction {
     ContextImportMidi(usize),                        // layer_index
     ContextGroupSelectedLayers,
     ContextUngroup(usize),                           // layer_index
+
+    // Waveform lane
+    ImportAudioClicked,
+    RemoveAudioClicked,
+    WaveformScrub(f32, f32),          // screen_x, screen_y
+    WaveformDragDelta(f32),            // delta_beats (snapped to whole beats)
+    WaveformDragEnd(f32),              // total_snapped_delta
+    ExpandStemsToggled(bool),          // expanded
+
+    // Re-analysis buttons (UI chrome — callbacks to percussion pipeline)
+    ReAnalyzeDrums,
+    ReAnalyzeBass,
+    ReAnalyzeSynth,
+    ReAnalyzeVocal,
+    ReImportStems,
+
+    // Stem mute/solo
+    StemMuteToggled(usize),            // stem_index (0-3)
+    StemSoloToggled(usize),            // stem_index (0-3)
 
     // Generic dropdown fallback (should not normally reach dispatch)
     DropdownSelected(usize),
