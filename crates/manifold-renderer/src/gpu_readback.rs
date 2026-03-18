@@ -7,6 +7,8 @@
 //   frame N:   readback.submit(device, encoder, &texture, width, height)
 //   frame N+3: if let Some(data) = readback.try_read(device)  { process(data) }
 
+use std::sync::mpsc;
+
 /// A pending or completed GPU readback of an Rgba8Unorm texture.
 pub struct ReadbackRequest {
     staging_buffer: Option<wgpu::Buffer>,
@@ -14,6 +16,8 @@ pub struct ReadbackRequest {
     height: u32,
     // True between submit() and the first successful try_read().
     pending: bool,
+    // Receiver for the map_async callback. Created once per readback cycle.
+    map_rx: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
 impl ReadbackRequest {
@@ -23,6 +27,7 @@ impl ReadbackRequest {
             width: 0,
             height: 0,
             pending: false,
+            map_rx: None,
         }
     }
 
@@ -54,9 +59,6 @@ impl ReadbackRequest {
             mapped_at_creation: false,
         });
 
-        // wgpu 28: ImageCopyTexture → TexelCopyTextureInfo
-        //          ImageCopyBuffer  → TexelCopyBufferInfo
-        //          ImageDataLayout  → TexelCopyBufferLayout
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture,
@@ -79,6 +81,7 @@ impl ReadbackRequest {
         self.width = width;
         self.height = height;
         self.pending = true;
+        self.map_rx = None; // Reset — map_async will be called on first try_read()
     }
 
     /// Try to read pixel data from the staging buffer.
@@ -88,33 +91,56 @@ impl ReadbackRequest {
     ///
     /// Unity equivalent: the readback callback receiving request.GetData<byte>().
     pub fn try_read(&mut self, device: &wgpu::Device) -> Option<Vec<u8>> {
+        if !self.pending {
+            return None;
+        }
         let staging = self.staging_buffer.as_ref()?;
 
-        // Poll the device to make completed work visible.
-        // wgpu 28: MaintainBase renamed to PollType.
+        // Poll the device to make completed GPU work visible.
         let _ = device.poll(wgpu::PollType::Poll);
 
-        let slice = staging.slice(..);
-        // map_async is non-blocking; we check if it's ready immediately.
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-        // Poll once more to flush the map request.
-        let _ = device.poll(wgpu::PollType::Poll);
+        // First call after submit(): issue map_async once.
+        // Subsequent calls: just check the existing receiver.
+        if self.map_rx.is_none() {
+            let (tx, rx) = mpsc::channel();
+            staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+            self.map_rx = Some(rx);
+            // Poll again to kick off the mapping request.
+            let _ = device.poll(wgpu::PollType::Poll);
+        }
 
+        // Check if mapping completed.
+        let rx = self.map_rx.as_ref()?;
         match rx.try_recv() {
-            Ok(Ok(())) => {}
-            _ => return None, // Not ready yet
+            Ok(Ok(())) => {} // Mapping complete, proceed to read
+            Ok(Err(_)) => {
+                // Mapping failed — discard this readback.
+                self.staging_buffer = None;
+                self.map_rx = None;
+                self.pending = false;
+                return None;
+            }
+            Err(mpsc::TryRecvError::Empty) => {
+                // Not ready yet — try again next frame.
+                return None;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                // Channel closed unexpectedly — discard.
+                self.staging_buffer = None;
+                self.map_rx = None;
+                self.pending = false;
+                return None;
+            }
         }
 
         let bytes_per_row = align_to_256(self.width * 4) as usize;
         let row_bytes = (self.width * 4) as usize;
+        let slice = staging.slice(..);
         let mapped = slice.get_mapped_range();
 
         // Re-pack: remove alignment padding to match Unity NativeArray<byte> layout.
-        // Unity: NativeArray<byte>.Copy(nativeData, pixelBuffer, copyLen)
-        // where pixelBuffer = new byte[READBACK_WIDTH * READBACK_HEIGHT * 4]
         let mut out = vec![0u8; row_bytes * self.height as usize];
         for row in 0..self.height as usize {
             let src_start = row * bytes_per_row;
@@ -126,6 +152,7 @@ impl ReadbackRequest {
         drop(mapped);
         staging.unmap();
         self.staging_buffer = None;
+        self.map_rx = None;
         self.pending = false;
 
         Some(out)
