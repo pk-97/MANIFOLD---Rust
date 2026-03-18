@@ -940,6 +940,27 @@ impl Application {
                     layer_idx, pixels, tw as u32, th as u32,
                 );
             }
+
+            // 6d. Repaint + upload waveform lane if dirty
+            let wf_rect = self.ui_root.viewport.waveform_lane_rect();
+            if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
+                let wf = &mut self.ui_root.waveform_lane;
+                // Force dirty on resize
+                if wf.buffer_width != wf_rect.width as usize {
+                    wf.dirty = true;
+                }
+                if wf.dirty {
+                    wf.repaint(wf_rect.width as usize);
+                    // Upload after repaint
+                    if wf.buffer_width > 0 && wf.buffer_height > 0 && !wf.pixel_buffer.is_empty() {
+                        bitmap_gpu.upload_layer(
+                            &gpu.device, &gpu.queue,
+                            1000, &wf.pixel_buffer,
+                            wf.buffer_width as u32, wf.buffer_height as u32,
+                        );
+                    }
+                }
+            }
         }
 
         // tick_result was computed at the top of tick_and_render (engine ticked first)
@@ -1189,9 +1210,16 @@ impl Application {
                     );
                 }
 
-                // Pass 2: Layer bitmap textures (alpha-blend over track BGs)
+                // Pass 2: Layer bitmap textures + waveform lane (alpha-blend over track BGs)
                 if let Some(bitmap_gpu) = &mut self.layer_bitmap_gpu {
-                    let rects = self.ui_root.viewport.layer_bitmap_rects();
+                    let mut rects = self.ui_root.viewport.layer_bitmap_rects();
+
+                    // Add waveform lane rect (texture at reserved index 1000)
+                    let wf_rect = self.ui_root.viewport.waveform_lane_rect();
+                    if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
+                        rects.push((1000, wf_rect));
+                    }
+
                     if !rects.is_empty() {
                         bitmap_gpu.render_layers(
                             &gpu.device, &gpu.queue, &mut encoder, &surface_view,

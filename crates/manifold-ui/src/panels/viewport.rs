@@ -502,6 +502,31 @@ impl TimelineViewportPanel {
     pub fn viewport_rect(&self) -> Rect { self.viewport_rect }
     pub fn ruler_rect(&self) -> Rect { self.ruler_rect }
     pub fn tracks_rect(&self) -> Rect { self.tracks_rect }
+
+    /// Screen rect for the waveform lane (between ruler and tracks).
+    /// Returns ZERO if waveform lane is not visible.
+    pub fn waveform_lane_rect(&self) -> Rect {
+        let waveform_y = self.ruler_rect.y + self.ruler_rect.height;
+        if self.tracks_rect.y > waveform_y + 1.0 {
+            // There's space between ruler and tracks — that's the waveform area
+            let h = (self.tracks_rect.y - waveform_y).min(color::WAVEFORM_LANE_HEIGHT);
+            Rect::new(self.ruler_rect.x, waveform_y, self.ruler_rect.width, h)
+        } else {
+            Rect::ZERO
+        }
+    }
+
+    /// Screen rect for the stem lanes (below waveform lane, above tracks).
+    pub fn stem_lanes_rect(&self) -> Rect {
+        let waveform_y = self.ruler_rect.y + self.ruler_rect.height;
+        let stem_y = waveform_y + color::WAVEFORM_LANE_HEIGHT;
+        if self.tracks_rect.y > stem_y + 1.0 {
+            let h = self.tracks_rect.y - stem_y;
+            Rect::new(self.ruler_rect.x, stem_y, self.ruler_rect.width, h)
+        } else {
+            Rect::ZERO
+        }
+    }
     pub fn first_node(&self) -> usize { self.first_node }
     pub fn node_count(&self) -> usize { self.node_count }
 
@@ -810,8 +835,14 @@ impl Panel for TimelineViewportPanel {
             return;
         }
 
-        // Header stack: overview strip (16) + ruler (40) = 56px
-        let header_h = color::OVERVIEW_STRIP_HEIGHT + RULER_HEIGHT;
+        // Header stack: overview strip (16) + ruler (40) + optional waveform lane (56)
+        let waveform_h = if layout.waveform_lane_visible { color::WAVEFORM_LANE_HEIGHT } else { 0.0 };
+        let stem_h = if layout.waveform_lane_visible && layout.stem_lanes_expanded {
+            4.0 * color::STEM_LANE_HEIGHT
+        } else {
+            0.0
+        };
+        let header_h = color::OVERVIEW_STRIP_HEIGHT + RULER_HEIGHT + waveform_h + stem_h;
         self.viewport_rect = Rect::new(body.x, body.y, tracks_w, body.height);
         self.ruler_rect = Rect::new(body.x, body.y + color::OVERVIEW_STRIP_HEIGHT, tracks_w, RULER_HEIGHT);
         self.tracks_rect = Rect::new(
