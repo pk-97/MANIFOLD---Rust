@@ -25,15 +25,18 @@ pub fn create_zero_buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu
     // We need to unmap after creation — caller must call buffer.unmap().
 }
 
-/// Particle struct matching Unity's ParticleCommon.cginc.
-/// 48 bytes = 12 floats. Used by FluidSimulation and ComputeStrangeAttractor.
+/// Particle struct matching WGSL layout of ParticleCommon (vec3 alignment = 16).
+/// WGSL pads vec3<f32> to 16-byte alignment, so the struct is 64 bytes, not 48.
+/// Layout: position(12) + pad(4) + velocity(12) + life(4) + age(4) + pad(12) + color(16) = 64.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Particle {
     pub position: [f32; 3],   // UV-space position (0-1 range)
+    pub _pad0: f32,           // WGSL vec3 alignment padding
     pub velocity: [f32; 3],   // per-frame velocity
-    pub life: f32,            // 0=dead, 1=alive
+    pub life: f32,            // 0=dead, 1=alive (offset 28 — follows vec3 without padding)
     pub age: f32,             // seconds since spawn
+    pub _pad1: [f32; 3],      // WGSL padding to align color vec4 to 16 bytes
     pub color: [f32; 4],      // RGBA
 }
 
