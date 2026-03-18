@@ -217,7 +217,10 @@ pub struct FluidSimulationGenerator {
     resolve_uniform_buf: wgpu::Buffer,
     splat_color_uniform_buf: wgpu::Buffer,
     resolve_color_uniform_buf: wgpu::Buffer,
-    blur_uniform_buf: wgpu::Buffer,
+    // 5 blur uniform buffers — one per blur invocation per frame. Each render pass
+    // needs its own buffer because queue.write_buffer overwrites are not flushed until
+    // queue.submit, so a shared buffer would only retain the last write.
+    blur_uniform_bufs: [wgpu::Buffer; 5],
     gradient_uniform_buf: wgpu::Buffer,
     sim_uniform_buf: wgpu::Buffer,
     seed_uniform_buf: wgpu::Buffer,
@@ -528,7 +531,9 @@ impl FluidSimulationGenerator {
         let resolve_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<ResolveUniforms>(), "FluidSim Resolve Uniforms");
         let splat_color_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<SplatColorUniforms>(), "FluidSim SplatColor Uniforms");
         let resolve_color_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<ResolveColorUniforms>(), "FluidSim ResolveColor Uniforms");
-        let blur_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<BlurUniforms>(), "FluidSim Blur Uniforms");
+        let blur_uniform_bufs = std::array::from_fn(|i| {
+            create_uniform_buffer(device, std::mem::size_of::<BlurUniforms>(), &format!("FluidSim Blur Uniforms {i}"))
+        });
         let gradient_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<GradientUniforms>(), "FluidSim Gradient Uniforms");
         let sim_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<SimUniforms>(), "FluidSim Simulate Uniforms");
         let seed_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<SeedUniforms>(), "FluidSim Seed Uniforms");
@@ -579,7 +584,7 @@ impl FluidSimulationGenerator {
             resolve_uniform_buf,
             splat_color_uniform_buf,
             resolve_color_uniform_buf,
-            blur_uniform_buf,
+            blur_uniform_bufs,
             gradient_uniform_buf,
             sim_uniform_buf,
             seed_uniform_buf,
@@ -728,6 +733,7 @@ impl FluidSimulationGenerator {
         radius: f32,
         texel_x: f32,
         texel_y: f32,
+        buf_index: usize,
     ) {
         let uniforms = BlurUniforms {
             direction,
@@ -738,13 +744,13 @@ impl FluidSimulationGenerator {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        queue.write_buffer(&self.blur_uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&self.blur_uniform_bufs[buf_index], 0, bytemuck::bytes_of(&uniforms));
 
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim Blur BG"),
             layout: &self.blur_bgl,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.blur_uniform_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 0, resource: self.blur_uniform_bufs[buf_index].as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(source) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
             ],
@@ -1071,19 +1077,19 @@ impl Generator for FluidSimulationGenerator {
         let density_rt = self.density_rt.as_ref().unwrap();
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &density_rt.view, &blur_density_rt.view,
-            &self.blur_pipeline, [0.0, 0.0], 0.0, blur_texel_x, blur_texel_y);
+            &self.blur_pipeline, [0.0, 0.0], 0.0, blur_texel_x, blur_texel_y, 0);
 
         // Step 2: H blur: blur_density_rt → blur_temp_rt
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &blur_density_rt.view, &blur_temp_rt.view,
-            &self.blur_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y);
+            &self.blur_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, 1);
 
         // Step 3: V blur: blur_temp_rt → blur_density_rt (in-place result)
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &blur_temp_rt.view, &blur_density_rt.view,
-            &self.blur_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y);
+            &self.blur_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, 2);
 
         // Gradient + Rotate: blurredDensity → vector field
         // Unity: densityAreaScale = (trailWidth * trailHeight) / SCATTER_REFERENCE_AREA
@@ -1140,11 +1146,11 @@ impl Generator for FluidSimulationGenerator {
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &vector_field_rt.view, &blur_temp_rt.view,
-            &self.blur_vector_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y);
+            &self.blur_vector_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, 3);
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &blur_temp_rt.view, &vector_field_rt.view,
-            &self.blur_vector_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y);
+            &self.blur_vector_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, 4);
 
         // ================================================================
         // PHASE 3: Position Integration — simulate shader

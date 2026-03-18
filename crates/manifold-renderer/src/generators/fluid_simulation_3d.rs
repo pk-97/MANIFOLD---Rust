@@ -220,14 +220,17 @@ pub struct FluidSimulation3DGenerator {
     // Uniform buffers
     splat_3d_uniform_buf: wgpu::Buffer,
     resolve_3d_uniform_buf: wgpu::Buffer,
-    blur_3d_uniform_buf: wgpu::Buffer,
+    // 6 blur uniform buffers — up to 3 scalar + 3 vector dispatches per frame.
+    // Each compute dispatch needs its own buffer (queue.write_buffer overwrites
+    // are not flushed until queue.submit).
+    blur_3d_uniform_bufs: [wgpu::Buffer; 6],
     gradient_curl_3d_uniform_buf: wgpu::Buffer,
     sim_3d_uniform_buf: wgpu::Buffer,
     projected_uniform_buf: wgpu::Buffer,
     resolve_display_uniform_buf: wgpu::Buffer,
     seed_uniform_buf: wgpu::Buffer,
     display_uniform_buf: wgpu::Buffer,
-    blur_2d_uniform_buf: wgpu::Buffer,
+    blur_2d_uniform_bufs: [wgpu::Buffer; 2],
     sampler_3d: wgpu::Sampler,
 
     // State
@@ -490,7 +493,9 @@ impl FluidSimulation3DGenerator {
         // ── Uniform buffers ──
         let splat_3d_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<Splat3DUniforms>(), "FluidSim3D Splat3D Uniforms");
         let resolve_3d_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<Resolve3DUniforms>(), "FluidSim3D Resolve3D Uniforms");
-        let blur_3d_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<Blur3DUniforms>(), "FluidSim3D Blur3D Uniforms");
+        let blur_3d_uniform_bufs = std::array::from_fn(|i| {
+            create_uniform_buffer(device, std::mem::size_of::<Blur3DUniforms>(), &format!("FluidSim3D Blur3D Uniforms {i}"))
+        });
         let gradient_curl_3d_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<GradientCurl3DUniforms>(), "FluidSim3D GradientCurl3D Uniforms");
         let sim_3d_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<Sim3DUniforms>(), "FluidSim3D Sim3D Uniforms");
         let projected_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<ProjectedUniforms>(), "FluidSim3D Projected Uniforms");
@@ -498,7 +503,9 @@ impl FluidSimulation3DGenerator {
         let seed_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<SeedUniforms>(), "FluidSim3D Seed Uniforms");
         let display_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<DisplayUniforms>(), "FluidSim3D Display Uniforms");
         // BlurUniforms: 2 floats (direction) + radius + texel_x + texel_y + 3 pads = 32 bytes
-        let blur_2d_uniform_buf = create_uniform_buffer(device, 32, "FluidSim3D Blur2D Uniforms");
+        let blur_2d_uniform_bufs = std::array::from_fn(|i| {
+            create_uniform_buffer(device, 32, &format!("FluidSim3D Blur2D Uniforms {i}"))
+        });
 
         Self {
             splat_3d_pipeline,
@@ -534,14 +541,14 @@ impl FluidSimulation3DGenerator {
             blur_display_rt: None,
             splat_3d_uniform_buf,
             resolve_3d_uniform_buf,
-            blur_3d_uniform_buf,
+            blur_3d_uniform_bufs,
             gradient_curl_3d_uniform_buf,
             sim_3d_uniform_buf,
             projected_uniform_buf,
             resolve_display_uniform_buf,
             seed_uniform_buf,
             display_uniform_buf,
-            blur_2d_uniform_buf,
+            blur_2d_uniform_bufs,
             sampler_3d,
             active_count: 0,
             vol_res: 0,
@@ -677,6 +684,7 @@ impl FluidSimulation3DGenerator {
         radius: f32,
         src_view: &wgpu::TextureView,
         dst_view: &wgpu::TextureView,
+        buf_index: usize,
     ) {
         let uniforms = Blur3DUniforms {
             vol_res: self.vol_res,
@@ -684,7 +692,7 @@ impl FluidSimulation3DGenerator {
             radius,
             _pad: 0,
         };
-        queue.write_buffer(&self.blur_3d_uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&self.blur_3d_uniform_bufs[buf_index], 0, bytemuck::bytes_of(&uniforms));
 
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim3D BlurScalar BG"),
@@ -692,7 +700,7 @@ impl FluidSimulation3DGenerator {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.blur_3d_uniform_buf.as_entire_binding(),
+                    resource: self.blur_3d_uniform_bufs[buf_index].as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -724,6 +732,7 @@ impl FluidSimulation3DGenerator {
         radius: f32,
         src_view: &wgpu::TextureView,
         dst_view: &wgpu::TextureView,
+        buf_index: usize,
     ) {
         let uniforms = Blur3DUniforms {
             vol_res: self.vol_res,
@@ -731,7 +740,7 @@ impl FluidSimulation3DGenerator {
             radius,
             _pad: 0,
         };
-        queue.write_buffer(&self.blur_3d_uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&self.blur_3d_uniform_bufs[buf_index], 0, bytemuck::bytes_of(&uniforms));
 
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim3D BlurVector BG"),
@@ -739,7 +748,7 @@ impl FluidSimulation3DGenerator {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.blur_3d_uniform_buf.as_entire_binding(),
+                    resource: self.blur_3d_uniform_bufs[buf_index].as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -773,6 +782,7 @@ impl FluidSimulation3DGenerator {
         radius: f32,
         texel_x: f32,
         texel_y: f32,
+        buf_index: usize,
     ) {
         #[repr(C)]
         #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -795,7 +805,7 @@ impl FluidSimulation3DGenerator {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        queue.write_buffer(&self.blur_2d_uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&self.blur_2d_uniform_bufs[buf_index], 0, bytemuck::bytes_of(&uniforms));
 
         let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim3D Blur2D BG"),
@@ -803,7 +813,7 @@ impl FluidSimulation3DGenerator {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.blur_2d_uniform_buf.as_entire_binding(),
+                    resource: self.blur_2d_uniform_bufs[buf_index].as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -1003,20 +1013,20 @@ impl Generator for FluidSimulation3DGenerator {
                 let density_vol = self.density_volume.as_ref().unwrap();
                 let density_temp = self.density_blur_temp.as_ref().unwrap();
                 // X: density_volume -> density_blur_temp
-                self.dispatch_3d_blur_scalar(device, queue, encoder, 0, density_radius, &density_vol.view, &density_temp.view);
+                self.dispatch_3d_blur_scalar(device, queue, encoder, 0, density_radius, &density_vol.view, &density_temp.view, 0);
             }
             {
                 let density_vol = self.density_volume.as_ref().unwrap();
                 let density_temp = self.density_blur_temp.as_ref().unwrap();
                 // Y: density_blur_temp -> density_volume
-                self.dispatch_3d_blur_scalar(device, queue, encoder, 1, density_radius, &density_temp.view, &density_vol.view);
+                self.dispatch_3d_blur_scalar(device, queue, encoder, 1, density_radius, &density_temp.view, &density_vol.view, 1);
             }
             // Z pass: skip if vol_res depth < 8
             if vol_res >= 8 {
                 let density_vol = self.density_volume.as_ref().unwrap();
                 let density_temp = self.density_blur_temp.as_ref().unwrap();
                 // Z: density_volume -> density_blur_temp
-                self.dispatch_3d_blur_scalar(device, queue, encoder, 2, density_radius, &density_vol.view, &density_temp.view);
+                self.dispatch_3d_blur_scalar(device, queue, encoder, 2, density_radius, &density_vol.view, &density_temp.view, 2);
                 // Copy result back: density_blur_temp -> density_volume (swap pointers conceptually)
                 // For simplicity, do one more pass Z->density_volume. Actually, after Z blur the result
                 // is in density_blur_temp. We need density_volume to have the final result.
@@ -1082,19 +1092,19 @@ impl Generator for FluidSimulation3DGenerator {
                 let vector_vol = self.vector_volume.as_ref().unwrap();
                 let vector_temp = self.vector_blur_temp.as_ref().unwrap();
                 // X: vector_volume -> vector_blur_temp
-                self.dispatch_3d_blur_vector(device, queue, encoder, 0, vector_radius, &vector_vol.view, &vector_temp.view);
+                self.dispatch_3d_blur_vector(device, queue, encoder, 0, vector_radius, &vector_vol.view, &vector_temp.view, 3);
             }
             {
                 let vector_vol = self.vector_volume.as_ref().unwrap();
                 let vector_temp = self.vector_blur_temp.as_ref().unwrap();
                 // Y: vector_blur_temp -> vector_volume
-                self.dispatch_3d_blur_vector(device, queue, encoder, 1, vector_radius, &vector_temp.view, &vector_vol.view);
+                self.dispatch_3d_blur_vector(device, queue, encoder, 1, vector_radius, &vector_temp.view, &vector_vol.view, 4);
             }
             if vol_res >= 8 {
                 let vector_vol = self.vector_volume.as_ref().unwrap();
                 let vector_temp = self.vector_blur_temp.as_ref().unwrap();
                 // Z: vector_volume -> vector_blur_temp
-                self.dispatch_3d_blur_vector(device, queue, encoder, 2, vector_radius, &vector_vol.view, &vector_temp.view);
+                self.dispatch_3d_blur_vector(device, queue, encoder, 2, vector_radius, &vector_vol.view, &vector_temp.view, 5);
                 // After Z blur, result is in vector_blur_temp.
                 // Simulate will read from the appropriate view below.
             }
@@ -1286,6 +1296,7 @@ impl Generator for FluidSimulation3DGenerator {
                 blur_2d_radius,
                 texel_x,
                 texel_y,
+                0,
             );
         }
         {
@@ -1300,6 +1311,7 @@ impl Generator for FluidSimulation3DGenerator {
                 blur_2d_radius,
                 texel_x,
                 texel_y,
+                1,
             );
         }
 
