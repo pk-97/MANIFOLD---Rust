@@ -13,6 +13,10 @@ pub struct EffectContext {
     /// 0 = master, layer_index+1 = layer, hash(clip_id) = clip.
     pub owner_key: i64,
     pub is_clip_level: bool,
+    /// Precomputed cross-chain param: EdgeStretch source width.
+    /// Unity ref: EffectContext.FindChainParam(EffectType.EdgeStretch, 1, 0.5625f)
+    /// Filled by effect_chain before calling apply. Used by VoronoiPrism.
+    pub edge_stretch_width: f32,
 }
 
 /// Find a parameter value from another effect in a chain.

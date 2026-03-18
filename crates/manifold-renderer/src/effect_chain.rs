@@ -1,5 +1,6 @@
+use manifold_core::EffectType;
 use manifold_core::effects::{EffectGroup, EffectInstance};
-use crate::effect::EffectContext;
+use crate::effect::{EffectContext, find_chain_param};
 use crate::effect_registry::EffectRegistry;
 use crate::render_target::RenderTarget;
 use crate::wet_dry_lerp::WetDryLerpPipeline;
@@ -270,6 +271,15 @@ impl EffectChain {
         self.ensure_buffers(device, ctx.width, ctx.height);
         self.use_ping_as_source = true;
 
+        // Precompute cross-chain params for effects that need them.
+        // Unity ref: EffectContext.FindChainParam() — VoronoiPrism reads EdgeStretch width.
+        let chain_ctx = EffectContext {
+            edge_stretch_width: find_chain_param(
+                effects, EffectType::EdgeStretch, 1, 0.5625,
+            ),
+            ..*ctx
+        };
+
         // Copy input into our source buffer via blit (handles any input format)
         self.internal_blit.as_ref().unwrap().blit(
             device, encoder, input_view, self.source_view(),
@@ -331,7 +341,7 @@ impl EffectChain {
                         device, queue, encoder,
                         self.source_view(),
                         self.target_view(),
-                        fx, ctx,
+                        fx, &chain_ctx,
                     );
                     self.swap();
                 }
