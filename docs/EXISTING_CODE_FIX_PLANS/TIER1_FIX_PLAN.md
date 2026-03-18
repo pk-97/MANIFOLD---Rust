@@ -1,5 +1,7 @@
 # Tier 1 Fix Plan: `manifold-editing` + `manifold-playback` Parity Remediation
 
+**Status: COMPLETE** — Implemented 2026-03-18, commit `be4c7f0`
+
 **Generated:** 2026-03-18 from line-by-line audit of all Unity Editing/*.cs, Playback/*.cs, Sync/*.cs against Rust manifold-editing/src/*.rs and manifold-playback/src/*.rs
 
 **Methodology:** Every fix references exact Unity source file and line numbers. The implementing agent MUST read the Unity source — not this document — as the source of truth.

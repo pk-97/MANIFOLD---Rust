@@ -1,5 +1,7 @@
 # Tier 3 Fix Plan: `manifold-renderer` Parity Remediation
 
+**Status: COMPLETE** — Implemented 2026-03-18, commit `6ffdfe9`
+
 **Generated:** 2026-03-18 from line-by-line audit of all Unity Compositing/*.cs, Effects/*.cs, Generators/*.cs, and Shaders/*.shader/*.compute against Rust manifold-renderer/src/**/*.rs and *.wgsl
 
 **Methodology:** Every fix below references the exact Unity source file and line numbers. The implementing agent MUST read the Unity source — not this document — as the source of truth. This plan tells you WHAT to fix and WHERE to look, not HOW the code should read.
