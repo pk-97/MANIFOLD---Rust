@@ -85,6 +85,25 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Why:** Rust's borrow checker makes storing a `&mut dyn SyncArbiterTarget` as a field impractical (lifetime conflicts). Passing explicitly is functionally equivalent — same gating logic, same behavior.
 - **Files affected:** `manifold-playback/src/sync.rs`
 
+### [D-11] FluidSim3D density volume: R32Float instead of R16Float
+- **Unity does:** `RenderTextureFormat.RHalf` (R16Float) for 3D density volumes
+- **Rust does:** `R32Float` for 3D density volumes
+- **Why:** Metal does not support `STORAGE_BINDING` on `R16Float` textures. The density volume requires both storage writes (compute resolve) and texture reads (blur, gradient). R32Float supports both. All reads use `textureLoad` (not `textureSample`), so R32Float's lack of filtering on Metal is not an issue. 2x memory per volume but higher precision — no visual degradation.
+- **Files affected:** `manifold-renderer/src/generators/fluid_simulation_3d.rs`, `shaders/fluid_scatter_3d.wgsl`, `shaders/fluid_blur_3d.wgsl`
+
+### [D-12] Texture formats: Rgba16Float instead of R32Float/Rg32Float for storage+sampling textures
+- **Unity does:** `RFloat` (R32Float) for density, `RGFloat` (Rg32Float) for vector fields — these textures are both written by compute and sampled with bilinear filtering
+- **Rust does:** `Rgba16Float` for all textures that need both `STORAGE_BINDING` and filtered `textureSample`
+- **Why:** On Metal via wgpu, `R32Float` and `Rg32Float` are NOT filterable (`textureSample` requires `Float { filterable: true }`). Unity's Metal backend handles this internally. `Rgba16Float` is the only format that supports both storage writes and filtered sampling on Metal. Half precision (16-bit) is sufficient for display intermediates and density fields; the extra channels are unused but harmless.
+- **Applies to:** FluidSim3D 2D display density, FluidSimulation density/vector field, Mycelium trail textures
+- **Files affected:** `fluid_simulation_3d.rs` (DENSITY_FORMAT), `fluid_simulation.rs` (DENSITY_FORMAT, VECTOR_FORMAT), `mycelium.rs` (TRAIL_FORMAT), `shaders/fluid_scatter_3d.wgsl`
+
+### [D-13] FluidSim3D simulate shader: textureLoad instead of textureSampleLevel for density
+- **Unity does:** `_DensityTex.SampleLevel(sampler_linear_clamp, pos, 0)` — bilinear filtered sample
+- **Rust does:** `textureLoad(t_density, coord, 0)` — nearest-neighbor load
+- **Why:** The 3D density volume uses `R32Float` (D-11), which is not filterable on Metal. Since the density is already 3D Gaussian-blurred before the simulate shader reads it, nearest-neighbor sampling is visually equivalent to bilinear — the blur removes the high-frequency content that filtering would smooth.
+- **Files affected:** `shaders/fluid_simulate_3d.wgsl`
+
 ---
 
 ## Add new divergences above this line.

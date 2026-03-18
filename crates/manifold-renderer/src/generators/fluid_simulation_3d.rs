@@ -40,10 +40,11 @@ const CAM_DIST: usize = 23;
 const CAM_TILT: usize = 24;
 const FLATTEN: usize = 25;
 
-// 2D projected density: R32Float (Unity: RFloat)
-const DENSITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
-// 3D volume density: R16Float (Unity: RHalf)
-const DENSITY_3D_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+// 2D projected density: Rgba16Float (Unity: RFloat / R32Float, but R32Float is not filterable
+// on Metal and this texture needs both STORAGE_BINDING and filtered sampling for 2D blur)
+const DENSITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+// 3D volume density: R32Float (Unity: RHalf / R16Float, but R16Float lacks STORAGE_BINDING on Metal)
+const DENSITY_3D_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 // 3D volume vector field: Rgba16Float (Unity: ARGBHalf)
 const VECTOR_3D_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const PARTICLE_SIZE_BYTES: u64 = std::mem::size_of::<Particle>() as u64;
@@ -343,12 +344,12 @@ impl FluidSimulation3DGenerator {
             ),
         });
 
-        // Blur scalar pipeline (R16Float)
+        // Blur scalar pipeline (R32Float — not filterable on Metal, uses textureLoad only)
         let blur_scalar_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("FluidSim3D BlurScalar BGL"),
             entries: &[
                 bgl_uniform(0, wgpu::ShaderStages::COMPUTE),
-                bgl_texture_3d(1, wgpu::ShaderStages::COMPUTE),
+                bgl_texture_3d_unfilterable(1, wgpu::ShaderStages::COMPUTE),
                 bgl_storage_texture_3d(2, wgpu::ShaderStages::COMPUTE, DENSITY_3D_FORMAT),
             ],
         });
@@ -377,7 +378,7 @@ impl FluidSimulation3DGenerator {
             label: Some("FluidSim3D GradientCurl3D BGL"),
             entries: &[
                 bgl_uniform(0, wgpu::ShaderStages::COMPUTE),
-                bgl_texture_3d(1, wgpu::ShaderStages::COMPUTE),
+                bgl_texture_3d_unfilterable(1, wgpu::ShaderStages::COMPUTE),
                 bgl_storage_texture_3d(2, wgpu::ShaderStages::COMPUTE, VECTOR_3D_FORMAT),
             ],
         });
@@ -395,9 +396,9 @@ impl FluidSimulation3DGenerator {
             label: Some("FluidSim3D Simulate3D BGL"),
             entries: &[
                 bgl_storage_rw(0, wgpu::ShaderStages::COMPUTE),
-                bgl_texture_3d_filterable(1, wgpu::ShaderStages::COMPUTE), // vector field (Rgba16Float, filterable)
+                bgl_texture_3d(1, wgpu::ShaderStages::COMPUTE),             // vector field (Rgba16Float, filterable)
                 bgl_sampler(2, wgpu::ShaderStages::COMPUTE),              // filtering sampler
-                bgl_texture_3d_filterable(3, wgpu::ShaderStages::COMPUTE), // density (Rgba16Float, filterable)
+                bgl_texture_3d_unfilterable(3, wgpu::ShaderStages::COMPUTE), // density (R32Float, not filterable on Metal)
                 bgl_uniform(4, wgpu::ShaderStages::COMPUTE),
             ],
         });
@@ -1433,8 +1434,17 @@ fn bgl_texture_3d(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGro
     }
 }
 
-fn bgl_texture_3d_filterable(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
-    bgl_texture_3d(binding, visibility)
+fn bgl_texture_3d_unfilterable(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D3,
+            multisampled: false,
+        },
+        count: None,
+    }
 }
 
 fn bgl_texture_filterable(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {

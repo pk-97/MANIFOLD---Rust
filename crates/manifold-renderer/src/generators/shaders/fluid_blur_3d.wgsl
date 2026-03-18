@@ -1,6 +1,6 @@
 // Separable 3D Gaussian blur for volumetric fields.
 // Two entry points:
-//   blur_scalar: blur Rgba16Float density volume (X, Y, or Z pass)
+//   blur_scalar: blur R32Float density volume (X, Y, or Z pass)
 //   blur_vector: blur Rgba16Float vector volume (X, Y, or Z pass)
 // Ping-pongs between source and dest textures per axis.
 // Toroidal wrap via modulo.
@@ -12,11 +12,11 @@ struct BlurUniforms {
     _pad: u32,
 };
 
-// ── Scalar blur (Rgba16Float density) ──
+// ── Scalar blur (R32Float density — Unity: RHalf, but R16Float lacks STORAGE_BINDING on Metal) ──
 
 @group(0) @binding(0) var<uniform> params: BlurUniforms;
 @group(0) @binding(1) var src_scalar: texture_3d<f32>;
-@group(0) @binding(2) var dst_scalar: texture_storage_3d<rgba16float, write>;
+@group(0) @binding(2) var dst_scalar: texture_storage_3d<r32float, write>;
 
 @compute @workgroup_size(4, 4, 4)
 fn blur_scalar(@builtin(global_invocation_id) id: vec3<u32>) {

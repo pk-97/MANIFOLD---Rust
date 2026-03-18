@@ -44,9 +44,12 @@ const PRE_SHRINK: u32 = 2;
 const INJECT_FRAMES_PER_ZONE: i32 = 120; // ~2 sec at 60fps
 const SCATTER_REFERENCE_AREA: f32 = 1920.0 * 1080.0; // reference for intensity normalization
 
-// Texture formats matching Unity (FM-10): RFloat density, RGFloat vector field
-const DENSITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
-const VECTOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Float;
+// Texture formats: Rgba16Float for both density and vector field.
+// Unity uses RFloat / RGFloat (R32Float / Rg32Float), but neither is filterable on Metal,
+// and these textures need both storage writes (compute resolve) and filtered sampling (blur/simulate).
+// Rgba16Float supports both STORAGE_BINDING and filterable sampling on Metal.
+const DENSITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const VECTOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const PARTICLE_SIZE_BYTES: u64 = std::mem::size_of::<Particle>() as u64;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {

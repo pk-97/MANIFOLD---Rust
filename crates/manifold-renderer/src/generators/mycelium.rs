@@ -24,8 +24,9 @@ const AGENTS: usize = 9;
 const SCALE: usize = 10;
 const SEEDS: usize = 11;
 
-// Trail format: R32Float (Unity: RFloat — single-channel density storage)
-const TRAIL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+// Trail format: Rgba16Float (Unity: RFloat / R32Float, but R32Float is not filterable on Metal
+// and trail textures need both STORAGE_BINDING and filtered sampling)
+const TRAIL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const MAX_AGENTS: u32 = 500_000;
 const MIN_AGENTS: u32 = 10_000;
 
