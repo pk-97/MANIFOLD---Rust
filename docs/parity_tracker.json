@@ -1,17 +1,17 @@
 {
   "metadata": {
-    "last_updated": "2026-03-18",
+    "last_updated": "2026-03-19",
     "audit_source": "docs/DEFINITIVE_PARITY_AUDIT.md",
     "audit_date": "2026-03-17",
     "true_functional_completion_pct": 53,
-    "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context. Tier 4 fix plan (manifold-ui + manifold-app) completed 2026-03-18: 7 color corrections, WidgetLayout + InspectorLayout constants, InteractionOverlay ctrl_held/finalize_move_snap/preDragSplitCommands, TruncateWithEllipsis, UINode texture, right-click guard, ScrollToReveal, beat_to_time tempo map, context menu items."
+    "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context. Tier 4 fix plan (manifold-ui + manifold-app) completed 2026-03-18: 7 color corrections, WidgetLayout + InspectorLayout constants, InteractionOverlay ctrl_held/finalize_move_snap/preDragSplitCommands, TruncateWithEllipsis, UINode texture, right-click guard, ScrollToReveal, beat_to_time tempo map, context menu items. GAP-GEN-3 done 2026-03-19: FluidSimulation3D 10 divergences fixed (gradient force, full simulate rewrite, blur radius, cam_tilt, ref_axis, scatter energy, ortho fract, trigger_count, 2D blur removal, amortization)."
   },
   "subsystems": {
     "core": { "pct": 85, "audit_section": 1 },
     "editing": { "pct": 80, "audit_section": 2 },
     "playback": { "pct": 72, "audit_section": 3 },
     "effects": { "pct": 58, "audit_section": 4 },
-    "generators": { "pct": 93, "audit_section": 6 },
+    "generators": { "pct": 97, "audit_section": 6 },
     "compositor": { "pct": 60, "audit_section": 5 },
     "ui": { "pct": 72, "audit_section": 7 },
     "io": { "pct": 70, "audit_section": 8 },
@@ -176,9 +176,9 @@
       "title": "Fix FluidSimulation3D (19 issues per FLUID_SIM_AUDIT.md)",
       "severity": "critical",
       "est_loc": 300,
-      "status": "todo",
-      "commit": null,
-      "notes": "Gradient magnitude 128x too strong, particles die after 3-6s, density capping wrong, velocity divergence."
+      "status": "done",
+      "commit": "c5979da",
+      "notes": "Fixed 10 divergences: DIFF-14 gradient force 64x too strong (now * 0.5 integer voxel space), DIFF-2 fluid_simulate_3d.wgsl full rewrite (noise at time2*0.1/pos*2, anti-clump, container SDF, integration, flatten, color), DIFF-9 blur radius formula corrected (base=round(feather), scaled=max(1,round(base*res/640))), DIFF-1 cam_tilt converted to cam_tilt*PI*0.5, DIFF-8 ref_axis time scale ctx.Time*0.3, DIFF-3 3D scatter energy removed particle_size factor, DIFF-11 ortho projection uses fract() toroidal wrap, DIFF-12 SeedUniforms trigger_count field added, DIFF-26 2D blur pass removed, DIFF-15 volume amortization toggle parity + force on snap frames."
     },
     {
       "number": 14,
@@ -374,15 +374,27 @@
     },
     {
       "number": 30,
-      "id": "GAP-AUDIO-7",
-      "tier": 3,
+      "id": "GAP-AUDIO-7a",
+      "tier": 2,
       "subsystem": "audio_percussion",
-      "title": "Port ImportedAudioSyncController + StemAudioController",
+      "title": "Port ImportedAudioSyncController (basic audio playback)",
       "severity": "high",
-      "est_loc": 700,
+      "est_loc": 400,
       "status": "todo",
       "commit": null,
-      "notes": "945 lines. Timeline-synced audio playback, 4-stem DAW-style playback, MP3 encoder delay compensation."
+      "notes": "Basic timeline-synced audio playback from loaded projects. Load audio file from PercussionImportState.audio_path, decode (symphonia/rodio), sync to engine tick (play/pause/seek/stop), hard-resync on drift >0.20s. MP3 encoder delay probe optional (ffprobe fallback to 0). No dependency on percussion analysis pipeline. Split from original GAP-AUDIO-7."
+    },
+    {
+      "number": 47,
+      "id": "GAP-AUDIO-7b",
+      "tier": 3,
+      "subsystem": "audio_percussion",
+      "title": "Port StemAudioController (4-stem DAW playback)",
+      "severity": "medium",
+      "est_loc": 350,
+      "status": "todo",
+      "commit": null,
+      "notes": "4-stem Demucs playback (drums, bass, other, vocals) with per-stem mute/solo. Depends on GAP-AUDIO-7a for base audio sync. Split from original GAP-AUDIO-7."
     },
     {
       "number": 31,
