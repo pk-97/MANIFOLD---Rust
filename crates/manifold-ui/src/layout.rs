@@ -153,6 +153,12 @@ impl ScreenLayout {
     /// When audio waveform lane is visible: + 56px.
     /// When stem lanes are visible (4×56): + 224px.
     /// From Unity UIConstants: ImportedWaveformLaneHeight = 56, StemLaneHeight = 56.
+    ///
+    /// **INVARIANT**: This is the SINGLE SOURCE OF TRUTH for the header offset.
+    /// Both `viewport.rs` (tracks_rect.y) and `layer_header.rs` (panel_origin.y)
+    /// MUST use this method to compute the Y offset between the timeline body top
+    /// and the scrollable track area. If they diverge, layer controls will be
+    /// vertically misaligned with their tracks.
     pub fn track_header_height(&self) -> f32 {
         let mut h = color::OVERVIEW_STRIP_HEIGHT + color::RULER_HEIGHT;
         if self.waveform_lane_visible {

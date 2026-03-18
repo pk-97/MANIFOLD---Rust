@@ -835,14 +835,11 @@ impl Panel for TimelineViewportPanel {
             return;
         }
 
-        // Header stack: overview strip (16) + ruler (40) + optional waveform lane (56)
-        let waveform_h = if layout.waveform_lane_visible { color::WAVEFORM_LANE_HEIGHT } else { 0.0 };
-        let stem_h = if layout.waveform_lane_visible && layout.stem_lanes_expanded {
-            4.0 * color::STEM_LANE_HEIGHT
-        } else {
-            0.0
-        };
-        let header_h = color::OVERVIEW_STRIP_HEIGHT + RULER_HEIGHT + waveform_h + stem_h;
+        // Header stack: overview strip + ruler + optional waveform/stem lanes.
+        // INVARIANT: MUST use layout.track_header_height() — same source as
+        // layer_header.rs uses for panel_origin. If these diverge, layer controls
+        // will be vertically misaligned with their tracks.
+        let header_h = layout.track_header_height();
         self.viewport_rect = Rect::new(body.x, body.y, tracks_w, body.height);
         self.ruler_rect = Rect::new(body.x, body.y + color::OVERVIEW_STRIP_HEIGHT, tracks_w, RULER_HEIGHT);
         self.tracks_rect = Rect::new(

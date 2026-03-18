@@ -982,9 +982,10 @@ impl Default for LayerHeaderPanel {
 impl Panel for LayerHeaderPanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
         let lc = layout.layer_controls();
-        // Offset layer rows down by the header stack (overview strip + ruler = 56px)
+        // Offset layer rows down by the header stack (overview strip + ruler + waveform lanes)
         // so they align vertically with the track content area.
-        let header_spacer = color::OVERVIEW_STRIP_HEIGHT + color::RULER_HEIGHT;
+        // INVARIANT: this MUST match viewport.rs header_h computation exactly.
+        let header_spacer = layout.track_header_height();
         self.panel_origin = Vec2::new(lc.x, lc.y + header_spacer - self.scroll_y_px);
         self.panel_width = lc.width;
 
