@@ -20,6 +20,7 @@ use crate::effects::stylized_feedback::StylizedFeedbackFX;
 use crate::effects::edge_glow::EdgeGlowFX;
 use crate::effects::transform::TransformFX;
 use crate::effects::infrared::InfraredFX;
+use crate::effects::voronoi_prism::VoronoiPrismFX;
 
 /// Factory + singleton storage for all effect processors.
 /// One processor per EffectType — per-owner state lives inside each processor.
@@ -49,6 +50,7 @@ impl EffectRegistry {
         processors.insert(EffectType::EdgeGlow, Box::new(EdgeGlowFX::new(device)));
         processors.insert(EffectType::Transform, Box::new(TransformFX::new(device)));
         processors.insert(EffectType::Infrared, Box::new(InfraredFX::new(device)));
+        processors.insert(EffectType::VoronoiPrism, Box::new(VoronoiPrismFX::new(device)));
         Self { processors }
     }
 
