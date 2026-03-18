@@ -429,6 +429,7 @@ impl ClipChromePanel {
     }
 
     pub fn sync_slip(&mut self, tree: &mut UITree, value: f32) {
+        if (self.cached_slip - value).abs() < f32::EPSILON { return; }
         self.cached_slip = value;
         if let Some(ref ids) = self.slip_slider {
             let norm = if self.max_slip > 0.0 { (value / self.max_slip).clamp(0.0, 1.0) } else { 0.0 };
@@ -474,6 +475,7 @@ impl ClipChromePanel {
     }
 
     pub fn sync_loop_duration(&mut self, tree: &mut UITree, beats: f32) {
+        if (self.cached_loop_duration - beats).abs() < f32::EPSILON { return; }
         self.cached_loop_duration = beats;
         if let Some(ref ids) = self.loop_slider {
             let norm = if self.max_loop_beats > 0.0 {

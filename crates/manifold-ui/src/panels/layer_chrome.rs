@@ -218,6 +218,7 @@ impl LayerChromePanel {
     }
 
     pub fn sync_opacity(&mut self, tree: &mut UITree, value: f32) {
+        if (self.cached_opacity - value).abs() < f32::EPSILON { return; }
         self.cached_opacity = value;
         if let Some(ref ids) = self.opacity_slider {
             let text = format!("{:.2}", value);

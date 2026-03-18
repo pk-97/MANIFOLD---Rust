@@ -295,9 +295,16 @@ impl UIRoot {
             }
         }
 
-        // Route Drag/DragEnd to inspector directly (needs &mut tree for slider feedback).
-        // This is separate from the panel event loop because Panel::handle_event takes
-        // &UITree, but slider drag updates need &mut UITree.
+        // Route Drag/DragEnd/PointerUp to inspector directly (needs &mut tree for
+        // slider feedback). Separate from the panel event loop because
+        // Panel::handle_event takes &UITree, but slider drag updates need &mut UITree.
+        //
+        // PointerUp handling: Unity's OnPointerUp ALWAYS fires on mouse release.
+        // If the user clicked a slider without crossing the 4px DRAG_THRESHOLD,
+        // no DragEnd fires — but PointerUp still does. We route PointerUp through
+        // handle_drag_end so the sub-panel's dragging state is cleared and the
+        // undo snapshot is committed. handle_drag_end is idempotent: if DragEnd
+        // already cleared pressed_target, PointerUp is a no-op.
         for event in &events {
             match event {
                 UIEvent::Drag { pos, .. } => {
@@ -306,7 +313,7 @@ impl UIRoot {
                         actions.append(&mut drag_actions);
                     }
                 }
-                UIEvent::DragEnd { .. } => {
+                UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
                     if self.inspector.has_pressed_target() {
                         let mut end_actions = self.inspector.handle_drag_end(&mut self.tree);
                         actions.append(&mut end_actions);

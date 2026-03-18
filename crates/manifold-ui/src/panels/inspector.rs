@@ -777,9 +777,19 @@ impl Panel for InspectorCompositePanel {
             }
             UIEvent::DragBegin { node_id, pos, .. } => {
                 if !self.viewport_rect.contains(*pos) { return Vec::new(); }
-                // DragBegin sets pressed_target (same as PointerDown) so
-                // subsequent Drag/DragEnd events route to the correct sub-panel.
-                self.route_pointer_down(*node_id, *pos)
+                // DragBegin only ensures pressed_target is set for drag routing.
+                // Do NOT re-call route_pointer_down — that re-fires
+                // handle_pointer_down on the sub-panel, overwriting the undo
+                // snapshot captured on PointerDown. Unity's DragBegin just starts
+                // routing Drag events; it doesn't re-apply the slider value.
+                if self.pressed_target.is_none() {
+                    let target = self.find_target_for_node(*node_id);
+                    self.pressed_target = target;
+                    if let Some(ref t) = target {
+                        self.update_last_effect_tab(t);
+                    }
+                }
+                Vec::new()
             }
             UIEvent::RightClick { node_id, pos, .. } => {
                 if !self.viewport_rect.contains(*pos) { return Vec::new(); }
