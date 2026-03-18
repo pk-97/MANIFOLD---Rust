@@ -16,3 +16,4 @@ pub mod osc_receiver;
 pub mod osc_registry;
 pub mod osc_sync;
 pub mod audio_sync;
+pub mod audio_decoder;

@@ -512,6 +512,7 @@ impl Application {
                 // Load imported audio if present in project.
                 // Port of Unity WorkspaceController: audioSyncController.LoadAudioAsync
                 // called during project open when percussionImport.audioPath is set.
+                let mut waveform_audio_path: Option<String> = None;
                 if let Some(ref mut audio_sync) = self.audio_sync {
                     if let Some(proj) = self.engine.project() {
                         if let Some(ref perc) = proj.percussion_import {
@@ -522,8 +523,27 @@ impl Application {
                                     if let Err(e) = audio_sync.load_audio(&audio_path_owned, start_beat) {
                                         log::warn!("[ProjectIO] Failed to load imported audio: {}", e);
                                     }
+                                    waveform_audio_path = Some(audio_path.clone());
                                 }
                             }
+                        }
+                    }
+                }
+
+                // Decode audio for waveform visualization (separate from kira playback).
+                // Uses symphonia to extract raw PCM samples for the spectral waveform renderer.
+                if let Some(ref audio_path) = waveform_audio_path {
+                    match manifold_playback::audio_decoder::decode_audio_to_pcm(audio_path) {
+                        Ok(decoded) => {
+                            self.ui_root.waveform_lane.set_audio_data(
+                                &decoded.samples,
+                                decoded.channels,
+                                decoded.sample_rate,
+                            );
+                            log::info!("[Waveform] Decoded audio for waveform display");
+                        }
+                        Err(e) => {
+                            log::warn!("[Waveform] Failed to decode audio for waveform: {}", e);
                         }
                     }
                 }
@@ -905,6 +925,37 @@ impl Application {
 
         // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)
         self.ui_root.update();
+
+        // 6a. Update waveform lane overlay (position + playhead for dirty-checking)
+        {
+            let playhead_beat = self.engine.current_beat();
+            let scroll_x = self.ui_root.viewport.scroll_x_beats() * self.ui_root.viewport.pixels_per_beat();
+            let wf = &mut self.ui_root.waveform_lane;
+            if wf.is_ready() {
+                // Get start beat and duration from project percussion import state
+                let (start_beat, duration_beats) = if let Some(proj) = self.engine.project() {
+                    if let Some(ref perc) = proj.percussion_import {
+                        let dur_sec = wf.clip_duration_seconds();
+                        let bpm = proj.settings.bpm.max(1.0);
+                        let dur_beats = dur_sec * bpm / 60.0;
+                        (perc.audio_start_beat, dur_beats)
+                    } else {
+                        (0.0, 0.0)
+                    }
+                } else {
+                    (0.0, 0.0)
+                };
+                let mapper = self.ui_root.viewport.mapper();
+                wf.update_overlay(
+                    start_beat,
+                    duration_beats,
+                    playhead_beat,
+                    scroll_x,
+                    self.ui_root.viewport.tracks_rect().width,
+                    mapper,
+                );
+            }
+        }
 
         // 6b. Repaint dirty layer bitmaps (CPU pixel painting).
         // Build BitmapRepaintState from current selection/hover.
