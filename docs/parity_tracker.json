@@ -551,6 +551,30 @@
       "status": "todo",
       "commit": null,
       "notes": "1,417 lines across 4 files. SQLite telemetry. Not needed for visual/behavioral parity."
+    },
+    {
+      "number": 45,
+      "id": "GAP-CORE-8",
+      "tier": 2,
+      "subsystem": "core",
+      "title": "VideoLibrary disk-scanning methods (ScanDirectory, ScanLayerFolder, ProcessVideoFile)",
+      "severity": "medium",
+      "est_loc": 150,
+      "status": "todo",
+      "commit": null,
+      "notes": "VideoLibrary struct exists with add/remove/find/clear methods, but the filesystem scanning methods that rebuild the library from disk are missing. Unity: VideoLibrary.cs ScanDirectory(), ScanLayerFolder(), ProcessVideoFile()."
+    },
+    {
+      "number": 46,
+      "id": "GAP-CORE-9",
+      "tier": 2,
+      "subsystem": "core",
+      "title": "Fix 5 minor core behavioral divergences",
+      "severity": "low",
+      "est_loc": 30,
+      "status": "todo",
+      "commit": null,
+      "notes": "1) TempoMapConverter.seconds_per_beat_from_bpm() doesn't clamp BPM to 20-300. 2) TimelineClip.overlaps_with() doesn't check layer index (Unity returns false for different layers). 3) EffectInstance.ensure_base_values() doesn't check length mismatch, only is_none(). 4) Layer.change_generator_type() doesn't propagate to clips via UpdateClipGeneratorTypes(). 5) BeatQuantizer negative sentinel — verify if already fixed in b59ad6d."
     }
   ]
 }
