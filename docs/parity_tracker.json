@@ -9,7 +9,7 @@
   "subsystems": {
     "core": { "pct": 85, "audit_section": 1 },
     "editing": { "pct": 80, "audit_section": 2 },
-    "playback": { "pct": 65, "audit_section": 3 },
+    "playback": { "pct": 72, "audit_section": 3 },
     "effects": { "pct": 58, "audit_section": 4 },
     "generators": { "pct": 93, "audit_section": 6 },
     "compositor": { "pct": 60, "audit_section": 5 },
@@ -44,9 +44,9 @@
       "title": "Port PlaybackController orchestration (Update loop)",
       "severity": "catastrophic",
       "est_loc": 800,
-      "status": "todo",
+      "status": "partial",
       "commit": null,
-      "notes": "Unity PlaybackController.Update() is 1500+ lines. Rust has ~15% in engine.rs."
+      "notes": "Tick loop orchestration restructured to match Unity PlaybackController.Update() exactly. All ported-but-unwired methods now called in correct order: check_preparing_clips, activate_due_pending_launches, update_active_clip_playback_rates, check_custom_loop_boundaries, correct_video_drift (throttled), filter_ready_clips (replaces build_ready_clips_list), compute_prewarm_candidates. Added fields: video_sync_interval, is_export_mode, export_fixed_dt, on_time_changed callback. Remaining stubs: external beat derivation from Link/MidiClock (blocked by GAP-PLAY-9), tempo recording/resolution (TempoRecorder not yet ported), perf stats collection (GAP-DIAG-1)."
     },
     {
       "number": 3,

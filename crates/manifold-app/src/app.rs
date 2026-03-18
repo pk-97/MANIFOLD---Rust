@@ -609,6 +609,7 @@ impl Application {
             realtime_now: realtime,
             pre_render_dt: dt as f32,
             frame_count: self.frame_count as i32,
+            export_fixed_dt: 0.0, // non-zero only during video export (GAP-IO-4)
         };
         let tick_result = self.engine.tick(ctx);
 

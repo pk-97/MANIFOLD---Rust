@@ -339,6 +339,43 @@ impl LiveClipManager {
         any_activated
     }
 
+    /// Tick-based variant for calling from engine tick loop without a LiveClipHost.
+    /// Avoids borrow conflict where engine can't pass &self as host while &mut self.
+    /// Port of C# PlaybackController.Update line 1152.
+    pub fn activate_due_pending_launches_at_tick(&mut self, now_tick: i32) -> bool {
+        if self.pending_by_tick.is_empty() {
+            return false;
+        }
+
+        let mut any_activated = false;
+        let mut due_launches: Vec<PendingLiveLaunch> = Vec::new();
+
+        while let Some(&earliest_tick) = self.pending_by_tick.keys().next() {
+            if earliest_tick > now_tick {
+                break;
+            }
+
+            let clip_ids = match self.pending_by_tick.remove(&earliest_tick) {
+                Some(ids) => ids,
+                None => break,
+            };
+
+            for clip_id in clip_ids {
+                if let Some(launch) = self.pending_by_clip_id.remove(&clip_id) {
+                    self.pending_by_layer.remove(&launch.layer_index);
+                    due_launches.push(launch);
+                }
+            }
+        }
+
+        for launch in due_launches {
+            self.activate_live_slot_now(launch.layer_index, launch.clip);
+            any_activated = true;
+        }
+
+        any_activated
+    }
+
     /// Check if any pending launches activated (for the engine to call mark_dirty).
     pub fn has_pending_activations(&self, host: &dyn LiveClipHost) -> bool {
         if let Some(&earliest) = self.pending_by_tick.keys().next() {

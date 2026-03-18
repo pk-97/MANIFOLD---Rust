@@ -51,6 +51,9 @@ pub struct TickContext {
     pub realtime_now: f64,
     pub pre_render_dt: f32,
     pub frame_count: i32,
+    /// Fixed delta for export mode (0.0 = use real dt_seconds).
+    /// Port of C# PlaybackController.exportFixedDeltaSeconds (line 42).
+    pub export_fixed_dt: f64,
 }
 
 /// Output of a single engine tick.
@@ -111,9 +114,11 @@ pub struct PlaybackEngine {
     live_external_tempo_bpm: f32,
     live_external_tempo_source: TempoPointSource,
 
-    // Drift correction
+    // Drift correction. Port of C# PlaybackController.videoSyncInterval (line 33).
+    video_sync_interval: f32,
     last_sync_time: f32,
     drift_correction_count: i32,
+    is_export_mode: bool,
 
     // Clock state (for out-of-tick operations)
     last_realtime_now: f64,
@@ -150,6 +155,10 @@ pub struct PlaybackEngine {
     // Debug flag. Port of C# PlaybackEngine.showDebugLogs.
     pub show_debug_logs: bool,
 
+    // Callback: fires each frame during playback after AdvanceTime.
+    // Port of C# PlaybackController.OnTimeChanged (line 1149).
+    pub on_time_changed: Option<Box<dyn Fn(f32)>>,
+
     // Cached media length resolver. Port of C# PlaybackEngine line 201.
     cached_get_media_length: HashMap<String, f32>,
 
@@ -185,8 +194,10 @@ impl PlaybackEngine {
             has_live_external_tempo: false,
             live_external_tempo_bpm: 0.0,
             live_external_tempo_source: TempoPointSource::Unknown,
+            video_sync_interval: 2.0,
             last_sync_time: 0.0,
             drift_correction_count: 0,
+            is_export_mode: false,
             last_realtime_now: 0.0,
             last_frame_count: 0,
             stop_buffer: Vec::with_capacity(16),
@@ -208,6 +219,7 @@ impl PlaybackEngine {
             absolute_tick_resolver: None,
             record_command_delegate: None,
             show_debug_logs: false,
+            on_time_changed: None,
             cached_get_media_length: HashMap::with_capacity(32),
             to_pause_list: Vec::with_capacity(8),
         }
@@ -223,6 +235,8 @@ impl PlaybackEngine {
     pub fn is_playing(&self) -> bool { self.current_state == PlaybackState::Playing }
     pub fn is_recording(&self) -> bool { self.is_recording }
     pub fn external_time_sync(&self) -> bool { self.external_time_sync }
+    pub fn is_export_mode(&self) -> bool { self.is_export_mode }
+    pub fn video_sync_interval(&self) -> f32 { self.video_sync_interval }
     pub fn active_clip_count(&self) -> usize { self.active_clip_renderers.len() }
     pub fn project(&self) -> Option<&Project> { self.project.as_ref() }
     pub fn project_mut(&mut self) -> Option<&mut Project> { self.project.as_mut() }
@@ -362,6 +376,14 @@ impl PlaybackEngine {
         self.is_recording = value;
     }
 
+    pub fn set_export_mode(&mut self, value: bool) {
+        self.is_export_mode = value;
+    }
+
+    pub fn set_video_sync_interval(&mut self, interval: f32) {
+        self.video_sync_interval = interval;
+    }
+
     pub fn advance_time(&mut self, dt_seconds: f64) -> f32 {
         self.current_time_double += dt_seconds;
         self.current_time = self.current_time_double as f32;
@@ -417,10 +439,18 @@ impl PlaybackEngine {
     }
 
     // ─── Core tick ───
+    //
+    // Orchestration order matches Unity PlaybackController.Update() (lines 1055-1218)
+    // exactly, so we never need to revisit this structure. Individual method
+    // implementations may evolve (especially video-related), but the call sites
+    // and their ordering are final.
 
     /// Advance playback by one frame. Returns compositor instructions.
     /// Must not be called re-entrantly.
-    /// Port of C# PlaybackEngine.Tick + PlaybackController.Update orchestration.
+    ///
+    /// Port of C# PlaybackController.Update() orchestration (lines 1055-1218).
+    /// The engine owns the full orchestration that Unity splits across
+    /// PlaybackController (MonoBehaviour) and PlaybackEngine (plain class).
     pub fn tick(&mut self, ctx: TickContext) -> TickResult {
         if self.is_ticking {
             return TickResult::default();
@@ -435,6 +465,28 @@ impl PlaybackEngine {
         self.last_realtime_now = ctx.realtime_now;
         self.last_frame_count = ctx.frame_count;
 
+        // ── Phase 1: External beat derivation (stub) ──
+        // Port of C# PlaybackController.Update lines 1064-1096.
+        // When Link/MidiClock sync controllers are wired (GAP-PLAY-9),
+        // external beat injection will go here:
+        //   - Link authority: engine.set_beat(link.beat - link_beat_offset)
+        //   - MidiClock authority: engine.set_beat((sixteenths + tick/6) / 4)
+        //   - Otherwise: beat derived from time (already happens in advance_time)
+
+        // ── Phase 2: Tempo recording/resolution (stub) ──
+        // Port of C# PlaybackController.Update lines 1098-1099.
+        // UpdateRecordingSessionState(authority) → TempoRecorder (not yet ported)
+        // ApplyResolvedTempo(authority) → TryResolveExternalTempo (not yet ported)
+        // When wired, this will pull live BPM from Link/MidiClock and either
+        // record tempo automation or update the global BPM.
+
+        // ── Phase 3: Shared pre-branch (all states) ──
+        // Port of C# PlaybackController.Update lines 1102-1112.
+        self.sync_project_bpm_from_current_beat();
+        self.process_pending_pauses(ctx.realtime_now);
+        self.check_preparing_clips();
+
+        // ── Phase 4: Branch on playback state ──
         let result = if self.current_state == PlaybackState::Playing {
             self.tick_playing(ctx)
         } else {
@@ -445,25 +497,56 @@ impl PlaybackEngine {
         result
     }
 
-    /// Playing-state tick: advance time, sync clips, build compositor output.
+    /// Playing-state tick. Matches C# PlaybackController.Update lines 1135-1218.
     fn tick_playing(&mut self, ctx: TickContext) -> TickResult {
-        // 1. Advance time (unless external sync source is clock authority)
-        if !self.external_time_sync {
-            let dt = ctx.dt_seconds * self.playback_speed as f64;
-            self.advance_time(dt);
-        }
-
-        // 2. Sync project BPM to current beat position
-        self.sync_project_bpm_from_current_beat();
-
-        // 3. Consume sync-dirty flag (always sync during playback)
+        // 1. Clear deferred sync flag — SyncClipsToTime below handles it.
+        //    Port of C# line 1138.
         self.consume_sync_dirty();
 
-        // 4. Sync clips to current time (start/stop as needed)
+        // 2. Advance time (unless external sync source is the clock authority).
+        //    Port of C# lines 1141-1150.
+        if !self.external_time_sync {
+            let frame_delta = if self.is_export_mode && ctx.export_fixed_dt > 0.0 {
+                ctx.export_fixed_dt
+            } else {
+                ctx.dt_seconds
+            };
+            self.advance_time(frame_delta * self.playback_speed as f64);
+            self.sync_project_bpm_from_current_beat();
+
+            // Fire on_time_changed callback. Port of C# line 1149.
+            if let Some(ref cb) = self.on_time_changed {
+                cb(self.current_time);
+            }
+        }
+
+        // 3. Activate pending live MIDI launches whose target tick has arrived.
+        //    Port of C# line 1152: engine.LiveClipMgr.ActivateDuePendingLiveLaunches().
+        let live_activated = if let Some(ref mut mgr) = self.live_clip_manager {
+            let now_tick = self.last_frame_count; // absolute tick from frame count
+            mgr.activate_due_pending_launches_at_tick(now_tick)
+        } else {
+            false
+        };
+        if live_activated {
+            self.sync_clips_dirty = true;
+        }
+
+        // 4. Sync clips to current time (start/stop as needed).
+        //    Port of C# lines 1155-1158.
         self.sync_clips_to_time();
 
-        // 5. Evaluate modulation pipeline (LFO drivers + ADSR envelopes)
-        // Port of C# DriverController.Update() [execution order 50]
+        // 5. Keep active video playback rates aligned with current tempo/beat.
+        //    Port of C# line 1161.
+        self.update_active_clip_playback_rates();
+
+        // 6. Per-frame boundary enforcement for custom loop duration clips.
+        //    Must run BEFORE drift correction, which skips all looping clips.
+        //    Port of C# line 1166.
+        self.check_custom_loop_boundaries();
+
+        // 7. Evaluate modulation pipeline (LFO drivers + ADSR envelopes).
+        //    Port of C# DriverController.Update() [ExecutionOrder 50, after PlaybackController].
         let modulation_dirty = if let Some(project) = &mut self.project {
             crate::modulation::evaluate_modulation(project, self.current_beat)
         } else {
@@ -473,58 +556,76 @@ impl PlaybackEngine {
             self.mark_compositor_dirty(ctx.realtime_now);
         }
 
-        // 6. Process pending pauses
-        self.process_pending_pauses(ctx.realtime_now);
+        // 8. Drift correction BEFORE compositor so any clip stops are reflected immediately.
+        //    Skipped during export — re-seeking every 2s causes visible stutters.
+        //    Port of C# lines 1175-1183.
+        if !self.is_export_mode
+            && self.current_time - self.last_sync_time >= self.video_sync_interval
+        {
+            self.correct_video_drift();
+            self.last_sync_time = self.current_time;
+        }
 
-        // 7. Clear expired recently-started entries
-        self.recently_started_times.retain(|_, &mut start_time| {
-            ctx.realtime_now - start_time < RECENTLY_STARTED_TIME as f64
-        });
+        // 9. Filter ready clips for compositor (full filtering with pre_render + recently-started).
+        //    Replaces the simpler build_ready_clips_list with Unity's FilterReadyClips.
+        //    Port of C# UpdateCompositor → engine.FilterReadyClips (lines 1432-1458).
+        let ready = self.filter_ready_clips(ctx.pre_render_dt);
 
-        // 8. Build ready clips for compositor
-        self.build_ready_clips_list();
-
-        let compositor_dirty = !self.ready_clips_list.is_empty()
+        let compositor_dirty = !ready.is_empty()
             || ctx.realtime_now < self.compositor_dirty_deadline;
+        let should_clear = ready.is_empty() && !self.has_pending_clip_state();
+
+        // 10. Lookahead prewarm — engine computes candidates, caller executes pool pre-warm.
+        //     Port of C# line 1217: UpdateLookaheadPrewarm(force: false).
+        //     Candidates are returned in TickResult for the caller (app.rs) to act on.
+        let _prewarm = self.compute_prewarm_candidates(false);
 
         TickResult {
-            ready_clips: self.ready_clips_list.clone(),
+            ready_clips: ready,
             compositor_dirty,
-            should_clear_compositor: self.ready_clips_list.is_empty() && self.active_clip_renderers.is_empty(),
+            should_clear_compositor: should_clear,
             should_clear_feedback_buffer: false,
         }
     }
 
-    /// Non-playing tick: only sync if dirty, update compositor while deadline active.
+    /// Non-playing (paused/stopped) tick. Matches C# PlaybackController.Update lines 1114-1133.
     fn tick_non_playing(&mut self, ctx: TickContext) -> TickResult {
-        // Paused/Stopped: sync only if dirty flag set (deferred MIDI events)
+        // 1. Flush deferred sync from MIDI events.
+        //    Port of C# lines 1117-1120.
         if self.consume_sync_dirty() {
             self.sync_clips_to_time();
         }
 
-        // Evaluate modulation pipeline even when stopped (for scrub preview / inspector)
+        // 2. Keep active clip playback rates aligned.
+        //    Port of C# line 1122.
+        self.update_active_clip_playback_rates();
+
+        // 3. Evaluate modulation pipeline even when stopped (for scrub preview / inspector).
+        //    Port of C# DriverController — runs in all states.
         if let Some(project) = &mut self.project {
             if crate::modulation::evaluate_modulation(project, self.current_beat) {
                 self.mark_compositor_dirty(ctx.realtime_now);
             }
         }
 
-        // Process pending pauses (needed in all states for scrub preview)
-        self.process_pending_pauses(ctx.realtime_now);
-
-        // Build ready clips
-        self.build_ready_clips_list();
-
-        // Compositor dirty while deadline active or generators are active
+        // 4. Filter ready clips for compositor.
+        //    Port of C# UpdateCompositor (lines 1126-1132).
+        //    Only runs while compositor dirty deadline is active or generators are running.
         let has_generators = self.active_clip_renderers.iter().any(|(_, &idx)| {
             !self.renderers[idx].needs_prepare_phase()
         });
         let compositor_dirty = ctx.realtime_now < self.compositor_dirty_deadline || has_generators;
 
+        let ready = if compositor_dirty {
+            self.filter_ready_clips(ctx.pre_render_dt)
+        } else {
+            Vec::new()
+        };
+
         TickResult {
-            ready_clips: self.ready_clips_list.clone(),
+            ready_clips: ready,
             compositor_dirty,
-            should_clear_compositor: self.ready_clips_list.is_empty()
+            should_clear_compositor: !compositor_dirty
                 && self.active_clip_renderers.is_empty()
                 && !self.has_pending_clip_state(),
             should_clear_feedback_buffer: false,
@@ -532,6 +633,9 @@ impl PlaybackEngine {
     }
 
     /// Build the ready_clips_list from currently active clips.
+    /// Superseded by filter_ready_clips() in the tick loop, but kept for
+    /// potential use in tests or simple queries.
+    #[allow(dead_code)]
     fn build_ready_clips_list(&mut self) {
         self.ready_clips_list.clear();
         for (clip_id, _) in &self.active_clip_renderers {
@@ -547,6 +651,7 @@ impl PlaybackEngine {
     }
 
     /// Clone a clip by ID for the ready list. Needed because we can't hold refs across mutable ops.
+    #[allow(dead_code)]
     fn find_timeline_clip_clone(&self, clip_id: &str) -> Option<TimelineClip> {
         self.find_timeline_clip(clip_id).cloned()
     }
