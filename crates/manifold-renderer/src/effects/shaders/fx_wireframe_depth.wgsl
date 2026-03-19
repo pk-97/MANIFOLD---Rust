@@ -55,8 +55,8 @@ struct VertexOutput {
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     var out: VertexOutput;
-    let x = f32((vi & 1u) * 2u) - 1.0;
-    let y = f32((vi >> 1u) * 2u) - 1.0;
+    let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
+    let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
     out.position = vec4<f32>(x, y, 0.0, 1.0);
     out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
     return out;

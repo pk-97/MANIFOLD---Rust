@@ -274,6 +274,14 @@ These are the specific mistakes that keep happening. If you catch yourself doing
 - `ARGBFloat` → `Rgba32Float`
 Never use `Rgba16Float` as a "universal" format — it wastes bandwidth and changes precision. If Metal doesn't support a format for a specific usage, that's a runtime problem to solve at runtime (format fallback, capability query) — NOT a compile-time compromise baked into the source.
 
+**CRITICAL EXCEPTION — Metal filterability:** ALL 32-bit float formats (`R32Float`, `Rg32Float`, `Rgba32Float`) are NOT filterable on Metal. If the WGSL shader reads the texture via `textureSample` (uses a sampler), the BGL MUST declare `Float { filterable: true }`, and 32-bit float formats will crash at bind group creation. In this case — and ONLY this case — substitute `Rgba16Float`. This is not optional; it is a hard wgpu validation error. Document every such substitution in `docs/KNOWN_DIVERGENCES.md`.
+
+**Decision checklist for every texture:**
+1. Check the WGSL shader: does it use `textureSample` or `textureLoad` for this texture?
+2. `textureSample` → format MUST be filterable → use `Rgba16Float` if Unity uses any 32-bit float format
+3. `textureLoad` → 32-bit float formats are fine → use `Float { filterable: false }` in the BGL
+4. If you change a format, update the upload code (f32→f16 conversion) and `KNOWN_DIVERGENCES.md`
+
 ### FM-11: Changing Constants and Limits
 **Pattern:** Unity says `maxParticles = 8_000_000`. The Rust port says `MAX_PARTICLES = 2_000_000` because "Metal's max_storage_buffer_binding_size is 128MB."
 **Why it fails:** The Unity value IS the spec. Platform constraints are runtime concerns, not source-code compromises. If the value needs to be clamped at runtime on certain hardware, do that at runtime.
@@ -453,9 +461,15 @@ These Unity interfaces MUST have Rust trait equivalents with the SAME method sur
 - **Then handle Metal limitations as runtime fallbacks:**
   - `R16Float` does NOT support `STORAGE_BINDING` on Metal
   - `R32Float` is NOT filterable on Metal (can't use `textureSample`)
-  - If Unity uses `RFloat` for storage+sample, you need a runtime format selection or separate read/write textures
-  - Document the workaround in a comment referencing the Unity format
-- Compute shaders: `textureLoad` (no sampler). Fragment shaders: `textureSample` (needs filtering)
+  - `Rg32Float` is NOT filterable on Metal (can't use `textureSample`)
+  - `Rgba32Float` is NOT filterable on Metal (can't use `textureSample`)
+  - **ALL 32-bit float formats are unfilterable on Metal.** If a texture is sampled via `textureSample` (i.e., the shader uses a sampler), you MUST use `Rgba16Float` instead. This applies even when Unity uses `ARGBFloat` — the Metal backend in Unity handles this internally, but wgpu does not.
+  - If Unity uses `RFloat`/`RGFloat`/`ARGBFloat` for a texture that is ONLY read via `textureLoad` (compute shaders, no sampler), keep the 32-bit format and use `Float { filterable: false }` in the BGL.
+  - Document every format substitution in a comment referencing the Unity format and in `docs/KNOWN_DIVERGENCES.md`.
+- **Decision rule for every new texture:**
+  1. Will the shader read this texture with `textureSample`? → Format MUST be filterable → use `Rgba16Float` (not any 32-bit float)
+  2. Will the shader read this texture with `textureLoad` only? → 32-bit float formats are fine → use `Float { filterable: false }` in BGL
+  3. Does it need both? → Two textures (storage write to 32-bit, copy to filterable 16-bit) or use `Rgba16Float` for both
 - `Float { filterable: true }` for `textureSample` sources; `Float { filterable: false }` for `textureLoad`
 
 ### Buffer Sizes

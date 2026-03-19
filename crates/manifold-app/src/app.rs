@@ -1830,8 +1830,13 @@ impl ApplicationHandler for Application {
             // ── Mouse wheel (scroll / zoom) ──────────────────────────
             WindowEvent::MouseWheel { delta, .. } => {
                 if is_primary {
+                    // Convert line deltas (mouse wheel notches) to logical pixels.
+                    // Each downstream consumer applies its own speed constant on top.
+                    const LINE_DELTA_PX: f32 = 20.0;
                     let (dx, dy) = match delta {
-                        winit::event::MouseScrollDelta::LineDelta(x, y) => (x * 20.0, y * 20.0),
+                        winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                            (x * LINE_DELTA_PX, y * LINE_DELTA_PX)
+                        }
                         winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
                     };
 

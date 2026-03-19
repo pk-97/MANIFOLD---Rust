@@ -10,7 +10,10 @@ const SPEED: usize = 2;
 const SCALE: usize = 3;
 
 const STEPS_PER_FRAME: u32 = 8;
-const STATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+// Unity: ARGBFloat (Rgba32Float), but Rgba32Float is NOT filterable on Metal.
+// textureSample requires filterable; Rgba16Float is the approved Metal fallback.
+// See docs/KNOWN_DIVERGENCES.md.
+const STATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

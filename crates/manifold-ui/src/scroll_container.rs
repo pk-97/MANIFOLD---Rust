@@ -19,10 +19,9 @@
 use crate::node::*;
 use crate::tree::UITree;
 
-/// Scroll speed in logical pixels per raw scroll delta unit.
 /// Scroll speed in logical pixels per normalized scroll unit.
 /// Unity BitmapScrollContainer.cs divides raw delta by 120 then multiplies by 30.
-/// winit provides pre-normalized line units (1.0 per notch), so 30.0 matches.
+/// winit LineDelta provides 1.0 per notch (already normalized), so 30.0 matches.
 pub const SCROLL_SPEED: f32 = 30.0;
 
 pub struct ScrollContainer {

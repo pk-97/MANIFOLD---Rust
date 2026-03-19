@@ -50,7 +50,7 @@ enum DepthSourceMode {
 // WireframeDepthFX.cs line 47-90 — OwnerState
 // ARGB32  → Rgba8Unorm
 // ARGBHalf → Rgba16Float
-// RGBAFloat (nativeFlowTexture) → Rgba32Float
+// RGBAFloat (nativeFlowTexture) → Rgba16Float (Metal: Rgba32Float not filterable; see KNOWN_DIVERGENCES)
 struct OwnerState {
     analysis_width: u32,
     analysis_height: u32,
@@ -84,7 +84,7 @@ struct OwnerState {
     has_prev_native_frame: bool,
     prev_native_pixel_buffer: Vec<u8>,   // byte[analysisWidth * analysisHeight * 4]
     native_flow_buffer: Vec<f32>,        // float[analysisWidth * analysisHeight * 4]
-    native_flow_texture: wgpu::Texture,  // RGBAFloat → Rgba32Float CPU-upload texture
+    native_flow_texture: wgpu::Texture,  // RGBAFloat → Rgba16Float CPU-upload texture (Metal: Rgba32Float not filterable)
     native_flow_texture_view: wgpu::TextureView,
     native_flow_has_data: bool,
     native_flow_dirty: bool,
@@ -582,8 +582,11 @@ impl WireframeDepthFX {
         let (dnn_depth_texture, dnn_depth_texture_view) = Self::create_cpu_texture(
             device, aw, ah, wgpu::TextureFormat::Rgba8Unorm,
             &format!("WireframeDepthDnnDepth_{owner_key}"));
+        // Unity: RGBAFloat (Rgba32Float), but Rgba32Float is NOT filterable on Metal.
+        // textureSample requires filterable; Rgba16Float is the approved Metal fallback.
+        // Upload converts f32 → f16 in upload_native_flow_texture().
         let (native_flow_texture, native_flow_texture_view) = Self::create_cpu_texture(
-            device, aw, ah, wgpu::TextureFormat::Rgba32Float,
+            device, aw, ah, wgpu::TextureFormat::Rgba16Float,
             &format!("WireframeDepthNativeFlow_{owner_key}"));
         let (dnn_subject_texture, dnn_subject_texture_view) = Self::create_cpu_texture(
             device, aw, ah, wgpu::TextureFormat::Rgba8Unorm,
@@ -891,14 +894,18 @@ impl WireframeDepthFX {
     }
 
     // WireframeDepthFX.cs line 574-594 — UploadNativeFlowTexture
-    // nativeFlowPixels is Color (RGBAFloat) → upload as Rgba32Float
+    // nativeFlowPixels is Color (RGBAFloat) → upload as Rgba16Float (Metal: Rgba32Float not filterable)
     fn upload_native_flow_texture(queue: &wgpu::Queue, state: &mut OwnerState) {
         if !state.native_flow_dirty {
             return;
         }
         let count = (state.analysis_width * state.analysis_height) as usize;
-        // Reinterpret float[count*4] as bytes for Rgba32Float upload
-        let bytes: &[u8] = bytemuck::cast_slice(&state.native_flow_buffer[..count * 4]);
+        // Convert f32 flow data → f16 for Rgba16Float upload
+        let floats = &state.native_flow_buffer[..count * 4];
+        let mut f16_bytes: Vec<u8> = Vec::with_capacity(count * 8); // 4 halfs × 2 bytes
+        for &f in floats {
+            f16_bytes.extend_from_slice(&f32_to_f16(f).to_le_bytes());
+        }
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &state.native_flow_texture,
@@ -906,10 +913,10 @@ impl WireframeDepthFX {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            bytes,
+            &f16_bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(state.analysis_width * 16), // 4 floats × 4 bytes
+                bytes_per_row: Some(state.analysis_width * 8), // 4 halfs × 2 bytes
                 rows_per_image: None,
             },
             wgpu::Extent3d {
@@ -1974,5 +1981,34 @@ impl StatefulEffect for WireframeDepthFX {
     fn cleanup_all_owners(&mut self, _device: &wgpu::Device) {
         self.owner_states.clear();
         self.warned_missing_dnn = false;
+    }
+}
+
+/// Convert f32 to IEEE 754 half-precision (f16) stored as u16.
+/// Used for Rgba16Float CPU uploads where Unity uses Rgba32Float.
+fn f32_to_f16(val: f32) -> u16 {
+    let bits = val.to_bits();
+    let sign = ((bits >> 16) & 0x8000) as u16;
+    let exp = ((bits >> 23) & 0xFF) as i32;
+    let frac = bits & 0x007F_FFFF;
+
+    if exp == 255 {
+        // Inf / NaN
+        sign | 0x7C00 | if frac != 0 { 0x0200 } else { 0 }
+    } else if exp > 142 {
+        // Overflow → Inf
+        sign | 0x7C00
+    } else if exp > 112 {
+        // Normal range
+        let e = (exp - 112) as u16;
+        sign | (e << 10) | ((frac >> 13) as u16)
+    } else if exp > 101 {
+        // Subnormal
+        let shift = (113 - exp) as u32;
+        let f = (frac | 0x0080_0000) >> (shift + 13);
+        sign | f as u16
+    } else {
+        // Underflow → zero
+        sign
     }
 }

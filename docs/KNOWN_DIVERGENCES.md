@@ -116,6 +116,18 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Why:** Intentional improvement. Continuous blending provides smoother transitions and is more consistent with how all other effects work. The extra render pass cost is negligible.
 - **Files affected:** `manifold-renderer/src/effects/invert_colors.rs`, `shaders/invert_colors.wgsl`
 
+### [D-16] ReactionDiffusion state texture: Rgba16Float instead of Rgba32Float
+- **Unity does:** `StatefulShaderGeneratorBase.StateTextureFormat` defaults to `ARGBFloat` (Rgba32Float) for the ping-pong simulation state textures
+- **Rust does:** `STATE_FORMAT = Rgba16Float`
+- **Why:** The simulation shader reads state via `textureSample` (bilinear-filtered Laplacian neighbor lookups). `Rgba32Float` is NOT filterable on Metal — wgpu crashes with "Texture binding expects Float { filterable: true }". Half precision (16-bit) is sufficient for the Gray-Scott RD simulation's 0–1 chemical concentrations. No visual difference.
+- **Files affected:** `manifold-renderer/src/generators/reaction_diffusion.rs`
+
+### [D-17] WireframeDepth native flow texture: Rgba16Float instead of Rgba32Float
+- **Unity does:** `nativeFlowTexture` uses `RGBAFloat` (Rgba32Float) for CPU-uploaded optical flow data
+- **Rust does:** `Rgba16Float` with f32→f16 conversion during `upload_native_flow_texture()`
+- **Why:** The native flow texture is bound into the shared BGL where all 12 texture slots require `Float { filterable: true }` (passes use `textureSample`). `Rgba32Float` is NOT filterable on Metal. Optical flow vectors (typically ±0–50 pixel displacements) fit comfortably in f16 range. f32→f16 conversion is done per-upload (infrequent — every 2–4 frames). No visual difference.
+- **Files affected:** `manifold-renderer/src/effects/wireframe_depth.rs`
+
 ---
 
 ## Add new divergences above this line.
