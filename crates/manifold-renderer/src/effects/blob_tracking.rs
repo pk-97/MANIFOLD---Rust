@@ -419,7 +419,9 @@ impl BlobTrackingFX {
         // For each new detection, find closest unmatched tracked blob
         for d in 0..raw_count as usize {
             let dx = state.native_blob_output[d * 4 + 0];
-            let dy = state.native_blob_output[d * 4 + 1];
+            // The C++ plugin flips Y for Unity UV space (v=0 at bottom).
+            // wgpu UV has uv.y=0 at the top, so undo the flip.
+            let dy = 1.0 - state.native_blob_output[d * 4 + 1];
             let dw = state.native_blob_output[d * 4 + 2];
             let dh = state.native_blob_output[d * 4 + 3];
 
