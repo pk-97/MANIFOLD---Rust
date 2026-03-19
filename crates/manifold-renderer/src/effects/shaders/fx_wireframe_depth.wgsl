@@ -1,33 +1,35 @@
-// Port of WireframeDepthEffect.shader — 12 passes (removed heuristic_depth, update_history, semantic_mask).
+// Mechanical port of WireframeDepthEffect.shader — all 15 passes.
 // Unity source: Assets/Shaders/WireframeDepthEffect.shader
 // Same math, same variable names, same constants, same pass order.
 
-// Must match Rust WireUniforms exactly (20 × f32 = 80 bytes = 5 × vec4).
 struct Uniforms {
-    amount: f32,                // _Amount
-    grid_density: f32,          // _GridDensity
-    line_width: f32,            // _LineWidth
-    depth_scale: f32,           // _DepthScale
+    // Scalar params
+    amount: f32,            // _Amount
+    grid_density: f32,      // _GridDensity
+    line_width: f32,        // _LineWidth
+    depth_scale: f32,       // _DepthScale
 
-    temporal_smooth: f32,       // _TemporalSmooth
-    flow_lock_strength: f32,    // _FlowLockStrength
-    mesh_regularize: f32,       // _MeshRegularize
-    cell_affine_strength: f32,  // _CellAffineStrength
+    temporal_smooth: f32,   // _TemporalSmooth
+    persistence: f32,       // _Persistence
+    flow_lock_strength: f32,// _FlowLockStrength
+    mesh_regularize: f32,   // _MeshRegularize
 
-    edge_follow_strength: f32,  // _EdgeFollowStrength (was _FaceWarpStrength)
-    surface_persistence: f32,   // _SurfacePersistence
-    wire_taa: f32,              // _WireTaa
-    subject_isolation: f32,     // _SubjectIsolation
+    cell_affine_strength: f32, // _CellAffineStrength
+    face_warp_strength: f32,   // _FaceWarpStrength
+    surface_persistence: f32,  // _SurfacePersistence
+    wire_taa: f32,             // _WireTaa
 
-    blend_mode: f32,            // _BlendMode
-    texel_x: f32,               // _MainTex_TexelSize.x = 1/w
-    texel_y: f32,               // _MainTex_TexelSize.y = 1/h
-    depth_texel_x: f32,         // _DepthTex_TexelSize.x
+    subject_isolation: f32,    // _SubjectIsolation
+    blend_mode: f32,           // _BlendMode
+    // Source texel size (set to main_tex dimensions per-pass)
+    texel_x: f32,       // _MainTex_TexelSize.x = 1/w
+    texel_y: f32,       // _MainTex_TexelSize.y = 1/h
 
-    depth_texel_y: f32,         // _DepthTex_TexelSize.y
+    // Depth texel size
+    depth_texel_x: f32, // _DepthTex_TexelSize.x
+    depth_texel_y: f32, // _DepthTex_TexelSize.y
     _pad0: f32,
     _pad1: f32,
-    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -83,10 +85,53 @@ fn fs_analysis(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(l, l, l, 1.0);
 }
 
-// (Pass 1: HeuristicDepth removed — DNN depth always used)
+// ---------------------------------------------------------------------------
+// Pass 1: HeuristicDepth — pseudo-depth from edges + frame delta + temporal smoothing.
+// Unity: fragHeuristicDepth
+// _MainTex_TexelSize.xy maps to u.texel_x, u.texel_y
+// ---------------------------------------------------------------------------
+@fragment
+fn fs_heuristic_depth(in: VertexOutput) -> @location(0) vec4<f32> {
+    let texel = vec2<f32>(u.texel_x, u.texel_y);
+    let uv = in.uv;
+
+    let c  = textureSample(main_tex, samp, uv).r;
+    let tl = textureSample(main_tex, samp, uv + texel * vec2<f32>(-1.0, -1.0)).r;
+    let tc = textureSample(main_tex, samp, uv + texel * vec2<f32>( 0.0, -1.0)).r;
+    let tr = textureSample(main_tex, samp, uv + texel * vec2<f32>( 1.0, -1.0)).r;
+    let ml = textureSample(main_tex, samp, uv + texel * vec2<f32>(-1.0,  0.0)).r;
+    let mr = textureSample(main_tex, samp, uv + texel * vec2<f32>( 1.0,  0.0)).r;
+    let bl = textureSample(main_tex, samp, uv + texel * vec2<f32>(-1.0,  1.0)).r;
+    let bc = textureSample(main_tex, samp, uv + texel * vec2<f32>( 0.0,  1.0)).r;
+    let br = textureSample(main_tex, samp, uv + texel * vec2<f32>( 1.0,  1.0)).r;
+
+    let gx = -tl - 2.0 * ml - bl + tr + 2.0 * mr + br;
+    let gy = -tl - 2.0 * tc - tr + bl + 2.0 * bc + br;
+    let edge = clamp(sqrt(gx * gx + gy * gy) * 0.18, 0.0, 1.0);
+
+    let prev_luma = textureSample(prev_analysis_tex, samp, uv).r;
+    let motion = clamp(abs(c - prev_luma) * 2.0, 0.0, 1.0);
+    let luma_depth = 1.0 - c;
+    let neighborhood_mean = (tl + tc + tr + ml + c + mr + bl + bc + br) / 9.0;
+    let local_contrast = clamp(abs(c - neighborhood_mean) * 2.0, 0.0, 1.0);
+    let structure = clamp(edge * 0.9 + local_contrast * 0.6, 0.0, 1.0);
+
+    let raw_depth = clamp(luma_depth * 0.78 + structure * 0.20 + motion * 0.10, 0.0, 1.0);
+    let prev_depth   = textureSample(prev_depth_tex, samp, uv).r;
+    let prev_depth_l = textureSample(prev_depth_tex, samp, uv - vec2<f32>(texel.x, 0.0)).r;
+    let prev_depth_r = textureSample(prev_depth_tex, samp, uv + vec2<f32>(texel.x, 0.0)).r;
+    let prev_depth_b = textureSample(prev_depth_tex, samp, uv - vec2<f32>(0.0, texel.y)).r;
+    let prev_depth_t = textureSample(prev_depth_tex, samp, uv + vec2<f32>(0.0, texel.y)).r;
+    let prev_depth_blur = (prev_depth * 2.0 + prev_depth_l + prev_depth_r + prev_depth_b + prev_depth_t) / 6.0;
+    let smooth_depth = mix(raw_depth, prev_depth_blur, u.temporal_smooth);
+
+    let confidence_raw = clamp(luma_depth * 0.60 + structure * 0.30 + motion * 0.10, 0.0, 1.0);
+    let confidence = smoothstep(0.35, 0.75, confidence_raw);
+    return vec4<f32>(smooth_depth, smooth_depth, smooth_depth, confidence);
+}
 
 // ---------------------------------------------------------------------------
-// Pass 1: WireMask — displaced wireframe mask from pseudo-depth.
+// Pass 2: WireMask — displaced wireframe mask from pseudo-depth.
 // Unity: fragWireMask
 // _DepthTex_TexelSize maps to u.depth_texel_x, u.depth_texel_y
 // ---------------------------------------------------------------------------
@@ -226,12 +271,42 @@ fn fs_wire_mask(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(wire, wire, wire, 1.0);
 }
 
-// (Pass 3: UpdateHistory removed — persistence/history no longer used)
+// ---------------------------------------------------------------------------
+// Pass 3: UpdateHistory — temporal line persistence.
+// Unity: fragUpdateHistory
+// _MainTex = lineMask (current wire mask), _HistoryTex = previous history
+// ---------------------------------------------------------------------------
+@fragment
+fn fs_update_history(in: VertexOutput) -> @location(0) vec4<f32> {
+    let texel = vec2<f32>(u.texel_x, u.texel_y);
+    let line_now = textureSample(main_tex, samp, in.uv).r;
+    let history_prev = textureSample(history_tex, samp, in.uv).r;
+    let persist_t = clamp(u.persistence, 0.0, 1.0);
+    let decay = mix(0.55, 0.9985, persist_t);
+    let stability = clamp(textureSample(surface_cache_tex, samp, in.uv).b, 0.0, 1.0);
+    let taa_base = clamp(u.wire_taa, 0.0, 1.0) * (0.22 + stability * 0.72);
+    let reprojected = history_prev * decay;
+    let n_l = textureSample(main_tex, samp, in.uv - vec2<f32>(texel.x, 0.0)).r;
+    let n_r = textureSample(main_tex, samp, in.uv + vec2<f32>(texel.x, 0.0)).r;
+    let n_b = textureSample(main_tex, samp, in.uv - vec2<f32>(0.0, texel.y)).r;
+    let n_t = textureSample(main_tex, samp, in.uv + vec2<f32>(0.0, texel.y)).r;
+    let local_min = min(line_now, min(min(n_l, n_r), min(n_b, n_t)));
+    let local_max = max(line_now, max(max(n_l, n_r), max(n_b, n_t)));
+    let clamp_pad = 0.05 + (1.0 - stability) * 0.03;
+    let reproj_clamped_raw = clamp(reprojected, local_min - clamp_pad, local_max + clamp_pad);
+    let support = max(line_now, max(max(n_l, n_r), max(n_b, n_t)));
+    let support_gate = smoothstep(0.025, 0.14, support);
+    let reproj_clamped = reproj_clamped_raw * support_gate;
+    let taa = taa_base * support_gate;
+    let blended = mix(line_now, reproj_clamped, taa);
+    let line_value = max(blended, line_now * (0.72 + stability * 0.20));
+    return vec4<f32>(line_value, line_value, line_value, 1.0);
+}
 
 // ---------------------------------------------------------------------------
-// Pass 2: Composite — wire mask over source.
+// Pass 4: Composite — line history over source.
 // Unity: fragComposite
-// _MainTex = source frame, _HistoryTex binding = lineMask (direct, no history)
+// _MainTex = source frame, _HistoryTex = lineHistoryTex
 // ---------------------------------------------------------------------------
 fn blend_add(base_col: vec3<f32>, blend_col: vec3<f32>) -> vec3<f32> {
     return clamp(base_col + blend_col, vec3<f32>(0.0), vec3<f32>(1.0));
@@ -282,7 +357,7 @@ fn fs_composite(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 3: DnnDepthPost — post-process DNN depth into internal depth format.
+// Pass 5: DnnDepthPost — post-process DNN depth into internal depth format.
 // Unity: fragDnnDepthPost
 // _MainTex = dnnDepthTexture (uploaded CPU texture)
 // ---------------------------------------------------------------------------
@@ -296,7 +371,7 @@ fn fs_dnn_depth_post(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 4: FlowEstimate — optical flow from prev analysis to current.
+// Pass 6: FlowEstimate — optical flow from prev analysis to current.
 // Unity: fragFlowEstimate
 // _MainTex = analysis, _PrevAnalysisTex = previousAnalysisTex
 // ---------------------------------------------------------------------------
@@ -328,7 +403,7 @@ fn fs_flow_estimate(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 5: FlowAdvectCoord — advect mesh coordinates by flow.
+// Pass 7: FlowAdvectCoord — advect mesh coordinates by flow.
 // Unity: fragFlowAdvectCoord
 // _MainTex = analysis, _FlowTex, _PrevMeshCoordTex, _PrevAnalysisTex
 // ---------------------------------------------------------------------------
@@ -429,7 +504,7 @@ fn fs_flow_advect_coord(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 6: InitMeshCoord — initialize mesh coordinate map to identity UV.
+// Pass 8: InitMeshCoord — initialize mesh coordinate map to identity UV.
 // Unity: fragInitMeshCoord
 // ---------------------------------------------------------------------------
 @fragment
@@ -438,7 +513,7 @@ fn fs_init_mesh_coord(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 7: MeshRegularize — ARAP-lite regularization.
+// Pass 9: MeshRegularize — ARAP-lite regularization.
 // Unity: fragMeshRegularize
 // _MainTex = coordNext or coordAffine, _PrevMeshCoordTex, _FlowTex
 // ---------------------------------------------------------------------------
@@ -511,7 +586,7 @@ fn fs_mesh_regularize(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 8: MeshCellAffine — per-cell affine deformation from local flow Jacobian.
+// Pass 10: MeshCellAffine — per-cell affine deformation from local flow Jacobian.
 // Unity: fragMeshCellAffine
 // _MainTex = coordNext, _FlowTex
 // ---------------------------------------------------------------------------
@@ -568,15 +643,46 @@ fn fs_mesh_cell_affine(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(coord, trust_out, c0.a);
 }
 
-// (Pass 11: SemanticMask removed — DNN subject mask used directly instead of GPU heuristic)
-
 // ---------------------------------------------------------------------------
-// Pass 9: MeshEdgeFollow — DNN-driven non-rigid warp prior to regularization.
-// Reads DNN subject mask (via semantic_tex binding) instead of GPU heuristic.
-// _MainTex = coordAffine, _SemanticTex = dnn_subject_texture, _FlowTex
+// Pass 11: SemanticMask — lightweight semantic proxy (body/face/boundary).
+// Unity: fragSemanticMask
+// _MainTex = analysis, _DepthTex, _FlowTex
 // ---------------------------------------------------------------------------
 @fragment
-fn fs_mesh_edge_follow(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_semantic_mask(in: VertexOutput) -> @location(0) vec4<f32> {
+    let uv = in.uv;
+    let texel = vec2<f32>(u.texel_x, u.texel_y);
+    let lum = textureSample(main_tex, samp, uv).r;
+    let depth = textureSample(depth_tex, samp, uv).r;
+    let flow = textureSample(flow_tex, samp, uv);
+    let flow_conf = clamp(flow.b * flow.a, 0.0, 1.0);
+
+    let l_l = textureSample(main_tex, samp, uv - vec2<f32>(texel.x, 0.0)).r;
+    let l_r = textureSample(main_tex, samp, uv + vec2<f32>(texel.x, 0.0)).r;
+    let l_b = textureSample(main_tex, samp, uv - vec2<f32>(0.0, texel.y)).r;
+    let l_t = textureSample(main_tex, samp, uv + vec2<f32>(0.0, texel.y)).r;
+    let grad = sqrt((l_r - l_l) * (l_r - l_l) + (l_t - l_b) * (l_t - l_b));
+
+    var body = smoothstep(0.14, 0.64, flow_conf * 0.92 + (1.0 - depth) * 0.16 + grad * 0.20);
+    body = body * smoothstep(0.05, 0.92, 1.0 - abs(lum - 0.5) * 1.4);
+
+    let p = (uv - vec2<f32>(0.5)) * vec2<f32>(1.20, 1.55);
+    let center_bias = 1.0 - smoothstep(0.32, 0.98, length(p));
+    let face = body * center_bias * smoothstep(0.10, 0.70, (1.0 - depth) * 0.35 + flow_conf * 0.65);
+
+    var boundary = smoothstep(0.07, 0.28, grad) * body;
+    boundary = clamp(boundary * (0.6 + (1.0 - face) * 0.4), 0.0, 1.0);
+
+    return vec4<f32>(clamp(body, 0.0, 1.0), clamp(face, 0.0, 1.0), clamp(boundary, 0.0, 1.0), 1.0);
+}
+
+// ---------------------------------------------------------------------------
+// Pass 12: MeshFaceWarp — face-region non-rigid warp prior to regularization.
+// Unity: fragMeshFaceWarp
+// _MainTex = coordAffine, _SemanticTex, _FlowTex
+// ---------------------------------------------------------------------------
+@fragment
+fn fs_mesh_face_warp(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = in.uv;
     let texel = vec2<f32>(u.texel_x, u.texel_y);
     let c0 = textureSample(main_tex, samp, uv);
@@ -605,7 +711,7 @@ fn fs_mesh_edge_follow(in: VertexOutput) -> @location(0) vec4<f32> {
     var warp_vec = vec2<f32>(d_fdy.x - d_fdx.y, d_fdx.x + d_fdy.y);
     warp_vec = warp_vec * 0.55 + flow_c * 0.35 + face_grad * 0.20;
 
-    var strength = clamp(u.edge_follow_strength, 0.0, 1.0);
+    var strength = clamp(u.face_warp_strength, 0.0, 1.0);
     strength = strength * face;
     strength = strength * (1.0 - boundary * 0.65);
     strength = strength * clamp(0.45 + trust * 0.55, 0.0, 1.0);
@@ -616,7 +722,7 @@ fn fs_mesh_edge_follow(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 10: SurfaceCacheUpdate — persistent surface cache (stable IDs/age).
+// Pass 13: SurfaceCacheUpdate — persistent surface cache (stable IDs/age).
 // Unity: fragSurfaceCacheUpdate
 // _MainTex = meshCoordTex (after regularize), _PrevSurfaceCacheTex, _FlowTex
 // ---------------------------------------------------------------------------
@@ -649,7 +755,7 @@ fn fs_surface_cache_update(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 11: FlowHygiene — confidence-gated flow smoothing + hole fill.
+// Pass 14: FlowHygiene — confidence-gated flow smoothing + hole fill.
 // Unity: fragFlowHygiene
 // _MainTex = flow source (native or PASS_FLOW_ESTIMATE output)
 // ---------------------------------------------------------------------------
