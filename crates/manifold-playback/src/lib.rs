@@ -19,3 +19,4 @@ pub mod audio_sync;
 pub mod audio_decoder;
 pub mod process_runner;
 pub mod percussion_parser;
+pub mod percussion_backend;
