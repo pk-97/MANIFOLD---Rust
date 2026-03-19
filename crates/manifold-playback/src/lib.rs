@@ -20,5 +20,7 @@ pub mod audio_decoder;
 pub mod process_runner;
 pub mod percussion_parser;
 pub mod percussion_backend;
+pub mod percussion_planner;
+pub mod percussion_import;
 pub mod midi_parser;
 pub mod midi_import;
