@@ -726,6 +726,34 @@ void* DepthEstimator_Create()
     return state.release();
 }
 
+// Specialized factory functions for parallel worker mode.
+// Each creates a handle with only the resources needed for one inference type.
+// Existing Process/ComputeFlow/ProcessSubjectMask functions handle empty
+// models gracefully (return 0), so calling the wrong function on a
+// specialized handle is safe — it just returns failure.
+
+void* DepthEstimator_CreateDepthOnly()
+{
+    auto state = std::make_unique<DepthEstimatorState>();
+    TryLoadNet(*state);
+    return state.release();
+}
+
+void* DepthEstimator_CreateFlowOnly()
+{
+    auto state = std::make_unique<DepthEstimatorState>();
+    // No models loaded. Flow Mats (prevGray, currGray, flowForward, etc.)
+    // are allocated lazily by OpenCV on first ComputeFlow call.
+    return state.release();
+}
+
+void* DepthEstimator_CreateSubjectOnly()
+{
+    auto state = std::make_unique<DepthEstimatorState>();
+    TryLoadSubjectNet(*state);
+    return state.release();
+}
+
 void DepthEstimator_Destroy(void* ptr)
 {
     if (!ptr) return;
