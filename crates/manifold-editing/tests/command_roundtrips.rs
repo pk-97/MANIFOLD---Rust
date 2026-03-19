@@ -345,7 +345,7 @@ fn change_generator_type_undo_roundtrip() {
     assert_eq!(project.timeline.layers[1].generator_type(), GeneratorType::Tesseract);
     // After type change, params are filled with Tesseract's definition defaults (11 params)
     assert_eq!(project.timeline.layers[1].snapshot_gen_params().len(),
-               GeneratorType::Tesseract.param_defs().len());
+               manifold_core::generator_definition_registry::get(GeneratorType::Tesseract).param_count);
 
     cmd.undo(&mut project);
     assert_eq!(project.timeline.layers[1].generator_type(), GeneratorType::Plasma);

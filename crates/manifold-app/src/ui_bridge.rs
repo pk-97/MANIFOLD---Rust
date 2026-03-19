@@ -1684,9 +1684,7 @@ pub fn dispatch(
             let Some(effect_type) = EffectType::from_index(*effect_type_idx) else {
                 return DispatchResult::handled();
             };
-            let defaults: Vec<f32> = effect_type.param_defs().iter()
-                .map(|&(_, _, _, default, _)| default)
-                .collect();
+            let defaults = manifold_core::effect_definition_registry::get_defaults(effect_type);
             let effect = EffectInstance {
                 effect_type,
                 enabled: true,

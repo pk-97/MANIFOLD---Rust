@@ -175,6 +175,13 @@ pub fn get_osc_address_for_layer(effect_type: EffectType, layer_id: &str, param_
     Some(format!("/layer/{}/{}{}", layer_id, prefix, suffix))
 }
 
+/// Get default parameter values for an effect type.
+/// Matches Unity's EffectDefinitionRegistry usage for creating new instances.
+pub fn get_defaults(effect_type: EffectType) -> Vec<f32> {
+    let def = get(effect_type);
+    def.param_defs.iter().map(|p| p.default_value).collect()
+}
+
 /// Get all registered effect types (unordered).
 /// Matches Unity's `EffectDefinitionRegistry.GetAllEffectTypes(List<EffectType>)`.
 pub fn get_all_effect_types() -> Vec<EffectType> {

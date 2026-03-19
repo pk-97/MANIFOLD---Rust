@@ -12,6 +12,7 @@
 use manifold_core::effects::{EffectInstance, ParamEnvelope, ParameterDriver};
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
+use manifold_core::{effect_definition_registry, generator_definition_registry};
 
 // =====================================================================
 // Phase 1: Reset all effectives (base → effective, blank slate)
@@ -90,7 +91,8 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: f32) -> bool {
         if layer.layer_type == LayerType::Generator {
             if let Some(gp) = &mut layer.gen_params {
                 let gen_type = gp.generator_type;
-                let gen_defs = gen_type.param_defs();
+                let gen_def = generator_definition_registry::get(gen_type);
+                let gen_defs = &gen_def.param_defs;
 
                 if let Some(drivers) = &gp.drivers {
                     // Collect driver evaluation results to avoid borrow conflict
@@ -103,7 +105,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: f32) -> bool {
                                 return None;
                             }
                             let pd = &gen_defs[idx];
-                            let (_, min, max, _, _, _) = *pd;
+                            let (min, max) = (pd.min, pd.max);
 
                             let mut normalized = ParameterDriver::evaluate(
                                 current_beat,
@@ -151,7 +153,8 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: f32) -> bool {
         _ => return false,
     };
 
-    let effect_defs = fx.effect_type.param_defs();
+    let effect_def = effect_definition_registry::get(fx.effect_type);
+    let effect_defs = &effect_def.param_defs;
     let mut any_driven = false;
 
     // Collect results to avoid borrow conflict between drivers and param_values
@@ -163,7 +166,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: f32) -> bool {
             if idx >= effect_defs.len() {
                 return None;
             }
-            let (_, min, max, _, _) = effect_defs[idx];
+            let (min, max) = (effect_defs[idx].min, effect_defs[idx].max);
 
             let mut normalized = ParameterDriver::evaluate(
                 current_beat,
@@ -278,13 +281,13 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
                     None => continue,
                 };
 
-                let effect_defs = fx.effect_type.param_defs();
+                let effect_def = effect_definition_registry::get(fx.effect_type);
                 let idx = param_index as usize;
-                if idx >= effect_defs.len() || idx >= fx.param_values.len() {
+                if idx >= effect_def.param_defs.len() || idx >= fx.param_values.len() {
                     continue;
                 }
 
-                let (_, min, max, _, _) = effect_defs[idx];
+                let (min, max) = (effect_def.param_defs[idx].min, effect_def.param_defs[idx].max);
 
                 // Additive composition: push current toward target
                 let current_value = fx.param_values[idx];
@@ -351,13 +354,13 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
                     None => continue,
                 };
 
-                let effect_defs = fx.effect_type.param_defs();
+                let effect_def = effect_definition_registry::get(fx.effect_type);
                 let idx = param_index as usize;
-                if idx >= effect_defs.len() || idx >= fx.param_values.len() {
+                if idx >= effect_def.param_defs.len() || idx >= fx.param_values.len() {
                     continue;
                 }
 
-                let (_, min, max, _, _) = effect_defs[idx];
+                let (min, max) = (effect_def.param_defs[idx].min, effect_def.param_defs[idx].max);
 
                 let current_value = fx.param_values[idx];
                 let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
@@ -401,7 +404,8 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: f32) ->
         }
 
         let gen_type = gp.generator_type;
-        let gen_defs = gen_type.param_defs();
+        let gen_def = generator_definition_registry::get(gen_type);
+        let gen_defs = &gen_def.param_defs;
 
         // Find first active clip on this layer for envelope timing
         let mut active_elapsed: f32 = -1.0;
@@ -434,7 +438,7 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: f32) ->
                 continue;
             }
 
-            let (_, min, max, _, _, _) = gen_defs[idx];
+            let (min, max) = (gen_defs[idx].min, gen_defs[idx].max);
 
             if active_elapsed < 0.0 {
                 // No active clip — envelope at rest
