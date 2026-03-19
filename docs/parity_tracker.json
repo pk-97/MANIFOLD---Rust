@@ -3,8 +3,8 @@
     "last_updated": "2026-03-19",
     "audit_source": "docs/DEFINITIVE_PARITY_AUDIT.md",
     "audit_date": "2026-03-17",
-    "true_functional_completion_pct": 57,
-    "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context. Tier 4 fix plan (manifold-ui + manifold-app) completed 2026-03-18: 7 color corrections, WidgetLayout + InspectorLayout constants, InteractionOverlay ctrl_held/finalize_move_snap/preDragSplitCommands, TruncateWithEllipsis, UINode texture, right-click guard, ScrollToReveal, beat_to_time tempo map, context menu items. GAP-GEN-3 done 2026-03-19: FluidSimulation3D 10 divergences fixed (gradient force, full simulate rewrite, blur radius, cam_tilt, ref_axis, scatter energy, ortho fract, trigger_count, 2D blur removal, amortization). GAP-AUDIO-9 done 2026-03-18: waveform UI ported (WaveformRenderer MIP chain, spectral coloring, ImportedAudioWaveformLane, StemLaneGroup, DriverWaveformIcons, scrub/drag handlers, bitmap painting)."
+    "true_functional_completion_pct": 65,
+    "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context. GAP-AUDIO pipeline batch 2026-03-19: Ported entire percussion/audio import pipeline (8 gaps, ~3900 LOC). GAP-INFRA-1 ExternalProcessRunner (process_runner.rs). GAP-AUDIO-1 PercussionAnalysisModels (percussion_analysis.rs + percussion_settings.rs + percussion_binding.rs in manifold-core). GAP-AUDIO-2 PercussionAnalysisParser (percussion_parser.rs). GAP-AUDIO-6 PercussionPipelineBackendResolver (percussion_backend.rs). GAP-AUDIO-3 PercussionTimelinePlanner + PercussionImportService (percussion_planner.rs + percussion_import.rs). GAP-AUDIO-5 MidiFileParser + MidiImportService (midi_parser.rs + midi_import.rs). GAP-AUDIO-4 PercussionImportOrchestrator (percussion_orchestrator.rs). GAP-AUDIO-8 PercussionAlignmentService (percussion_alignment.rs). All in manifold-playback except core types."
   },
   "subsystems": {
     "core": {
@@ -44,7 +44,7 @@
       "audit_section": 9
     },
     "audio_percussion": {
-      "pct": 60,
+      "pct": 92,
       "audit_section": 10
     },
     "midi_input": {
@@ -60,7 +60,7 @@
       "audit_section": 13
     },
     "infrastructure": {
-      "pct": 0,
+      "pct": 100,
       "audit_section": 14
     },
     "diagnostics": {
@@ -341,9 +341,9 @@
       "title": "Port ExternalProcessRunner (std::process::Command)",
       "severity": "high",
       "est_loc": 150,
-      "status": "todo",
-      "commit": null,
-      "notes": "487 lines Unity. Much simpler in Rust (no IL2CPP popen workaround). Required by percussion pipeline."
+      "status": "done",
+      "commit": "36d46d2",
+      "notes": "Port of ExternalProcessRunner using std::process::Command + std::thread + mpsc channels. IExternalProcessRunner trait + ProcessRunnerImpl + ProcessHandle (poll-based). IL2CPP popen path dropped (not needed in Rust). Includes argument quoting helpers + tests."
     },
     {
       "number": 24,
@@ -353,9 +353,9 @@
       "title": "Port PercussionAnalysisModels (all data types)",
       "severity": "high",
       "est_loc": 400,
-      "status": "todo",
-      "commit": null,
-      "notes": "561 lines. PercussionTriggerType (11 variants), events, beat grid, options, placement plan."
+      "status": "done",
+      "commit": "004688e",
+      "notes": "Full port: PercussionTriggerType (11 variants), PercussionEvent, PercussionBeatGrid (with TryMapSecondsToBeat, EnsureValid), PercussionAnalysisData (EnergyAtBeat, EnsureValid), PercussionClipBinding, PercussionImportOptions, PercussionClipPlacement, PercussionPlacementPlan. Also: BeatTimeConverter trait + ProjectBeatTimeConverter, PercussionClipReprojectionPlanner. PercussionPipelineSettings (all 12 nested setting structs with exact defaults). PercussionBindingResolver trait + ProjectPercussionBindingResolver. PercussionImportOptionsFactory."
     },
     {
       "number": 25,
@@ -365,9 +365,9 @@
       "title": "Port PercussionAnalysisParser (JSON parsing)",
       "severity": "high",
       "est_loc": 350,
-      "status": "todo",
-      "commit": null,
-      "notes": "439 lines. Maps dozens of string aliases to trigger types."
+      "status": "done",
+      "commit": "4824527",
+      "notes": "Full port: IPercussionAnalysisParser trait + JsonPercussionAnalysisParser. All DTOs (RootDto, EventDto, BeatGridDto, EnergyEnvelopeDto). ParseTriggerType with every alias (exact + contains fallbacks). NormalizeRoot, FirstNonEmpty, FirstFiniteNonNegative. MIDI velocity normalization (>1 && <=127 → /127). Beat grid parsing with priority chain."
     },
     {
       "number": 26,
@@ -377,9 +377,9 @@
       "title": "Port PercussionTimelinePlanner + PercussionImportService",
       "severity": "high",
       "est_loc": 450,
-      "status": "todo",
-      "commit": null,
-      "notes": "Seconds to beats conversion, quantization, confidence gating, layer resolution, clip creation."
+      "status": "done",
+      "commit": "30a1a33",
+      "notes": "PercussionTimelinePlanner: full planning pipeline (seconds→beats, quantization, confidence gating, energy gate, dedup via compose_quantized_slot_key, duration clamping 0.0625-32.0). PercussionImportService: clip placement on timeline, BPM auto-apply (PercussionBpmDecision), layer auto-creation, overlap enforcement, ImportedPercussionClipPlacement record creation, PercussionImportState assembly."
     },
     {
       "number": 27,
@@ -401,9 +401,9 @@
       "title": "Port MidiFileParser + MidiImportService",
       "severity": "high",
       "est_loc": 400,
-      "status": "todo",
-      "commit": null,
-      "notes": "Standard MIDI File parser (format 0+1) + timeline application with overlap trimming."
+      "status": "done",
+      "commit": "797f7ce",
+      "notes": "MidiFileParser: pure Rust SMF parser (format 0+1), MThd/MTrk chunks, variable-length quantity, running status, tempo map, tick-to-seconds, NoteOn/NoteOff pairing, MIN_NOTE_DURATION_BEATS=1/128. MidiImportService: timeline clip creation, layer auto-create, generator/video resolution, BasicShapesSnap fallback, overlap trimming, composite AddClipCommand with undo."
     },
     {
       "number": 29,
@@ -413,9 +413,9 @@
       "title": "Port PercussionPipelineBackendResolver",
       "severity": "high",
       "est_loc": 800,
-      "status": "todo",
-      "commit": null,
-      "notes": "1,176 lines. Resolves Python/ffmpeg/Demucs binaries, builds CLI invocations. Two backend modes."
+      "status": "done",
+      "commit": "1f42d6c",
+      "notes": "Full port: PercussionPipelineBackendType enum, PercussionPipelineInvocation struct, PercussionPipelineBackendResolver with all 4 Build* entry points. Binary resolution (Python, ffmpeg, demucs) with exact path candidate lists. CLI argument building with all settings params. Demucs cache arguments. Platform conditionals (macOS mps/cpu). Temp config path generation."
     },
     {
       "number": 30,
@@ -449,9 +449,9 @@
       "title": "Port PercussionAlignmentService",
       "severity": "high",
       "est_loc": 400,
-      "status": "todo",
-      "commit": null,
-      "notes": "538 lines. Downbeat calibration, nudge, reset, reprojection. Contains 2 ICommand implementations."
+      "status": "done",
+      "commit": "4608947",
+      "notes": "Full port: PercussionAlignmentService (downbeat calibration, nudge, reset, reprojection). NudgePercussionAlignmentCommand + ResetPercussionAlignmentCommand (ICommand impls with undo). PercussionAlignmentSnapshot for state save/restore. Added is_valid() + set_alignment_state() to ImportedPercussionClipPlacement. Added Project accessor methods for percussion clip placements."
     },
     {
       "number": 32,
