@@ -208,6 +208,15 @@ impl InteractionOverlay {
 
             let layer_index = viewport.layer_at_y(pos.y);
 
+            // Unity: InputHandler.HandleEmptyAreaRightClick → ShowLayerContextMenu
+            if is_right_button {
+                if let Some(layer) = layer_index {
+                    let beat = viewport.pixel_to_beat(pos.x);
+                    host.on_track_right_click(beat, layer, pos);
+                }
+                return;
+            }
+
             // Unity lines 152-162: double-click on empty area → create clip
             if click_count >= 2 {
                 if let Some(layer) = layer_index {

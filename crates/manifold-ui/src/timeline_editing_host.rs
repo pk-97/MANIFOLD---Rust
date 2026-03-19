@@ -114,6 +114,10 @@ pub trait TimelineEditingHost {
     /// Show clip context menu. Unity: OnClipRightClick(TimelineClip, Vector2).
     fn on_clip_right_click(&mut self, clip_id: &str, screen_pos: Vec2);
 
+    /// Show track/layer context menu on empty area right-click.
+    /// Unity: InputHandler.HandleEmptyAreaRightClick → ShowLayerContextMenu.
+    fn on_track_right_click(&mut self, beat: f32, layer_index: usize, screen_pos: Vec2);
+
     /// Inspect a layer (shows layer inspector). Unity: InspectLayer(int).
     fn inspect_layer(&mut self, layer_index: usize);
 

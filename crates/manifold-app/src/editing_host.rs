@@ -17,6 +17,7 @@ use manifold_playback::engine::PlaybackEngine;
 
 use manifold_ui::node::Vec2;
 use manifold_ui::cursors::{CursorManager, TimelineCursor as UICursor};
+use manifold_ui::panels::PanelAction;
 use manifold_ui::timeline_editing_host::{
     TimelineEditingHost, TimelineCursor, ClipRef, RegionSplitResult,
 };
@@ -44,6 +45,10 @@ pub struct AppEditingHost<'a> {
     // Unity: InteractionOverlay.preDragSplitCommands (lines 69, 430-433).
     // Populated by split_clips_for_region_move, prepended on commit_command_batch.
     pub pre_drag_commands: &'a mut Vec<Box<dyn Command>>,
+
+    /// PanelActions generated during overlay processing (e.g. right-click context menus).
+    /// Drained by app.rs after the overlay event loop.
+    pub pending_actions: Vec<PanelAction>,
 }
 
 impl<'a> AppEditingHost<'a> {
@@ -67,6 +72,7 @@ impl<'a> AppEditingHost<'a> {
             needs_scroll_rebuild,
             command_batch: Vec::new(),
             pre_drag_commands,
+            pending_actions: Vec::new(),
         }
     }
 }
@@ -268,10 +274,12 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         *self.needs_structural_sync = true;
     }
 
-    fn on_clip_right_click(&mut self, _clip_id: &str, _screen_pos: Vec2) {
-        // Context menu is handled by the UI layer (dropdown panel)
-        // The overlay emits this; the app layer opens the dropdown
-        log::debug!("on_clip_right_click — routed through overlay");
+    fn on_clip_right_click(&mut self, clip_id: &str, _screen_pos: Vec2) {
+        self.pending_actions.push(PanelAction::ClipRightClicked(clip_id.to_string()));
+    }
+
+    fn on_track_right_click(&mut self, beat: f32, layer_index: usize, _screen_pos: Vec2) {
+        self.pending_actions.push(PanelAction::TrackRightClicked(beat, layer_index));
     }
 
     fn inspect_layer(&mut self, layer_index: usize) {
