@@ -1486,12 +1486,19 @@ impl WireframeDepthFX {
         if face_warp_enabled {
             let coord_face = RenderTarget::new(device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD CoordFace");
             // PASS_MESH_FACE_WARP: coordAffine → coordFace
+            // Use DNN subject mask when available (proper object detection),
+            // fall back to GPU semantic heuristic otherwise.
+            let edge_follow_mask_view = if state.dnn_has_subject_mask {
+                &state.dnn_subject_texture_view
+            } else {
+                &state.semantic_tex.view
+            };
             let bg_face = self.make_bind_group(device, ubo,
                 &coord_affine.view,        // main_tex = coordAffine
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 flow_stable_view,          // flow_tex
                 &self.dummy_view, &self.dummy_view,
-                &state.semantic_tex.view,  // semantic_tex
+                edge_follow_mask_view,     // semantic_tex slot → DNN subject mask or GPU heuristic
                 &self.dummy_view, &self.dummy_view, &self.dummy_view,
             );
             self.run_pass(encoder, &self.pipelines[PASS_MESH_FACE_WARP], &bg_face, &coord_face.view, aw, ah);
