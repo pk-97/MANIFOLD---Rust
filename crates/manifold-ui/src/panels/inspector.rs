@@ -14,7 +14,7 @@ use super::gen_param::{GenParamPanel, GenParamConfig};
 
 const SCROLLBAR_W: f32 = 4.0;
 const SCROLLBAR_MIN_THUMB_H: f32 = 16.0;
-const SCROLL_SPEED: f32 = 12.5;
+const SCROLL_SPEED: f32 = 1.0; // INTENTIONAL DIVERGENCE
 const SECTION_GAP: f32 = 2.0;
 
 const SCROLLBAR_TRACK_COLOR: Color32 = color::SCROLLBAR_TRACK_C32;

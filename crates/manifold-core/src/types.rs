@@ -396,12 +396,11 @@ impl EffectType {
         EffectType::Kaleidoscope, EffectType::EdgeStretch, EffectType::PixelSort,
         EffectType::Strobe, EffectType::ChromaticAberration, EffectType::FilmGrain,
         EffectType::Glitch, EffectType::Dither, EffectType::CRT,
-        EffectType::Halation, EffectType::InfiniteZoom, EffectType::VoronoiPrism,
+        EffectType::Halation, EffectType::VoronoiPrism,
         EffectType::QuadMirror, EffectType::StylizedFeedback, EffectType::BlobTracking,
-        EffectType::FluidDistortion, EffectType::EdgeGlow, EffectType::Datamosh,
-        EffectType::SlitScan, EffectType::WireframeDepth, EffectType::GradientMap,
-        EffectType::Microscope, EffectType::Corruption, EffectType::Infrared,
-        EffectType::Surveillance, EffectType::Redaction,
+        EffectType::EdgeGlow,
+        EffectType::WireframeDepth,
+        EffectType::Microscope, EffectType::Infrared,
     ];
 
     pub fn from_index(i: usize) -> Option<Self> {

@@ -3,14 +3,14 @@
     "last_updated": "2026-03-19",
     "audit_source": "docs/DEFINITIVE_PARITY_AUDIT.md",
     "audit_date": "2026-03-17",
-    "true_functional_completion_pct": 53,
+    "true_functional_completion_pct": 57,
     "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context. Tier 4 fix plan (manifold-ui + manifold-app) completed 2026-03-18: 7 color corrections, WidgetLayout + InspectorLayout constants, InteractionOverlay ctrl_held/finalize_move_snap/preDragSplitCommands, TruncateWithEllipsis, UINode texture, right-click guard, ScrollToReveal, beat_to_time tempo map, context menu items. GAP-GEN-3 done 2026-03-19: FluidSimulation3D 10 divergences fixed (gradient force, full simulate rewrite, blur radius, cam_tilt, ref_axis, scatter energy, ortho fract, trigger_count, 2D blur removal, amortization). GAP-AUDIO-9 done 2026-03-18: waveform UI ported (WaveformRenderer MIP chain, spectral coloring, ImportedAudioWaveformLane, StemLaneGroup, DriverWaveformIcons, scrub/drag handlers, bitmap painting)."
   },
   "subsystems": {
     "core": { "pct": 85, "audit_section": 1 },
     "editing": { "pct": 80, "audit_section": 2 },
     "playback": { "pct": 72, "audit_section": 3 },
-    "effects": { "pct": 58, "audit_section": 4 },
+    "effects": { "pct": 75, "audit_section": 4 },
     "generators": { "pct": 97, "audit_section": 6 },
     "compositor": { "pct": 60, "audit_section": 5 },
     "ui": { "pct": 72, "audit_section": 7 },
@@ -260,9 +260,9 @@
       "title": "Port 6 simple missing effects",
       "severity": "medium",
       "est_loc": 300,
-      "status": "todo",
-      "commit": null,
-      "notes": "GradientMap (WGSL exists), EdgeGlow, Infrared, Surveillance, Redaction, VoronoiPrism. All single-pass blits."
+      "status": "partial",
+      "commit": "ff640ce",
+      "notes": "EdgeGlow, Infrared, VoronoiPrism ported. Remaining: GradientMap, Surveillance, Redaction (removed from dropdown, not yet implemented)."
     },
     {
       "number": 21,
@@ -441,8 +441,8 @@
       "severity": "medium",
       "est_loc": 2000,
       "status": "partial",
-      "commit": "edad373",
-      "notes": "PixelSort, Microscope, WireframeDepth ported. FluidDistortion still missing."
+      "commit": "ff640ce",
+      "notes": "PixelSort, Microscope, WireframeDepth, Transform ported. BlobTracking ported with FFI (manifold-native crate). FluidDistortion still missing (removed from dropdown)."
     },
     {
       "number": 35,

@@ -21,7 +21,7 @@ const ITEM_HEIGHT: f32 = 24.0;
 const PADDING_H: f32 = 8.0;
 const PADDING_V: f32 = 4.0;
 const MIN_WIDTH: f32 = 120.0;
-const MAX_VISIBLE_ITEMS: usize = 20;
+const MAX_VISIBLE_ITEMS: usize = 40;
 const SEPARATOR_HEIGHT: f32 = 9.0; // pad + 1px line + pad
 const CHAR_WIDTH: f32 = 7.0; // approximate glyph width for width estimation
 

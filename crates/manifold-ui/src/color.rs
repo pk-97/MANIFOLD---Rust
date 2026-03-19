@@ -429,7 +429,7 @@ pub const ZOOM_LEVELS: [f32; 10] = [1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 80.0, 120.0
 pub const DEFAULT_ZOOM_INDEX: usize = 7; // 120 pixels/beat
 
 // ── Scroll ──────────────────────────────────────────────────────────
-pub const SCROLL_SENSITIVITY: f32 = 5.0;
+pub const SCROLL_SENSITIVITY: f32 = 1.0; // INTENTIONAL DIVERGENCE
 pub const BITMAP_SCROLL_SPEED: f32 = 12.5;
 
 // ── Layer control panel layout ──────────────────────────────────────
