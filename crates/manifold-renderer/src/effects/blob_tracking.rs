@@ -8,10 +8,22 @@
 use std::collections::HashMap;
 use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
-use manifold_native::blob_detector::BlobDetector;
+use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
+
+// Request/response types for the background blob detection worker.
+struct BlobRequest {
+    pixel_buffer: Vec<u8>,
+    threshold: f32,
+    sensitivity: f32,
+}
+
+struct BlobResponse {
+    blob_data: Vec<f32>,  // MAX_BLOBS * 4: [x, y, w, h] per blob
+    blob_count: i32,
+}
 
 // BlobTrackingFX.cs line 14-17
 const READBACK_WIDTH: u32 = 320;
@@ -99,7 +111,10 @@ pub struct BlobTrackingFX {
     font_atlas: wgpu::Texture,
     font_atlas_view: wgpu::TextureView,
     // BlobTrackingFX.cs line 22 — nativeHandle (native blob detector)
-    blob_detector: Option<Box<dyn BlobDetector>>,
+    // Native processing runs on a background thread via BackgroundWorker.
+    worker: Option<BackgroundWorker<BlobRequest, BlobResponse>>,
+    // Track which owner submitted the in-flight worker request.
+    pending_worker_owner: Option<i64>,
     // BlobTrackingFX.cs line 70 — ownerStates
     owner_states: HashMap<i64, OwnerState>,
 }
@@ -107,10 +122,25 @@ pub struct BlobTrackingFX {
 impl BlobTrackingFX {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         // BlobTrackingFX.cs line 108-117 — try to create native detector
-        let blob_detector: Option<Box<dyn BlobDetector>> =
-            manifold_native::ffi::blob_ffi::FfiBlobDetector::new(MAX_BLOBS as i32)
-                .map(|d| -> Box<dyn BlobDetector> { Box::new(d) });
-        if blob_detector.is_none() {
+        // Plugin is created on the worker thread (single creation, no probe).
+        // try_new returns None if the plugin isn't available.
+        let worker = BackgroundWorker::try_new(|| {
+            use manifold_native::blob_detector::BlobDetector;
+            let detector = manifold_native::ffi::blob_ffi::FfiBlobDetector::new(MAX_BLOBS as i32)?;
+            Some(move |req: BlobRequest| -> BlobResponse {
+                let mut blob_data = vec![0f32; MAX_BLOBS * 4];
+                let blob_count = detector.process(
+                    &req.pixel_buffer,
+                    READBACK_WIDTH as i32,
+                    READBACK_HEIGHT as i32,
+                    req.threshold,
+                    req.sensitivity,
+                    &mut blob_data,
+                );
+                BlobResponse { blob_data, blob_count }
+            })
+        });
+        if worker.is_none() {
             log::warn!("[BlobTrackingFX] BlobDetector native plugin not found. \
                        Build it with Assets/Plugins/BlobDetector/build.sh");
         }
@@ -324,7 +354,8 @@ impl BlobTrackingFX {
             uniform_buffer,
             font_atlas,
             font_atlas_view,
-            blob_detector,
+            worker,
+            pending_worker_owner: None,
             owner_states: HashMap::new(),
         }
     }
@@ -370,11 +401,23 @@ impl BlobTrackingFX {
         })
     }
 
-    // BlobTrackingFX.cs lines 184-256 — OnReadbackComplete (inlined at poll site)
-    // Returns true if blob data was updated.
+    // BlobTrackingFX.cs lines 184-256 — OnReadbackComplete
+    // Split into two non-blocking phases:
+    //   1. Poll worker for completed blob detection result
+    //   2. Poll GPU readback for new pixel data → submit to worker
     fn poll_readback(&mut self, device: &wgpu::Device, owner_key: i64) {
-        // Can't hold &mut state and &self.blob_detector simultaneously;
-        // extract what we need before the mutable borrow.
+        // ── Phase 1: check if the background worker has a result ──
+        if let Some(worker) = &mut self.worker {
+            if let Some(response) = worker.try_recv() {
+                // Route result to the owner that submitted it.
+                let result_owner = self.pending_worker_owner.take().unwrap_or(owner_key);
+                if let Some(state) = self.owner_states.get_mut(&result_owner) {
+                    Self::apply_blob_response(state, &response);
+                }
+            }
+        }
+
+        // ── Phase 2: check for new pixel data from GPU readback ──
         let Some(state) = self.owner_states.get_mut(&owner_key) else { return };
 
         let pixels = match state.readback.try_read(device) {
@@ -382,34 +425,24 @@ impl BlobTrackingFX {
             None => return,
         };
 
-        // BlobTrackingFX.cs line 192-193: copy pixel data
-        let copy_len = pixels.len().min(state.pixel_buffer.len());
-        state.pixel_buffer[..copy_len].copy_from_slice(&pixels[..copy_len]);
-
         // BlobTrackingFX.cs line 195: if (nativeHandle == IntPtr.Zero) return;
-        if self.blob_detector.is_none() {
-            return;
-        }
+        let Some(worker) = &mut self.worker else { return };
 
-        let threshold = state.pending_threshold;
-        let sensitivity = state.pending_sensitivity;
+        // Submit to background worker (non-blocking).
+        worker.submit(BlobRequest {
+            pixel_buffer: pixels,
+            threshold: state.pending_threshold,
+            sensitivity: state.pending_sensitivity,
+        });
+        self.pending_worker_owner = Some(owner_key);
+    }
 
-        // BlobDetectorNative.BlobDetector_Process(...)
-        let raw_count = {
-            let state = self.owner_states.get_mut(&owner_key).unwrap();
-            self.blob_detector.as_ref().unwrap().process(
-                &state.pixel_buffer,
-                READBACK_WIDTH as i32,
-                READBACK_HEIGHT as i32,
-                threshold,
-                sensitivity,
-                &mut state.native_blob_output,
-            )
-        };
-
-        let state = self.owner_states.get_mut(&owner_key).unwrap();
-
-        // BlobTrackingFX.cs lines 204-252 — greedy nearest-neighbour matching
+    // Apply a completed BlobResponse to OwnerState.
+    // BlobTrackingFX.cs lines 204-252 — greedy nearest-neighbour matching
+    fn apply_blob_response(state: &mut OwnerState, response: &BlobResponse) {
+        // Copy raw blob output into state for matching
+        let copy_len = response.blob_data.len().min(state.native_blob_output.len());
+        state.native_blob_output[..copy_len].copy_from_slice(&response.blob_data[..copy_len]);
 
         // Mark all existing tracked blobs as unmatched
         for i in 0..state.tracked_count {
@@ -417,7 +450,7 @@ impl BlobTrackingFX {
         }
 
         // For each new detection, find closest unmatched tracked blob
-        for d in 0..raw_count as usize {
+        for d in 0..response.blob_count as usize {
             let dx = state.native_blob_output[d * 4 + 0];
             // The C++ plugin outputs Y in Unity UV convention (v=0 at bottom).
             // Keep as-is: the overlay shader uses a Y-flipped draw_uv that matches

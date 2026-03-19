@@ -11,11 +11,33 @@
 use std::collections::HashMap;
 use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
-use manifold_native::depth_estimator::DepthEstimator;
 use wgpu::util::DeviceExt;
+use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
+
+// Request/response types for the background depth estimation worker.
+struct DepthRequest {
+    pixel_data: Vec<u8>,
+    prev_pixel_data: Vec<u8>,
+    has_prev_frame: bool,
+    width: i32,
+    height: i32,
+    wants_flow: bool,
+    wants_depth: bool,
+    wants_subject: bool,
+    has_subject_mask_history: bool,
+    subject_history: Vec<f32>,
+}
+
+struct DepthResponse {
+    flow_buffer: Option<Vec<f32>>,
+    cut_score: f32,
+    depth_buffer: Option<Vec<f32>>,
+    subject_history_blended: Option<Vec<f32>>,
+    subject_api_failed: bool,
+}
 
 // WireframeDepthFX.cs line 21-35
 const PASS_ANALYSIS: usize           = 0;
@@ -145,7 +167,10 @@ pub struct WireframeDepthFX {
     width: u32,
     height: u32,
     // WireframeDepthFX.cs line 96-101 — DNN backend state
-    depth_estimator: Option<Box<dyn DepthEstimator>>,
+    // Native processing runs on a background thread via BackgroundWorker.
+    worker: Option<BackgroundWorker<DepthRequest, DepthResponse>>,
+    // Track which owner submitted the in-flight worker request.
+    pending_native_owner: Option<i64>,
     dnn_backend_initialized: bool,
     dnn_backend_available: bool,
     dnn_next_retry_frame: i64,
@@ -433,11 +458,10 @@ impl WireframeDepthFX {
         let dummy_view = dummy_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         // WireframeDepthFX.cs line 96-101 — try to create native backend
-        let depth_estimator: Option<Box<dyn DepthEstimator>> =
-            manifold_native::ffi::depth_ffi::FfiDepthEstimator::new()
-                .map(|d| -> Box<dyn DepthEstimator> { Box::new(d) });
-        let dnn_backend_available = depth_estimator.is_some();
-        let dnn_backend_initialized = depth_estimator.is_some();
+        // Plugin is created on the worker thread (single creation, no probe).
+        let worker = Self::try_spawn_worker();
+        let dnn_backend_available = worker.is_some();
+        let dnn_backend_initialized = worker.is_some();
 
         Self {
             pipelines,
@@ -449,7 +473,8 @@ impl WireframeDepthFX {
             owner_states: HashMap::new(),
             width: 0,
             height: 0,
-            depth_estimator,
+            worker,
+            pending_native_owner: None,
             dnn_backend_initialized,
             dnn_backend_available,
             dnn_next_retry_frame: 0,
@@ -928,6 +953,69 @@ impl WireframeDepthFX {
         state.native_flow_dirty = false;
     }
 
+    /// Try to spawn a BackgroundWorker that owns the DepthEstimator.
+    /// Returns None if the native plugin isn't available.
+    fn try_spawn_worker() -> Option<BackgroundWorker<DepthRequest, DepthResponse>> {
+        BackgroundWorker::try_new(|| {
+            use manifold_native::depth_estimator::DepthEstimator;
+            let mut estimator = manifold_native::ffi::depth_ffi::FfiDepthEstimator::new()?;
+            Some(move |req: DepthRequest| -> DepthResponse {
+                let w = req.width;
+                let h = req.height;
+                let pixel_count = (w * h) as usize;
+
+                // Flow
+                let (flow_buffer, cut_score) = if req.wants_flow && req.has_prev_frame {
+                    let mut flow = vec![0f32; pixel_count * 4];
+                    let mut cut = vec![0f32; 1];
+                    let ok = estimator.compute_flow(
+                        &req.prev_pixel_data, &req.pixel_data,
+                        w, h, &mut flow, w, h, &mut cut,
+                    );
+                    if ok != 0 { (Some(flow), cut[0]) } else { (None, 0.0) }
+                } else {
+                    (None, 0.0)
+                };
+
+                // Depth
+                let depth_buffer = if req.wants_depth {
+                    let mut depth = vec![0f32; pixel_count];
+                    let ok = estimator.process(&req.pixel_data, w, h, &mut depth, w, h);
+                    if ok != 0 { Some(depth) } else { None }
+                } else {
+                    None
+                };
+
+                // Subject mask + temporal blend
+                let (subject_history_blended, subject_api_failed) = if req.wants_subject {
+                    let mut mask = vec![0f32; pixel_count];
+                    let ok = estimator.process_subject_mask(&req.pixel_data, w, h, &mut mask, w, h);
+                    if ok != 0 {
+                        // Temporal blend on worker thread (cheap, data is local)
+                        const BLEND: f32 = 0.55;
+                        let blended: Vec<f32> = if req.has_subject_mask_history {
+                            let mut hist = req.subject_history;
+                            for i in 0..pixel_count {
+                                let current = mask[i].clamp(0.0, 1.0);
+                                hist[i] = hist[i] + (current - hist[i]) * BLEND;
+                            }
+                            hist
+                        } else {
+                            mask.iter().map(|v| v.clamp(0.0, 1.0)).collect()
+                        };
+                        (Some(blended), false)
+                    } else {
+                        (None, true) // API not available in this plugin build
+                    }
+                } else {
+                    (None, false)
+                };
+
+                DepthResponse { flow_buffer, cut_score, depth_buffer, subject_history_blended, subject_api_failed }
+            })
+        })
+    }
+
     // WireframeDepthFX.cs line 497-525 — EnsureDnnBackendAvailable
     // Returns whether backend is ready. If FfiDepthEstimator already loaded in new(),
     // this just returns the cached state. Retry after 300 frames on failure.
@@ -941,12 +1029,10 @@ impl WireframeDepthFX {
             return false;
         }
 
-        // Retry loading the native plugin
-        let estimator =
-            manifold_native::ffi::depth_ffi::FfiDepthEstimator::new()
-                .map(|d| -> Box<dyn DepthEstimator> { Box::new(d) });
-        self.dnn_backend_available = estimator.is_some();
-        self.depth_estimator = estimator;
+        // Retry loading the native plugin (created on worker thread, no probe)
+        let worker = Self::try_spawn_worker();
+        self.dnn_backend_available = worker.is_some();
+        self.worker = worker;
         self.dnn_backend_initialized = true;
         if !self.dnn_backend_available {
             self.dnn_next_retry_frame = frame_count + 300;
@@ -956,7 +1042,7 @@ impl WireframeDepthFX {
 
     // WireframeDepthFX.cs line 715-728 — DisableDnnBackend
     fn disable_dnn_backend(&mut self, frame_count: i64) {
-        self.depth_estimator = None;
+        self.worker = None;
         self.dnn_backend_initialized = true;
         self.dnn_backend_available = false;
         self.dnn_next_retry_frame = frame_count + 300;
@@ -1050,121 +1136,38 @@ impl WireframeDepthFX {
         state.dnn_readback_pending = true;
     }
 
-    // WireframeDepthFX.cs line 596-713 — OnNativeReadbackComplete
-    // Called when try_read() returns Some. Drives native FFI.
-    fn on_native_readback_complete(
-        &mut self,
-        owner_key: i64,
-        pixel_data: Vec<u8>,
-        frame_count: i64,
-    ) {
-        let state = match self.owner_states.get_mut(&owner_key) {
-            Some(s) => s,
-            None => return,
-        };
-
-        state.dnn_readback_pending = false;
-
-        if !self.dnn_backend_available || self.depth_estimator.is_none() {
-            return;
-        }
-
-        let copy_len = pixel_data.len().min(state.dnn_pixel_buffer.len());
-        state.dnn_pixel_buffer[..copy_len].copy_from_slice(&pixel_data[..copy_len]);
-
-        let aw = state.analysis_width as i32;
-        let ah = state.analysis_height as i32;
-
-        // WireframeDepthFX.cs line 611-637 — flow computation
-        if state.native_request_wants_flow && state.has_prev_native_frame {
-            // Split borrows: need state.prev_native_pixel_buffer as immutable,
-            // state.dnn_pixel_buffer as immutable, state.native_flow_buffer + cut_score_buffer as mutable.
-            // Safety: they are separate Vec fields.
-            let prev_buf = state.prev_native_pixel_buffer.clone();
-            let curr_buf = state.dnn_pixel_buffer.clone();
-            let estimator = self.depth_estimator.as_mut().unwrap();
-            let flow_ok = estimator.compute_flow(
-                &prev_buf,
-                &curr_buf,
-                aw, ah,
-                &mut state.native_flow_buffer,
-                aw, ah,
-                &mut state.cut_score_buffer,
-            );
-            if flow_ok != 0 {
-                state.native_flow_has_data = true;
-                state.native_flow_dirty    = true;
-                state.native_flow_ready    = true;
-                state.latest_cut_score     = state.cut_score_buffer[0];
-            } else {
-                state.native_flow_has_data = false;
-                state.native_flow_ready    = false;
-                state.latest_cut_score     = 0.0;
-            }
+    // Apply a completed DepthResponse from the background worker to OwnerState.
+    // Replaces the old on_native_readback_complete which ran FFI inline.
+    fn apply_depth_response(state: &mut OwnerState, response: &DepthResponse) {
+        // Flow
+        if let Some(ref flow) = response.flow_buffer {
+            let copy_len = flow.len().min(state.native_flow_buffer.len());
+            state.native_flow_buffer[..copy_len].copy_from_slice(&flow[..copy_len]);
+            state.native_flow_has_data = true;
+            state.native_flow_dirty    = true;
+            state.native_flow_ready    = true;
+            state.latest_cut_score     = response.cut_score;
         } else {
             state.native_flow_has_data = false;
             state.native_flow_ready    = false;
             state.latest_cut_score     = 0.0;
         }
 
-        // WireframeDepthFX.cs line 645-661 — depth inference
-        if state.native_request_wants_depth {
-            let curr_buf = state.dnn_pixel_buffer.clone();
-            let estimator = self.depth_estimator.as_mut().unwrap();
-            let ok = estimator.process(
-                &curr_buf,
-                aw, ah,
-                &mut state.dnn_depth_buffer,
-                aw, ah,
-            );
-            if ok != 0 {
-                state.dnn_has_depth   = true;
-                state.dnn_depth_dirty = true;
-            }
+        // Depth
+        if let Some(ref depth) = response.depth_buffer {
+            let copy_len = depth.len().min(state.dnn_depth_buffer.len());
+            state.dnn_depth_buffer[..copy_len].copy_from_slice(&depth[..copy_len]);
+            state.dnn_has_depth   = true;
+            state.dnn_depth_dirty = true;
         }
 
-        // WireframeDepthFX.cs line 663-700 — subject mask
-        if state.native_request_wants_subject {
-            let curr_buf = state.dnn_pixel_buffer.clone();
-            let estimator = self.depth_estimator.as_mut().unwrap();
-            // Backward compat: process_subject_mask returns 0 if not exported
-            let ok = estimator.process_subject_mask(
-                &curr_buf,
-                aw, ah,
-                &mut state.dnn_subject_buffer,
-                aw, ah,
-            );
-            if ok != 0 {
-                let count = (state.analysis_width * state.analysis_height) as usize;
-                const BLEND: f32 = 0.55;
-                for i in 0..count {
-                    let current  = state.dnn_subject_buffer[i].clamp(0.0, 1.0);
-                    let previous = if state.dnn_has_subject_mask {
-                        state.dnn_subject_history_buffer[i]
-                    } else {
-                        current
-                    };
-                    state.dnn_subject_history_buffer[i] =
-                        previous + (current - previous) * BLEND.clamp(0.0, 1.0);
-                }
-                state.dnn_has_subject_mask = true;
-                state.dnn_subject_dirty    = true;
-            } else {
-                // EntryPointNotFoundException equivalent: disable subject API
-                self.dnn_subject_api_available = false;
-                if let Some(s) = self.owner_states.get_mut(&owner_key) {
-                    s.native_request_wants_subject = false;
-                }
-            }
+        // Subject mask (temporally blended on worker thread)
+        if let Some(ref blended) = response.subject_history_blended {
+            let copy_len = blended.len().min(state.dnn_subject_history_buffer.len());
+            state.dnn_subject_history_buffer[..copy_len].copy_from_slice(&blended[..copy_len]);
+            state.dnn_has_subject_mask = true;
+            state.dnn_subject_dirty    = true;
         }
-
-        // WireframeDepthFX.cs line 702-703
-        let state = self.owner_states.get_mut(&owner_key).unwrap();
-        let prev_len = state.prev_native_pixel_buffer.len();
-        let copy_len2 = state.dnn_pixel_buffer.len().min(prev_len);
-        let src: Vec<u8> = state.dnn_pixel_buffer[..copy_len2].to_vec();
-        state.prev_native_pixel_buffer[..copy_len2].copy_from_slice(&src);
-        state.has_prev_native_frame = true;
     }
 
     // WireframeDepthFX.cs line 894-913 — EstimateDepthHeuristic
@@ -1639,16 +1642,47 @@ impl PostProcessEffect for WireframeDepthFX {
         let subject_isolation = fx.param_values.get(7).copied().unwrap_or(0.0).clamp(0.0, 1.0);
         let blend_mode        = fx.param_values.get(8).copied().unwrap_or(0.0).clamp(0.0, 6.0);
 
-        // Poll pending readback (poll each frame before encoding new work).
-        // Unity: callback fires asynchronously; we poll at apply() start.
+        // ── Poll background worker for completed native results ──
+        if let Some(worker) = &mut self.worker {
+            if let Some(response) = worker.try_recv() {
+                let result_owner = self.pending_native_owner.take().unwrap_or(owner_key);
+                if let Some(state) = self.owner_states.get_mut(&result_owner) {
+                    Self::apply_depth_response(state, &response);
+                }
+                if response.subject_api_failed {
+                    self.dnn_subject_api_available = false;
+                }
+            }
+        }
+
+        // ── Poll GPU readback → submit to background worker ──
         if let Some(state) = self.owner_states.get_mut(&owner_key) {
             if state.dnn_readback_pending {
                 if let Some(pixels) = state.readback.try_read(device) {
-                    let wants_depth   = state.native_request_wants_depth;
-                    let wants_flow    = state.native_request_wants_flow;
-                    let wants_subject = state.native_request_wants_subject;
-                    drop(state); // release borrow before calling on_native_readback_complete
-                    self.on_native_readback_complete(owner_key, pixels, ctx.frame_count);
+                    state.dnn_readback_pending = false;
+                    // Build request and submit to worker (non-blocking).
+                    if let Some(worker) = &mut self.worker {
+                        let aw = state.analysis_width as i32;
+                        let ah = state.analysis_height as i32;
+                        let req = DepthRequest {
+                            pixel_data: pixels.clone(),
+                            prev_pixel_data: state.prev_native_pixel_buffer.clone(),
+                            has_prev_frame: state.has_prev_native_frame,
+                            width: aw,
+                            height: ah,
+                            wants_flow: state.native_request_wants_flow,
+                            wants_depth: state.native_request_wants_depth,
+                            wants_subject: state.native_request_wants_subject,
+                            has_subject_mask_history: state.dnn_has_subject_mask,
+                            subject_history: state.dnn_subject_history_buffer.clone(),
+                        };
+                        worker.submit(req);
+                        self.pending_native_owner = Some(owner_key);
+                    }
+                    // Copy current → prev immediately (at submit time, not completion).
+                    let copy_len = pixels.len().min(state.prev_native_pixel_buffer.len());
+                    state.prev_native_pixel_buffer[..copy_len].copy_from_slice(&pixels[..copy_len]);
+                    state.has_prev_native_frame = true;
                 }
             }
         }

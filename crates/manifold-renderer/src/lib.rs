@@ -1,6 +1,7 @@
 pub mod gpu;
 pub mod render_target;
 pub mod gpu_readback;
+pub mod background_worker;
 pub mod surface;
 pub mod blit;
 pub mod compositor;
