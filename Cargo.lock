@@ -1943,6 +1943,8 @@ dependencies = [
  "manifold-core",
  "manifold-editing",
  "manifold-io",
+ "serde",
+ "serde_json",
  "symphonia",
 ]
 
