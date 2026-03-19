@@ -153,11 +153,14 @@ fn fs_wire_mask(in: VertexOutput) -> @location(0) vec4<f32> {
     let center_bias = 1.0 - smoothstep(0.28, 1.08, length(center_delta));
     let sem_foreground = clamp(max(body_mask * (0.28 + center_bias * 0.95) + boundary_mask * 0.24, face_mask * 1.28), 0.0, 1.0);
 
-    let d_c0 = textureSample(depth_tex, samp, vec2<f32>(0.50, 0.52)).r;
-    let d_c1 = textureSample(depth_tex, samp, vec2<f32>(0.38, 0.54)).r;
-    let d_c2 = textureSample(depth_tex, samp, vec2<f32>(0.62, 0.54)).r;
-    let d_c3 = textureSample(depth_tex, samp, vec2<f32>(0.50, 0.40)).r;
-    let d_c4 = textureSample(depth_tex, samp, vec2<f32>(0.50, 0.66)).r;
+    // Unity UV has v=0 at bottom; wgpu has uv.y=0 at top.
+    // Flip Y of these hardcoded positions so they sample the same screen regions
+    // (slightly above center, face/body area) as the Unity shader.
+    let d_c0 = textureSample(depth_tex, samp, vec2<f32>(0.50, 0.48)).r;
+    let d_c1 = textureSample(depth_tex, samp, vec2<f32>(0.38, 0.46)).r;
+    let d_c2 = textureSample(depth_tex, samp, vec2<f32>(0.62, 0.46)).r;
+    let d_c3 = textureSample(depth_tex, samp, vec2<f32>(0.50, 0.60)).r;
+    let d_c4 = textureSample(depth_tex, samp, vec2<f32>(0.50, 0.34)).r;
     let near_ref = min(min(d_c0, d_c1), min(min(d_c2, d_c3), d_c4));
 
     let isolation = clamp(u.subject_isolation, 0.0, 1.0);
@@ -229,14 +232,16 @@ fn fs_wire_mask(in: VertexOutput) -> @location(0) vec4<f32> {
     let z = depth * u.depth_scale;
     let persp = 1.0 / (1.0 + z * 1.6);
     var warped = p * persp;
-    warped = warped + vec2<f32>(z * 0.12, -z * 0.08);
+    // Unity: float2(z*0.12, -z*0.08) — shifts right and down in Y-up UV.
+    // wgpu Y-down: positive Y is down, so negate the Y offset.
+    warped = warped + vec2<f32>(z * 0.12, z * 0.08);
 
     // Derive AA from unsnapped coordinates.
     let p_raw = (mesh_uv_raw - vec2<f32>(0.5)) * 2.0;
     let z_raw = depth_raw * u.depth_scale;
     let persp_raw = 1.0 / (1.0 + z_raw * 1.6);
     var warped_raw = p_raw * persp_raw;
-    warped_raw = warped_raw + vec2<f32>(z_raw * 0.12, -z_raw * 0.08);
+    warped_raw = warped_raw + vec2<f32>(z_raw * 0.12, z_raw * 0.08);
 
     // Quad lattice for DCC-style wireframe feel.
     let grid_coord = warped * density * 0.50;
