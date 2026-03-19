@@ -770,8 +770,10 @@ impl PostProcessEffect for BlobTrackingFX {
         }
 
         // ---- Phase 3: Render overlay with smoothed blob data ----
-        // BlobTrackingFX.cs lines 154-155
-        if state.tracked_count == 0 && !state.has_blob_data { return; }
+        // BlobTrackingFX.cs lines 154-155: Unity returns early here because its swap
+        // is inside Apply(). In Rust the effect chain swaps unconditionally after apply(),
+        // so we must always write to target. With 0 blobs the shader is a near-passthrough
+        // (only adds a subtle scanline weighted by amount).
 
         // Build shader data from smoothed tracked blobs
         // BlobTrackingFX.cs lines 157-166

@@ -7,6 +7,7 @@
 //   BlobDetector_Process(IntPtr, byte[], int, int, float, float, float[]) → int
 
 use crate::blob_detector::BlobDetector;
+use libloading::Library;
 
 // Raw FFI function signatures, loaded via libloading at runtime.
 // Matches BlobDetectorNative.cs extern signatures exactly.
@@ -27,7 +28,7 @@ type FnProcess = unsafe extern "C" fn(
 /// runs without any blob detection (matching Unity's DllNotFoundException path).
 pub struct FfiBlobDetector {
     // Keep _lib alive so the symbols remain valid.
-    _lib: libloading::Library,
+    _lib: Library,
     fn_destroy: FnDestroy,
     fn_process: FnProcess,
     handle: *mut std::ffi::c_void,
@@ -41,35 +42,34 @@ impl FfiBlobDetector {
     /// Try to load the native blob detector plugin and create a handle.
     /// Returns None if the plugin is not found (matching Unity DllNotFoundException).
     pub fn new(max_blobs: i32) -> Option<Self> {
-        // Search for the .bundle / .dylib / .so in the same directory as the binary.
-        let lib_name = Self::lib_name();
-        let lib = unsafe { libloading::Library::new(lib_name) }.ok()?;
+        // Use the same bundle resolution as DepthEstimator (searches exe dir,
+        // project root, cwd, and MANIFOLD_BLOBDETECTOR_PLUGIN env var).
+        let path = super::resolve_bundle_path("BlobDetector")?;
+        let lib = unsafe { Library::new(&path) }.ok()?;
 
-        let fn_create: libloading::Symbol<FnCreate> =
-            unsafe { lib.get(b"BlobDetector_Create\0") }.ok()?;
-        let fn_destroy: libloading::Symbol<FnDestroy> =
-            unsafe { lib.get(b"BlobDetector_Destroy\0") }.ok()?;
-        let fn_process: libloading::Symbol<FnProcess> =
-            unsafe { lib.get(b"BlobDetector_Process\0") }.ok()?;
+        let (fn_create, fn_destroy, fn_process) = unsafe {
+            let create: libloading::Symbol<FnCreate> =
+                lib.get(b"BlobDetector_Create\0").ok()?;
+            let destroy: libloading::Symbol<FnDestroy> =
+                lib.get(b"BlobDetector_Destroy\0").ok()?;
+            let process: libloading::Symbol<FnProcess> =
+                lib.get(b"BlobDetector_Process\0").ok()?;
+            // Transmute symbol lifetimes away — safe because _lib outlives them.
+            (*create, *destroy, *process)
+        };
 
         let handle = unsafe { fn_create(max_blobs) };
         if handle.is_null() {
             return None;
         }
 
-        // Transmute symbol lifetimes away — safe because _lib outlives them.
-        let fn_destroy: FnDestroy = unsafe { std::mem::transmute(*fn_destroy) };
-        let fn_process: FnProcess = unsafe { std::mem::transmute(*fn_process) };
+        log::info!(
+            "[FfiBlobDetector] Loaded native plugin from {}",
+            path.display()
+        );
 
         Some(Self { _lib: lib, fn_destroy, fn_process, handle })
     }
-
-    #[cfg(target_os = "macos")]
-    fn lib_name() -> &'static str { "BlobDetector.bundle" }
-    #[cfg(target_os = "linux")]
-    fn lib_name() -> &'static str { "libBlobDetector.so" }
-    #[cfg(target_os = "windows")]
-    fn lib_name() -> &'static str { "BlobDetector.dll" }
 }
 
 impl Drop for FfiBlobDetector {
