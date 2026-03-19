@@ -231,8 +231,46 @@ impl EffectInstance {
 
     /// Resize paramValues and baseParamValues to match the current effect definition.
     /// New slots are filled with the definition's default values.
+    /// Includes migration for layout changes (e.g., WireframeDepth 14→12 params).
     pub fn align_to_definition(&mut self) {
         use crate::effect_definition_registry;
+        use crate::EffectType;
+
+        // Migration: WireframeDepth 14-param (old) → 12-param (new).
+        // Old: Amount(0) Density(1) Width(2) ZScale(3) Smooth(4) Persist(5) Depth(6)
+        //      Subject(7) Blend(8) WireRes(9) MeshRate(10) CVFlow(11) Lock(12) Face(13)
+        // New: Amount(0) Density(1) Width(2) ZScale(3) Smooth(4) Subject(5) Blend(6)
+        //      WireRes(7) MeshRate(8) Flow(9) Lock(10) EdgeFollow(11)
+        if self.effect_type == EffectType::WireframeDepth && self.param_values.len() == 14 {
+            let old = &self.param_values;
+            let migrated = vec![
+                old[0],  // Amount → Amount
+                old[1],  // Density → Density
+                old[2],  // Width → Width
+                old[3],  // ZScale → ZScale
+                old[4],  // Smooth → Smooth
+                old[7],  // Subject → Subject (was index 7)
+                old[8],  // Blend → Blend (was index 8)
+                old[9],  // WireRes → WireRes (was index 9)
+                old[10], // MeshRate → MeshRate (was index 10)
+                old[11], // CVFlow → Flow (was index 11)
+                old[12], // Lock → Lock (was index 12)
+                0.5,     // EdgeFollow default (Face was discrete toggle, not transferable)
+            ];
+            self.param_values = migrated;
+            // Migrate base values too
+            if let Some(ref base) = self.base_param_values {
+                if base.len() == 14 {
+                    let migrated_base = vec![
+                        base[0], base[1], base[2], base[3], base[4],
+                        base[7], base[8], base[9], base[10], base[11], base[12],
+                        0.5,
+                    ];
+                    self.base_param_values = Some(migrated_base);
+                }
+            }
+        }
+
         if let Some(def) = effect_definition_registry::try_get(self.effect_type) {
             let target = def.param_count;
             if self.param_values.len() == target {
