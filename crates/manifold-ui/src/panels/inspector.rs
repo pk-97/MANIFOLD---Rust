@@ -22,6 +22,15 @@ const SCROLLBAR_THUMB_COLOR: Color32 = color::SCROLLBAR_THUMB_C32;
 const SCROLLBAR_THUMB_HOVER: Color32 = color::SCROLLBAR_THUMB_HOVER_C32;
 
 const ADD_EFFECT_BTN_H: f32 = 26.0;
+
+// ── Effect card drag-reorder constants (Unity EffectsListBitmapPanel) ──
+const DRAG_GHOST_H: f32 = 24.0;
+const DRAG_GHOST_FONT_SIZE: u16 = 10;
+const DRAG_GHOST_BG: Color32 = Color32::new(60, 80, 120, 200);
+const DRAG_GHOST_TEXT: Color32 = Color32::new(220, 220, 230, 255);
+const DRAG_INDICATOR_H: f32 = 2.0;
+const DRAG_INDICATOR_INSET: f32 = 4.0;
+const DRAG_INDICATOR_COLOR: Color32 = color::ACCENT_BLUE_C32;
 const ADD_EFFECT_BTN_BG: Color32 = color::ADD_EFFECT_BTN_BG_C32;
 const ADD_EFFECT_BTN_HOVER: Color32 = color::ADD_EFFECT_BTN_HOVER_C32;
 const ADD_EFFECT_BTN_TEXT: Color32 = color::ADD_EFFECT_BTN_TEXT_C32;
@@ -96,6 +105,16 @@ pub struct InspectorCompositePanel {
 
     // Background
     bg_panel_id: i32,
+
+    // ── Effect card drag-reorder state (Unity EffectsListBitmapPanel) ──
+    card_drag_active: bool,
+    card_drag_tab: InspectorTab,
+    card_drag_source_index: usize, // index within the tab's effect cards vec
+    card_drag_effect_index: usize, // effect_index in the flat effects list
+    card_drag_target_index: usize, // current drop target index
+    card_drag_ghost_id: i32,
+    card_drag_indicator_id: i32,
+    card_drag_label: String,
 }
 
 impl InspectorCompositePanel {
@@ -124,6 +143,14 @@ impl InspectorCompositePanel {
             pressed_target: None,
             last_effect_tab: InspectorTab::Layer,
             bg_panel_id: -1,
+            card_drag_active: false,
+            card_drag_tab: InspectorTab::Master,
+            card_drag_source_index: 0,
+            card_drag_effect_index: 0,
+            card_drag_target_index: 0,
+            card_drag_ghost_id: -1,
+            card_drag_indicator_id: -1,
+            card_drag_label: String::new(),
         }
     }
 
@@ -203,6 +230,7 @@ impl InspectorCompositePanel {
 
     pub fn is_dragging(&self) -> bool {
         self.dragging_scrollbar
+            || self.card_drag_active
             || self.master_chrome.is_dragging()
             || self.layer_chrome.is_dragging()
             || self.clip_chrome.is_dragging()
@@ -375,7 +403,12 @@ impl InspectorCompositePanel {
 
     /// Whether a sub-panel is currently pressed (active drag target).
     pub fn has_pressed_target(&self) -> bool {
-        self.pressed_target.is_some() || self.dragging_scrollbar
+        self.pressed_target.is_some() || self.dragging_scrollbar || self.card_drag_active
+    }
+
+    /// Whether an effect card reorder drag is in progress.
+    pub fn is_card_drag_active(&self) -> bool {
+        self.card_drag_active
     }
 
     /// Route drag events to the pressed sub-panel.
@@ -469,6 +502,203 @@ impl InspectorCompositePanel {
 
         self.pressed_target = None;
         actions
+    }
+
+    // ── Effect card drag-reorder (Unity EffectsListBitmapPanel) ──
+
+    /// Try to begin a card drag on a DragBegin event. Returns true if drag started.
+    /// Called from ui_root.rs on DragBegin (needs &mut UITree).
+    pub fn try_begin_card_drag(&mut self, node_id: u32, tree: &mut UITree) -> bool {
+        // Check each tab's effect cards for a drag handle match
+        if let Some((tab, card_idx, fx_idx, name)) = self.find_drag_handle(node_id) {
+            self.card_drag_active = true;
+            self.card_drag_tab = tab;
+            self.card_drag_source_index = card_idx;
+            self.card_drag_effect_index = fx_idx;
+            self.card_drag_target_index = card_idx;
+            self.card_drag_label = name;
+            self.last_effect_tab = tab;
+
+            // Dim source card border (Unity: SetDragDimmed(true))
+            let cards = self.cards_for_tab_mut(tab);
+            if let Some(card) = cards.get(card_idx) {
+                card.set_drag_dimmed(tree, true);
+            }
+
+            // Create ghost + indicator nodes
+            let panel_w = self.viewport_rect.width;
+            let ghost_w = (panel_w - 24.0).min(160.0);
+            self.card_drag_ghost_id = tree.add_label(
+                -1, 0.0, -100.0, ghost_w, DRAG_GHOST_H,
+                &self.card_drag_label,
+                UIStyle {
+                    bg_color: DRAG_GHOST_BG,
+                    text_color: DRAG_GHOST_TEXT,
+                    font_size: DRAG_GHOST_FONT_SIZE,
+                    text_align: TextAlign::Center,
+                    corner_radius: 4.0,
+                    ..UIStyle::default()
+                },
+            ) as i32;
+            self.card_drag_indicator_id = tree.add_panel(
+                -1, self.viewport_rect.x + DRAG_INDICATOR_INSET, -100.0,
+                panel_w - DRAG_INDICATOR_INSET * 2.0, DRAG_INDICATOR_H,
+                UIStyle {
+                    bg_color: DRAG_INDICATOR_COLOR,
+                    corner_radius: 1.0,
+                    ..UIStyle::default()
+                },
+            ) as i32;
+
+            return true;
+        }
+        false
+    }
+
+    /// Update card drag ghost + indicator during drag.
+    pub fn update_card_drag(&mut self, pos: Vec2, tree: &mut UITree) {
+        if !self.card_drag_active { return; }
+
+        let vp = self.viewport_rect;
+        let panel_w = vp.width;
+        let ghost_w = (panel_w - 24.0).min(160.0);
+
+        // Position ghost centered on cursor, clamped to viewport
+        let ghost_x = (pos.x - ghost_w * 0.5).clamp(
+            vp.x + DRAG_INDICATOR_INSET,
+            vp.x + panel_w - ghost_w - DRAG_INDICATOR_INSET,
+        );
+        let ghost_y = (pos.y - DRAG_GHOST_H * 0.5).clamp(vp.y, vp.y + vp.height - DRAG_GHOST_H);
+
+        if self.card_drag_ghost_id >= 0 {
+            tree.set_bounds(self.card_drag_ghost_id as u32,
+                Rect::new(ghost_x, ghost_y, ghost_w, DRAG_GHOST_H));
+        }
+
+        // Compute target card index from Y position
+        let tab = self.card_drag_tab;
+        let (target, indicator_y) = {
+            let cards = self.cards_for_tab(tab);
+            let card_count = cards.len();
+            let mut t = card_count; // default: after last card
+            for (i, card) in cards.iter().enumerate() {
+                let cy = card.card_y();
+                let ch = card.compute_height();
+                let mid = cy + ch * 0.5;
+                if pos.y < mid {
+                    t = i;
+                    break;
+                }
+            }
+            let iy = if t < card_count {
+                cards[t].card_y()
+            } else if card_count > 0 {
+                let last = &cards[card_count - 1];
+                last.card_y() + last.compute_height()
+            } else {
+                vp.y
+            };
+            (t, iy)
+        };
+        self.card_drag_target_index = target;
+
+        if self.card_drag_indicator_id >= 0 {
+            tree.set_bounds(self.card_drag_indicator_id as u32,
+                Rect::new(
+                    vp.x + DRAG_INDICATOR_INSET,
+                    indicator_y - DRAG_INDICATOR_H * 0.5,
+                    panel_w - DRAG_INDICATOR_INSET * 2.0,
+                    DRAG_INDICATOR_H,
+                ));
+        }
+    }
+
+    /// End card drag — restore dimming, hide ghost/indicator, return reorder action.
+    pub fn end_card_drag(&mut self, tree: &mut UITree) -> Vec<PanelAction> {
+        if !self.card_drag_active { return Vec::new(); }
+
+        let src = self.card_drag_source_index;
+        let tab = self.card_drag_tab;
+        let from = self.card_drag_effect_index;
+        let to_card = self.card_drag_target_index;
+
+        // Restore source card border + compute target effect index
+        // (scope borrow of cards before mutating self fields)
+        let to_fx = {
+            let cards = self.cards_for_tab(tab);
+            if let Some(card) = cards.get(src) {
+                card.set_drag_dimmed(tree, false);
+            }
+            if to_card < cards.len() {
+                cards[to_card].effect_index()
+            } else if !cards.is_empty() {
+                cards.last().unwrap().effect_index() + 1
+            } else {
+                0
+            }
+        };
+
+        // Hide ghost + indicator (move offscreen)
+        if self.card_drag_ghost_id >= 0 {
+            tree.set_bounds(self.card_drag_ghost_id as u32, Rect::new(0.0, -100.0, 0.0, 0.0));
+        }
+        if self.card_drag_indicator_id >= 0 {
+            tree.set_bounds(self.card_drag_indicator_id as u32, Rect::new(0.0, -100.0, 0.0, 0.0));
+        }
+
+        self.card_drag_active = false;
+        self.card_drag_ghost_id = -1;
+        self.card_drag_indicator_id = -1;
+
+        // Only emit action if position actually changed
+        if to_fx != from && to_fx != from + 1 {
+            vec![PanelAction::EffectReorder(from, to_fx)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Find which card's drag handle matches the given node_id.
+    /// Returns (tab, card_index_in_vec, effect_index, effect_name).
+    fn find_drag_handle(&self, node_id: u32) -> Option<(InspectorTab, usize, usize, String)> {
+        if self.master_visible {
+            for (i, card) in self.master_effects.iter().enumerate() {
+                if card.is_drag_handle(node_id) {
+                    return Some((InspectorTab::Master, i, card.effect_index(), card.effect_name().to_string()));
+                }
+            }
+        }
+        if self.layer_visible {
+            for (i, card) in self.layer_effects.iter().enumerate() {
+                if card.is_drag_handle(node_id) {
+                    return Some((InspectorTab::Layer, i, card.effect_index(), card.effect_name().to_string()));
+                }
+            }
+        }
+        if self.clip_visible {
+            for (i, card) in self.clip_effects.iter().enumerate() {
+                if card.is_drag_handle(node_id) {
+                    return Some((InspectorTab::Clip, i, card.effect_index(), card.effect_name().to_string()));
+                }
+            }
+        }
+        None
+    }
+
+    fn cards_for_tab(&self, tab: InspectorTab) -> &[EffectCardPanel] {
+        match tab {
+            InspectorTab::Master => &self.master_effects,
+            InspectorTab::Layer => &self.layer_effects,
+            InspectorTab::Clip => &self.clip_effects,
+        }
+    }
+
+    fn cards_for_tab_mut(&mut self, tab: InspectorTab) -> &mut Vec<EffectCardPanel> {
+        match tab {
+            InspectorTab::Master => &mut self.master_effects,
+            InspectorTab::Layer => &mut self.layer_effects,
+            InspectorTab::Clip => &mut self.clip_effects,
+        }
     }
 
     // ── Internal event routing ───────────────────────────────────

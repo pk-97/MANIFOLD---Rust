@@ -159,6 +159,9 @@ pub enum PanelAction {
     EffectTargetSnapshot(usize, usize),
     /// Commit target drag (record undo command). Unity: onTargetCommit.
     EffectTargetCommit(usize, usize),
+    /// Reorder effect card: move from_index to to_index.
+    /// Unity: EffectsListBitmapPanel.onCardReorder.
+    EffectReorder(usize, usize),
 
     // Generator params
     GenTypeClicked,

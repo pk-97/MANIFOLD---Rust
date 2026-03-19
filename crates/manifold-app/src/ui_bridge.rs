@@ -14,7 +14,7 @@ use manifold_editing::commands::settings::{
     ChangeQuantizeModeCommand, ChangeLayerBlendModeCommand,
 };
 use manifold_editing::commands::effects::{
-    ToggleEffectCommand, ChangeEffectParamCommand, RemoveEffectCommand,
+    ToggleEffectCommand, ChangeEffectParamCommand, RemoveEffectCommand, ReorderEffectCommand,
 };
 use manifold_editing::commands::envelopes::{
     ChangeEnvelopeADSRCommand, ChangeLayerEnvelopeADSRCommand,
@@ -1328,6 +1328,15 @@ pub fn dispatch(
                         editing.execute(Box::new(cmd), project);
                     }
                 }
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::EffectReorder(from_idx, to_idx) => {
+            let tab = ui.inspector.last_effect_tab();
+            if let Some(project) = engine.project_mut() {
+                let target = resolve_effect_target(tab, *active_layer);
+                let cmd = ReorderEffectCommand::new(target, *from_idx, *to_idx);
+                editing.execute(Box::new(cmd), project);
             }
             DispatchResult::structural()
         }

@@ -326,12 +326,16 @@ impl UIRoot {
         for event in &events {
             match event {
                 UIEvent::DragBegin { node_id, .. } => {
+                    // Effect card drag handle — try to start card reorder drag
+                    self.inspector.try_begin_card_drag(*node_id, &mut self.tree);
                     // Layer header drag handle — needs &mut tree for dim/indicator
                     let mut lh_actions = self.layer_headers.handle_drag_begin(&mut self.tree, *node_id);
                     actions.append(&mut lh_actions);
                 }
                 UIEvent::Drag { pos, .. } => {
-                    if self.inspector.has_pressed_target() {
+                    if self.inspector.is_card_drag_active() {
+                        self.inspector.update_card_drag(*pos, &mut self.tree);
+                    } else if self.inspector.has_pressed_target() {
                         let mut drag_actions = self.inspector.handle_drag(*pos, &mut self.tree);
                         actions.append(&mut drag_actions);
                     }
@@ -341,7 +345,10 @@ impl UIRoot {
                     }
                 }
                 UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
-                    if self.inspector.has_pressed_target() {
+                    if self.inspector.is_card_drag_active() {
+                        let mut reorder_actions = self.inspector.end_card_drag(&mut self.tree);
+                        actions.append(&mut reorder_actions);
+                    } else if self.inspector.has_pressed_target() {
                         let mut end_actions = self.inspector.handle_drag_end(&mut self.tree);
                         actions.append(&mut end_actions);
                     }

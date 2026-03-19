@@ -254,6 +254,9 @@ pub struct EffectCardPanel {
     // Node range
     first_node: usize,
     node_count: usize,
+
+    // Card position (for drag-reorder hit testing)
+    card_y: f32,
 }
 
 impl EffectCardPanel {
@@ -297,6 +300,7 @@ impl EffectCardPanel {
             param_cache: Vec::new(),
             first_node: 0,
             node_count: 0,
+            card_y: 0.0,
         }
     }
 
@@ -349,6 +353,8 @@ impl EffectCardPanel {
     }
 
     pub fn effect_index(&self) -> usize { self.effect_index }
+    pub fn effect_name(&self) -> &str { &self.effect_name }
+    pub fn card_y(&self) -> f32 { self.card_y }
     pub fn first_node(&self) -> usize { self.first_node }
     pub fn node_count(&self) -> usize { self.node_count }
     pub fn is_dragging(&self) -> bool {
@@ -379,10 +385,34 @@ impl EffectCardPanel {
 
     pub fn drag_handle_id(&self) -> i32 { self.drag_icon_id }
 
+    /// Unity EffectCardBitmapPanel.IsDragHandle (line 228)
+    pub fn is_drag_handle(&self, node_id: u32) -> bool {
+        self.drag_icon_id >= 0 && node_id == self.drag_icon_id as u32
+    }
+
+    /// Unity EffectCardBitmapPanel.SetDragDimmed (lines 231-241)
+    pub fn set_drag_dimmed(&self, tree: &mut UITree, dim: bool) {
+        if self.border_id >= 0 {
+            let color = if dim {
+                Color32::new(46, 46, 49, 100) // Unity: dimmed border
+            } else if self.is_selected {
+                color::SELECTED_BORDER
+            } else {
+                color::CARD_BORDER_C32
+            };
+            tree.set_style(self.border_id as u32, UIStyle {
+                bg_color: color,
+                corner_radius: CORNER_RADIUS,
+                ..UIStyle::default()
+            });
+        }
+    }
+
     // ── Build ────────────────────────────────────────────────────
 
     pub fn build(&mut self, tree: &mut UITree, rect: Rect) {
         self.first_node = tree.count();
+        self.card_y = rect.y;
         self.param_cache.iter_mut().for_each(|v| *v = f32::NAN);
 
         let effect_name = self.effect_name.clone();
