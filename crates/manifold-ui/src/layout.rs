@@ -37,7 +37,7 @@ impl ScreenLayout {
             inspector_width: color::DEFAULT_INSPECTOR_WIDTH,
             effect_browser_width: 0.0,
             timeline_split_ratio: color::DEFAULT_TIMELINE_SPLIT_RATIO,
-            waveform_lane_visible: true,
+            waveform_lane_visible: false,
             stem_lanes_expanded: false,
         }
     }
