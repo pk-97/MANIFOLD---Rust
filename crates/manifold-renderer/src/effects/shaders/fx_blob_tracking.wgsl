@@ -170,6 +170,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let src = textureSample(main_tex, main_sampler, in.uv);
     let original = src.rgb;
 
+    // Unity UV has v=0 at bottom (Y-up); wgpu UV has uv.y=0 at top (Y-down).
+    // Flip Y for overlay drawing so all label offsets, text rendering, and bracket
+    // directions match Unity's shader exactly. Source texture sampling uses in.uv.
+    let draw_uv = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
+
     // BlobTrackingEffect.shader lines 188-193
     let px_u = uniforms.texel_size.x;
     let px_v = uniforms.texel_size.y;
@@ -187,26 +192,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if b >= uniforms.blob_count { break; }
 
         let blob = uniforms.blob_center_size[b];
+        // Blob positions are already in Unity Y-up convention (from C++ plugin),
+        // matching draw_uv. No flip needed.
         let center    = blob.xy;
         let half_size = blob.zw * 0.5;
 
         // Corner brackets
         // BlobTrackingEffect.shader line 207
         let bracket_len = min(half_size.x, half_size.y) * 0.4;
-        overlay = max(overlay, corner_bracket(in.uv, center + half_size * vec2<f32>(-1.0, -1.0), vec2<f32>(-1.0, -1.0), bracket_len, line_thick));
-        overlay = max(overlay, corner_bracket(in.uv, center + half_size * vec2<f32>( 1.0, -1.0), vec2<f32>( 1.0, -1.0), bracket_len, line_thick));
-        overlay = max(overlay, corner_bracket(in.uv, center + half_size * vec2<f32>(-1.0,  1.0), vec2<f32>(-1.0,  1.0), bracket_len, line_thick));
-        overlay = max(overlay, corner_bracket(in.uv, center + half_size * vec2<f32>( 1.0,  1.0), vec2<f32>( 1.0,  1.0), bracket_len, line_thick));
+        overlay = max(overlay, corner_bracket(draw_uv, center + half_size * vec2<f32>(-1.0, -1.0), vec2<f32>(-1.0, -1.0), bracket_len, line_thick));
+        overlay = max(overlay, corner_bracket(draw_uv, center + half_size * vec2<f32>( 1.0, -1.0), vec2<f32>( 1.0, -1.0), bracket_len, line_thick));
+        overlay = max(overlay, corner_bracket(draw_uv, center + half_size * vec2<f32>(-1.0,  1.0), vec2<f32>(-1.0,  1.0), bracket_len, line_thick));
+        overlay = max(overlay, corner_bracket(draw_uv, center + half_size * vec2<f32>( 1.0,  1.0), vec2<f32>( 1.0,  1.0), bracket_len, line_thick));
 
         // Crosshair at center
         // BlobTrackingEffect.shader lines 213-216
         let ch_size = min(half_size.x, half_size.y) * 0.3;
-        overlay = max(overlay, line_seg(in.uv, center - vec2<f32>(ch_size, 0.0), center + vec2<f32>(ch_size, 0.0), thin_line));
-        overlay = max(overlay, line_seg(in.uv, center - vec2<f32>(0.0, ch_size), center + vec2<f32>(0.0, ch_size), thin_line));
+        overlay = max(overlay, line_seg(draw_uv, center - vec2<f32>(ch_size, 0.0), center + vec2<f32>(ch_size, 0.0), thin_line));
+        overlay = max(overlay, line_seg(draw_uv, center - vec2<f32>(0.0, ch_size), center + vec2<f32>(0.0, ch_size), thin_line));
 
         // Center dot
         // BlobTrackingEffect.shader lines 218-220
-        let dot_dist = length(in.uv - center);
+        let dot_dist = length(draw_uv - center);
         overlay = max(overlay, 1.0 - saturate(dot_dist / (px_u * 4.0)));
 
         // ---- Data labels ----
@@ -215,19 +222,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // BlobTrackingEffect.shader lines 225-227
         let hex_pos = center + vec2<f32>(-half_size.x, half_size.y + px_v * 8.0);
         let hex_id  = f32(b) * 17.0 + 48.0;
-        overlay = max(overlay, draw_hex_label(hex_id, in.uv, hex_pos, digit_size));
+        overlay = max(overlay, draw_hex_label(hex_id, draw_uv, hex_pos, digit_size));
 
         // Coordinate readout: bottom-left, outside bracket
         // BlobTrackingEffect.shader lines 229-231
         let coord_pos = center + vec2<f32>(-half_size.x, -half_size.y - px_v * 38.0);
-        overlay = max(overlay, draw_coord_label(center, in.uv, coord_pos, digit_size));
+        overlay = max(overlay, draw_coord_label(center, draw_uv, coord_pos, digit_size));
 
         // Size gauge bar: bottom, below coords
         // BlobTrackingEffect.shader lines 233-237
         let gauge_pos  = center + vec2<f32>(-half_size.x, -half_size.y - px_v * 50.0);
         let gauge_w    = max(half_size.x * 2.0, px_u * 80.0);
         let gauge_fill = saturate(blob.z * blob.w * 20.0);
-        overlay = max(overlay, h_bar(in.uv, gauge_pos, gauge_w, gauge_fill, px_v * 8.0, thin_line));
+        overlay = max(overlay, h_bar(draw_uv, gauge_pos, gauge_w, gauge_fill, px_v * 8.0, thin_line));
 
         // Tick marks on right side of box
         // BlobTrackingEffect.shader lines 239-247
@@ -238,7 +245,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             // BlobTrackingEffect.shader line 245:
             // ((uint)t % 2u == 0u) ? pxU * 12.0 : pxU * 6.0
             let tick_len = select(px_u * 6.0, px_u * 12.0, (u32(t) % 2u) == 0u);
-            overlay = max(overlay, line_seg(in.uv, tick_start, tick_start + vec2<f32>(tick_len, 0.0), thin_line) * 0.5);
+            overlay = max(overlay, line_seg(draw_uv, tick_start, tick_start + vec2<f32>(tick_len, 0.0), thin_line) * 0.5);
         }
     }
 
@@ -248,33 +255,36 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         if c >= uniforms.connection_count { break; }
 
         let conn = uniforms.blob_connections[c];
-        let len = length(conn.zw - conn.xy);
+        // Connection endpoints are already in Unity Y-up convention, matching draw_uv.
+        let conn_a = conn.xy;
+        let conn_b = conn.zw;
+        let len = length(conn_b - conn_a);
         if len > 0.001 {
             // Dashed effect: use frac of distance along line
             // BlobTrackingEffect.shader lines 260-266
-            let pa = in.uv - conn.xy;
-            let ba = conn.zw - conn.xy;
+            let pa = draw_uv - conn_a;
+            let ba = conn_b - conn_a;
             let t_val = saturate(dot(pa, ba) / dot(ba, ba));
             let dash_phase = fract(t_val * len / (px_u * 12.0));
             let dash_mask  = step(0.4, dash_phase);
 
-            overlay = max(overlay, line_seg(in.uv, conn.xy, conn.zw, thin_line) * 0.5 * dash_mask);
+            overlay = max(overlay, line_seg(draw_uv, conn_a, conn_b, thin_line) * 0.5 * dash_mask);
 
             // Midpoint diamond
             // BlobTrackingEffect.shader lines 268-271
-            let mid = (conn.xy + conn.zw) * 0.5;
-            let mid_dist = length(in.uv - mid);
+            let mid = (conn_a + conn_b) * 0.5;
+            let mid_dist = length(draw_uv - mid);
             overlay = max(overlay, (1.0 - saturate(mid_dist / (px_u * 5.0))) * 0.4);
 
             // Distance readout at midpoint
             // BlobTrackingEffect.shader lines 273-276
             let dist_label_pos = mid + vec2<f32>(px_u * 8.0, px_v * 4.0);
             let dist_val = len * 1000.0;
-            overlay = max(overlay, draw_3_digits(dist_val, in.uv, dist_label_pos, digit_size * 0.7) * 0.6);
+            overlay = max(overlay, draw_3_digits(dist_val, draw_uv, dist_label_pos, digit_size * 0.7) * 0.6);
         }
     }
 
-    // Subtle scanline
+    // Subtle scanline (uses screen-space UV, not draw_uv)
     // BlobTrackingEffect.shader lines 280-282
     let scanline  = abs(fract(in.uv.y * uniforms.resolution.y * 0.5) - 0.5) * 2.0;
     let scan_alpha = (1.0 - smoothstep(0.4, 0.5, scanline)) * 0.04;
