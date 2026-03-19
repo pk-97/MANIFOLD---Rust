@@ -288,20 +288,21 @@ impl EffectType {
                 ("Focus",    0.0,    1.0,   0.75, false),
             ],
             Self::WireframeDepth => &[
-                ("Amount",  0.0,  1.0,   1.0,   false),
-                ("Density", 16.0, 280.0, 260.0, true),
-                ("Width",   0.4,  3.0,   1.335, false),
-                ("ZScale",  0.0,  2.5,   1.35,  false),
-                ("Smooth",  0.0,  0.98,  0.90,  false),
-                ("Persist", 0.0,  1.0,   0.82,  false),
-                ("Depth",   0.0,  1.0,   0.0,   true),
-                ("Subject", 0.0,  1.0,   0.52,  false),
-                ("Blend",   0.0,  6.0,   6.0,   true),
-                ("WireRes", 0.5,  1.0,   1.0,   false),
-                ("MeshRate", 1.0, 4.0,   1.0,   true),
-                ("CVFlow",  0.0,  1.0,   1.0,   true),
-                ("Lock",    0.0,  1.0,   1.0,   true),
-                ("Face",    0.0,  1.0,   1.0,   true),
+                // Intentional divergence from Unity: removed Persist (unused),
+                // Depth (always DNN), Face (replaced by EdgeFollow with DNN mask).
+                // Renamed CVFlow → Flow. See KNOWN_DIVERGENCES.md.
+                ("Amount",    0.0,  1.0,   1.0,   false), // 0
+                ("Density",  16.0, 280.0, 260.0,  true),  // 1
+                ("Width",     0.4,  3.0,   1.335, false),  // 2
+                ("ZScale",    0.0,  2.5,   1.35,  false),  // 3
+                ("Smooth",    0.0,  0.98,  0.90,  false),  // 4
+                ("Subject",   0.0,  1.0,   0.52,  false),  // 5
+                ("Blend",     0.0,  6.0,   6.0,   true),   // 6
+                ("WireRes",   0.5,  1.0,   1.0,   false),  // 7
+                ("MeshRate",  1.0,  4.0,   1.0,   true),   // 8
+                ("Flow",      0.0,  1.0,   1.0,   true),   // 9
+                ("Lock",      0.0,  1.0,   1.0,   true),   // 10
+                ("EdgeFollow", 0.0, 1.0,   0.5,   false),  // 11
             ],
             Self::ChromaticAberration => &[
                 ("Amount",  0.0, 1.0,   0.0,  false),

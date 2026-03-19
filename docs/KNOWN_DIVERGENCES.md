@@ -128,6 +128,57 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Why:** The native flow texture is bound into the shared BGL where all 12 texture slots require `Float { filterable: true }` (passes use `textureSample`). `Rgba32Float` is NOT filterable on Metal. Optical flow vectors (typically ±0–50 pixel displacements) fit comfortably in f16 range. f32→f16 conversion is done per-upload (infrequent — every 2–4 frames). No visual difference.
 - **Files affected:** `manifold-renderer/src/effects/wireframe_depth.rs`
 
+## WireframeDepth Overhaul (Intentional Design Improvements)
+
+### [D-18] WireframeDepth: removed heuristic depth mode — DNN always
+- **Unity does:** User-selectable DepthSourceMode enum: Heuristic (GPU pass) or DNN (OpenVINO MiDaS)
+- **Rust does:** DNN depth always. Removed `DepthSourceMode` enum, `PASS_HEURISTIC_DEPTH`, `estimate_depth_heuristic()`. If DNN backend unavailable, depth_tex stays black/previous frame (graceful degradation).
+- **Why:** DNN depth is strictly superior. Heuristic was a fallback for systems without OpenVINO — not a useful creative choice. Removes 1 GPU pass and simplifies control flow.
+- **Approved by:** Peter / 2026-03-19
+- **Files affected:** `manifold-renderer/src/effects/wireframe_depth.rs`, `manifold-renderer/src/effects/shaders/fx_wireframe_depth.wgsl`, `manifold-core/src/types.rs`
+
+### [D-19] WireframeDepth: removed persistence/history pass
+- **Unity does:** `PASS_UPDATE_HISTORY` blends current wireframe with previous frame's wireframe for temporal line persistence. Controlled by "Persist" param.
+- **Rust does:** Removed pass entirely. Composite reads wire mask directly. Removed `line_history_tex` from OwnerState, removed "Persist" param.
+- **Why:** The temporal smoothing in the mesh stabilization pipeline already provides visual stability. The persistence pass added near-invisible ghosting at the cost of an extra GPU pass + render target.
+- **Approved by:** Peter / 2026-03-19
+- **Files affected:** `manifold-renderer/src/effects/wireframe_depth.rs`, `manifold-renderer/src/effects/shaders/fx_wireframe_depth.wgsl`, `manifold-core/src/types.rs`
+
+### [D-20] WireframeDepth: replaced GPU semantic mask with DNN subject mask for edge follow
+- **Unity does:** `PASS_SEMANTIC_MASK` runs a GPU heuristic (luminance + flow + depth + center bias) to estimate body/face/boundary regions. Result drives `PASS_MESH_FACE_WARP` for non-rigid mesh deformation.
+- **Rust does:** Removed `PASS_SEMANTIC_MASK` entirely. Edge follow pass (`PASS_MESH_EDGE_FOLLOW`, renamed from `PASS_MESH_FACE_WARP`) reads DNN subject mask texture instead. Removed `semantic_tex` from OwnerState.
+- **Why:** The GPU heuristic was a crude center-biased guess. The DNN subject segmentation (already running for the "Subject" param) provides actual object detection. Rewiring the edge follow pass to use it gives correct contour following for off-center subjects, multiple objects, and non-human content.
+- **Approved by:** Peter / 2026-03-19
+- **Files affected:** `manifold-renderer/src/effects/wireframe_depth.rs`, `manifold-renderer/src/effects/shaders/fx_wireframe_depth.wgsl`
+
+### [D-21] WireframeDepth: "Face" param replaced by continuous "EdgeFollow"
+- **Unity does:** Param 13 "Face" is a discrete toggle (0/1) that enables/disables the face warp pass.
+- **Rust does:** Param 11 "EdgeFollow" is a continuous slider (0.0–1.0, default 0.5) controlling warp strength. Pass runs when strength > 0.01. Strength scales the temporal-smooth-derived warp range.
+- **Why:** Continuous control is more useful than on/off. Users can dial in subtle edge conformity without full-strength warping.
+- **Approved by:** Peter / 2026-03-19
+- **Files affected:** `manifold-renderer/src/effects/wireframe_depth.rs`, `manifold-core/src/types.rs`
+
+### [D-22] WireframeDepth: param registry reindexed (14 → 12 params)
+- **Unity does:** 14 params: Amount, Density, Width, ZScale, Smooth, Persist, Depth, Subject, Blend, WireRes, MeshRate, CVFlow, Lock, Face
+- **Rust does:** 12 params: Amount, Density, Width, ZScale, Smooth, Subject, Blend, WireRes, MeshRate, Flow, Lock, EdgeFollow
+- **Why:** Removed Persist (D-19), Depth (D-18). Renamed CVFlow→Flow, Face→EdgeFollow (D-21). Reindexed all param reads.
+- **Approved by:** Peter / 2026-03-19
+- **Files affected:** `manifold-core/src/types.rs`, `manifold-renderer/src/effects/wireframe_depth.rs`
+
+### [D-23] WireframeDepth: 3 parallel background workers instead of 1 sequential
+- **Unity does:** Single native plugin call processes depth + flow + subject sequentially (~25-45ms total blocking main thread).
+- **Rust does:** 3 independent `BackgroundWorker` instances (depth, flow, subject), each owning its own `FfiDepthEstimator`. All run in parallel on separate threads. Results polled independently.
+- **Why:** Eliminates sequential FFI bottleneck. Wall-clock time drops from sum(all) to max(individual). Enabling subject segmentation no longer slows depth/flow updates.
+- **Approved by:** Peter / 2026-03-19
+- **Files affected:** `manifold-renderer/src/effects/wireframe_depth.rs`, `manifold-renderer/src/background_worker.rs`
+
+### [D-24] WireframeDepth: shader reduced from 15 to 12 passes
+- **Unity does:** 15 shader passes (0–14)
+- **Rust does:** 12 shader passes (0–11). Removed: heuristic_depth (D-18), update_history (D-19), semantic_mask (D-20). Renamed mesh_face_warp → mesh_edge_follow.
+- **Why:** Follows from D-18, D-19, D-20. Fewer GPU passes = less overhead.
+- **Approved by:** Peter / 2026-03-19
+- **Files affected:** `manifold-renderer/src/effects/wireframe_depth.rs`, `manifold-renderer/src/effects/shaders/fx_wireframe_depth.wgsl`
+
 ---
 
 ## Add new divergences above this line.
