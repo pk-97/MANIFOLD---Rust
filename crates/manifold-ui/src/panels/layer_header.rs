@@ -972,9 +972,11 @@ impl LayerHeaderPanel {
         // Reject right-clicks outside the layer controls X bounds.
         // All panels receive all events; without this check, a right-click
         // in the inspector (same Y as a layer) would open the layer context menu.
-        let local_x = pos.x - self.panel_origin.x;
-        if local_x < 0.0 || local_x > self.panel_width {
-            return Vec::new();
+        if self.panel_width > 0.0 {
+            let local_x = pos.x - self.panel_origin.x;
+            if local_x < 0.0 || local_x > self.panel_width {
+                return Vec::new();
+            }
         }
         // Position-based lookup: find which layer the Y coordinate falls in
         let local_y = pos.y - self.panel_origin.y;
