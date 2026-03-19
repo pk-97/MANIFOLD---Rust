@@ -690,7 +690,7 @@ impl Application {
         }
 
         // 2. Process UI events and dispatch actions
-        let actions = self.ui_root.process_events();
+        let mut actions = self.ui_root.process_events();
 
         // 2a. Route viewport tracks-area events through InteractionOverlay.
         // These events were stashed by process_events() because the overlay
@@ -728,11 +728,21 @@ impl Application {
                             );
                         }
                         UIEvent::RightClick { pos, .. } => {
+                            // Let overlay handle selection/cursor state
                             self.overlay.on_pointer_click(
                                 *pos, false, false,
                                 1, true,
                                 &mut host, &mut self.selection, &self.ui_root.viewport,
                             );
+                            // Emit track context menu action.
+                            // The overlay handles clip selection on right-click but
+                            // doesn't emit PanelActions. Emit TrackRightClicked for
+                            // all right-clicks in the tracks area to open the context
+                            // menu (Paste, Import MIDI, Insert Layer, etc.)
+                            if let Some(layer) = self.ui_root.viewport.layer_at_y(pos.y) {
+                                let beat = self.ui_root.viewport.pixel_to_beat(pos.x);
+                                actions.push(PanelAction::TrackRightClicked(beat, layer));
+                            }
                         }
                         UIEvent::DragBegin { origin, .. } => {
                             self.overlay.on_begin_drag(
