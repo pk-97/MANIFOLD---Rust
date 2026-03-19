@@ -109,6 +109,40 @@ impl Project {
         self.timeline.layers.len()
     }
 
+    /// Port of Unity Project.ImportedPercussionClipPlacements property.
+    /// Returns a mutable reference to the clip placements slice inside percussion_import.
+    /// Initializes percussion_import if absent (matches Unity's lazy-init pattern).
+    pub fn imported_percussion_clip_placements_mut(
+        &mut self,
+    ) -> &mut Vec<crate::percussion::ImportedPercussionClipPlacement> {
+        if self.percussion_import.is_none() {
+            self.percussion_import = Some(crate::percussion::PercussionImportState::default());
+        }
+        &mut self.percussion_import.as_mut().unwrap().clip_placements
+    }
+
+    /// Port of Unity Project.ImportedPercussionClipPlacements (read-only path).
+    pub fn imported_percussion_clip_placements(
+        &self,
+    ) -> Option<&Vec<crate::percussion::ImportedPercussionClipPlacement>> {
+        self.percussion_import.as_ref().map(|s| &s.clip_placements)
+    }
+
+    /// Port of Unity Project.ImportedPercussionAudioStartBeat getter.
+    pub fn imported_percussion_audio_start_beat(&self) -> f32 {
+        self.percussion_import
+            .as_ref()
+            .map_or(0.0, |s| s.audio_start_beat)
+    }
+
+    /// Port of Unity Project.ImportedPercussionAudioStartBeat setter (Mathf.Max(0f, value)).
+    pub fn set_imported_percussion_audio_start_beat(&mut self, value: f32) {
+        if self.percussion_import.is_none() {
+            self.percussion_import = Some(crate::percussion::PercussionImportState::default());
+        }
+        self.percussion_import.as_mut().unwrap().audio_start_beat = value.max(0.0);
+    }
+
     pub fn total_clip_count(&self) -> usize {
         self.timeline.total_clip_count()
     }

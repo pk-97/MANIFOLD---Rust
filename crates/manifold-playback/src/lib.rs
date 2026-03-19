@@ -24,3 +24,4 @@ pub mod percussion_planner;
 pub mod percussion_import;
 pub mod midi_parser;
 pub mod midi_import;
+pub mod percussion_alignment;

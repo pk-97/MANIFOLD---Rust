@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Placement data for an imported percussion clip.
+/// Port of Unity ImportedPercussionClipPlacement (Project.cs lines 398-492).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportedPercussionClipPlacement {
@@ -19,6 +20,48 @@ pub struct ImportedPercussionClipPlacement {
     pub alignment_slope_beats_per_second: f32,
     #[serde(default)]
     pub alignment_pivot_seconds: f32,
+}
+
+impl ImportedPercussionClipPlacement {
+    /// Port of Unity ImportedPercussionClipPlacement.SetAlignmentState() (Project.cs lines 447-452).
+    pub fn set_alignment_state(
+        &mut self,
+        offset_beats: f32,
+        slope_beats_per_second: f32,
+        pivot_seconds: f32,
+    ) {
+        self.alignment_offset_beats = if offset_beats.is_finite() { offset_beats } else { 0.0 };
+        self.alignment_slope_beats_per_second =
+            if slope_beats_per_second.is_finite() { slope_beats_per_second } else { 0.0 };
+        self.alignment_pivot_seconds =
+            if pivot_seconds.is_finite() { pivot_seconds.max(0.0) } else { 0.0 };
+    }
+
+    /// Port of Unity ImportedPercussionClipPlacement.IsValid() (Project.cs lines 468-490).
+    pub fn is_valid(&self) -> bool {
+        if self.clip_id.trim().is_empty() {
+            return false;
+        }
+        if !self.source_time_seconds.is_finite() || self.source_time_seconds < 0.0 {
+            return false;
+        }
+        if !self.start_beat_offset.is_finite() || self.start_beat_offset < 0.0 {
+            return false;
+        }
+        if !self.quantize_step_beats.is_finite() || self.quantize_step_beats < 0.0 {
+            return false;
+        }
+        if !self.alignment_offset_beats.is_finite() {
+            return false;
+        }
+        if !self.alignment_slope_beats_per_second.is_finite() {
+            return false;
+        }
+        if !self.alignment_pivot_seconds.is_finite() || self.alignment_pivot_seconds < 0.0 {
+            return false;
+        }
+        true
+    }
 }
 
 /// State for imported percussion analysis.
