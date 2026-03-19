@@ -369,12 +369,13 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     // BlobTracking
     m.insert(EffectType::BlobTracking, EffectDef {
         display_name: "Blob Tracking",
-        param_count: 4,
+        param_count: 5,
         param_defs: vec![
             pd("Amount", 0.0, 1.0, 0.0),
             pd_osc("Thresh", 0.05, 0.9, 0.65, "Threshold"),
             pd_osc("Sens", 0.2, 1.0, 0.85, "Sensitivity"),
             pd_osc("Smooth", 0.0, 1.0, 0.7, "Smoothing"),
+            pd_osc("Connect", 0.0, 1.0, 0.35, "Connect"),
         ],
         osc_prefix: Some("blobTracking"),
     });

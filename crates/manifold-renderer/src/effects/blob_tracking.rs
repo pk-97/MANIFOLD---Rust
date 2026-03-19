@@ -35,8 +35,8 @@ const READBACK_INTERVAL_FRAMES: i64 = 3;
 const MATCH_RADIUS_SQ: f32 = 0.08;
 const SIZE_SMOOTH_FACTOR: f32 = 0.85;
 
-// BlobTrackingEffect.shader line 310: dist < 0.35 * 0.35
-const CONNECTION_DIST_THRESHOLD_SQ: f32 = 0.35 * 0.35;
+// Connection distance threshold is now param 4 ("Connect", 0.0–1.0, default 0.35).
+// Squared before use in compute_connections().
 
 // BlobTrackingFX.cs line 39-46 — TrackedBlob
 #[derive(Clone, Copy, Default)]
@@ -536,8 +536,10 @@ impl BlobTrackingFX {
     }
 
     // BlobTrackingFX.cs lines 293-327 — ComputeConnections (static method)
-    fn compute_connections(state: &mut OwnerState) {
+    // connect_dist: param 4 "Connect" (0.0–1.0), squared before comparison.
+    fn compute_connections(state: &mut OwnerState, connect_dist: f32) {
         state.connection_count = 0;
+        let threshold_sq = connect_dist * connect_dist;
 
         let mut c = 0usize;
         let mut i = 0usize;
@@ -553,8 +555,7 @@ impl BlobTrackingFX {
                 let dy = a[1] - b[1];
                 let dist = dx * dx + dy * dy;
 
-                // BlobTrackingFX.cs line 310: dist < bestDist && dist < 0.35f * 0.35f
-                if dist < best_dist && dist < CONNECTION_DIST_THRESHOLD_SQ {
+                if dist < best_dist && dist < threshold_sq {
                     best_dist = dist;
                     best_j = j as i32;
                 }
@@ -729,9 +730,10 @@ impl PostProcessEffect for BlobTrackingFX {
         if amount <= 0.0 { return; }
 
         // BlobTrackingFX.cs lines 129-131
-        let threshold   = fx.param_values.get(1).copied().unwrap_or(0.65);
-        let sensitivity = fx.param_values.get(2).copied().unwrap_or(0.85);
-        let smoothing   = fx.param_values.get(3).copied().unwrap_or(0.7);
+        let threshold    = fx.param_values.get(1).copied().unwrap_or(0.65);
+        let sensitivity  = fx.param_values.get(2).copied().unwrap_or(0.85);
+        let smoothing    = fx.param_values.get(3).copied().unwrap_or(0.7);
+        let connect_dist = fx.param_values.get(4).copied().unwrap_or(0.35);
 
         // BlobTrackingFX.cs line 133
         self.get_or_create_owner(device, ctx.owner_key);
@@ -825,7 +827,7 @@ impl PostProcessEffect for BlobTrackingFX {
         }
 
         state.blob_count = state.tracked_count as i32;
-        Self::compute_connections(state);
+        Self::compute_connections(state, connect_dist);
 
         // Build uniform buffer
         // BlobTrackingFX.cs lines 171-176
