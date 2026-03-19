@@ -99,6 +99,7 @@ pub struct Application {
     // Video/timeline split handle drag state.
     // From Unity PanelResizeHandle.cs — drag to resize video vs timeline proportion.
     split_dragging: bool,
+    split_was_hovered: bool,
 
     // File I/O
     current_project_path: Option<std::path::PathBuf>,
@@ -188,6 +189,7 @@ impl Application {
             time_since_start: 0.0,
             cursor_manager: CursorManager::new(),
             split_dragging: false,
+            split_was_hovered: false,
             current_project_path: None,
             user_prefs: UserPrefs::load(),
             text_input: crate::text_input::TextInputState::new(),
@@ -249,9 +251,17 @@ impl Application {
 
         // Priority 3: Video/timeline split handle hover
         // Use the same hit test as click detection (layout.split_handle rect).
-        if self.split_dragging || self.ui_root.layout.is_near_split_handle(self.cursor_pos) {
+        let near_split = self.split_dragging || self.ui_root.layout.is_near_split_handle(self.cursor_pos);
+        if near_split {
+            if !self.split_dragging {
+                self.ui_root.set_split_handle_hover();
+            }
             self.cursor_manager.set(TimelineCursor::ResizeVertical);
+            self.split_was_hovered = true;
             return;
+        } else if self.split_was_hovered && !self.split_dragging {
+            self.ui_root.set_split_handle_idle();
+            self.split_was_hovered = false;
         }
 
         // Priority 4: Clip trim handle hover
@@ -928,6 +938,15 @@ impl Application {
             self.editing_service.is_dirty(),
             self.current_project_path.as_deref(),
         );
+
+        // 4b. Sync clip positions from live project model every frame.
+        // During drag, the InteractionOverlay mutates clip data directly in the
+        // project model, but the viewport's clips_by_layer cache is only refreshed
+        // via sync_project_data() (structural sync). This per-frame sync ensures
+        // bitmap renderers see mutated clip positions and repaint during drag.
+        // Cost: iterates layers+clips, but the bitmap fingerprint skips repaint
+        // when nothing changed (cheap no-op outside of drag).
+        crate::ui_bridge::sync_clip_positions(&mut self.ui_root, &self.engine);
 
         // 5. Push performance metrics to HUD
         if self.ui_root.perf_hud.is_visible() {
@@ -1778,6 +1797,7 @@ impl ApplicationHandler for Application {
                                         // Begin video/timeline split drag.
                                         // From Unity PanelResizeHandle.OnPointerDown.
                                         self.split_dragging = true;
+                                        self.ui_root.set_split_handle_drag();
                                     } else if self.ui_root.is_near_inspector_edge(self.cursor_pos) {
                                         self.ui_root.begin_inspector_resize(self.cursor_pos.x);
                                     } else {
@@ -1795,6 +1815,7 @@ impl ApplicationHandler for Application {
                                         // From Unity PanelResizeHandle.OnPointerUp.
                                         self.split_dragging = false;
                                         self.cursor_manager.set_default();
+                                        self.ui_root.set_split_handle_idle();
                                         // Persist to ProjectSettings (Unity WorkspaceController line 591)
                                         if let Some(project) = self.engine.project_mut() {
                                             project.settings.timeline_height_percent =

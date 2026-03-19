@@ -576,6 +576,11 @@ impl LayerHeaderPanel {
 
     // ── Drag-reorder (separate from Panel trait — needs &mut UITree) ──
 
+    /// Returns true if a layer drag is currently active.
+    pub fn is_dragging(&self) -> bool {
+        self.drag_source >= 0
+    }
+
     /// Call when a drag begins on a layer header node.
     /// Returns PanelAction if the drag starts on a drag handle.
     pub fn handle_drag_begin(&mut self, tree: &mut UITree, node_id: u32) -> Vec<PanelAction> {

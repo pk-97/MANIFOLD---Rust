@@ -2669,6 +2669,51 @@ pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer:
     }
 }
 
+/// Lightweight per-frame clip position sync.
+/// Refreshes viewport.clips_by_layer from the live project model so that
+/// drag mutations (clip move, trim) are visible in the bitmap renderer.
+/// Does NOT touch tracks, bitmap renderers, or layer headers — only clip data.
+/// The bitmap fingerprint will detect if positions actually changed and skip
+/// repaint when nothing moved (cheap no-op outside of drag).
+pub fn sync_clip_positions(ui: &mut UIRoot, engine: &PlaybackEngine) {
+    let project = match engine.project() {
+        Some(p) => p,
+        None => return,
+    };
+    use manifold_ui::panels::viewport::ViewportClip;
+    let mut viewport_clips = Vec::new();
+    for (i, layer) in project.timeline.layers.iter().enumerate() {
+        let is_gen = layer.layer_type == LayerType::Generator;
+        for clip in &layer.clips {
+            let name = if is_gen {
+                layer.gen_params.as_ref()
+                    .map(|gp| gp.generator_type.display_name().to_string())
+                    .unwrap_or_else(|| "Gen".to_string())
+            } else if !clip.video_clip_id.is_empty() {
+                clip.video_clip_id.clone()
+            } else {
+                "Clip".to_string()
+            };
+            viewport_clips.push(ViewportClip {
+                clip_id: clip.id.clone(),
+                layer_index: i,
+                start_beat: clip.start_beat,
+                duration_beats: clip.duration_beats,
+                name,
+                color: if is_gen {
+                    manifold_ui::color::CLIP_GEN_NORMAL
+                } else {
+                    manifold_ui::color::CLIP_NORMAL
+                },
+                is_muted: clip.is_muted,
+                is_locked: false,
+                is_generator: is_gen,
+            });
+        }
+    }
+    ui.viewport.set_clips(viewport_clips);
+}
+
 /// Sync inspector content for the active selection.
 /// Called when the active layer changes or after structural mutations.
 pub fn sync_inspector_data(

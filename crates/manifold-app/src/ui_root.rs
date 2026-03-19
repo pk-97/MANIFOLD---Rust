@@ -72,6 +72,10 @@ pub struct UIRoot {
     /// Events in the tracks area that need host trait access are stored here
     /// during process_events() and drained by app.rs to route through the overlay.
     viewport_events: Vec<manifold_ui::input::UIEvent>,
+
+    /// Node ID for the video/timeline split handle (color feedback on hover/drag).
+    /// From Unity PanelResizeHandle.cs — idle/hover/drag color states.
+    split_handle_id: i32,
 }
 
 impl UIRoot {
@@ -102,6 +106,7 @@ impl UIRoot {
             inspector_drag_start_width: 0.0,
             cursor_hover_actions: Vec::new(),
             viewport_events: Vec::new(),
+            split_handle_id: -1,
         }
     }
 
@@ -138,6 +143,19 @@ impl UIRoot {
         self.header.build(&mut self.tree, &self.layout);
         self.footer.build(&mut self.tree, &self.layout);
         self.inspector.build(&mut self.tree, &self.layout);
+
+        // Split handle — thin bar between video and timeline areas.
+        // From Unity PanelResizeHandle.cs: idle (transparent), hover, drag color states.
+        {
+            let r = self.layout.split_handle();
+            self.split_handle_id = self.tree.add_panel(
+                -1, r.x, r.y, r.width, r.height,
+                manifold_ui::node::UIStyle {
+                    bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
+                    ..manifold_ui::node::UIStyle::default()
+                },
+            ) as i32;
+        }
 
         // Mark boundary — everything after this is rebuilt on scroll.
         self.scroll_panels_start = self.tree.count();
@@ -307,16 +325,29 @@ impl UIRoot {
         // already cleared pressed_target, PointerUp is a no-op.
         for event in &events {
             match event {
+                UIEvent::DragBegin { node_id, .. } => {
+                    // Layer header drag handle — needs &mut tree for dim/indicator
+                    let mut lh_actions = self.layer_headers.handle_drag_begin(&mut self.tree, *node_id);
+                    actions.append(&mut lh_actions);
+                }
                 UIEvent::Drag { pos, .. } => {
                     if self.inspector.has_pressed_target() {
                         let mut drag_actions = self.inspector.handle_drag(*pos, &mut self.tree);
                         actions.append(&mut drag_actions);
+                    }
+                    if self.layer_headers.is_dragging() {
+                        let mut lh_actions = self.layer_headers.handle_drag(&mut self.tree, *pos);
+                        actions.append(&mut lh_actions);
                     }
                 }
                 UIEvent::DragEnd { .. } | UIEvent::PointerUp { .. } => {
                     if self.inspector.has_pressed_target() {
                         let mut end_actions = self.inspector.handle_drag_end(&mut self.tree);
                         actions.append(&mut end_actions);
+                    }
+                    if self.layer_headers.is_dragging() {
+                        let mut lh_actions = self.layer_headers.handle_drag_end(&mut self.tree);
+                        actions.append(&mut lh_actions);
                     }
                 }
                 _ => {}
@@ -551,6 +582,38 @@ impl UIRoot {
     /// End inspector resize drag.
     pub fn end_inspector_resize(&mut self) {
         self.inspector_resize_dragging = false;
+    }
+
+    // ── Split handle color feedback ─────────────────────────────
+
+    /// Update split handle color to hover state.
+    pub fn set_split_handle_hover(&mut self) {
+        if self.split_handle_id >= 0 {
+            self.tree.set_style(self.split_handle_id as u32, manifold_ui::node::UIStyle {
+                bg_color: manifold_ui::color::RESIZE_HANDLE_HOVER,
+                ..manifold_ui::node::UIStyle::default()
+            });
+        }
+    }
+
+    /// Update split handle color to drag state.
+    pub fn set_split_handle_drag(&mut self) {
+        if self.split_handle_id >= 0 {
+            self.tree.set_style(self.split_handle_id as u32, manifold_ui::node::UIStyle {
+                bg_color: manifold_ui::color::RESIZE_HANDLE_DRAG,
+                ..manifold_ui::node::UIStyle::default()
+            });
+        }
+    }
+
+    /// Update split handle color to idle state.
+    pub fn set_split_handle_idle(&mut self) {
+        if self.split_handle_id >= 0 {
+            self.tree.set_style(self.split_handle_id as u32, manifold_ui::node::UIStyle {
+                bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
+                ..manifold_ui::node::UIStyle::default()
+            });
+        }
     }
 
     /// Drain viewport-area events stashed during process_events().
