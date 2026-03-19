@@ -759,6 +759,11 @@ impl Application {
             }
         }
 
+        // Overlay-generated right-click actions (TrackRightClicked, ClipRightClicked)
+        // arrive AFTER process_events() has already run its try_open_dropdown pass.
+        // Route them through the dropdown system now so context menus actually open.
+        self.ui_root.intercept_overlay_actions(&mut actions);
+
         // Consume deferred structural sync flag (set by keyboard shortcuts)
         let mut needs_structural_sync = self.needs_structural_sync;
         self.needs_structural_sync = false;

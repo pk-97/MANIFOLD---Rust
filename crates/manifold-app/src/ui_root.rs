@@ -73,6 +73,11 @@ pub struct UIRoot {
     /// during process_events() and drained by app.rs to route through the overlay.
     viewport_events: Vec<manifold_ui::input::UIEvent>,
 
+    /// Last right-click screen position, persisted across process_events() so
+    /// overlay-generated actions (TrackRightClicked, ClipRightClicked) can anchor
+    /// their dropdown menus after the main event loop returns.
+    last_right_click_pos: Vec2,
+
     /// Node ID for the video/timeline split handle (color feedback on hover/drag).
     /// From Unity PanelResizeHandle.cs — idle/hover/drag color states.
     split_handle_id: i32,
@@ -106,6 +111,7 @@ impl UIRoot {
             inspector_drag_start_width: 0.0,
             cursor_hover_actions: Vec::new(),
             viewport_events: Vec::new(),
+            last_right_click_pos: Vec2::new(0.0, 0.0),
             split_handle_id: -1,
         }
     }
@@ -249,15 +255,13 @@ impl UIRoot {
         actions.append(&mut self.cursor_hover_actions);
 
         let mut last_click_node: i32 = -1;
-        let mut last_right_click_pos = Vec2::new(0.0, 0.0);
-
         for event in &events {
             // Track which node was clicked (for dropdown anchoring).
             if let UIEvent::Click { node_id, .. } = event {
                 last_click_node = *node_id as i32;
             }
             if let UIEvent::RightClick { pos, .. } = event {
-                last_right_click_pos = *pos;
+                self.last_right_click_pos = *pos;
             }
 
             // Dropdown gets first crack at all events.
@@ -365,7 +369,7 @@ impl UIRoot {
         // (where we have access to the tree for node bounds).
         let mut filtered = Vec::with_capacity(actions.len());
         for action in actions {
-            if self.try_open_dropdown(&action, last_click_node, last_right_click_pos) {
+            if self.try_open_dropdown(&action, last_click_node) {
                 // Consumed — don't forward to dispatch.
                 continue;
             }
@@ -377,7 +381,8 @@ impl UIRoot {
 
     /// If the action is a dropdown trigger, open the dropdown anchored to the
     /// clicked button and return true (action consumed). Otherwise return false.
-    fn try_open_dropdown(&mut self, action: &PanelAction, click_node: i32, right_click_pos: Vec2) -> bool {
+    fn try_open_dropdown(&mut self, action: &PanelAction, click_node: i32) -> bool {
+        let right_click_pos = self.last_right_click_pos;
         let trigger = if click_node >= 0 {
             self.tree.get_bounds(click_node as u32)
         } else {
@@ -627,6 +632,14 @@ impl UIRoot {
     /// App.rs routes these through the InteractionOverlay with a host trait.
     pub fn drain_viewport_events(&mut self) -> Vec<manifold_ui::input::UIEvent> {
         std::mem::take(&mut self.viewport_events)
+    }
+
+    /// Filter overlay-generated actions (TrackRightClicked, ClipRightClicked)
+    /// through the dropdown system. Called by app.rs after the overlay processes
+    /// viewport events — these actions are generated AFTER process_events()
+    /// returns, so they need a second pass through try_open_dropdown.
+    pub fn intercept_overlay_actions(&mut self, actions: &mut Vec<PanelAction>) {
+        actions.retain(|action| !self.try_open_dropdown(action, -1));
     }
 
     /// Check if a UI event's position falls within the tracks area.
