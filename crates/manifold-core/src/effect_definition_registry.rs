@@ -458,37 +458,32 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
         osc_prefix: Some("colorGrade"),
     });
 
-    // WireframeDepth
+    // WireframeDepth — intentional divergence from Unity (D-22):
+    // 12 params, removed Persist/Depth/Face, added EdgeFollow, renamed CVFlow→Flow.
     m.insert(EffectType::WireframeDepth, EffectDef {
         display_name: "Wireframe Depth",
-        param_count: 14,
+        param_count: 12,
         param_defs: vec![
-            pd("Amount", 0.0, 1.0, 1.0),
-            pd_whole("Density", 16.0, 280.0, 260.0, "Density"),
-            pd_osc("Width", 0.4, 3.0, 1.335, "Width"),
-            pd_osc("ZScale", 0.0, 2.5, 1.35, "ZScale"),
-            pd_osc("Smooth", 0.0, 0.98, 0.90, "Smooth"),
-            pd_osc("Persist", 0.0, 1.0, 0.82, "Persistence"),
-            pd_whole_labels("Depth", 0.0, 1.0, 0.0,
-                &["Heuristic", "DNN"],
-                "DepthMode"),
-            pd_osc("Subject", 0.0, 1.0, 0.52, "SubjectIsolation"),
+            pd("Amount", 0.0, 1.0, 1.0),                                      // 0
+            pd_whole("Density", 16.0, 280.0, 260.0, "Density"),                // 1
+            pd_osc("Width", 0.4, 3.0, 1.335, "Width"),                         // 2
+            pd_osc("ZScale", 0.0, 2.5, 1.35, "ZScale"),                        // 3
+            pd_osc("Smooth", 0.0, 0.98, 0.90, "Smooth"),                       // 4
+            pd_osc("Subject", 0.0, 1.0, 0.52, "SubjectIsolation"),             // 5
             pd_whole_labels("Blend", 0.0, 6.0, 6.0,
                 &["Normal", "Add", "Multiply", "Screen", "Overlay", "Stencil", "Opaque"],
-                "BlendMode"),
-            pd_osc("WireRes", 0.5, 1.0, 1.0, "WireRes"),
+                "BlendMode"),                                                   // 6
+            pd_osc("WireRes", 0.5, 1.0, 1.0, "WireRes"),                       // 7
             pd_whole_labels("MeshRate", 1.0, 4.0, 1.0,
                 &["Every", "Half", "Third", "Quarter"],
-                "MeshRate"),
-            pd_whole_labels("CVFlow", 0.0, 1.0, 1.0,
+                "MeshRate"),                                                    // 8
+            pd_whole_labels("Flow", 0.0, 1.0, 1.0,
                 &["Off", "On"],
-                "NativeFlow"),
+                "NativeFlow"),                                                  // 9
             pd_whole_labels("Lock", 0.0, 1.0, 1.0,
                 &["Off", "On"],
-                "FlowLock"),
-            pd_whole_labels("Face", 0.0, 1.0, 1.0,
-                &["Off", "On"],
-                "FaceWarp"),
+                "FlowLock"),                                                    // 10
+            pd_osc("EdgeFollow", 0.0, 1.0, 0.5, "EdgeFollow"),                 // 11
         ],
         osc_prefix: Some("wireframeDepth"),
     });
