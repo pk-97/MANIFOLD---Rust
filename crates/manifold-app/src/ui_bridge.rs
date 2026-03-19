@@ -2731,15 +2731,16 @@ pub fn sync_inspector_data(
 /// Unity: EffectCardState.SyncFromDataModel — populates all data-derived visual state.
 fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -> Vec<EffectCardConfig> {
     effects.iter().enumerate().map(|(i, fx)| {
-        let defs = fx.effect_type.param_defs();
-        let n = defs.len();
-        let params: Vec<EffectParamInfo> = defs.iter().map(|&(name, min, max, default, whole)| {
+        let reg_def = manifold_core::effect_definition_registry::get(fx.effect_type);
+        let n = reg_def.param_count;
+        let params: Vec<EffectParamInfo> = reg_def.param_defs.iter().map(|pd| {
             EffectParamInfo {
-                name: name.to_string(),
-                min,
-                max,
-                default,
-                whole_numbers: whole,
+                name: pd.name.clone(),
+                min: pd.min,
+                max: pd.max,
+                default: pd.default_value,
+                whole_numbers: pd.whole_numbers,
+                value_labels: pd.value_labels.clone(),
             }
         }).collect();
 
@@ -2841,15 +2842,16 @@ fn beat_div_to_button_index(div: BeatDivision) -> i32 {
 
 /// Convert a `GeneratorParamState` into `GenParamConfig` for the UI.
 fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState) -> GenParamConfig {
-    let defs = gp.generator_type.param_defs();
-    let params: Vec<GenParamInfo> = defs.iter().map(|&(name, min, max, default, whole, toggle)| {
+    let reg_def = manifold_core::generator_definition_registry::get(gp.generator_type);
+    let params: Vec<GenParamInfo> = reg_def.param_defs.iter().map(|pd| {
         GenParamInfo {
-            name: name.to_string(),
-            min,
-            max,
-            default,
-            whole_numbers: whole,
-            is_toggle: toggle,
+            name: pd.name.clone(),
+            min: pd.min,
+            max: pd.max,
+            default: pd.default_value,
+            whole_numbers: pd.whole_numbers,
+            is_toggle: pd.is_toggle,
+            value_labels: pd.value_labels.clone(),
         }
     }).collect();
 

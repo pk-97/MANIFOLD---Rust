@@ -66,6 +66,10 @@ pub struct EffectParamInfo {
     pub max: f32,
     pub default: f32,
     pub whole_numbers: bool,
+    /// Named value labels for discrete params (e.g., ["Horiz", "Vert", "Both"]).
+    /// When present, the slider displays the label instead of a numeric value.
+    /// Unity: ParamDef.valueLabels → EffectDefinitionRegistry.FormatValue().
+    pub value_labels: Option<Vec<String>>,
 }
 
 /// Configuration for creating an effect card.
@@ -554,7 +558,7 @@ impl EffectCardPanel {
         for i in 0..self.param_info.len() {
             let info = self.param_info[i].clone();
             let norm = BitmapSlider::value_to_normalized(info.default, info.min, info.max);
-            let val_text = format_param_value(info.default, info.whole_numbers);
+            let val_text = format_param_value(info.default, info.whole_numbers, info.value_labels.as_deref());
 
             // Param slider
             let slider_rect = Rect::new(x + PADDING, cy, slider_w, ROW_HEIGHT);
@@ -852,7 +856,7 @@ impl EffectCardPanel {
                 if let Some(ref ids) = self.slider_ids[i] {
                     let info = &self.param_info[i];
                     let norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
-                    let text = format_param_value(val, info.whole_numbers);
+                    let text = format_param_value(val, info.whole_numbers, info.value_labels.as_deref());
                     BitmapSlider::update_value(tree, ids, norm, &text);
                 }
             }
@@ -1147,7 +1151,7 @@ impl EffectCardPanel {
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
                 let val = if info.whole_numbers { val.round() } else { val };
-                let text = format_param_value(val, info.whole_numbers);
+                let text = format_param_value(val, info.whole_numbers, info.value_labels.as_deref());
                 BitmapSlider::update_value(tree, ids, norm, &text);
                 self.param_cache[pi] = val;
                 return vec![PanelAction::EffectParamChanged(ei, pi, val)];
@@ -1204,8 +1208,12 @@ impl Default for EffectCardPanel {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-fn format_param_value(val: f32, whole_numbers: bool) -> String {
-    if whole_numbers { format!("{}", val as i32) } else { format!("{:.2}", val) }
+fn format_param_value(val: f32, whole_numbers: bool, value_labels: Option<&[String]>) -> String {
+    if let Some(labels) = value_labels {
+        let idx = (val.round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
+        return labels[idx].clone();
+    }
+    if whole_numbers { format!("{}", val.round() as i32) } else { format!("{:.2}", val) }
 }
 
 fn toggle_btn_style(enabled: bool) -> UIStyle {
@@ -1314,8 +1322,8 @@ mod tests {
             collapsed: false,
             supports_envelopes: true,
             params: vec![
-                EffectParamInfo { name: "Radius".into(), min: 0.0, max: 100.0, default: 10.0, whole_numbers: true },
-                EffectParamInfo { name: "Strength".into(), min: 0.0, max: 1.0, default: 0.5, whole_numbers: false },
+                EffectParamInfo { name: "Radius".into(), min: 0.0, max: 100.0, default: 10.0, whole_numbers: true, value_labels: None },
+                EffectParamInfo { name: "Strength".into(), min: 0.0, max: 1.0, default: 0.5, whole_numbers: false, value_labels: None },
             ],
             has_drv: false,
             has_env: false,

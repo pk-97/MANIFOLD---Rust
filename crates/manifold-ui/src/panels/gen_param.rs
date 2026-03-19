@@ -63,6 +63,10 @@ pub struct GenParamInfo {
     pub default: f32,
     pub whole_numbers: bool,
     pub is_toggle: bool,
+    /// Named value labels for discrete params (e.g., ["Classic", "Rings", "Diamond"]).
+    /// When present, the slider displays the label instead of a numeric value.
+    /// Unity: ParamDef.valueLabels → GeneratorDefinitionRegistry.FormatValue().
+    pub value_labels: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -345,7 +349,7 @@ impl GenParamPanel {
             } else {
                 // Slider row
                 let norm = BitmapSlider::value_to_normalized(info.default, info.min, info.max);
-                let val_text = format_param_value(info.default, info.whole_numbers);
+                let val_text = format_param_value(info.default, info.whole_numbers, info.value_labels.as_deref());
                 let slider_rect = Rect::new(cx, cy, slider_w, ROW_HEIGHT);
                 self.slider_ids[i] = Some(BitmapSlider::build(
                     tree, -1, slider_rect,
@@ -582,7 +586,7 @@ impl GenParamPanel {
                 self.param_cache[i] = val;
                 if let Some(ref ids) = self.slider_ids[i] {
                     let norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
-                    let text = format_param_value(val, info.whole_numbers);
+                    let text = format_param_value(val, info.whole_numbers, info.value_labels.as_deref());
                     BitmapSlider::update_value(tree, ids, norm, &text);
                 }
             }
@@ -769,7 +773,7 @@ impl GenParamPanel {
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
                 let val = if info.whole_numbers { val.round() } else { val };
-                let text = format_param_value(val, info.whole_numbers);
+                let text = format_param_value(val, info.whole_numbers, info.value_labels.as_deref());
                 BitmapSlider::update_value(tree, ids, norm, &text);
                 self.param_cache[pi] = val;
                 return vec![PanelAction::GenParamChanged(pi, val)];
@@ -811,8 +815,12 @@ impl Default for GenParamPanel {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-fn format_param_value(val: f32, whole_numbers: bool) -> String {
-    if whole_numbers { format!("{}", val as i32) } else { format!("{:.2}", val) }
+fn format_param_value(val: f32, whole_numbers: bool, value_labels: Option<&[String]>) -> String {
+    if let Some(labels) = value_labels {
+        let idx = (val.round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
+        return labels[idx].clone();
+    }
+    if whole_numbers { format!("{}", val.round() as i32) } else { format!("{:.2}", val) }
 }
 
 fn toggle_style(on: bool) -> UIStyle {
@@ -901,9 +909,9 @@ mod tests {
         GenParamConfig {
             gen_type_name: "Plasma".into(),
             params: vec![
-                GenParamInfo { name: "Speed".into(), min: 0.0, max: 10.0, default: 1.0, whole_numbers: false, is_toggle: false },
-                GenParamInfo { name: "Invert".into(), min: 0.0, max: 1.0, default: 0.0, whole_numbers: false, is_toggle: true },
-                GenParamInfo { name: "Scale".into(), min: 0.1, max: 5.0, default: 1.0, whole_numbers: false, is_toggle: false },
+                GenParamInfo { name: "Speed".into(), min: 0.0, max: 10.0, default: 1.0, whole_numbers: false, is_toggle: false, value_labels: None },
+                GenParamInfo { name: "Invert".into(), min: 0.0, max: 1.0, default: 0.0, whole_numbers: false, is_toggle: true, value_labels: None },
+                GenParamInfo { name: "Scale".into(), min: 0.1, max: 5.0, default: 1.0, whole_numbers: false, is_toggle: false, value_labels: None },
             ],
         }
     }
