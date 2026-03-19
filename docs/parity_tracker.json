@@ -7,21 +7,66 @@
     "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context. Tier 4 fix plan (manifold-ui + manifold-app) completed 2026-03-18: 7 color corrections, WidgetLayout + InspectorLayout constants, InteractionOverlay ctrl_held/finalize_move_snap/preDragSplitCommands, TruncateWithEllipsis, UINode texture, right-click guard, ScrollToReveal, beat_to_time tempo map, context menu items. GAP-GEN-3 done 2026-03-19: FluidSimulation3D 10 divergences fixed (gradient force, full simulate rewrite, blur radius, cam_tilt, ref_axis, scatter energy, ortho fract, trigger_count, 2D blur removal, amortization). GAP-AUDIO-9 done 2026-03-18: waveform UI ported (WaveformRenderer MIP chain, spectral coloring, ImportedAudioWaveformLane, StemLaneGroup, DriverWaveformIcons, scrub/drag handlers, bitmap painting)."
   },
   "subsystems": {
-    "core": { "pct": 85, "audit_section": 1 },
-    "editing": { "pct": 80, "audit_section": 2 },
-    "playback": { "pct": 72, "audit_section": 3 },
-    "effects": { "pct": 75, "audit_section": 4 },
-    "generators": { "pct": 97, "audit_section": 6 },
-    "compositor": { "pct": 60, "audit_section": 5 },
-    "ui": { "pct": 72, "audit_section": 7 },
-    "io": { "pct": 70, "audit_section": 8 },
-    "app": { "pct": 60, "audit_section": 9 },
-    "audio_percussion": { "pct": 10, "audit_section": 10 },
-    "midi_input": { "pct": 0, "audit_section": 11 },
-    "led_external": { "pct": 0, "audit_section": 12 },
-    "external_window": { "pct": 0, "audit_section": 13 },
-    "infrastructure": { "pct": 0, "audit_section": 14 },
-    "diagnostics": { "pct": 0, "audit_section": 15 }
+    "core": {
+      "pct": 85,
+      "audit_section": 1
+    },
+    "editing": {
+      "pct": 80,
+      "audit_section": 2
+    },
+    "playback": {
+      "pct": 72,
+      "audit_section": 3
+    },
+    "effects": {
+      "pct": 75,
+      "audit_section": 4
+    },
+    "generators": {
+      "pct": 97,
+      "audit_section": 6
+    },
+    "compositor": {
+      "pct": 60,
+      "audit_section": 5
+    },
+    "ui": {
+      "pct": 72,
+      "audit_section": 7
+    },
+    "io": {
+      "pct": 70,
+      "audit_section": 8
+    },
+    "app": {
+      "pct": 60,
+      "audit_section": 9
+    },
+    "audio_percussion": {
+      "pct": 60,
+      "audit_section": 10
+    },
+    "midi_input": {
+      "pct": 0,
+      "audit_section": 11
+    },
+    "led_external": {
+      "pct": 0,
+      "audit_section": 12
+    },
+    "external_window": {
+      "pct": 0,
+      "audit_section": 13
+    },
+    "infrastructure": {
+      "pct": 0,
+      "audit_section": 14
+    },
+    "diagnostics": {
+      "pct": 0,
+      "audit_section": 15
+    }
   },
   "gaps": [
     {
@@ -149,7 +194,7 @@
       "id": "GAP-IO-1",
       "tier": 1,
       "subsystem": "io",
-      "title": "Port ProjectArchive.Save() — V2 ZIP format",
+      "title": "Port ProjectArchive.Save() \u2014 V2 ZIP format",
       "severity": "critical",
       "est_loc": 400,
       "status": "done",
@@ -166,7 +211,7 @@
       "est_loc": 100,
       "status": "done",
       "commit": "c2a6504",
-      "notes": "Ported 5 of 6 post-load steps: (1) on_after_deserialize (was present), (2) BPM sync with clamp 20-300, (3) DurationMode migration (force NoteOff), (4) Project.validate() structural check, (5) VideoLibrary.validate_clips() missing file detection, (6) Project.purge_orphaned_references() cascading cleanup. Step 3 (PathResolver.ResolveAll) deferred — requires GAP-CORE-7. Added has_clip() to VideoLibrary, ValidationResult struct."
+      "notes": "Ported 5 of 6 post-load steps: (1) on_after_deserialize (was present), (2) BPM sync with clamp 20-300, (3) DurationMode migration (force NoteOff), (4) Project.validate() structural check, (5) VideoLibrary.validate_clips() missing file detection, (6) Project.purge_orphaned_references() cascading cleanup. Step 3 (PathResolver.ResolveAll) deferred \u2014 requires GAP-CORE-7. Added has_clip() to VideoLibrary, ValidationResult struct."
     },
     {
       "number": 13,
@@ -274,7 +319,7 @@
       "est_loc": 50,
       "status": "done",
       "commit": "6ffdfe9",
-      "notes": "Tier 3 Phase 7A: Two-stage projection (4D→3D→2D), raw pz depth. Phase 8A-8B: removed double-scale. Phase 11A-11B: WireframeZoo vertex normalization + projected_z fix."
+      "notes": "Tier 3 Phase 7A: Two-stage projection (4D\u21923D\u21922D), raw pz depth. Phase 8A-8B: removed double-scale. Phase 11A-11B: WireframeZoo vertex normalization + projected_z fix."
     },
     {
       "number": 22,
@@ -344,9 +389,9 @@
       "title": "Port PercussionImportOrchestrator (central orchestration)",
       "severity": "high",
       "est_loc": 1000,
-      "status": "todo",
-      "commit": null,
-      "notes": "1,501 lines. Central orchestration: file selection, pipeline invocation, progress, JSON parsing, placement."
+      "status": "done",
+      "commit": "4608947",
+      "notes": "1,501 lines. Port complete: state machine (IEnumerator -> poll-based tick()), pipeline invocation, progress parser (PercussionPipelineProgressParser), JSON parsing, clip placement, BPM auto-apply, stem path resolution, SetImportedAudioCommand. ProjectPercussionBindingResolver refactored to own its data (no lifetime param) to resolve &mut Project aliasing. PercussionTimelinePlanner updated to 'a lifetime on trait bounds."
     },
     {
       "number": 28,
@@ -382,7 +427,7 @@
       "est_loc": 400,
       "status": "done",
       "commit": "347a5e8",
-      "notes": "Full port using kira 0.9 (StaticSoundData + AudioManager). All methods translated: load_audio, update_sync (3-state Playing/Paused/Stopped), set_start_beat, get_duration_beats, get_end_beat, try_get_source_seconds_at_playhead, reset_audio. ffprobe encoder delay probing via std::process::Command. Constants match Unity exactly (0.06, 0.20, 0.5). Wired into app tick loop (after engine.tick) and project load (reads PercussionImportState.audio_path). kira stop() is permanent so Stopped state uses pause()+seek_to(0) — same logical behavior."
+      "notes": "Full port using kira 0.9 (StaticSoundData + AudioManager). All methods translated: load_audio, update_sync (3-state Playing/Paused/Stopped), set_start_beat, get_duration_beats, get_end_beat, try_get_source_seconds_at_playhead, reset_audio. ffprobe encoder delay probing via std::process::Command. Constants match Unity exactly (0.06, 0.20, 0.5). Wired into app tick loop (after engine.tick) and project load (reads PercussionImportState.audio_path). kira stop() is permanent so Stopped state uses pause()+seek_to(0) \u2014 same logical behavior."
     },
     {
       "number": 47,
@@ -418,7 +463,7 @@
       "est_loc": 1200,
       "status": "done",
       "commit": "ece97aa",
-      "notes": "1,870 lines across 8 files. Ported all 7 Unity files: WaveformRenderer (MIP chain + spectral coloring), ImportedAudioWaveformLane (bitmap panel + scrub/drag handlers), StemWaveformLane + StemLaneGroup (4-stem lanes with mute/solo), DriverWaveformIcons (procedural SDF), WaveformLaneScrollForwarder, ImportedAudioWaveformScrubHandler, ImportedAudioWaveformDragHandler. Adapted from Unity tile-based rendering to Rust bitmap pixel-buffer painting. 16 unit tests. Full GPU pipeline: symphonia PCM decoder → MIP chain → spectral coloring → pixel buffer → wgpu texture upload → render pass. Wired into UIRoot, UIBridge, ScreenLayout. track_header_height() invariant established. Stem audio playback stubbed (needs GAP-AUDIO-7b)."
+      "notes": "1,870 lines across 8 files. Ported all 7 Unity files: WaveformRenderer (MIP chain + spectral coloring), ImportedAudioWaveformLane (bitmap panel + scrub/drag handlers), StemWaveformLane + StemLaneGroup (4-stem lanes with mute/solo), DriverWaveformIcons (procedural SDF), WaveformLaneScrollForwarder, ImportedAudioWaveformScrubHandler, ImportedAudioWaveformDragHandler. Adapted from Unity tile-based rendering to Rust bitmap pixel-buffer painting. 16 unit tests. Full GPU pipeline: symphonia PCM decoder \u2192 MIP chain \u2192 spectral coloring \u2192 pixel buffer \u2192 wgpu texture upload \u2192 render pass. Wired into UIRoot, UIBridge, ScreenLayout. track_header_height() invariant established. Stem audio playback stubbed (needs GAP-AUDIO-7b)."
     },
     {
       "number": 33,
@@ -586,7 +631,7 @@
       "est_loc": 30,
       "status": "todo",
       "commit": null,
-      "notes": "1) TempoMapConverter.seconds_per_beat_from_bpm() doesn't clamp BPM to 20-300. 2) TimelineClip.overlaps_with() doesn't check layer index (Unity returns false for different layers). 3) EffectInstance.ensure_base_values() doesn't check length mismatch, only is_none(). 4) Layer.change_generator_type() doesn't propagate to clips via UpdateClipGeneratorTypes(). 5) BeatQuantizer negative sentinel — verify if already fixed in b59ad6d."
+      "notes": "1) TempoMapConverter.seconds_per_beat_from_bpm() doesn't clamp BPM to 20-300. 2) TimelineClip.overlaps_with() doesn't check layer index (Unity returns false for different layers). 3) EffectInstance.ensure_base_values() doesn't check length mismatch, only is_none(). 4) Layer.change_generator_type() doesn't propagate to clips via UpdateClipGeneratorTypes(). 5) BeatQuantizer negative sentinel \u2014 verify if already fixed in b59ad6d."
     }
   ]
 }

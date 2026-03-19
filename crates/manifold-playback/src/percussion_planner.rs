@@ -13,15 +13,15 @@ use manifold_core::percussion_binding::PercussionBindingResolver;
 /// Port of Unity PercussionTimelinePlanner.
 /// Converts parsed seconds-domain percussion events into beat-domain timeline placements.
 /// Pure planning logic; does not mutate timeline/project state.
-pub struct PercussionTimelinePlanner {
-    beat_time_converter: Box<dyn BeatTimeConverter>,
-    binding_resolver: Box<dyn PercussionBindingResolver>,
+pub struct PercussionTimelinePlanner<'a> {
+    beat_time_converter: Box<dyn BeatTimeConverter + 'a>,
+    binding_resolver: Box<dyn PercussionBindingResolver + 'a>,
 }
 
-impl PercussionTimelinePlanner {
+impl<'a> PercussionTimelinePlanner<'a> {
     pub fn new(
-        beat_time_converter: Box<dyn BeatTimeConverter>,
-        binding_resolver: Box<dyn PercussionBindingResolver>,
+        beat_time_converter: Box<dyn BeatTimeConverter + 'a>,
+        binding_resolver: Box<dyn PercussionBindingResolver + 'a>,
     ) -> Self {
         Self {
             beat_time_converter,

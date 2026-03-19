@@ -1,6 +1,6 @@
 # MANIFOLD Rust Port — File Parity Tracker
 
-**Last updated: 2026-03-17**
+**Last updated: 2026-03-19**
 
 Status key: `ported` = substantial Rust implementation exists | `partial` = exists but missing significant parts | `stub` = placeholder only | `missing` = no Rust equivalent
 
@@ -83,6 +83,15 @@ Agents: CHECK THIS FILE before porting. If a file is already `ported`, verify pa
 | ParameterDriverManager.cs | modulation.rs (evaluate_all_drivers) | ported |
 | PerfLogger.cs | — | partial (log crate) |
 | TempoRecorder.cs | — | missing (diagnostics) |
+| PercussionAnalysisModels.cs | percussion_analysis.rs (manifold-core) | ported |
+| BeatTimeConverter.cs | percussion_analysis.rs (manifold-core) | ported |
+| PercussionBindingResolver.cs | percussion_binding.rs (manifold-core) | ported |
+| PercussionAnalysisParser.cs | percussion_parser.rs | ported |
+| PercussionTimelinePlanner.cs | percussion_planner.rs | ported |
+| PercussionImportService.cs | percussion_import.rs | ported |
+| PercussionPipelineBackendResolver.cs | percussion_backend.rs | ported |
+| PercussionPipelineProgressParser.cs | percussion_orchestrator.rs (inline) | ported |
+| PercussionImportOrchestrator.cs | percussion_orchestrator.rs | ported |
 
 ## Sync System (manifold-playback)
 
