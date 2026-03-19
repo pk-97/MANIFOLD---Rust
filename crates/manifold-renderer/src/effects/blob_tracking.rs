@@ -25,13 +25,14 @@ struct BlobResponse {
     blob_count: i32,
 }
 
-// BlobTrackingFX.cs line 14-17
-const READBACK_WIDTH: u32 = 320;
-const READBACK_HEIGHT: u32 = 180;
+// BlobTrackingFX.cs line 14-17 (tuned up from Unity: 320x180 @ every-3-frames)
+// M4 Max unified memory makes per-frame readback essentially free.
+const READBACK_WIDTH: u32 = 640;
+const READBACK_HEIGHT: u32 = 360;
 const MAX_BLOBS: usize = 16;
-const READBACK_INTERVAL_FRAMES: i64 = 3;
+const READBACK_INTERVAL_FRAMES: i64 = 1;
 
-// BlobTrackingFX.cs line 35-36
+// BlobTrackingFX.cs line 35
 const MATCH_RADIUS_SQ: f32 = 0.08;
 const SIZE_SMOOTH_FACTOR: f32 = 0.85;
 

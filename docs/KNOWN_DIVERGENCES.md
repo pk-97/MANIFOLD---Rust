@@ -179,6 +179,13 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Approved by:** Peter / 2026-03-19
 - **Files affected:** `manifold-renderer/src/effects/wireframe_depth.rs`, `manifold-renderer/src/effects/shaders/fx_wireframe_depth.wgsl`
 
+### [D-25] BlobTracking: higher readback resolution, per-frame detection, exposed Connect param
+- **Unity does:** 320x180 readback at every 3 frames, `MATCH_RADIUS_SQ = 0.08`, connection threshold hardcoded at 0.35
+- **Rust does:** 640x360 readback every frame, `MATCH_RADIUS_SQ = 0.08` (unchanged from Unity), connection threshold exposed as param 4 "Connect" (0.0–1.0, default 0.35)
+- **Why:** Apple Silicon unified memory makes per-frame GPU readback essentially free. Higher resolution gives better blob boundary precision. Tighter match radius appropriate for per-frame detection. Exposable connection distance gives artistic control over web density.
+- **Approved by:** Peter / 2026-03-19
+- **Files affected:** `manifold-renderer/src/effects/blob_tracking.rs`, `manifold-core/src/effect_definition_registry.rs`
+
 ---
 
 ## Add new divergences above this line.
