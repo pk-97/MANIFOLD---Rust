@@ -39,6 +39,51 @@ struct DepthResponse {
     subject_api_failed: bool,
 }
 
+// Per-task request/response types for parallel worker mode.
+struct DepthOnlyRequest {
+    pixel_data: Vec<u8>,
+    width: i32,
+    height: i32,
+}
+struct DepthOnlyResponse {
+    depth_buffer: Option<Vec<f32>>,
+}
+
+struct FlowOnlyRequest {
+    pixel_data: Vec<u8>,
+    prev_pixel_data: Vec<u8>,
+    has_prev_frame: bool,
+    width: i32,
+    height: i32,
+}
+struct FlowOnlyResponse {
+    flow_buffer: Option<Vec<f32>>,
+    cut_score: f32,
+}
+
+struct SubjectOnlyRequest {
+    pixel_data: Vec<u8>,
+    width: i32,
+    height: i32,
+    has_subject_mask_history: bool,
+    subject_history: Vec<f32>,
+}
+struct SubjectOnlyResponse {
+    subject_history_blended: Option<Vec<f32>>,
+    subject_api_failed: bool,
+}
+
+enum WorkerMode {
+    Parallel {
+        depth_worker: BackgroundWorker<DepthOnlyRequest, DepthOnlyResponse>,
+        flow_worker: BackgroundWorker<FlowOnlyRequest, FlowOnlyResponse>,
+        subject_worker: BackgroundWorker<SubjectOnlyRequest, SubjectOnlyResponse>,
+    },
+    Monolithic {
+        worker: BackgroundWorker<DepthRequest, DepthResponse>,
+    },
+}
+
 // WireframeDepthFX.cs line 21-35
 const PASS_ANALYSIS: usize           = 0;
 const PASS_HEURISTIC_DEPTH: usize    = 1;
@@ -167,10 +212,14 @@ pub struct WireframeDepthFX {
     width: u32,
     height: u32,
     // WireframeDepthFX.cs line 96-101 — DNN backend state
-    // Native processing runs on a background thread via BackgroundWorker.
-    worker: Option<BackgroundWorker<DepthRequest, DepthResponse>>,
-    // Track which owner submitted the in-flight worker request.
-    pending_native_owner: Option<i64>,
+    // Native processing runs on background thread(s) via BackgroundWorker.
+    // Parallel mode: 3 independent workers (depth, flow, subject).
+    // Monolithic fallback: single worker handling all three tasks.
+    workers: Option<WorkerMode>,
+    // Track which owner submitted in-flight worker requests.
+    pending_depth_owner: Option<i64>,
+    pending_flow_owner: Option<i64>,
+    pending_subject_owner: Option<i64>,
     dnn_backend_initialized: bool,
     dnn_backend_available: bool,
     dnn_next_retry_frame: i64,
@@ -459,9 +508,9 @@ impl WireframeDepthFX {
 
         // WireframeDepthFX.cs line 96-101 — try to create native backend
         // Plugin is created on the worker thread (single creation, no probe).
-        let worker = Self::try_spawn_worker();
-        let dnn_backend_available = worker.is_some();
-        let dnn_backend_initialized = worker.is_some();
+        let workers = Self::try_spawn_workers();
+        let dnn_backend_available = workers.is_some();
+        let dnn_backend_initialized = workers.is_some();
 
         Self {
             pipelines,
@@ -473,8 +522,10 @@ impl WireframeDepthFX {
             owner_states: HashMap::new(),
             width: 0,
             height: 0,
-            worker,
-            pending_native_owner: None,
+            workers,
+            pending_depth_owner: None,
+            pending_flow_owner: None,
+            pending_subject_owner: None,
             dnn_backend_initialized,
             dnn_backend_available,
             dnn_next_retry_frame: 0,
@@ -953,9 +1004,79 @@ impl WireframeDepthFX {
         state.native_flow_dirty = false;
     }
 
-    /// Try to spawn a BackgroundWorker that owns the DepthEstimator.
+    /// Try to spawn 3 parallel workers (depth, flow, subject).
+    /// Returns None if the plugin doesn't support specialized creation.
+    fn try_spawn_parallel_workers() -> Option<WorkerMode> {
+        let depth_worker = BackgroundWorker::try_new(|| {
+            use manifold_native::depth_estimator::DepthEstimator;
+            let mut estimator = manifold_native::ffi::depth_ffi::FfiDepthEstimator::new_depth_only()?;
+            Some(move |req: DepthOnlyRequest| -> DepthOnlyResponse {
+                let pc = (req.width * req.height) as usize;
+                let mut depth = vec![0f32; pc];
+                let ok = estimator.process(&req.pixel_data, req.width, req.height, &mut depth, req.width, req.height);
+                DepthOnlyResponse { depth_buffer: if ok != 0 { Some(depth) } else { None } }
+            })
+        })?;
+
+        let flow_worker = BackgroundWorker::try_new(|| {
+            use manifold_native::depth_estimator::DepthEstimator;
+            let mut estimator = manifold_native::ffi::depth_ffi::FfiDepthEstimator::new_flow_only()?;
+            Some(move |req: FlowOnlyRequest| -> FlowOnlyResponse {
+                if !req.has_prev_frame {
+                    return FlowOnlyResponse { flow_buffer: None, cut_score: 0.0 };
+                }
+                let pc = (req.width * req.height) as usize;
+                let mut flow = vec![0f32; pc * 4];
+                let mut cut = vec![0f32; 1];
+                let ok = estimator.compute_flow(
+                    &req.prev_pixel_data, &req.pixel_data,
+                    req.width, req.height, &mut flow, req.width, req.height, &mut cut,
+                );
+                if ok != 0 { FlowOnlyResponse { flow_buffer: Some(flow), cut_score: cut[0] } }
+                else { FlowOnlyResponse { flow_buffer: None, cut_score: 0.0 } }
+            })
+        })?;
+
+        let subject_worker = BackgroundWorker::try_new(|| {
+            use manifold_native::depth_estimator::DepthEstimator;
+            let mut estimator = manifold_native::ffi::depth_ffi::FfiDepthEstimator::new_subject_only()?;
+            Some(move |req: SubjectOnlyRequest| -> SubjectOnlyResponse {
+                let pc = (req.width * req.height) as usize;
+                let mut mask = vec![0f32; pc];
+                let ok = estimator.process_subject_mask(&req.pixel_data, req.width, req.height, &mut mask, req.width, req.height);
+                if ok != 0 {
+                    const BLEND: f32 = 0.55;
+                    let blended: Vec<f32> = if req.has_subject_mask_history {
+                        let mut hist = req.subject_history;
+                        for i in 0..pc { hist[i] = hist[i] + (mask[i].clamp(0.0, 1.0) - hist[i]) * BLEND; }
+                        hist
+                    } else {
+                        mask.iter().map(|v| v.clamp(0.0, 1.0)).collect()
+                    };
+                    SubjectOnlyResponse { subject_history_blended: Some(blended), subject_api_failed: false }
+                } else {
+                    SubjectOnlyResponse { subject_history_blended: None, subject_api_failed: true }
+                }
+            })
+        })?;
+
+        Some(WorkerMode::Parallel { depth_worker, flow_worker, subject_worker })
+    }
+
+    /// Try to spawn workers: parallel mode first, monolithic fallback.
+    fn try_spawn_workers() -> Option<WorkerMode> {
+        if let Some(parallel) = Self::try_spawn_parallel_workers() {
+            log::info!("[WireframeDepthFX] Spawned 3 parallel native workers");
+            return Some(parallel);
+        }
+        let worker = Self::try_spawn_monolithic_worker()?;
+        log::info!("[WireframeDepthFX] Parallel spawn failed; falling back to monolithic worker");
+        Some(WorkerMode::Monolithic { worker })
+    }
+
+    /// Try to spawn a BackgroundWorker that owns the DepthEstimator (monolithic mode).
     /// Returns None if the native plugin isn't available.
-    fn try_spawn_worker() -> Option<BackgroundWorker<DepthRequest, DepthResponse>> {
+    fn try_spawn_monolithic_worker() -> Option<BackgroundWorker<DepthRequest, DepthResponse>> {
         BackgroundWorker::try_new(|| {
             use manifold_native::depth_estimator::DepthEstimator;
             let mut estimator = manifold_native::ffi::depth_ffi::FfiDepthEstimator::new()?;
@@ -1030,9 +1151,9 @@ impl WireframeDepthFX {
         }
 
         // Retry loading the native plugin (created on worker thread, no probe)
-        let worker = Self::try_spawn_worker();
-        self.dnn_backend_available = worker.is_some();
-        self.worker = worker;
+        let workers = Self::try_spawn_workers();
+        self.dnn_backend_available = workers.is_some();
+        self.workers = workers;
         self.dnn_backend_initialized = true;
         if !self.dnn_backend_available {
             self.dnn_next_retry_frame = frame_count + 300;
@@ -1042,7 +1163,7 @@ impl WireframeDepthFX {
 
     // WireframeDepthFX.cs line 715-728 — DisableDnnBackend
     fn disable_dnn_backend(&mut self, frame_count: i64) {
-        self.worker = None;
+        self.workers = None;
         self.dnn_backend_initialized = true;
         self.dnn_backend_available = false;
         self.dnn_next_retry_frame = frame_count + 300;
@@ -1645,43 +1766,119 @@ impl PostProcessEffect for WireframeDepthFX {
         let subject_isolation = fx.param_values.get(5).copied().unwrap_or(0.0).clamp(0.0, 1.0);
         let blend_mode        = fx.param_values.get(6).copied().unwrap_or(0.0).clamp(0.0, 6.0);
 
-        // ── Poll background worker for completed native results ──
-        if let Some(worker) = &mut self.worker {
-            if let Some(response) = worker.try_recv() {
-                let result_owner = self.pending_native_owner.take().unwrap_or(owner_key);
-                if let Some(state) = self.owner_states.get_mut(&result_owner) {
-                    Self::apply_depth_response(state, &response);
+        // ── Poll background worker(s) for completed native results ──
+        match &mut self.workers {
+            Some(WorkerMode::Parallel { depth_worker, flow_worker, subject_worker }) => {
+                if let Some(resp) = depth_worker.try_recv() {
+                    let ok = self.pending_depth_owner.take().unwrap_or(owner_key);
+                    if let Some(state) = self.owner_states.get_mut(&ok) {
+                        if let Some(ref depth) = resp.depth_buffer {
+                            let copy_len = depth.len().min(state.dnn_depth_buffer.len());
+                            state.dnn_depth_buffer[..copy_len].copy_from_slice(&depth[..copy_len]);
+                            state.dnn_has_depth = true;
+                            state.dnn_depth_dirty = true;
+                        }
+                    }
                 }
-                if response.subject_api_failed {
-                    self.dnn_subject_api_available = false;
+                if let Some(resp) = flow_worker.try_recv() {
+                    let ok = self.pending_flow_owner.take().unwrap_or(owner_key);
+                    if let Some(state) = self.owner_states.get_mut(&ok) {
+                        if let Some(ref flow) = resp.flow_buffer {
+                            let copy_len = flow.len().min(state.native_flow_buffer.len());
+                            state.native_flow_buffer[..copy_len].copy_from_slice(&flow[..copy_len]);
+                            state.native_flow_has_data = true;
+                            state.native_flow_dirty = true;
+                            state.native_flow_ready = true;
+                            state.latest_cut_score = resp.cut_score;
+                        } else {
+                            state.native_flow_has_data = false;
+                            state.native_flow_ready = false;
+                            state.latest_cut_score = 0.0;
+                        }
+                    }
+                }
+                if let Some(resp) = subject_worker.try_recv() {
+                    if resp.subject_api_failed {
+                        self.dnn_subject_api_available = false;
+                    }
+                    let ok = self.pending_subject_owner.take().unwrap_or(owner_key);
+                    if let Some(state) = self.owner_states.get_mut(&ok) {
+                        if let Some(ref blended) = resp.subject_history_blended {
+                            let copy_len = blended.len().min(state.dnn_subject_history_buffer.len());
+                            state.dnn_subject_history_buffer[..copy_len].copy_from_slice(&blended[..copy_len]);
+                            state.dnn_has_subject_mask = true;
+                            state.dnn_subject_dirty = true;
+                        }
+                    }
                 }
             }
+            Some(WorkerMode::Monolithic { worker }) => {
+                if let Some(response) = worker.try_recv() {
+                    let result_owner = self.pending_depth_owner.take().unwrap_or(owner_key);
+                    if let Some(state) = self.owner_states.get_mut(&result_owner) {
+                        Self::apply_depth_response(state, &response);
+                    }
+                    if response.subject_api_failed {
+                        self.dnn_subject_api_available = false;
+                    }
+                }
+            }
+            None => {}
         }
 
-        // ── Poll GPU readback → submit to background worker ──
+        // ── Poll GPU readback → submit to background worker(s) ──
         if let Some(state) = self.owner_states.get_mut(&owner_key) {
             if state.dnn_readback_pending {
                 if let Some(pixels) = state.readback.try_read(device) {
                     state.dnn_readback_pending = false;
-                    // Build request and submit to worker (non-blocking).
-                    if let Some(worker) = &mut self.worker {
-                        let aw = state.analysis_width as i32;
-                        let ah = state.analysis_height as i32;
-                        let req = DepthRequest {
-                            pixel_data: pixels.clone(),
-                            prev_pixel_data: state.prev_native_pixel_buffer.clone(),
-                            has_prev_frame: state.has_prev_native_frame,
-                            width: aw,
-                            height: ah,
-                            wants_flow: state.native_request_wants_flow,
-                            wants_depth: state.native_request_wants_depth,
-                            wants_subject: state.native_request_wants_subject,
-                            has_subject_mask_history: state.dnn_has_subject_mask,
-                            subject_history: state.dnn_subject_history_buffer.clone(),
-                        };
-                        worker.submit(req);
-                        self.pending_native_owner = Some(owner_key);
+                    let aw = state.analysis_width as i32;
+                    let ah = state.analysis_height as i32;
+
+                    match &mut self.workers {
+                        Some(WorkerMode::Parallel { depth_worker, flow_worker, subject_worker }) => {
+                            if state.native_request_wants_depth {
+                                depth_worker.submit(DepthOnlyRequest {
+                                    pixel_data: pixels.clone(), width: aw, height: ah,
+                                });
+                                self.pending_depth_owner = Some(owner_key);
+                            }
+                            if state.native_request_wants_flow {
+                                flow_worker.submit(FlowOnlyRequest {
+                                    pixel_data: pixels.clone(),
+                                    prev_pixel_data: state.prev_native_pixel_buffer.clone(),
+                                    has_prev_frame: state.has_prev_native_frame,
+                                    width: aw, height: ah,
+                                });
+                                self.pending_flow_owner = Some(owner_key);
+                            }
+                            if state.native_request_wants_subject {
+                                subject_worker.submit(SubjectOnlyRequest {
+                                    pixel_data: pixels.clone(),
+                                    width: aw, height: ah,
+                                    has_subject_mask_history: state.dnn_has_subject_mask,
+                                    subject_history: state.dnn_subject_history_buffer.clone(),
+                                });
+                                self.pending_subject_owner = Some(owner_key);
+                            }
+                        }
+                        Some(WorkerMode::Monolithic { worker }) => {
+                            let req = DepthRequest {
+                                pixel_data: pixels.clone(),
+                                prev_pixel_data: state.prev_native_pixel_buffer.clone(),
+                                has_prev_frame: state.has_prev_native_frame,
+                                width: aw, height: ah,
+                                wants_flow: state.native_request_wants_flow,
+                                wants_depth: state.native_request_wants_depth,
+                                wants_subject: state.native_request_wants_subject,
+                                has_subject_mask_history: state.dnn_has_subject_mask,
+                                subject_history: state.dnn_subject_history_buffer.clone(),
+                            };
+                            worker.submit(req);
+                            self.pending_depth_owner = Some(owner_key);
+                        }
+                        None => {}
                     }
+
                     // Copy current → prev immediately (at submit time, not completion).
                     let copy_len = pixels.len().min(state.prev_native_pixel_buffer.len());
                     state.prev_native_pixel_buffer[..copy_len].copy_from_slice(&pixels[..copy_len]);
