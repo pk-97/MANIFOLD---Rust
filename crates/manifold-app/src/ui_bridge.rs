@@ -250,7 +250,34 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::TogglePercussion => {
-            log::info!("Toggle percussion (not yet implemented)");
+            // Unity: PERC button → percussionImportController.OnImportPercussionMap()
+            // Same as ImportAudioClicked — open file dialog for audio analysis.
+            let last_dir = dialog_path_memory::get_last_directory(
+                DialogContext::PercussionImport, user_prefs,
+            );
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("Import Audio for Percussion Analysis")
+                .add_filter("Audio Files", &["wav", "mp3", "m4a", "aac", "flac", "ogg", "aif", "aiff", "wma", "json"]);
+            if !last_dir.is_empty() {
+                dialog = dialog.set_directory(&last_dir);
+            }
+            if let Some(path) = dialog.pick_file() {
+                let path_str = path.to_string_lossy().to_string();
+                dialog_path_memory::remember_directory(
+                    DialogContext::PercussionImport, &path_str, user_prefs,
+                );
+                let current_beat = engine.current_beat();
+                if let Some(project) = engine.project_mut() {
+                    let beats_per_bar = project.settings.time_signature_numerator;
+                    percussion_orchestrator.on_import_percussion_map(
+                        Some(path_str),
+                        project,
+                        editing,
+                        current_beat,
+                        beats_per_bar,
+                    );
+                }
+            }
             DispatchResult::handled()
         }
         PanelAction::ToggleMonitor => {
