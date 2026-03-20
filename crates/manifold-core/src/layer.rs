@@ -357,12 +357,18 @@ impl Layer {
     }
 
     /// Change generator type, clearing params/drivers/envelopes.
+    /// Unity Layer.cs lines 554-559.
     pub fn change_generator_type(&mut self, new_type: GeneratorType) {
+        if self.layer_type != LayerType::Generator {
+            return;
+        }
         let gp = self.gen_params.get_or_insert_with(GeneratorParamState::default);
         gp.change_type(new_type);
+        self.update_clip_generator_types(new_type);
     }
 
     /// Restore generator state from snapshot.
+    /// Unity Layer.cs lines 561-567.
     pub fn restore_generator_state(
         &mut self,
         old_type: GeneratorType,
@@ -370,12 +376,26 @@ impl Layer {
         drivers: Option<Vec<ParameterDriver>>,
         envelopes: Option<Vec<ParamEnvelope>>,
     ) {
+        if self.layer_type != LayerType::Generator {
+            return;
+        }
         let gp = self.gen_params.get_or_insert_with(GeneratorParamState::default);
         gp.generator_type = old_type;
         gp.param_values = params.clone();
         gp.base_param_values = Some(params);
         gp.drivers = drivers;
         gp.envelopes = envelopes;
+        self.update_clip_generator_types(old_type);
+    }
+
+    /// Propagate generator type to all generator clips on this layer.
+    /// Unity Layer.cs lines 569-577.
+    fn update_clip_generator_types(&mut self, gen_type: GeneratorType) {
+        for clip in &mut self.clips {
+            if clip.is_generator() {
+                clip.generator_type = gen_type;
+            }
+        }
     }
 
     /// Set opacity with clamp. Unity Layer.cs line 140.

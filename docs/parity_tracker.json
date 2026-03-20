@@ -629,9 +629,9 @@
       "title": "Fix 5 minor core behavioral divergences",
       "severity": "low",
       "est_loc": 30,
-      "status": "todo",
+      "status": "done",
       "commit": null,
-      "notes": "1) TempoMapConverter.seconds_per_beat_from_bpm() doesn't clamp BPM to 20-300. 2) TimelineClip.overlaps_with() doesn't check layer index (Unity returns false for different layers). 3) EffectInstance.ensure_base_values() doesn't check length mismatch, only is_none(). 4) Layer.change_generator_type() doesn't propagate to clips via UpdateClipGeneratorTypes(). 5) BeatQuantizer negative sentinel \u2014 verify if already fixed in b59ad6d."
+      "notes": "All 5 verified: (1) seconds_per_beat_from_bpm — already had clamp(20,300). (2) overlaps_with — FIXED: added layer_index guard matching Unity. (3) ensure_base_values — already checks is_none OR length mismatch. (4) change_generator_type — FIXED: added LayerType::Generator guard + update_clip_generator_types() propagation; also fixed restore_generator_state. (5) BeatQuantizer negative sentinel — already fixed (negative values returned as-is)."
     }
   ]
 }

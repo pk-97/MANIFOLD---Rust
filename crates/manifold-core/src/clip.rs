@@ -93,6 +93,9 @@ impl TimelineClip {
     }
 
     pub fn overlaps_with(&self, other: &TimelineClip) -> bool {
+        if other.layer_index != self.layer_index {
+            return false;
+        }
         self.start_beat < other.end_beat() && self.end_beat() > other.start_beat
     }
 
