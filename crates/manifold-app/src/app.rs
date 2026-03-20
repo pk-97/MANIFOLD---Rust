@@ -599,9 +599,7 @@ impl Application {
             self.needs_rebuild = true;
 
             // Sync frame timer to project's frame rate (Unity: Application.targetFrameRate)
-            if let Some(p) = self.engine.project() {
-                self.frame_timer.set_target_fps(p.settings.frame_rate as f64);
-            }
+            self.frame_timer.set_target_fps(self.local_project.settings.frame_rate as f64);
 
             eprintln!("[PROJECT LOAD] total sync time: {:.1}ms (audio loading continues in background)", t_total.elapsed().as_secs_f64() * 1000.0);
         }
@@ -663,8 +661,9 @@ impl Application {
         }
     }
 
-    /// Open an HDR output window on the specified (or non-primary) monitor.
-    /// Uses borderless fullscreen to avoid macOS fullscreen transition stall.
+    /// Open a decorated HDR output window (default size = project resolution).
+    /// Resizable — content always renders at project resolution with letterbox/pillarbox.
+    /// Native title bar allows drag-to-monitor and macOS fullscreen (green button).
     /// Surface is Rgba16Float — wgpu v28 Metal backend auto-enables EDR.
     /// Unity: NativeMonitorWindowController.cs + MonitorWindowPlugin.mm.
     fn open_output_window(
@@ -732,16 +731,21 @@ impl Application {
             mon_phys_size.width, mon_phys_size.height, scale_factor
         );
 
-        // "Fake fullscreen" — borderless window sized and positioned in logical coords
-        // to cover the target monitor exactly. Avoids macOS fullscreen spaces transition.
+        // Default size = project resolution. Resizable + native fullscreen supported.
+        // Content always renders at project resolution with letterbox/pillarbox to fit.
+        let (proj_w, proj_h) = (
+            self.local_project.settings.output_width.max(1) as f64,
+            self.local_project.settings.output_height.max(1) as f64,
+        );
+        let center_x = logical_x + (logical_w - proj_w) * 0.5;
+        let center_y = logical_y + (logical_h - proj_h) * 0.5;
+
         let attrs = winit::window::Window::default_attributes()
             .with_title(format!("MANIFOLD - {}", name))
-            .with_decorations(false)
-            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             .with_position(winit::dpi::Position::Logical(
-                winit::dpi::LogicalPosition::new(logical_x, logical_y),
+                winit::dpi::LogicalPosition::new(center_x, center_y),
             ))
-            .with_inner_size(winit::dpi::LogicalSize::new(logical_w, logical_h));
+            .with_inner_size(winit::dpi::LogicalSize::new(proj_w, proj_h));
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
@@ -751,12 +755,7 @@ impl Application {
             }
         };
 
-        // Make the output window click-through and non-focusable.
-        // All mouse/keyboard input passes to the workspace window behind it.
-        // Unity: MonitorWindowPlugin.mm sets NSWindow.ignoresMouseEvents = YES.
-        if let Err(e) = window.set_cursor_hittest(false) {
-            log::warn!("[OutputWindow] set_cursor_hittest(false) failed: {e} — window may steal input");
-        }
+        // Window is interactive — user can drag to any monitor and use native fullscreen.
 
         let size = window.inner_size();
         let scale = window.scale_factor();
@@ -997,7 +996,8 @@ impl Application {
                 }
                 PanelAction::LayerDoubleClicked(idx) => {
                     // Open text input for layer rename
-                    if let Some(project) = self.engine.project() {
+                    {
+                        let project = &self.local_project;
                         if let Some(layer) = project.timeline.layers.get(*idx) {
                             let nid = self.ui_root.layer_headers.name_node_id(*idx);
                             let r = if nid >= 0 {
@@ -1413,9 +1413,8 @@ impl Application {
                     source_aspect,
                 );
             } else {
-                // Output windows: HDR blit with aspect-correct letterbox/pillarbox.
-                // Uses the output-specific blit pipeline (Rgba16Float target format)
-                // if available, otherwise falls back to the workspace blit pipeline.
+                // Output windows: project resolution centered with letterbox/pillarbox.
+                // Clear to black first (bars around content when window != project aspect).
                 let output_blit = self.output_blit_pipeline.as_ref().unwrap_or(blit);
                 {
                     let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
