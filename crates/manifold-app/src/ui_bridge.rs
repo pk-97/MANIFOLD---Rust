@@ -400,7 +400,7 @@ pub fn dispatch(
             DispatchResult::structural()
         }
         PanelAction::LayerDoubleClicked(_idx) => {
-            log::debug!("Layer double-clicked (rename not yet implemented)");
+            // Intercepted by app.rs — opens text input for layer rename
             DispatchResult::handled()
         }
         PanelAction::ChevronClicked(idx) => {

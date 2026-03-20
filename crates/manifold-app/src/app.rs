@@ -999,6 +999,26 @@ impl Application {
                     );
                     continue;
                 }
+                PanelAction::LayerDoubleClicked(idx) => {
+                    // Open text input for layer rename
+                    if let Some(project) = self.engine.project() {
+                        if let Some(layer) = project.timeline.layers.get(*idx) {
+                            let nid = self.ui_root.layer_headers.name_node_id(*idx);
+                            let r = if nid >= 0 {
+                                self.ui_root.tree.get_bounds(nid as u32)
+                            } else {
+                                manifold_ui::node::Rect::new(100.0, 100.0, 120.0, 20.0)
+                            };
+                            self.text_input.begin(
+                                crate::text_input::TextInputField::LayerName(*idx),
+                                &layer.name,
+                                crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                                11.0,
+                            );
+                        }
+                    }
+                    continue;
+                }
                 PanelAction::ClipBpmClicked => {
                     // Open text input for clip recorded BPM editing.
                     // Unity: ClipInspector.OnBitmapBpmClicked → BitmapTextInput.BeginEdit
