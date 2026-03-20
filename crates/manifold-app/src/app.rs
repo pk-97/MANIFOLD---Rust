@@ -837,9 +837,13 @@ impl Application {
                 // Accept project snapshot if data_version changed (unless drag in progress)
                 if let Some(snapshot) = state.project_snapshot {
                     let drag_active = self.overlay.drag_mode() != manifold_ui::interaction_overlay::DragMode::None;
+                    // Also guard against inspector slider/param drags — these mutate
+                    // local_project directly during drag without sending commands.
+                    // Accepting a snapshot mid-drag would overwrite the drag value.
+                    let inspector_dragging = self.ui_root.inspector.is_dragging();
                     // Suppress snapshots until content thread catches up after a local project load.
                     let suppressed = state.data_version < self.suppress_snapshot_until;
-                    if !drag_active && !suppressed {
+                    if !drag_active && !inspector_dragging && !suppressed {
                         self.local_project = *snapshot;
                         // Clear suppression once we've accepted a post-load snapshot
                         self.suppress_snapshot_until = 0;

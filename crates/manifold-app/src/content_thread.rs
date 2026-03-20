@@ -194,7 +194,16 @@ impl ContentThread {
                 }
             }
             ContentCommand::Record(cmd) => {
-                self.editing_service.record(cmd);
+                // Record = already executed on local_project by the UI thread.
+                // We must ALSO execute on the content thread's project so that
+                // the next snapshot sent back to the UI contains the correct
+                // (post-command) state. Without this, the snapshot has stale
+                // data and overwrites the UI's local_project → snap-back bug.
+                if let Some(p) = self.engine.project_mut() {
+                    self.editing_service.execute(cmd, p);
+                } else {
+                    self.editing_service.record(cmd);
+                }
             }
             ContentCommand::Undo => {
                 if let Some(p) = self.engine.project_mut() {
