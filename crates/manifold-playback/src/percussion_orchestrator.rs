@@ -351,13 +351,12 @@ impl Command for SetImportedAudioCommand {
 /// Internal phase of an active pipeline run.
 /// Encodes the sequential logic of RunPercussionPipelineAsync.
 enum PipelineRunState {
-    /// Currently running backend at `invocation_index`. `handle` is the live process.
+    /// Currently running the single backend. `handle` is the live process.
     Running {
-        invocation_index: usize,
         handle: ProcessHandle,
         latest_process_line: String,
     },
-    /// All backends exhausted — done (success or failure stored in `result`).
+    /// Done (success or failure stored in `result`).
     Done {
         ok: bool,
         /// Last failure detail (used for diagnostics logging).
@@ -413,9 +412,8 @@ struct ImportMapState {
     import_start_beat: f32,
     selected_path: String,
     temp_output_json: String,
-    invocations: Vec<PercussionPipelineInvocation>,
+    invocation: PercussionPipelineInvocation,
     pipeline_run: Option<PipelineRunState>,
-    all_failures: Vec<String>,
 }
 
 #[allow(dead_code)]
@@ -437,9 +435,8 @@ struct ImportAudioOnlyState {
     selected_path: String,
     start_beat: f32,
     temp_output_json: String,
-    invocations: Vec<PercussionPipelineInvocation>,
+    invocation: PercussionPipelineInvocation,
     pipeline_run: Option<PipelineRunState>,
-    all_failures: Vec<String>,
 }
 
 #[allow(dead_code)]
@@ -457,9 +454,8 @@ struct ReAnalyzeTriggersState {
     instrument_group: String,
     sub_phase: ReAnalyzeSubPhase,
     temp_output_json: String,
-    invocations: Vec<PercussionPipelineInvocation>,
+    invocation: PercussionPipelineInvocation,
     pipeline_run: Option<PipelineRunState>,
-    all_failures: Vec<String>,
 }
 
 #[allow(dead_code)]
@@ -472,9 +468,8 @@ struct ReImportStemsState {
     audio_path: String,
     sub_phase: ReImportStemsSubPhase,
     temp_output_json: String,
-    invocations: Vec<PercussionPipelineInvocation>,
+    invocation: PercussionPipelineInvocation,
     pipeline_run: Option<PipelineRunState>,
-    all_failures: Vec<String>,
 }
 
 #[allow(dead_code)]
@@ -730,31 +725,42 @@ impl PercussionImportOrchestrator {
         }
 
         let temp_output_json = Self::build_temp_percussion_output_path(&selected_path);
-        let invocations = PercussionPipelineBackendResolver::build_default_import_invocations(
-            &self.application_data_path,
-            &selected_path,
-            &temp_output_json,
-            self.pipeline_settings.as_ref(),
-        );
+        let invocation = if let Some(settings) = self.pipeline_settings.as_ref() {
+            PercussionPipelineBackendResolver::build_invocation_with_settings(
+                &self.application_data_path,
+                &selected_path,
+                &temp_output_json,
+                settings,
+                None,
+            )
+        } else {
+            PercussionPipelineBackendResolver::build_invocation(
+                &self.application_data_path,
+                &selected_path,
+                &temp_output_json,
+            )
+        };
 
-        if invocations.is_empty() {
-            log::error!(
-                "[PercussionImportOrchestrator] Percussion analysis backend unavailable. \
-                Expected either bundled runtime at Resources/{} \
-                or project script at Tools/AudioAnalysis/percussion_json_pipeline.py",
-                PercussionPipelineBackendResolver::BUNDLED_RUNTIME_FOLDER_NAME
-            );
-            self.percussion_import_in_progress = false;
-            self.set_percussion_import_status(
-                "Perc: analysis backend missing",
-                COLOR_RED,
-                false,
-                4.0,
-                PERCUSSION_PROGRESS_UNKNOWN,
-                false,
-            );
-            return;
-        }
+        let invocation = match invocation {
+            Some(inv) => inv,
+            None => {
+                log::error!(
+                    "[PercussionImportOrchestrator] Percussion analysis backend unavailable. \
+                    Expected bundled runtime at Resources/{}",
+                    PercussionPipelineBackendResolver::BUNDLED_RUNTIME_FOLDER_NAME
+                );
+                self.percussion_import_in_progress = false;
+                self.set_percussion_import_status(
+                    "Perc: analysis backend missing",
+                    COLOR_RED,
+                    false,
+                    4.0,
+                    PERCUSSION_PROGRESS_UNKNOWN,
+                    false,
+                );
+                return;
+            }
+        };
 
         self.set_percussion_import_status(
             "Perc: preparing analysis backend",
@@ -771,9 +777,8 @@ impl PercussionImportOrchestrator {
             import_start_beat,
             selected_path,
             temp_output_json,
-            invocations,
+            invocation,
             pipeline_run: None,
-            all_failures: Vec::new(),
         });
     }
 
@@ -823,49 +828,61 @@ impl PercussionImportOrchestrator {
         );
 
         let temp_output_json = Self::build_temp_percussion_output_path(&selected_path);
-        let invocations = PercussionPipelineBackendResolver::build_bpm_only_invocations(
-            &self.application_data_path,
-            &selected_path,
-            &temp_output_json,
-            self.pipeline_settings.as_ref(),
-        );
+        let invocation = if let Some(settings) = self.pipeline_settings.as_ref() {
+            PercussionPipelineBackendResolver::build_invocation_with_settings(
+                &self.application_data_path,
+                &selected_path,
+                &temp_output_json,
+                settings,
+                None,
+            )
+        } else {
+            PercussionPipelineBackendResolver::build_invocation(
+                &self.application_data_path,
+                &selected_path,
+                &temp_output_json,
+            )
+        };
 
-        if invocations.is_empty() {
-            // No BPM backend — still import the audio, just without BPM detection.
-            let bpm_text = "no BPM backend";
-            self.set_percussion_import_status(
-                &format!("Audio imported | {}", bpm_text),
-                COLOR_ORANGE,
-                false,
-                5.0,
-                PERCUSSION_PROGRESS_UNKNOWN,
-                false,
-            );
-            log::log!(
-                log::Level::Info,
-                "[PercussionImportOrchestrator] Audio imported: '{}' at beat {:.2} (no BPM backend available)",
-                path_file_name(&selected_path),
-                start_beat
-            );
+        let invocation = match invocation {
+            Some(inv) => inv,
+            None => {
+                // No BPM backend — still import the audio, just without BPM detection.
+                let bpm_text = "no BPM backend";
+                self.set_percussion_import_status(
+                    &format!("Audio imported | {}", bpm_text),
+                    COLOR_ORANGE,
+                    false,
+                    5.0,
+                    PERCUSSION_PROGRESS_UNKNOWN,
+                    false,
+                );
+                log::log!(
+                    log::Level::Info,
+                    "[PercussionImportOrchestrator] Audio imported: '{}' at beat {:.2} (no BPM backend available)",
+                    path_file_name(&selected_path),
+                    start_beat
+                );
 
-            let new_path = state.audio_path.clone();
-            let new_start_beat = state.audio_start_beat;
-            let new_hash = state.audio_hash.clone();
-            let new_stems = state.stem_paths.clone();
-            self.record_audio_state_change(
-                old_audio.path,
-                old_audio.start_beat,
-                old_audio.hash,
-                old_audio.stem_paths,
-                new_path,
-                new_start_beat,
-                new_hash,
-                new_stems,
-                "Import audio",
-                editing_service,
-            );
-            return;
-        }
+                let new_path = state.audio_path.clone();
+                let new_start_beat = state.audio_start_beat;
+                let new_hash = state.audio_hash.clone();
+                let new_stems = state.stem_paths.clone();
+                self.record_audio_state_change(
+                    old_audio.path,
+                    old_audio.start_beat,
+                    old_audio.hash,
+                    old_audio.stem_paths,
+                    new_path,
+                    new_start_beat,
+                    new_hash,
+                    new_stems,
+                    "Import audio",
+                    editing_service,
+                );
+                return;
+            }
+        };
 
         self.set_percussion_import_status(
             "Detecting BPM",
@@ -883,9 +900,8 @@ impl PercussionImportOrchestrator {
             selected_path,
             start_beat,
             temp_output_json,
-            invocations,
+            invocation,
             pipeline_run: None,
-            all_failures: Vec::new(),
         });
     }
 
@@ -939,26 +955,36 @@ impl PercussionImportOrchestrator {
 
         let audio_path = audio_path.to_string();
         let temp_output_json = Self::build_temp_percussion_output_path(&audio_path);
-        let invocations =
-            PercussionPipelineBackendResolver::build_trigger_re_analysis_invocations(
+        let invocation = if let Some(settings) = self.pipeline_settings.as_ref() {
+            PercussionPipelineBackendResolver::build_invocation_with_settings(
                 &self.application_data_path,
                 &audio_path,
                 &temp_output_json,
-                self.pipeline_settings.as_ref(),
+                settings,
                 Some(instrument_group),
-            );
+            )
+        } else {
+            PercussionPipelineBackendResolver::build_invocation(
+                &self.application_data_path,
+                &audio_path,
+                &temp_output_json,
+            )
+        };
 
-        if invocations.is_empty() {
-            self.set_percussion_import_status(
-                "Analysis backend missing",
-                COLOR_RED,
-                false,
-                4.0,
-                PERCUSSION_PROGRESS_UNKNOWN,
-                false,
-            );
-            return;
-        }
+        let invocation = match invocation {
+            Some(inv) => inv,
+            None => {
+                self.set_percussion_import_status(
+                    "Analysis backend missing",
+                    COLOR_RED,
+                    false,
+                    4.0,
+                    PERCUSSION_PROGRESS_UNKNOWN,
+                    false,
+                );
+                return;
+            }
+        };
 
         let group_label = instrument_group.to_uppercase();
         self.percussion_import_in_progress = true;
@@ -975,9 +1001,8 @@ impl PercussionImportOrchestrator {
             instrument_group: instrument_group.to_string(),
             sub_phase: ReAnalyzeSubPhase::RunningPipeline,
             temp_output_json,
-            invocations,
+            invocation,
             pipeline_run: None,
-            all_failures: Vec::new(),
         });
     }
 
@@ -1033,26 +1058,36 @@ impl PercussionImportOrchestrator {
         }
 
         let temp_output_json = Self::build_temp_percussion_output_path(&audio_path);
-        let invocations =
-            PercussionPipelineBackendResolver::build_trigger_re_analysis_invocations(
+        let invocation = if let Some(settings) = self.pipeline_settings.as_ref() {
+            PercussionPipelineBackendResolver::build_invocation_with_settings(
                 &self.application_data_path,
                 &audio_path,
                 &temp_output_json,
-                self.pipeline_settings.as_ref(),
+                settings,
                 None, // null = all instruments, ensures all stems are generated
-            );
+            )
+        } else {
+            PercussionPipelineBackendResolver::build_invocation(
+                &self.application_data_path,
+                &audio_path,
+                &temp_output_json,
+            )
+        };
 
-        if invocations.is_empty() {
-            self.set_percussion_import_status(
-                "Analysis backend missing",
-                COLOR_RED,
-                false,
-                4.0,
-                PERCUSSION_PROGRESS_UNKNOWN,
-                false,
-            );
-            return;
-        }
+        let invocation = match invocation {
+            Some(inv) => inv,
+            None => {
+                self.set_percussion_import_status(
+                    "Analysis backend missing",
+                    COLOR_RED,
+                    false,
+                    4.0,
+                    PERCUSSION_PROGRESS_UNKNOWN,
+                    false,
+                );
+                return;
+            }
+        };
 
         self.percussion_import_in_progress = true;
         self.set_percussion_import_status(
@@ -1068,9 +1103,8 @@ impl PercussionImportOrchestrator {
             audio_path,
             sub_phase: ReImportStemsSubPhase::RunningPipeline,
             temp_output_json,
-            invocations,
+            invocation,
             pipeline_run: None,
-            all_failures: Vec::new(),
         });
     }
 
@@ -1501,25 +1535,15 @@ impl PercussionImportOrchestrator {
         match &state.sub_phase {
             ImportMapSubPhase::RunningPipeline => {
                 // Drive pipeline runner.
-                let (done, ok, _details) = drive_pipeline_run(
+                let (done, ok, details) = drive_pipeline_run(
                     &mut state.pipeline_run,
-                    &state.invocations,
-                    &mut state.all_failures,
+                    &state.invocation,
                     &self.pipeline_progress_parser,
-                    |msg, color| {
-                        // Can't call self here — collect update info and apply after.
-                        let _ = (msg, color); // applied below via separate tracking
-                    },
                 );
 
                 // Update status from pipeline output.
-                let current_idx = get_current_invocation_index(&state.pipeline_run);
-                let total = state.invocations.len();
-                self.percussion_import_status_message = format!(
-                    "Perc: running analysis backend ({}/{})",
-                    current_idx + 1,
-                    total
-                );
+                self.percussion_import_status_message =
+                    "Perc: running analysis backend".to_string();
                 self.percussion_import_status_color = COLOR_BLUE;
                 self.percussion_import_status_animate = true;
                 self.percussion_import_status_progress01 = PERCUSSION_PROGRESS_UNKNOWN;
@@ -1529,7 +1553,7 @@ impl PercussionImportOrchestrator {
                     // Transition to ImportingJson.
                     let pipeline_ok = ok;
                     if !pipeline_ok {
-                        let details_str = state.all_failures.last().cloned().unwrap_or_default();
+                        let details_str = details;
                         log::error!(
                             "[PercussionImportOrchestrator] Audio analysis failed. {}",
                             details_str
@@ -1720,10 +1744,8 @@ impl PercussionImportOrchestrator {
             ImportAudioOnlySubPhase::RunningBpmPipeline => {
                 let (done, ok, _details) = drive_pipeline_run(
                     &mut state.pipeline_run,
-                    &state.invocations,
-                    &mut state.all_failures,
+                    &state.invocation,
                     &self.pipeline_progress_parser,
-                    |_, _| {},
                 );
 
                 if done {
@@ -1929,12 +1951,10 @@ impl PercussionImportOrchestrator {
 
         match &state.sub_phase {
             ReAnalyzeSubPhase::RunningPipeline => {
-                let (done, ok, _details) = drive_pipeline_run(
+                let (done, ok, details) = drive_pipeline_run(
                     &mut state.pipeline_run,
-                    &state.invocations,
-                    &mut state.all_failures,
+                    &state.invocation,
                     &self.pipeline_progress_parser,
-                    |_, _| {},
                 );
 
                 if done {
@@ -1942,7 +1962,7 @@ impl PercussionImportOrchestrator {
                     let temp_json = state.temp_output_json.clone();
 
                     if !ok {
-                        let details = state.all_failures.last().cloned().unwrap_or_default();
+                        let details = details;
                         let group_label = instrument_group.to_uppercase();
                         log::error!(
                             "[PercussionImportOrchestrator] Re-analysis failed for {}. {}",
@@ -2014,12 +2034,10 @@ impl PercussionImportOrchestrator {
 
         match &state.sub_phase {
             ReImportStemsSubPhase::RunningPipeline => {
-                let (done, ok, _details) = drive_pipeline_run(
+                let (done, ok, details) = drive_pipeline_run(
                     &mut state.pipeline_run,
-                    &state.invocations,
-                    &mut state.all_failures,
+                    &state.invocation,
                     &self.pipeline_progress_parser,
-                    |_, _| {},
                 );
 
                 if done {
@@ -2029,7 +2047,7 @@ impl PercussionImportOrchestrator {
                     let _ = std::fs::remove_file(&temp_json);
 
                     if !ok {
-                        let details = state.all_failures.last().cloned().unwrap_or_default();
+                        let details = details;
                         log::error!(
                             "[PercussionImportOrchestrator] Stem re-import failed. {}",
                             details
@@ -2808,201 +2826,145 @@ impl Command for MoveClipBeatCommand {
 
 /// Drive the pipeline run one tick. Returns (done, ok, last_details).
 /// This is the Rust equivalent of `RunPercussionPipelineAsync`'s per-frame logic.
+/// With the simplified bundled-only backend, there is exactly one invocation to run.
 fn drive_pipeline_run(
     pipeline_run: &mut Option<PipelineRunState>,
-    invocations: &[PercussionPipelineInvocation],
-    all_failures: &mut Vec<String>,
+    invocation: &PercussionPipelineInvocation,
     parser: &PercussionPipelineProgressParser,
-    mut _status_callback: impl FnMut(&str, StatusColor),
 ) -> (bool, bool, String) {
-    // If no active run, start the first invocation.
+    // If no active run, start the invocation.
     if pipeline_run.is_none() {
-        advance_to_next_invocation(pipeline_run, invocations, all_failures, 0);
-        if pipeline_run.is_none() {
-            // No invocations available.
+        if invocation.command.trim().is_empty() {
             let details = "No analysis backend invocation candidates were resolved.".to_string();
             return (true, false, details);
         }
-    }
-
-    loop {
-        let (current_idx, finished, exit_code, new_lines, latest_line) =
-            match pipeline_run.as_mut() {
-                Some(PipelineRunState::Running {
-                    invocation_index,
-                    handle,
-                    latest_process_line,
-                }) => {
-                    let new_lines = handle.poll();
-                    let mut latest = latest_process_line.clone();
-                    for line_info in &new_lines {
-                        if !line_info.line.trim().is_empty() {
-                            latest = line_info.line.trim().to_string();
-                        }
-                    }
-                    let finished = handle.is_finished();
-                    let exit_code = handle.exit_code();
-                    (*invocation_index, finished, exit_code, new_lines, latest)
-                }
-                Some(PipelineRunState::Done { ok, details }) => {
-                    let ok = *ok;
-                    let details = details.clone();
-                    return (true, ok, details);
-                }
-                None => {
-                    return (true, false, "No pipeline run active.".to_string());
-                }
-            };
-
-        // Parse progress lines and surface to status.
-        for line_info in &new_lines {
-            if line_info.line.trim().is_empty() {
-                continue;
-            }
-            let progress = parser.parse_line(&line_info.line, line_info.is_stderr);
-            if progress.has_progress {
-                // Status update captured; callers will read it from the orchestrator.
-                let _ = progress;
-            }
-        }
-
-        if !finished {
-            // Not done yet — return without advancing.
-            return (false, false, String::new());
-        }
-
-        // Process finished. Check result.
-        let exit_code = exit_code.unwrap_or(-1);
-        let invocation = &invocations[current_idx];
-
-        let output_json = PercussionImportOrchestrator::resolve_output_path_from_arguments(
-            &invocation.arguments,
-        );
-        let output_exists = output_json
-            .as_deref()
-            .map_or(false, |p| std::path::Path::new(p).exists());
-
-        if exit_code == 0 && output_exists {
-            // Success.
-            log::info!(
-                "[PercussionImportOrchestrator] Percussion pipeline: analysis complete (backend='{}')",
-                invocation.backend_label
-            );
-            *pipeline_run = Some(PipelineRunState::Done {
-                ok: true,
-                details: String::new(),
-            });
-            return (true, true, String::new());
-        }
-
-        // Failure — record details and try next invocation.
-        let stderr_acc = match pipeline_run.as_ref() {
-            Some(PipelineRunState::Running { handle, .. }) => handle.stderr().to_string(),
-            _ => String::new(),
-        };
-
-        let details = format!(
-            "backend='{}' cmd='{}' exit={}. {}{}",
-            invocation.backend_label,
-            invocation.command,
-            exit_code,
-            if !stderr_acc.trim().is_empty() {
-                format!("stderr: {} ", stderr_acc.trim())
-            } else {
-                String::new()
-            },
-            if !latest_line.is_empty() {
-                format!("lastLog: {}", latest_line)
-            } else {
-                String::new()
-            },
-        );
-        log::warn!(
-            "[PercussionImportOrchestrator] Percussion backend failed: {}",
-            details
-        );
-        all_failures.push(details);
-
-        // Try next invocation.
-        let next_idx = current_idx + 1;
-        advance_to_next_invocation(pipeline_run, invocations, all_failures, next_idx);
-
-        if let Some(PipelineRunState::Done { ok, details }) = pipeline_run.as_ref() {
-            let ok = *ok;
-            let details = details.clone();
-            return (true, ok, details);
-        }
-
-        // Continue polling the new handle next tick.
-        return (false, false, String::new());
-    }
-}
-
-/// Advance the pipeline run to the invocation at `start_idx`, skipping blank commands.
-/// If all invocations are exhausted, sets Done { ok: false }.
-fn advance_to_next_invocation(
-    pipeline_run: &mut Option<PipelineRunState>,
-    invocations: &[PercussionPipelineInvocation],
-    all_failures: &mut Vec<String>,
-    start_idx: usize,
-) {
-    for i in start_idx..invocations.len() {
-        let inv = &invocations[i];
-        if inv.command.trim().is_empty() {
-            continue;
-        }
 
         log::info!(
-            "[PercussionImportOrchestrator] Trying percussion backend {}/{}: backend='{}' cmd='{}'",
-            i + 1,
-            invocations.len(),
-            inv.backend_label,
-            inv.command
+            "[PercussionImportOrchestrator] Starting percussion backend: label='{}' cmd='{}'",
+            invocation.label,
+            invocation.command
         );
 
-        let args_refs: Vec<&str> = inv.arguments.iter().map(|s| s.as_str()).collect();
-        let handle = ProcessRunnerImpl::run_async(&inv.command, &args_refs);
+        let args_refs: Vec<&str> = invocation.arguments.iter().map(|s| s.as_str()).collect();
+        let handle = ProcessRunnerImpl::run_async(&invocation.command, &args_refs);
 
         if handle.is_finished() && handle.exit_code() == Some(-1) {
-            // Failed to start — skip and try next.
             let details = format!(
-                "backend='{}' cmd='{}' failed to start.",
-                inv.backend_label, inv.command
+                "label='{}' cmd='{}' failed to start.",
+                invocation.label, invocation.command
             );
-            all_failures.push(details);
-            continue;
+            *pipeline_run = Some(PipelineRunState::Done {
+                ok: false,
+                details: details.clone(),
+            });
+            return (true, false, details);
         }
 
         *pipeline_run = Some(PipelineRunState::Running {
-            invocation_index: i,
             handle,
             latest_process_line: String::new(),
         });
-        return;
     }
 
-    // All exhausted.
-    let fail_summary = all_failures
-        .last()
-        .cloned()
-        .unwrap_or_else(|| "no backends".to_string());
-    let fail_summary = if fail_summary.len() > 500 {
-        fail_summary[..500].to_string()
-    } else {
-        fail_summary
+    let (finished, exit_code, new_lines, latest_line) =
+        match pipeline_run.as_mut() {
+            Some(PipelineRunState::Running {
+                handle,
+                latest_process_line,
+            }) => {
+                let new_lines = handle.poll();
+                let mut latest = latest_process_line.clone();
+                for line_info in &new_lines {
+                    if !line_info.line.trim().is_empty() {
+                        latest = line_info.line.trim().to_string();
+                    }
+                }
+                let finished = handle.is_finished();
+                let exit_code = handle.exit_code();
+                (finished, exit_code, new_lines, latest)
+            }
+            Some(PipelineRunState::Done { ok, details }) => {
+                let ok = *ok;
+                let details = details.clone();
+                return (true, ok, details);
+            }
+            None => {
+                return (true, false, "No pipeline run active.".to_string());
+            }
+        };
+
+    // Parse progress lines and surface to status.
+    for line_info in &new_lines {
+        if line_info.line.trim().is_empty() {
+            continue;
+        }
+        let progress = parser.parse_line(&line_info.line, line_info.is_stderr);
+        if progress.has_progress {
+            // Status update captured; callers will read it from the orchestrator.
+            let _ = progress;
+        }
+    }
+
+    if !finished {
+        // Not done yet — return without advancing.
+        return (false, false, String::new());
+    }
+
+    // Process finished. Check result.
+    let exit_code = exit_code.unwrap_or(-1);
+
+    let output_json = PercussionImportOrchestrator::resolve_output_path_from_arguments(
+        &invocation.arguments,
+    );
+    let output_exists = output_json
+        .as_deref()
+        .map_or(false, |p| std::path::Path::new(p).exists());
+
+    if exit_code == 0 && output_exists {
+        // Success.
+        log::info!(
+            "[PercussionImportOrchestrator] Percussion pipeline: analysis complete (backend='{}')",
+            invocation.label
+        );
+        *pipeline_run = Some(PipelineRunState::Done {
+            ok: true,
+            details: String::new(),
+        });
+        return (true, true, String::new());
+    }
+
+    // Failure — single backend, no fallback.
+    let stderr_acc = match pipeline_run.as_ref() {
+        Some(PipelineRunState::Running { handle, .. }) => handle.stderr().to_string(),
+        _ => String::new(),
     };
+
+    let details = format!(
+        "label='{}' cmd='{}' exit={}. {}{}",
+        invocation.label,
+        invocation.command,
+        exit_code,
+        if !stderr_acc.trim().is_empty() {
+            format!("stderr: {} ", stderr_acc.trim())
+        } else {
+            String::new()
+        },
+        if !latest_line.is_empty() {
+            format!("lastLog: {}", latest_line)
+        } else {
+            String::new()
+        },
+    );
+    log::warn!(
+        "[PercussionImportOrchestrator] Percussion backend failed: {}",
+        details
+    );
+
     *pipeline_run = Some(PipelineRunState::Done {
         ok: false,
-        details: fail_summary,
+        details: details.clone(),
     });
-}
-
-/// Get the current invocation index from the pipeline run state (for display).
-fn get_current_invocation_index(pipeline_run: &Option<PipelineRunState>) -> usize {
-    match pipeline_run {
-        Some(PipelineRunState::Running { invocation_index, .. }) => *invocation_index,
-        _ => 0,
-    }
+    (true, false, details)
 }
 
 // ──────────────────────────────────────

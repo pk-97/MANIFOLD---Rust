@@ -1,0 +1,22 @@
+# Runtime dependencies for bundled macOS percussion analysis backend.
+# Keep this file minimal; it is used by stage_runtime_mac.sh.
+
+numpy==2.4.2
+demucs==4.0.1
+# torchaudio 2.9+ removed soundfile/sox backends and requires torchcodec (heavy).
+# Pin to 2.8.x which still supports the lightweight soundfile backend.
+torch<2.9
+torchaudio<2.9
+soundfile
+# setuptools<81 keeps pkg_resources available (removed in 82+), required by madmom.
+setuptools<81
+# madmom 0.16.1 (PyPI) is broken on Python 3.10+.
+# Install from GitHub main which has the fix.
+# Requires --no-build-isolation (stage_runtime_mac.sh handles this).
+madmom @ git+https://github.com/CPJKU/madmom.git@main
+# ADTOF drum transcription (PyTorch port of Zehren et al.)
+adtof-pytorch @ git+https://github.com/xavriley/ADTOF-pytorch.git@main
+pretty_midi
+librosa
+# Spotify Basic Pitch — polyphonic pitch detection for bass/synth/pad.
+basic-pitch
