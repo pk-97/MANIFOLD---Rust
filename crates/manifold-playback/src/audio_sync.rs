@@ -173,10 +173,9 @@ impl ImportedAudioSyncController {
         if !self.is_ready || self.clip_duration_seconds <= 0.0 {
             return;
         }
-        let handle = match self.sound_handle {
-            Some(ref mut h) => h,
-            None => return,
-        };
+        if self.sound_handle.is_none() {
+            return;
+        }
 
         let clip_length = self.clip_duration_seconds;
 
@@ -188,29 +187,52 @@ impl ImportedAudioSyncController {
         let in_range = expected_time >= 0.0 && expected_time < clip_length;
         let clamped_expected = expected_time.clamp(0.0, (clip_length - 0.001).max(0.0));
 
-        let is_source_playing = handle.state() == KiraPlaybackState::Playing;
+        let handle_state = self.sound_handle.as_ref().unwrap().state();
+        let is_source_playing = handle_state == KiraPlaybackState::Playing;
 
         match engine.current_state() {
             PlaybackState::Playing => {
                 if !in_range {
                     if is_source_playing {
-                        handle.pause(Tween::default());
+                        self.sound_handle.as_mut().unwrap().pause(Tween::default());
                     }
                     return;
                 }
 
                 if !is_source_playing {
-                    handle.seek_to(clamped_expected as f64);
-                    handle.resume(Tween::default());
+                    // Kira auto-transitions to Stopped when audio reaches its
+                    // natural end. resume() is a no-op on stopped handles, so
+                    // we must re-play from sound_data to get a fresh handle.
+                    // Unity's audioSource.Play() works from any state — this
+                    // matches that semantic.
+                    if handle_state == KiraPlaybackState::Stopped {
+                        if let Some(ref data) = self.sound_data {
+                            match self.audio_manager.play(data.clone()) {
+                                Ok(mut new_handle) => {
+                                    new_handle.seek_to(clamped_expected as f64);
+                                    self.sound_handle = Some(new_handle);
+                                }
+                                Err(e) => {
+                                    log::warn!("[ImportedAudioSyncController] Failed to restart stopped audio: {}", e);
+                                }
+                            }
+                        }
+                    } else {
+                        let handle = self.sound_handle.as_mut().unwrap();
+                        handle.seek_to(clamped_expected as f64);
+                        handle.resume(Tween::default());
+                    }
                     return;
                 }
 
+                let handle = self.sound_handle.as_mut().unwrap();
                 let current_pos = handle.position() as f32;
                 if (current_pos - clamped_expected).abs() > HARD_RESYNC_SECONDS {
                     handle.seek_to(clamped_expected as f64);
                 }
             }
             PlaybackState::Paused => {
+                let handle = self.sound_handle.as_mut().unwrap();
                 if is_source_playing {
                     handle.pause(Tween::default());
                 }
@@ -224,6 +246,7 @@ impl ImportedAudioSyncController {
             }
             _ => {
                 // Stopped
+                let handle = self.sound_handle.as_mut().unwrap();
                 if is_source_playing {
                     handle.pause(Tween::default());
                 }
