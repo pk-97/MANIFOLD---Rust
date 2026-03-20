@@ -708,6 +708,13 @@ impl Application {
             }
         };
 
+        // Make the output window click-through and non-focusable.
+        // All mouse/keyboard input passes to the workspace window behind it.
+        // Unity: MonitorWindowPlugin.mm sets NSWindow.ignoresMouseEvents = YES.
+        if let Err(e) = window.set_cursor_hittest(false) {
+            log::warn!("[OutputWindow] set_cursor_hittest(false) failed: {e} — window may steal input");
+        }
+
         let size = window.inner_size();
         let scale = window.scale_factor();
 
