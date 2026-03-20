@@ -823,26 +823,40 @@ impl Application {
         let realtime = self.frame_timer.realtime_since_start();
         self.time_since_start = realtime as f32;
 
-        // 1. Tick the engine FIRST so this frame's UI sees the advanced time
-        let ctx = TickContext {
-            dt_seconds: dt,
-            realtime_now: realtime,
-            pre_render_dt: dt as f32,
-            frame_count: self.frame_count as i32,
-            export_fixed_dt: 0.0, // non-zero only during video export (GAP-IO-4)
+        // Check if we should run a content frame (engine tick + GPU render).
+        // UI always runs; content runs at its own cadence.
+        let render_content = self.content_pipeline.as_ref()
+            .map_or(true, |p| p.should_render_content(realtime));
+
+        // Content frame: tick engine, audio sync, percussion, then render later.
+        // UI-only frame: skip these — engine state is at most one content-frame stale.
+        let tick_result = if render_content {
+            // 1. Tick the engine FIRST so this frame's UI sees the advanced time
+            let ctx = TickContext {
+                dt_seconds: dt,
+                realtime_now: realtime,
+                pre_render_dt: dt as f32,
+                frame_count: self.frame_count as i32,
+                export_fixed_dt: 0.0, // non-zero only during video export (GAP-IO-4)
+            };
+            let result = self.engine.tick(ctx);
+
+            // 1b. Poll for completed background audio load (async decode from project open)
+            self.poll_pending_audio_load();
+
+            // 1c. Sync imported audio playback to timeline
+            // Port of Unity WorkspaceController.LateUpdate → audioSyncController.UpdateSync
+            if let Some(ref mut audio_sync) = self.audio_sync {
+                audio_sync.update_sync(&mut self.engine);
+            }
+
+            Some(result)
+        } else {
+            None
         };
-        let tick_result = self.engine.tick(ctx);
-
-        // 1b. Poll for completed background audio load (async decode from project open)
-        self.poll_pending_audio_load();
-
-        // 1c. Sync imported audio playback to timeline
-        // Port of Unity WorkspaceController.LateUpdate → audioSyncController.UpdateSync
-        if let Some(ref mut audio_sync) = self.audio_sync {
-            audio_sync.update_sync(&mut self.engine);
-        }
 
         // 1d. Tick percussion import orchestrator (poll-based state machine)
+        // Runs every frame (not just content frames) so progress bar stays responsive.
         let was_importing = self.percussion_orchestrator.is_import_in_progress();
         {
             let current_beat = self.engine.current_beat();
@@ -1323,8 +1337,6 @@ impl Application {
             }
         }
 
-        // tick_result was computed at the top of tick_and_render (engine ticked first)
-
         let gpu = match &self.gpu {
             Some(g) => g,
             None => return,
@@ -1334,15 +1346,24 @@ impl Application {
             None => return,
         };
 
-        let output_view = content_pipeline.render_content(
-            gpu, &mut self.engine, &tick_result, dt, self.frame_count,
-        );
+        // Content frame: render generators + compositor.
+        // UI-only frame: skip — blit the cached front buffer from last content frame.
+        if let Some(ref tick_result) = tick_result {
+            content_pipeline.render_content(
+                gpu, &mut self.engine, tick_result, dt, self.frame_count,
+            );
+            content_pipeline.mark_content_rendered(realtime);
+        }
 
-        // SAFETY: output_view points into content_pipeline's compositor RenderTarget
-        // which is not modified between here and the blit calls in present_all_windows.
-        let output_view_ptr: *const wgpu::TextureView = output_view;
-        let output_view_ref = unsafe { &*output_view_ptr };
-        self.present_all_windows(output_view_ref);
+        // Double-buffered: output_view() returns the stable front buffer.
+        // Raw pointer needed because content_pipeline is behind &mut self
+        // and present_all_windows also borrows &mut self. The front buffer
+        // is not modified until the next render_content() call.
+        if let Some(output_view) = content_pipeline.output_view() {
+            let output_view_ptr: *const wgpu::TextureView = output_view;
+            let output_view_ref = unsafe { &*output_view_ptr };
+            self.present_all_windows(output_view_ref);
+        }
 
         self.frame_count += 1;
     }

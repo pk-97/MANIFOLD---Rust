@@ -4,30 +4,60 @@ use manifold_renderer::compositor::{Compositor, CompositeLayerDescriptor, Compos
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu::GpuContext;
 use manifold_renderer::layer_compositor::CompositeClipDescriptor;
+use manifold_renderer::render_target::RenderTarget;
 use manifold_renderer::tonemap::TonemapSettings;
 use manifold_playback::engine::{PlaybackEngine, TickResult};
+
+/// Output format for double-buffered compositor output.
+/// Matches compositor's tonemap output format.
+const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Self-contained content rendering pipeline.
 ///
 /// Owns the compositor and orchestrates GPU rendering of generators + compositing.
 /// The PlaybackEngine (which owns GeneratorRenderer) is borrowed for each frame.
 ///
-/// This is the unit that will eventually move to its own thread for
-/// independent content frame rate (decoupled from UI refresh rate).
+/// Double-buffered output: content writes to back buffer, swaps on completion.
+/// UI always reads from the stable front buffer via `output_view()`.
 pub struct ContentPipeline {
     compositor: Box<dyn Compositor>,
+    /// Double-buffered output textures. UI reads front, content writes to back.
+    /// Lazily initialized on first render (needs device + dimensions).
+    output_buffers: Option<[RenderTarget; 2]>,
+    /// Which buffer is the front (0 or 1). Back is always `1 - front_index`.
+    front_index: usize,
+    /// Content frame rate tracking (for separate cadence mode).
+    content_interval_secs: f64,
+    last_content_time: f64,
 }
 
 impl ContentPipeline {
     pub fn new(compositor: Box<dyn Compositor>) -> Self {
-        Self { compositor }
+        Self {
+            compositor,
+            output_buffers: None,
+            front_index: 0,
+            content_interval_secs: 1.0 / 60.0,
+            last_content_time: 0.0,
+        }
     }
 
-    /// Render all generators and composite into the final output texture.
+    /// Lazily create the double-buffer pair at compositor dimensions.
+    fn ensure_output_buffers(&mut self, device: &wgpu::Device) {
+        if self.output_buffers.is_some() {
+            return;
+        }
+        let (w, h) = self.compositor.dimensions();
+        self.output_buffers = Some([
+            RenderTarget::new(device, w, h, OUTPUT_FORMAT, "ContentOutput_Front"),
+            RenderTarget::new(device, w, h, OUTPUT_FORMAT, "ContentOutput_Back"),
+        ]);
+        self.front_index = 0;
+    }
+
+    /// Render all generators and composite into the back buffer, then swap.
     ///
-    /// Returns the tonemapped output texture view (lifetime tied to `&self`).
-    /// The caller must store this as a raw pointer before calling present,
-    /// since present needs `&mut Application`.
+    /// After this call, `output_view()` returns the newly rendered frame.
     pub fn render_content(
         &mut self,
         gpu: &GpuContext,
@@ -35,7 +65,9 @@ impl ContentPipeline {
         tick_result: &TickResult,
         dt: f64,
         frame_count: u64,
-    ) -> &wgpu::TextureView {
+    ) {
+        self.ensure_output_buffers(&gpu.device);
+
         // Extract timing values before split borrow
         let time = engine.current_time();
         let beat = engine.current_beat();
@@ -47,8 +79,6 @@ impl ContentPipeline {
                 });
 
         // Split borrow: get renderers + project from engine simultaneously.
-        // Engine now owns the real GeneratorRenderer (replaced stub in init_gpu),
-        // so clip lifecycle (start/stop) is handled by engine's sync_clips_to_time.
         let (renderers, project) = engine.split_renderer_project();
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
 
@@ -122,18 +152,64 @@ impl ContentPipeline {
             tonemap: TonemapSettings::default(),
         };
 
-        let output_view = self.compositor.render(&gpu.device, &gpu.queue, &mut encoder, &frame);
+        // Render compositor (records into encoder, returns view into tonemap output)
+        let _compositor_view = self.compositor.render(&gpu.device, &gpu.queue, &mut encoder, &frame);
 
-        // Submit generator + compositor work
-        let output_view_ptr: *const wgpu::TextureView = output_view;
+        // Copy compositor tonemap output → back buffer via texture copy
+        let back_index = 1 - self.front_index;
+        let bufs = self.output_buffers.as_ref().unwrap();
+        let (comp_w, comp_h) = self.compositor.dimensions();
+        let copy_size = wgpu::Extent3d {
+            width: comp_w.min(bufs[back_index].width),
+            height: comp_h.min(bufs[back_index].height),
+            depth_or_array_layers: 1,
+        };
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: self.compositor.output_texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &bufs[back_index].texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            copy_size,
+        );
+
+        // Submit all work (generators + compositor + copy)
         gpu.queue.submit(std::iter::once(encoder.finish()));
 
-        // SAFETY: output_view points into self.compositor's RenderTarget which
-        // is not modified between here and the blit calls in present_all_windows.
-        unsafe { &*output_view_ptr }
+        // Swap: back becomes front
+        self.front_index = back_index;
     }
 
-    /// Resize compositor and generators to new project resolution.
+    /// The stable output texture view. UI reads this for blitting.
+    /// Returns None only before the first render.
+    pub fn output_view(&self) -> Option<&wgpu::TextureView> {
+        self.output_buffers.as_ref().map(|bufs| &bufs[self.front_index].view)
+    }
+
+    /// Whether it's time for a content frame (for separate cadence mode).
+    pub fn should_render_content(&self, realtime_now: f64) -> bool {
+        realtime_now - self.last_content_time >= self.content_interval_secs
+    }
+
+    /// Mark that a content frame was rendered at the given time.
+    pub fn mark_content_rendered(&mut self, realtime_now: f64) {
+        self.last_content_time = realtime_now;
+    }
+
+    /// Set content rendering frame rate (independent of UI refresh rate).
+    #[allow(dead_code)]
+    pub fn set_content_fps(&mut self, fps: f64) {
+        self.content_interval_secs = 1.0 / fps.max(1.0);
+    }
+
+    /// Resize compositor, generators, and output buffers to new project resolution.
     pub fn resize(&mut self, device: &wgpu::Device, engine: &mut PlaybackEngine, width: u32, height: u32) {
         self.compositor.resize(device, width, height);
         // Resize generator renderer via engine downcast
@@ -143,6 +219,14 @@ impl ContentPipeline {
                 gen.resize_gpu(width, height);
                 break;
             }
+        }
+        // Recreate output buffers at new dimensions
+        if self.output_buffers.is_some() {
+            self.output_buffers = Some([
+                RenderTarget::new(device, width, height, OUTPUT_FORMAT, "ContentOutput_Front"),
+                RenderTarget::new(device, width, height, OUTPUT_FORMAT, "ContentOutput_Back"),
+            ]);
+            self.front_index = 0;
         }
     }
 
