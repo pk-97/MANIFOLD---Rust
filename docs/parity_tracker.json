@@ -48,7 +48,7 @@
       "audit_section": 10
     },
     "midi_input": {
-      "pct": 0,
+      "pct": 90,
       "audit_section": 11
     },
     "led_external": {
@@ -125,9 +125,9 @@
       "title": "Port MidiInputController (MIDI device to ClipLauncher routing)",
       "severity": "critical",
       "est_loc": 400,
-      "status": "todo",
+      "status": "done",
       "commit": null,
-      "notes": "MidiInputController.cs (526 lines). Would use midir crate."
+      "notes": "MidiInputController.cs ported to midi_input.rs using midir. All methods translated 1:1: set_device_filter, register/unregister devices, update() per tick, process_note_on/off, has_beat_stamp, compare/count_same_tick_reorders. MidiNoteEventType + MidiNoteEvent ported from MidiClock.cs. PlaybackEngine now implements LiveClipHost. ClipLauncher added to ContentThread. midir replaces both Minis+NativePlugin paths (D-26). All constants match: NATIVE_CLOCK_DEVICE_ID_BASE=100000, MAX_NATIVE_CLOCK_EVENTS_PER_FRAME=512."
     },
     {
       "number": 6,

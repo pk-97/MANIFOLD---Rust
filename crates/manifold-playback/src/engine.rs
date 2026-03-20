@@ -983,6 +983,49 @@ impl PlaybackEngine {
         self.project.as_ref().map_or(120.0, |p| p.settings.bpm)
     }
 
+    /// Process MIDI input events for the current frame.
+    /// Extracts project and live_clip_manager from self to avoid borrow conflict,
+    /// then calls MidiInputController::update with self as the LiveClipHost.
+    pub fn tick_midi_input(
+        &mut self,
+        midi_input: &mut crate::midi_input::MidiInputController,
+        clip_launcher: &mut crate::clip_launcher::ClipLauncher,
+        realtime_now: f64,
+    ) {
+        // Get clock authority without borrowing project mutably.
+        let clock_authority = self.project.as_ref()
+            .map(|p| p.settings.clock_authority)
+            .unwrap_or(manifold_core::types::ClockAuthority::Internal);
+
+        if self.project.is_none() || self.live_clip_manager.is_none() {
+            return;
+        }
+
+        // Safety: We need &mut Project and &mut LiveClipManager while also passing
+        // &mut self as LiveClipHost. Rust can't express this borrow split through
+        // the public API, so we use pointer-level split borrow here.
+        // This is safe because the LiveClipHost methods on PlaybackEngine that take
+        // &mut self only mutate fields that are NOT project or live_clip_manager
+        // (stop_clip mutates active_clip_renderers etc., mark_sync_dirty sets a bool,
+        // mark_compositor_dirty sets a deadline, invalidate_lookahead_prewarm resets a timer).
+        let project = self.project.as_mut().unwrap() as *mut manifold_core::project::Project;
+        let live_clip_manager = self.live_clip_manager.as_mut().unwrap() as *mut crate::live_clip_manager::LiveClipManager;
+
+        // SAFETY: project and live_clip_manager are distinct fields from those
+        // mutated by the LiveClipHost trait methods called inside update().
+        let project_ref = unsafe { &mut *project };
+        let lcm_ref = unsafe { &mut *live_clip_manager };
+
+        midi_input.update(
+            clock_authority,
+            project_ref,
+            clip_launcher,
+            lcm_ref,
+            self,
+            realtime_now,
+        );
+    }
+
     // ─── Live external tempo ───
 
     /// Set live external tempo state (called by driver from sync controllers each frame).
@@ -1658,5 +1701,111 @@ impl PlaybackEngine {
         self.last_prewarm_ids.extend(prewarm_set.keys().cloned());
 
         Some(prewarm_set)
+    }
+}
+
+// ─── LiveClipHost impl for PlaybackEngine ───────────────────────────────────
+
+use crate::live_clip_manager::LiveClipHost;
+
+/// PlaybackEngine implements LiveClipHost so it can be passed directly to
+/// ClipLauncher / LiveClipManager without a separate adapter type.
+/// Port of C# PlaybackController implementing ILiveClipHost.
+impl LiveClipHost for PlaybackEngine {
+    fn current_beat(&self) -> f32 { self.current_beat }
+    fn current_time(&self) -> f32 { self.current_time }
+    fn is_recording(&self) -> bool { self.is_recording }
+    fn is_playing(&self) -> bool { self.current_state == PlaybackState::Playing }
+    fn show_debug_logs(&self) -> bool { self.show_debug_logs }
+
+    /// BPM at the given beat. Checks live external tempo first.
+    fn get_bpm_at_beat(&self, beat: f32) -> f32 {
+        if let Some((live_bpm, _)) = self.try_get_live_external_tempo() {
+            return live_bpm;
+        }
+        if let Some(project) = &self.project {
+            // Immutable scan (tempo map is kept sorted by ensure_sorted on mutation).
+            let fallback = project.settings.bpm;
+            let points = project.tempo_map.clone_points();
+            if points.is_empty() {
+                return fallback.clamp(20.0, 300.0);
+            }
+            let mut bpm = points[0].bpm;
+            for point in &points {
+                if point.beat <= beat {
+                    bpm = point.bpm;
+                } else {
+                    break;
+                }
+            }
+            bpm.clamp(20.0, 300.0)
+        } else {
+            120.0
+        }
+    }
+
+    fn get_tempo_source_at_beat(&self, _beat: f32) -> TempoPointSource {
+        // Live external tempo overrides the source.
+        if let Some((_, source)) = self.try_get_live_external_tempo() {
+            return source;
+        }
+        TempoPointSource::Unknown
+    }
+
+    fn get_beat_snapped_beat(&self) -> f32 {
+        if let Some(ref resolver) = self.beat_snapped_beat_resolver {
+            resolver()
+        } else {
+            self.current_beat
+        }
+    }
+
+    fn get_current_absolute_tick(&self) -> i32 {
+        if let Some(ref resolver) = self.absolute_tick_resolver {
+            resolver()
+        } else {
+            self.last_frame_count
+        }
+    }
+
+    fn stop_clip(&mut self, clip_id: &str) {
+        PlaybackEngine::stop_clip(self, clip_id);
+    }
+
+    fn mark_sync_dirty(&mut self) {
+        PlaybackEngine::mark_sync_dirty(self);
+    }
+
+    fn mark_compositor_dirty(&mut self) {
+        let now = self.last_realtime_now;
+        PlaybackEngine::mark_compositor_dirty(self, now);
+    }
+
+    fn invalidate_lookahead_prewarm(&mut self) {
+        self.next_prewarm_at = 0.0;
+    }
+
+    fn register_clip_lookup(&mut self, _clip_id: &str, _clip: &manifold_core::clip::TimelineClip) {
+        // PlaybackEngine looks up clips via the timeline and live_clip_manager.
+        // No separate lookup table is needed — the engine's find_timeline_clip
+        // already searches both the timeline and live slots.
+    }
+
+    fn record_command(&mut self, cmd: Box<dyn manifold_editing::command::Command>) {
+        if let Some(ref delegate) = self.record_command_delegate {
+            delegate(cmd);
+        }
+    }
+
+    fn beat_to_timeline_time(&self, beat: f32) -> f32 {
+        if let Some(project) = &self.project {
+            TempoMapConverter::beat_to_seconds_immut(
+                &project.tempo_map,
+                beat,
+                project.settings.bpm,
+            )
+        } else {
+            beat * 0.5 // fallback: 120 bpm
+        }
     }
 }

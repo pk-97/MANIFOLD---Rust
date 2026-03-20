@@ -25,11 +25,11 @@ pub struct ClipLauncher {
 
     /// Fired when a clip is launched (for Phase 4 recording).
     /// Args: midi_note, video_clip_id, layer_index, start_time, in_point
-    pub on_clip_launched: Option<Box<dyn FnMut(i32, String, i32, f32, f32)>>,
+    pub on_clip_launched: Option<Box<dyn FnMut(i32, String, i32, f32, f32) + Send>>,
 
     /// Fired when a clip is stopped via NoteOff (for Phase 4 recording).
     /// Args: midi_note, layer_index, stop_time
-    pub on_clip_stopped: Option<Box<dyn FnMut(i32, i32, f32)>>,
+    pub on_clip_stopped: Option<Box<dyn FnMut(i32, i32, f32) + Send>>,
 }
 
 /// Tracks an active note for NoteOff matching.

@@ -1891,6 +1891,9 @@ impl ApplicationHandler for Application {
                 }
             };
 
+            let mut midi_input = manifold_playback::midi_input::MidiInputController::new();
+            midi_input.start();
+
             let content_thread = crate::content_thread::ContentThread {
                 engine,
                 editing_service: EditingService::new(),
@@ -1913,6 +1916,8 @@ impl ApplicationHandler for Application {
                 frame_count: 0,
                 time_since_start: 0.0,
                 last_data_version: 0,
+                midi_input,
+                clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
                 rendering_paused: false,
             };
 

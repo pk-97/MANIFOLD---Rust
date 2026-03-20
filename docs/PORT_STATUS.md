@@ -92,6 +92,8 @@ Agents: CHECK THIS FILE before porting. If a file is already `ported`, verify pa
 | PercussionPipelineBackendResolver.cs | percussion_backend.rs | ported |
 | PercussionPipelineProgressParser.cs | percussion_orchestrator.rs (inline) | ported |
 | PercussionImportOrchestrator.cs | percussion_orchestrator.rs | ported |
+| ClipLauncher.cs | clip_launcher.rs | ported |
+| MidiInputController.cs | midi_input.rs | ported |
 
 ## Sync System (manifold-playback)
 

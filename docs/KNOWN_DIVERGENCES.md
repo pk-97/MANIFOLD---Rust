@@ -186,6 +186,20 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Approved by:** Peter / 2026-03-19
 - **Files affected:** `manifold-renderer/src/effects/blob_tracking.rs`, `manifold-core/src/effect_definition_registry.rs`
 
+### [D-26] MidiInputController: Minis + native CLK plugin → midir unified path
+- **Unity does:** Two MIDI input paths — Minis (Unity Input System callbacks) for normal operation, and a native CoreMIDI plugin (MidiClock.bundle) queue drain when CLK is the clock authority and the plugin's note-event API is available. `IsNativeClockNotePathActive()` gates which path is active each frame. `GetMinisFallbackTickInfo()` provides a polled absolute_tick when CLK is authority but the native note-event API is unavailable.
+- **Rust does:** `midir` replaces both paths. midir IS the native CoreMIDI backend on macOS (ALSA on Linux, WinMM on Windows). All events arrive via a single `std::sync::mpsc` channel from midir callbacks. The `native_clock_path_active` flag is preserved for telemetry parity. The Minis fallback warning (logged once when CLK is authority but SupportsNoteEvents is false) is not ported — in midir, note events are always supported.
+- **Why:** midir provides equivalent accuracy to Unity's native plugin. A single unified path eliminates the complexity of dual-path switching while matching the same visual and timing behavior. This is a genuine architectural simplification with no degradation.
+- **Approved by:** Peter / task spec
+- **Files affected:** `manifold-playback/src/midi_input.rs`
+
+### [D-27] MidiInputController: device disconnect not individually tracked
+- **Unity does:** `OnDeviceChange(device, InputDeviceChange.Removed)` → `UnregisterDevice(device)` removes a specific device by identity.
+- **Rust does:** midir does not provide device disconnect callbacks in the same session. Ports are enumerated at `start()` and on `set_device_filter()`. Device disconnect means the midir connection silently stops delivering events (the callback simply doesn't fire). `unregister_all_devices()` is called only on `stop()`.
+- **Why:** midir's API does not expose plug/unplug callbacks in the same way as Unity's InputSystem.onDeviceChange. The behavioral difference is cosmetic — the device name in the UI may show stale info until the next filter scan, but no incorrect events are generated.
+- **Approved by:** Peter / task spec
+- **Files affected:** `manifold-playback/src/midi_input.rs`
+
 ---
 
 ## Add new divergences above this line.

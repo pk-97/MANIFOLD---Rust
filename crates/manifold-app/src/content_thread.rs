@@ -10,7 +10,9 @@ use crossbeam_channel::{Receiver, Sender};
 
 use manifold_editing::service::EditingService;
 use manifold_playback::audio_sync::ImportedAudioSyncController;
+use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
+use manifold_playback::midi_input::MidiInputController;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 use manifold_playback::transport_controller::TransportController;
 use manifold_renderer::gpu::GpuContext;
@@ -32,6 +34,10 @@ pub struct ContentThread {
     pub frame_count: u64,
     pub time_since_start: f32,
     pub last_data_version: u64,
+    /// MIDI device input — routes hardware note events to ClipLauncher.
+    pub midi_input: MidiInputController,
+    /// Bridges MIDI note events to LiveClipManager.
+    pub clip_launcher: ClipLauncher,
     /// When true, skip tick+render but still drain commands.
     /// Used while native file dialogs are open on macOS.
     pub rendering_paused: bool,
@@ -78,7 +84,15 @@ impl ContentThread {
             let realtime = timer.realtime_since_start();
             self.time_since_start = realtime as f32;
 
-            // 3. Tick engine
+            // 3. Process MIDI input (before engine tick — matches Unity Update() ordering).
+            // Drains hardware note events and routes them to ClipLauncher → LiveClipManager.
+            self.engine.tick_midi_input(
+                &mut self.midi_input,
+                &mut self.clip_launcher,
+                realtime,
+            );
+
+            // 4. Tick engine
             let ctx = TickContext {
                 dt_seconds: dt,
                 realtime_now: realtime,
@@ -88,12 +102,12 @@ impl ContentThread {
             };
             let tick_result = self.engine.tick(ctx);
 
-            // 4. Audio sync
+            // 5. Audio sync
             if let Some(ref mut audio_sync) = self.audio_sync {
                 audio_sync.update_sync(&mut self.engine);
             }
 
-            // 5. Percussion tick
+            // 6. Percussion tick
             let beat = self.engine.current_beat();
             if let Some(p) = self.engine.project_mut() {
                 self.percussion_orchestrator.tick(
@@ -104,13 +118,13 @@ impl ContentThread {
                 );
             }
 
-            // 6. Render content
+            // 7. Render content
             self.content_pipeline.render_content(
                 &self.gpu, &mut self.engine, &tick_result, dt, self.frame_count,
             );
             self.frame_count += 1;
 
-            // 7. Push state to UI
+            // 8. Push state to UI
             let version = self.editing_service.data_version();
             let snapshot = if version != self.last_data_version {
                 self.last_data_version = version;
@@ -233,10 +247,19 @@ impl ContentThread {
                     let h = p.settings.output_height.max(1) as u32;
                     self.content_pipeline.resize(&self.gpu.device, &mut self.engine, w, h);
                 }
+                // Update MIDI mapping config from the newly loaded project.
+                // Port of C# PlaybackController.OnProjectLoaded → midiInputController.SetMidiConfig().
+                if let Some(p) = self.engine.project() {
+                    self.midi_input.set_midi_config(p.midi_config.clone());
+                }
             }
             ContentCommand::NewProject(project) => {
                 self.engine.initialize(*project);
                 self.editing_service.set_project();
+                // Update MIDI mapping config for new project.
+                if let Some(p) = self.engine.project() {
+                    self.midi_input.set_midi_config(p.midi_config.clone());
+                }
             }
 
             // ── Settings ───────────────────────────────────────────
