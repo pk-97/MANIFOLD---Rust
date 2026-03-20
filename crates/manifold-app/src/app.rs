@@ -673,6 +673,7 @@ impl Application {
         let attrs = winit::window::Window::default_attributes()
             .with_title(format!("MANIFOLD - {}", name))
             .with_decorations(false)
+            .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
             .with_position(winit::dpi::Position::Physical(
                 winit::dpi::PhysicalPosition::new(mon_pos.x, mon_pos.y),
             ))
