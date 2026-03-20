@@ -1,3 +1,5 @@
+use std::sync::{Arc, RwLock};
+
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::types::BlendMode;
 use manifold_renderer::compositor::{Compositor, CompositeLayerDescriptor, CompositorFrame};
@@ -7,6 +9,42 @@ use manifold_renderer::layer_compositor::CompositeClipDescriptor;
 use manifold_renderer::render_target::RenderTarget;
 use manifold_renderer::tonemap::TonemapSettings;
 use manifold_playback::engine::{PlaybackEngine, TickResult};
+
+/// Thread-safe shared output view. The content thread writes a new view
+/// after each swap; the UI thread reads it for blitting to screen.
+pub struct SharedOutputView {
+    view: RwLock<Option<wgpu::TextureView>>,
+    dimensions: RwLock<(u32, u32)>,
+}
+
+impl SharedOutputView {
+    pub fn new() -> Self {
+        Self {
+            view: RwLock::new(None),
+            dimensions: RwLock::new((1920, 1080)),
+        }
+    }
+
+    /// Read the current front buffer view (called by UI thread).
+    pub fn get_view(&self) -> Option<wgpu::TextureView> {
+        self.view.read().unwrap().clone()
+    }
+
+    /// Update the front buffer view (called by content thread after swap).
+    pub fn set_view(&self, view: wgpu::TextureView) {
+        *self.view.write().unwrap() = Some(view);
+    }
+
+    /// Update dimensions (called by content thread on resize).
+    pub fn set_dimensions(&self, w: u32, h: u32) {
+        *self.dimensions.write().unwrap() = (w, h);
+    }
+
+    /// Get current output dimensions (called by UI thread for aspect ratio).
+    pub fn get_dimensions(&self) -> (u32, u32) {
+        *self.dimensions.read().unwrap()
+    }
+}
 
 /// Output format for double-buffered compositor output.
 /// Matches compositor's tonemap output format.
@@ -29,17 +67,28 @@ pub struct ContentPipeline {
     /// Content frame rate tracking (for separate cadence mode).
     content_interval_secs: f64,
     last_content_time: f64,
+    /// Shared output view for cross-thread access. The UI thread holds an Arc
+    /// to this and reads the front buffer view for blitting.
+    shared_output: Arc<SharedOutputView>,
 }
 
 impl ContentPipeline {
     pub fn new(compositor: Box<dyn Compositor>) -> Self {
+        let shared = Arc::new(SharedOutputView::new());
         Self {
             compositor,
             output_buffers: None,
             front_index: 0,
             content_interval_secs: 1.0 / 60.0,
             last_content_time: 0.0,
+            shared_output: shared,
         }
+    }
+
+    /// Get a clone of the shared output handle. The UI thread holds this
+    /// to read the front buffer view and dimensions.
+    pub fn shared_output(&self) -> Arc<SharedOutputView> {
+        Arc::clone(&self.shared_output)
     }
 
     /// Lazily create the double-buffer pair at compositor dimensions.
@@ -185,6 +234,11 @@ impl ContentPipeline {
 
         // Swap: back becomes front
         self.front_index = back_index;
+
+        // Update shared output view for the UI thread
+        let bufs = self.output_buffers.as_ref().unwrap();
+        let front_view = bufs[self.front_index].texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.shared_output.set_view(front_view);
     }
 
     /// The stable output texture view. UI reads this for blitting.
@@ -228,6 +282,8 @@ impl ContentPipeline {
             ]);
             self.front_index = 0;
         }
+        // Update shared dimensions for UI thread
+        self.shared_output.set_dimensions(width, height);
     }
 
     /// Get current compositor output dimensions.

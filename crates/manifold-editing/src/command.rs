@@ -3,7 +3,7 @@ use manifold_core::project::Project;
 use std::fmt::Debug;
 
 /// Trait for undoable commands. Port of C# ICommand.
-pub trait Command: Debug {
+pub trait Command: Debug + Send {
     fn execute(&mut self, project: &mut Project);
     fn undo(&mut self, project: &mut Project);
     fn description(&self) -> &str;

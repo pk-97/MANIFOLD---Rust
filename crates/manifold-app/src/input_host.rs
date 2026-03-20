@@ -6,7 +6,6 @@
 
 use manifold_editing::commands::clip::MuteClipCommand;
 use manifold_editing::service::EditingService;
-use manifold_playback::engine::PlaybackEngine;
 use manifold_ui::timeline_input_host::TimelineInputHost;
 use manifold_ui::ui_state::UIState;
 use manifold_ui::cursor_nav;
@@ -18,8 +17,9 @@ use crate::ui_root::UIRoot;
 /// Selection (UIState) is available for host methods that need to read/write
 /// selection state (paste, duplicate, navigate_cursor, select_all, etc.).
 pub struct AppInputHost<'a> {
-    pub engine: &'a mut PlaybackEngine,
-    pub editing: &'a mut EditingService,
+    pub project: &'a mut manifold_core::project::Project,
+    pub content_tx: &'a crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    pub content_state: &'a crate::content_state::ContentState,
     pub ui_root: &'a mut UIRoot,
     pub selection: &'a mut UIState,
     pub active_layer: &'a mut Option<usize>,
@@ -60,7 +60,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         //   needsRebuild = true; RefreshAllInspectors();
         //   playbackController.RefreshActiveClips(); playbackController.MarkCompositorDirty();
         //   ApplyProjectResolutionFromFooter(); ApplyProjectFpsFromFooter();
-        self.engine.mark_compositor_dirty(0.0);
+        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::MarkCompositorDirty);
 
         // TODO: Re-apply resolution/FPS from project settings after undo/redo.
         // Unity calls ApplyProjectResolutionFromFooter() and ApplyProjectFpsFromFooter()
@@ -82,7 +82,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn mark_compositor_dirty(&mut self) {
-        self.engine.mark_compositor_dirty(0.0);
+        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::MarkCompositorDirty);
     }
 
     fn invalidate_all_layer_bitmaps(&mut self) {
@@ -94,7 +94,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn get_playhead_viewport_x(&self) -> f32 {
-        let beat = self.engine.current_beat();
+        let beat = self.content_state.current_beat;
         let ppb = self.ui_root.viewport.pixels_per_beat();
         let scroll = self.ui_root.viewport.scroll_x_beats();
         (beat - scroll) * ppb
@@ -105,7 +105,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn get_seconds_per_beat(&self) -> f32 {
-        let bpm = self.engine.project()
+        let bpm = Some(&*self.project)
             .map(|p| p.settings.bpm)
             .unwrap_or(120.0);
         if bpm > 0.0 { 60.0 / bpm } else { 0.5 }
@@ -131,11 +131,11 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn undo(&mut self) {
-        crate::ui_bridge::undo(self.engine, self.editing);
+        crate::ui_bridge::undo(self.content_tx);
     }
 
     fn redo(&mut self) {
-        crate::ui_bridge::redo(self.engine, self.editing);
+        crate::ui_bridge::redo(self.content_tx);
     }
 
     fn save_project(&mut self) {
@@ -160,15 +160,15 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn play_pause(&mut self, insert_cursor_beat: Option<f32>) {
-        if self.engine.is_playing() {
-            self.engine.pause();
+        if self.content_state.is_playing {
+            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Pause);
         } else {
             // Unity: if paused and insert cursor exists, seek to cursor first (Ableton behavior)
             if let Some(beat) = insert_cursor_beat {
-                let time = self.engine.beat_to_timeline_time(beat);
-                self.engine.seek_to(time);
+                let time = beat * (60.0 / self.project.settings.bpm);
+                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::SeekTo(time));
             }
-            self.engine.play();
+            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Play);
         }
     }
 
@@ -176,7 +176,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if time == f32::MAX {
             // Sentinel for "seek to end" — Unity InputHandler line 380-390
             // Uses beat_to_timeline_time for tempo map consistency (Step 8 fix)
-            if let Some(project) = self.engine.project() {
+            if let Some(project) = Some(&*self.project) {
                 let mut max_beat: f32 = 0.0;
                 for layer in &project.timeline.layers {
                     for clip in &layer.clips {
@@ -184,25 +184,25 @@ impl TimelineInputHost for AppInputHost<'_> {
                         if end > max_beat { max_beat = end; }
                     }
                 }
-                let end_time = self.engine.beat_to_timeline_time(max_beat);
-                self.engine.seek_to(end_time);
+                let end_time = max_beat * (60.0 / self.project.settings.bpm);
+                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::SeekTo(end_time));
             }
         } else {
-            self.engine.seek_to(time);
+            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::SeekTo(time));
         }
     }
 
     fn current_beat(&self) -> f32 {
-        self.engine.current_beat()
+        self.content_state.current_beat
     }
 
     fn is_playing(&self) -> bool {
-        self.engine.is_playing()
+        self.content_state.is_playing
     }
 
     fn select_all_clips(&mut self) {
         // Unity EditingService.SelectAllClips (lines 264-276)
-        if let Some(project) = self.engine.project() {
+        if let Some(project) = Some(&*self.project) {
             self.selection.clear_selection();
             for layer in &project.timeline.layers {
                 for clip in &layer.clips {
@@ -220,31 +220,33 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_structural_sync = true;
     }
 
-    fn copy_clips(&mut self, clip_ids: &[String]) {
+    fn copy_clips(&mut self, _clip_ids: &[String]) {
         // Region-aware copy: trim clips at region boundaries (Unity CopySelectedClips)
-        let region = if self.selection.has_region() {
+        let _region = if self.selection.has_region() {
             Some(self.selection.get_region().clone())
         } else {
             None
         };
-        if let Some(project) = self.engine.project() {
-            let spb = 60.0 / project.settings.bpm.max(1.0);
-            self.editing.copy_clips(project, clip_ids, region.as_ref(), spb);
+        if let Some(project) = Some(&*self.project) {
+            let _spb = 60.0 / project.settings.bpm.max(1.0);
+            // TODO: clipboard operations need EditingService refactor
+            log::info!("Copy clips requested");
         }
     }
 
     fn cut_clips(&mut self, clip_ids: &[String], has_region: bool) {
         // Unity: copy first (region-aware), then delete
-        let region = if has_region {
+        let _region = if has_region {
             Some(self.selection.get_region().clone())
         } else {
             None
         };
-        if let Some(project) = self.engine.project() {
-            let spb = 60.0 / project.settings.bpm.max(1.0);
-            self.editing.copy_clips(project, clip_ids, region.as_ref(), spb);
+        if let Some(project) = Some(&*self.project) {
+            let _spb = 60.0 / project.settings.bpm.max(1.0);
+            // TODO: clipboard operations need EditingService refactor
+            log::info!("Copy clips requested");
         }
-        if let Some(project) = self.engine.project_mut() {
+        if let Some(project) = Some(&mut *self.project) {
             let spb = 60.0 / project.settings.bpm;
             // Step 4i: pass actual region from UIState when active
             let region = if has_region {
@@ -253,19 +255,20 @@ impl TimelineInputHost for AppInputHost<'_> {
                 None
             };
             let commands = EditingService::delete_clips(project, clip_ids, region.as_ref(), spb);
-            self.editing.execute_batch(commands, "Cut clips".into(), project);
+            for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
         }
         self.selection.clear_selection();
     }
 
-    fn paste_clips(&mut self, target_beat: f32, target_layer: i32) {
+    fn paste_clips(&mut self, _target_beat: f32, _target_layer: i32) {
         // Unity EditingService.PasteClips (line 660-667):
         // After paste, select all pasted clips and update region.
-        if let Some(project) = self.engine.project_mut() {
-            let spb = 60.0 / project.settings.bpm;
-            let result = self.editing.paste_clips(project, target_beat, target_layer, spb);
+        if let Some(project) = Some(&mut *self.project) {
+            let _spb = 60.0 / project.settings.bpm;
+            let result = // TODO: paste operations need EditingService refactor
+            manifold_editing::service::PasteResult { commands: Vec::new(), pasted_clip_ids: Vec::new(), skip_reason: None, skipped_count: 0 };
             if !result.commands.is_empty() {
-                self.editing.execute_batch(result.commands, "Paste clips".into(), project);
+                // Paste not yet wired to content thread
                 // Step 4g: select pasted clips and update region
                 self.selection.clear_selection();
                 for id in result.pasted_clip_ids {
@@ -284,7 +287,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn duplicate_clips(&mut self, clip_ids: &[String]) {
         // Unity EditingService.DuplicateSelectedClips (line 767-778):
         // After duplicate, select the new clips and update region.
-        if let Some(project) = self.engine.project_mut() {
+        if let Some(project) = Some(&mut *self.project) {
             let mut region = manifold_core::selection::SelectionRegion::default();
             let mut min_beat = f32::MAX;
             let mut max_beat = f32::MIN;
@@ -309,7 +312,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             let spb = 60.0 / project.settings.bpm.max(1.0);
             let commands = EditingService::duplicate_clips(project, clip_ids, &region, spb);
             if !commands.is_empty() {
-                self.editing.execute_batch(commands, "Duplicate clips".into(), project);
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
 
                 // Step 4h: find newly created clips and select them
                 let new_ids: Vec<String> = project.timeline.layers.iter()
@@ -332,7 +335,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn delete_clips(&mut self, clip_ids: &[String], has_region: bool) {
-        if let Some(project) = self.engine.project_mut() {
+        if let Some(project) = Some(&mut *self.project) {
             let spb = 60.0 / project.settings.bpm;
             // Step 4i: pass actual region from UIState when active
             let region = if has_region {
@@ -341,18 +344,18 @@ impl TimelineInputHost for AppInputHost<'_> {
                 None
             };
             let commands = EditingService::delete_clips(project, clip_ids, region.as_ref(), spb);
-            self.editing.execute_batch(commands, "Delete clips".into(), project);
+            for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
         }
         *self.needs_structural_sync = true;
     }
 
     fn delete_layer(&mut self, layer_index: usize) {
-        if let Some(project) = self.engine.project_mut() {
+        if let Some(project) = Some(&mut *self.project) {
             if project.timeline.layers.len() > 1 {
                 if let Some(layer) = project.timeline.layers.get(layer_index) {
                     let layer_clone = layer.clone();
                     let cmd = manifold_editing::commands::layer::DeleteLayerCommand::new(layer_clone, layer_index);
-                    self.editing.execute(Box::new(cmd), project);
+                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(boxed)); }
                 }
             }
         }
@@ -360,8 +363,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn split_clips_at_playhead(&mut self, clip_ids: &[String]) {
-        let beat = self.engine.current_beat();
-        if let Some(project) = self.engine.project_mut() {
+        let beat = self.content_state.current_beat;
+        if let Some(project) = Some(&mut *self.project) {
             let spb = 60.0 / project.settings.bpm;
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
             for id in clip_ids {
@@ -370,35 +373,35 @@ impl TimelineInputHost for AppInputHost<'_> {
                 }
             }
             if !commands.is_empty() {
-                self.editing.execute_batch(commands, "Split clips".into(), project);
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
     }
 
     fn extend_clips(&mut self, clip_ids: &[String], grid_step: f32) {
-        if let Some(project) = self.engine.project_mut() {
+        if let Some(project) = Some(&mut *self.project) {
             let commands = EditingService::extend_clips_by_grid(project, clip_ids, grid_step);
             if !commands.is_empty() {
-                self.editing.execute_batch(commands, "Extend clips".into(), project);
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
     }
 
     fn shrink_clips(&mut self, clip_ids: &[String], grid_step: f32) {
-        if let Some(project) = self.engine.project_mut() {
+        if let Some(project) = Some(&mut *self.project) {
             let commands = EditingService::shrink_clips_by_grid(project, clip_ids, grid_step);
             if !commands.is_empty() {
-                self.editing.execute_batch(commands, "Shrink clips".into(), project);
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
     }
 
     fn nudge_clips(&mut self, clip_ids: &[String], beat_delta: f32) {
-        if let Some(project) = self.engine.project_mut() {
+        if let Some(project) = Some(&mut *self.project) {
             let spb = 60.0 / project.settings.bpm;
             let commands = EditingService::nudge_clips(project, clip_ids, beat_delta, spb);
             if !commands.is_empty() {
-                self.editing.execute_batch(commands, "Nudge clips".into(), project);
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
         *self.needs_structural_sync = true;
@@ -408,7 +411,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Unity EditingService.ToggleMuteSelectedClips (line 418-448):
         // Group-mute semantics: if ANY unmuted → mute ALL, else unmute ALL.
         // Records undo via MuteClipCommand. Marks compositor dirty.
-        if let Some(project) = self.engine.project_mut() {
+        if let Some(project) = Some(&mut *self.project) {
             // First pass: collect current mute state for each clip
             let mut clip_states: Vec<(String, bool)> = Vec::new();
             for layer in &project.timeline.layers {
@@ -434,11 +437,11 @@ impl TimelineInputHost for AppInputHost<'_> {
             }
 
             if !commands.is_empty() {
-                let label = if new_muted { "Mute clips" } else { "Unmute clips" };
-                self.editing.execute_batch(commands, label.into(), project);
+                let _label = if new_muted { "Mute clips" } else { "Unmute clips" };
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
-        self.engine.mark_compositor_dirty(0.0);
+        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::MarkCompositorDirty);
         *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
     }
@@ -452,7 +455,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         let selected_ids: Vec<String> = self.selection.selected_layer_ids.iter().cloned().collect();
 
-        if let Some(project) = self.engine.project() {
+        if let Some(project) = Some(&*self.project) {
             // Validate: none are nested (have parent) or group layers
             let mut layers_to_group = Vec::new();
             for layer in &project.timeline.layers {
@@ -473,13 +476,13 @@ impl TimelineInputHost for AppInputHost<'_> {
                 layers_to_group, original_order,
             );
 
-            if let Some(project) = self.engine.project_mut() {
-                self.editing.execute(Box::new(cmd), project);
+            if let Some(project) = Some(&mut *self.project) {
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(boxed)); }
             }
         }
 
         self.selection.clear_selection();
-        self.engine.mark_compositor_dirty(0.0);
+        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::MarkCompositorDirty);
         *self.needs_rebuild = true;
         *self.needs_structural_sync = true;
     }
@@ -493,7 +496,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         let selected_ids: Vec<String> = self.selection.selected_layer_ids.iter().cloned().collect();
 
-        if let Some(project) = self.engine.project_mut() {
+        if let Some(project) = Some(&mut *self.project) {
             // Find indices to delete (in reverse order for safe removal)
             let mut indices: Vec<usize> = Vec::new();
             for (i, layer) in project.timeline.layers.iter().enumerate() {
@@ -527,24 +530,24 @@ impl TimelineInputHost for AppInputHost<'_> {
             }
 
             if !commands.is_empty() {
-                self.editing.execute_batch(commands, "Delete layers".into(), project);
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
 
         self.selection.clear_selection();
-        self.engine.mark_compositor_dirty(0.0);
+        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::MarkCompositorDirty);
         *self.needs_rebuild = true;
         *self.needs_structural_sync = true;
     }
 
     fn layer_count(&self) -> usize {
-        self.engine.project()
+        Some(&*self.project)
             .map(|p| p.timeline.layers.len())
             .unwrap_or(0)
     }
 
     fn project_beats_per_bar(&self) -> u32 {
-        self.engine.project()
+        Some(&*self.project)
             .map(|p| p.settings.time_signature_numerator.max(1) as u32)
             .unwrap_or(4)
     }
@@ -552,8 +555,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn set_export_in_at_playhead(&mut self) {
         // Unity InputHandler.SetExportInAtPlayhead (lines 615-628):
         // Snap to grid before applying.
-        let beat = self.engine.current_beat();
-        if let Some(project) = self.engine.project_mut() {
+        let beat = self.content_state.current_beat;
+        if let Some(project) = Some(&mut *self.project) {
             let bpb = project.settings.time_signature_numerator.max(1) as u32;
             let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
             project.timeline.export_in_beat = snapped;
@@ -564,8 +567,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn set_export_out_at_playhead(&mut self) {
         // Unity InputHandler.SetExportOutAtPlayhead (lines 630-643):
         // Snap to grid before applying.
-        let beat = self.engine.current_beat();
-        if let Some(project) = self.engine.project_mut() {
+        let beat = self.content_state.current_beat;
+        if let Some(project) = Some(&mut *self.project) {
             let bpb = project.settings.time_signature_numerator.max(1) as u32;
             let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
             project.timeline.export_out_beat = snapped;
@@ -577,7 +580,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Unity InputHandler.ClearExportIn (lines 645-662):
         // If no out-point → clear entire range.
         // If out-point exists → reset in to 0, keep range enabled.
-        if let Some(project) = self.engine.project_mut() {
+        if let Some(project) = Some(&mut *self.project) {
             if project.timeline.export_out_beat <= 0.0 {
                 // No out-point — clear entire range
                 project.timeline.export_in_beat = 0.0;
@@ -594,7 +597,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Unity InputHandler.ClearExportOut (lines 664-677):
         // If no range active → no-op.
         // If range active → clear entire range.
-        if let Some(project) = self.engine.project_mut() {
+        if let Some(project) = Some(&mut *self.project) {
             if !project.timeline.export_range_enabled {
                 return; // no-op
             }
@@ -631,7 +634,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let mut layers = Vec::with_capacity(layer_count);
         let mut clips = Vec::new();
 
-        if let Some(project) = self.engine.project() {
+        if let Some(project) = Some(&*self.project) {
             for (i, layer) in project.timeline.layers.iter().enumerate() {
                 layers.push(cursor_nav::NavLayerInfo {
                     index: i,
@@ -650,7 +653,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         // Step 4f: read cursor position from UIState (not viewport scroll)
         let current_beat = self.selection.insert_cursor_beat
-            .unwrap_or(self.engine.current_beat());
+            .unwrap_or(self.content_state.current_beat);
         let current_layer = self.selection.insert_cursor_layer_index
             .or(*self.active_layer)
             .unwrap_or(0);
@@ -665,7 +668,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             }
             cursor_nav::NavResult::SelectClip(clip_id) => {
                 // Find the clip's layer for proper selection
-                let li = self.engine.project()
+                let li = Some(&*self.project)
                     .and_then(|p| p.timeline.layers.iter().enumerate()
                         .find_map(|(i, l)| l.clips.iter()
                             .any(|c| c.id == clip_id).then_some(i)))
@@ -716,7 +719,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let viewport_width = self.ui_root.viewport.tracks_rect().width;
         if viewport_width <= 0.0 { return; }
 
-        let project = match self.engine.project() {
+        let project = match Some(&*self.project) {
             Some(p) => p,
             None => return,
         };
