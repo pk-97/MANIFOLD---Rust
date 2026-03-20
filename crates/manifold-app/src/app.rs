@@ -84,6 +84,8 @@ pub struct Application {
     // Rendering
     compositor: Option<Box<dyn Compositor>>,
     blit_pipeline: Option<BlitPipeline>,
+    output_blit_pipeline: Option<BlitPipeline>,
+    output_blit_format: Option<wgpu::TextureFormat>,
     ui_renderer: Option<UIRenderer>,
     layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
     surface_format: wgpu::TextureFormat,
@@ -154,6 +156,7 @@ pub struct Application {
 
     // State
     initialized: bool,
+    pending_toggle_output: bool,
     needs_rebuild: bool,
     /// Set by scroll/zoom events that only affect viewport + layer_headers.
     /// Uses the partial rebuild path (rebuild_scroll_panels) instead of full build.
@@ -190,6 +193,8 @@ impl Application {
             target_snapshot: None,
             compositor: None,
             blit_pipeline: None,
+            output_blit_pipeline: None,
+            output_blit_format: None,
             ui_renderer: None,
             layer_bitmap_gpu: None,
             surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
@@ -238,6 +243,7 @@ impl Application {
             pre_drag_commands: Vec::new(),
             display_resolutions: Vec::new(),
             initialized: false,
+            pending_toggle_output: false,
             needs_rebuild: false,
             needs_scroll_rebuild: false,
             needs_structural_sync: false,
@@ -614,6 +620,10 @@ impl Application {
         }
     }
 
+    /// Open an HDR output window on the specified (or non-primary) monitor.
+    /// Uses borderless fullscreen to avoid macOS fullscreen transition stall.
+    /// Surface is Rgba16Float — wgpu v28 Metal backend auto-enables EDR.
+    /// Unity: NativeMonitorWindowController.cs + MonitorWindowPlugin.mm.
     fn open_output_window(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -625,35 +635,46 @@ impl Application {
             None => return,
         };
 
-        // Size output window to compositor dimensions (Unity: ResolveSizingTexture)
-        let (comp_w, comp_h) = self.compositor.as_ref()
-            .map(|c| c.dimensions())
-            .unwrap_or((1920, 1080));
-
-        let mut attrs = winit::window::Window::default_attributes()
-            .with_title(format!("MANIFOLD - {}", name))
-            .with_inner_size(winit::dpi::LogicalSize::new(comp_w, comp_h));
-
-        if let Some(idx) = display_index {
-            if let Some(monitor) = event_loop.available_monitors().nth(idx) {
-                let pos = monitor.position();
-                let mon_size = monitor.size();
-                log::info!(
-                    "Output window targeting monitor {idx}: {}x{} at ({}, {})",
-                    mon_size.width, mon_size.height, pos.x, pos.y
-                );
-                attrs = attrs
-                    .with_position(winit::dpi::Position::Physical(
-                        winit::dpi::PhysicalPosition::new(pos.x, pos.y),
-                    ))
-                    .with_inner_size(mon_size);
+        // Resolve target monitor.
+        // If display_index is given, use that. Otherwise pick first non-primary monitor.
+        // If only one monitor, use it (user's primary display).
+        let monitors: Vec<_> = event_loop.available_monitors().collect();
+        let target_monitor = if let Some(idx) = display_index {
+            monitors.get(idx).cloned()
+        } else {
+            // Pick non-primary: primary is usually index 0
+            if monitors.len() > 1 {
+                Some(monitors[1].clone())
+            } else {
+                monitors.first().cloned()
             }
-        }
+        };
+
+        let monitor = match target_monitor {
+            Some(m) => m,
+            None => {
+                log::error!("[OutputWindow] No monitors available");
+                return;
+            }
+        };
+
+        let mon_size = monitor.size();
+        let mon_name = monitor.name().unwrap_or_else(|| "Unknown".to_string());
+        log::info!(
+            "[OutputWindow] Targeting monitor '{}': {}x{} (borderless fullscreen, HDR)",
+            mon_name, mon_size.width, mon_size.height
+        );
+
+        // Borderless fullscreen on the target monitor — avoids macOS stall.
+        let attrs = winit::window::Window::default_attributes()
+            .with_title(format!("MANIFOLD - {}", name))
+            .with_fullscreen(Some(winit::window::Fullscreen::Borderless(Some(monitor.clone()))))
+            .with_decorations(false);
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                log::error!("Failed to create output window: {e}");
+                log::error!("[OutputWindow] Failed to create window: {e}");
                 return;
             }
         };
@@ -661,7 +682,9 @@ impl Application {
         let size = window.inner_size();
         let scale = window.scale_factor();
 
-        let surface = SurfaceWrapper::new(
+        // Create HDR surface (Rgba16Float) — wgpu auto-enables EDR on Metal.
+        // Linear HDR values pass through directly; macOS clips at display's physical max.
+        let surface = SurfaceWrapper::new_hdr(
             &gpu.instance,
             &gpu.adapter,
             &gpu.device,
@@ -672,18 +695,41 @@ impl Application {
             wgpu::PresentMode::Fifo,
         );
 
+        let surface_format = surface.format();
+
+        // Create a blit pipeline matching the output surface format.
+        // The main workspace uses Bgra8UnormSrgb; the output window uses Rgba16Float.
+        // Each needs its own pipeline for the target format.
+        if self.output_blit_pipeline.is_none()
+            || self.output_blit_format != Some(surface_format)
+        {
+            self.output_blit_pipeline = Some(BlitPipeline::new(&gpu.device, surface_format));
+            self.output_blit_format = Some(surface_format);
+            log::info!(
+                "[OutputWindow] Created blit pipeline for {:?}",
+                surface_format
+            );
+        }
+
         let id = window.id();
+        let resolved_index = display_index.or_else(|| {
+            if monitors.len() > 1 { Some(1) } else { Some(0) }
+        });
+
         let state = WindowState {
             window,
             surface,
             role: WindowRole::Output {
                 name: name.to_string(),
             },
-            display_index,
+            display_index: resolved_index,
         };
 
         self.window_registry.add(id, state);
-        log::info!("Opened output window: {name}");
+        log::info!(
+            "[OutputWindow] Opened '{}' on '{}' ({}x{}, {:?})",
+            name, mon_name, size.width, size.height, surface_format
+        );
     }
 
     fn tick_and_render(&mut self) {
@@ -833,6 +879,7 @@ impl Application {
         for action in &actions {
             // Intercept actions that need Application-level access
             match action {
+                PanelAction::ToggleMonitor => { self.pending_toggle_output = true; continue; }
                 PanelAction::SaveProject => { self.save_project(); continue; }
                 PanelAction::SaveProjectAs => { self.save_project_as(); continue; }
                 PanelAction::OpenProject => { self.open_project(); needs_structural_sync = true; continue; }
@@ -1330,7 +1377,10 @@ impl Application {
                     source_aspect,
                 );
             } else {
-                // Output windows: aspect-correct blit with letterbox/pillarbox
+                // Output windows: HDR blit with aspect-correct letterbox/pillarbox.
+                // Uses the output-specific blit pipeline (Rgba16Float target format)
+                // if available, otherwise falls back to the workspace blit pipeline.
+                let output_blit = self.output_blit_pipeline.as_ref().unwrap_or(blit);
                 {
                     let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Clear Output"),
@@ -1349,7 +1399,7 @@ impl Application {
                         multiview_mask: None,
                     });
                 }
-                blit.blit_to_rect_fit(
+                output_blit.blit_to_rect_fit(
                     &gpu.device, &mut encoder, compositor_output, &surface_view,
                     0.0, 0.0, surface_w as f32, surface_h as f32,
                     source_aspect,
@@ -2245,9 +2295,27 @@ impl ApplicationHandler for Application {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if !self.initialized {
             return;
+        }
+
+        // Deferred output window toggle (needs ActiveEventLoop).
+        if self.pending_toggle_output {
+            self.pending_toggle_output = false;
+            if self.window_registry.has_output_window() {
+                // Close existing output window(s)
+                let output_ids: Vec<_> = self.window_registry.iter()
+                    .filter(|(_, ws)| matches!(ws.role, WindowRole::Output { .. }))
+                    .map(|(id, _)| *id)
+                    .collect();
+                for id in output_ids {
+                    self.window_registry.remove(&id);
+                }
+                log::info!("[OutputWindow] Closed");
+            } else {
+                self.open_output_window(event_loop, "Output", None);
+            }
         }
 
         if self.frame_timer.should_tick() {

@@ -56,7 +56,7 @@
       "audit_section": 12
     },
     "external_window": {
-      "pct": 0,
+      "pct": 80,
       "audit_section": 13
     },
     "infrastructure": {
@@ -593,9 +593,9 @@
       "title": "Port external monitor output (second winit window + wgpu surface)",
       "severity": "medium",
       "est_loc": 400,
-      "status": "todo",
+      "status": "done",
       "commit": null,
-      "notes": "NativeMonitorWindowController.cs (574 lines). HDR logic (EDR headroom, PQ decode) worth preserving."
+      "notes": "Native Rust implementation using winit + wgpu (not porting Unity Obj-C plugin). Borderless fullscreen on non-primary monitor. HDR via Rgba16Float surface — wgpu v28 Metal backend auto-enables EDR (wantsExtendedDynamicRangeContent). Separate blit pipeline for Rgba16Float target format. Compositor output (Rgba16Float) blits directly — same device, no cross-context copy (better than Unity). ToggleMonitor wired via deferred flag (needs ActiveEventLoop). Close on CloseRequested handled. EDR headroom query deferred (pass-through HDR for now, macOS clips at display max)."
     },
     {
       "number": 44,

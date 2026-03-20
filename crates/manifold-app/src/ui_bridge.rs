@@ -281,8 +281,13 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ToggleMonitor => {
-            log::info!("Toggle monitor (not yet implemented)");
-            DispatchResult::handled()
+            // Deferred — needs ActiveEventLoop which is only available in about_to_wait.
+            // Set flag; app.rs processes it in the next frame.
+            DispatchResult {
+                handled: true,
+                structural_change: false,
+                resolution_changed: false,
+            }
         }
         PanelAction::CycleQuantize => {
             if let Some(project) = engine.project_mut() {
