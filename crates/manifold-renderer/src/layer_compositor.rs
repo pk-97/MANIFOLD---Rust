@@ -658,4 +658,8 @@ impl Compositor for LayerCompositor {
     fn pre_tonemap_output(&self) -> &wgpu::TextureView {
         self.main.source_view()
     }
+
+    fn output_texture(&self) -> &wgpu::Texture {
+        &self.tonemap.output.texture
+    }
 }

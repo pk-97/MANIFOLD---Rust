@@ -52,5 +52,9 @@ pub trait Compositor {
     /// tonemapping was applied. Used by the export pipeline.
     /// Matches Unity CompositorStack.PreTonemapOutput.
     fn pre_tonemap_output(&self) -> &wgpu::TextureView;
+
+    /// The underlying texture of the tonemapped output.
+    /// Used by ContentPipeline to copy the compositor result to a double-buffer.
+    fn output_texture(&self) -> &wgpu::Texture;
 }
 
