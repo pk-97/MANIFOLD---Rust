@@ -82,8 +82,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Orbiting camera — matches Unity exactly
     let ro = vec3<f32>(cos(t) * CAM_DIST, sin(t * 0.7) * 2.0, sin(t) * CAM_DIST);
-    let target = vec3<f32>(0.0);
-    let fwd = normalize(target - ro);
+    let look_target = vec3<f32>(0.0);
+    let fwd = normalize(look_target - ro);
     // Unity: right = normalize(cross(float3(0,1,0), fwd))
     let right = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), fwd));
     let up = cross(fwd, right);
