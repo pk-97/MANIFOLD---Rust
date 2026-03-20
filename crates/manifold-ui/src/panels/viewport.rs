@@ -32,7 +32,7 @@ const GRID_LINE_W: f32 = 1.0;
 
 // Maximum nodes to allocate for grid/ruler/clips (avoid unbounded allocation)
 const MAX_GRID_LINES: usize = 200;
-const MAX_RULER_TICKS: usize = 200;
+const MAX_RULER_TICKS: usize = 1500;
 const MAX_VISIBLE_CLIPS: usize = 500;
 
 // ── Data types ──────────────────────────────────────────────────
@@ -137,6 +137,7 @@ pub struct TimelineViewportPanel {
 
     // Viewport rects
     viewport_rect: Rect,
+    overview_rect: Rect,
     ruler_rect: Rect,
     tracks_rect: Rect,
 
@@ -183,6 +184,7 @@ pub struct TimelineViewportPanel {
 enum ViewportDragMode {
     None,
     RulerScrub,
+    OverviewScrub,
 }
 
 impl TimelineViewportPanel {
@@ -206,6 +208,7 @@ impl TimelineViewportPanel {
             selected_clip_ids: Vec::new(),
             hovered_clip_id: None,
             viewport_rect: Rect::ZERO,
+            overview_rect: Rect::ZERO,
             ruler_rect: Rect::ZERO,
             tracks_rect: Rect::ZERO,
             bg_panel_id: -1,
@@ -502,6 +505,13 @@ impl TimelineViewportPanel {
     pub fn viewport_rect(&self) -> Rect { self.viewport_rect }
     pub fn ruler_rect(&self) -> Rect { self.ruler_rect }
     pub fn tracks_rect(&self) -> Rect { self.tracks_rect }
+
+    /// Max beat across all clips (for overview strip normalization).
+    pub fn max_content_beat(&self) -> f32 {
+        self.clips.iter()
+            .map(|c| c.start_beat + c.duration_beats)
+            .fold(0.0f32, f32::max)
+    }
 
     /// Screen rect for the waveform lane (between ruler and tracks).
     /// Returns ZERO if waveform lane is not visible.
@@ -859,7 +869,8 @@ impl Panel for TimelineViewportPanel {
         // Overview strip at top of viewport.
         // From Unity OverviewStripPanel.cs — mini-timeline with clip miniatures,
         // viewport indicator, playhead, and export range markers.
-        let overview_rect = Rect::new(body.x, body.y, tracks_w, color::OVERVIEW_STRIP_HEIGHT);
+        self.overview_rect = Rect::new(body.x, body.y, tracks_w, color::OVERVIEW_STRIP_HEIGHT);
+        let overview_rect = self.overview_rect;
         tree.add_panel(
             -1, overview_rect.x, overview_rect.y, overview_rect.width, overview_rect.height,
             UIStyle { bg_color: color::OVERVIEW_BG, ..UIStyle::default() },
@@ -919,8 +930,12 @@ impl Panel for TimelineViewportPanel {
         // InteractionOverlay in app.rs — NOT here. This method only
         // handles ruler events (seek/scrub) which are viewport-specific.
         match event {
-            // ── Click: ruler only ────────────────────────────────
+            // ── Click: ruler or overview strip ────────────────────
             UIEvent::Click { pos, .. } => {
+                if self.overview_rect.contains(*pos) {
+                    let norm = ((pos.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
+                    return vec![PanelAction::OverviewScrub(norm)];
+                }
                 if self.ruler_rect.contains(*pos) {
                     let beat = self.pixel_to_beat(pos.x).max(0.0);
                     return vec![PanelAction::Seek(beat)];
@@ -928,8 +943,13 @@ impl Panel for TimelineViewportPanel {
                 Vec::new()
             }
 
-            // ── DragBegin: ruler scrub only ─────────────────────
+            // ── DragBegin: ruler or overview scrub ───────────────
             UIEvent::DragBegin { origin, .. } => {
+                if self.overview_rect.contains(*origin) {
+                    self.drag_mode = ViewportDragMode::OverviewScrub;
+                    let norm = ((origin.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
+                    return vec![PanelAction::OverviewScrub(norm)];
+                }
                 if self.ruler_rect.contains(*origin) {
                     self.drag_mode = ViewportDragMode::RulerScrub;
                     let beat = self.pixel_to_beat(origin.x).max(0.0);
@@ -938,8 +958,12 @@ impl Panel for TimelineViewportPanel {
                 Vec::new()
             }
 
-            // ── Drag: ruler scrub continuation ──────────────────
+            // ── Drag: ruler or overview scrub continuation ───────
             UIEvent::Drag { pos, .. } => {
+                if self.drag_mode == ViewportDragMode::OverviewScrub {
+                    let norm = ((pos.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
+                    return vec![PanelAction::OverviewScrub(norm)];
+                }
                 if self.drag_mode == ViewportDragMode::RulerScrub {
                     let beat = self.pixel_to_beat(pos.x).max(0.0);
                     return vec![PanelAction::Seek(beat)];
@@ -947,9 +971,9 @@ impl Panel for TimelineViewportPanel {
                 Vec::new()
             }
 
-            // ── DragEnd: reset ruler scrub mode ─────────────────
+            // ── DragEnd: reset drag mode ─────────────────────────
             UIEvent::DragEnd { .. } => {
-                if self.drag_mode == ViewportDragMode::RulerScrub {
+                if self.drag_mode != ViewportDragMode::None {
                     self.drag_mode = ViewportDragMode::None;
                 }
                 Vec::new()
@@ -1132,14 +1156,35 @@ impl TimelineViewportPanel {
 
         let (min_beat, max_beat) = self.visible_beat_range();
         let bpb = self.beats_per_bar as f32;
+        let ppb = self.mapper.pixels_per_beat();
         let subdiv = self.grid_subdivision();
 
-        // Tick step
+        // ── Tick step (controls which tick marks appear) ──
         let tick_step = match subdiv {
             GridSubdivision::Bar => bpb,
             GridSubdivision::Beat => 1.0,
             GridSubdivision::Eighth => 0.5,
             GridSubdivision::Sixteenth => 0.25,
+        };
+
+        // ── Label step (adaptive — ensures labels never overlap) ──
+        // Find the smallest musically-meaningful interval where labels
+        // are at least MIN_LABEL_SPACING pixels apart.
+        const MIN_LABEL_SPACING: f32 = 50.0;
+        let label_step: f32 = if ppb >= MIN_LABEL_SPACING {
+            // Enough room for per-beat labels (bar.beat format)
+            1.0
+        } else if bpb * ppb >= MIN_LABEL_SPACING {
+            // Enough room for per-bar labels
+            bpb
+        } else {
+            // Skip bars — double until labels fit
+            let bar_px = bpb * ppb;
+            let mut n_bars = 2.0_f32;
+            while n_bars * bar_px < MIN_LABEL_SPACING && n_bars <= 1024.0 {
+                n_bars *= 2.0;
+            }
+            bpb * n_bars
         };
 
         let start = (min_beat / tick_step).floor() * tick_step;
@@ -1152,8 +1197,12 @@ impl TimelineViewportPanel {
             if px >= self.ruler_rect.x && px <= self.ruler_rect.x_max() {
                 let is_bar = (beat % bpb).abs() < 0.001;
                 let is_beat = (beat % 1.0).abs() < 0.001;
+                let is_label_beat = (beat % label_step).abs() < 0.001;
 
-                let tick_h = if is_bar {
+                // Labeled bars get taller ticks for visual anchoring
+                let tick_h = if is_label_beat && is_bar {
+                    RULER_BAR_TICK_H + 4.0
+                } else if is_bar {
                     RULER_BAR_TICK_H
                 } else if is_beat {
                     RULER_BEAT_TICK_H
@@ -1161,10 +1210,12 @@ impl TimelineViewportPanel {
                     4.0
                 };
 
-                let tick_color = if is_bar {
+                let tick_color = if is_label_beat && is_bar {
                     color::TEXT_NORMAL
-                } else {
+                } else if is_bar {
                     color::TEXT_SUBTLE
+                } else {
+                    color::TEXT_FAINT
                 };
 
                 // Tick mark (bottom-aligned)
@@ -1175,8 +1226,8 @@ impl TimelineViewportPanel {
                 ) as i32;
                 self.ruler_tick_ids.push(id);
 
-                // Label (for bars and beats at higher zoom)
-                if is_bar || (is_beat && subdiv != GridSubdivision::Bar) {
+                // Label (only at label_step intervals to prevent overlap)
+                if is_label_beat {
                     let bar_num = (beat / bpb).floor() as i32 + 1;
                     let beat_in_bar = ((beat % bpb) + 0.001).floor() as i32 + 1;
                     let label = if is_bar {

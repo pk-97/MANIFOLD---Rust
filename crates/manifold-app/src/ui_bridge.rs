@@ -133,6 +133,18 @@ pub fn dispatch(
             }
             DispatchResult::handled()
         }
+        PanelAction::OverviewScrub(norm) => {
+            // Unity: ViewportManager.OnOverviewStripScrub — center viewport on click
+            let ppb = ui.viewport.pixels_per_beat();
+            let viewport_w = ui.viewport.get_tracks_rect().width;
+            // Compute total content width from clips
+            let max_beat = ui.viewport.max_content_beat().max(1.0);
+            let content_w = max_beat * ppb;
+            let target_scroll = (norm * content_w - viewport_w * 0.5) / ppb;
+            let target_scroll = target_scroll.max(0.0);
+            ui.viewport.set_scroll(target_scroll, ui.viewport.scroll_y_px());
+            DispatchResult::structural()
+        }
         PanelAction::SetInsertCursor(beat) => {
             // Legacy path — when no layer context available.
             // Uses set_insert_cursor_beat (non-clearing variant)
@@ -656,7 +668,7 @@ pub fn dispatch(
             DispatchResult::structural()
         }
         PanelAction::ClipBpmClicked => {
-            log::debug!("Clip BPM clicked (text input not yet implemented)");
+            // Intercepted by app.rs — opens text input overlay
             DispatchResult::handled()
         }
         PanelAction::ClipLoopToggle => {
@@ -1355,7 +1367,11 @@ pub fn dispatch(
 
         // ── Effect management ──────────────────────────────────────
         PanelAction::AddEffectClicked(_tab) => {
-            // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
+            // Intercepted by UIRoot::try_open_dropdown (opens browser popup at button).
+            DispatchResult::handled()
+        }
+        PanelAction::BrowserSearchClicked => {
+            // Intercepted by app.rs — opens text input for browser search
             DispatchResult::handled()
         }
         PanelAction::RemoveEffect(fx_idx) => {

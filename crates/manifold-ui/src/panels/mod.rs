@@ -10,6 +10,7 @@ pub mod gen_param;
 pub mod inspector;
 pub mod viewport;
 pub mod dropdown;
+pub mod browser_popup;
 pub mod perf_hud;
 pub mod waveform_lane;
 pub mod stem_lane;
@@ -184,6 +185,8 @@ pub enum PanelAction {
     // Timeline
     Seek(f32),
     SetInsertCursor(f32),
+    /// Overview strip scrub — normalized [0,1] position. Centers viewport.
+    OverviewScrub(f32),
 
     // Viewport clip interaction
     ClipClicked(String, Modifiers),                // clip_id, modifiers (for Ctrl detection)
@@ -207,6 +210,7 @@ pub enum PanelAction {
     // Effect management
     AddEffectClicked(InspectorTab),
     RemoveEffect(usize),
+    BrowserSearchClicked,
 
     // Dropdown results (context-routed from UIRoot)
     SetMidiNote(usize, i32),       // layer_index, note (0-127)

@@ -415,7 +415,50 @@ impl Application {
                 self.needs_rebuild = true;
             }
             TextInputField::ClipBpm => {
-                log::info!("Clip BPM input: {} (not yet wired)", text);
+                // Unity: ClipInspector.OnBitmapBpmCommit
+                // "auto" or empty → 0 (use project BPM), otherwise parse + clamp [20, 300]
+                let trimmed = text.trim();
+                let new_bpm = if trimmed.is_empty()
+                    || trimmed.eq_ignore_ascii_case("auto")
+                {
+                    0.0
+                } else if let Ok(v) = trimmed.parse::<f32>() {
+                    if v > 0.0 { v.clamp(20.0, 300.0) } else { 0.0 }
+                } else {
+                    return; // parse failed — silent no-op (matches Unity)
+                };
+                if let Some(clip_id) = &self.selection.primary_selected_clip_id {
+                    let clip_id = clip_id.clone();
+                    if let Some(project) = self.engine.project_mut() {
+                        let old_bpm = project.timeline.find_clip_by_id(&clip_id)
+                            .map(|c| c.recorded_bpm)
+                            .unwrap_or(0.0);
+                        if (old_bpm - new_bpm).abs() >= 0.01 {
+                            let cmd = manifold_editing::commands::clip::ChangeClipRecordedBpmCommand::new(
+                                clip_id, old_bpm, new_bpm,
+                            );
+                            self.editing_service.execute(Box::new(cmd), project);
+                        }
+                    }
+                }
+                self.needs_rebuild = true;
+            }
+            TextInputField::EffectParam(_, _) => {
+                // TODO: parse float, clamp to param range, execute ChangeEffectParamCommand
+                log::debug!("Effect param text input: {}", text);
+            }
+            TextInputField::GenParam(_) => {
+                // TODO: parse float, clamp to param range, execute ChangeGenParamCommand
+                log::debug!("Gen param text input: {}", text);
+            }
+            TextInputField::GroupRename(_) => {
+                // TODO: execute RenameGroupCommand
+                log::debug!("Group rename: {}", text);
+            }
+            TextInputField::SearchFilter => {
+                // Update browser popup filter — no undo command
+                self.ui_root.browser_popup.set_filter(text.trim().to_string());
+                self.needs_rebuild = true;
             }
         }
     }
@@ -931,20 +974,69 @@ impl Application {
                 PanelAction::SaveProjectAs => { self.save_project_as(); continue; }
                 PanelAction::OpenProject => { self.open_project(); needs_structural_sync = true; continue; }
                 PanelAction::OpenRecent => { self.open_recent_project(); needs_structural_sync = true; continue; }
+                PanelAction::BrowserSearchClicked => {
+                    let r = self.ui_root.browser_popup.search_bar_rect(&self.ui_root.tree);
+                    self.text_input.begin(
+                        crate::text_input::TextInputField::SearchFilter,
+                        &self.ui_root.browser_popup.current_filter,
+                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                        11.0,
+                    );
+                    continue;
+                }
                 PanelAction::BpmFieldClicked => {
                     let bpm = self.engine.project().map_or(120.0, |p| p.settings.bpm);
+                    let r = self.ui_root.tree.get_bounds(
+                        self.ui_root.transport.bpm_field_id() as u32,
+                    );
                     self.text_input.begin(
                         crate::text_input::TextInputField::Bpm,
                         &format!("{:.1}", bpm),
+                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                        14.0,
                     );
                     continue;
                 }
                 PanelAction::FpsFieldClicked => {
                     let fps = self.engine.project().map_or(60.0, |p| p.settings.frame_rate);
+                    let r = self.ui_root.tree.get_bounds(
+                        self.ui_root.footer.fps_field_id() as u32,
+                    );
                     self.text_input.begin(
                         crate::text_input::TextInputField::Fps,
                         &format!("{:.0}", fps),
+                        crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                        11.0,
                     );
+                    continue;
+                }
+                PanelAction::ClipBpmClicked => {
+                    // Open text input for clip recorded BPM editing.
+                    // Unity: ClipInspector.OnBitmapBpmClicked → BitmapTextInput.BeginEdit
+                    if let Some(clip_id) = &self.selection.primary_selected_clip_id {
+                        let bpm_text = self.engine.project()
+                            .and_then(|p| {
+                                p.timeline.layers.iter()
+                                    .flat_map(|l| l.clips.iter())
+                                    .find(|c| c.id == *clip_id)
+                            })
+                            .map(|c| {
+                                if c.recorded_bpm > 0.0 {
+                                    format!("{:.1}", c.recorded_bpm)
+                                } else {
+                                    "Auto".to_string()
+                                }
+                            })
+                            .unwrap_or_else(|| "Auto".to_string());
+                        let r = self.ui_root.inspector.clip_chrome_mut()
+                            .bpm_button_rect(&self.ui_root.tree);
+                        self.text_input.begin(
+                            crate::text_input::TextInputField::ClipBpm,
+                            &bpm_text,
+                            crate::text_input::AnchorRect::new(r.x, r.y, r.width, r.height),
+                            10.0,
+                        );
+                    }
                     continue;
                 }
                 PanelAction::NewProject => {
@@ -1460,12 +1552,14 @@ impl Application {
                 let logical_h = (surface_h as f64 / scale) as u32;
 
                 // Pass 1: UITree rects + text (track backgrounds, ruler, chrome panels).
-                // When dropdown is open, skip overlay nodes — they render in Pass 4.
+                // When overlay popups are open, skip their nodes — they render in Pass 4.
                 // Uses TextMode::Main so base UI text goes to the main TextRenderer's
                 // own vertex buffer, isolated from the overlay TextRenderer.
                 if let Some(ui) = &mut self.ui_renderer {
                     let skip_from = if self.ui_root.dropdown.is_open() {
                         Some(self.ui_root.dropdown.first_node())
+                    } else if self.ui_root.browser_popup.is_open() {
+                        Some(self.ui_root.browser_popup.first_node())
                     } else {
                         None
                     };
@@ -1511,13 +1605,34 @@ impl Application {
                     }
                 }
 
-                // Pass 4: Dropdown overlay — renders ON TOP of layer bitmaps and playhead.
-                // Uses TextMode::Overlay so dropdown text goes to a separate TextRenderer
+                // Pass 4: Overlay popups — render ON TOP of layer bitmaps and playhead.
+                // Uses TextMode::Overlay so popup text goes to a separate TextRenderer
                 // with its own vertex buffer, preventing corruption of Pass 1's text.
                 if self.ui_root.dropdown.is_open() {
                     if let Some(ui) = &mut self.ui_renderer {
                         let start = self.ui_root.dropdown.first_node();
                         ui.render_overlay(&self.ui_root.tree, start);
+                        ui.render(
+                            &gpu.device, &gpu.queue, &mut encoder, &surface_view,
+                            logical_w, logical_h, scale, TextMode::Overlay,
+                        );
+                    }
+                } else if self.ui_root.browser_popup.is_open() {
+                    if let Some(ui) = &mut self.ui_renderer {
+                        let start = self.ui_root.browser_popup.first_node();
+                        ui.render_overlay(&self.ui_root.tree, start);
+                        ui.render(
+                            &gpu.device, &gpu.queue, &mut encoder, &surface_view,
+                            logical_w, logical_h, scale, TextMode::Overlay,
+                        );
+                    }
+                }
+
+                // Pass 5: Text input overlay — renders on top of everything.
+                // Uses immediate-mode draw_rect + draw_text (no UITree nodes needed).
+                if self.text_input.active {
+                    if let Some(ui) = &mut self.ui_renderer {
+                        render_text_input_overlay(&self.text_input, &self.frame_timer, ui);
                         ui.render(
                             &gpu.device, &gpu.queue, &mut encoder, &surface_view,
                             logical_w, logical_h, scale, TextMode::Overlay,
@@ -2193,8 +2308,13 @@ impl ApplicationHandler for Application {
                                 consumed = true;
                             }
                             Key::Character(ref c) => {
-                                for ch in c.chars() {
-                                    self.text_input.insert_char(ch);
+                                // Cmd+A / Ctrl+A → select all
+                                if c == "a" && self.modifiers.command {
+                                    self.text_input.select_all_text();
+                                } else {
+                                    for ch in c.chars() {
+                                        self.text_input.insert_char(ch);
+                                    }
                                 }
                                 consumed = true;
                             }
@@ -2413,6 +2533,65 @@ impl ApplicationHandler for Application {
             .collect::<Vec<_>>()
         {
             window.request_redraw();
+        }
+    }
+}
+
+// ── Text input overlay rendering (free function to avoid borrow conflicts) ──
+
+/// Render the text input overlay using immediate-mode draw calls.
+fn render_text_input_overlay(
+    ti: &crate::text_input::TextInputState,
+    timer: &crate::frame_timer::FrameTimer,
+    ui: &mut UIRenderer,
+) {
+    use crate::text_input::*;
+
+    let a = &ti.anchor;
+    let fs = ti.font_size;
+    let pad_h = TEXT_INPUT_PAD_H;
+    let pad_v = TEXT_INPUT_PAD_V;
+
+    let bg_x = a.x;
+    let bg_y = a.y;
+    let bg_w = a.width.max(40.0);
+    let bg_h = a.height.max(fs + pad_v * 2.0);
+
+    ui.draw_bordered_rect(
+        bg_x, bg_y, bg_w, bg_h,
+        TEXT_INPUT_BG,
+        3.0,
+        1.0,
+        [0.35, 0.45, 0.7, 0.8],
+    );
+
+    // Selection highlight (when select_all)
+    if ti.select_all && !ti.text.is_empty() {
+        let text_w = ti.text.len() as f32 * fs * 0.6;
+        ui.draw_rect(
+            bg_x + pad_h, bg_y + pad_v,
+            text_w.min(bg_w - pad_h * 2.0), bg_h - pad_v * 2.0,
+            TEXT_INPUT_SELECT_BG,
+        );
+    }
+
+    // Text
+    let text_x = bg_x + pad_h;
+    let text_y = bg_y + pad_v;
+    ui.draw_text(text_x, text_y, &ti.text, fs, TEXT_INPUT_FG);
+
+    // Blinking cursor
+    if !ti.select_all {
+        let elapsed = timer.realtime_since_start();
+        let blink_on = (elapsed / TEXT_INPUT_BLINK_PERIOD) as u64 % 2 == 0;
+        if blink_on {
+            let chars_before = ti.text[..ti.cursor].chars().count();
+            let cursor_x = text_x + chars_before as f32 * fs * 0.6;
+            ui.draw_rect(
+                cursor_x, bg_y + pad_v,
+                TEXT_INPUT_CURSOR_W, bg_h - pad_v * 2.0,
+                TEXT_INPUT_CURSOR,
+            );
         }
     }
 }

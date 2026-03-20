@@ -37,6 +37,7 @@ pub struct UIRoot {
     pub inspector: InspectorCompositePanel,
     pub viewport: TimelineViewportPanel,
     pub dropdown: DropdownPanel,
+    pub browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel,
     pub perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel,
 
     // Waveform panels (bitmap-rendered, not UITree-based)
@@ -96,6 +97,7 @@ impl UIRoot {
             inspector: InspectorCompositePanel::new(),
             viewport: TimelineViewportPanel::new(),
             dropdown: DropdownPanel::new(),
+            browser_popup: manifold_ui::panels::browser_popup::BrowserPopupPanel::new(),
             perf_hud: manifold_ui::panels::perf_hud::PerfHudPanel::new(),
             waveform_lane: WaveformLanePanel::new(),
             stem_lanes: StemLaneGroupPanel::new(),
@@ -196,6 +198,11 @@ impl UIRoot {
         if self.dropdown.is_open() {
             self.dropdown.rebuild_nodes(&mut self.tree);
         }
+
+        self.browser_popup.set_screen_size(self.screen_width, self.screen_height);
+        if self.browser_popup.is_open() {
+            self.browser_popup.build(&mut self.tree);
+        }
     }
 
     /// Handle a resize event. Rebuilds all panels.
@@ -262,6 +269,50 @@ impl UIRoot {
             }
             if let UIEvent::RightClick { pos, .. } = event {
                 self.last_right_click_pos = *pos;
+            }
+
+            // Browser popup gets first crack (higher z-order than dropdown).
+            if self.browser_popup.is_open() {
+                use manifold_ui::panels::browser_popup::BrowserPopupAction;
+                let mut consumed = false;
+
+                // Escape key
+                if let UIEvent::KeyDown { key: Key::Escape, .. } = event {
+                    if let Some(_) = self.browser_popup.handle_escape() {
+                        consumed = true;
+                    }
+                }
+
+                // Click events
+                if let UIEvent::Click { node_id, .. } = event {
+                    // Search bar click → open text input
+                    if self.browser_popup.is_search_bar(*node_id) {
+                        actions.push(PanelAction::BrowserSearchClicked);
+                        consumed = true;
+                    } else if let Some(bp_action) = self.browser_popup.handle_click(*node_id) {
+                        match bp_action {
+                            BrowserPopupAction::Selected(key) => {
+                                let tab = self.browser_popup.tab();
+                                actions.push(PanelAction::AddEffect(tab, key as usize));
+                            }
+                            BrowserPopupAction::Paste => {
+                                // TODO: wire paste
+                            }
+                            BrowserPopupAction::Dismissed => {}
+                        }
+                        consumed = true;
+                    }
+                }
+
+                // Scroll events within the popup
+                if let UIEvent::Scroll { delta, .. } = event {
+                    self.browser_popup.handle_scroll(delta.y);
+                    consumed = true;
+                }
+
+                if consumed {
+                    continue;
+                }
             }
 
             // Dropdown gets first crack at all events.
@@ -400,10 +451,35 @@ impl UIRoot {
             }
             PanelAction::AddEffectClicked(tab) => {
                 use manifold_core::types::EffectType;
-                let items: Vec<DropdownItem> = EffectType::ALL.iter()
-                    .map(|e| DropdownItem::new(e.display_name()))
+                use manifold_core::effect_category_registry;
+                use manifold_ui::panels::browser_popup::*;
+
+                let mut names = Vec::new();
+                let mut keys = Vec::new();
+                let mut categories = Vec::new();
+                for &et in EffectType::ALL {
+                    names.push(et.display_name().to_string());
+                    keys.push(et as i32);
+                    categories.push(effect_category_registry::get_category(et).to_string());
+                }
+
+                // Unique category names (excluding Generators)
+                let cat_names: Vec<String> = effect_category_registry::ALL_CATEGORIES.iter()
+                    .filter(|&&c| c != effect_category_registry::GENERATORS)
+                    .map(|&c| c.to_string())
                     .collect();
-                self.open_dropdown_at(DropdownContext::AddEffect(*tab), items, trigger);
+
+                self.browser_popup.set_screen_size(self.screen_width, self.screen_height);
+                self.browser_popup.open(BrowserPopupRequest {
+                    mode: BrowserPopupMode::Effect,
+                    tab: *tab,
+                    item_names: names,
+                    item_keys: keys,
+                    item_categories: categories,
+                    category_names: cat_names,
+                    paste_count: 0, // TODO: wire clipboard count
+                    screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
+                });
                 true
             }
             PanelAction::GenTypeClicked => {
