@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-TOOLS_DIR="$PROJECT_ROOT/Tools/AudioAnalysis"
+TOOLS_DIR="$SCRIPT_DIR"
 
 SOURCE_VENV_DEFAULT="$TOOLS_DIR/.venv"
 TARGET_DEFAULT="$TOOLS_DIR/BundledRuntime/macOS"
