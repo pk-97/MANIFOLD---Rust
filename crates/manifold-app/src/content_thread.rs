@@ -32,6 +32,9 @@ pub struct ContentThread {
     pub frame_count: u64,
     pub time_since_start: f32,
     pub last_data_version: u64,
+    /// When true, skip tick+render but still drain commands.
+    /// Used while native file dialogs are open on macOS.
+    pub rendering_paused: bool,
 }
 
 impl ContentThread {
@@ -62,7 +65,11 @@ impl ContentThread {
                 }
             }
 
-            // 2. Wait for next content frame
+            // 2. Wait for next content frame (skip tick+render when paused)
+            if self.rendering_paused {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                continue;
+            }
             if !timer.should_tick() {
                 std::thread::sleep(std::time::Duration::from_micros(500));
                 continue;
@@ -287,9 +294,39 @@ impl ContentThread {
                 }
             }
 
+            // ── Clipboard ─────────────────────────────────────────
+            ContentCommand::CopyClips { clip_ids, region } => {
+                if let Some(p) = self.engine.project() {
+                    let spb = 60.0 / p.settings.bpm.max(1.0);
+                    self.editing_service.copy_clips(p, &clip_ids, region.as_ref(), spb);
+                }
+            }
+            ContentCommand::PasteClips { target_beat, target_layer, result_tx } => {
+                if let Some(p) = self.engine.project_mut() {
+                    let spb = 60.0 / p.settings.bpm.max(1.0);
+                    let result = self.editing_service.paste_clips(p, target_beat, target_layer, spb);
+                    if !result.commands.is_empty() {
+                        self.editing_service.execute_batch(result.commands, "Paste clips".into(), p);
+                    }
+                    let _ = result_tx.send(result.pasted_clip_ids);
+                } else {
+                    let _ = result_tx.send(Vec::new());
+                }
+            }
+
             // ── Compositor ─────────────────────────────────────────
             ContentCommand::MarkCompositorDirty => {
                 self.engine.mark_compositor_dirty(0.0);
+            }
+
+            // ── Lifecycle ────────────────────────────────────────────
+            ContentCommand::PauseRendering => {
+                self.rendering_paused = true;
+                log::info!("[ContentThread] rendering paused (dialog open)");
+            }
+            ContentCommand::ResumeRendering => {
+                self.rendering_paused = false;
+                log::info!("[ContentThread] rendering resumed");
             }
         }
         false

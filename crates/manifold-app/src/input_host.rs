@@ -220,65 +220,64 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_structural_sync = true;
     }
 
-    fn copy_clips(&mut self, _clip_ids: &[String]) {
-        // Region-aware copy: trim clips at region boundaries (Unity CopySelectedClips)
-        let _region = if self.selection.has_region() {
+    fn copy_clips(&mut self, clip_ids: &[String]) {
+        // Send copy to content thread (EditingService owns the clipboard)
+        let region = if self.selection.has_region() {
             Some(self.selection.get_region().clone())
         } else {
             None
         };
-        if let Some(project) = Some(&*self.project) {
-            let _spb = 60.0 / project.settings.bpm.max(1.0);
-            // TODO: clipboard operations need EditingService refactor
-            log::info!("Copy clips requested");
-        }
+        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::CopyClips {
+            clip_ids: clip_ids.to_vec(),
+            region,
+        });
     }
 
     fn cut_clips(&mut self, clip_ids: &[String], has_region: bool) {
-        // Unity: copy first (region-aware), then delete
-        let _region = if has_region {
+        // Copy first (via content thread), then delete locally + record commands
+        let region = if has_region {
             Some(self.selection.get_region().clone())
         } else {
             None
         };
-        if let Some(project) = Some(&*self.project) {
-            let _spb = 60.0 / project.settings.bpm.max(1.0);
-            // TODO: clipboard operations need EditingService refactor
-            log::info!("Copy clips requested");
-        }
-        if let Some(project) = Some(&mut *self.project) {
-            let spb = 60.0 / project.settings.bpm;
-            // Step 4i: pass actual region from UIState when active
-            let region = if has_region {
-                Some(self.selection.get_region().clone())
-            } else {
-                None
-            };
-            let commands = EditingService::delete_clips(project, clip_ids, region.as_ref(), spb);
-            for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
+        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::CopyClips {
+            clip_ids: clip_ids.to_vec(),
+            region,
+        });
+        // Delete from local project + send commands to content thread
+        let project = &mut *self.project;
+        let spb = 60.0 / project.settings.bpm.max(1.0);
+        let del_region = if has_region {
+            Some(self.selection.get_region().clone())
+        } else {
+            None
+        };
+        let commands = EditingService::delete_clips(project, clip_ids, del_region.as_ref(), spb);
+        for mut c in commands {
+            c.execute(project);
+            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c));
         }
         self.selection.clear_selection();
     }
 
-    fn paste_clips(&mut self, _target_beat: f32, _target_layer: i32) {
-        // Unity EditingService.PasteClips (line 660-667):
-        // After paste, select all pasted clips and update region.
-        if let Some(project) = Some(&mut *self.project) {
-            let _spb = 60.0 / project.settings.bpm;
-            let result = // TODO: paste operations need EditingService refactor
-            manifold_editing::service::PasteResult { commands: Vec::new(), pasted_clip_ids: Vec::new(), skip_reason: None, skipped_count: 0 };
-            if !result.commands.is_empty() {
-                // Paste not yet wired to content thread
-                // Step 4g: select pasted clips and update region
+    fn paste_clips(&mut self, target_beat: f32, target_layer: i32) {
+        // Send paste to content thread and wait for result (pasted clip IDs)
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::PasteClips {
+            target_beat,
+            target_layer,
+            result_tx: tx,
+        });
+        // Wait briefly for pasted IDs to select them in the UI
+        if let Ok(pasted_ids) = rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            if !pasted_ids.is_empty() {
                 self.selection.clear_selection();
-                for id in result.pasted_clip_ids {
-                    self.selection.selected_clip_ids.insert(id);
+                for id in &pasted_ids {
+                    self.selection.selected_clip_ids.insert(id.clone());
                 }
-                self.selection.primary_selected_clip_id =
-                    self.selection.selected_clip_ids.iter().next().cloned();
+                self.selection.primary_selected_clip_id = pasted_ids.first().cloned();
                 self.selection.selection_version += 1;
-                crate::ui_bridge::update_region_from_clip_selection_inline(
-                    self.selection, project);
+                // Region update will happen when project snapshot arrives
             }
         }
         *self.needs_structural_sync = true;
