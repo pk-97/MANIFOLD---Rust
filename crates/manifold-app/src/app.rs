@@ -659,17 +659,24 @@ impl Application {
         };
 
         let mon_size = monitor.size();
+        let mon_pos = monitor.position();
         let mon_name = monitor.name().unwrap_or_else(|| "Unknown".to_string());
         log::info!(
-            "[OutputWindow] Targeting monitor '{}': {}x{} (borderless fullscreen, HDR)",
-            mon_name, mon_size.width, mon_size.height
+            "[OutputWindow] Targeting monitor '{}': {}x{} at ({},{}) (borderless, HDR)",
+            mon_name, mon_size.width, mon_size.height, mon_pos.x, mon_pos.y
         );
 
-        // Borderless fullscreen on the target monitor — avoids macOS stall.
+        // "Fake fullscreen" — borderless window positioned and sized to cover the
+        // target monitor exactly. Avoids macOS fullscreen spaces transition which
+        // steals focus from the workspace window and causes a stall animation.
+        // This is the standard approach for VJ/live-visual output windows.
         let attrs = winit::window::Window::default_attributes()
             .with_title(format!("MANIFOLD - {}", name))
-            .with_fullscreen(Some(winit::window::Fullscreen::Borderless(Some(monitor.clone()))))
-            .with_decorations(false);
+            .with_decorations(false)
+            .with_position(winit::dpi::Position::Physical(
+                winit::dpi::PhysicalPosition::new(mon_pos.x, mon_pos.y),
+            ))
+            .with_inner_size(mon_size);
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
