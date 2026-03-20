@@ -658,26 +658,47 @@ impl Application {
             }
         };
 
-        let mon_size = monitor.size();
+        let mon_phys_size = monitor.size();
         let mon_pos = monitor.position();
+        let scale_factor = monitor.scale_factor();
         let mon_name = monitor.name().unwrap_or_else(|| "Unknown".to_string());
-        log::info!(
-            "[OutputWindow] Targeting monitor '{}': {}x{} at ({},{}) (borderless, HDR)",
-            mon_name, mon_size.width, mon_size.height, mon_pos.x, mon_pos.y
+
+        // Log all available monitors for debugging
+        for (i, m) in monitors.iter().enumerate() {
+            let s = m.size();
+            let p = m.position();
+            let sf = m.scale_factor();
+            let n = m.name().unwrap_or_else(|| "?".to_string());
+            eprintln!(
+                "[OutputWindow] Monitor {}: '{}' physical={}x{} pos=({},{}) scale={:.2} logical={}x{}",
+                i, n, s.width, s.height, p.x, p.y, sf,
+                (s.width as f64 / sf) as u32, (s.height as f64 / sf) as u32
+            );
+        }
+
+        // Use logical coordinates — macOS window placement uses logical (point) coords.
+        // Physical pixels / scale_factor = logical points.
+        let logical_w = mon_phys_size.width as f64 / scale_factor;
+        let logical_h = mon_phys_size.height as f64 / scale_factor;
+        let logical_x = mon_pos.x as f64 / scale_factor;
+        let logical_y = mon_pos.y as f64 / scale_factor;
+
+        eprintln!(
+            "[OutputWindow] Target '{}': logical={:.0}x{:.0} at ({:.0},{:.0}), physical={}x{}, scale={:.2}",
+            mon_name, logical_w, logical_h, logical_x, logical_y,
+            mon_phys_size.width, mon_phys_size.height, scale_factor
         );
 
-        // "Fake fullscreen" — borderless window positioned and sized to cover the
-        // target monitor exactly. Avoids macOS fullscreen spaces transition which
-        // steals focus from the workspace window and causes a stall animation.
-        // This is the standard approach for VJ/live-visual output windows.
+        // "Fake fullscreen" — borderless window sized and positioned in logical coords
+        // to cover the target monitor exactly. Avoids macOS fullscreen spaces transition.
         let attrs = winit::window::Window::default_attributes()
             .with_title(format!("MANIFOLD - {}", name))
             .with_decorations(false)
             .with_window_level(winit::window::WindowLevel::AlwaysOnTop)
-            .with_position(winit::dpi::Position::Physical(
-                winit::dpi::PhysicalPosition::new(mon_pos.x, mon_pos.y),
+            .with_position(winit::dpi::Position::Logical(
+                winit::dpi::LogicalPosition::new(logical_x, logical_y),
             ))
-            .with_inner_size(mon_size);
+            .with_inner_size(winit::dpi::LogicalSize::new(logical_w, logical_h));
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
