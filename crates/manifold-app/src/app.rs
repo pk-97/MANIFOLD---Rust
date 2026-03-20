@@ -223,7 +223,13 @@ impl Application {
                 }
             },
             pending_audio_load: None,
-            percussion_orchestrator: PercussionImportOrchestrator::new(None, String::new()),
+            percussion_orchestrator: PercussionImportOrchestrator::new(
+                None,
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()))
+                    .unwrap_or_default(),
+            ),
             transport_controller: manifold_playback::transport_controller::TransportController::new(),
             input_handler: crate::input_handler::InputHandler::new(),
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
@@ -715,6 +721,20 @@ impl Application {
                     current_beat,
                 );
             }
+        }
+
+        // 1e. Sync percussion pipeline status to header panel
+        // Port of Unity WorkspaceController.RefreshPercussionImportStatusLabel
+        {
+            let msg = self.percussion_orchestrator.status_message();
+            let progress = self.percussion_orchestrator.status_progress01();
+            let show = self.percussion_orchestrator.show_progress_bar() && !msg.is_empty();
+            self.ui_root.header.set_import_status(
+                &mut self.ui_root.tree,
+                msg,
+                progress.clamp(0.0, 1.0),
+                show,
+            );
         }
 
         // 2. Process UI events and dispatch actions
