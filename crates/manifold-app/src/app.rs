@@ -711,6 +711,7 @@ impl Application {
         }
 
         // 1d. Tick percussion import orchestrator (poll-based state machine)
+        let was_importing = self.percussion_orchestrator.is_import_in_progress();
         {
             let current_beat = self.engine.current_beat();
             if let Some(project) = self.engine.project_mut() {
@@ -722,6 +723,7 @@ impl Application {
                 );
             }
         }
+        let is_importing = self.percussion_orchestrator.is_import_in_progress();
 
         // 1e. Sync percussion pipeline status to header panel
         // Port of Unity WorkspaceController.RefreshPercussionImportStatusLabel
@@ -732,9 +734,19 @@ impl Application {
             self.ui_root.header.set_import_status(
                 &mut self.ui_root.tree,
                 msg,
-                progress.clamp(0.0, 1.0),
+                if progress < 0.0 { 0.0 } else { progress.clamp(0.0, 1.0) },
                 show,
             );
+            // Force UI rebuild while pipeline is running (progress bar updates)
+            // and on completion (new clips/layers need to appear).
+            if is_importing {
+                self.needs_rebuild = true;
+            }
+            if was_importing && !is_importing {
+                // Pipeline just finished — structural sync to pick up new clips/layers.
+                self.needs_structural_sync = true;
+                self.needs_rebuild = true;
+            }
         }
 
         // 2. Process UI events and dispatch actions
