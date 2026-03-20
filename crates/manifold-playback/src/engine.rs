@@ -430,10 +430,14 @@ impl PlaybackEngine {
             }
         }
 
-        // Re-sync clips at new position
-        if self.current_state != PlaybackState::Stopped {
-            self.sync_clips_to_time();
-        }
+        // Re-sync clips at new position — unconditional, matching Unity's
+        // PlaybackController.Seek() which always calls SyncClipsToTime() + SeekActiveClips()
+        // regardless of playback state. This is what makes scrub-while-stopped work.
+        self.sync_clips_to_time();
+
+        // Mark compositor dirty so the stopped-state tick renders the new frame.
+        // Port of Unity SeekActiveClips() setting compositorDirtyDeadline.
+        self.compositor_dirty_deadline = self.last_realtime_now + COMPOSITOR_DIRTY_TIME as f64;
 
         beat_delta
     }
