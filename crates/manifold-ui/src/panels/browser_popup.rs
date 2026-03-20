@@ -364,41 +364,44 @@ impl BrowserPopupPanel {
             cy += CHIP_ROW_HEIGHT + SECTION_SPACING;
         }
 
-        // Grid cells (with viewport culling)
+        // Grid viewport — ClipRegion clips cells that extend beyond bounds.
         let vp_top = cy;
         let vp_h = self.grid_viewport_height;
+
+        let clip_id = tree.add_node(
+            -1,
+            Rect::new(cx, vp_top, content_w, vp_h),
+            UINodeType::ClipRegion,
+            UIStyle::default(),
+            None,
+            UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
+        ) as i32;
 
         for (fi, &src_idx) in self.filtered_indices.iter().enumerate() {
             let col = fi % self.columns;
             let row = fi / self.columns;
-            let cell_x = cx + col as f32 * (CELL_WIDTH + CELL_SPACING);
+            // Positions are relative to clip region origin
+            let cell_x = col as f32 * (CELL_WIDTH + CELL_SPACING);
             let cell_y = row as f32 * (CELL_HEIGHT + CELL_SPACING) - self.scroll_offset;
 
-            // Cull outside viewport
+            // Cull cells entirely outside viewport
             if cell_y + CELL_HEIGHT < 0.0 || cell_y > vp_h {
                 continue;
             }
 
-            // Clamp to viewport bounds
-            let clamped_y = cell_y.max(0.0);
-            let clamped_h = (cell_y + CELL_HEIGHT).min(vp_h) - clamped_y;
-            if clamped_h <= 0.0 { continue; }
-
-            let abs_y = vp_top + clamped_y;
-
             // Category accent bar
             if src_idx < self.item_categories.len() && !self.item_categories[src_idx].is_empty() {
                 let accent_color = category_color(&self.item_categories[src_idx]);
-                tree.add_panel(-1, cell_x, abs_y, ACCENT_BAR_W, clamped_h,
+                tree.add_panel(clip_id, cell_x, cell_y, ACCENT_BAR_W, CELL_HEIGHT,
                     UIStyle { bg_color: accent_color, corner_radius: 2.0, ..UIStyle::default() },
                 );
             }
 
-            // Cell button
+            // Cell button — full height, ClipRegion handles visual clipping
             let prefix = if !self.item_categories.is_empty() { "     " } else { "  " };
             let label = format!("{}{}", prefix, &self.item_names[src_idx]);
             let id = tree.add_button(
-                -1, cell_x, abs_y, CELL_WIDTH, clamped_h,
+                clip_id, cell_x, cell_y, CELL_WIDTH, CELL_HEIGHT,
                 UIStyle {
                     bg_color: CELL_NORMAL,
                     corner_radius: CELL_RADIUS,

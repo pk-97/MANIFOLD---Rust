@@ -411,8 +411,17 @@ impl UIRenderer {
                     self.draw_node(node);
                 }
             }
-            TraversalEvent::PushClip(_) => {}
-            TraversalEvent::PopClip => {}
+            TraversalEvent::PushClip(rect) => {
+                let clipped = if let Some(current) = self.clip_stack.last() {
+                    intersect_rects(*current, rect)
+                } else {
+                    rect
+                };
+                self.clip_stack.push(clipped);
+            }
+            TraversalEvent::PopClip => {
+                self.clip_stack.pop();
+            }
         });
     }
 
