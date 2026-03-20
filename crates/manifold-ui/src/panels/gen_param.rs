@@ -73,6 +73,20 @@ pub struct GenParamInfo {
 pub struct GenParamConfig {
     pub gen_type_name: String,
     pub params: Vec<GenParamInfo>,
+    pub driver_active: Vec<bool>,
+    pub envelope_active: Vec<bool>,
+    pub trim_min: Vec<f32>,
+    pub trim_max: Vec<f32>,
+    pub target_norm: Vec<f32>,
+    pub env_attack: Vec<f32>,
+    pub env_decay: Vec<f32>,
+    pub env_sustain: Vec<f32>,
+    pub env_release: Vec<f32>,
+    pub driver_beat_div_idx: Vec<i32>,
+    pub driver_waveform_idx: Vec<i32>,
+    pub driver_reversed: Vec<bool>,
+    pub driver_dotted: Vec<bool>,
+    pub driver_triplet: Vec<bool>,
 }
 
 /// Per-parameter expansion state for generator params.
