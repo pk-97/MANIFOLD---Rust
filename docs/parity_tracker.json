@@ -257,9 +257,9 @@
       "title": "Port 5 critical missing panels",
       "severity": "high",
       "est_loc": 1500,
-      "status": "todo",
+      "status": "partial",
       "commit": null,
-      "notes": "OverviewStripPanel, BrowserPopupPanel, ClipInspector, LayerInspector, MasterInspector."
+      "notes": "Assessment: OverviewStripPanel already inline in viewport.rs (clip miniatures, viewport indicator, playhead — missing push-update node IDs and export range markers). BrowserPopupPanel has functional dropdown fallback in ui_root.rs (missing full grid/category/search UI). ClipInspector/LayerInspector/MasterInspector have chrome panels (clip_chrome.rs 561L, layer_chrome.rs 345L, master_chrome.rs 403L) + inspector.rs orchestration (1179L) — missing data binding, undo snapshots, version-gated sync, multi-layer support. Remaining: BrowserPopup full grid, inspector data binding/undo wiring."
     },
     {
       "number": 17,
