@@ -4,6 +4,7 @@ mod editing_host;
 mod frame_timer;
 mod input_handler;
 mod input_host;
+mod project_io;
 mod text_input;
 mod transport_state;
 mod ui_bridge;

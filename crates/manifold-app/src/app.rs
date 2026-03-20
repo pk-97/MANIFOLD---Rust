@@ -31,8 +31,8 @@ use manifold_ui::node::Vec2;
 use manifold_ui::panels::PanelAction;
 use manifold_ui::ui_state::UIState;
 
-use crate::dialog_path_memory::{self, DialogContext};
 use crate::frame_timer::FrameTimer;
+use crate::project_io::{ProjectIOService, ProjectIOAction};
 use crate::ui_root::UIRoot;
 use crate::user_prefs::UserPrefs;
 use crate::window_registry::{WindowRegistry, WindowRole, WindowState};
@@ -113,6 +113,7 @@ pub struct Application {
     // File I/O
     current_project_path: Option<std::path::PathBuf>,
     user_prefs: UserPrefs,
+    project_io: ProjectIOService,
 
     // Text input
     text_input: crate::text_input::TextInputState,
@@ -208,6 +209,10 @@ impl Application {
             split_dragging: false,
             split_was_hovered: false,
             current_project_path: None,
+            project_io: {
+                let prefs = UserPrefs::load();
+                ProjectIOService::new(&prefs)
+            },
             user_prefs: UserPrefs::load(),
             text_input: crate::text_input::TextInputState::new(),
             audio_sync: match ImportedAudioSyncController::new() {
@@ -401,237 +406,169 @@ impl Application {
         }
     }
 
-    // ── Project I/O constants ──────────────────────────────────────────
-    // Same key as Unity ProjectIOService.LAST_OPENED_PROJECT_PREF_KEY
-    const LAST_OPENED_PROJECT_PREF_KEY: &str = "MANIFOLD_LastOpenedProjectPath";
+    // ── Project I/O — delegates to ProjectIOService ────────────────────
 
-    /// Save the current project. If no path exists, triggers Save As.
-    /// 1:1 port of ProjectIOService.OnSaveProject (line 175).
+    /// Save. Delegates to ProjectIOService.save_project.
     fn save_project(&mut self) {
-        if let Some(path) = self.current_project_path.clone() {
-            self.sync_project_saved_playhead();
-            if let Some(project) = self.engine.project_mut() {
-                match manifold_io::saver::save_project(project, &path, None, false) {
-                    Ok(()) => {
-                        self.editing_service.mark_clean();
-                        log::info!("[ProjectIO] Saved to {}", path.display());
-                    }
-                    Err(e) => log::error!("[ProjectIO] Save failed: {e}"),
-                }
-            }
-        } else {
-            self.save_project_as();
-        }
-    }
-
-    /// Save As — open native save dialog.
-    /// 1:1 port of ProjectIOService.OnSaveProjectAsAsync (line 201).
-    fn save_project_as(&mut self) {
-        self.sync_project_saved_playhead();
-
-        let last_dir = dialog_path_memory::get_last_directory(
-            DialogContext::ProjectSave, &mut self.user_prefs,
-        );
-
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("Save MANIFOLD Project")
-            .add_filter("MANIFOLD Project", &["json", "manifold"])
-            .set_file_name("project.json");
-
-        if !last_dir.is_empty() {
-            dialog = dialog.set_directory(&last_dir);
-        }
-
-        if let Some(path) = dialog.save_file() {
-            self.current_project_path = Some(path.clone());
-            if let Some(project) = self.engine.project_mut() {
-                match manifold_io::saver::save_project(project, &path, None, false) {
-                    Ok(()) => {
-                        // Persist last opened path (Unity line 218-220)
-                        let path_str = path.to_string_lossy();
-                        self.user_prefs.set_string(
-                            Self::LAST_OPENED_PROJECT_PREF_KEY,
-                            &path_str,
-                        );
-                        self.user_prefs.save();
-                        dialog_path_memory::remember_directory(
-                            DialogContext::ProjectSave,
-                            &path_str,
-                            &mut self.user_prefs,
-                        );
-                        self.editing_service.mark_clean();
-                        log::info!("[ProjectIO] Saved to {}", path.display());
-                    }
-                    Err(e) => log::error!("[ProjectIO] Save failed: {e}"),
-                }
-            }
-        }
-    }
-
-    /// Open — native file dialog + load.
-    /// 1:1 port of ProjectIOService.OnOpenProject / OnOpenProjectAsync (line 92).
-    fn open_project(&mut self) {
-        let last_dir = dialog_path_memory::get_last_directory(
-            DialogContext::ProjectOpen, &mut self.user_prefs,
-        );
-
-        let mut dialog = rfd::FileDialog::new()
-            .set_title("Open MANIFOLD Project")
-            .add_filter("MANIFOLD Project", &["json", "manifold"]);
-
-        if !last_dir.is_empty() {
-            dialog = dialog.set_directory(&last_dir);
-        }
-
-        if let Some(path) = dialog.pick_file() {
-            let path_str = path.to_string_lossy().to_string();
-            dialog_path_memory::remember_directory(
-                DialogContext::ProjectOpen,
-                &path_str,
+        let current_time = self.engine.current_time();
+        let current_path = self.current_project_path.clone();
+        if let Some(project) = self.engine.project_mut() {
+            let action = self.project_io.save_project(
+                project,
+                current_path.as_deref(),
+                current_time,
+                &mut self.editing_service,
                 &mut self.user_prefs,
             );
-            self.open_project_from_path(path);
+            self.apply_project_io_action(action);
         }
     }
 
-    /// Open Recent — load the last opened project without a file dialog.
-    /// 1:1 port of ProjectIOService.OnOpenRecentProject (line 108).
+    /// Save As. Delegates to ProjectIOService.save_project_as.
+    fn save_project_as(&mut self) {
+        let current_time = self.engine.current_time();
+        if let Some(project) = self.engine.project_mut() {
+            let action = self.project_io.save_project_as(
+                project,
+                current_time,
+                &mut self.editing_service,
+                &mut self.user_prefs,
+            );
+            self.apply_project_io_action(action);
+        }
+    }
+
+    /// Open. Delegates to ProjectIOService.open_project.
+    fn open_project(&mut self) {
+        let action = self.project_io.open_project(&mut self.user_prefs);
+        self.apply_project_io_action(action);
+    }
+
+    /// Open Recent. Delegates to ProjectIOService.open_recent_project.
     fn open_recent_project(&mut self) {
-        let last_path = self.user_prefs.get_string(Self::LAST_OPENED_PROJECT_PREF_KEY, "");
-        if last_path.is_empty() {
-            log::warn!("[ProjectIO] No recent project to open.");
-            return;
-        }
-
-        let path = std::path::PathBuf::from(&last_path);
-        if !path.exists() {
-            log::warn!("[ProjectIO] Recent project not found: {last_path}");
-            return;
-        }
-
-        self.open_project_from_path(path);
+        let action = self.project_io.open_recent_project(&mut self.user_prefs);
+        self.apply_project_io_action(action);
     }
 
-    /// Shared project-load logic used by both open_project and open_recent_project.
-    /// 1:1 port of ProjectIOService.OpenProjectFromPath (line 125).
-    ///
-    /// Audio loading is async (background thread) matching Unity's coroutine pattern.
-    /// The project data, GPU resize, and engine init happen synchronously; the expensive
-    /// audio file decode + ffprobe runs on a background thread and results are applied
-    /// in tick_and_render via poll_pending_audio_load.
+    /// Shared project-load logic — called by open, open recent, and file drop.
+    /// Delegates load+persist to ProjectIOService, then handles GPU/audio side-effects.
     fn open_project_from_path(&mut self, path: std::path::PathBuf) {
-        let t_total = std::time::Instant::now();
+        let action = self.project_io.open_project_from_path(&path, &mut self.user_prefs);
+        self.apply_project_io_action(action);
+    }
 
-        let t0 = std::time::Instant::now();
-        let load_result = manifold_io::loader::load_project(&path);
-        eprintln!("[PROJECT LOAD] load_project: {:.1}ms", t0.elapsed().as_secs_f64() * 1000.0);
+    /// Apply a ProjectIOAction returned by ProjectIOService.
+    /// Handles all side-effects that require Application-owned state:
+    /// engine init, GPU resize, audio loading, selection reset, etc.
+    fn apply_project_io_action(&mut self, action: ProjectIOAction) {
+        // Apply loaded project (replaces host.PrepareForProjectSwitch + ApplyProject + OnProjectOpened)
+        if let Some(project) = action.apply_project {
+            let t_total = std::time::Instant::now();
 
-        match load_result {
-            Ok(project) => {
-                // Apply saved layout before initializing (Unity ApplySavedLayout)
-                self.ui_root.apply_project_layout(&project.settings);
-                let saved_time = project.saved_playhead_time;
+            // Apply saved layout before initializing
+            self.ui_root.apply_project_layout(&project.settings);
+            let saved_time = project.saved_playhead_time;
 
-                let t1 = std::time::Instant::now();
-                self.engine.initialize(project);
-                eprintln!("[PROJECT LOAD] engine.initialize: {:.1}ms", t1.elapsed().as_secs_f64() * 1000.0);
+            let t1 = std::time::Instant::now();
+            self.engine.initialize(project);
+            eprintln!("[PROJECT LOAD] engine.initialize: {:.1}ms", t1.elapsed().as_secs_f64() * 1000.0);
 
-                // Restore playhead position (Unity ProjectIOService line 235)
-                if saved_time > 0.0 {
-                    self.engine.seek_to(saved_time);
-                }
-
-                // Resize compositor + generators to project resolution
-                // (Unity: ChangeResolution called on project load)
-                if let Some(proj) = self.engine.project() {
-                    let w = proj.settings.output_width.max(1) as u32;
-                    let h = proj.settings.output_height.max(1) as u32;
-                    if let Some(gpu) = &self.gpu {
-                        let t2 = std::time::Instant::now();
-                        if let Some(compositor) = &mut self.compositor {
-                            compositor.resize(&gpu.device, w, h);
-                        }
-                        // Resize generator renderer via engine downcast
-                        let (renderers, _) = self.engine.split_renderer_project();
-                        for renderer in renderers.iter_mut() {
-                            if let Some(gen) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
-                                gen.resize_gpu(w, h);
-                                break;
-                            }
-                        }
-                        eprintln!("[PROJECT LOAD] GPU resize: {:.1}ms ({}x{})", t2.elapsed().as_secs_f64() * 1000.0, w, h);
-                    }
-                }
-
-                // Spawn audio loading on background thread.
-                // Unity loads audio via coroutines (async); we match that by decoding
-                // on a background thread and applying results in tick_and_render.
-                let mut audio_path_for_load: Option<(String, f32)> = None;
-                if self.audio_sync.is_some() {
-                    if let Some(proj) = self.engine.project() {
-                        if let Some(ref perc) = proj.percussion_import {
-                            if let Some(ref audio_path) = perc.audio_path {
-                                if !audio_path.is_empty() {
-                                    audio_path_for_load = Some((audio_path.clone(), perc.audio_start_beat));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if let Some((audio_path, start_beat)) = audio_path_for_load {
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    self.pending_audio_load = Some(rx);
-
-                    std::thread::Builder::new()
-                        .name("audio-load".into())
-                        .spawn(move || {
-                            let t_audio = std::time::Instant::now();
-
-                            // 1. Decode audio for kira playback + probe encoder delay
-                            let preloaded = match manifold_playback::audio_sync::preload_audio(&audio_path, start_beat) {
-                                Ok(p) => p,
-                                Err(e) => {
-                                    log::warn!("[ProjectIO] Background audio load failed: {}", e);
-                                    return;
-                                }
-                            };
-                            eprintln!("[PROJECT LOAD] audio decode (background): {:.1}ms", t_audio.elapsed().as_secs_f64() * 1000.0);
-
-                            // 2. Decode audio for waveform visualization
-                            let t_wave = std::time::Instant::now();
-                            let waveform = match manifold_playback::audio_decoder::decode_audio_to_pcm(&audio_path) {
-                                Ok(decoded) => Some(decoded),
-                                Err(e) => {
-                                    log::warn!("[Waveform] Background waveform decode failed: {}", e);
-                                    None
-                                }
-                            };
-                            eprintln!("[PROJECT LOAD] waveform decode (background): {:.1}ms", t_wave.elapsed().as_secs_f64() * 1000.0);
-
-                            let _ = tx.send(PendingAudioLoadResult { preloaded, waveform });
-                        })
-                        .expect("Failed to spawn audio load thread");
-                }
-
-                self.editing_service.set_project();
-                self.selection.clear_selection();
-                self.active_layer_index = Some(0);
-                self.current_project_path = Some(path.clone());
-                self.needs_rebuild = true;
-
-                // Persist last opened path (Unity line 157-159)
-                let path_str = path.to_string_lossy();
-                self.user_prefs.set_string(
-                    Self::LAST_OPENED_PROJECT_PREF_KEY,
-                    &path_str,
-                );
-                self.user_prefs.save();
-
-                eprintln!("[PROJECT LOAD] total sync time: {:.1}ms (audio loading continues in background)", t_total.elapsed().as_secs_f64() * 1000.0);
-                log::info!("[ProjectIO] Opened project from {}", path.display());
+            // Restore playhead position
+            if saved_time > 0.0 {
+                self.engine.seek_to(saved_time);
             }
-            Err(e) => log::error!("[ProjectIO] Failed to open project: {e}"),
+
+            // Resize compositor + generators to project resolution
+            if let Some(proj) = self.engine.project() {
+                let w = proj.settings.output_width.max(1) as u32;
+                let h = proj.settings.output_height.max(1) as u32;
+                if let Some(gpu) = &self.gpu {
+                    let t2 = std::time::Instant::now();
+                    if let Some(compositor) = &mut self.compositor {
+                        compositor.resize(&gpu.device, w, h);
+                    }
+                    let (renderers, _) = self.engine.split_renderer_project();
+                    for renderer in renderers.iter_mut() {
+                        if let Some(gen) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
+                            gen.resize_gpu(w, h);
+                            break;
+                        }
+                    }
+                    eprintln!("[PROJECT LOAD] GPU resize: {:.1}ms ({}x{})", t2.elapsed().as_secs_f64() * 1000.0, w, h);
+                }
+            }
+
+            // Spawn background audio loading
+            let mut audio_path_for_load: Option<(String, f32)> = None;
+            if self.audio_sync.is_some() {
+                if let Some(proj) = self.engine.project() {
+                    if let Some(ref perc) = proj.percussion_import {
+                        if let Some(ref audio_path) = perc.audio_path {
+                            if !audio_path.is_empty() {
+                                audio_path_for_load = Some((audio_path.clone(), perc.audio_start_beat));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some((audio_path, start_beat)) = audio_path_for_load {
+                let (tx, rx) = std::sync::mpsc::channel();
+                self.pending_audio_load = Some(rx);
+
+                std::thread::Builder::new()
+                    .name("audio-load".into())
+                    .spawn(move || {
+                        let t_audio = std::time::Instant::now();
+                        let preloaded = match manifold_playback::audio_sync::preload_audio(&audio_path, start_beat) {
+                            Ok(p) => p,
+                            Err(e) => {
+                                log::warn!("[ProjectIO] Background audio load failed: {}", e);
+                                return;
+                            }
+                        };
+                        eprintln!("[PROJECT LOAD] audio decode (background): {:.1}ms", t_audio.elapsed().as_secs_f64() * 1000.0);
+
+                        let t_wave = std::time::Instant::now();
+                        let waveform = match manifold_playback::audio_decoder::decode_audio_to_pcm(&audio_path) {
+                            Ok(decoded) => Some(decoded),
+                            Err(e) => {
+                                log::warn!("[Waveform] Background waveform decode failed: {}", e);
+                                None
+                            }
+                        };
+                        eprintln!("[PROJECT LOAD] waveform decode (background): {:.1}ms", t_wave.elapsed().as_secs_f64() * 1000.0);
+
+                        let _ = tx.send(PendingAudioLoadResult { preloaded, waveform });
+                    })
+                    .expect("Failed to spawn audio load thread");
+            }
+
+            self.editing_service.set_project();
+            self.selection.clear_selection();
+            self.active_layer_index = Some(0);
+            self.needs_rebuild = true;
+
+            eprintln!("[PROJECT LOAD] total sync time: {:.1}ms (audio loading continues in background)", t_total.elapsed().as_secs_f64() * 1000.0);
+        }
+
+        // Set project path
+        if let Some(path) = action.set_project_path {
+            self.current_project_path = if path.as_os_str().is_empty() {
+                None
+            } else {
+                Some(path)
+            };
+        }
+
+        // Structural sync
+        if action.needs_structural_sync {
+            self.needs_structural_sync = true;
+        }
+
+        // Clip sync
+        if action.needs_clip_sync {
+            self.needs_rebuild = true;
         }
     }
 
@@ -647,14 +584,12 @@ impl Application {
             Ok(result) => {
                 self.pending_audio_load = None;
 
-                // Apply kira playback audio
                 if let Some(ref mut audio_sync) = self.audio_sync {
                     if let Err(e) = audio_sync.apply_preloaded(result.preloaded) {
                         log::warn!("[ProjectIO] Failed to apply loaded audio: {}", e);
                     }
                 }
 
-                // Apply waveform data
                 if let Some(decoded) = result.waveform {
                     self.ui_root.waveform_lane.set_audio_data(
                         &decoded.samples,
@@ -666,22 +601,10 @@ impl Application {
 
                 eprintln!("[PROJECT LOAD] audio load applied to main thread");
             }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                // Still loading — nothing to do
-            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                // Thread exited without sending (error logged on thread)
                 self.pending_audio_load = None;
             }
-        }
-    }
-
-    /// Sync the current playhead time into the project before save.
-    /// 1:1 port of ProjectIOService.SyncProjectSavedPlayhead (line 230).
-    fn sync_project_saved_playhead(&mut self) {
-        let current_time = self.engine.current_time();
-        if let Some(project) = self.engine.project_mut() {
-            project.saved_playhead_time = current_time;
         }
     }
 
@@ -2245,30 +2168,37 @@ impl ApplicationHandler for Application {
             // From Unity FileDragDrop.cs — polls for OS-level file drops.
             // In winit, this is event-driven instead of polled.
             WindowEvent::DroppedFile(path) => {
-                let path_str = path.to_string_lossy().to_string();
                 let ext = path.extension()
                     .map(|e| e.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
 
-                match ext.as_str() {
-                    // Video files → import as video clip on active layer
-                    "mp4" | "mov" | "avi" | "mkv" | "webm" => {
-                        log::info!("Video file dropped: {}", path_str);
-                        // Future: create video clip on active layer at cursor position
+                if crate::project_io::is_supported_video_extension(&path)
+                    || crate::project_io::is_supported_midi_extension(&path)
+                {
+                    // Video/MIDI files → route through ProjectIOService.
+                    // Drop at playhead beat on active layer (Unity ProcessDroppedFiles).
+                    let drop_beat = self.engine.current_beat();
+                    let drop_layer = self.active_layer_index.unwrap_or(0) as i32;
+                    let spb = manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(
+                        self.engine.project().map(|p| p.settings.bpm).unwrap_or(120.0),
+                    );
+                    if let Some(project) = self.engine.project_mut() {
+                        let action = self.project_io.process_dropped_files(
+                            &[path.clone()],
+                            drop_beat,
+                            drop_layer,
+                            project,
+                            spb,
+                        );
+                        self.apply_project_io_action(action);
                     }
-                    // Project files → load project (routes through shared load path)
-                    "json" | "manifold" => {
-                        log::info!("[ProjectIO] Project file dropped: {}", path_str);
-                        self.open_project_from_path(path.clone());
-                        self.needs_structural_sync = true;
-                    }
-                    // Audio files → import as audio lane
-                    "wav" | "mp3" | "flac" | "aiff" | "ogg" => {
-                        log::info!("Audio file dropped: {} (audio import not yet implemented)", path_str);
-                    }
-                    _ => {
-                        log::debug!("Unrecognized file type dropped: {}", path_str);
-                    }
+                } else if ext == "json" || ext == "manifold" {
+                    // Project files → load project
+                    self.open_project_from_path(path.clone());
+                } else if matches!(ext.as_str(), "wav" | "mp3" | "flac" | "aiff" | "ogg") {
+                    log::info!("Audio file dropped: {} (audio import not yet implemented)", path.to_string_lossy());
+                } else {
+                    log::debug!("Unrecognized file type dropped: {}", path.to_string_lossy());
                 }
             }
             WindowEvent::HoveredFile(path) => {

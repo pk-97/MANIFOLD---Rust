@@ -40,7 +40,7 @@
       "audit_section": 8
     },
     "app": {
-      "pct": 60,
+      "pct": 70,
       "audit_section": 9
     },
     "audio_percussion": {
@@ -293,9 +293,9 @@
       "title": "Consolidate ProjectIOService as unit",
       "severity": "high",
       "est_loc": 200,
-      "status": "todo",
+      "status": "done",
       "commit": null,
-      "notes": "Unity ProjectIOService.cs (527 lines) scattered as private methods on Application in app.rs."
+      "notes": "ProjectIOService consolidated as project_io.rs (470 lines). All project lifecycle (new, open, open recent, save, save as) + file drop processing (video, MIDI, project files) ported as unit. Application delegates via thin wrappers + ProjectIOAction return type (replaces IProjectIOHost callback). DroppedFile handler now routes video/MIDI through service."
     },
     {
       "number": 20,
