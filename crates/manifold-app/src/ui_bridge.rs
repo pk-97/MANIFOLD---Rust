@@ -40,7 +40,12 @@ use manifold_ui::panels::viewport::{TrackInfo, HitRegion};
 use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
 use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo};
 
+use manifold_playback::audio_sync::ImportedAudioSyncController;
+use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
+
 use crate::app::SelectionState;
+use crate::dialog_path_memory::{self, DialogContext};
+use crate::user_prefs::UserPrefs;
 use crate::ui_root::UIRoot;
 
 /// Result of dispatching a panel action.
@@ -72,6 +77,9 @@ pub fn dispatch(
     trim_snapshot: &mut Option<(f32, f32)>,
     adsr_snapshot: &mut Option<(f32, f32, f32, f32)>,
     target_snapshot: &mut Option<f32>,
+    percussion_orchestrator: &mut PercussionImportOrchestrator,
+    audio_sync: &mut Option<ImportedAudioSyncController>,
+    user_prefs: &mut UserPrefs,
 ) -> DispatchResult {
     match action {
         // ── Transport ──────────────────────────────────────────────
@@ -1887,14 +1895,48 @@ pub fn dispatch(
 
         // ── Waveform lane ─────────────────────────────────────────
         PanelAction::ImportAudioClicked => {
-            log::info!("Import audio clicked — file dialog not yet wired");
+            // Open native file dialog for audio import.
+            // Port of Unity WorkspaceController → percussionImportController.OnImportPercussionMap.
+            let last_dir = dialog_path_memory::get_last_directory(
+                DialogContext::PercussionImport, user_prefs,
+            );
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("Import Audio for Percussion Analysis")
+                .add_filter("Audio Files", &["wav", "mp3", "m4a", "aac", "flac", "ogg", "aif", "aiff", "wma", "json"]);
+            if !last_dir.is_empty() {
+                dialog = dialog.set_directory(&last_dir);
+            }
+            if let Some(path) = dialog.pick_file() {
+                let path_str = path.to_string_lossy().to_string();
+                dialog_path_memory::remember_directory(
+                    DialogContext::PercussionImport, &path_str, user_prefs,
+                );
+                let current_beat = engine.current_beat();
+                if let Some(project) = engine.project_mut() {
+                    let beats_per_bar = project.settings.time_signature_numerator;
+                    percussion_orchestrator.on_import_percussion_map(
+                        Some(path_str),
+                        project,
+                        editing,
+                        current_beat,
+                        beats_per_bar,
+                    );
+                }
+            }
             DispatchResult::handled()
         }
         PanelAction::RemoveAudioClicked => {
             log::info!("Remove audio clicked");
+            if let Some(project) = engine.project_mut() {
+                percussion_orchestrator.on_remove_imported_audio(project, editing);
+            }
+            // Reset audio sync controller
+            if let Some(ref mut sync) = audio_sync {
+                sync.reset_audio();
+            }
             ui.waveform_lane.clear_audio();
             ui.stem_lanes.clear_all_stems();
-            ui.layout.waveform_lane_visible = true; // keep lane visible, just clear waveform
+            ui.layout.waveform_lane_visible = true;
             DispatchResult::handled()
         }
         PanelAction::WaveformScrub(screen_x, _screen_y) => {
@@ -1923,10 +1965,34 @@ pub fn dispatch(
             ui.layout.stem_lanes_expanded = *expanded;
             DispatchResult::handled()
         }
-        PanelAction::ReAnalyzeDrums | PanelAction::ReAnalyzeBass
-        | PanelAction::ReAnalyzeSynth | PanelAction::ReAnalyzeVocal
-        | PanelAction::ReImportStems => {
-            log::info!("Re-analyze {:?} — percussion pipeline not yet wired", action);
+        PanelAction::ReAnalyzeDrums => {
+            if let Some(project) = engine.project_mut() {
+                percussion_orchestrator.on_re_analyze_triggers("drums", project);
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::ReAnalyzeBass => {
+            if let Some(project) = engine.project_mut() {
+                percussion_orchestrator.on_re_analyze_triggers("bass", project);
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::ReAnalyzeSynth => {
+            if let Some(project) = engine.project_mut() {
+                percussion_orchestrator.on_re_analyze_triggers("synth", project);
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::ReAnalyzeVocal => {
+            if let Some(project) = engine.project_mut() {
+                percussion_orchestrator.on_re_analyze_triggers("vocal", project);
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::ReImportStems => {
+            if let Some(project) = engine.project_mut() {
+                percussion_orchestrator.on_re_import_stems(project);
+            }
             DispatchResult::handled()
         }
         PanelAction::StemMuteToggled(stem_index) => {

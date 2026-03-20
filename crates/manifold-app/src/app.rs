@@ -12,6 +12,7 @@ use manifold_core::layer::Layer;
 use manifold_editing::commands::layer::DeleteLayerCommand;
 use manifold_editing::service::EditingService;
 use manifold_playback::audio_sync::ImportedAudioSyncController;
+use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::renderer::StubRenderer;
 use manifold_renderer::blit::BlitPipeline;
@@ -112,6 +113,10 @@ pub struct Application {
     // Port of Unity ImportedAudioSyncController (owned by WorkspaceController).
     audio_sync: Option<ImportedAudioSyncController>,
 
+    // Percussion import orchestrator — central state machine for audio analysis pipeline.
+    // Port of Unity PercussionImportOrchestrator (owned by WorkspaceController).
+    percussion_orchestrator: PercussionImportOrchestrator,
+
     // Transport controller — sync management, BPM editing, playback actions
     transport_controller: manifold_playback::transport_controller::TransportController,
 
@@ -200,6 +205,7 @@ impl Application {
                     None
                 }
             },
+            percussion_orchestrator: PercussionImportOrchestrator::new(None, String::new()),
             transport_controller: manifold_playback::transport_controller::TransportController::new(),
             input_handler: crate::input_handler::InputHandler::new(),
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
@@ -689,6 +695,19 @@ impl Application {
             audio_sync.update_sync(&mut self.engine);
         }
 
+        // 1c. Tick percussion import orchestrator (poll-based state machine)
+        {
+            let current_beat = self.engine.current_beat();
+            if let Some(project) = self.engine.project_mut() {
+                self.percussion_orchestrator.tick(
+                    self.time_since_start,
+                    project,
+                    &mut self.editing_service,
+                    current_beat,
+                );
+            }
+        }
+
         // 2. Process UI events and dispatch actions
         let mut actions = self.ui_root.process_events();
 
@@ -840,6 +859,9 @@ impl Application {
                 &mut self.trim_snapshot,
                 &mut self.adsr_snapshot,
                 &mut self.target_snapshot,
+                &mut self.percussion_orchestrator,
+                &mut self.audio_sync,
+                &mut self.user_prefs,
             );
             if result.structural_change {
                 needs_structural_sync = true;
