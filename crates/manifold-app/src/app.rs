@@ -401,6 +401,8 @@ impl Application {
                         );
                         self.editing_service.execute(Box::new(cmd), project);
                     }
+                    // Unity: Application.targetFrameRate = newFps
+                    self.frame_timer.set_target_fps(fps as f64);
                     self.needs_rebuild = true;
                 }
             }
@@ -603,6 +605,11 @@ impl Application {
             self.active_layer_index = Some(0);
             self.needs_rebuild = true;
 
+            // Sync frame timer to project's frame rate (Unity: Application.targetFrameRate)
+            if let Some(p) = self.engine.project() {
+                self.frame_timer.set_target_fps(p.settings.frame_rate as f64);
+            }
+
             eprintln!("[PROJECT LOAD] total sync time: {:.1}ms (audio loading continues in background)", t_total.elapsed().as_secs_f64() * 1000.0);
         }
 
@@ -771,7 +778,7 @@ impl Application {
             size.width,
             size.height,
             scale,
-            wgpu::PresentMode::Fifo,
+            wgpu::PresentMode::AutoNoVsync,
         );
 
         let surface_format = surface.format();
