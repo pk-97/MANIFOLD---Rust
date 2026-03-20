@@ -12,7 +12,7 @@
       "audit_section": 1
     },
     "editing": {
-      "pct": 80,
+      "pct": 90,
       "audit_section": 2
     },
     "playback": {
@@ -269,9 +269,9 @@
       "title": "Complete EditingService orchestration methods",
       "severity": "high",
       "est_loc": 400,
-      "status": "partial",
+      "status": "done",
       "commit": "be4c7f0",
-      "notes": "Added 8 methods: get_effective_selected_clips, select_all_clip_ids, compute_region_from_clip_selection, cut_clips, split_clips_for_region_move, split_clips_at_beat_batch, toggle_mute_clips, duplicate_clips_with_region. Also fixed shrink_clips_by_grid min duration. Remaining: select_region_to, on_clip_selected, delete_selected_layers, group_selected_layers (UI-coupled, live in app layer per D-09)."
+      "notes": "All EditingService orchestration methods complete. 8 methods in editing crate + 4 UI-coupled methods in app layer: select_region_to (ui_bridge.rs select_region_to_with_engine), on_clip_selected (inspector sync via UIBridge), delete_selected_layers (input_host.rs), group_selected_layers (input_host.rs). All wired into keyboard shortcuts (Delete, Cmd+G) and Shift+Click selection."
     },
     {
       "number": 18,
