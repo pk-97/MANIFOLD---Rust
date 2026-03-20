@@ -2961,6 +2961,7 @@ fn beat_div_to_button_index(div: BeatDivision) -> i32 {
 /// Convert a `GeneratorParamState` into `GenParamConfig` for the UI.
 fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState) -> GenParamConfig {
     let reg_def = manifold_core::generator_definition_registry::get(gp.generator_type);
+    let n = reg_def.param_defs.len();
     let params: Vec<GenParamInfo> = reg_def.param_defs.iter().map(|pd| {
         GenParamInfo {
             name: pd.name.clone(),
@@ -2973,8 +2974,72 @@ fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState) -> G
         }
     }).collect();
 
+    // Per-param driver state
+    let mut driver_active = vec![false; n];
+    let mut trim_min = vec![0.0f32; n];
+    let mut trim_max = vec![1.0f32; n];
+    let mut driver_beat_div_idx = vec![-1i32; n];
+    let mut driver_waveform_idx = vec![-1i32; n];
+    let mut driver_reversed = vec![false; n];
+    let mut driver_dotted = vec![false; n];
+    let mut driver_triplet = vec![false; n];
+    if let Some(ref drivers) = gp.drivers {
+        for d in drivers {
+            if d.enabled {
+                let pi = d.param_index as usize;
+                if pi < n {
+                    driver_active[pi] = true;
+                    trim_min[pi] = d.trim_min;
+                    trim_max[pi] = d.trim_max;
+                    driver_beat_div_idx[pi] = beat_div_to_button_index(d.beat_division.base_division());
+                    driver_waveform_idx[pi] = d.waveform as i32;
+                    driver_reversed[pi] = d.reversed;
+                    driver_dotted[pi] = d.beat_division.is_dotted();
+                    driver_triplet[pi] = d.beat_division.is_triplet();
+                }
+            }
+        }
+    }
+
+    // Per-param envelope state
+    let mut envelope_active = vec![false; n];
+    let mut target_norm = vec![1.0f32; n];
+    let mut env_attack = vec![0.0f32; n];
+    let mut env_decay = vec![0.0f32; n];
+    let mut env_sustain = vec![0.0f32; n];
+    let mut env_release = vec![0.0f32; n];
+    if let Some(ref envelopes) = gp.envelopes {
+        for env in envelopes {
+            if env.enabled {
+                let pi = env.param_index as usize;
+                if pi < n {
+                    envelope_active[pi] = true;
+                    target_norm[pi] = env.target_normalized;
+                    env_attack[pi] = env.attack_beats;
+                    env_decay[pi] = env.decay_beats;
+                    env_sustain[pi] = env.sustain_level;
+                    env_release[pi] = env.release_beats;
+                }
+            }
+        }
+    }
+
     GenParamConfig {
         gen_type_name: gp.generator_type.display_name().to_string(),
         params,
+        driver_active,
+        envelope_active,
+        trim_min,
+        trim_max,
+        target_norm,
+        env_attack,
+        env_decay,
+        env_sustain,
+        env_release,
+        driver_beat_div_idx,
+        driver_waveform_idx,
+        driver_reversed,
+        driver_dotted,
+        driver_triplet,
     }
 }

@@ -100,6 +100,11 @@ pub struct GenParamState {
     pub env_decay: Vec<f32>,
     pub env_sustain: Vec<f32>,
     pub env_release: Vec<f32>,
+    pub driver_beat_div_idx: Vec<i32>,
+    pub driver_waveform_idx: Vec<i32>,
+    pub driver_reversed: Vec<bool>,
+    pub driver_dotted: Vec<bool>,
+    pub driver_triplet: Vec<bool>,
 }
 
 impl GenParamState {
@@ -114,6 +119,11 @@ impl GenParamState {
             env_decay: vec![0.3; param_count],
             env_sustain: vec![0.7; param_count],
             env_release: vec![0.5; param_count],
+            driver_beat_div_idx: vec![-1; param_count],
+            driver_waveform_idx: vec![-1; param_count],
+            driver_reversed: vec![false; param_count],
+            driver_dotted: vec![false; param_count],
+            driver_triplet: vec![false; param_count],
         }
     }
 }
@@ -223,6 +233,22 @@ impl GenParamPanel {
 
         let n = config.params.len();
         self.state = GenParamState::new(n);
+        for i in 0..n {
+            self.state.driver_expanded[i] = config.driver_active.get(i).copied().unwrap_or(false);
+            self.state.envelope_expanded[i] = config.envelope_active.get(i).copied().unwrap_or(false);
+            self.state.trim_min[i] = config.trim_min.get(i).copied().unwrap_or(0.0);
+            self.state.trim_max[i] = config.trim_max.get(i).copied().unwrap_or(1.0);
+            self.state.target_norm[i] = config.target_norm.get(i).copied().unwrap_or(1.0);
+            self.state.env_attack[i] = config.env_attack.get(i).copied().unwrap_or(0.0);
+            self.state.env_decay[i] = config.env_decay.get(i).copied().unwrap_or(0.0);
+            self.state.env_sustain[i] = config.env_sustain.get(i).copied().unwrap_or(0.0);
+            self.state.env_release[i] = config.env_release.get(i).copied().unwrap_or(0.0);
+            self.state.driver_beat_div_idx[i] = config.driver_beat_div_idx.get(i).copied().unwrap_or(-1);
+            self.state.driver_waveform_idx[i] = config.driver_waveform_idx.get(i).copied().unwrap_or(-1);
+            self.state.driver_reversed[i] = config.driver_reversed.get(i).copied().unwrap_or(false);
+            self.state.driver_dotted[i] = config.driver_dotted.get(i).copied().unwrap_or(false);
+            self.state.driver_triplet[i] = config.driver_triplet.get(i).copied().unwrap_or(false);
+        }
         self.slider_ids = vec![None; n];
         self.toggle_ids = Vec::new();
         self.toggle_ids.resize_with(n, || None);
@@ -457,7 +483,7 @@ impl GenParamPanel {
 
                 // Driver config
                 if self.state.driver_expanded.get(i).copied().unwrap_or(false) {
-                    self.driver_config_ids[i] = Some(self.build_driver_config(tree, cx, cy, slider_w));
+                    self.driver_config_ids[i] = Some(self.build_driver_config(tree, cx, cy, slider_w, i));
                     cy += DRIVER_CONFIG_HEIGHT;
                 }
             }
@@ -466,11 +492,18 @@ impl GenParamPanel {
         self.node_count = tree.count() - self.first_node;
     }
 
-    fn build_driver_config(&self, tree: &mut UITree, x: f32, y: f32, w: f32) -> DriverConfigIds {
+    fn build_driver_config(&self, tree: &mut UITree, x: f32, y: f32, w: f32, param_idx: usize) -> DriverConfigIds {
         let container_id = tree.add_panel(
             -1, x, y, w, DRIVER_CONFIG_HEIGHT,
             UIStyle { bg_color: color::CONFIG_BG_C32, corner_radius: 2.0, ..UIStyle::default() },
         ) as i32;
+
+        let active_div = self.state.driver_beat_div_idx.get(param_idx).copied().unwrap_or(-1);
+        let active_wave = self.state.driver_waveform_idx.get(param_idx).copied().unwrap_or(-1);
+        let is_reversed = self.state.driver_reversed.get(param_idx).copied().unwrap_or(false);
+        let is_dotted = self.state.driver_dotted.get(param_idx).copied().unwrap_or(false);
+        let is_triplet = self.state.driver_triplet.get(param_idx).copied().unwrap_or(false);
+        let no_mod = !is_dotted && !is_triplet;
 
         let mut cx = x + DRIVER_PAD_H;
         let row1_y = y + 4.0;
@@ -479,18 +512,10 @@ impl GenParamPanel {
 
         let mut beat_div_btn_ids = [-1i32; BEAT_DIV_COUNT];
         for j in 0..BEAT_DIV_COUNT {
+            let active = j as i32 == active_div && no_mod;
             beat_div_btn_ids[j] = tree.add_button(
                 container_id, cx, row1_y, btn_w, DRIVER_ROW_HEIGHT,
-                UIStyle {
-                    bg_color: color::CONFIG_BTN_INACTIVE_C32,
-                    hover_bg_color: color::CONFIG_BTN_HOVER_C32,
-                    pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
-                    text_color: color::TEXT_DIMMED_C32,
-                    font_size: 8,
-                    corner_radius: 1.0,
-                    text_align: TextAlign::Center,
-                    ..UIStyle::default()
-                },
+                config_btn_style(active),
                 BEAT_DIV_LABELS[j],
             ) as i32;
             cx += btn_w + BEAT_DIV_SPACING;
@@ -501,21 +526,22 @@ impl GenParamPanel {
 
         let dot_btn_id = tree.add_button(
             container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
-            config_btn_style(), ".",
+            config_btn_style(is_dotted), ".",
         ) as i32;
         cx += WAVE_BTN_W + BEAT_DIV_SPACING;
 
         let triplet_btn_id = tree.add_button(
             container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
-            config_btn_style(), "T",
+            config_btn_style(is_triplet), "T",
         ) as i32;
         cx += WAVE_BTN_W + GAP;
 
         let mut wave_btn_ids = [-1i32; WAVEFORM_COUNT];
         for j in 0..WAVEFORM_COUNT {
+            let active = j as i32 == active_wave;
             wave_btn_ids[j] = tree.add_button(
                 container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
-                config_btn_style(), WAVEFORM_LABELS[j],
+                config_btn_style(active), WAVEFORM_LABELS[j],
             ) as i32;
             cx += WAVE_BTN_W + BEAT_DIV_SPACING;
         }
@@ -524,7 +550,7 @@ impl GenParamPanel {
         let reverse_x = x + w - DRIVER_PAD_H - reverse_w;
         let reverse_btn_id = tree.add_button(
             container_id, reverse_x, row2_y, reverse_w, DRIVER_ROW_HEIGHT,
-            config_btn_style(), "Rev",
+            config_btn_style(is_reversed), "Rev",
         ) as i32;
 
         DriverConfigIds {
@@ -901,16 +927,29 @@ fn de_btn_style(active: bool, active_color: Color32) -> UIStyle {
     }
 }
 
-fn config_btn_style() -> UIStyle {
-    UIStyle {
-        bg_color: color::CONFIG_BTN_INACTIVE_C32,
-        hover_bg_color: color::CONFIG_BTN_HOVER_C32,
-        pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
-        text_color: color::TEXT_DIMMED_C32,
-        font_size: FONT_SIZE,
-        corner_radius: 1.0,
-        text_align: TextAlign::Center,
-        ..UIStyle::default()
+fn config_btn_style(active: bool) -> UIStyle {
+    if active {
+        UIStyle {
+            bg_color: color::DRIVER_ACTIVE_C32,
+            hover_bg_color: color::DRIVER_ACTIVE_HOVER_C32,
+            pressed_bg_color: color::DRIVER_ACTIVE_PRESS_C32,
+            text_color: color::TEXT_WHITE_C32,
+            font_size: FONT_SIZE,
+            corner_radius: 1.0,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        }
+    } else {
+        UIStyle {
+            bg_color: color::CONFIG_BTN_INACTIVE_C32,
+            hover_bg_color: color::CONFIG_BTN_HOVER_C32,
+            pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
+            text_color: color::TEXT_DIMMED_C32,
+            font_size: FONT_SIZE,
+            corner_radius: 1.0,
+            text_align: TextAlign::Center,
+            ..UIStyle::default()
+        }
     }
 }
 
@@ -927,6 +966,20 @@ mod tests {
                 GenParamInfo { name: "Invert".into(), min: 0.0, max: 1.0, default: 0.0, whole_numbers: false, is_toggle: true, value_labels: None },
                 GenParamInfo { name: "Scale".into(), min: 0.1, max: 5.0, default: 1.0, whole_numbers: false, is_toggle: false, value_labels: None },
             ],
+            driver_active: vec![false; 3],
+            envelope_active: vec![false; 3],
+            trim_min: vec![0.0; 3],
+            trim_max: vec![1.0; 3],
+            target_norm: vec![1.0; 3],
+            env_attack: vec![0.0; 3],
+            env_decay: vec![0.0; 3],
+            env_sustain: vec![0.0; 3],
+            env_release: vec![0.0; 3],
+            driver_beat_div_idx: vec![-1; 3],
+            driver_waveform_idx: vec![-1; 3],
+            driver_reversed: vec![false; 3],
+            driver_dotted: vec![false; 3],
+            driver_triplet: vec![false; 3],
         }
     }
 
