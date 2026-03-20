@@ -289,6 +289,87 @@ impl ImportedAudioSyncController {
         self.sound_data = None;
         self.clip_duration_seconds = 0.0;
     }
+
+    /// Applies pre-loaded audio data to the controller. Fast — only does
+    /// AudioManager::play (no file I/O). Must be called on the main thread.
+    pub fn apply_preloaded(&mut self, preloaded: PreloadedAudioData) -> Result<(), String> {
+        // Stop and discard previous sound handle.
+        if let Some(ref mut handle) = self.sound_handle {
+            handle.stop(Tween::default());
+        }
+        self.sound_handle = None;
+
+        self.clip_duration_seconds = preloaded.clip_duration;
+        self.audio_path = Some(preloaded.path.clone());
+        self.start_beat = preloaded.start_beat;
+        self.start_time_seconds = 0.0;
+        self.encoder_delay_seconds = preloaded.encoder_delay;
+
+        // Play the sound immediately paused (equivalent to audioSource.clip = audioClip).
+        let data_clone = preloaded.sound_data.clone();
+        let mut handle = self.audio_manager.play(data_clone)
+            .map_err(|e| format!("Failed to play audio: {}", e))?;
+        handle.pause(Tween::default());
+        handle.seek_to(0.0);
+        self.sound_handle = Some(handle);
+        self.sound_data = Some(preloaded.sound_data);
+
+        self.is_ready = true;
+        if let Some(ref mut cb) = self.on_clip_changed {
+            cb(true);
+        }
+
+        let file_name = Path::new(&preloaded.path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let delay_info = if self.encoder_delay_seconds > 0.0 {
+            format!(" encoderDelay={:.1}ms", self.encoder_delay_seconds * 1000.0)
+        } else {
+            String::new()
+        };
+        log::info!(
+            "[ImportedAudioSyncController] Imported audio attached for sync: '{}' startBeat={:.2}{}",
+            file_name, self.start_beat, delay_info
+        );
+
+        Ok(())
+    }
+}
+
+// ─── Async preloading (runs on background thread) ───
+
+/// Pre-decoded audio data ready to be applied to the controller on the main thread.
+/// The heavy I/O (file read + decode + ffprobe) happens off-thread; only the fast
+/// AudioManager::play call happens on the main thread via `apply_preloaded`.
+pub struct PreloadedAudioData {
+    pub sound_data: StaticSoundData,
+    pub encoder_delay: f32,
+    pub clip_duration: f32,
+    pub path: String,
+    pub start_beat: f32,
+}
+
+/// Performs the expensive audio loading work (file I/O + decode + ffprobe).
+/// Safe to call from any thread — returns data to be applied on main thread.
+pub fn preload_audio(path: &str, start_beat_offset: f32) -> Result<PreloadedAudioData, String> {
+    let sound_data = StaticSoundData::from_file(path)
+        .map_err(|e| format!("Failed to load audio: {}", e))?;
+
+    let clip_duration = sound_data.duration().as_secs_f32();
+    if clip_duration <= 0.0 {
+        return Err("Decoded audio clip has zero duration".to_string());
+    }
+
+    let encoder_delay = probe_encoder_delay_seconds(path);
+
+    Ok(PreloadedAudioData {
+        sound_data,
+        encoder_delay,
+        clip_duration,
+        path: path.to_string(),
+        start_beat: start_beat_offset.max(0.0),
+    })
 }
 
 // ─── ffprobe encoder delay probing (module-level functions) ───

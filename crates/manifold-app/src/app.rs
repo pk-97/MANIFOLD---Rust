@@ -11,7 +11,8 @@ use manifold_core::types::{BlendMode, LayerType};
 use manifold_core::layer::Layer;
 use manifold_editing::commands::layer::DeleteLayerCommand;
 use manifold_editing::service::EditingService;
-use manifold_playback::audio_sync::ImportedAudioSyncController;
+use manifold_playback::audio_sync::{ImportedAudioSyncController, PreloadedAudioData};
+use manifold_playback::audio_decoder::DecodedAudio;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::renderer::StubRenderer;
@@ -47,6 +48,13 @@ pub type SelectionState = UIState;
 
 // ClipDragMode, ClipDragSnapshot, ClipDragState — REMOVED.
 // All drag state now lives in InteractionOverlay (interaction_overlay.rs).
+
+/// Result from background audio loading thread.
+/// Contains pre-decoded audio for both kira playback and waveform visualization.
+struct PendingAudioLoadResult {
+    preloaded: PreloadedAudioData,
+    waveform: Option<DecodedAudio>,
+}
 
 pub struct Application {
     // GPU
@@ -112,6 +120,10 @@ pub struct Application {
     // Audio sync — imported audio playback synced to timeline.
     // Port of Unity ImportedAudioSyncController (owned by WorkspaceController).
     audio_sync: Option<ImportedAudioSyncController>,
+
+    // Pending audio load — receives results from background decode thread.
+    // Unity loads audio async via coroutines; we use std::thread + mpsc channel.
+    pending_audio_load: Option<std::sync::mpsc::Receiver<PendingAudioLoadResult>>,
 
     // Percussion import orchestrator — central state machine for audio analysis pipeline.
     // Port of Unity PercussionImportOrchestrator (owned by WorkspaceController).
@@ -205,6 +217,7 @@ impl Application {
                     None
                 }
             },
+            pending_audio_load: None,
             percussion_orchestrator: PercussionImportOrchestrator::new(None, String::new()),
             transport_controller: manifold_playback::transport_controller::TransportController::new(),
             input_handler: crate::input_handler::InputHandler::new(),
@@ -501,13 +514,28 @@ impl Application {
 
     /// Shared project-load logic used by both open_project and open_recent_project.
     /// 1:1 port of ProjectIOService.OpenProjectFromPath (line 125).
+    ///
+    /// Audio loading is async (background thread) matching Unity's coroutine pattern.
+    /// The project data, GPU resize, and engine init happen synchronously; the expensive
+    /// audio file decode + ffprobe runs on a background thread and results are applied
+    /// in tick_and_render via poll_pending_audio_load.
     fn open_project_from_path(&mut self, path: std::path::PathBuf) {
-        match manifold_io::loader::load_project(&path) {
+        let t_total = std::time::Instant::now();
+
+        let t0 = std::time::Instant::now();
+        let load_result = manifold_io::loader::load_project(&path);
+        eprintln!("[PROJECT LOAD] load_project: {:.1}ms", t0.elapsed().as_secs_f64() * 1000.0);
+
+        match load_result {
             Ok(project) => {
                 // Apply saved layout before initializing (Unity ApplySavedLayout)
                 self.ui_root.apply_project_layout(&project.settings);
                 let saved_time = project.saved_playhead_time;
+
+                let t1 = std::time::Instant::now();
                 self.engine.initialize(project);
+                eprintln!("[PROJECT LOAD] engine.initialize: {:.1}ms", t1.elapsed().as_secs_f64() * 1000.0);
+
                 // Restore playhead position (Unity ProjectIOService line 235)
                 if saved_time > 0.0 {
                     self.engine.seek_to(saved_time);
@@ -519,6 +547,7 @@ impl Application {
                     let w = proj.settings.output_width.max(1) as u32;
                     let h = proj.settings.output_height.max(1) as u32;
                     if let Some(gpu) = &self.gpu {
+                        let t2 = std::time::Instant::now();
                         if let Some(compositor) = &mut self.compositor {
                             compositor.resize(&gpu.device, w, h);
                         }
@@ -530,47 +559,59 @@ impl Application {
                                 break;
                             }
                         }
+                        eprintln!("[PROJECT LOAD] GPU resize: {:.1}ms ({}x{})", t2.elapsed().as_secs_f64() * 1000.0, w, h);
                     }
-                    eprintln!("[PROJECT LOAD] Resized compositor/generators to {}x{}", w, h);
                 }
 
-                // Load imported audio if present in project.
-                // Port of Unity WorkspaceController: audioSyncController.LoadAudioAsync
-                // called during project open when percussionImport.audioPath is set.
-                let mut waveform_audio_path: Option<String> = None;
-                if let Some(ref mut audio_sync) = self.audio_sync {
+                // Spawn audio loading on background thread.
+                // Unity loads audio via coroutines (async); we match that by decoding
+                // on a background thread and applying results in tick_and_render.
+                let mut audio_path_for_load: Option<(String, f32)> = None;
+                if self.audio_sync.is_some() {
                     if let Some(proj) = self.engine.project() {
                         if let Some(ref perc) = proj.percussion_import {
                             if let Some(ref audio_path) = perc.audio_path {
                                 if !audio_path.is_empty() {
-                                    let start_beat = perc.audio_start_beat;
-                                    let audio_path_owned = audio_path.clone();
-                                    if let Err(e) = audio_sync.load_audio(&audio_path_owned, start_beat) {
-                                        log::warn!("[ProjectIO] Failed to load imported audio: {}", e);
-                                    }
-                                    waveform_audio_path = Some(audio_path.clone());
+                                    audio_path_for_load = Some((audio_path.clone(), perc.audio_start_beat));
                                 }
                             }
                         }
                     }
                 }
 
-                // Decode audio for waveform visualization (separate from kira playback).
-                // Uses symphonia to extract raw PCM samples for the spectral waveform renderer.
-                if let Some(ref audio_path) = waveform_audio_path {
-                    match manifold_playback::audio_decoder::decode_audio_to_pcm(audio_path) {
-                        Ok(decoded) => {
-                            self.ui_root.waveform_lane.set_audio_data(
-                                &decoded.samples,
-                                decoded.channels,
-                                decoded.sample_rate,
-                            );
-                            log::info!("[Waveform] Decoded audio for waveform display");
-                        }
-                        Err(e) => {
-                            log::warn!("[Waveform] Failed to decode audio for waveform: {}", e);
-                        }
-                    }
+                if let Some((audio_path, start_beat)) = audio_path_for_load {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    self.pending_audio_load = Some(rx);
+
+                    std::thread::Builder::new()
+                        .name("audio-load".into())
+                        .spawn(move || {
+                            let t_audio = std::time::Instant::now();
+
+                            // 1. Decode audio for kira playback + probe encoder delay
+                            let preloaded = match manifold_playback::audio_sync::preload_audio(&audio_path, start_beat) {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    log::warn!("[ProjectIO] Background audio load failed: {}", e);
+                                    return;
+                                }
+                            };
+                            eprintln!("[PROJECT LOAD] audio decode (background): {:.1}ms", t_audio.elapsed().as_secs_f64() * 1000.0);
+
+                            // 2. Decode audio for waveform visualization
+                            let t_wave = std::time::Instant::now();
+                            let waveform = match manifold_playback::audio_decoder::decode_audio_to_pcm(&audio_path) {
+                                Ok(decoded) => Some(decoded),
+                                Err(e) => {
+                                    log::warn!("[Waveform] Background waveform decode failed: {}", e);
+                                    None
+                                }
+                            };
+                            eprintln!("[PROJECT LOAD] waveform decode (background): {:.1}ms", t_wave.elapsed().as_secs_f64() * 1000.0);
+
+                            let _ = tx.send(PendingAudioLoadResult { preloaded, waveform });
+                        })
+                        .expect("Failed to spawn audio load thread");
                 }
 
                 self.editing_service.set_project();
@@ -587,9 +628,51 @@ impl Application {
                 );
                 self.user_prefs.save();
 
+                eprintln!("[PROJECT LOAD] total sync time: {:.1}ms (audio loading continues in background)", t_total.elapsed().as_secs_f64() * 1000.0);
                 log::info!("[ProjectIO] Opened project from {}", path.display());
             }
             Err(e) => log::error!("[ProjectIO] Failed to open project: {e}"),
+        }
+    }
+
+    /// Poll for completed background audio load and apply results.
+    /// Called each frame from tick_and_render.
+    fn poll_pending_audio_load(&mut self) {
+        let rx = match self.pending_audio_load.as_ref() {
+            Some(rx) => rx,
+            None => return,
+        };
+
+        match rx.try_recv() {
+            Ok(result) => {
+                self.pending_audio_load = None;
+
+                // Apply kira playback audio
+                if let Some(ref mut audio_sync) = self.audio_sync {
+                    if let Err(e) = audio_sync.apply_preloaded(result.preloaded) {
+                        log::warn!("[ProjectIO] Failed to apply loaded audio: {}", e);
+                    }
+                }
+
+                // Apply waveform data
+                if let Some(decoded) = result.waveform {
+                    self.ui_root.waveform_lane.set_audio_data(
+                        &decoded.samples,
+                        decoded.channels,
+                        decoded.sample_rate,
+                    );
+                    log::info!("[Waveform] Decoded audio for waveform display");
+                }
+
+                eprintln!("[PROJECT LOAD] audio load applied to main thread");
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                // Still loading — nothing to do
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                // Thread exited without sending (error logged on thread)
+                self.pending_audio_load = None;
+            }
         }
     }
 
@@ -689,13 +772,16 @@ impl Application {
         };
         let tick_result = self.engine.tick(ctx);
 
-        // 1b. Sync imported audio playback to timeline
+        // 1b. Poll for completed background audio load (async decode from project open)
+        self.poll_pending_audio_load();
+
+        // 1c. Sync imported audio playback to timeline
         // Port of Unity WorkspaceController.LateUpdate → audioSyncController.UpdateSync
         if let Some(ref mut audio_sync) = self.audio_sync {
             audio_sync.update_sync(&mut self.engine);
         }
 
-        // 1c. Tick percussion import orchestrator (poll-based state machine)
+        // 1d. Tick percussion import orchestrator (poll-based state machine)
         {
             let current_beat = self.engine.current_beat();
             if let Some(project) = self.engine.project_mut() {
