@@ -478,6 +478,7 @@ impl Application {
 
     /// Save As. Delegates to ProjectIOService.save_project_as.
     fn save_project_as(&mut self) {
+        self.send_content_cmd(ContentCommand::PauseRendering);
         let current_time = self.content_state.current_time;
         self.local_project.saved_playhead_time = current_time;
         let action = self.project_io.save_project_as(
@@ -486,12 +487,15 @@ impl Application {
             &mut EditingService::new(), // placeholder — mark clean via content thread
             &mut self.user_prefs,
         );
+        self.send_content_cmd(ContentCommand::ResumeRendering);
         self.apply_project_io_action(action);
     }
 
     /// Open. Delegates to ProjectIOService.open_project.
     fn open_project(&mut self) {
+        self.send_content_cmd(ContentCommand::PauseRendering);
         let action = self.project_io.open_project(&mut self.user_prefs);
+        self.send_content_cmd(ContentCommand::ResumeRendering);
         self.apply_project_io_action(action);
     }
 
@@ -1865,6 +1869,7 @@ impl ApplicationHandler for Application {
                 frame_count: 0,
                 time_since_start: 0.0,
                 last_data_version: 0,
+                rendering_paused: false,
             };
 
             let handle = std::thread::Builder::new()

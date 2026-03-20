@@ -53,6 +53,20 @@ pub enum ContentCommand {
     },
     ResetAudio,
 
+    // ── Clipboard ────────────────────────────────────────────────
+    /// Copy clips to clipboard on the content thread (EditingService owns clipboard).
+    CopyClips {
+        clip_ids: Vec<String>,
+        region: Option<manifold_core::selection::SelectionRegion>,
+    },
+    /// Paste from clipboard at target position. Content thread mutates project and
+    /// sends updated snapshot. `result_tx` receives pasted clip IDs for UI selection.
+    PasteClips {
+        target_beat: f32,
+        target_layer: i32,
+        result_tx: std::sync::mpsc::Sender<Vec<String>>,
+    },
+
     // ── Direct project mutation ────────────────────────────────────
     /// Closure runs on the content thread with &mut Project access.
     MutateProject(Box<dyn FnOnce(&mut Project) + Send>),
@@ -64,6 +78,13 @@ pub enum ContentCommand {
 
     // ── Compositor ────────────────────────────────────────────────
     MarkCompositorDirty,
+
+    // ── Lifecycle ─────────────────────────────────────────────────
+    /// Pause rendering (content thread stops ticking/rendering but still drains commands).
+    /// Used while native file dialogs are open to avoid GPU contention on macOS.
+    PauseRendering,
+    /// Resume rendering after a dialog closes.
+    ResumeRendering,
 
     // ── Shutdown ──────────────────────────────────────────────────
     Shutdown,
