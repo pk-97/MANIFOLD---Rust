@@ -23,7 +23,7 @@ use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu::GpuContext;
 use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
 use manifold_renderer::surface::SurfaceWrapper;
-use manifold_renderer::ui_renderer::UIRenderer;
+use manifold_renderer::ui_renderer::{TextMode, UIRenderer};
 
 use manifold_ui::cursors::{CursorManager, TimelineCursor};
 use manifold_ui::input::{Modifiers, PointerAction};
@@ -1450,19 +1450,20 @@ impl Application {
                 let logical_w = (surface_w as f64 / scale) as u32;
                 let logical_h = (surface_h as f64 / scale) as u32;
 
-                // Pass 1: UITree (track backgrounds, ruler + ruler markers,
-                // overview strip, export markers, all chrome panels)
+                // Pass 1: UITree rects + text (track backgrounds, ruler, chrome panels).
+                // When dropdown is open, skip overlay nodes — they render in Pass 4.
+                // Uses TextMode::Main so base UI text goes to the main TextRenderer's
+                // own vertex buffer, isolated from the overlay TextRenderer.
                 if let Some(ui) = &mut self.ui_renderer {
-                    if self.ui_root.dropdown.is_open() {
-                        let start = Some(self.ui_root.dropdown.first_node());
-                        let bounds = Some(self.ui_root.dropdown.container_bounds());
-                        ui.render_tree_with_overlay(&self.ui_root.tree, start, bounds);
+                    let skip_from = if self.ui_root.dropdown.is_open() {
+                        Some(self.ui_root.dropdown.first_node())
                     } else {
-                        ui.render_tree(&self.ui_root.tree);
-                    }
+                        None
+                    };
+                    ui.render_tree(&self.ui_root.tree, skip_from);
                     ui.render(
                         &gpu.device, &gpu.queue, &mut encoder, &surface_view,
-                        logical_w, logical_h, scale,
+                        logical_w, logical_h, scale, TextMode::Main,
                     );
                 }
 
@@ -1484,7 +1485,8 @@ impl Application {
                     }
                 }
 
-                // Pass 3: Playhead track-area line ONLY (on top of bitmap textures)
+                // Pass 3: Playhead track-area line ONLY (on top of bitmap textures).
+                // TextMode::Skip — no text, no glyphon prepare(), no buffer mutation.
                 if let Some(ui) = &mut self.ui_renderer {
                     if let Some(px) = self.ui_root.viewport.playhead_pixel() {
                         let tr = self.ui_root.viewport.get_tracks_rect();
@@ -1495,20 +1497,21 @@ impl Application {
                         );
                         ui.render(
                             &gpu.device, &gpu.queue, &mut encoder, &surface_view,
-                            logical_w, logical_h, scale,
+                            logical_w, logical_h, scale, TextMode::Skip,
                         );
                     }
                 }
 
                 // Pass 4: Dropdown overlay — renders ON TOP of layer bitmaps and playhead.
-                // Must be a separate pass so dropdowns aren't occluded by bitmap textures.
+                // Uses TextMode::Overlay so dropdown text goes to a separate TextRenderer
+                // with its own vertex buffer, preventing corruption of Pass 1's text.
                 if self.ui_root.dropdown.is_open() {
                     if let Some(ui) = &mut self.ui_renderer {
                         let start = self.ui_root.dropdown.first_node();
                         ui.render_overlay(&self.ui_root.tree, start);
                         ui.render(
                             &gpu.device, &gpu.queue, &mut encoder, &surface_view,
-                            logical_w, logical_h, scale,
+                            logical_w, logical_h, scale, TextMode::Overlay,
                         );
                     }
                 }

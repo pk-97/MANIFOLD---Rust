@@ -120,19 +120,36 @@ struct TextCommand {
     clip_bounds: Option<[f32; 4]>,
 }
 
+/// Controls which TextRenderer is used (or skipped) during `render()`.
+///
+/// Each mode corresponds to an independent glyphon TextRenderer with its own
+/// vertex buffer, preventing cross-pass corruption when multiple render() calls
+/// are recorded into the same CommandEncoder before submission.
+pub enum TextMode {
+    /// Use the main TextRenderer (base UI text).
+    Main,
+    /// Use the overlay TextRenderer (dropdown/popup text).
+    Overlay,
+    /// Skip text entirely — render only rects (e.g. playhead line).
+    Skip,
+}
+
 /// Simple batched 2D UI renderer for wgpu.
 pub struct UIRenderer {
     pipeline: wgpu::RenderPipeline,
     globals_buffer: wgpu::Buffer,
     globals_bind_group_layout: wgpu::BindGroupLayout,
 
-    // Text rendering
+    // Text rendering — two independent TextRenderers to avoid glyphon vertex
+    // buffer corruption when multiple render() calls share one CommandEncoder.
+    // Each owns its own GPU vertex buffer; they share the glyph atlas.
     font_system: FontSystem,
     swash_cache: SwashCache,
     #[allow(dead_code)]
     text_cache: Cache,
     text_atlas: TextAtlas,
     text_renderer: TextRenderer,
+    overlay_text_renderer: TextRenderer,
     viewport: Viewport,
     text_buffers: Vec<TextBuffer>,
 
@@ -149,13 +166,6 @@ pub struct UIRenderer {
     // Draw queues
     rect_commands: Vec<RectCommand>,
     text_commands: Vec<TextCommand>,
-
-    /// When set, base text overlapping this rect is hidden (zero-area clip).
-    overlay_occlude_rect: Option<Rect>,
-    /// Node index where overlay starts (text after this is NOT occluded).
-    overlay_start_node: Option<usize>,
-    /// Whether we've passed the overlay start during traversal.
-    in_overlay: bool,
 
     // Per-frame vertex buffer
     vertices: Vec<UIVertex>,
@@ -274,6 +284,8 @@ impl UIRenderer {
         let mut text_atlas = TextAtlas::new(device, queue, &cache, target_format);
         let text_renderer =
             TextRenderer::new(&mut text_atlas, device, wgpu::MultisampleState::default(), None);
+        let overlay_text_renderer =
+            TextRenderer::new(&mut text_atlas, device, wgpu::MultisampleState::default(), None);
         let viewport = Viewport::new(device, &cache);
 
         Self {
@@ -285,6 +297,7 @@ impl UIRenderer {
             text_cache: cache,
             text_atlas,
             text_renderer,
+            overlay_text_renderer,
             viewport,
             text_buffers: Vec::new(),
             text_buffer_cache: std::collections::HashMap::with_capacity(256),
@@ -292,9 +305,6 @@ impl UIRenderer {
             text_cache_used: std::collections::HashMap::with_capacity(256),
             rect_commands: Vec::with_capacity(256),
             text_commands: Vec::with_capacity(128),
-            overlay_occlude_rect: None,
-            overlay_start_node: None,
-            in_overlay: false,
             vertices: Vec::with_capacity(1024),
             indices: Vec::with_capacity(1536),
             clip_stack: Vec::with_capacity(8),
@@ -361,33 +371,15 @@ impl UIRenderer {
 
     // ── UITree rendering ────────────────────────────────────────────
 
-    /// Render a UITree (single pass, no dropdown occlusion).
-    pub fn render_tree(&mut self, tree: &UITree) {
-        self.render_tree_with_overlay(tree, None, None);
-    }
-
-    /// Render with optional dropdown occlusion. When a dropdown is open:
-    /// - `overlay_start_node`: tree node index where dropdown nodes begin
-    /// - `overlay_bounds`: the dropdown container rect
-    ///
-    /// Base text overlapping `overlay_bounds` is hidden via zero-area clip.
-    /// Overlay nodes are SKIPPED here — call `render_overlay` separately
-    /// after layer bitmaps / playhead so the dropdown renders on top of everything.
-    pub fn render_tree_with_overlay(
-        &mut self,
-        tree: &UITree,
-        overlay_start_node: Option<usize>,
-        overlay_bounds: Option<Rect>,
-    ) {
+    /// Render a UITree. When `skip_from` is `Some(n)`, nodes with
+    /// `id >= n` are skipped (used to exclude dropdown overlay nodes
+    /// that render in a separate pass via `render_overlay`).
+    pub fn render_tree(&mut self, tree: &UITree, skip_from: Option<usize>) {
         self.clip_stack.clear();
-        self.overlay_occlude_rect = overlay_bounds;
-        self.overlay_start_node = overlay_start_node;
-        self.in_overlay = overlay_start_node.is_none();
 
         tree.traverse(|event| match event {
             TraversalEvent::Node(node) => {
-                // Skip overlay nodes — they render in a separate pass via render_overlay().
-                if let Some(start) = self.overlay_start_node {
+                if let Some(start) = skip_from {
                     if node.id as usize >= start {
                         return;
                     }
@@ -412,9 +404,6 @@ impl UIRenderer {
     /// Call this AFTER layer bitmaps and playhead so the dropdown sits on top.
     pub fn render_overlay(&mut self, tree: &UITree, start_node: usize) {
         self.clip_stack.clear();
-        self.overlay_occlude_rect = None;
-        self.overlay_start_node = None;
-        self.in_overlay = true;
 
         tree.traverse(|event| match event {
             TraversalEvent::Node(node) => {
@@ -514,18 +503,7 @@ impl UIRenderer {
                     TextAlign::Left => bounds.x,
                 };
 
-                let mut clip_bounds = self.clip_stack.last().map(|c| [c.x, c.y, c.x_max(), c.y_max()]);
-
-                // If this is base (non-overlay) text overlapping the dropdown,
-                // hide it by setting zero-area clip bounds.
-                if !self.in_overlay {
-                    if let Some(ref occlude) = self.overlay_occlude_rect {
-                        let text_rect = Rect::new(text_x, text_y, text_size.x, text_size.y);
-                        if rects_overlap(&text_rect, occlude) {
-                            clip_bounds = Some([0.0, 0.0, 0.0, 0.0]);
-                        }
-                    }
-                }
+                let clip_bounds = self.clip_stack.last().map(|c| [c.x, c.y, c.x_max(), c.y_max()]);
 
                 self.text_commands.push(TextCommand {
                     x: text_x,
@@ -591,6 +569,7 @@ impl UIRenderer {
     ///
     /// `width`/`height`: logical pixel dimensions (matches UITree coordinates).
     /// `scale_factor`: HiDPI scale (e.g. 2.0 on Retina). Used for crisp text.
+    /// `text_mode`: which TextRenderer to use, or `Skip` for rects only.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -600,6 +579,7 @@ impl UIRenderer {
         width: u32,
         height: u32,
         scale_factor: f64,
+        text_mode: TextMode,
     ) {
         let physical_w = (width as f64 * scale_factor) as u32;
         let physical_h = (height as f64 * scale_factor) as u32;
@@ -658,103 +638,106 @@ impl UIRenderer {
             ]);
         }
 
-        // Prepare text buffers for glyphon — reuse cached buffers where possible.
-        // Matches Unity's glyph atlas: pre-rasterized glyphs served from cache,
-        // only new characters trigger shaping/rasterization.
-        self.text_buffers.clear();
-        let mut text_areas = Vec::new();
-        let mut cache_misses = 0u32;
+        // ── Text preparation (skipped for TextMode::Skip) ──────────
+        let has_text = !matches!(text_mode, TextMode::Skip) && !self.text_commands.is_empty();
 
-        for cmd in &self.text_commands {
-            let key = (cmd.text.clone(), cmd.font_size as u16);
+        if has_text {
+            // Prepare text buffers for glyphon — reuse cached buffers where possible.
+            self.text_buffers.clear();
 
-            if let Some(buffer) = self.text_buffer_cache.get(&key) {
-                // Cache hit — clone the pre-shaped buffer (cheap: no re-shaping)
-                self.text_buffers.push(buffer.clone());
-            } else {
-                // Cache miss — create and shape new TextBuffer
-                let mut buffer = TextBuffer::new(
-                    &mut self.font_system,
-                    Metrics::new(cmd.font_size, cmd.font_size * 1.2),
-                );
-                buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
-                buffer.set_text(
-                    &mut self.font_system,
-                    &cmd.text,
-                    &Attrs::new().family(Family::SansSerif),
-                    Shaping::Basic,
-                    None,
-                );
-                buffer.shape_until_scroll(&mut self.font_system, false);
-                self.text_buffer_cache.insert(key, buffer.clone());
-                self.text_buffers.push(buffer);
-                cache_misses += 1;
-            }
-        }
+            for cmd in &self.text_commands {
+                let key = (cmd.text.clone(), cmd.font_size as u16);
 
-        // Evict stale cache entries every 60 frames
-        self.text_cache_generation += 1;
-        if self.text_cache_generation % 60 == 0 {
-            let gen = self.text_cache_generation;
-            let stale: Vec<_> = self.text_cache_used.iter()
-                .filter(|(_, &last_used)| gen - last_used > 120)
-                .map(|(k, _)| k.clone())
-                .collect();
-            for key in stale {
-                self.text_buffer_cache.remove(&key);
-                self.text_cache_used.remove(&key);
-            }
-        }
-
-        let _ = cache_misses; // used only for debugging
-
-        let sf = scale_factor as f32;
-        for (i, cmd) in self.text_commands.iter().enumerate() {
-            // TextArea positions and bounds must be in physical pixels
-            // because the viewport is set to physical resolution.
-            let bounds = if let Some(clip) = cmd.clip_bounds {
-                TextBounds {
-                    left: (clip[0] * sf) as i32,
-                    top: (clip[1] * sf) as i32,
-                    right: (clip[2] * sf) as i32,
-                    bottom: (clip[3] * sf) as i32,
+                if let Some(buffer) = self.text_buffer_cache.get(&key) {
+                    self.text_buffers.push(buffer.clone());
+                } else {
+                    let mut buffer = TextBuffer::new(
+                        &mut self.font_system,
+                        Metrics::new(cmd.font_size, cmd.font_size * 1.2),
+                    );
+                    buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+                    buffer.set_text(
+                        &mut self.font_system,
+                        &cmd.text,
+                        &Attrs::new().family(Family::SansSerif),
+                        Shaping::Basic,
+                        None,
+                    );
+                    buffer.shape_until_scroll(&mut self.font_system, false);
+                    self.text_buffer_cache.insert(key, buffer.clone());
+                    self.text_buffers.push(buffer);
                 }
-            } else {
-                TextBounds {
-                    left: 0,
-                    top: 0,
-                    right: physical_w as i32,
-                    bottom: physical_h as i32,
+            }
+
+            // Evict stale cache entries every 60 frames (only in Main mode
+            // so the generation counter increments once per frame, not per pass).
+            if matches!(text_mode, TextMode::Main) {
+                self.text_cache_generation += 1;
+                if self.text_cache_generation % 60 == 0 {
+                    let gen = self.text_cache_generation;
+                    let stale: Vec<_> = self.text_cache_used.iter()
+                        .filter(|(_, &last_used)| gen - last_used > 120)
+                        .map(|(k, _)| k.clone())
+                        .collect();
+                    for key in stale {
+                        self.text_buffer_cache.remove(&key);
+                        self.text_cache_used.remove(&key);
+                    }
                 }
+            }
+
+            let sf = scale_factor as f32;
+            let mut text_areas = Vec::with_capacity(self.text_commands.len());
+            for (i, cmd) in self.text_commands.iter().enumerate() {
+                let bounds = if let Some(clip) = cmd.clip_bounds {
+                    TextBounds {
+                        left: (clip[0] * sf) as i32,
+                        top: (clip[1] * sf) as i32,
+                        right: (clip[2] * sf) as i32,
+                        bottom: (clip[3] * sf) as i32,
+                    }
+                } else {
+                    TextBounds {
+                        left: 0,
+                        top: 0,
+                        right: physical_w as i32,
+                        bottom: physical_h as i32,
+                    }
+                };
+
+                text_areas.push(TextArea {
+                    buffer: &self.text_buffers[i],
+                    left: cmd.x * sf,
+                    top: cmd.y * sf,
+                    scale: sf,
+                    bounds,
+                    default_color: GlyphonColor::rgba(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]),
+                    custom_glyphs: &[],
+                });
+            }
+
+            self.viewport.update(queue, Resolution { width: physical_w, height: physical_h });
+
+            // Prepare the appropriate TextRenderer — each has its own vertex buffer.
+            let renderer = match text_mode {
+                TextMode::Main => &mut self.text_renderer,
+                TextMode::Overlay => &mut self.overlay_text_renderer,
+                TextMode::Skip => unreachable!(),
             };
-
-            text_areas.push(TextArea {
-                buffer: &self.text_buffers[i],
-                left: cmd.x * sf,
-                top: cmd.y * sf,
-                scale: sf,
-                bounds,
-                default_color: GlyphonColor::rgba(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]),
-                custom_glyphs: &[],
-            });
+            renderer
+                .prepare(
+                    device,
+                    queue,
+                    &mut self.font_system,
+                    &mut self.text_atlas,
+                    &self.viewport,
+                    text_areas,
+                    &mut self.swash_cache,
+                )
+                .expect("Failed to prepare text renderer");
         }
 
-        // Update viewport — physical resolution for crisp text
-        self.viewport.update(queue, Resolution { width: physical_w, height: physical_h });
-
-        self.text_renderer
-            .prepare(
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.text_atlas,
-                &self.viewport,
-                text_areas,
-                &mut self.swash_cache,
-            )
-            .expect("Failed to prepare text renderer");
-
-        if self.vertices.is_empty() && self.text_commands.is_empty() {
+        if self.vertices.is_empty() && !has_text {
             self.rect_commands.clear();
             self.text_commands.clear();
             return;
@@ -798,13 +781,22 @@ impl UIRenderer {
                 pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
             }
 
-            self.text_renderer
-                .render(&self.text_atlas, &self.viewport, &mut pass)
-                .expect("Failed to render text");
+            if has_text {
+                let renderer = match text_mode {
+                    TextMode::Main => &self.text_renderer,
+                    TextMode::Overlay => &self.overlay_text_renderer,
+                    TextMode::Skip => unreachable!(),
+                };
+                renderer
+                    .render(&self.text_atlas, &self.viewport, &mut pass)
+                    .expect("Failed to render text");
+            }
         }
 
         self.rect_commands.clear();
-        self.text_commands.clear();
+        if !matches!(text_mode, TextMode::Skip) {
+            self.text_commands.clear();
+        }
     }
 }
 
@@ -840,7 +832,3 @@ fn clamp_rect_to_clip(rect: Rect, clip: Rect) -> Rect {
     intersect_rects(rect, clip)
 }
 
-fn rects_overlap(a: &Rect, b: &Rect) -> bool {
-    a.x < b.x + b.width && a.x + a.width > b.x &&
-    a.y < b.y + b.height && a.y + a.height > b.y
-}
