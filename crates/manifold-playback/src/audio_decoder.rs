@@ -6,6 +6,7 @@
 //! This is separate from kira's playback pipeline — kira handles real-time audio
 //! playback, while this module provides sample access for visualization.
 
+use kira::sound::static_sound::StaticSoundData;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::FormatOptions;
@@ -21,6 +22,25 @@ pub struct DecodedAudio {
     pub sample_rate: u32,
     /// Number of channels (1=mono, 2=stereo)
     pub channels: usize,
+}
+
+impl DecodedAudio {
+    /// Extract interleaved PCM samples from kira's already-decoded StaticSoundData.
+    /// This is a pure memory copy (no file I/O, no decoding) — takes single-digit ms
+    /// even for long tracks. Kira's Frame is always stereo (left, right).
+    pub fn from_static_sound_data(data: &StaticSoundData) -> Self {
+        let num_frames = data.frames.len();
+        let mut samples = Vec::with_capacity(num_frames * 2);
+        for frame in data.frames.iter() {
+            samples.push(frame.left);
+            samples.push(frame.right);
+        }
+        DecodedAudio {
+            samples,
+            sample_rate: data.sample_rate,
+            channels: 2,
+        }
+    }
 }
 
 /// Decode an audio file into raw interleaved PCM f32 samples.

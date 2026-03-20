@@ -546,15 +546,11 @@ impl Application {
                         };
                         eprintln!("[PROJECT LOAD] audio decode (background): {:.1}ms", t_audio.elapsed().as_secs_f64() * 1000.0);
 
+                        // Extract waveform PCM from kira's already-decoded frames (no second decode).
+                        // Unity does the same: decode once, then AudioClip.GetData() for waveform.
                         let t_wave = std::time::Instant::now();
-                        let waveform = match manifold_playback::audio_decoder::decode_audio_to_pcm(&audio_path) {
-                            Ok(decoded) => Some(decoded),
-                            Err(e) => {
-                                log::warn!("[Waveform] Background waveform decode failed: {}", e);
-                                None
-                            }
-                        };
-                        eprintln!("[PROJECT LOAD] waveform decode (background): {:.1}ms", t_wave.elapsed().as_secs_f64() * 1000.0);
+                        let waveform = Some(DecodedAudio::from_static_sound_data(&preloaded.sound_data));
+                        eprintln!("[PROJECT LOAD] waveform extract from kira frames: {:.1}ms", t_wave.elapsed().as_secs_f64() * 1000.0);
 
                         let _ = tx.send(PendingAudioLoadResult { preloaded, waveform });
                     })
@@ -613,6 +609,7 @@ impl Application {
                         decoded.channels,
                         decoded.sample_rate,
                     );
+                    self.ui_root.layout.waveform_lane_visible = true;
                     log::info!("[Waveform] Decoded audio for waveform display");
                 }
 

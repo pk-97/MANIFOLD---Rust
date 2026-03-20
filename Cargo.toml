@@ -22,3 +22,20 @@ env_logger = "0.11"
 pollster = "0.4"
 kira = "0.9"
 symphonia = { version = "0.5", features = ["all"] }
+
+# Optimise audio decoding even in debug builds — pure-Rust symphonia is 10-50x
+# slower without optimisation, and kira uses it internally for decoding.
+[profile.dev.package.symphonia-core]
+opt-level = 2
+[profile.dev.package.symphonia-bundle-mp3]
+opt-level = 2
+[profile.dev.package.symphonia-bundle-flac]
+opt-level = 2
+[profile.dev.package.symphonia-codec-vorbis]
+opt-level = 2
+[profile.dev.package.symphonia-format-wav]
+opt-level = 2
+[profile.dev.package.symphonia-format-ogg]
+opt-level = 2
+[profile.dev.package.symphonia-codec-aac]
+opt-level = 2
