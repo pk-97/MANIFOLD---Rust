@@ -75,6 +75,12 @@ pub struct Application {
     /// when data_version changes. During drag, snapshots are deferred.
     local_project: Project,
 
+    /// After a local project load (open/new), suppress content thread snapshots
+    /// until its data_version exceeds this value. Prevents the old project from
+    /// overwriting the locally-loaded new project before the content thread
+    /// processes the LoadProject command.
+    suppress_snapshot_until: u64,
+
     // Selection
     selection: SelectionState,
     active_layer_index: Option<usize>,
@@ -184,6 +190,7 @@ impl Application {
             content_thread_handle: None,
             content_state: ContentState::default(),
             local_project: default_project,
+            suppress_snapshot_until: 0,
             selection: UIState::new(),
             active_layer_index: None,
             slider_snapshot: None,
@@ -535,6 +542,9 @@ impl Application {
             // Update local_project BEFORE sending to content thread so UI
             // can rebuild the timeline in this same frame.
             self.local_project = project.clone();
+            // Suppress content thread snapshots until it processes the LoadProject
+            // command (which will bump data_version above current).
+            self.suppress_snapshot_until = self.content_state.data_version + 1;
 
             let t1 = std::time::Instant::now();
             self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
@@ -821,9 +831,12 @@ impl Application {
                 // Accept project snapshot if data_version changed (unless drag in progress)
                 if let Some(snapshot) = state.project_snapshot {
                     let drag_active = self.overlay.drag_mode() != manifold_ui::interaction_overlay::DragMode::None;
-                    if !drag_active {
+                    // Suppress snapshots until content thread catches up after a local project load.
+                    let suppressed = state.data_version < self.suppress_snapshot_until;
+                    if !drag_active && !suppressed {
                         self.local_project = *snapshot;
-                        self.last_accepted_data_version = state.data_version;
+                        // Clear suppression once we've accepted a post-load snapshot
+                        self.suppress_snapshot_until = 0;
                     }
                 }
                 self.content_state = ContentState {
@@ -1023,6 +1036,7 @@ impl Application {
                 PanelAction::NewProject => {
                     let project = Self::create_default_project();
                     self.local_project = project.clone();
+                    self.suppress_snapshot_until = self.content_state.data_version + 1;
                     self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
                     self.send_content_cmd(ContentCommand::SetProject);
                     self.selection.clear_selection();
@@ -2337,6 +2351,7 @@ impl ApplicationHandler for Application {
                         Key::Character(ref c) if c.as_str() == "n" && m.is_command_only() => {
                             let project = Self::create_default_project();
                             self.local_project = project.clone();
+                            self.suppress_snapshot_until = self.content_state.data_version + 1;
                             self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
                             self.send_content_cmd(ContentCommand::SetProject);
                             self.selection.clear_selection();
