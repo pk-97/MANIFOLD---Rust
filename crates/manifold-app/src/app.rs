@@ -1623,14 +1623,37 @@ impl ApplicationHandler for Application {
         let size = window.inner_size();
         let scale = window.scale_factor();
 
-        // Detect connected display resolutions (Unity: Footer.CollectDisplayResolutions)
+        // Detect connected display resolutions (Unity: Footer.CollectDisplayResolutions).
+        // Use the highest video mode resolution per monitor — this is the native panel
+        // resolution, not the current macOS scaled resolution. Gives pixel-perfect output.
         self.display_resolutions.clear();
         for (i, monitor) in event_loop.available_monitors().enumerate() {
-            let mon_size = monitor.size();
+            // Find the native (highest) resolution from video modes
+            let native_size = monitor.video_modes()
+                .max_by_key(|vm| {
+                    let s = vm.size();
+                    (s.width as u64) * (s.height as u64)
+                })
+                .map(|vm| vm.size());
+
+            let (w, h) = match native_size {
+                Some(s) if s.width > 0 && s.height > 0 => (s.width, s.height),
+                _ => {
+                    // Fallback to monitor.size() (current scaled resolution)
+                    let s = monitor.size();
+                    (s.width, s.height)
+                }
+            };
+
+            let scaled = monitor.size();
             let label = monitor.name().unwrap_or_else(|| format!("Display {}", i + 1));
-            if mon_size.width > 0 && mon_size.height > 0 {
-                log::info!("Detected monitor: {} ({}x{})", label, mon_size.width, mon_size.height);
-                self.display_resolutions.push((mon_size.width, mon_size.height, label));
+            log::info!(
+                "Detected monitor: {} native={}x{} scaled={}x{} scale={:.2}",
+                label, w, h, scaled.width, scaled.height, monitor.scale_factor()
+            );
+
+            if w > 0 && h > 0 {
+                self.display_resolutions.push((w, h, label));
             }
         }
         // Rename to "Display N" for consistent UI (Unity uses 1-indexed "Display N")
