@@ -1,4 +1,5 @@
 mod app;
+mod content_pipeline;
 mod dialog_path_memory;
 mod editing_host;
 mod frame_timer;

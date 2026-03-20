@@ -7,7 +7,7 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
 use manifold_core::project::Project;
-use manifold_core::types::{BlendMode, LayerType};
+use manifold_core::types::LayerType;
 use manifold_core::layer::Layer;
 use manifold_editing::commands::layer::DeleteLayerCommand;
 use manifold_editing::service::EditingService;
@@ -17,11 +17,9 @@ use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::renderer::StubRenderer;
 use manifold_renderer::blit::BlitPipeline;
-use manifold_renderer::compositor::{Compositor, CompositeLayerDescriptor, CompositorFrame};
-use manifold_renderer::tonemap::TonemapSettings;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu::GpuContext;
-use manifold_renderer::layer_compositor::{CompositeClipDescriptor, LayerCompositor};
+use manifold_renderer::layer_compositor::LayerCompositor;
 use manifold_renderer::surface::SurfaceWrapper;
 use manifold_renderer::ui_renderer::{TextMode, UIRenderer};
 
@@ -82,7 +80,7 @@ pub struct Application {
     target_snapshot: Option<f32>,
 
     // Rendering
-    compositor: Option<Box<dyn Compositor>>,
+    content_pipeline: Option<crate::content_pipeline::ContentPipeline>,
     blit_pipeline: Option<BlitPipeline>,
     output_blit_pipeline: Option<BlitPipeline>,
     output_blit_format: Option<wgpu::TextureFormat>,
@@ -192,7 +190,7 @@ impl Application {
             trim_snapshot: None,
             adsr_snapshot: None,
             target_snapshot: None,
-            compositor: None,
+            content_pipeline: None,
             blit_pipeline: None,
             output_blit_pipeline: None,
             output_blit_format: None,
@@ -548,18 +546,9 @@ impl Application {
             if let Some(proj) = self.engine.project() {
                 let w = proj.settings.output_width.max(1) as u32;
                 let h = proj.settings.output_height.max(1) as u32;
-                if let Some(gpu) = &self.gpu {
+                if let (Some(gpu), Some(pipeline)) = (&self.gpu, &mut self.content_pipeline) {
                     let t2 = std::time::Instant::now();
-                    if let Some(compositor) = &mut self.compositor {
-                        compositor.resize(&gpu.device, w, h);
-                    }
-                    let (renderers, _) = self.engine.split_renderer_project();
-                    for renderer in renderers.iter_mut() {
-                        if let Some(gen) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
-                            gen.resize_gpu(w, h);
-                            break;
-                        }
-                    }
+                    pipeline.resize(&gpu.device, &mut self.engine, w, h);
                     eprintln!("[PROJECT LOAD] GPU resize: {:.1}ms ({}x{})", t2.elapsed().as_secs_f64() * 1000.0, w, h);
                 }
             }
@@ -1104,18 +1093,8 @@ impl Application {
                 (p.settings.output_width.max(1) as u32, p.settings.output_height.max(1) as u32)
             });
             if let Some((w, h)) = dims {
-                if let Some(gpu) = &self.gpu {
-                    if let Some(compositor) = &mut self.compositor {
-                        compositor.resize(&gpu.device, w, h);
-                    }
-                    // Resize generator renderer via engine downcast
-                    let (renderers, _) = self.engine.split_renderer_project();
-                    for renderer in renderers.iter_mut() {
-                        if let Some(gen) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
-                            gen.resize_gpu(w, h);
-                            break;
-                        }
-                    }
+                if let (Some(gpu), Some(pipeline)) = (&self.gpu, &mut self.content_pipeline) {
+                    pipeline.resize(&gpu.device, &mut self.engine, w, h);
                 }
                 log::info!("Resolution changed to {}x{}", w, h);
             }
@@ -1323,107 +1302,18 @@ impl Application {
             Some(g) => g,
             None => return,
         };
-
-        // Extract timing values before split borrow
-        let time = self.engine.current_time();
-        let beat = self.engine.current_beat();
-
-        let mut encoder =
-            gpu.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Frame Encoder"),
-                });
-
-        // Split borrow: get renderers + project from engine simultaneously.
-        // Engine now owns the real GeneratorRenderer (replaced stub in init_gpu),
-        // so clip lifecycle (start/stop) is handled by engine's sync_clips_to_time.
-        let (renderers, project) = self.engine.split_renderer_project();
-        let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
-
-        // 4. Render generators via downcast (GPU rendering needs queue + encoder)
-        for renderer in renderers.iter_mut() {
-            if let Some(gen) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
-                gen.render_all(&gpu.queue, &mut encoder, time, beat, dt as f32, layers);
-                break;
-            }
-        }
-
-        // 5. Build clip descriptors for compositor
-        let mut clip_descs: Vec<CompositeClipDescriptor> =
-            Vec::with_capacity(tick_result.ready_clips.len());
-
-        for clip in &tick_result.ready_clips {
-            let texture_view = renderers.iter().find_map(|r| {
-                r.as_any().downcast_ref::<GeneratorRenderer>()
-                    .and_then(|gen| gen.get_clip_texture_view(&clip.id))
-            });
-            if let Some(view) = texture_view {
-                let layer = layers.get(clip.layer_index as usize);
-                clip_descs.push(CompositeClipDescriptor {
-                    clip_id: &clip.id,
-                    texture_view: view,
-                    layer_index: clip.layer_index,
-                    blend_mode: layer.map_or(BlendMode::Normal, |l| l.default_blend_mode),
-                    opacity: layer.map_or(1.0, |l| l.opacity),
-                    translate_x: clip.translate_x,
-                    translate_y: clip.translate_y,
-                    scale: clip.scale,
-                    rotation: clip.rotation,
-                    invert_colors: clip.invert_colors,
-                    effects: &clip.effects,
-                    effect_groups: clip.effect_groups.as_deref().unwrap_or(&[]),
-                });
-            }
-        }
-
-        // 6. Build layer descriptors for compositor
-        let empty_effects: Vec<manifold_core::effects::EffectInstance> = Vec::new();
-        let empty_groups: Vec<manifold_core::effects::EffectGroup> = Vec::new();
-        let layer_descs: Vec<CompositeLayerDescriptor> = layers.iter().map(|layer| {
-            CompositeLayerDescriptor {
-                layer_index: layer.index,
-                blend_mode: layer.default_blend_mode,
-                opacity: layer.opacity,
-                is_muted: layer.is_muted,
-                is_solo: layer.is_solo,
-                effects: layer.effects.as_deref().unwrap_or(&empty_effects),
-                effect_groups: layer.effect_groups.as_deref().unwrap_or(&empty_groups),
-            }
-        }).collect();
-
-        // 7. Composite
-        let compositor = match &mut self.compositor {
-            Some(c) => c,
+        let content_pipeline = match &mut self.content_pipeline {
+            Some(p) => p,
             None => return,
         };
 
-        let master_effects = project.map_or(&empty_effects[..], |p| &p.settings.master_effects);
-        let master_effect_groups = project
-            .and_then(|p| p.settings.master_effect_groups.as_deref())
-            .unwrap_or(&empty_groups);
+        let output_view = content_pipeline.render_content(
+            gpu, &mut self.engine, &tick_result, dt, self.frame_count,
+        );
 
-        let frame = CompositorFrame {
-            time,
-            beat,
-            dt: dt as f32,
-            frame_count: self.frame_count,
-            compositor_dirty: tick_result.compositor_dirty,
-            clips: &clip_descs,
-            layers: &layer_descs,
-            master_effects,
-            master_effect_groups,
-            tonemap: TonemapSettings::default(),
-        };
-
-        let output_view = compositor.render(&gpu.device, &gpu.queue, &mut encoder, &frame);
-
-        // 8. Submit generator + compositor work
+        // SAFETY: output_view points into content_pipeline's compositor RenderTarget
+        // which is not modified between here and the blit calls in present_all_windows.
         let output_view_ptr: *const wgpu::TextureView = output_view;
-        gpu.queue.submit(std::iter::once(encoder.finish()));
-
-        // 9. Present to all windows via blit + UI overlay
-        // SAFETY: output_view points into self.compositor's RenderTarget which
-        // is not modified between here and the blit calls.
         let output_view_ref = unsafe { &*output_view_ptr };
         self.present_all_windows(output_view_ref);
 
@@ -1440,8 +1330,8 @@ impl Application {
             None => return,
         };
         // Compositor aspect ratio for aspect-correct blitting (FitInParent)
-        let (comp_w, comp_h) = self.compositor.as_ref()
-            .map(|c| c.dimensions())
+        let (comp_w, comp_h) = self.content_pipeline.as_ref()
+            .map(|p| p.dimensions())
             .unwrap_or((1920, 1080));
         let source_aspect = comp_w as f32 / comp_h as f32;
 
@@ -1918,7 +1808,9 @@ impl ApplicationHandler for Application {
                 8,
             )));
 
-            self.compositor = Some(Box::new(LayerCompositor::new(&device, &queue, output_w, output_h)));
+            self.content_pipeline = Some(crate::content_pipeline::ContentPipeline::new(
+                Box::new(LayerCompositor::new(&device, &queue, output_w, output_h)),
+            ));
             eprintln!("[GPU INIT] generator/compositor resolution: {}x{}", output_w, output_h);
 
             GpuContext {

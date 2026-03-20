@@ -83,6 +83,7 @@ pub const GROUP_BOTTOM_BORDER: Color32 = Color32::new(97, 97, 148, 153);
 pub const TEXT_NORMAL: Color32 = Color32::new(224, 224, 230, 255);
 pub const TEXT_DIMMED: Color32 = Color32::new(158, 158, 163, 255);
 pub const TEXT_SUBTLE: Color32 = Color32::new(107, 107, 112, 255);
+pub const TEXT_FAINT: Color32 = Color32::new(80, 80, 85, 255);
 pub const PLACEHOLDER_TEXT: Color32 = Color32::new(107, 107, 112, 153);
 pub const TEXT_NEAR_WHITE: Color32 = Color32::new(209, 209, 214, 255);
 pub const DROPDOWN_INACTIVE_TEXT: Color32 = Color32::new(173, 173, 179, 255);
