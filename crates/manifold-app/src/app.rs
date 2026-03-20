@@ -9,12 +9,11 @@ use winit::window::WindowId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::layer::Layer;
-use manifold_editing::commands::layer::DeleteLayerCommand;
 use manifold_editing::service::EditingService;
 use manifold_playback::audio_sync::{ImportedAudioSyncController, PreloadedAudioData};
 use manifold_playback::audio_decoder::DecodedAudio;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
-use manifold_playback::engine::{PlaybackEngine, TickContext};
+use manifold_playback::engine::PlaybackEngine;
 use manifold_playback::renderer::StubRenderer;
 use manifold_renderer::blit::BlitPipeline;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
@@ -806,7 +805,7 @@ impl Application {
     }
 
     fn tick_and_render(&mut self) {
-        let dt = self.frame_timer.consume_tick();
+        let _dt = self.frame_timer.consume_tick();
         let realtime = self.frame_timer.realtime_since_start();
         self.time_since_start = realtime as f32;
 
@@ -1286,7 +1285,7 @@ impl Application {
             }
         }
 
-        let gpu = match &self.gpu {
+        let _gpu = match &self.gpu {
             Some(g) => g,
             None => return,
         };

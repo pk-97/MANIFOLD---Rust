@@ -203,7 +203,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         };
         if !overlap_cmds.is_empty() {
             if let Some(project) = Some(&mut *self.project) {
-                { for mut c in overlap_cmds { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); } }
+                for mut c in overlap_cmds { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
         *self.needs_structural_sync = true;
@@ -501,7 +501,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Video metadata ──────────────────────────────────────────
 
-    fn get_max_duration_beats(&self, clip_id: &str) -> f32 {
+    fn get_max_duration_beats(&self, _clip_id: &str) -> f32 {
         // TODO: wire to video library metadata
         // Returns max clip duration based on source video length minus InPoint
         0.0

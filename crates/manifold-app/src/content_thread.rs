@@ -5,7 +5,6 @@
 //! project), the editing service (undo/redo), audio sync, percussion, and the
 //! GPU content pipeline (generators + compositor).
 
-use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, Sender};
 

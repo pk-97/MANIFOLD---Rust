@@ -27,16 +27,15 @@ use manifold_editing::commands::drivers::{
     ToggleDriverReversedCommand, ChangeTrimCommand,
 };
 use manifold_editing::commands::clip::{
-    MoveClipCommand, TrimClipCommand, SlipClipCommand, ChangeClipLoopCommand,
+    SlipClipCommand, ChangeClipLoopCommand,
 };
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
-use manifold_playback::engine::PlaybackEngine;
 use manifold_ui::{PanelAction, InspectorTab, DriverConfigAction};
 use manifold_ui::node::Color32;
 use manifold_ui::color;
 use manifold_ui::panels::layer_header::LayerInfo;
-use manifold_ui::panels::viewport::{TrackInfo, HitRegion};
+use manifold_ui::panels::viewport::TrackInfo;
 use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
 use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo};
 
@@ -489,7 +488,7 @@ pub fn dispatch(
                         // Build parent ID maps for undo
                         let mut old_parents = std::collections::HashMap::new();
                         let mut new_parents = std::collections::HashMap::new();
-                        for (i, l) in old_order.iter().enumerate() {
+                        for (_i, l) in old_order.iter().enumerate() {
                             old_parents.insert(l.layer_id.clone(), l.parent_layer_id.clone());
                         }
                         // Update moved layer's parent
@@ -1816,7 +1815,7 @@ pub fn dispatch(
             {
                 let commands = EditingService::delete_clips(project, &[clip_id.clone()], None, 0.0);
                 if !commands.is_empty() {
-                    { for mut c in commands { c.execute(project); let _ = content_tx.try_send(ContentCommand::Record(c)); } }
+                    for mut c in commands { c.execute(project); let _ = content_tx.try_send(ContentCommand::Record(c)); }
                 }
             }
             selection.selected_clip_ids.remove(clip_id);
@@ -1834,19 +1833,19 @@ pub fn dispatch(
                 let spb = 60.0 / project.settings.bpm.max(1.0);
                 let commands = EditingService::duplicate_clips(project, &[clip_id.clone()], &region, spb);
                 if !commands.is_empty() {
-                    { for mut c in commands { c.execute(project); let _ = content_tx.try_send(ContentCommand::Record(c)); } }
+                    for mut c in commands { c.execute(project); let _ = content_tx.try_send(ContentCommand::Record(c)); }
                 }
             }
             DispatchResult::structural()
         }
-        PanelAction::ContextPasteAtTrack(beat, layer) => {
-            let snapped = ui.viewport.snap_to_grid(*beat);
+        PanelAction::ContextPasteAtTrack(beat, _layer) => {
+            let _snapped = ui.viewport.snap_to_grid(*beat);
             {
-                let spb = 60.0 / project.settings.bpm;
+                let _spb = 60.0 / project.settings.bpm;
                 // TODO: browser paste not yet wired
                 let result = manifold_editing::service::PasteResult { commands: Vec::new(), pasted_clip_ids: Vec::new(), skip_reason: None, skipped_count: 0 };
                 if !result.commands.is_empty() {
-                    { for mut c in result.commands { c.execute(project); let _ = content_tx.try_send(ContentCommand::Record(c)); } }
+                    for mut c in result.commands { c.execute(project); let _ = content_tx.try_send(ContentCommand::Record(c)); }
                     selection.selected_clip_ids.clear();
                     for id in result.pasted_clip_ids {
                         selection.selected_clip_ids.insert(id);
@@ -2644,7 +2643,7 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
         // - is_muted includes parent group mute (children of muted groups are dimmed)
         // - is_group set correctly for group layers
         // - accent_color set for child layers
-        let tracks: Vec<TrackInfo> = project.timeline.layers.iter().enumerate().map(|(i, layer)| {
+        let tracks: Vec<TrackInfo> = project.timeline.layers.iter().enumerate().map(|(_i, layer)| {
             // Check if muted individually or by parent group
             let parent_muted = layer.parent_layer_id.as_ref().map_or(false, |pid| {
                 project.timeline.layers.iter().any(|l| l.layer_id == *pid && l.is_muted)

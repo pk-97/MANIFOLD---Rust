@@ -7,8 +7,6 @@
 
 use manifold_core::types::{ClockAuthority, PlaybackState};
 use manifold_ui::color;
-use manifold_ui::node::Color32;
-use manifold_ui::tree::UITree;
 
 use crate::ui_root::UIRoot;
 
@@ -58,7 +56,7 @@ impl TransportStateCache {
         project_path: Option<&std::path::Path>,
         current_time: f32,
     ) {
-        let tree = &mut ui.tree;
+        let _tree = &mut ui.tree;
 
         // ── Per-frame: time display (needs per-frame accuracy) ──
         self.update_time_display(ui, project, content_state, project_path, is_dirty);

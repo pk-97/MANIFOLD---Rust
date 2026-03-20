@@ -220,15 +220,15 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_structural_sync = true;
     }
 
-    fn copy_clips(&mut self, clip_ids: &[String]) {
+    fn copy_clips(&mut self, _clip_ids: &[String]) {
         // Region-aware copy: trim clips at region boundaries (Unity CopySelectedClips)
-        let region = if self.selection.has_region() {
+        let _region = if self.selection.has_region() {
             Some(self.selection.get_region().clone())
         } else {
             None
         };
         if let Some(project) = Some(&*self.project) {
-            let spb = 60.0 / project.settings.bpm.max(1.0);
+            let _spb = 60.0 / project.settings.bpm.max(1.0);
             // TODO: clipboard operations need EditingService refactor
             log::info!("Copy clips requested");
         }
@@ -236,13 +236,13 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn cut_clips(&mut self, clip_ids: &[String], has_region: bool) {
         // Unity: copy first (region-aware), then delete
-        let region = if has_region {
+        let _region = if has_region {
             Some(self.selection.get_region().clone())
         } else {
             None
         };
         if let Some(project) = Some(&*self.project) {
-            let spb = 60.0 / project.settings.bpm.max(1.0);
+            let _spb = 60.0 / project.settings.bpm.max(1.0);
             // TODO: clipboard operations need EditingService refactor
             log::info!("Copy clips requested");
         }
@@ -255,16 +255,16 @@ impl TimelineInputHost for AppInputHost<'_> {
                 None
             };
             let commands = EditingService::delete_clips(project, clip_ids, region.as_ref(), spb);
-            { for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); } }
+            for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
         }
         self.selection.clear_selection();
     }
 
-    fn paste_clips(&mut self, target_beat: f32, target_layer: i32) {
+    fn paste_clips(&mut self, _target_beat: f32, _target_layer: i32) {
         // Unity EditingService.PasteClips (line 660-667):
         // After paste, select all pasted clips and update region.
         if let Some(project) = Some(&mut *self.project) {
-            let spb = 60.0 / project.settings.bpm;
+            let _spb = 60.0 / project.settings.bpm;
             let result = // TODO: paste operations need EditingService refactor
             manifold_editing::service::PasteResult { commands: Vec::new(), pasted_clip_ids: Vec::new(), skip_reason: None, skipped_count: 0 };
             if !result.commands.is_empty() {
@@ -312,7 +312,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             let spb = 60.0 / project.settings.bpm.max(1.0);
             let commands = EditingService::duplicate_clips(project, clip_ids, &region, spb);
             if !commands.is_empty() {
-                { for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); } }
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
 
                 // Step 4h: find newly created clips and select them
                 let new_ids: Vec<String> = project.timeline.layers.iter()
@@ -344,7 +344,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 None
             };
             let commands = EditingService::delete_clips(project, clip_ids, region.as_ref(), spb);
-            { for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); } }
+            for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
         }
         *self.needs_structural_sync = true;
     }
@@ -373,7 +373,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 }
             }
             if !commands.is_empty() {
-                { for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); } }
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
     }
@@ -382,7 +382,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if let Some(project) = Some(&mut *self.project) {
             let commands = EditingService::extend_clips_by_grid(project, clip_ids, grid_step);
             if !commands.is_empty() {
-                { for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); } }
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
     }
@@ -391,7 +391,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if let Some(project) = Some(&mut *self.project) {
             let commands = EditingService::shrink_clips_by_grid(project, clip_ids, grid_step);
             if !commands.is_empty() {
-                { for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); } }
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
     }
@@ -401,7 +401,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             let spb = 60.0 / project.settings.bpm;
             let commands = EditingService::nudge_clips(project, clip_ids, beat_delta, spb);
             if !commands.is_empty() {
-                { for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); } }
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
         *self.needs_structural_sync = true;
@@ -437,8 +437,8 @@ impl TimelineInputHost for AppInputHost<'_> {
             }
 
             if !commands.is_empty() {
-                let label = if new_muted { "Mute clips" } else { "Unmute clips" };
-                { for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); } }
+                let _label = if new_muted { "Mute clips" } else { "Unmute clips" };
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
         let _ = self.content_tx.try_send(crate::content_command::ContentCommand::MarkCompositorDirty);
@@ -530,7 +530,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             }
 
             if !commands.is_empty() {
-                { for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); } }
+                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
             }
         }
 
