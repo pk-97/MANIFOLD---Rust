@@ -75,8 +75,8 @@ if [[ ! -f "$PIPELINE_SCRIPT" || ! -f "$SHIM_SCRIPT" ]]; then
   exit 2
 fi
 
-TARGET_ROOT="$(cd "$(dirname "$TARGET_ROOT")" && pwd)/$(basename "$TARGET_ROOT")"
 mkdir -p "$TARGET_ROOT"
+TARGET_ROOT="$(cd "$TARGET_ROOT" && pwd)"
 
 PYTHON_DIR="$TARGET_ROOT/python"
 BIN_DIR="$TARGET_ROOT/bin"
