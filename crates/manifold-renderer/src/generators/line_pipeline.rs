@@ -337,6 +337,7 @@ impl LineGeneratorHelper {
         &mut self,
         rt_width: f32,
         rt_height: f32,
+        aspect: f32,
         line_thickness: f32,
         show_verts: bool,
         vert_size: f32,
@@ -389,9 +390,9 @@ impl LineGeneratorHelper {
                 let fade = 1.0 - offset as f32 / window_edges as f32;
                 let a = self.edge_a[edge_idx];
                 let b = self.edge_b[edge_idx];
-                let ax = self.projected_x[a] + 0.5;
+                let ax = self.projected_x[a] / aspect + 0.5;
                 let ay = self.projected_y[a] + 0.5;
-                let bx = self.projected_x[b] + 0.5;
+                let bx = self.projected_x[b] / aspect + 0.5;
                 let by = self.projected_y[b] + 0.5;
                 let quad = build_edge_quad(ax, ay, bx, by, half_thick, rt_width, rt_height, fade);
                 self.vertices.extend_from_slice(&quad);
@@ -400,9 +401,9 @@ impl LineGeneratorHelper {
             for i in 0..edge_count {
                 let a = self.edge_a[i];
                 let b = self.edge_b[i];
-                let ax = self.projected_x[a] + 0.5;
+                let ax = self.projected_x[a] / aspect + 0.5;
                 let ay = self.projected_y[a] + 0.5;
-                let bx = self.projected_x[b] + 0.5;
+                let bx = self.projected_x[b] / aspect + 0.5;
                 let by = self.projected_y[b] + 0.5;
                 let quad = build_edge_quad(ax, ay, bx, by, half_thick, rt_width, rt_height, 1.0);
                 self.vertices.extend_from_slice(&quad);
@@ -413,7 +414,7 @@ impl LineGeneratorHelper {
             let base_radius = DEFAULT_DOT_RADIUS * rt_height * vert_size * dot_scale;
             let vert_count = self.projected_x.len();
             for i in 0..vert_count {
-                let cx = self.projected_x[i] + 0.5;
+                let cx = self.projected_x[i] / aspect + 0.5;
                 let cy = self.projected_y[i] + 0.5;
                 let quad = build_dot_quad(cx, cy, base_radius, rt_width, rt_height, 1.0);
                 self.vertices.extend_from_slice(&quad);

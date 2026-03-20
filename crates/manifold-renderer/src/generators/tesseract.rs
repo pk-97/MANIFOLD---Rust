@@ -105,6 +105,7 @@ impl Generator for TesseractGenerator {
         let verts = self.helper.build_vertices(
             ctx.width as f32,
             ctx.height as f32,
+            ctx.aspect,
             line,
             show_verts,
             vert_size,
