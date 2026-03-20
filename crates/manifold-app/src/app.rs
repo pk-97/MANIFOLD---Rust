@@ -479,6 +479,15 @@ impl Application {
         if let Some(project) = action.apply_project {
             let t_total = std::time::Instant::now();
 
+            // PrepareForProjectSwitch — clean up previous audio/waveform state
+            // Unity: WorkspaceController.ProjectIO.cs PrepareForProjectSwitch()
+            if let Some(ref mut audio_sync) = self.audio_sync {
+                audio_sync.reset_audio();
+            }
+            self.ui_root.waveform_lane.clear_audio();
+            self.ui_root.layout.waveform_lane_visible = false;
+            self.pending_audio_load = None;
+
             // Apply saved layout before initializing
             self.ui_root.apply_project_layout(&project.settings);
             let saved_time = project.saved_playhead_time;
