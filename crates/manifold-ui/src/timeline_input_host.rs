@@ -17,6 +17,9 @@ pub trait TimelineInputHost {
     /// Whether the monitor output window is currently active.
     fn is_monitor_output_active(&self) -> bool;
 
+    /// Close the monitor output window.
+    fn close_output_window(&mut self);
+
     /// Request a full UI rebuild (structural change).
     fn request_rebuild(&mut self);
 

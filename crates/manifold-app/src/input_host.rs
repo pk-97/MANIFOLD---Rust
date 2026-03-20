@@ -27,6 +27,8 @@ pub struct AppInputHost<'a> {
     pub needs_structural_sync: &'a mut bool,
     pub needs_scroll_rebuild: &'a mut bool,
     pub current_project_path: &'a Option<std::path::PathBuf>,
+    pub has_output_window: bool,
+    pub pending_close_output: &'a mut bool,
 }
 
 impl TimelineInputHost for AppInputHost<'_> {
@@ -42,13 +44,11 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn is_monitor_output_active(&self) -> bool {
-        // In Unity this checks monitorOutputSection.IsActive (a UI panel).
-        // In Rust the output is a separate window — checking window existence
-        // is the correct equivalent for the Escape L2 guard.
-        // Note: window_registry is not available here (not borrowed).
-        // For now return false — the legacy block's Escape already handles
-        // output window close at the app level.
-        false
+        self.has_output_window
+    }
+
+    fn close_output_window(&mut self) {
+        *self.pending_close_output = true;
     }
 
     fn request_rebuild(&mut self) {

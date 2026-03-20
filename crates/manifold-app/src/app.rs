@@ -157,6 +157,7 @@ pub struct Application {
     // State
     initialized: bool,
     pending_toggle_output: bool,
+    pending_close_output: bool,
     needs_rebuild: bool,
     /// Set by scroll/zoom events that only affect viewport + layer_headers.
     /// Uses the partial rebuild path (rebuild_scroll_panels) instead of full build.
@@ -244,6 +245,7 @@ impl Application {
             display_resolutions: Vec::new(),
             initialized: false,
             pending_toggle_output: false,
+            pending_close_output: false,
             needs_rebuild: false,
             needs_scroll_rebuild: false,
             needs_structural_sync: false,
@@ -518,6 +520,9 @@ impl Application {
                         if let Some(ref audio_path) = perc.audio_path {
                             if !audio_path.is_empty() {
                                 audio_path_for_load = Some((audio_path.clone(), perc.audio_start_beat));
+                                // Show the waveform lane immediately — audio decode
+                                // will populate it once the background thread finishes.
+                                self.ui_root.layout.waveform_lane_visible = true;
                             }
                         }
                     }
@@ -2205,6 +2210,8 @@ impl ApplicationHandler for Application {
                             needs_structural_sync: &mut self.needs_structural_sync,
                             needs_scroll_rebuild: &mut self.needs_scroll_rebuild,
                             current_project_path: &self.current_project_path,
+                            has_output_window: self.window_registry.has_output_window(),
+                            pending_close_output: &mut self.pending_close_output,
                         };
                         if self.input_handler.handle_keyboard_input(
                             &logical_key, self.modifiers,
@@ -2360,18 +2367,27 @@ impl ApplicationHandler for Application {
         }
 
         // Deferred output window toggle (needs ActiveEventLoop).
+        // Close output window (Escape key or programmatic close)
+        if self.pending_close_output {
+            self.pending_close_output = false;
+            let output_ids: Vec<_> = self.window_registry.iter()
+                .filter(|(_, ws)| matches!(ws.role, WindowRole::Output { .. }))
+                .map(|(id, _)| *id)
+                .collect();
+            let had_output = !output_ids.is_empty();
+            for id in output_ids {
+                self.window_registry.remove(&id);
+            }
+            if had_output {
+                log::info!("[OutputWindow] Closed via Escape");
+            }
+        }
+
+        // Toggle output window (UI button)
         if self.pending_toggle_output {
             self.pending_toggle_output = false;
             if self.window_registry.has_output_window() {
-                // Close existing output window(s)
-                let output_ids: Vec<_> = self.window_registry.iter()
-                    .filter(|(_, ws)| matches!(ws.role, WindowRole::Output { .. }))
-                    .map(|(id, _)| *id)
-                    .collect();
-                for id in output_ids {
-                    self.window_registry.remove(&id);
-                }
-                log::info!("[OutputWindow] Closed");
+                self.pending_close_output = true; // will close next iteration
             } else {
                 self.open_output_window(event_loop, "Output", None);
             }

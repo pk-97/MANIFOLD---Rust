@@ -84,8 +84,9 @@ impl InputHandler {
                 host.dismiss_context_menu();
                 return true;
             }
-            // Level 2: monitor output active → no-op
+            // Level 2: monitor output active → close it
             if host.is_monitor_output_active() {
+                host.close_output_window();
                 return true;
             }
             // Level 3: inspector has focus → clear effect selection
