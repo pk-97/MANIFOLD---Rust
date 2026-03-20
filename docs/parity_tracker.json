@@ -499,7 +499,7 @@
       "est_loc": 1500,
       "status": "partial",
       "commit": "be4c7f0",
-      "notes": "LinkSync: SyncTransportFromLink ported, Update body complete (native FFI stubbed). MidiClockSync: full Update state machine ported, SyncPositionToPlayback + ResetTransportTimeIntegrator ported (native FFI stubbed). OscSyncController: fully ported with SMPTE timecode parsing, transport sync, seek logic. OscReceiver: fully ported with subscription model. OscParameterRegistry: fully ported with singleton pattern. Remaining: 4 OSC bridge classes (MasterEffectOscBridge, LayerEffectOscBridge, LayerOscBridge, GeneratorOscBridge), native AbletonLink/midir/rosc FFI."
+      "notes": "LinkSync: SyncTransportFromLink ported, Update body complete (native FFI stubbed). MidiClockSync: full Update state machine ported, SyncPositionToPlayback + ResetTransportTimeIntegrator ported (native FFI stubbed). OscSyncController: fully ported with SMPTE timecode parsing, transport sync, seek logic. OscReceiver: fully ported with subscription model. OscParameterRegistry: fully ported with singleton pattern. Remaining: 4 OSC bridge classes (~466 lines Unity: MasterEffectOscBridge 109L, LayerEffectOscBridge 102L, LayerOscBridge 148L, GeneratorOscBridge 107L). All registries + infrastructure in place. Bridge closures need Rust-specific buffer-and-apply pattern (can't mutate Project from inside Mutex callback). Blocked by: no live OSC receiver — bridges would be dead code until UDP listener is wired. Native FFI for AbletonLink/midir also pending."
     },
     {
       "number": 36,
