@@ -534,9 +534,13 @@ impl Application {
             self.ui_root.apply_project_layout(&project.settings);
             let saved_time = project.saved_playhead_time;
 
+            // Update local_project BEFORE sending to content thread so UI
+            // can rebuild the timeline in this same frame.
+            self.local_project = project.clone();
+
             let t1 = std::time::Instant::now();
             self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
-            eprintln!("[PROJECT LOAD] engine.initialize: {:.1}ms", t1.elapsed().as_secs_f64() * 1000.0);
+            eprintln!("[PROJECT LOAD] engine.initialize sent: {:.1}ms", t1.elapsed().as_secs_f64() * 1000.0);
 
             // Restore playhead position
             if saved_time > 0.0 {
@@ -544,27 +548,22 @@ impl Application {
             }
 
             // Resize compositor + generators to project resolution
-            if let Some(proj) = Some(&self.local_project) {
-                let w = proj.settings.output_width.max(1) as u32;
-                let h = proj.settings.output_height.max(1) as u32;
+            {
+                let w = self.local_project.settings.output_width.max(1) as u32;
+                let h = self.local_project.settings.output_height.max(1) as u32;
                 self.send_content_cmd(ContentCommand::ResizeContent(w, h));
-                    self.content_dimensions = (w, h);
-                    eprintln!("[PROJECT LOAD] GPU resize sent: {}x{}", w, h);
+                self.content_dimensions = (w, h);
+                eprintln!("[PROJECT LOAD] GPU resize sent: {}x{}", w, h);
             }
 
-            // Spawn background audio loading
+            // Spawn background audio loading (audio decode on background thread,
+            // result forwarded to content thread via AudioLoaded command)
             let mut audio_path_for_load: Option<(String, f32)> = None;
-            if false /* audio_sync on content thread */ {
-                if let Some(proj) = Some(&self.local_project) {
-                    if let Some(ref perc) = proj.percussion_import {
-                        if let Some(ref audio_path) = perc.audio_path {
-                            if !audio_path.is_empty() {
-                                audio_path_for_load = Some((audio_path.clone(), perc.audio_start_beat));
-                                // Show the waveform lane immediately — audio decode
-                                // will populate it once the background thread finishes.
-                                self.ui_root.layout.waveform_lane_visible = true;
-                            }
-                        }
+            if let Some(ref perc) = self.local_project.percussion_import {
+                if let Some(ref audio_path) = perc.audio_path {
+                    if !audio_path.is_empty() {
+                        audio_path_for_load = Some((audio_path.clone(), perc.audio_start_beat));
+                        self.ui_root.layout.waveform_lane_visible = true;
                     }
                 }
             }
@@ -1050,6 +1049,7 @@ impl Application {
                 }
                 PanelAction::NewProject => {
                     let project = Self::create_default_project();
+                    self.local_project = project.clone();
                     self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
                     self.send_content_cmd(ContentCommand::SetProject);
                     self.selection.clear_selection();
@@ -2362,6 +2362,7 @@ impl ApplicationHandler for Application {
                         // ── New: Cmd+N ──
                         Key::Character(ref c) if c.as_str() == "n" && m.is_command_only() => {
                             let project = Self::create_default_project();
+                            self.local_project = project.clone();
                             self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
                             self.send_content_cmd(ContentCommand::SetProject);
                             self.selection.clear_selection();
