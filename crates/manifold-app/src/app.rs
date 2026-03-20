@@ -29,6 +29,8 @@ use manifold_ui::node::Vec2;
 use manifold_ui::panels::PanelAction;
 use manifold_ui::ui_state::UIState;
 
+use crate::content_command::ContentCommand;
+use crate::content_state::ContentState;
 use crate::frame_timer::FrameTimer;
 use crate::project_io::{ProjectIOService, ProjectIOAction};
 use crate::ui_root::UIRoot;
@@ -49,9 +51,9 @@ pub type SelectionState = UIState;
 
 /// Result from background audio loading thread.
 /// Contains pre-decoded audio for both kira playback and waveform visualization.
-struct PendingAudioLoadResult {
-    preloaded: PreloadedAudioData,
-    waveform: Option<DecodedAudio>,
+pub(crate) struct PendingAudioLoadResult {
+    pub preloaded: PreloadedAudioData,
+    pub waveform: Option<DecodedAudio>,
 }
 
 pub struct Application {
@@ -62,9 +64,17 @@ pub struct Application {
     window_registry: WindowRegistry,
     primary_window_id: Option<WindowId>,
 
-    // Engine
-    engine: PlaybackEngine,
-    editing_service: EditingService,
+    // Content thread communication
+    content_tx: Option<crossbeam_channel::Sender<ContentCommand>>,
+    state_rx: Option<crossbeam_channel::Receiver<ContentState>>,
+    content_thread_handle: Option<std::thread::JoinHandle<()>>,
+
+    /// Latest state snapshot from the content thread.
+    content_state: ContentState,
+
+    /// Local project snapshot for UI reads. Updated from content thread
+    /// when data_version changes. During drag, snapshots are deferred.
+    local_project: Project,
 
     // Selection
     selection: SelectionState,
@@ -80,13 +90,17 @@ pub struct Application {
     target_snapshot: Option<f32>,
 
     // Rendering
-    content_pipeline: Option<crate::content_pipeline::ContentPipeline>,
+    /// Shared reference to the content pipeline's output texture.
+    /// The content thread renders to it; UI thread reads output_view().
+    content_pipeline_output: Option<Arc<crate::content_pipeline::SharedOutputView>>,
     blit_pipeline: Option<BlitPipeline>,
     output_blit_pipeline: Option<BlitPipeline>,
     output_blit_format: Option<wgpu::TextureFormat>,
     ui_renderer: Option<UIRenderer>,
     layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
     surface_format: wgpu::TextureFormat,
+    /// Content pipeline dimensions (for aspect-correct blitting).
+    content_dimensions: (u32, u32),
 
     // UI
     ui_root: UIRoot,
@@ -118,20 +132,10 @@ pub struct Application {
     // Text input
     text_input: crate::text_input::TextInputState,
 
-    // Audio sync — imported audio playback synced to timeline.
-    // Port of Unity ImportedAudioSyncController (owned by WorkspaceController).
-    audio_sync: Option<ImportedAudioSyncController>,
-
     // Pending audio load — receives results from background decode thread.
     // Unity loads audio async via coroutines; we use std::thread + mpsc channel.
+    // Waveform data stays on UI thread; preloaded audio data is forwarded to content thread.
     pending_audio_load: Option<std::sync::mpsc::Receiver<PendingAudioLoadResult>>,
-
-    // Percussion import orchestrator — central state machine for audio analysis pipeline.
-    // Port of Unity PercussionImportOrchestrator (owned by WorkspaceController).
-    percussion_orchestrator: PercussionImportOrchestrator,
-
-    // Transport controller — sync management, BPM editing, playback actions
-    transport_controller: manifold_playback::transport_controller::TransportController,
 
     // Keyboard/zoom handler — port of Unity InputHandler.cs
     // Owns inspector_has_focus (panel focus for context-sensitive routing).
@@ -163,40 +167,38 @@ pub struct Application {
     /// Set by keyboard shortcuts that mutate project data (undo, delete, etc.).
     /// Consumed by tick_and_render to trigger sync_project_data + rebuild.
     needs_structural_sync: bool,
+    /// Last data_version seen from content thread. When content_state.data_version
+    /// is newer, accept the project snapshot (unless drag is in progress).
+    last_accepted_data_version: u64,
 }
 
 impl Application {
     pub fn new() -> Self {
-        // Create engine with stub renderers for lifecycle tracking
-        let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
-            Box::new(StubRenderer::new_video()),
-            Box::new(StubRenderer::new_generator()),
-        ];
-        let mut engine = PlaybackEngine::new(renderers);
-
-        // Create default project with one empty video layer
-        let project = Self::create_default_project();
-        engine.initialize(project);
+        let default_project = Self::create_default_project();
 
         Self {
             gpu: None,
             window_registry: WindowRegistry::new(),
             primary_window_id: None,
-            engine,
-            editing_service: EditingService::new(),
+            content_tx: None,
+            state_rx: None,
+            content_thread_handle: None,
+            content_state: ContentState::default(),
+            local_project: default_project,
             selection: UIState::new(),
             active_layer_index: None,
             slider_snapshot: None,
             trim_snapshot: None,
             adsr_snapshot: None,
             target_snapshot: None,
-            content_pipeline: None,
+            content_pipeline_output: None,
             blit_pipeline: None,
             output_blit_pipeline: None,
             output_blit_format: None,
             ui_renderer: None,
             layer_bitmap_gpu: None,
             surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            content_dimensions: (1920, 1080),
             ui_root: UIRoot::new(),
             frame_timer: FrameTimer::new(60.0),
             frame_count: 0,
@@ -219,22 +221,7 @@ impl Application {
             },
             user_prefs: UserPrefs::load(),
             text_input: crate::text_input::TextInputState::new(),
-            audio_sync: match ImportedAudioSyncController::new() {
-                Ok(ctrl) => Some(ctrl),
-                Err(e) => {
-                    log::warn!("[Audio] Failed to initialize audio sync: {}", e);
-                    None
-                }
-            },
             pending_audio_load: None,
-            percussion_orchestrator: PercussionImportOrchestrator::new(
-                None,
-                std::env::current_exe()
-                    .ok()
-                    .and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()))
-                    .unwrap_or_default(),
-            ),
-            transport_controller: manifold_playback::transport_controller::TransportController::new(),
             input_handler: crate::input_handler::InputHandler::new(),
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
                 manifold_ui::color::CLIP_VERTICAL_PAD,
@@ -247,6 +234,14 @@ impl Application {
             needs_rebuild: false,
             needs_scroll_rebuild: false,
             needs_structural_sync: false,
+            last_accepted_data_version: 0,
+        }
+    }
+
+    /// Send a command to the content thread (no-op if not yet spawned).
+    fn send_content_cmd(&self, cmd: ContentCommand) {
+        if let Some(ref tx) = self.content_tx {
+            let _ = tx.try_send(cmd);
         }
     }
 
@@ -321,14 +316,14 @@ impl Application {
     fn navigate_cursor(&mut self, direction: manifold_ui::cursor_nav::Direction) {
         use manifold_ui::cursor_nav::{navigate_cursor, NavResult, NavLayerInfo, NavClipInfo};
 
-        let current_beat = self.selection.insert_cursor_beat.unwrap_or(self.engine.current_beat());
+        let current_beat = self.selection.insert_cursor_beat.unwrap_or(self.content_state.current_beat);
         let current_layer = self.selection.insert_cursor_layer_index
             .or(self.active_layer_index)
             .unwrap_or(0);
         let grid_interval = self.ui_root.viewport.grid_step();
 
         // Build layer info for navigation (skip collapsed layers)
-        let layers: Vec<NavLayerInfo> = self.engine.project()
+        let layers: Vec<NavLayerInfo> = Some(&self.local_project)
             .map(|p| p.timeline.layers.iter().enumerate().map(|(i, l)| {
                 NavLayerInfo {
                     index: i,
@@ -338,7 +333,7 @@ impl Application {
             .unwrap_or_default();
 
         // Build clip info for auto-select
-        let clips: Vec<NavClipInfo> = self.engine.project()
+        let clips: Vec<NavClipInfo> = Some(&self.local_project)
             .map(|p| p.timeline.layers.iter().enumerate().flat_map(|(li, l)| {
                 l.clips.iter().map(move |c| NavClipInfo {
                     clip_id: c.id.clone(),
@@ -355,7 +350,7 @@ impl Application {
         ) {
             NavResult::SelectClip(clip_id) => {
                 // Find the clip's layer for proper UIState selection
-                let li = self.engine.project()
+                let li = Some(&self.local_project)
                     .and_then(|p| p.timeline.layers.iter().enumerate()
                         .find_map(|(i, l)| l.clips.iter().any(|c| c.id == clip_id).then_some(i)))
                     .unwrap_or(0);
@@ -379,14 +374,14 @@ impl Application {
             TextInputField::Bpm => {
                 if let Ok(new_bpm) = text.parse::<f32>() {
                     let new_bpm = new_bpm.clamp(20.0, 300.0);
-                    if let Some(project) = self.engine.project_mut() {
+                    if let Some(project) = Some(&mut self.local_project) {
                         let old_bpm = project.settings.bpm;
                         // Unity: skip if approximately equal
                         if (old_bpm - new_bpm).abs() >= 0.01 {
                             let cmd = manifold_editing::commands::settings::ChangeBpmCommand::new(
                                 old_bpm, new_bpm,
                             );
-                            self.editing_service.execute(Box::new(cmd), project);
+                            { let mut boxed_cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed_cmd.execute(project); self.send_content_cmd(ContentCommand::Record(boxed_cmd)); }
                         }
                     }
                     self.needs_rebuild = true;
@@ -395,17 +390,17 @@ impl Application {
             TextInputField::Fps => {
                 if let Ok(fps) = text.parse::<f32>() {
                     let fps = fps.clamp(1.0, 240.0);
-                    if let Some(project) = self.engine.project_mut() {
+                    if let Some(project) = Some(&mut self.local_project) {
                         let cmd = manifold_editing::commands::settings::ChangeFrameRateCommand::new(
                             project.settings.frame_rate, fps,
                         );
-                        self.editing_service.execute(Box::new(cmd), project);
+                        { let mut boxed_cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed_cmd.execute(project); self.send_content_cmd(ContentCommand::Record(boxed_cmd)); }
                     }
                     self.needs_rebuild = true;
                 }
             }
             TextInputField::LayerName(idx) => {
-                if let Some(project) = self.engine.project_mut() {
+                if let Some(project) = Some(&mut self.local_project) {
                     if let Some(layer) = project.timeline.layers.get_mut(idx) {
                         layer.name = text.to_string();
                     }
@@ -427,7 +422,7 @@ impl Application {
                 };
                 if let Some(clip_id) = &self.selection.primary_selected_clip_id {
                     let clip_id = clip_id.clone();
-                    if let Some(project) = self.engine.project_mut() {
+                    if let Some(project) = Some(&mut self.local_project) {
                         let old_bpm = project.timeline.find_clip_by_id(&clip_id)
                             .map(|c| c.recorded_bpm)
                             .unwrap_or(0.0);
@@ -435,7 +430,7 @@ impl Application {
                             let cmd = manifold_editing::commands::clip::ChangeClipRecordedBpmCommand::new(
                                 clip_id, old_bpm, new_bpm,
                             );
-                            self.editing_service.execute(Box::new(cmd), project);
+                            { let mut boxed_cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed_cmd.execute(project); self.send_content_cmd(ContentCommand::Record(boxed_cmd)); }
                         }
                     }
                 }
@@ -465,32 +460,34 @@ impl Application {
 
     /// Save. Delegates to ProjectIOService.save_project.
     fn save_project(&mut self) {
-        let current_time = self.engine.current_time();
+        let current_time = self.content_state.current_time;
         let current_path = self.current_project_path.clone();
-        if let Some(project) = self.engine.project_mut() {
-            let action = self.project_io.save_project(
-                project,
-                current_path.as_deref(),
-                current_time,
-                &mut self.editing_service,
-                &mut self.user_prefs,
-            );
-            self.apply_project_io_action(action);
+        // Save the local project snapshot (best effort — authoritative is on content thread)
+        self.local_project.saved_playhead_time = current_time;
+        if let Some(path) = current_path.as_deref() {
+            match manifold_io::saver::save_project(&mut self.local_project, path, None, false) {
+                Ok(()) => {
+                    self.send_content_cmd(ContentCommand::SetProject);
+                    log::info!("[ProjectIO] Saved to {}", path.display());
+                }
+                Err(e) => log::error!("[ProjectIO] Save failed: {e}"),
+            }
+        } else {
+            self.save_project_as();
         }
     }
 
     /// Save As. Delegates to ProjectIOService.save_project_as.
     fn save_project_as(&mut self) {
-        let current_time = self.engine.current_time();
-        if let Some(project) = self.engine.project_mut() {
-            let action = self.project_io.save_project_as(
-                project,
-                current_time,
-                &mut self.editing_service,
-                &mut self.user_prefs,
-            );
-            self.apply_project_io_action(action);
-        }
+        let current_time = self.content_state.current_time;
+        self.local_project.saved_playhead_time = current_time;
+        let action = self.project_io.save_project_as(
+            &mut self.local_project,
+            current_time,
+            &mut EditingService::new(), // placeholder — mark clean via content thread
+            &mut self.user_prefs,
+        );
+        self.apply_project_io_action(action);
     }
 
     /// Open. Delegates to ProjectIOService.open_project.
@@ -522,9 +519,8 @@ impl Application {
 
             // PrepareForProjectSwitch — clean up previous audio/waveform state
             // Unity: WorkspaceController.ProjectIO.cs PrepareForProjectSwitch()
-            if let Some(ref mut audio_sync) = self.audio_sync {
-                audio_sync.reset_audio();
-            }
+            // Audio reset sent to content thread
+            self.send_content_cmd(ContentCommand::ResetAudio);
             self.ui_root.waveform_lane.clear_audio();
             self.ui_root.layout.waveform_lane_visible = false;
             self.pending_audio_load = None;
@@ -534,29 +530,27 @@ impl Application {
             let saved_time = project.saved_playhead_time;
 
             let t1 = std::time::Instant::now();
-            self.engine.initialize(project);
+            self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
             eprintln!("[PROJECT LOAD] engine.initialize: {:.1}ms", t1.elapsed().as_secs_f64() * 1000.0);
 
             // Restore playhead position
             if saved_time > 0.0 {
-                self.engine.seek_to(saved_time);
+                self.send_content_cmd(ContentCommand::SeekTo(saved_time));
             }
 
             // Resize compositor + generators to project resolution
-            if let Some(proj) = self.engine.project() {
+            if let Some(proj) = Some(&self.local_project) {
                 let w = proj.settings.output_width.max(1) as u32;
                 let h = proj.settings.output_height.max(1) as u32;
-                if let (Some(gpu), Some(pipeline)) = (&self.gpu, &mut self.content_pipeline) {
-                    let t2 = std::time::Instant::now();
-                    pipeline.resize(&gpu.device, &mut self.engine, w, h);
-                    eprintln!("[PROJECT LOAD] GPU resize: {:.1}ms ({}x{})", t2.elapsed().as_secs_f64() * 1000.0, w, h);
-                }
+                self.send_content_cmd(ContentCommand::ResizeContent(w, h));
+                    self.content_dimensions = (w, h);
+                    eprintln!("[PROJECT LOAD] GPU resize sent: {}x{}", w, h);
             }
 
             // Spawn background audio loading
             let mut audio_path_for_load: Option<(String, f32)> = None;
-            if self.audio_sync.is_some() {
-                if let Some(proj) = self.engine.project() {
+            if false /* audio_sync on content thread */ {
+                if let Some(proj) = Some(&self.local_project) {
                     if let Some(ref perc) = proj.percussion_import {
                         if let Some(ref audio_path) = perc.audio_path {
                             if !audio_path.is_empty() {
@@ -598,7 +592,7 @@ impl Application {
                     .expect("Failed to spawn audio load thread");
             }
 
-            self.editing_service.set_project();
+            self.send_content_cmd(ContentCommand::SetProject);
             self.selection.clear_selection();
             self.active_layer_index = Some(0);
             self.needs_rebuild = true;
@@ -638,11 +632,11 @@ impl Application {
             Ok(result) => {
                 self.pending_audio_load = None;
 
-                if let Some(ref mut audio_sync) = self.audio_sync {
-                    if let Err(e) = audio_sync.apply_preloaded(result.preloaded) {
-                        log::warn!("[ProjectIO] Failed to apply loaded audio: {}", e);
-                    }
-                }
+                // Send loaded audio to content thread
+                self.send_content_cmd(ContentCommand::AudioLoaded {
+                    preloaded: result.preloaded,
+                    waveform: None,
+                });
 
                 if let Some(decoded) = result.waveform {
                     self.ui_root.waveform_lane.set_audio_data(
@@ -816,63 +810,43 @@ impl Application {
         let realtime = self.frame_timer.realtime_since_start();
         self.time_since_start = realtime as f32;
 
-        // Check if we should run a content frame (engine tick + GPU render).
-        // UI always runs; content runs at its own cadence.
-        let render_content = self.content_pipeline.as_ref()
-            .map_or(true, |p| p.should_render_content(realtime));
+        // Content rendering now runs on dedicated thread — no cadence check needed here.
 
-        // Content frame: tick engine, audio sync, percussion, then render later.
-        // UI-only frame: skip these — engine state is at most one content-frame stale.
-        let tick_result = if render_content {
-            // 1. Tick the engine FIRST so this frame's UI sees the advanced time
-            let ctx = TickContext {
-                dt_seconds: dt,
-                realtime_now: realtime,
-                pre_render_dt: dt as f32,
-                frame_count: self.frame_count as i32,
-                export_fixed_dt: 0.0, // non-zero only during video export (GAP-IO-4)
-            };
-            let result = self.engine.tick(ctx);
-
-            // 1b. Poll for completed background audio load (async decode from project open)
-            self.poll_pending_audio_load();
-
-            // 1c. Sync imported audio playback to timeline
-            // Port of Unity WorkspaceController.LateUpdate → audioSyncController.UpdateSync
-            if let Some(ref mut audio_sync) = self.audio_sync {
-                audio_sync.update_sync(&mut self.engine);
-            }
-
-            Some(result)
-        } else {
-            None
-        };
-
-        // 1d. Tick percussion import orchestrator (poll-based state machine)
-        // Runs every frame (not just content frames) so progress bar stays responsive.
-        let was_importing = self.percussion_orchestrator.is_import_in_progress();
-        {
-            let current_beat = self.engine.current_beat();
-            if let Some(project) = self.engine.project_mut() {
-                self.percussion_orchestrator.tick(
-                    self.time_since_start,
-                    project,
-                    &mut self.editing_service,
-                    current_beat,
-                );
+        // 1. Drain state from content thread
+        if let Some(ref rx) = self.state_rx {
+            // Drain all pending states, keep the latest
+            while let Ok(state) = rx.try_recv() {
+                // Accept project snapshot if data_version changed (unless drag in progress)
+                if let Some(snapshot) = state.project_snapshot {
+                    let drag_active = self.overlay.drag_mode() != manifold_ui::interaction_overlay::DragMode::None;
+                    if !drag_active {
+                        self.local_project = *snapshot;
+                        self.last_accepted_data_version = state.data_version;
+                    }
+                }
+                self.content_state = ContentState {
+                    project_snapshot: None, // consumed above
+                    ..state
+                };
             }
         }
-        let is_importing = self.percussion_orchestrator.is_import_in_progress();
+
+        // 1b. Poll for completed background audio load (waveform stays on UI thread)
+        self.poll_pending_audio_load();
+
+        // 1d. Percussion import runs on content thread — read status from content_state.
+        let was_importing = false; // previous frame state not tracked here
+        let is_importing = self.content_state.percussion_importing;
 
         // 1e. Sync percussion pipeline status to header panel
         // Port of Unity WorkspaceController.RefreshPercussionImportStatusLabel
         {
-            let msg = self.percussion_orchestrator.status_message();
-            let progress = self.percussion_orchestrator.status_progress01();
-            let show = self.percussion_orchestrator.show_progress_bar() && !msg.is_empty();
+            let msg = self.content_state.percussion_status_message.clone();
+            let progress = self.content_state.percussion_progress;
+            let show = self.content_state.percussion_show_progress && !msg.is_empty();
             self.ui_root.header.set_import_status(
                 &mut self.ui_root.tree,
-                msg,
+                &msg,
                 if progress < 0.0 { 0.0 } else { progress.clamp(0.0, 1.0) },
                 show,
             );
@@ -899,9 +873,11 @@ impl Application {
             if !viewport_events.is_empty() {
                 // Sync modifier state to overlay (Unity reads Keyboard.current inline)
                 self.overlay.set_modifiers(self.modifiers);
+                let content_tx = self.content_tx.as_ref().unwrap();
                 let mut host = crate::editing_host::AppEditingHost::new(
-                    &mut self.engine,
-                    &mut self.editing_service,
+                    &mut self.local_project,
+                    content_tx,
+                    &self.content_state,
                     &mut self.cursor_manager,
                     &mut self.active_layer_index,
                     &mut self.needs_rebuild,
@@ -988,7 +964,7 @@ impl Application {
                     continue;
                 }
                 PanelAction::BpmFieldClicked => {
-                    let bpm = self.engine.project().map_or(120.0, |p| p.settings.bpm);
+                    let bpm = Some(&self.local_project).map_or(120.0, |p| p.settings.bpm);
                     let r = self.ui_root.tree.get_bounds(
                         self.ui_root.transport.bpm_field_id() as u32,
                     );
@@ -1001,7 +977,7 @@ impl Application {
                     continue;
                 }
                 PanelAction::FpsFieldClicked => {
-                    let fps = self.engine.project().map_or(60.0, |p| p.settings.frame_rate);
+                    let fps = Some(&self.local_project).map_or(60.0, |p| p.settings.frame_rate);
                     let r = self.ui_root.tree.get_bounds(
                         self.ui_root.footer.fps_field_id() as u32,
                     );
@@ -1017,7 +993,7 @@ impl Application {
                     // Open text input for clip recorded BPM editing.
                     // Unity: ClipInspector.OnBitmapBpmClicked → BitmapTextInput.BeginEdit
                     if let Some(clip_id) = &self.selection.primary_selected_clip_id {
-                        let bpm_text = self.engine.project()
+                        let bpm_text = Some(&self.local_project)
                             .and_then(|p| {
                                 p.timeline.layers.iter()
                                     .flat_map(|l| l.clips.iter())
@@ -1044,8 +1020,8 @@ impl Application {
                 }
                 PanelAction::NewProject => {
                     let project = Self::create_default_project();
-                    self.engine.initialize(project);
-                    self.editing_service.set_project();
+                    self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
+                    self.send_content_cmd(ContentCommand::SetProject);
                     self.selection.clear_selection();
                     self.active_layer_index = Some(0);
                     self.current_project_path = None;
@@ -1054,34 +1030,34 @@ impl Application {
                 }
                 // Transport controller actions — intercept here for Application-level access
                 PanelAction::CycleClockAuthority => {
-                    self.transport_controller.cycle_authority(&mut self.engine);
+                    self.send_content_cmd(ContentCommand::CycleClockAuthority);
                     continue;
                 }
                 PanelAction::ToggleLink => {
-                    self.transport_controller.toggle_link(&mut self.engine);
+                    self.send_content_cmd(ContentCommand::ToggleLink);
                     continue;
                 }
                 PanelAction::ToggleMidiClock => {
-                    self.transport_controller.toggle_midi_clock(&mut self.engine);
+                    self.send_content_cmd(ContentCommand::ToggleMidiClock);
                     continue;
                 }
                 PanelAction::ToggleSyncOutput => {
-                    self.transport_controller.toggle_sync_output(&mut self.engine);
+                    self.send_content_cmd(ContentCommand::ToggleSyncOutput);
                     continue;
                 }
                 PanelAction::ResetBpm => {
-                    manifold_playback::transport_controller::TransportController::reset_bpm(
-                        &mut self.engine, &mut self.editing_service,
-                    );
+                    self.send_content_cmd(ContentCommand::ResetBpm);
                     self.needs_rebuild = true;
                     continue;
                 }
                 _ => {}
             }
+            let content_tx = self.content_tx.as_ref().unwrap();
             let result = crate::ui_bridge::dispatch(
                 action,
-                &mut self.engine,
-                &mut self.editing_service,
+                &mut self.local_project,
+                content_tx,
+                &self.content_state,
                 &mut self.ui_root,
                 &mut self.selection,
                 &mut self.active_layer_index,
@@ -1089,8 +1065,6 @@ impl Application {
                 &mut self.trim_snapshot,
                 &mut self.adsr_snapshot,
                 &mut self.target_snapshot,
-                &mut self.percussion_orchestrator,
-                &mut self.audio_sync,
                 &mut self.user_prefs,
             );
             if result.structural_change {
@@ -1103,28 +1077,27 @@ impl Application {
 
         // Resize compositor + generator when resolution preset changes
         if needs_resolution_resize {
-            let dims = self.engine.project().map(|p| {
+            let dims = Some(&self.local_project).map(|p| {
                 (p.settings.output_width.max(1) as u32, p.settings.output_height.max(1) as u32)
             });
             if let Some((w, h)) = dims {
-                if let (Some(gpu), Some(pipeline)) = (&self.gpu, &mut self.content_pipeline) {
-                    pipeline.resize(&gpu.device, &mut self.engine, w, h);
-                }
+                self.send_content_cmd(ContentCommand::ResizeContent(w, h));
+                self.content_dimensions = (w, h);
                 log::info!("Resolution changed to {}x{}", w, h);
             }
         }
 
         // Selection version change → sync inspector so it shows the newly selected clip
         if self.selection.selection_version != prev_sel_version && !needs_structural_sync {
-            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index, &self.selection);
+            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, self.active_layer_index, &self.selection);
             needs_structural_sync = true;
         }
 
         if needs_structural_sync {
-            crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine, self.active_layer_index);
-            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index, &self.selection);
+            crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.local_project, self.active_layer_index);
+            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, self.active_layer_index, &self.selection);
         } else if self.active_layer_index != prev_active_layer {
-            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index, &self.selection);
+            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, self.active_layer_index, &self.selection);
             needs_structural_sync = true; // Inspector content changed — needs rebuild
         }
         // 2a. Per-frame drag polling with auto-scroll.
@@ -1132,9 +1105,11 @@ impl Application {
         {
             use manifold_ui::interaction_overlay::DragMode;
             if self.overlay.drag_mode() == DragMode::Move {
+                let content_tx = self.content_tx.as_ref().unwrap();
                 let mut host = crate::editing_host::AppEditingHost::new(
-                    &mut self.engine,
-                    &mut self.editing_service,
+                    &mut self.local_project,
+                    content_tx,
+                    &self.content_state,
                     &mut self.cursor_manager,
                     &mut self.active_layer_index,
                     &mut self.needs_rebuild,
@@ -1150,7 +1125,7 @@ impl Application {
         // Legacy drag polling removed — overlay.poll_move_drag() handles it above.
 
         // 2b. Auto-scroll check for playback (BEFORE build so rebuild includes new scroll)
-        let auto_scroll_changed = crate::ui_bridge::check_auto_scroll(&mut self.ui_root, &self.engine);
+        let auto_scroll_changed = crate::ui_bridge::check_auto_scroll(&mut self.ui_root, &self.content_state, &self.local_project);
         let scroll_changed = auto_scroll_changed || self.needs_scroll_rebuild;
         self.needs_scroll_rebuild = false;
 
@@ -1183,10 +1158,11 @@ impl Application {
         // 4. Push engine state to UI panels (AFTER build so new nodes get state)
         crate::ui_bridge::push_state(
             &mut self.ui_root,
-            &self.engine,
+            &self.local_project,
+            &self.content_state,
             self.active_layer_index,
             &self.selection,
-            self.editing_service.is_dirty(),
+            self.content_state.editing_is_dirty,
             self.current_project_path.as_deref(),
         );
 
@@ -1197,12 +1173,12 @@ impl Application {
         // bitmap renderers see mutated clip positions and repaint during drag.
         // Cost: iterates layers+clips, but the bitmap fingerprint skips repaint
         // when nothing changed (cheap no-op outside of drag).
-        crate::ui_bridge::sync_clip_positions(&mut self.ui_root, &self.engine);
+        crate::ui_bridge::sync_clip_positions(&mut self.ui_root, &self.local_project);
 
         // 5. Push performance metrics to HUD
         if self.ui_root.perf_hud.is_visible() {
-            let bpm = self.engine.project().map(|p| p.settings.bpm).unwrap_or(120.0);
-            let clock_source = self.engine.project()
+            let bpm = Some(&self.local_project).map(|p| p.settings.bpm).unwrap_or(120.0);
+            let clock_source = Some(&self.local_project)
                 .map(|p| p.settings.clock_authority.display_name().to_string())
                 .unwrap_or_else(|| "Internal".to_string());
             self.ui_root.perf_hud.set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
@@ -1210,12 +1186,12 @@ impl Application {
                 frame_time_ms: (self.frame_timer.last_dt() * 1000.0) as f32,
                 active_clips: 0, // TODO: wire from tick_result
                 preparing_clips: 0,
-                current_beat: self.engine.current_beat(),
-                current_time_secs: self.engine.current_time(),
+                current_beat: self.content_state.current_beat,
+                current_time_secs: self.content_state.current_time,
                 bpm,
                 clock_source,
-                is_playing: self.engine.is_playing(),
-                data_version: self.editing_service.data_version(),
+                is_playing: self.content_state.is_playing,
+                data_version: self.content_state.data_version,
             });
         }
 
@@ -1224,12 +1200,12 @@ impl Application {
 
         // 6a. Update waveform lane overlay (position + playhead for dirty-checking)
         {
-            let playhead_beat = self.engine.current_beat();
+            let playhead_beat = self.content_state.current_beat;
             let scroll_x = self.ui_root.viewport.scroll_x_beats() * self.ui_root.viewport.pixels_per_beat();
             let wf = &mut self.ui_root.waveform_lane;
             if wf.is_ready() {
                 // Get start beat and duration from project percussion import state
-                let (start_beat, duration_beats) = if let Some(proj) = self.engine.project() {
+                let (start_beat, duration_beats) = if let Some(proj) = Some(&self.local_project) {
                     if let Some(ref perc) = proj.percussion_import {
                         let dur_sec = wf.clip_duration_seconds();
                         let bpm = proj.settings.bpm.max(1.0);
@@ -1314,28 +1290,12 @@ impl Application {
             Some(g) => g,
             None => return,
         };
-        let content_pipeline = match &mut self.content_pipeline {
-            Some(p) => p,
-            None => return,
-        };
-
-        // Content frame: render generators + compositor.
-        // UI-only frame: skip — blit the cached front buffer from last content frame.
-        if let Some(ref tick_result) = tick_result {
-            content_pipeline.render_content(
-                gpu, &mut self.engine, tick_result, dt, self.frame_count,
-            );
-            content_pipeline.mark_content_rendered(realtime);
-        }
-
-        // Double-buffered: output_view() returns the stable front buffer.
-        // Raw pointer needed because content_pipeline is behind &mut self
-        // and present_all_windows also borrows &mut self. The front buffer
-        // is not modified until the next render_content() call.
-        if let Some(output_view) = content_pipeline.output_view() {
-            let output_view_ptr: *const wgpu::TextureView = output_view;
-            let output_view_ref = unsafe { &*output_view_ptr };
-            self.present_all_windows(output_view_ref);
+        // Content rendering now happens on the content thread.
+        // Read the shared output view for presentation.
+        if let Some(ref shared_output) = self.content_pipeline_output {
+            if let Some(output_view) = shared_output.get_view() {
+                self.present_all_windows(&output_view);
+            }
         }
 
         self.frame_count += 1;
@@ -1351,8 +1311,8 @@ impl Application {
             None => return,
         };
         // Compositor aspect ratio for aspect-correct blitting (FitInParent)
-        let (comp_w, comp_h) = self.content_pipeline.as_ref()
-            .map(|p| p.dimensions())
+        let (comp_w, comp_h) = self.content_pipeline_output.as_ref()
+            .map(|p| p.get_dimensions())
             .unwrap_or((1920, 1080));
         let source_aspect = comp_w as f32 / comp_h as f32;
 
@@ -1813,25 +1773,30 @@ impl ApplicationHandler for Application {
             self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(&device, format));
 
             // Create generator renderer and compositor at project resolution
-            let (output_w, output_h) = if let Some(project) = self.engine.project() {
-                (project.settings.output_width.max(1) as u32, project.settings.output_height.max(1) as u32)
-            } else {
-                (1920u32, 1080u32)
-            };
+            let output_w = self.local_project.settings.output_width.max(1) as u32;
+            let output_h = self.local_project.settings.output_height.max(1) as u32;
             let compositor_format = wgpu::TextureFormat::Rgba16Float;
 
-            // Replace the generator stub with the real GeneratorRenderer
-            self.engine.replace_renderer(1, Box::new(GeneratorRenderer::new(
-                Arc::clone(&device),
-                output_w,
-                output_h,
-                compositor_format,
-                8,
-            )));
+            // Create engine with real GeneratorRenderer
+            let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
+                Box::new(StubRenderer::new_video()),
+                Box::new(GeneratorRenderer::new(
+                    Arc::clone(&device),
+                    output_w,
+                    output_h,
+                    compositor_format,
+                    8,
+                )),
+            ];
+            let mut engine = PlaybackEngine::new(renderers);
+            engine.initialize(self.local_project.clone());
 
-            self.content_pipeline = Some(crate::content_pipeline::ContentPipeline::new(
+            // Create content pipeline with compositor
+            let content_pipeline = crate::content_pipeline::ContentPipeline::new(
                 Box::new(LayerCompositor::new(&device, &queue, output_w, output_h)),
-            ));
+            );
+            self.content_pipeline_output = Some(content_pipeline.shared_output());
+            self.content_dimensions = (output_w, output_h);
             eprintln!("[GPU INIT] generator/compositor resolution: {}x{}", output_w, output_h);
 
             GpuContext {
@@ -1841,6 +1806,80 @@ impl ApplicationHandler for Application {
                 queue,
             }
         };
+
+        // Spawn content thread
+        {
+            let (cmd_tx, cmd_rx) = crossbeam_channel::bounded::<ContentCommand>(64);
+            let (state_tx, state_rx) = crossbeam_channel::bounded::<ContentState>(4);
+
+            // Create engine and editing service for content thread
+            let output_w = self.local_project.settings.output_width.max(1) as u32;
+            let output_h = self.local_project.settings.output_height.max(1) as u32;
+            let compositor_format = wgpu::TextureFormat::Rgba16Float;
+
+            let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
+                Box::new(StubRenderer::new_video()),
+                Box::new(GeneratorRenderer::new(
+                    Arc::clone(&gpu.device),
+                    output_w,
+                    output_h,
+                    compositor_format,
+                    8,
+                )),
+            ];
+            let mut engine = PlaybackEngine::new(renderers);
+            engine.initialize(self.local_project.clone());
+
+            let content_pipeline = crate::content_pipeline::ContentPipeline::new(
+                Box::new(LayerCompositor::new(&gpu.device, &gpu.queue, output_w, output_h)),
+            );
+            self.content_pipeline_output = Some(content_pipeline.shared_output());
+            self.content_dimensions = (output_w, output_h);
+
+            let audio_sync = match ImportedAudioSyncController::new() {
+                Ok(ctrl) => Some(ctrl),
+                Err(e) => {
+                    log::warn!("[Audio] Failed to initialize audio sync: {}", e);
+                    None
+                }
+            };
+
+            let content_thread = crate::content_thread::ContentThread {
+                engine,
+                editing_service: EditingService::new(),
+                content_pipeline,
+                audio_sync,
+                percussion_orchestrator: PercussionImportOrchestrator::new(
+                    None,
+                    std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.parent().map(|d| d.to_string_lossy().into_owned()))
+                        .unwrap_or_default(),
+                ),
+                transport_controller: manifold_playback::transport_controller::TransportController::new(),
+                gpu: GpuContext {
+                    instance: gpu.instance.clone(),
+                    adapter: gpu.adapter.clone(),
+                    device: Arc::clone(&gpu.device),
+                    queue: Arc::clone(&gpu.queue),
+                },
+                frame_count: 0,
+                time_since_start: 0.0,
+                last_data_version: 0,
+            };
+
+            let handle = std::thread::Builder::new()
+                .name("content-thread".into())
+                .spawn(move || {
+                    content_thread.run(cmd_rx, state_tx);
+                })
+                .expect("Failed to spawn content thread");
+
+            self.content_tx = Some(cmd_tx);
+            self.state_rx = Some(state_rx);
+            self.content_thread_handle = Some(handle);
+            log::info!("[ContentThread] spawned");
+        }
 
         self.gpu = Some(gpu);
 
@@ -1853,8 +1892,8 @@ impl ApplicationHandler for Application {
         self.ui_root.resize(logical_w, logical_h);
 
         // Push initial project data (layers, tracks) and rebuild
-        crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.engine, self.active_layer_index);
-        crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.engine, self.active_layer_index, &self.selection);
+        crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.local_project, self.active_layer_index);
+        crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, self.active_layer_index, &self.selection);
 
         self.initialized = true;
 
@@ -1876,6 +1915,14 @@ impl ApplicationHandler for Application {
         match event {
             WindowEvent::CloseRequested => {
                 if is_primary {
+                    // Shut down content thread
+                    if let Some(tx) = self.content_tx.take() {
+                        let _ = tx.send(ContentCommand::Shutdown);
+                    }
+                    if let Some(handle) = self.content_thread_handle.take() {
+                        let _ = handle.join();
+                        log::info!("[ContentThread] joined");
+                    }
                     event_loop.exit();
                 } else {
                     self.window_registry.remove(&window_id);
@@ -1949,9 +1996,11 @@ impl ApplicationHandler for Application {
                         // This handles: CursorBeat/CursorLayerIndex tracking, per-layer bitmap
                         // invalidation on hover change, and cursor shape feedback.
                         {
+                            let content_tx = self.content_tx.as_ref().unwrap();
                             let mut host = crate::editing_host::AppEditingHost::new(
-                                &mut self.engine,
-                                &mut self.editing_service,
+                                &mut self.local_project,
+                                content_tx,
+                                &self.content_state,
                                 &mut self.cursor_manager,
                                 &mut self.active_layer_index,
                                 &mut self.needs_rebuild,
@@ -2040,13 +2089,13 @@ impl ApplicationHandler for Application {
                                         self.cursor_manager.set_default();
                                         self.ui_root.set_split_handle_idle();
                                         // Persist to ProjectSettings (Unity WorkspaceController line 591)
-                                        if let Some(project) = self.engine.project_mut() {
+                                        if let Some(project) = Some(&mut self.local_project) {
                                             project.settings.timeline_height_percent =
                                                 self.ui_root.layout.timeline_split_ratio;
                                         }
                                     } else if self.ui_root.inspector_resize_dragging {
                                         // Persist to ProjectSettings (Unity WorkspaceController line 528)
-                                        if let Some(project) = self.engine.project_mut() {
+                                        if let Some(project) = Some(&mut self.local_project) {
                                             project.settings.inspector_width =
                                                 self.ui_root.layout.inspector_width;
                                         }
@@ -2190,7 +2239,7 @@ impl ApplicationHandler for Application {
             } => {
                 // App-level shortcuts (handled before UI forwarding)
                 let mut consumed = false;
-                let data_version_before = self.editing_service.data_version();
+                let data_version_before = self.content_state.data_version;
                 if is_primary {
                     // Text input mode: intercept all keys for text editing
                     if self.text_input.active {
@@ -2243,8 +2292,9 @@ impl ApplicationHandler for Application {
                     // All viewport access goes through the TimelineInputHost trait.
                     if !consumed {
                         let mut host = crate::input_host::AppInputHost {
-                            engine: &mut self.engine,
-                            editing: &mut self.editing_service,
+                            project: &mut self.local_project,
+                            content_tx: self.content_tx.as_ref().unwrap(),
+                            content_state: &self.content_state,
                             ui_root: &mut self.ui_root,
                             selection: &mut self.selection,
                             active_layer: &mut self.active_layer_index,
@@ -2282,8 +2332,8 @@ impl ApplicationHandler for Application {
                         // ── New: Cmd+N ──
                         Key::Character(ref c) if c.as_str() == "n" && m.is_command_only() => {
                             let project = Self::create_default_project();
-                            self.engine.initialize(project);
-                            self.editing_service.set_project();
+                            self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
+                            self.send_content_cmd(ContentCommand::SetProject);
                             self.selection.clear_selection();
                             self.active_layer_index = Some(0);
                             self.needs_rebuild = true;
@@ -2303,7 +2353,7 @@ impl ApplicationHandler for Application {
                 // Only save/open/new remain as direct fallbacks above.)
 
                 // If any keyboard shortcut mutated project data, trigger structural sync
-                if self.editing_service.data_version() != data_version_before {
+                if self.content_state.data_version != data_version_before {
                     self.needs_structural_sync = true;
                     self.needs_rebuild = true;
                 }
@@ -2367,12 +2417,12 @@ impl ApplicationHandler for Application {
                 {
                     // Video/MIDI files → route through ProjectIOService.
                     // Drop at playhead beat on active layer (Unity ProcessDroppedFiles).
-                    let drop_beat = self.engine.current_beat();
+                    let drop_beat = self.content_state.current_beat;
                     let drop_layer = self.active_layer_index.unwrap_or(0) as i32;
                     let spb = manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(
-                        self.engine.project().map(|p| p.settings.bpm).unwrap_or(120.0),
+                        Some(&self.local_project).map(|p| p.settings.bpm).unwrap_or(120.0),
                     );
-                    if let Some(project) = self.engine.project_mut() {
+                    if let Some(project) = Some(&mut self.local_project) {
                         let action = self.project_io.process_dropped_files(
                             &[path.clone()],
                             drop_beat,

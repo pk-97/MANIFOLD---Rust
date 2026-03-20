@@ -6,8 +6,6 @@
 //! like time display.
 
 use manifold_core::types::{ClockAuthority, PlaybackState};
-use manifold_playback::engine::PlaybackEngine;
-use manifold_playback::transport_controller::TransportController;
 use manifold_ui::color;
 use manifold_ui::node::Color32;
 use manifold_ui::tree::UITree;
@@ -54,8 +52,8 @@ impl TransportStateCache {
     pub fn update(
         &mut self,
         ui: &mut UIRoot,
-        engine: &PlaybackEngine,
-        transport: &TransportController,
+        project: &manifold_core::project::Project,
+        content_state: &crate::content_state::ContentState,
         is_dirty: bool,
         project_path: Option<&std::path::Path>,
         current_time: f32,
@@ -63,7 +61,7 @@ impl TransportStateCache {
         let tree = &mut ui.tree;
 
         // ── Per-frame: time display (needs per-frame accuracy) ──
-        self.update_time_display(ui, engine, project_path, is_dirty);
+        self.update_time_display(ui, project, content_state, project_path, is_dirty);
 
         // ── Throttled: transport state (0.25s) ──
         if current_time - self.last_update_time < TRANSPORT_UPDATE_INTERVAL {
@@ -71,27 +69,28 @@ impl TransportStateCache {
         }
         self.last_update_time = current_time;
 
-        self.update_playback_state(ui, engine);
-        self.update_bpm(ui, engine);
+        self.update_playback_state(ui, content_state, project);
+        self.update_bpm(ui, project);
         self.update_dirty(ui, is_dirty);
-        self.update_authority(ui, engine);
-        self.update_link_state(ui, transport);
-        self.update_midi_clock_state(ui, transport);
-        self.update_sync_output_state(ui, transport, engine);
-        self.update_bpm_buttons(ui, engine);
+        self.update_authority(ui, project);
+        self.update_link_state(ui, content_state);
+        self.update_midi_clock_state(ui, content_state);
+        self.update_sync_output_state(ui, content_state, project);
+        self.update_bpm_buttons(ui, project);
     }
 
     fn update_time_display(
         &self,
         ui: &mut UIRoot,
-        engine: &PlaybackEngine,
+        project: &manifold_core::project::Project,
+        content_state: &crate::content_state::ContentState,
         project_path: Option<&std::path::Path>,
         is_dirty: bool,
     ) {
-        let beat = engine.current_beat();
-        let time = engine.current_time();
+        let beat = content_state.current_beat;
+        let time = content_state.current_time;
 
-        if let Some(project) = engine.project() {
+        {
             let tree = &mut ui.tree;
 
             // Unity FormatTime: "{minutes:D2}:{seconds:D2}.{tenths}"
@@ -126,8 +125,8 @@ impl TransportStateCache {
         }
     }
 
-    fn update_playback_state(&mut self, ui: &mut UIRoot, engine: &PlaybackEngine) {
-        let state = engine.current_state();
+    fn update_playback_state(&mut self, ui: &mut UIRoot, content_state: &crate::content_state::ContentState, project: &manifold_core::project::Project) {
+        let state = if content_state.is_playing { PlaybackState::Playing } else { PlaybackState::Stopped };
         if state == self.playback_state { return; }
         self.playback_state = state;
 
@@ -140,15 +139,13 @@ impl TransportStateCache {
         ui.transport.set_play_state(tree, play_text, play_color);
 
         // Record state — disabled when OSC is authority
-        if let Some(project) = engine.project() {
-            let auth = project.settings.clock_authority;
-            let rec_allowed = auth != ClockAuthority::Osc;
-            ui.transport.set_record_state(tree, engine.is_recording() && rec_allowed, rec_allowed);
-        }
+        let auth = project.settings.clock_authority;
+        let rec_allowed = auth != ClockAuthority::Osc;
+        ui.transport.set_record_state(tree, content_state.is_recording && rec_allowed, rec_allowed);
     }
 
-    fn update_bpm(&mut self, ui: &mut UIRoot, engine: &PlaybackEngine) {
-        if let Some(project) = engine.project() {
+    fn update_bpm(&mut self, ui: &mut UIRoot, project: &manifold_core::project::Project) {
+        {
             let bpm = project.settings.bpm;
             if (bpm - self.bpm).abs() < 0.01 { return; }
             self.bpm = bpm;
@@ -162,8 +159,8 @@ impl TransportStateCache {
         ui.transport.set_save_text(&mut ui.tree, if is_dirty { "SAVE *" } else { "SAVE" });
     }
 
-    fn update_authority(&mut self, ui: &mut UIRoot, engine: &PlaybackEngine) {
-        if let Some(project) = engine.project() {
+    fn update_authority(&mut self, ui: &mut UIRoot, project: &manifold_core::project::Project) {
+        {
             let auth = project.settings.clock_authority;
             if auth == self.authority { return; }
             self.authority = auth;
@@ -178,8 +175,8 @@ impl TransportStateCache {
         }
     }
 
-    fn update_link_state(&mut self, ui: &mut UIRoot, transport: &TransportController) {
-        let enabled = transport.link_sync.as_ref().map_or(false, |s| s.is_enabled());
+    fn update_link_state(&mut self, ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
+        let enabled = content_state.link_enabled;
         // For now, no peer count available — will be populated when LinkSyncController exists
         let peers: i32 = 0;
 
@@ -198,8 +195,8 @@ impl TransportStateCache {
         }
     }
 
-    fn update_midi_clock_state(&mut self, ui: &mut UIRoot, transport: &TransportController) {
-        let enabled = transport.midi_clock_sync.as_ref().map_or(false, |s| s.is_enabled());
+    fn update_midi_clock_state(&mut self, ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
+        let enabled = content_state.midi_clock_enabled;
         // For now, no receiving/position available — will be populated when MidiClockSyncController exists
         let receiving = false;
         let position = String::new();
@@ -221,8 +218,8 @@ impl TransportStateCache {
         }
     }
 
-    fn update_sync_output_state(&mut self, ui: &mut UIRoot, transport: &TransportController, engine: &PlaybackEngine) {
-        let enabled = transport.osc_sender_enabled;
+    fn update_sync_output_state(&mut self, ui: &mut UIRoot, content_state: &crate::content_state::ContentState, project: &manifold_core::project::Project) {
+        let enabled = content_state.osc_sender_enabled;
         if enabled == self.sync_enabled { return; }
         self.sync_enabled = enabled;
 
@@ -230,16 +227,14 @@ impl TransportStateCache {
         if !enabled {
             ui.transport.set_sync_state(tree, false, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
         } else {
-            let port = engine.project()
-                .map(|p| p.settings.osc_send_port)
-                .unwrap_or(9001);
+            let port = project.settings.osc_send_port;
             let status = format!(":{}", port);
             ui.transport.set_sync_state(tree, true, color::STATUS_DOT_GREEN, &status, color::TEXT_WHITE_C32);
         }
     }
 
-    fn update_bpm_buttons(&mut self, ui: &mut UIRoot, engine: &PlaybackEngine) {
-        if let Some(project) = engine.project() {
+    fn update_bpm_buttons(&mut self, ui: &mut UIRoot, project: &manifold_core::project::Project) {
+        {
             let bpm = project.settings.bpm;
 
             // Reset: enabled when recorded tempo differs from current

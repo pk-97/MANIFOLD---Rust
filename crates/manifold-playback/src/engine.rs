@@ -141,23 +141,23 @@ pub struct PlaybackEngine {
     is_ticking: bool,
 
     // Logging (optional). Port of C# PlaybackEngine lines 248-253.
-    pub log: Option<Box<dyn Fn(&str)>>,
-    pub log_warning: Option<Box<dyn Fn(&str)>>,
-    pub log_error: Option<Box<dyn Fn(&str)>>,
+    pub log: Option<Box<dyn Fn(&str) + Send>>,
+    pub log_warning: Option<Box<dyn Fn(&str) + Send>>,
+    pub log_error: Option<Box<dyn Fn(&str) + Send>>,
 
     // Callback delegates. Port of C# PlaybackEngine lines 254-275.
-    pub replenish_warm_cache: Option<Box<dyn Fn(&[TimelineClip])>>,
-    pub on_drift_corrected: Option<Box<dyn Fn(&str, f32)>>,
-    pub beat_snapped_beat_resolver: Option<Box<dyn Fn() -> f32>>,
-    pub absolute_tick_resolver: Option<Box<dyn Fn() -> i32>>,
-    pub record_command_delegate: Option<Box<dyn Fn(Box<dyn manifold_editing::command::Command>)>>,
+    pub replenish_warm_cache: Option<Box<dyn Fn(&[TimelineClip]) + Send>>,
+    pub on_drift_corrected: Option<Box<dyn Fn(&str, f32) + Send>>,
+    pub beat_snapped_beat_resolver: Option<Box<dyn Fn() -> f32 + Send>>,
+    pub absolute_tick_resolver: Option<Box<dyn Fn() -> i32 + Send>>,
+    pub record_command_delegate: Option<Box<dyn Fn(Box<dyn manifold_editing::command::Command>) + Send>>,
 
     // Debug flag. Port of C# PlaybackEngine.showDebugLogs.
     pub show_debug_logs: bool,
 
     // Callback: fires each frame during playback after AdvanceTime.
     // Port of C# PlaybackController.OnTimeChanged (line 1149).
-    pub on_time_changed: Option<Box<dyn Fn(f32)>>,
+    pub on_time_changed: Option<Box<dyn Fn(f32) + Send>>,
 
     // Cached media length resolver. Port of C# PlaybackEngine line 201.
     cached_get_media_length: HashMap<String, f32>,

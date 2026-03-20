@@ -31,7 +31,7 @@ pub struct CompositorFrame<'a> {
 }
 
 /// Trait for compositing layers into a final output.
-pub trait Compositor {
+pub trait Compositor: Send {
     /// Render into the compositor's internal render targets.
     /// Returns the tonemapped texture view to present.
     fn render(

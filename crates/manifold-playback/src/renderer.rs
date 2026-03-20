@@ -4,7 +4,7 @@ use manifold_core::project::Project;
 
 /// Abstraction over clip renderers (video player pool, generator renderer, etc.).
 /// Port of C# IClipRenderer interface.
-pub trait ClipRenderer: Any {
+pub trait ClipRenderer: Any + Send {
     fn can_handle(&self, clip: &TimelineClip) -> bool;
     fn start_clip(&mut self, clip: &TimelineClip, current_time: f32) -> bool;
     fn stop_clip(&mut self, clip_id: &str);

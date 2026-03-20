@@ -22,3 +22,4 @@ pollster = { workspace = true }
 rfd = "0.15"
 serde = { workspace = true }
 serde_json = { workspace = true }
+crossbeam-channel = "0.5"

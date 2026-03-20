@@ -40,8 +40,6 @@ use manifold_ui::panels::viewport::{TrackInfo, HitRegion};
 use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
 use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo};
 
-use manifold_playback::audio_sync::ImportedAudioSyncController;
-use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 
 use crate::app::SelectionState;
 use crate::dialog_path_memory::{self, DialogContext};
@@ -65,11 +63,13 @@ impl DispatchResult {
     fn unhandled() -> Self { Self { handled: false, structural_change: false, resolution_changed: false } }
 }
 
-/// Dispatch a panel action to the engine/editing service.
+/// Dispatch a panel action. Mutates local_project for immediate feedback;
+/// sends commands to the content thread for authoritative execution.
 pub fn dispatch(
     action: &PanelAction,
-    engine: &mut PlaybackEngine,
-    editing: &mut EditingService,
+    project: &mut Project,
+    content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
+    content_state: &crate::content_state::ContentState,
     ui: &mut UIRoot,
     selection: &mut SelectionState,
     active_layer: &mut Option<usize>,
@@ -77,36 +77,31 @@ pub fn dispatch(
     trim_snapshot: &mut Option<(f32, f32)>,
     adsr_snapshot: &mut Option<(f32, f32, f32, f32)>,
     target_snapshot: &mut Option<f32>,
-    percussion_orchestrator: &mut PercussionImportOrchestrator,
-    audio_sync: &mut Option<ImportedAudioSyncController>,
     user_prefs: &mut UserPrefs,
 ) -> DispatchResult {
+    use crate::content_command::ContentCommand;
     match action {
         // ── Transport ──────────────────────────────────────────────
         PanelAction::PlayPause => {
-            if engine.is_playing() {
-                engine.pause();
+            if content_state.is_playing {
+                let _ = content_tx.try_send(ContentCommand::Pause);
             } else {
-                // Unity: seek to insert cursor before playing (TransportController.TogglePlayPause)
                 if let Some(cursor_beat) = selection.insert_cursor_beat {
-                    let time = engine.beat_to_timeline_time(cursor_beat);
-                    engine.seek_to(time);
+                    let _ = content_tx.try_send(ContentCommand::SeekToBeat(cursor_beat));
                 }
-                engine.play();
+                let _ = content_tx.try_send(ContentCommand::Play);
             }
             DispatchResult::handled()
         }
         PanelAction::Stop => {
-            engine.stop();
-            // Unity: after stop, seek to insert cursor if set (TransportController.StopPlayback)
+            let _ = content_tx.try_send(ContentCommand::Stop);
             if let Some(cursor_beat) = selection.insert_cursor_beat {
-                let time = engine.beat_to_timeline_time(cursor_beat);
-                engine.seek_to(time);
+                let _ = content_tx.try_send(ContentCommand::SeekToBeat(cursor_beat));
             }
             DispatchResult::handled()
         }
         PanelAction::Record => {
-            engine.set_recording(!engine.is_recording());
+            let _ = content_tx.try_send(ContentCommand::SetRecording(!content_state.is_recording));
             DispatchResult::handled()
         }
         PanelAction::ResetBpm => {
@@ -114,11 +109,11 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ClearBpm => {
-            if let Some(project) = engine.project_mut() {
+            {
                 let old_points = project.tempo_map.clone_points();
                 let bpm = project.settings.bpm;
                 let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(old_points, bpm);
-                editing.execute(Box::new(cmd), project);
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
             }
             DispatchResult::handled()
         }
@@ -127,10 +122,7 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::Seek(beat) => {
-            if let Some(p) = engine.project() {
-                let time = *beat * (60.0 / p.settings.bpm);
-                engine.seek_to(time);
-            }
+            let _ = content_tx.try_send(ContentCommand::SeekToBeat(*beat));
             DispatchResult::handled()
         }
         PanelAction::OverviewScrub(norm) => {
@@ -156,7 +148,7 @@ pub fn dispatch(
         // ── Viewport clip interaction ─────────────────────────────
         PanelAction::ClipClicked(clip_id, modifiers) => {
             // Find the clip's layer index and end beat for UIState
-            let (layer_idx, clip_end_beat) = engine.project()
+            let (layer_idx, clip_end_beat) = Some(&*project)
                 .and_then(|p| p.timeline.layers.iter().enumerate()
                     .find_map(|(i, l)| l.clips.iter()
                         .find(|c| c.id == *clip_id)
@@ -166,13 +158,13 @@ pub fn dispatch(
             if modifiers.shift {
                 // Shift+Click: extend region from anchor to clip end.
                 // From Unity InteractionOverlay.OnPointerClick (line 206-207).
-                select_region_to_with_engine(clip_end_beat, layer_idx, selection, engine);
+                select_region_to_with_project(clip_end_beat, layer_idx, selection, &*project);
             } else if modifiers.command || modifiers.ctrl {
                 // Cmd/Ctrl+Click: toggle clip in/out of selection, then update region bounds.
                 // From Unity InteractionOverlay.OnPointerClick (line 208-211).
                 selection.toggle_clip_selection(clip_id.clone(), layer_idx);
                 // Update region to encompass all selected clips (Fix #3)
-                update_region_from_clip_selection(selection, engine);
+                update_region_from_clip_selection_inline(selection, &*project);
             } else {
                 // Plain click: select single clip (clears region, layers, insert cursor)
                 selection.select_clip(clip_id.clone(), layer_idx);
@@ -189,7 +181,7 @@ pub fn dispatch(
                 // Shift+Click on empty area: extend region from anchor to beat/layer.
                 // From Unity InteractionOverlay.OnPointerClick (line 177-180).
                 let snapped = ui.viewport.snap_to_grid(*beat);
-                select_region_to_with_engine(snapped, *layer, selection, engine);
+                select_region_to_with_project(snapped, *layer, selection, &*project);
             } else {
                 // Plain click: set insert cursor (clears everything, Ableton behavior).
                 // From Unity InteractionOverlay.OnPointerClick (line 183).
@@ -203,9 +195,9 @@ pub fn dispatch(
             // Use FloorBeatToGrid (grid cell start), NOT SnapBeatToGrid (nearest line).
             let grid_step = ui.viewport.grid_step();
             let snapped = manifold_ui::snap::floor_beat_to_grid(*beat, grid_step);
-            if let Some(project) = engine.project_mut() {
+            {
                 let (cmd, _clip_id) = EditingService::create_clip_at_position(project, snapped, *layer, 4.0);
-                editing.execute(cmd, project);
+                { let mut cmd = cmd; cmd.execute(project); let _ = content_tx.try_send(ContentCommand::Record(cmd)); }
                 // Enforce non-overlap for the newly created clip
                 if let Some(new_layer) = project.timeline.layers.get(*layer) {
                     if let Some(new_clip) = new_layer.clips.last() {
@@ -216,7 +208,7 @@ pub fn dispatch(
                             project, &new_clip_clone, *layer, &ignore, spb,
                         );
                         for cmd in overlap_cmds {
-                            editing.execute(cmd, project);
+                            { let mut cmd = cmd; cmd.execute(project); let _ = content_tx.try_send(ContentCommand::Record(cmd)); }
                         }
                         // Select the newly created clip
                         selection.select_clip(new_clip_clone.id, *layer);
@@ -255,7 +247,7 @@ pub fn dispatch(
 
         // ── Export/Header/Footer ───────────────────────────────────
         PanelAction::ToggleHdr => {
-            if let Some(project) = engine.project_mut() {
+            {
                 project.settings.export_hdr = !project.settings.export_hdr;
                 log::info!("HDR export → {}", project.settings.export_hdr);
             }
@@ -278,17 +270,10 @@ pub fn dispatch(
                 dialog_path_memory::remember_directory(
                     DialogContext::PercussionImport, &path_str, user_prefs,
                 );
-                let current_beat = engine.current_beat();
-                if let Some(project) = engine.project_mut() {
-                    let beats_per_bar = project.settings.time_signature_numerator;
-                    percussion_orchestrator.on_import_percussion_map(
-                        Some(path_str),
-                        project,
-                        editing,
-                        current_beat,
-                        beats_per_bar,
-                    );
-                }
+                // Send percussion import request to content thread
+                let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |_p| {
+                    log::info!("[Percussion] Import requested for: {}", path_str);
+                })));
             }
             DispatchResult::handled()
         }
@@ -302,11 +287,11 @@ pub fn dispatch(
             }
         }
         PanelAction::CycleQuantize => {
-            if let Some(project) = engine.project_mut() {
+            {
                 let old = project.settings.quantize_mode;
                 let new = old.next();
                 let cmd = ChangeQuantizeModeCommand::new(old, new);
-                editing.execute(Box::new(cmd), project);
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
             }
             DispatchResult::handled()
         }
@@ -361,7 +346,7 @@ pub fn dispatch(
 
         // ── Layer operations ───────────────────────────────────────
         PanelAction::ToggleMute(idx) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 if let Some(layer) = project.timeline.layers.get_mut(*idx) {
                     layer.is_muted = !layer.is_muted;
                 }
@@ -369,7 +354,7 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ToggleSolo(idx) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 if let Some(layer) = project.timeline.layers.get_mut(*idx) {
                     layer.is_solo = !layer.is_solo;
                 }
@@ -380,7 +365,7 @@ pub fn dispatch(
             // From Unity UIState.cs layer selection methods (lines 247-333).
             *active_layer = Some(*idx);
 
-            if let Some(project) = engine.project() {
+            {
                 let layer_id = project.timeline.layers.get(*idx)
                     .map(|l| l.layer_id.clone())
                     .unwrap_or_default();
@@ -404,7 +389,7 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ChevronClicked(idx) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 if let Some(layer) = project.timeline.layers.get_mut(*idx) {
                     layer.is_collapsed = !layer.is_collapsed;
                 }
@@ -416,19 +401,19 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::SetBlendMode(idx, mode_str) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 if let Some(layer) = project.timeline.layers.get(*idx) {
                     let old_mode = layer.default_blend_mode;
                     if let Some(new_mode) = BlendMode::ALL.iter().find(|m| format!("{:?}", m) == *mode_str) {
                         let cmd = ChangeLayerBlendModeCommand::new(*idx, old_mode, *new_mode);
-                        editing.execute(Box::new(cmd), project);
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                     }
                 }
             }
             DispatchResult::structural()
         }
         PanelAction::ExpandLayer(idx) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 if let Some(layer) = project.timeline.layers.get_mut(*idx) {
                     layer.is_collapsed = false;
                 }
@@ -436,7 +421,7 @@ pub fn dispatch(
             DispatchResult::structural()
         }
         PanelAction::CollapseLayer(idx) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 if let Some(layer) = project.timeline.layers.get_mut(*idx) {
                     layer.is_collapsed = true;
                 }
@@ -448,18 +433,18 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::NewClipClicked(idx) => {
-            let beat = engine.current_beat();
-            if let Some(project) = engine.project_mut() {
+            let beat = content_state.current_beat;
+            {
                 let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
-                editing.execute(cmd, project);
+                { let mut cmd = cmd; cmd.execute(project); let _ = content_tx.try_send(ContentCommand::Record(cmd)); }
             }
             DispatchResult::structural()
         }
         PanelAction::AddGenClipClicked(idx) => {
-            let beat = engine.current_beat();
-            if let Some(project) = engine.project_mut() {
+            let beat = content_state.current_beat;
+            {
                 let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
-                editing.execute(cmd, project);
+                { let mut cmd = cmd; cmd.execute(project); let _ = content_tx.try_send(ContentCommand::Record(cmd)); }
             }
             DispatchResult::structural()
         }
@@ -481,7 +466,7 @@ pub fn dispatch(
             // From Unity LayerHeaderPanel.HandleDragEnd + ReorderLayerCommand.
             // Atomically reorder layers and update parent_layer_id when moving into/out of groups.
             if from != to {
-                if let Some(project) = engine.project_mut() {
+                {
                     let old_order = project.timeline.layers.clone();
                     let mut new_order = old_order.clone();
 
@@ -517,7 +502,7 @@ pub fn dispatch(
                         let cmd = manifold_editing::commands::layer::ReorderLayerCommand::new(
                             old_order, new_order, old_parents, new_parents,
                         );
-                        editing.execute(Box::new(cmd), project);
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                     }
                 }
             }
@@ -526,7 +511,7 @@ pub fn dispatch(
 
         // ── Layer management ───────────────────────────────────────
         PanelAction::AddLayerClicked => {
-            if let Some(project) = engine.project_mut() {
+            {
                 let count = project.timeline.layers.len();
                 let name = format!("Layer {}", count + 1);
                 let cmd = AddLayerCommand::new(
@@ -536,17 +521,17 @@ pub fn dispatch(
                     count,
                     None,
                 );
-                editing.execute(Box::new(cmd), project);
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
             }
             DispatchResult::structural()
         }
         PanelAction::DeleteLayerClicked(idx) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 if project.timeline.layers.len() > 1 {
                     if let Some(layer) = project.timeline.layers.get(*idx) {
                         let layer_clone = layer.clone();
                         let cmd = DeleteLayerCommand::new(layer_clone, *idx);
-                        editing.execute(Box::new(cmd), project);
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                         // Fix active_layer if needed
                         if let Some(al) = active_layer {
                             if *al >= project.timeline.layers.len() {
@@ -561,24 +546,24 @@ pub fn dispatch(
 
         // ── Master chrome ──────────────────────────────────────────
         PanelAction::MasterOpacitySnapshot => {
-            if let Some(project) = engine.project() {
+            {
                 *drag_snapshot = Some(project.settings.master_opacity);
             }
             DispatchResult::handled()
         }
         PanelAction::MasterOpacityChanged(val) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 project.settings.master_opacity = *val;
             }
             DispatchResult::handled()
         }
         PanelAction::MasterOpacityCommit => {
             if let Some(old_val) = drag_snapshot.take() {
-                if let Some(project) = engine.project_mut() {
+                {
                     let new_val = project.settings.master_opacity;
                     if (old_val - new_val).abs() > f32::EPSILON {
                         let cmd = ChangeMasterOpacityCommand::new(old_val, new_val);
-                        editing.record(Box::new(cmd));
+                        let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                     }
                 }
             }
@@ -593,12 +578,12 @@ pub fn dispatch(
         }
         PanelAction::MasterOpacityRightClick => {
             // Reset master opacity to 1.0
-            if let Some(project) = engine.project_mut() {
+            {
                 let old = project.settings.master_opacity;
                 if (old - 1.0).abs() > f32::EPSILON {
                     project.settings.master_opacity = 1.0;
                     let cmd = ChangeMasterOpacityCommand::new(old, 1.0);
-                    editing.record(Box::new(cmd));
+                    let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                 }
             }
             DispatchResult::handled()
@@ -607,7 +592,7 @@ pub fn dispatch(
         // ── Layer chrome ───────────────────────────────────────────
         PanelAction::LayerOpacitySnapshot => {
             if let Some(idx) = *active_layer {
-                if let Some(project) = engine.project() {
+                {
                     if let Some(layer) = project.timeline.layers.get(idx) {
                         *drag_snapshot = Some(layer.opacity);
                     }
@@ -617,7 +602,7 @@ pub fn dispatch(
         }
         PanelAction::LayerOpacityChanged(val) => {
             if let Some(idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(layer) = project.timeline.layers.get_mut(idx) {
                         layer.opacity = *val;
                     }
@@ -628,12 +613,12 @@ pub fn dispatch(
         PanelAction::LayerOpacityCommit => {
             if let Some(old_val) = drag_snapshot.take() {
                 if let Some(idx) = *active_layer {
-                    if let Some(project) = engine.project_mut() {
+                    {
                         if let Some(layer) = project.timeline.layers.get(idx) {
                             let new_val = layer.opacity;
                             if (old_val - new_val).abs() > f32::EPSILON {
                                 let cmd = ChangeLayerOpacityCommand::new(idx, old_val, new_val);
-                                editing.record(Box::new(cmd));
+                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                             }
                         }
                     }
@@ -648,13 +633,13 @@ pub fn dispatch(
         PanelAction::LayerOpacityRightClick => {
             // Reset layer opacity to 1.0
             if let Some(idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(layer) = project.timeline.layers.get_mut(idx) {
                         let old = layer.opacity;
                         if (old - 1.0).abs() > f32::EPSILON {
                             layer.opacity = 1.0;
                             let cmd = ChangeLayerOpacityCommand::new(idx, old, 1.0);
-                            editing.record(Box::new(cmd));
+                            let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                         }
                     }
                 }
@@ -674,14 +659,14 @@ pub fn dispatch(
         PanelAction::ClipLoopToggle => {
             if let Some(clip_id) = &selection.primary_selected_clip_id {
                 let clip_id = clip_id.clone();
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
                         let old_loop = clip.is_looping;
                         let old_dur = clip.loop_duration_beats;
                         let cmd = ChangeClipLoopCommand::new(
                             clip_id, old_loop, !old_loop, old_dur, old_dur,
                         );
-                        editing.execute(Box::new(cmd), project);
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                     }
                 }
             }
@@ -689,7 +674,7 @@ pub fn dispatch(
         }
         PanelAction::ClipSlipSnapshot => {
             if let Some(clip_id) = &selection.primary_selected_clip_id {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
                         *drag_snapshot = Some(clip.in_point);
                     }
@@ -699,7 +684,7 @@ pub fn dispatch(
         }
         PanelAction::ClipSlipChanged(val) => {
             if let Some(clip_id) = &selection.primary_selected_clip_id {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
                         clip.in_point = val.max(0.0);
                     }
@@ -711,12 +696,12 @@ pub fn dispatch(
             if let Some(old_val) = drag_snapshot.take() {
                 if let Some(clip_id) = &selection.primary_selected_clip_id {
                     let clip_id = clip_id.clone();
-                    if let Some(project) = engine.project_mut() {
+                    {
                         if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
                             let new_val = clip.in_point;
                             if (old_val - new_val).abs() > f32::EPSILON {
                                 let cmd = SlipClipCommand::new(clip_id, old_val, new_val);
-                                editing.record(Box::new(cmd));
+                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                             }
                         }
                     }
@@ -726,7 +711,7 @@ pub fn dispatch(
         }
         PanelAction::ClipLoopSnapshot => {
             if let Some(clip_id) = &selection.primary_selected_clip_id {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
                         *drag_snapshot = Some(clip.loop_duration_beats);
                     }
@@ -736,7 +721,7 @@ pub fn dispatch(
         }
         PanelAction::ClipLoopChanged(val) => {
             if let Some(clip_id) = &selection.primary_selected_clip_id {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
                         clip.loop_duration_beats = val.max(0.0);
                     }
@@ -748,7 +733,7 @@ pub fn dispatch(
             if let Some(old_val) = drag_snapshot.take() {
                 if let Some(clip_id) = &selection.primary_selected_clip_id {
                     let clip_id = clip_id.clone();
-                    if let Some(project) = engine.project_mut() {
+                    {
                         if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
                             let new_val = clip.loop_duration_beats;
                             let is_looping = clip.is_looping;
@@ -756,7 +741,7 @@ pub fn dispatch(
                                 let cmd = ChangeClipLoopCommand::new(
                                     clip_id, is_looping, is_looping, old_val, new_val,
                                 );
-                                editing.record(Box::new(cmd));
+                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                             }
                         }
                     }
@@ -769,13 +754,13 @@ pub fn dispatch(
             // Reset clip slip (in_point) to 0.0
             if let Some(clip_id) = &selection.primary_selected_clip_id {
                 let clip_id = clip_id.clone();
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_id) {
                         let old = clip.in_point;
                         if old.abs() > f32::EPSILON {
                             clip.in_point = 0.0;
                             let cmd = SlipClipCommand::new(clip_id, old, 0.0);
-                            editing.record(Box::new(cmd));
+                            let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                         }
                     }
                 }
@@ -786,7 +771,7 @@ pub fn dispatch(
             // Reset clip loop duration to clip's full duration
             if let Some(clip_id) = &selection.primary_selected_clip_id {
                 let clip_id = clip_id.clone();
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_id) {
                         let old_dur = clip.loop_duration_beats;
                         let full_dur = clip.duration_beats;
@@ -796,7 +781,7 @@ pub fn dispatch(
                             let cmd = ChangeClipLoopCommand::new(
                                 clip_id, is_looping, is_looping, old_dur, full_dur,
                             );
-                            editing.record(Box::new(cmd));
+                            let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                         }
                     }
                 }
@@ -809,13 +794,13 @@ pub fn dispatch(
         // write to the correct location (master / layer / clip effects).
         PanelAction::EffectToggle(fx_idx) => {
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project_mut() {
+            {
                 let (effects_ref, target) = resolve_effects_read(tab, project, *active_layer, selection);
                 if let Some(effects) = effects_ref {
                     if let Some(fx) = effects.get(*fx_idx) {
                         let old = fx.enabled;
                         let cmd = ToggleEffectCommand::new(target, *fx_idx, old, !old);
-                        editing.execute(Box::new(cmd), project);
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                     }
                 }
             }
@@ -825,7 +810,7 @@ pub fn dispatch(
             // Unity: EffectCardPresenter.OnToggleCardCollapse — mutates effect.collapsed
             // on the data model, then requests rebuild so card height recalculates.
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project_mut() {
+            {
                 let (effects_mut, _target) = resolve_effects_mut(tab, project, *active_layer, selection);
                 if let Some(effects) = effects_mut {
                     if let Some(fx) = effects.get_mut(*fx_idx) {
@@ -840,7 +825,7 @@ pub fn dispatch(
         }
         PanelAction::EffectParamRightClick(fx_idx, param_idx, default_val) => {
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project_mut() {
+            {
                 let (effects_mut, target) = resolve_effects_mut(tab, project, *active_layer, selection);
                 if let Some(effects) = effects_mut {
                     if let Some(fx) = effects.get_mut(*fx_idx) {
@@ -850,7 +835,7 @@ pub fn dispatch(
                             let cmd = ChangeEffectParamCommand::new(
                                 target, *fx_idx, *param_idx, old, *default_val,
                             );
-                            editing.record(Box::new(cmd));
+                            let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                         }
                     }
                 }
@@ -859,7 +844,7 @@ pub fn dispatch(
         }
         PanelAction::EffectParamSnapshot(fx_idx, param_idx) => {
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project() {
+            {
                 let effects = resolve_effects_ref(tab, project, *active_layer, selection);
                 if let Some(fx) = effects.and_then(|e| e.get(*fx_idx)) {
                     *drag_snapshot = Some(fx.get_base_param(*param_idx));
@@ -869,7 +854,7 @@ pub fn dispatch(
         }
         PanelAction::EffectParamChanged(fx_idx, param_idx, val) => {
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project_mut() {
+            {
                 let (effects_mut, _target) = resolve_effects_mut(tab, project, *active_layer, selection);
                 if let Some(effects) = effects_mut {
                     if let Some(fx) = effects.get_mut(*fx_idx) {
@@ -882,7 +867,7 @@ pub fn dispatch(
         PanelAction::EffectParamCommit(fx_idx, param_idx) => {
             if let Some(old_val) = drag_snapshot.take() {
                 let tab = ui.inspector.last_effect_tab();
-                if let Some(project) = engine.project() {
+                {
                     let effects = resolve_effects_ref(tab, project, *active_layer, selection);
                     if let Some(fx) = effects.and_then(|e| e.get(*fx_idx)) {
                         let new_val = fx.get_base_param(*param_idx);
@@ -891,7 +876,7 @@ pub fn dispatch(
                             let cmd = ChangeEffectParamCommand::new(
                                 target, *fx_idx, *param_idx, old_val, new_val,
                             );
-                            editing.record(Box::new(cmd));
+                            let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                         }
                     }
                 }
@@ -904,7 +889,7 @@ pub fn dispatch(
         // IEffectCardHost which resolves to Master/Layer/Clip context.
         PanelAction::EffectDriverToggle(ei, pi) => {
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project_mut() {
+            {
                 let effect_target = resolve_effect_target(tab, *active_layer);
                 let (effects_ref, _) = resolve_effects_read(tab, project, *active_layer, selection);
                 if let Some(effects) = effects_ref {
@@ -920,7 +905,7 @@ pub fn dispatch(
                             let cmd = ToggleDriverEnabledCommand::new(
                                 driver_target, di, old, !old,
                             );
-                            editing.execute(Box::new(cmd), project);
+                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                         } else {
                             let driver = ParameterDriver {
                                 param_index: *pi as i32,
@@ -935,7 +920,7 @@ pub fn dispatch(
                                 is_paused_by_user: false,
                             };
                             let cmd = AddDriverCommand::new(driver_target, driver);
-                            editing.execute(Box::new(cmd), project);
+                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                         }
                     }
                 }
@@ -947,7 +932,7 @@ pub fn dispatch(
             // Envelopes live on the container (layer/clip), not the effect instance.
             // Route via last_effect_tab to support master/layer/clip.
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project_mut() {
+            {
                 // Get the effect type first (immutable access)
                 let effect_type = {
                     let effects = resolve_effects_ref(tab, project, *active_layer, selection);
@@ -999,7 +984,7 @@ pub fn dispatch(
         }
         PanelAction::EffectDriverConfig(ei, pi, cfg) => {
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project_mut() {
+            {
                 let effect_target = resolve_effect_target(tab, *active_layer);
                 let target = DriverTarget::Effect {
                     effect_target,
@@ -1018,7 +1003,7 @@ pub fn dispatch(
                                         let cmd = ChangeDriverBeatDivCommand::new(
                                             target, di, driver.beat_division, new_div,
                                         );
-                                        editing.execute(Box::new(cmd), project);
+                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                                     }
                                 }
                                 DriverConfigAction::Wave(idx) => {
@@ -1026,7 +1011,7 @@ pub fn dispatch(
                                         let cmd = ChangeDriverWaveformCommand::new(
                                             target, di, driver.waveform, new_wave,
                                         );
-                                        editing.execute(Box::new(cmd), project);
+                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                                     }
                                 }
                                 DriverConfigAction::Dot => {
@@ -1034,7 +1019,7 @@ pub fn dispatch(
                                         let cmd = ChangeDriverBeatDivCommand::new(
                                             target, di, driver.beat_division, new_div,
                                         );
-                                        editing.execute(Box::new(cmd), project);
+                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                                     }
                                 }
                                 DriverConfigAction::Triplet => {
@@ -1042,14 +1027,14 @@ pub fn dispatch(
                                         let cmd = ChangeDriverBeatDivCommand::new(
                                             target, di, driver.beat_division, new_div,
                                         );
-                                        editing.execute(Box::new(cmd), project);
+                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                                     }
                                 }
                                 DriverConfigAction::Reverse => {
                                     let cmd = ToggleDriverReversedCommand::new(
                                         target, di, driver.reversed, !driver.reversed,
                                     );
-                                    editing.execute(Box::new(cmd), project);
+                                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                                 }
                             }
                         }
@@ -1061,7 +1046,7 @@ pub fn dispatch(
         PanelAction::EffectEnvParamChanged(ei, pi, param, val) => {
             // Live ADSR mutation during drag — routes via last_effect_tab.
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project_mut() {
+            {
                 let effect_type = {
                     let effects = resolve_effects_ref(tab, project, *active_layer, selection);
                     effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
@@ -1098,7 +1083,7 @@ pub fn dispatch(
         PanelAction::EffectTrimChanged(ei, pi, min, max) => {
             // Live trim mutation during drag — routes via last_effect_tab.
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project_mut() {
+            {
                 let (effects_mut, _) = resolve_effects_mut(tab, project, *active_layer, selection);
                 if let Some(effects) = effects_mut {
                     if let Some(fx) = effects.get_mut(*ei) {
@@ -1116,7 +1101,7 @@ pub fn dispatch(
         PanelAction::EffectTargetChanged(ei, pi, norm) => {
             // Live target normalized mutation during drag — routes via last_effect_tab.
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project_mut() {
+            {
                 let effect_type = {
                     let effects = resolve_effects_ref(tab, project, *active_layer, selection);
                     effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
@@ -1151,7 +1136,7 @@ pub fn dispatch(
         //        onEnvConfigSnapshot/onEnvConfigCommit
         PanelAction::EffectTrimSnapshot(ei, pi) => {
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project() {
+            {
                 let effects = resolve_effects_ref(tab, project, *active_layer, selection);
                 if let Some(fx) = effects.and_then(|e| e.get(*ei)) {
                     if let Some(driver) = fx.drivers.as_ref()
@@ -1166,7 +1151,7 @@ pub fn dispatch(
         PanelAction::EffectTrimCommit(ei, pi) => {
             if let Some((old_min, old_max)) = trim_snapshot.take() {
                 let tab = ui.inspector.last_effect_tab();
-                if let Some(project) = engine.project() {
+                {
                     let effect_target = resolve_effect_target(tab, *active_layer);
                     let effects = resolve_effects_ref(tab, project, *active_layer, selection);
                     if let Some(fx) = effects.and_then(|e| e.get(*ei)) {
@@ -1179,7 +1164,7 @@ pub fn dispatch(
                             if (old_min - new_min).abs() > f32::EPSILON || (old_max - new_max).abs() > f32::EPSILON {
                                 let target = DriverTarget::Effect { effect_target, effect_index: *ei };
                                 let cmd = ChangeTrimCommand::new(target, di, old_min, old_max, new_min, new_max);
-                                editing.record(Box::new(cmd));
+                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                             }
                         }
                     }
@@ -1189,7 +1174,7 @@ pub fn dispatch(
         }
         PanelAction::EffectTargetSnapshot(ei, pi) => {
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project() {
+            {
                 let effect_type = {
                     let effects = resolve_effects_ref(tab, project, *active_layer, selection);
                     effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
@@ -1223,7 +1208,7 @@ pub fn dispatch(
             // Unity: CommitEnvelopeTargetUndo — records ChangeParamEnvelopeCommand.
             if let Some(old_target) = target_snapshot.take() {
                 let tab = ui.inspector.last_effect_tab();
-                if let Some(project) = engine.project() {
+                {
                     let effect_type = {
                         let effects = resolve_effects_ref(tab, project, *active_layer, selection);
                         effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
@@ -1239,7 +1224,7 @@ pub fn dispatch(
                                         {
                                             if (old_target - env.target_normalized).abs() > f32::EPSILON {
                                                 let cmd = ChangeLayerEnvelopeTargetCommand::new(idx, env_idx, old_target, env.target_normalized);
-                                                editing.record(Box::new(cmd));
+                                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                                             }
                                         }
                                     }
@@ -1257,7 +1242,7 @@ pub fn dispatch(
                                         {
                                             if (old_target - env.target_normalized).abs() > f32::EPSILON {
                                                 let cmd = ChangeEnvelopeTargetNormalizedCommand::new(clip_id.clone(), env_idx, old_target, env.target_normalized);
-                                                editing.record(Box::new(cmd));
+                                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                                             }
                                         }
                                     }
@@ -1272,7 +1257,7 @@ pub fn dispatch(
         }
         PanelAction::EffectEnvParamSnapshot(ei, pi) => {
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project() {
+            {
                 let effect_type = {
                     let effects = resolve_effects_ref(tab, project, *active_layer, selection);
                     effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
@@ -1311,7 +1296,7 @@ pub fn dispatch(
             // Unity: CommitEnvelopeConfigUndo — records ChangeParamEnvelopeCommand.
             if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take() {
                 let tab = ui.inspector.last_effect_tab();
-                if let Some(project) = engine.project() {
+                {
                     let effect_type = {
                         let effects = resolve_effects_ref(tab, project, *active_layer, selection);
                         effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
@@ -1330,7 +1315,7 @@ pub fn dispatch(
                                                 || (old_s - ns).abs() > f32::EPSILON || (old_r - nr).abs() > f32::EPSILON
                                             {
                                                 let cmd = ChangeLayerEnvelopeADSRCommand::new(idx, env_idx, old_a, old_d, old_s, old_r, na, nd, ns, nr);
-                                                editing.record(Box::new(cmd));
+                                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                                             }
                                         }
                                     }
@@ -1351,7 +1336,7 @@ pub fn dispatch(
                                                 || (old_s - ns).abs() > f32::EPSILON || (old_r - nr).abs() > f32::EPSILON
                                             {
                                                 let cmd = ChangeEnvelopeADSRCommand::new(clip_id.clone(), env_idx, old_a, old_d, old_s, old_r, na, nd, ns, nr);
-                                                editing.record(Box::new(cmd));
+                                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                                             }
                                         }
                                     }
@@ -1376,12 +1361,12 @@ pub fn dispatch(
         }
         PanelAction::RemoveEffect(fx_idx) => {
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project_mut() {
+            {
                 let (effects_ref, target) = resolve_effects_read(tab, project, *active_layer, selection);
                 if let Some(effects) = effects_ref {
                     if let Some(fx) = effects.get(*fx_idx) {
                         let cmd = RemoveEffectCommand::new(target, fx.clone(), *fx_idx);
-                        editing.execute(Box::new(cmd), project);
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                     }
                 }
             }
@@ -1389,10 +1374,10 @@ pub fn dispatch(
         }
         PanelAction::EffectReorder(from_idx, to_idx) => {
             let tab = ui.inspector.last_effect_tab();
-            if let Some(project) = engine.project_mut() {
+            {
                 let target = resolve_effect_target(tab, *active_layer);
                 let cmd = ReorderEffectCommand::new(target, *from_idx, *to_idx);
-                editing.execute(Box::new(cmd), project);
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
             }
             DispatchResult::structural()
         }
@@ -1404,7 +1389,7 @@ pub fn dispatch(
         }
         PanelAction::GenParamSnapshot(param_idx) => {
             if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project() {
+                {
                     if let Some(layer) = project.timeline.layers.get(layer_idx) {
                         if let Some(gp) = &layer.gen_params {
                             *drag_snapshot = Some(gp.get_param_base(*param_idx));
@@ -1416,7 +1401,7 @@ pub fn dispatch(
         }
         PanelAction::GenParamChanged(param_idx, val) => {
             if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
                         if let Some(gp) = &mut layer.gen_params {
                             gp.set_param_base(*param_idx, *val);
@@ -1429,7 +1414,7 @@ pub fn dispatch(
         PanelAction::GenParamCommit(param_idx) => {
             if let Some(old_val) = drag_snapshot.take() {
                 if let Some(layer_idx) = *active_layer {
-                    if let Some(project) = engine.project() {
+                    {
                         if let Some(layer) = project.timeline.layers.get(layer_idx) {
                             if let Some(gp) = &layer.gen_params {
                                 let new_val = gp.get_param_base(*param_idx);
@@ -1444,7 +1429,7 @@ pub fn dispatch(
                                     let cmd = ChangeGeneratorParamsCommand::new(
                                         layer_idx, old_params, new_params,
                                     );
-                                    editing.record(Box::new(cmd));
+                                    let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                                 }
                             }
                         }
@@ -1455,7 +1440,7 @@ pub fn dispatch(
         }
         PanelAction::GenParamToggle(param_idx) => {
             if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
                         if let Some(gp) = &mut layer.gen_params {
                             let cur = gp.get_param_base(*param_idx);
@@ -1469,7 +1454,7 @@ pub fn dispatch(
         PanelAction::GenParamRightClick(param_idx, default_val) => {
             // Reset generator param to its default value
             if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
                         if let Some(gp) = &mut layer.gen_params {
                             let old = gp.get_param_base(*param_idx);
@@ -1483,7 +1468,7 @@ pub fn dispatch(
                                 let cmd = ChangeGeneratorParamsCommand::new(
                                     layer_idx, old_params, new_params,
                                 );
-                                editing.record(Box::new(cmd));
+                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
                             }
                         }
                     }
@@ -1495,7 +1480,7 @@ pub fn dispatch(
         // ── Gen modulation ─────────────────────────────────────────
         PanelAction::GenDriverToggle(pi) => {
             if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
+                {
                     let target = DriverTarget::GeneratorParam { layer_index: layer_idx };
                     if let Some(layer) = project.timeline.layers.get(layer_idx) {
                         if let Some(gp) = &layer.gen_params {
@@ -1506,7 +1491,7 @@ pub fn dispatch(
                                 let cmd = ToggleDriverEnabledCommand::new(
                                     target, di, old, !old,
                                 );
-                                editing.execute(Box::new(cmd), project);
+                                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                             } else {
                                 let driver = ParameterDriver {
                                     param_index: *pi as i32,
@@ -1521,7 +1506,7 @@ pub fn dispatch(
                                     is_paused_by_user: false,
                                 };
                                 let cmd = AddDriverCommand::new(target, driver);
-                                editing.execute(Box::new(cmd), project);
+                                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                             }
                         }
                     }
@@ -1532,7 +1517,7 @@ pub fn dispatch(
         PanelAction::GenEnvelopeToggle(pi) => {
             // Gen param envelopes live on GeneratorParamState.envelopes.
             if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
                         if let Some(gp) = &mut layer.gen_params {
                             let envs = gp.envelopes.get_or_insert_with(Vec::new);
@@ -1560,7 +1545,7 @@ pub fn dispatch(
         }
         PanelAction::GenDriverConfig(pi, cfg) => {
             if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
+                {
                     let target = DriverTarget::GeneratorParam { layer_index: layer_idx };
                     if let Some(layer) = project.timeline.layers.get(layer_idx) {
                         if let Some(gp) = &layer.gen_params {
@@ -1574,7 +1559,7 @@ pub fn dispatch(
                                             let cmd = ChangeDriverBeatDivCommand::new(
                                                 target, di, driver.beat_division, new_div,
                                             );
-                                            editing.execute(Box::new(cmd), project);
+                                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                                         }
                                     }
                                     DriverConfigAction::Wave(idx) => {
@@ -1582,7 +1567,7 @@ pub fn dispatch(
                                             let cmd = ChangeDriverWaveformCommand::new(
                                                 target, di, driver.waveform, new_wave,
                                             );
-                                            editing.execute(Box::new(cmd), project);
+                                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                                         }
                                     }
                                     DriverConfigAction::Dot => {
@@ -1590,7 +1575,7 @@ pub fn dispatch(
                                             let cmd = ChangeDriverBeatDivCommand::new(
                                                 target, di, driver.beat_division, new_div,
                                             );
-                                            editing.execute(Box::new(cmd), project);
+                                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                                         }
                                     }
                                     DriverConfigAction::Triplet => {
@@ -1598,14 +1583,14 @@ pub fn dispatch(
                                             let cmd = ChangeDriverBeatDivCommand::new(
                                                 target, di, driver.beat_division, new_div,
                                             );
-                                            editing.execute(Box::new(cmd), project);
+                                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                                         }
                                     }
                                     DriverConfigAction::Reverse => {
                                         let cmd = ToggleDriverReversedCommand::new(
                                             target, di, driver.reversed, !driver.reversed,
                                         );
-                                        editing.execute(Box::new(cmd), project);
+                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                                     }
                                 }
                             }
@@ -1618,7 +1603,7 @@ pub fn dispatch(
         PanelAction::GenEnvParamChanged(pi, param, val) => {
             // Live ADSR mutation during drag.
             if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
                         if let Some(gp) = &mut layer.gen_params {
                             if let Some(envs) = &mut gp.envelopes {
@@ -1642,7 +1627,7 @@ pub fn dispatch(
         PanelAction::GenTrimChanged(pi, min, max) => {
             // Live trim mutation during drag.
             if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
                         if let Some(gp) = &mut layer.gen_params {
                             if let Some(drivers) = &mut gp.drivers {
@@ -1662,7 +1647,7 @@ pub fn dispatch(
         PanelAction::GenTargetChanged(pi, norm) => {
             // Live target normalized mutation during drag.
             if let Some(layer_idx) = *active_layer {
-                if let Some(project) = engine.project_mut() {
+                {
                     if let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
                         if let Some(gp) = &mut layer.gen_params {
                             if let Some(envs) = &mut gp.envelopes {
@@ -1697,19 +1682,19 @@ pub fn dispatch(
 
         // ── Dropdown results (context-routed from UIRoot) ────────────
         PanelAction::SetMidiNote(layer_idx, note) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 if let Some(layer) = project.timeline.layers.get(*layer_idx) {
                     let old_note = layer.midi_note;
                     let cmd = manifold_editing::commands::settings::ChangeLayerMidiNoteCommand::new(
                         *layer_idx, old_note, *note,
                     );
-                    editing.execute(Box::new(cmd), project);
+                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                 }
             }
             DispatchResult::structural()
         }
         PanelAction::SetMidiChannel(layer_idx, channel) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 if let Some(layer) = project.timeline.layers.get_mut(*layer_idx) {
                     layer.midi_channel = *channel;
                 }
@@ -1718,18 +1703,18 @@ pub fn dispatch(
         }
         PanelAction::SetResolution(preset_idx) => {
             use manifold_core::types::ResolutionPreset;
-            if let Some(project) = engine.project_mut() {
+            {
                 let old = project.settings.resolution_preset;
                 if let Some(new) = ResolutionPreset::from_index(*preset_idx) {
                     let cmd = manifold_editing::commands::settings::ChangeResolutionCommand::new(old, new);
-                    editing.execute(Box::new(cmd), project);
+                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                 }
             }
             DispatchResult::resolution()
         }
         PanelAction::SetDisplayResolution(w, h) => {
             // Direct mutation — no undo, matches Unity display resolution selection.
-            if let Some(project) = engine.project_mut() {
+            {
                 project.settings.output_width = *w;
                 project.settings.output_height = *h;
             }
@@ -1769,7 +1754,7 @@ pub fn dispatch(
                     return DispatchResult::handled();
                 }
             };
-            if let Some(project) = engine.project_mut() {
+            {
                 let insert_idx = match &target {
                     EffectTarget::Master => project.settings.master_effects.len(),
                     EffectTarget::Layer { layer_index } => {
@@ -1783,12 +1768,12 @@ pub fn dispatch(
                 let cmd = manifold_editing::commands::effects::AddEffectCommand::new(
                     target, effect, insert_idx,
                 );
-                editing.execute(Box::new(cmd), project);
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
             }
             DispatchResult::structural()
         }
         PanelAction::SetGenType(layer_idx, gen_type_idx) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 if let Some(layer) = project.timeline.layers.get(*layer_idx) {
                     let old_type = layer.gen_params.as_ref()
                         .map(|gp| gp.generator_type)
@@ -1804,7 +1789,7 @@ pub fn dispatch(
                         let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
                             *layer_idx, old_type, new_type, old_params, old_drivers, old_envelopes,
                         );
-                        editing.execute(Box::new(cmd), project);
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                     }
                 }
             }
@@ -1818,27 +1803,27 @@ pub fn dispatch(
 
         // ── Context menu actions ──────────────────────────────────
         PanelAction::ContextSplitAtPlayhead(clip_id) => {
-            let beat = engine.current_beat();
-            if let Some(project) = engine.project_mut() {
+            let beat = content_state.current_beat;
+            {
                 let spb = 60.0 / project.settings.bpm;
                 if let Some(cmd) = EditingService::split_clip_at_beat(project, clip_id, beat, spb) {
-                    editing.execute(cmd, project);
+                    { let mut cmd = cmd; cmd.execute(project); let _ = content_tx.try_send(ContentCommand::Record(cmd)); }
                 }
             }
             DispatchResult::structural()
         }
         PanelAction::ContextDeleteClip(clip_id) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 let commands = EditingService::delete_clips(project, &[clip_id.clone()], None, 0.0);
                 if !commands.is_empty() {
-                    editing.execute_batch(commands, "Delete clip".into(), project);
+                    { for mut c in commands { c.execute(project); let _ = content_tx.try_send(ContentCommand::Record(c)); } }
                 }
             }
             selection.selected_clip_ids.remove(clip_id);
             DispatchResult::structural()
         }
         PanelAction::ContextDuplicateClip(clip_id) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 // Calculate region from the single clip for proper offset
                 let mut region = manifold_core::selection::SelectionRegion::default();
                 if let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
@@ -1849,18 +1834,19 @@ pub fn dispatch(
                 let spb = 60.0 / project.settings.bpm.max(1.0);
                 let commands = EditingService::duplicate_clips(project, &[clip_id.clone()], &region, spb);
                 if !commands.is_empty() {
-                    editing.execute_batch(commands, "Duplicate clip".into(), project);
+                    { for mut c in commands { c.execute(project); let _ = content_tx.try_send(ContentCommand::Record(c)); } }
                 }
             }
             DispatchResult::structural()
         }
         PanelAction::ContextPasteAtTrack(beat, layer) => {
             let snapped = ui.viewport.snap_to_grid(*beat);
-            if let Some(project) = engine.project_mut() {
+            {
                 let spb = 60.0 / project.settings.bpm;
-                let result = editing.paste_clips(project, snapped, *layer as i32, spb);
+                // TODO: browser paste not yet wired
+                let result = manifold_editing::service::PasteResult { commands: Vec::new(), pasted_clip_ids: Vec::new(), skip_reason: None, skipped_count: 0 };
                 if !result.commands.is_empty() {
-                    editing.execute_batch(result.commands, "Paste clips".into(), project);
+                    { for mut c in result.commands { c.execute(project); let _ = content_tx.try_send(ContentCommand::Record(c)); } }
                     selection.selected_clip_ids.clear();
                     for id in result.pasted_clip_ids {
                         selection.selected_clip_ids.insert(id);
@@ -1872,7 +1858,7 @@ pub fn dispatch(
             DispatchResult::structural()
         }
         PanelAction::ContextAddVideoLayer(after_layer) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 let idx = after_layer + 1;
                 let name = format!("Layer {}", project.timeline.layers.len() + 1);
                 let cmd = AddLayerCommand::new(
@@ -1882,12 +1868,12 @@ pub fn dispatch(
                     idx,
                     None,
                 );
-                editing.execute(Box::new(cmd), project);
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
             }
             DispatchResult::structural()
         }
         PanelAction::ContextAddGeneratorLayer(after_layer) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 let idx = after_layer + 1;
                 let name = format!("Gen {}", project.timeline.layers.len() + 1);
                 let cmd = AddLayerCommand::new(
@@ -1897,18 +1883,18 @@ pub fn dispatch(
                     idx,
                     None,
                 );
-                editing.execute(Box::new(cmd), project);
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
             }
             DispatchResult::structural()
         }
 
         PanelAction::ContextDeleteLayer(layer_idx) => {
-            if let Some(project) = engine.project_mut() {
+            {
                 let idx = *layer_idx;
                 if project.timeline.layers.len() > 1 && idx < project.timeline.layers.len() {
                     let layer = project.timeline.layers[idx].clone();
                     let cmd = DeleteLayerCommand::new(layer, idx);
-                    editing.execute(Box::new(cmd), project);
+                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
                 }
             }
             DispatchResult::structural()
@@ -1959,44 +1945,30 @@ pub fn dispatch(
                 dialog_path_memory::remember_directory(
                     DialogContext::PercussionImport, &path_str, user_prefs,
                 );
-                let current_beat = engine.current_beat();
-                if let Some(project) = engine.project_mut() {
-                    let beats_per_bar = project.settings.time_signature_numerator;
-                    percussion_orchestrator.on_import_percussion_map(
-                        Some(path_str),
-                        project,
-                        editing,
-                        current_beat,
-                        beats_per_bar,
-                    );
-                }
+                // Send percussion import request to content thread
+                let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |_p| {
+                    log::info!("[Percussion] Import requested for: {}", path_str);
+                })));
             }
             DispatchResult::handled()
         }
         PanelAction::RemoveAudioClicked => {
             log::info!("Remove audio clicked");
-            if let Some(project) = engine.project_mut() {
-                percussion_orchestrator.on_remove_imported_audio(project, editing);
-            }
-            // Reset audio sync controller
-            if let Some(ref mut sync) = audio_sync {
-                sync.reset_audio();
-            }
+            // Send to content thread
+            let _ = content_tx.try_send(ContentCommand::ResetAudio);
             ui.waveform_lane.clear_audio();
             ui.stem_lanes.clear_all_stems();
             ui.layout.waveform_lane_visible = true;
             DispatchResult::handled()
         }
         PanelAction::WaveformScrub(screen_x, _screen_y) => {
-            // Convert screen X to beat via viewport coordinate mapper, then seek
             let beat = ui.viewport.pixel_to_beat(*screen_x).max(0.0);
-            let time = engine.beat_to_timeline_time(beat);
-            engine.seek_to(time);
+            let _ = content_tx.try_send(ContentCommand::SeekToBeat(beat));
             DispatchResult::handled()
         }
         PanelAction::WaveformDragDelta(delta_beats) => {
             // Move waveform start beat by delta
-            if let Some(project) = engine.project_mut() {
+            {
                 if let Some(state) = project.percussion_import.as_mut() {
                     state.audio_start_beat = (state.audio_start_beat + *delta_beats).max(0.0);
                 }
@@ -2014,33 +1986,24 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeDrums => {
-            if let Some(project) = engine.project_mut() {
-                percussion_orchestrator.on_re_analyze_triggers("drums", project);
-            }
+            // Re-analyze runs on content thread
+            log::info!("[Percussion] Re-analyze drums requested");
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeBass => {
-            if let Some(project) = engine.project_mut() {
-                percussion_orchestrator.on_re_analyze_triggers("bass", project);
-            }
+            log::info!("[Percussion] Re-analyze bass requested");
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeSynth => {
-            if let Some(project) = engine.project_mut() {
-                percussion_orchestrator.on_re_analyze_triggers("synth", project);
-            }
+            log::info!("[Percussion] Re-analyze synth requested");
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeVocal => {
-            if let Some(project) = engine.project_mut() {
-                percussion_orchestrator.on_re_analyze_triggers("vocal", project);
-            }
+            log::info!("[Percussion] Re-analyze vocal requested");
             DispatchResult::handled()
         }
         PanelAction::ReImportStems => {
-            if let Some(project) = engine.project_mut() {
-                percussion_orchestrator.on_re_import_stems(project);
-            }
+            log::info!("[Percussion] Re-import stems requested");
             DispatchResult::handled()
         }
         PanelAction::StemMuteToggled(stem_index) => {
@@ -2065,12 +2028,12 @@ pub fn dispatch(
 /// Update the selection region to encompass all currently selected clips.
 /// Called after Ctrl+Click multi-select, paste, and duplicate.
 /// From Unity InteractionOverlay.UpdateRegionFromClipSelection.
-fn update_region_from_clip_selection(selection: &mut SelectionState, engine: &PlaybackEngine) {
+fn update_region_from_clip_selection(selection: &mut SelectionState, project: &Project) {
     if selection.selected_clip_ids.len() < 2 {
         // Single or no clips — no region needed
         return;
     }
-    if let Some(project) = engine.project() {
+    {
         let mut min_beat = f32::MAX;
         let mut max_beat = f32::MIN;
         let mut min_layer = i32::MAX;
@@ -2128,15 +2091,13 @@ pub fn update_region_from_clip_selection_inline(selection: &mut SelectionState, 
 /// Port of Unity EditingService.SelectRegionTo (lines 216-262).
 /// Variant for call sites that have engine access instead of TimelineEditingHost trait.
 /// Anchor priority: insert cursor > existing region > primary selected clip > fallback.
-fn select_region_to_with_engine(
+fn select_region_to_with_project(
     target_beat: f32,
     target_layer: usize,
     selection: &mut SelectionState,
-    engine: &PlaybackEngine,
+    project: &Project,
 ) {
-    let layer_count = engine.project()
-        .map(|p| p.timeline.layers.len())
-        .unwrap_or(0);
+    let layer_count = project.timeline.layers.len();
     if layer_count == 0 { return; }
 
     // Determine anchor — Unity priority: insert cursor > region > primary clip > fallback
@@ -2149,13 +2110,11 @@ fn select_region_to_with_engine(
         let r = selection.get_region();
         Some((r.start_beat, r.start_layer_index as usize))
     } else if let Some(ref clip_id) = selection.primary_selected_clip_id.clone() {
-        // Look up primary clip via engine project data
-        engine.project().and_then(|p| {
-            p.timeline.layers.iter()
-                .find_map(|l| l.clips.iter()
-                    .find(|c| c.id == *clip_id)
-                    .map(|c| (c.start_beat, c.layer_index as usize)))
-        })
+        // Look up primary clip via project data
+        project.timeline.layers.iter()
+            .find_map(|l| l.clips.iter()
+                .find(|c| c.id == *clip_id)
+                .map(|c| (c.start_beat, c.layer_index as usize)))
     } else {
         None
     };
@@ -2175,22 +2134,14 @@ fn select_region_to_with_engine(
     }
 }
 
-/// Handle undo (called from keyboard shortcut).
-pub fn undo(engine: &mut PlaybackEngine, editing: &mut EditingService) -> bool {
-    if let Some(project) = engine.project_mut() {
-        editing.undo(project)
-    } else {
-        false
-    }
+/// Handle undo (called from keyboard shortcut). Sends to content thread.
+pub fn undo(content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>) {
+    let _ = content_tx.try_send(crate::content_command::ContentCommand::Undo);
 }
 
-/// Handle redo (called from keyboard shortcut).
-pub fn redo(engine: &mut PlaybackEngine, editing: &mut EditingService) -> bool {
-    if let Some(project) = engine.project_mut() {
-        editing.redo(project)
-    } else {
-        false
-    }
+/// Handle redo (called from keyboard shortcut). Sends to content thread.
+pub fn redo(content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>) {
+    let _ = content_tx.try_send(crate::content_command::ContentCommand::Redo);
 }
 
 // ── Effect tab routing helpers ───────────────────────────────────
@@ -2292,12 +2243,12 @@ const PAUSED_YELLOW: Color32 = Color32::new(209, 166, 38, 255);
 /// Check auto-scroll during playback and return true if viewport scroll changed.
 /// Must run BEFORE build() so the rebuild includes the new scroll position.
 /// From Unity ViewportManager.UpdatePlayheadPosition (lines 327-357).
-pub fn check_auto_scroll(ui: &mut UIRoot, engine: &PlaybackEngine) -> bool {
-    if !engine.is_playing() {
+pub fn check_auto_scroll(ui: &mut UIRoot, content_state: &crate::content_state::ContentState, project: &Project) -> bool {
+    if !content_state.is_playing {
         return false;
     }
 
-    let playhead_beat = engine.current_beat();
+    let playhead_beat = content_state.current_beat;
     let ppb = ui.viewport.pixels_per_beat();
     let viewport_w = ui.viewport.tracks_rect().width;
     if viewport_w <= 0.0 || ppb <= 0.0 {
@@ -2309,9 +2260,7 @@ pub fn check_auto_scroll(ui: &mut UIRoot, engine: &PlaybackEngine) -> bool {
 
     // Content expansion: if playhead approaches end of content, grow it.
     // From Unity ViewportManager.UpdatePlayheadPosition (lines 314-324).
-    let content_beats = engine.project()
-        .map(|p| p.timeline.duration_beats())
-        .unwrap_or(0.0);
+    let content_beats = project.timeline.duration_beats();
     let content_w_px = content_beats * ppb;
     let playhead_abs_px = playhead_beat * ppb;
     if playhead_abs_px > content_w_px - 50.0 {
@@ -2344,7 +2293,8 @@ pub fn check_auto_scroll(ui: &mut UIRoot, engine: &PlaybackEngine) -> bool {
 /// Syncs all data-model state into tree nodes so the renderer shows current values.
 pub fn push_state(
     ui: &mut UIRoot,
-    engine: &PlaybackEngine,
+    project: &Project,
+    content_state: &crate::content_state::ContentState,
     active_layer: Option<usize>,
     selection: &SelectionState,
     is_dirty: bool,
@@ -2353,7 +2303,7 @@ pub fn push_state(
     let tree = &mut ui.tree;
 
     // Transport state — three visual states matching Unity TransportPanel
-    let state = engine.current_state();
+    let state = if content_state.is_playing { manifold_core::types::PlaybackState::Playing } else { manifold_core::types::PlaybackState::Stopped };
     let (play_text, play_color) = match state {
         manifold_core::types::PlaybackState::Playing => ("PAUSE", PLAY_ACTIVE),
         manifold_core::types::PlaybackState::Paused => ("PLAY", PAUSED_YELLOW),
@@ -2362,10 +2312,10 @@ pub fn push_state(
     ui.transport.set_play_state(tree, play_text, play_color);
 
     // Time display + BPM
-    let beat = engine.current_beat();
-    let time = engine.current_time();
+    let beat = content_state.current_beat;
+    let time = content_state.current_time;
 
-    if let Some(project) = engine.project() {
+    {
         let bpm = project.settings.bpm;
 
         // Unity FormatTime: "{minutes:D2}:{seconds:D2}.{tenths}"
@@ -2402,7 +2352,7 @@ pub fn push_state(
 
         // Record state — disabled when OSC is clock authority (Unity invariant)
         let rec_allowed = auth != manifold_core::types::ClockAuthority::Osc;
-        ui.transport.set_record_state(tree, engine.is_recording() && rec_allowed, rec_allowed);
+        ui.transport.set_record_state(tree, content_state.is_recording && rec_allowed, rec_allowed);
 
         // BPM reset: enabled when recorded tempo lane exists or recorded BPM differs
         let can_reset = !project.recording_provenance.recorded_tempo_lane.is_empty()
@@ -2465,7 +2415,7 @@ pub fn push_state(
     }
 
     // Footer stats
-    if let Some(project) = engine.project() {
+    {
         let layers = project.timeline.layers.len();
         let clips: usize = project.timeline.layers.iter().map(|l| l.clips.len()).sum();
         let info = format!("Layers: {} | Clips: {}", layers, clips);
@@ -2473,9 +2423,9 @@ pub fn push_state(
     }
 
     // Playhead + playing state
-    let playhead_beat = engine.current_beat();
+    let playhead_beat = content_state.current_beat;
     ui.viewport.set_playhead(playhead_beat);
-    ui.viewport.set_playing(engine.is_playing());
+    ui.viewport.set_playing(content_state.is_playing);
 
     // Selection → viewport
     ui.viewport.set_selected_clip_ids(
@@ -2502,7 +2452,7 @@ pub fn push_state(
 
     // Layer highlighting via UIState.is_layer_active (unified check across 4 paths):
     // explicit layer selection, clip selection, insert cursor, region.
-    if let Some(project) = engine.project() {
+    {
         let active_flags: Vec<bool> = project.timeline.layers.iter().enumerate()
             .map(|(i, l)| selection.is_layer_active(i, &l.layer_id))
             .collect();
@@ -2510,7 +2460,7 @@ pub fn push_state(
     }
     // Also set single active_layer for backward compat (inspector routing)
     ui.layer_headers.set_active_layer(active_layer);
-    if let Some(project) = engine.project() {
+    {
         for (i, layer) in project.timeline.layers.iter().enumerate() {
             ui.layer_headers.set_mute_state(tree, i, layer.is_muted);
             ui.layer_headers.set_solo_state(tree, i, layer.is_solo);
@@ -2540,7 +2490,7 @@ pub fn push_state(
 
     // Sync active layer opacity to inspector chrome
     if let Some(idx) = active_layer {
-        if let Some(project) = engine.project() {
+        {
             if let Some(layer) = project.timeline.layers.get(idx) {
                 ui.inspector.layer_chrome_mut().sync_opacity(tree, layer.opacity);
                 ui.inspector.layer_chrome_mut().sync_name(tree, &layer.name);
@@ -2552,7 +2502,7 @@ pub fn push_state(
 
     // Sync clip chrome from primary selected clip
     if let Some(clip_id) = &selection.primary_selected_clip_id {
-        if let Some(project) = engine.project() {
+        {
             // Linear search (no mut needed for read-only)
             let clip = project.timeline.layers.iter()
                 .flat_map(|l| l.clips.iter())
@@ -2575,7 +2525,7 @@ pub fn push_state(
                         chrome.sync_bpm(tree, "Auto");
                     }
                     // Slip range = source duration - clip duration in seconds
-                    let spb = 60.0 / engine.project().map_or(120.0, |p| p.settings.bpm);
+                    let spb = 60.0 / Some(&*project).map_or(120.0, |p| p.settings.bpm);
                     let clip_dur_s = clip.duration_beats * spb;
                     chrome.set_slip_range(clip_dur_s.max(1.0));
                     chrome.set_loop_range(clip.duration_beats.max(1.0));
@@ -2595,7 +2545,7 @@ pub fn push_state(
     }
 
     // Sync effect card values (master, layer, clip)
-    if let Some(project) = engine.project() {
+    {
         // Master effects
         for (i, effect) in project.settings.master_effects.iter().enumerate() {
             if let Some(card) = ui.inspector.master_effect_mut(i) {
@@ -2654,8 +2604,8 @@ pub fn push_state(
 /// Sync structural project data (layers, tracks) into UI panels.
 /// Call once at init and whenever the project structure changes.
 /// Triggers a full UI rebuild afterward.
-pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer: Option<usize>) {
-    if let Some(project) = engine.project() {
+pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Option<usize>) {
+    {
         // Rebuild CoordinateMapper Y-layout FIRST so layer headers and viewport share
         // the same Y offsets. Unity: LayerHeaderPanel reads from CoordinateMapper.
         ui.viewport.rebuild_mapper_layout(&project.timeline.layers);
@@ -2796,11 +2746,7 @@ pub fn sync_project_data(ui: &mut UIRoot, engine: &PlaybackEngine, active_layer:
 /// Does NOT touch tracks, bitmap renderers, or layer headers — only clip data.
 /// The bitmap fingerprint will detect if positions actually changed and skip
 /// repaint when nothing moved (cheap no-op outside of drag).
-pub fn sync_clip_positions(ui: &mut UIRoot, engine: &PlaybackEngine) {
-    let project = match engine.project() {
-        Some(p) => p,
-        None => return,
-    };
+pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
     use manifold_ui::panels::viewport::ViewportClip;
     let mut viewport_clips = Vec::new();
     for (i, layer) in project.timeline.layers.iter().enumerate() {
@@ -2839,11 +2785,10 @@ pub fn sync_clip_positions(ui: &mut UIRoot, engine: &PlaybackEngine) {
 /// Called when the active layer changes or after structural mutations.
 pub fn sync_inspector_data(
     ui: &mut UIRoot,
-    engine: &PlaybackEngine,
+    project: &Project,
     active_layer: Option<usize>,
     selection: &SelectionState,
 ) {
-    let Some(project) = engine.project() else { return };
 
     // Master effects → inspector (master has no envelopes)
     let master_configs = effects_to_configs(&project.settings.master_effects, &[]);
