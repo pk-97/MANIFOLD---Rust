@@ -82,7 +82,7 @@ Agents: CHECK THIS FILE before porting. If a file is already `ported`, verify pa
 | EnvelopeEvaluator.cs | modulation.rs (evaluate_all_envelopes, calculate_adsr) | ported |
 | ParameterDriverManager.cs | modulation.rs (evaluate_all_drivers) | ported |
 | PerfLogger.cs | — | partial (log crate) |
-| TempoRecorder.cs | — | missing (diagnostics) |
+| TempoRecorder.cs | tempo_recorder.rs (manifold-playback) | ported |
 | PercussionAnalysisModels.cs | percussion_analysis.rs (manifold-core) | ported |
 | BeatTimeConverter.cs | percussion_analysis.rs (manifold-core) | ported |
 | PercussionBindingResolver.cs | percussion_binding.rs (manifold-core) | ported |

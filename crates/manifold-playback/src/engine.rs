@@ -473,20 +473,11 @@ impl PlaybackEngine {
         self.last_realtime_now = ctx.realtime_now;
         self.last_frame_count = ctx.frame_count;
 
-        // ── Phase 1: External beat derivation (stub) ──
-        // Port of C# PlaybackController.Update lines 1064-1096.
-        // When Link/MidiClock sync controllers are wired (GAP-PLAY-9),
-        // external beat injection will go here:
-        //   - Link authority: engine.set_beat(link.beat - link_beat_offset)
-        //   - MidiClock authority: engine.set_beat((sixteenths + tick/6) / 4)
-        //   - Otherwise: beat derived from time (already happens in advance_time)
-
-        // ── Phase 2: Tempo recording/resolution (stub) ──
-        // Port of C# PlaybackController.Update lines 1098-1099.
-        // UpdateRecordingSessionState(authority) → TempoRecorder (not yet ported)
-        // ApplyResolvedTempo(authority) → TryResolveExternalTempo (not yet ported)
-        // When wired, this will pull live BPM from Link/MidiClock and either
-        // record tempo automation or update the global BPM.
+        // ── Phase 1 & 2 (beat derivation + tempo recording) ──
+        // Handled by ContentThread BEFORE engine.tick() — matching Unity where
+        // PlaybackController does this at its level before the engine's per-state logic.
+        // ContentThread calls derive_external_beat(), update_recording_session_state(),
+        // and apply_resolved_tempo() between tick_sync_controllers() and engine.tick().
 
         // ── Phase 3: Shared pre-branch (all states) ──
         // Port of C# PlaybackController.Update lines 1102-1112.

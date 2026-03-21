@@ -8,7 +8,8 @@
 
 use crossbeam_channel::{Receiver, Sender};
 
-use manifold_core::types::{ClockAuthority, TempoPointSource};
+use manifold_core::math::BeatQuantizer;
+use manifold_core::types::{ClockAuthority, PlaybackState, TempoPointSource};
 use manifold_editing::service::EditingService;
 use manifold_playback::audio_sync::ImportedAudioSyncController;
 use manifold_playback::stem_audio::StemAudioController;
@@ -20,6 +21,7 @@ use manifold_playback::osc_sender::OscPositionSender;
 use manifold_playback::osc_sync::OscSyncController;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 use manifold_playback::sync::{SyncArbiter, SyncTarget, SyncTargetSnapshot};
+use manifold_playback::tempo_recorder::TempoRecorder;
 use manifold_playback::transport_controller::TransportController;
 use manifold_renderer::gpu::GpuContext;
 
@@ -60,6 +62,16 @@ pub struct ContentThread {
     pub osc_sync: OscSyncController,
     /// OSC position sender — sends transport state to DAW (LateUpdate equivalent).
     pub osc_sender: OscPositionSender,
+
+    // ── Tempo recording (port of C# PlaybackController fields) ──
+    /// Tempo recording/provenance — tracks external tempo for tempo automation.
+    /// Port of C# PlaybackController.tempoRecorder field.
+    pub tempo_recorder: TempoRecorder,
+    /// Offset between Link's absolute beat epoch and MANIFOLD's timeline beat 0.
+    /// Cached ONLY at Play()/Seek() sync points. NOT refreshed periodically —
+    /// Link's cumulative beat counter keeps the offset valid across BPM changes.
+    /// Port of C# PlaybackController.linkBeatOffset field (line 74).
+    pub link_beat_offset: f64,
 }
 
 impl ContentThread {
@@ -124,6 +136,16 @@ impl ContentThread {
             // Link, MidiClock, and OSC poll their sources and issue gated transport
             // commands via SyncArbiter. Snapshot read-only state before mutable borrows.
             self.tick_sync_controllers();
+
+            // 3c. External beat derivation + tempo recording/resolution.
+            // Port of C# PlaybackController.Update lines 1064-1099.
+            // Must run AFTER sync controllers (which set live external tempo)
+            // and BEFORE engine.tick() (which uses the derived beat).
+            let authority = self.engine.project()
+                .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
+            self.derive_external_beat(authority);
+            self.update_recording_session_state(authority);
+            self.apply_resolved_tempo(authority);
 
             // 4. Tick engine
             let ctx = TickContext {
@@ -315,26 +337,279 @@ impl ContentThread {
         }
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // Phase 1 — External beat derivation
+    // Port of C# PlaybackController.Update lines 1064-1096.
+    // ═══════════════════════════════════════════════════════════════
+
+    /// When playing with an external beat authority (Link or MidiClock),
+    /// override the engine's beat from the sync controller's current position.
+    fn derive_external_beat(&mut self, authority: ClockAuthority) {
+        if self.engine.current_state() != PlaybackState::Playing {
+            return;
+        }
+
+        match authority {
+            ClockAuthority::Link => {
+                if let Some(ref link) = self.transport_controller.link_sync {
+                    if link.is_link_enabled()
+                        && link.has_active_peers()
+                        && !self.link_beat_offset.is_nan()
+                    {
+                        self.engine
+                            .set_beat((link.current_beat - self.link_beat_offset) as f32);
+                    }
+                }
+            }
+            ClockAuthority::MidiClock => {
+                if !self.sync_arbiter.manifold_owns_playback {
+                    if let Some(ref clk) = self.transport_controller.midi_clock_sync {
+                        if clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
+                            self.engine.set_beat(clk.current_clock_beat());
+                        }
+                        // else: beat derived from time (engine handles this in advance_time)
+                    }
+                }
+            }
+            // ClockAuthority::Internal | Osc: beat derived from time (engine handles this)
+            _ => {}
+        }
+    }
+
+    /// Cache the offset between Link's absolute beat epoch and MANIFOLD's timeline beat 0.
+    /// Called at Play() and Seek() sync points.
+    /// Port of C# PlaybackController.CacheLinkBeatOffset lines 352-360.
+    fn cache_link_beat_offset(&mut self) {
+        if let Some(ref link) = self.transport_controller.link_sync {
+            if link.is_link_enabled() {
+                let manifold_beat =
+                    self.engine.time_to_timeline_beat(self.engine.current_time()) as f64;
+                self.link_beat_offset = link.current_beat - manifold_beat;
+            } else {
+                self.link_beat_offset = 0.0;
+            }
+        } else {
+            self.link_beat_offset = 0.0;
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Phase 2 — Tempo recording / resolution
+    // Port of C# PlaybackController.UpdateRecordingSessionState
+    // and PlaybackController.ApplyResolvedTempo.
+    // ═══════════════════════════════════════════════════════════════
+
+    /// Arm/disarm the tempo recording session based on transport state.
+    /// Port of C# PlaybackController.UpdateRecordingSessionState lines 1098.
+    fn update_recording_session_state(&mut self, authority: ClockAuthority) {
+        let should_record = self.engine.is_recording()
+            && self.engine.current_state() == PlaybackState::Playing
+            && authority != ClockAuthority::Osc;
+
+        let default_bpm = self
+            .engine
+            .project()
+            .map_or(120.0, |p| p.settings.bpm);
+
+        // Capture live tempo source for the get_source_at_beat callback.
+        let live_tempo = self.engine.try_get_live_external_tempo();
+        let get_source_at_beat = |_beat: f32| -> TempoPointSource {
+            if let Some((_, source)) = live_tempo {
+                source
+            } else {
+                TempoPointSource::Unknown
+            }
+        };
+
+        if let Some(project) = self.engine.project_mut() {
+            self.tempo_recorder.update_session_state(
+                should_record,
+                &mut project.recording_provenance,
+                &mut project.tempo_map,
+                default_bpm,
+                &get_source_at_beat,
+            );
+        }
+    }
+
+    /// Apply resolved external tempo to tempo map (recording) or global BPM (non-recording).
+    /// Port of C# PlaybackController.ApplyResolvedTempo lines 1099.
+    fn apply_resolved_tempo(&mut self, authority: ClockAuthority) {
+        // Guard: no project → clear live tempo state.
+        // Port of C# ApplyResolvedTempo lines 260-264.
+        if self.engine.project().is_none() {
+            self.engine
+                .set_live_external_tempo(false, 0.0, TempoPointSource::Unknown);
+            return;
+        }
+
+        let should_record = self.engine.is_recording()
+            && self.engine.current_state() == PlaybackState::Playing;
+
+        if !should_record {
+            self.tempo_recorder.reset_tracking();
+        }
+
+        // TryResolveExternalTempo — already resolved by tick_sync_controllers()
+        // and stored in engine via set_live_external_tempo().
+        let (bpm, source) = match self.engine.try_get_live_external_tempo() {
+            Some((b, s)) => (b.clamp(20.0, 300.0), s),
+            None => {
+                // No external tempo — nothing to apply.
+                return;
+            }
+        };
+
+        let current_beat = self.engine.current_beat();
+        let current_time = self.engine.current_time();
+
+        let mut tempo_map_changed = false;
+
+        if let Some(project) = self.engine.project_mut() {
+            if authority != ClockAuthority::Osc {
+                if should_record {
+                    // Studio recording: append tempo automation points over time.
+                    // Port of C# ApplyResolvedTempo lines 1117-1122.
+                    tempo_map_changed = self.tempo_recorder.try_record_tempo_point(
+                        &mut project.tempo_map,
+                        current_beat,
+                        current_time,
+                        bpm,
+                        source,
+                    );
+                    if tempo_map_changed {
+                        self.tempo_recorder.append_tempo_change(
+                            &mut project.recording_provenance,
+                            current_time,
+                            current_beat,
+                            bpm,
+                            source,
+                        );
+                    }
+                } else if project.tempo_map.point_count() <= 1 {
+                    // No automation lane authored yet: treat tempo as a global master value.
+                    // Compare quantized values so raw float jitter doesn't trigger writes.
+                    // Port of C# ApplyResolvedTempo lines 1127-1134.
+                    let map_bpm =
+                        project.tempo_map.get_bpm_at_beat(0.0, project.settings.bpm);
+                    let q_resolved_bpm = BeatQuantizer::quantize_bpm(bpm);
+                    if (map_bpm - q_resolved_bpm).abs() >= TempoRecorder::BPM_THRESHOLD {
+                        project.tempo_map.add_or_replace_point(
+                            0.0, bpm, source, 0.001,
+                        );
+                        tempo_map_changed = true;
+                    }
+                }
+            }
+        }
+
+        if tempo_map_changed {
+            // Re-derive beat from time after tempo map change.
+            // Port of C# ApplyResolvedTempo line 1139.
+            let new_beat = self.engine.time_to_timeline_beat(current_time);
+            self.engine.set_beat(new_beat);
+        }
+    }
+
+    /// End the tempo recording session if active (called from Pause/Stop).
+    /// Port of C# PlaybackController.Pause/Stop → tempoRecorder.EndSessionIfActive.
+    fn end_tempo_recording_session(&mut self) {
+        if !self.tempo_recorder.is_session_active() {
+            return;
+        }
+
+        let default_bpm = self
+            .engine
+            .project()
+            .map_or(120.0, |p| p.settings.bpm);
+        let live_tempo = self.engine.try_get_live_external_tempo();
+        let get_source_at_beat = |_beat: f32| -> TempoPointSource {
+            if let Some((_, source)) = live_tempo {
+                source
+            } else {
+                TempoPointSource::Unknown
+            }
+        };
+
+        if let Some(project) = self.engine.project_mut() {
+            self.tempo_recorder.end_session_if_active(
+                &mut project.recording_provenance,
+                &mut project.tempo_map,
+                default_bpm,
+                &get_source_at_beat,
+            );
+        }
+    }
+
     /// Handle a single command. Returns true if Shutdown.
     fn handle_command(&mut self, cmd: ContentCommand) -> bool {
         match cmd {
             ContentCommand::Shutdown => return true,
 
             // ── Transport ──────────────────────────────────────────
-            ContentCommand::Play => self.engine.play(),
-            ContentCommand::Pause => self.engine.pause(),
-            ContentCommand::Stop => self.engine.stop(),
+            ContentCommand::Play => {
+                // Align transport to active external beat source BEFORE
+                // the first sync pass. Port of C# PlaybackController.Play() lines 631-643.
+                let authority = self.engine.project()
+                    .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
+                if authority == ClockAuthority::MidiClock
+                    && !self.sync_arbiter.manifold_owns_playback
+                {
+                    if let Some(ref clk) = self.transport_controller.midi_clock_sync {
+                        if clk.is_midi_clock_enabled() {
+                            let midi_beat = clk.current_clock_beat();
+                            self.engine.set_beat(midi_beat);
+                            let time = self.engine.beat_to_timeline_time(midi_beat);
+                            self.engine.set_time(time.max(0.0) as f64);
+                        }
+                    }
+                }
+                self.engine.play();
+                self.cache_link_beat_offset();
+            }
+            ContentCommand::Pause => {
+                // End tempo recording session on pause.
+                // Port of C# PlaybackController.Pause → tempoRecorder.EndSessionIfActive.
+                self.end_tempo_recording_session();
+                self.engine.pause();
+            }
+            ContentCommand::Stop => {
+                // End tempo recording session on stop.
+                self.end_tempo_recording_session();
+                self.engine.stop();
+                self.link_beat_offset = f64::NAN;
+            }
             ContentCommand::TogglePlayback => {
                 if self.engine.is_playing() {
+                    self.end_tempo_recording_session();
                     self.engine.pause();
                 } else {
+                    let authority = self.engine.project()
+                        .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
+                    if authority == ClockAuthority::MidiClock
+                        && !self.sync_arbiter.manifold_owns_playback
+                    {
+                        if let Some(ref clk) = self.transport_controller.midi_clock_sync {
+                            if clk.is_midi_clock_enabled() {
+                                let midi_beat = clk.current_clock_beat();
+                                self.engine.set_beat(midi_beat);
+                                let time = self.engine.beat_to_timeline_time(midi_beat);
+                                self.engine.set_time(time.max(0.0) as f64);
+                            }
+                        }
+                    }
                     self.engine.play();
+                    self.cache_link_beat_offset();
                 }
             }
-            ContentCommand::SeekTo(t) => { self.engine.seek_to(t); }
+            ContentCommand::SeekTo(t) => {
+                self.engine.seek_to(t);
+                self.cache_link_beat_offset();
+            }
             ContentCommand::SeekToBeat(beat) => {
                 let time = self.engine.beat_to_timeline_time(beat);
                 self.engine.seek_to(time);
+                self.cache_link_beat_offset();
             }
             ContentCommand::SetRecording(rec) => {
                 self.engine.set_recording(rec);
@@ -375,6 +650,10 @@ impl ContentThread {
                 if let Some(ref mut stem) = self.stem_audio {
                     stem.reset_stems(self.audio_sync.as_mut());
                 }
+                // Reset link beat offset and tempo recorder on project load.
+                // Port of C# PlaybackController.OnProjectLoading lines 550-551.
+                self.link_beat_offset = f64::NAN;
+                self.tempo_recorder.reset();
                 self.engine.initialize(*project);
                 // Resize content pipeline to project dims
                 if let Some(p) = self.engine.project() {
@@ -393,6 +672,8 @@ impl ContentThread {
                 }
             }
             ContentCommand::NewProject(project) => {
+                self.link_beat_offset = f64::NAN;
+                self.tempo_recorder.reset();
                 self.engine.initialize(*project);
                 self.editing_service.set_project();
                 // Sync frame timer to new project's frame rate.

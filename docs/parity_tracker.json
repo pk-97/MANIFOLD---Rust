@@ -89,9 +89,9 @@
       "title": "Port PlaybackController orchestration (Update loop)",
       "severity": "catastrophic",
       "est_loc": 800,
-      "status": "partial",
-      "commit": null,
-      "notes": "Tick loop orchestration restructured to match Unity PlaybackController.Update() exactly. All ported-but-unwired methods now called in correct order: check_preparing_clips, activate_due_pending_launches, update_active_clip_playback_rates, check_custom_loop_boundaries, correct_video_drift (throttled), filter_ready_clips (replaces build_ready_clips_list), compute_prewarm_candidates. Added fields: video_sync_interval, is_export_mode, export_fixed_dt, on_time_changed callback. Remaining stubs: external beat derivation from Link/MidiClock (blocked by GAP-PLAY-9), tempo recording/resolution (TempoRecorder not yet ported), perf stats collection (GAP-DIAG-1)."
+      "status": "done",
+      "commit": "pending",
+      "notes": "Full PlaybackController orchestration complete. External beat derivation from Link/MidiClock wired in content_thread.derive_external_beat(). TempoRecorder ported as unit (tempo_recorder.rs) with all 13 methods. Tempo recording session lifecycle wired: update_recording_session_state + apply_resolved_tempo (both recording and non-recording paths). Link beat offset cached at Play/Seek, cleared at Stop/LoadProject. MIDI clock beat alignment at Play() for MidiClock authority. Only remaining stub: perf stats collection (GAP-DIAG-1, separate gap)."
     },
     {
       "number": 3,

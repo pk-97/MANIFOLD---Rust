@@ -295,6 +295,14 @@ impl MidiClockSyncController {
     pub fn is_clock_transport_playing(&self) -> bool { self.is_receiving_clock && self.last_is_playing }
     pub fn current_position_display(&self) -> &str { &self.current_position_display }
     pub fn current_clock_bpm(&self) -> f32 { self.current_clock_bpm }
+
+    /// Current MIDI clock position as a beat value.
+    /// Computed as (position_sixteenths + clock_tick / 6.0) / 4.0.
+    /// Port of C# PlaybackController.Update() beat derivation formula.
+    pub fn current_clock_beat(&self) -> f32 {
+        (self.last_observed_sixteenths as f32 + self.last_observed_clock_tick as f32 / 6.0) / 4.0
+    }
+
     pub fn hard_seek_count(&self) -> i32 { self.hard_seek_count }
     pub fn last_hard_seek_delta_seconds(&self) -> f32 { self.last_hard_seek_delta_seconds }
     pub fn selected_source_index(&self) -> i32 { self.selected_source_index }
