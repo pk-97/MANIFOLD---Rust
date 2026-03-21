@@ -308,11 +308,11 @@ struct DisplayUniforms {
     intensity:    f32,
     contrast:     f32,
     invert:       f32,
+    uv_scale:     f32,
     color_mode:   f32,
     color_bright: f32,
     _pad0:        f32,
     _pad1:        f32,
-    _pad2:        f32,
 }
 
 pub struct FluidSimulation3DGenerator {
@@ -1339,11 +1339,11 @@ impl Generator for FluidSimulation3DGenerator {
                 intensity,
                 contrast,
                 invert,
+                uv_scale: 1.0,  // 3D fluid sim: no UV scaling (1.0 = identity)
                 color_mode: color_mode as f32,
                 color_bright,
                 _pad0: 0.0,
                 _pad1: 0.0,
-                _pad2: 0.0,
             };
             queue.write_buffer(&self.display_uniform_buf, 0, bytemuck::bytes_of(&display_uniforms));
 
