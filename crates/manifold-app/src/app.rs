@@ -94,6 +94,9 @@ pub struct Application {
     /// Envelope target drag snapshot for undo.
     target_snapshot: Option<f32>,
 
+    // Effect clipboard (Unity: static EffectClipboard singleton, Rust: instance)
+    effect_clipboard: manifold_editing::clipboard::EffectClipboard,
+
     // Rendering
     /// Shared reference to the content pipeline's output dimensions.
     content_pipeline_output: Option<Arc<crate::content_pipeline::SharedOutputView>>,
@@ -207,6 +210,7 @@ impl Application {
             trim_snapshot: None,
             adsr_snapshot: None,
             target_snapshot: None,
+            effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             content_pipeline_output: None,
             #[cfg(target_os = "macos")]
             shared_texture_bridge: None,
@@ -2421,6 +2425,7 @@ impl ApplicationHandler for Application {
                             current_project_path: &self.current_project_path,
                             has_output_window: self.window_registry.has_output_window(),
                             pending_close_output: &mut self.pending_close_output,
+                            effect_clipboard: &mut self.effect_clipboard,
                         };
                         if self.input_handler.handle_keyboard_input(
                             &logical_key, self.modifiers,

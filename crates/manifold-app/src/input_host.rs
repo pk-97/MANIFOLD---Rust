@@ -5,11 +5,15 @@
 //! so InputHandler, UIState, and viewport can be borrowed separately.
 
 use manifold_editing::commands::clip::MuteClipCommand;
+use manifold_editing::commands::effects::RemoveEffectCommand;
+use manifold_editing::commands::effect_target::EffectTarget;
 use manifold_editing::service::EditingService;
 use manifold_ui::timeline_input_host::TimelineInputHost;
 use manifold_ui::ui_state::UIState;
 use manifold_ui::cursor_nav;
+use manifold_ui::InspectorTab;
 
+use crate::content_command::ContentCommand;
 use crate::ui_root::UIRoot;
 
 /// Wrapper implementing TimelineInputHost by borrowing Application fields.
@@ -29,6 +33,7 @@ pub struct AppInputHost<'a> {
     pub current_project_path: &'a Option<std::path::PathBuf>,
     pub has_output_window: bool,
     pub pending_close_output: &'a mut bool,
+    pub effect_clipboard: &'a mut manifold_editing::clipboard::EffectClipboard,
 }
 
 impl TimelineInputHost for AppInputHost<'_> {
@@ -115,16 +120,139 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_structural_sync = true;
     }
 
-    // ── Effect shortcuts: stubs until effect system is ported ────
-    // These return false, so InputHandler falls through to clip operations.
-    // Correct infrastructure — just needs implementations when effects land.
-    fn handle_effect_copy(&mut self) -> bool { false }
-    fn handle_effect_cut(&mut self) -> bool { false }
-    fn handle_effect_paste(&mut self) -> bool { false }
-    fn handle_effect_delete(&mut self) -> bool { false }
-    fn handle_effect_group(&mut self) -> bool { false }
-    fn handle_effect_ungroup(&mut self) -> bool { false }
-    fn clear_effect_selection(&mut self) {}
+    // ── Effect keyboard shortcuts (Unity EffectSelectionManager) ──
+
+    fn handle_effect_copy(&mut self) -> bool {
+        if !self.ui_root.inspector.has_effect_selection() { return false; }
+        let tab = self.ui_root.inspector.last_effect_tab();
+        let indices = self.ui_root.inspector.get_selected_effect_indices();
+        let effects = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection);
+        if let Some(effects) = effects {
+            let selected: Vec<_> = indices.iter()
+                .filter_map(|&i| effects.get(i).cloned())
+                .collect();
+            if selected.len() == 1 {
+                self.effect_clipboard.copy_single(&selected[0]);
+            } else if !selected.is_empty() {
+                self.effect_clipboard.copy_all(&selected);
+            }
+            return !selected.is_empty();
+        }
+        false
+    }
+
+    fn handle_effect_cut(&mut self) -> bool {
+        if !self.ui_root.inspector.has_effect_selection() { return false; }
+        let tab = self.ui_root.inspector.last_effect_tab();
+        let indices = self.ui_root.inspector.get_selected_effect_indices();
+        let target = resolve_effect_target(tab, *self.active_layer, self.selection);
+
+        // Copy first
+        let effects = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection);
+        if let Some(effects) = effects {
+            let selected: Vec<_> = indices.iter()
+                .filter_map(|&i| effects.get(i).cloned())
+                .collect();
+            if selected.len() == 1 {
+                self.effect_clipboard.copy_single(&selected[0]);
+            } else if !selected.is_empty() {
+                self.effect_clipboard.copy_all(&selected);
+            }
+        }
+
+        // Remove in reverse index order (Unity lines 242-246)
+        for &idx in indices.iter().rev() {
+            let effects_slice = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection);
+            if let Some(effects) = effects_slice {
+                if let Some(fx) = effects.get(idx) {
+                    let cmd = RemoveEffectCommand::new(target.clone(), fx.clone(), idx);
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                    boxed.execute(self.project);
+                    let _ = self.content_tx.try_send(ContentCommand::Execute(boxed));
+                }
+            }
+        }
+
+        self.ui_root.inspector.clear_effect_selection();
+        *self.needs_structural_sync = true;
+        *self.needs_rebuild = true;
+        true
+    }
+
+    fn handle_effect_paste(&mut self) -> bool {
+        if !self.effect_clipboard.has_content() { return false; }
+        let tab = self.ui_root.inspector.last_effect_tab();
+        let target = resolve_effect_target(tab, *self.active_layer, self.selection);
+
+        // Insert after last selected card, or append to end (Unity lines 257-263)
+        let indices = self.ui_root.inspector.get_selected_effect_indices();
+        let effects_len = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection)
+            .map(|e| e.len())
+            .unwrap_or(0);
+        let insert_at = if let Some(&last) = indices.last() {
+            last + 1
+        } else {
+            effects_len
+        };
+
+        let clones = self.effect_clipboard.get_paste_clones();
+        for (offset, fx) in clones.into_iter().enumerate() {
+            let cmd = manifold_editing::commands::effects::AddEffectCommand::new(
+                target.clone(), fx, insert_at + offset,
+            );
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+            boxed.execute(self.project);
+            let _ = self.content_tx.try_send(ContentCommand::Execute(boxed));
+        }
+
+        *self.needs_structural_sync = true;
+        *self.needs_rebuild = true;
+        true
+    }
+
+    fn handle_effect_delete(&mut self) -> bool {
+        if !self.ui_root.inspector.has_effect_selection() { return false; }
+        let tab = self.ui_root.inspector.last_effect_tab();
+        let indices = self.ui_root.inspector.get_selected_effect_indices();
+        let target = resolve_effect_target(tab, *self.active_layer, self.selection);
+
+        // Remove in reverse index order (Unity lines 274-289)
+        for &idx in indices.iter().rev() {
+            let effects_slice = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection);
+            if let Some(effects) = effects_slice {
+                if let Some(fx) = effects.get(idx) {
+                    let cmd = RemoveEffectCommand::new(target.clone(), fx.clone(), idx);
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                    boxed.execute(self.project);
+                    let _ = self.content_tx.try_send(ContentCommand::Execute(boxed));
+                }
+            }
+        }
+
+        self.ui_root.inspector.clear_effect_selection();
+        *self.needs_structural_sync = true;
+        *self.needs_rebuild = true;
+        true
+    }
+
+    fn handle_effect_group(&mut self) -> bool {
+        // TODO: Port GroupEffectsCommand when effect racks are ported
+        false
+    }
+
+    fn handle_effect_ungroup(&mut self) -> bool {
+        // TODO: Port UngroupEffectsCommand when effect racks are ported
+        false
+    }
+
+    fn clear_effect_selection(&mut self) {
+        self.ui_root.inspector.clear_effect_selection();
+        // Visual update deferred — the caller sets needs_rebuild or the next
+        // frame's sync_project_data will rebuild the inspector with the
+        // updated is_selected state.
+        *self.needs_rebuild = true;
+    }
+
     fn set_inspector_focus(&mut self, _focused: bool) {}
     fn show_toast(&mut self, message: &str) {
         log::info!("[Toast] {}", message);
@@ -765,5 +893,52 @@ impl TimelineInputHost for AppInputHost<'_> {
         self.ui_root.viewport.set_scroll(scroll_beat, 0.0);
 
         *self.needs_scroll_rebuild = true;
+    }
+}
+
+// ── Effect resolution helpers (mirrors ui_bridge resolve_effects) ──
+
+use manifold_core::effects::EffectInstance;
+use manifold_core::project::Project;
+
+fn resolve_effects_ref<'a>(
+    tab: InspectorTab,
+    project: &'a Project,
+    active_layer: Option<usize>,
+    selection: &UIState,
+) -> Option<&'a [EffectInstance]> {
+    match tab {
+        InspectorTab::Master => Some(&project.settings.master_effects),
+        InspectorTab::Layer => {
+            active_layer
+                .and_then(|idx| project.timeline.layers.get(idx))
+                .and_then(|l| l.effects.as_deref())
+        }
+        InspectorTab::Clip => {
+            selection.primary_selected_clip_id.as_ref().and_then(|cid| {
+                project.timeline.layers.iter()
+                    .flat_map(|l| l.clips.iter())
+                    .find(|c| c.id == *cid)
+                    .map(|c| c.effects.as_slice())
+            })
+        }
+    }
+}
+
+fn resolve_effect_target(
+    tab: InspectorTab,
+    active_layer: Option<usize>,
+    selection: &UIState,
+) -> EffectTarget {
+    match tab {
+        InspectorTab::Master => EffectTarget::Master,
+        InspectorTab::Layer => EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) },
+        InspectorTab::Clip => {
+            if let Some(clip_id) = selection.primary_selected_clip_id.as_ref() {
+                EffectTarget::Clip { clip_id: clip_id.clone() }
+            } else {
+                EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) }
+            }
+        }
     }
 }

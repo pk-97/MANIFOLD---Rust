@@ -259,7 +259,23 @@ impl EffectCardPanel {
         self.drag.is_dragging()
     }
 
+    pub fn is_selected(&self) -> bool { self.is_selected }
     pub fn set_selected(&mut self, selected: bool) { self.is_selected = selected; }
+
+    /// Unity EffectCardBitmapPanel.SetSelected (lines 244-254)
+    /// Updates border color directly on the tree without a full rebuild.
+    pub fn update_selection_visual(&mut self, tree: &mut UITree, selected: bool) {
+        if selected == self.is_selected { return; }
+        self.is_selected = selected;
+        if self.border_id >= 0 {
+            let color = if selected { color::SELECTED_BORDER } else { color::CARD_BORDER_C32 };
+            tree.set_style(self.border_id as u32, UIStyle {
+                bg_color: color,
+                corner_radius: CORNER_RADIUS,
+                ..UIStyle::default()
+            });
+        }
+    }
     pub fn set_collapsed(&mut self, collapsed: bool) { self.is_collapsed = collapsed; }
     pub fn set_enabled(&mut self, enabled: bool) { self.enabled = enabled; }
     pub fn state_mut(&mut self) -> &mut EffectCardState { &mut self.state }

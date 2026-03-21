@@ -847,6 +847,12 @@ pub fn dispatch(
             DispatchResult::structural()
         }
         PanelAction::EffectCardClicked(_) => {
+            // Selection state was already updated in InspectorCompositePanel.route_click.
+            // Now apply the visual changes (border colors) to the tree.
+            // Split borrow: inspector and tree are independent fields of UIRoot.
+            let tree = &mut ui.tree;
+            let inspector = &mut ui.inspector;
+            inspector.apply_selection_visuals(tree);
             DispatchResult::handled()
         }
         PanelAction::EffectParamRightClick(fx_idx, param_idx, default_val) => {
