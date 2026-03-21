@@ -501,12 +501,12 @@ impl UIRoot {
                 });
                 true
             }
-            PanelAction::GenTypeClicked => {
+            PanelAction::GenTypeClicked(layer_idx) => {
                 use manifold_core::types::GeneratorType;
                 let items: Vec<DropdownItem> = GeneratorType::ALL.iter()
                     .map(|g| DropdownItem::new(g.display_name()))
                     .collect();
-                self.open_dropdown_at(DropdownContext::GenType(0), items, trigger);
+                self.open_dropdown_at(DropdownContext::GenType(*layer_idx), items, trigger);
                 true
             }
             PanelAction::MidiInputClicked(idx) => {

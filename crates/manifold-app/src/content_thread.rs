@@ -488,6 +488,21 @@ impl ContentThread {
                 self.engine.mark_compositor_dirty(0.0);
             }
 
+            // ── Generator ─────────────────────────────────────────
+            ContentCommand::GeneratorTypeChanged { layer_index, new_type } => {
+                // Port of C# PlaybackController.NotifyGeneratorTypeChanged().
+                let (renderers, _) = self.engine.split_renderer_project();
+                for renderer in renderers.iter_mut() {
+                    if let Some(gen) = renderer.as_any_mut()
+                        .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+                    {
+                        gen.update_active_types_for_layer(layer_index, new_type);
+                        break;
+                    }
+                }
+                self.engine.mark_compositor_dirty(0.0);
+            }
+
             // ── Lifecycle ────────────────────────────────────────────
             ContentCommand::PauseRendering => {
                 self.rendering_paused = true;

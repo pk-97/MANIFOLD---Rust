@@ -84,6 +84,8 @@ pub struct GenParamPanel {
     gen_type_name: String,
     param_info: Vec<GenParamInfo>,
     state: GenParamState,
+    /// The layer index this panel is displaying gen params for.
+    layer_index: usize,
 
     // Node IDs — gen type row
     gen_type_label_id: i32,
@@ -117,6 +119,7 @@ impl GenParamPanel {
             gen_type_name: String::new(),
             param_info: Vec::new(),
             state: GenParamState::new(0),
+            layer_index: 0,
             gen_type_label_id: -1,
             gen_type_btn_id: -1,
             slider_ids: Vec::new(),
@@ -388,6 +391,10 @@ impl GenParamPanel {
         }
     }
 
+    pub fn set_layer_index(&mut self, idx: usize) {
+        self.layer_index = idx;
+    }
+
     pub fn sync_gen_type_name(&mut self, tree: &mut UITree, name: &str) {
         self.gen_type_name = name.into();
         if self.gen_type_label_id >= 0 {
@@ -401,7 +408,7 @@ impl GenParamPanel {
         let id = node_id as i32;
 
         if id == self.gen_type_btn_id {
-            return vec![PanelAction::GenTypeClicked];
+            return vec![PanelAction::GenTypeClicked(self.layer_index)];
         }
 
         // Toggle buttons
@@ -705,7 +712,7 @@ mod tests {
 
         let actions = panel.handle_click(panel.gen_type_btn_id as u32);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], PanelAction::GenTypeClicked));
+        assert!(matches!(actions[0], PanelAction::GenTypeClicked(_)));
     }
 
     #[test]

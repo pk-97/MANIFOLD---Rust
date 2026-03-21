@@ -83,6 +83,11 @@ pub enum ContentCommand {
     // ── Compositor ────────────────────────────────────────────────
     MarkCompositorDirty,
 
+    // ── Generator ──────────────────────────────────────────────────
+    /// Notify renderer that a layer's generator type changed.
+    /// Port of C# PlaybackController.NotifyGeneratorTypeChanged().
+    GeneratorTypeChanged { layer_index: i32, new_type: manifold_core::GeneratorType },
+
     // ── Lifecycle ─────────────────────────────────────────────────
     /// Pause rendering (content thread stops ticking/rendering but still drains commands).
     /// Used while native file dialogs are open to avoid GPU contention on macOS.

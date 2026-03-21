@@ -232,6 +232,40 @@ impl GeneratorRenderer {
         }
     }
 
+    /// Update active clip types for a layer after generator type change.
+    /// Port of C# GeneratorRenderer.UpdateActiveTypesForLayer().
+    pub fn update_active_types_for_layer(&mut self, layer_index: i32, new_type: GeneratorType) {
+        // Update clip type tracking
+        for active in self.active_clips.values_mut() {
+            if active.layer_index == layer_index {
+                active.generator_type = new_type;
+            }
+        }
+
+        // If the type changed, force the generator swap now.
+        let needs_swap = self
+            .layer_generators
+            .get(&layer_index)
+            .is_some_and(|ls| ls.generator_type != new_type);
+
+        if needs_swap {
+            let old_trigger_count = self
+                .layer_generators
+                .get(&layer_index)
+                .map_or(0, |ls| ls.trigger_count);
+            if let Some(gen) = self.registry.create(&self.device, new_type) {
+                self.layer_generators.insert(
+                    layer_index,
+                    LayerGeneratorState {
+                        generator: gen,
+                        generator_type: new_type,
+                        trigger_count: old_trigger_count,
+                    },
+                );
+            }
+        }
+    }
+
     /// Number of active clips.
     pub fn active_count(&self) -> usize {
         self.active_clips.len()

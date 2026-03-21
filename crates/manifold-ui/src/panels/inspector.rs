@@ -206,9 +206,10 @@ impl InspectorCompositePanel {
         }
     }
 
-    pub fn configure_gen_params(&mut self, config: Option<&GenParamConfig>) {
+    pub fn configure_gen_params(&mut self, config: Option<&GenParamConfig>, layer_index: usize) {
         if let Some(cfg) = config {
             let mut panel = GenParamPanel::new();
+            panel.set_layer_index(layer_index);
             panel.configure(cfg);
             self.gen_params = Some(panel);
         } else {

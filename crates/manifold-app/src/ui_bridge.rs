@@ -1516,7 +1516,7 @@ pub fn dispatch(
         }
 
         // ── Generator params ───────────────────────────────────────
-        PanelAction::GenTypeClicked => {
+        PanelAction::GenTypeClicked(_) => {
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
@@ -2113,17 +2113,25 @@ pub fn dispatch(
                         .map(|gp| gp.generator_type)
                         .unwrap_or(GeneratorType::None);
                     if let Some(new_type) = GeneratorType::from_index(*gen_type_idx) {
-                        let old_params = layer.gen_params.as_ref()
-                            .map(|gp| gp.param_values.clone())
-                            .unwrap_or_default();
-                        let old_drivers = layer.gen_params.as_ref()
-                            .and_then(|gp| gp.drivers.clone());
-                        let old_envelopes = layer.gen_params.as_ref()
-                            .and_then(|gp| gp.envelopes.clone());
-                        let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
-                            *layer_idx, old_type, new_type, old_params, old_drivers, old_envelopes,
-                        );
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
+                        if new_type != old_type {
+                            let old_params = layer.gen_params.as_ref()
+                                .map(|gp| gp.param_values.clone())
+                                .unwrap_or_default();
+                            let old_drivers = layer.gen_params.as_ref()
+                                .and_then(|gp| gp.drivers.clone());
+                            let old_envelopes = layer.gen_params.as_ref()
+                                .and_then(|gp| gp.envelopes.clone());
+                            let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
+                                *layer_idx, old_type, new_type, old_params, old_drivers, old_envelopes,
+                            );
+                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
+                            // Notify content thread to swap active generator instances.
+                            // Port of C# PlaybackController.NotifyGeneratorTypeChanged().
+                            let _ = content_tx.try_send(ContentCommand::GeneratorTypeChanged {
+                                layer_index: *layer_idx as i32,
+                                new_type,
+                            });
+                        }
                     }
                 }
             }
@@ -3140,14 +3148,14 @@ pub fn sync_inspector_data(
             let gen_config = layer.gen_params.as_ref()
                 .filter(|gp| gp.generator_type != GeneratorType::None)
                 .map(|gp| gen_params_to_config(gp));
-            ui.inspector.configure_gen_params(gen_config.as_ref());
+            ui.inspector.configure_gen_params(gen_config.as_ref(), idx);
         } else {
             ui.inspector.configure_layer_effects(&[]);
-            ui.inspector.configure_gen_params(None);
+            ui.inspector.configure_gen_params(None, 0);
         }
     } else {
         ui.inspector.configure_layer_effects(&[]);
-        ui.inspector.configure_gen_params(None);
+        ui.inspector.configure_gen_params(None, 0);
     }
 
     // Clip effects → inspector

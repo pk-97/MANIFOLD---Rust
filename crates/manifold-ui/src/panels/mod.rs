@@ -166,7 +166,7 @@ pub enum PanelAction {
     EffectReorder(usize, usize),
 
     // Generator params
-    GenTypeClicked,
+    GenTypeClicked(usize),  // layer_index
     GenParamSnapshot(usize),
     GenParamChanged(usize, f32),
     GenParamCommit(usize),
