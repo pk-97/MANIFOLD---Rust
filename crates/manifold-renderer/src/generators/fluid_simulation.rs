@@ -836,6 +836,7 @@ impl Generator for FluidSimulationGenerator {
 
         // Unity: activeCount is dispatch-only. Buffer is always MAX_PARTICLES.
         let active_count = ((particles_param * 1_000_000.0) as u32).clamp(100_000, MAX_PARTICLES);
+        self.active_count = active_count;
 
         // Unity: particles created once in Initialize(), never recreated for param changes.
         if !self.initialized {
@@ -845,8 +846,6 @@ impl Generator for FluidSimulationGenerator {
         // Unity: density_res change → Resize() which only rebuilds scatter-resolution RTs.
         // "Particle buffer is resolution-independent — no rebuild needed."
         self.ensure_scatter_resources(device, queue, ctx.width, ctx.height, density_res);
-
-        self.active_count = active_count;
         let sw = self.scatter_width;
         let sh = self.scatter_height;
         let bw = (sw / PRE_SHRINK).max(1);

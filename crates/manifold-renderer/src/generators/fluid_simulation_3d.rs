@@ -888,6 +888,8 @@ impl Generator for FluidSimulation3DGenerator {
         let desired_dw = ((ctx.width  as f32 * field_res).round() as u32).max(16);
         let desired_dh = ((ctx.height as f32 * field_res).round() as u32).max(16);
 
+        self.active_count = active_count;
+
         // Unity: particles created once in Initialize(), never recreated for param changes.
         // Buffer is always MAX_PARTICLES; activeCount is dispatch-only.
         if !self.initialized {
@@ -899,8 +901,6 @@ impl Generator for FluidSimulation3DGenerator {
 
         // Unity EnsureDisplayResources: only recreate when display dims change
         self.ensure_display_resources(device, queue, desired_dw, desired_dh);
-
-        self.active_count = active_count;
         let vol_res      = self.vol_res;
         let dw           = self.disp_w;
         let dh           = self.disp_h;
