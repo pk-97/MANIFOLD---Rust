@@ -274,7 +274,7 @@ impl EditingService {
                     let trimmed = Self::trim_clip_to_region(clip, region, spb);
                     self.clipboard.push(ClipboardEntry {
                         beat_offset: trimmed.start_beat - origin_beat,
-                        layer_offset: trimmed.layer_index - min_layer as i32,
+                        layer_offset: trimmed.layer_index - min_layer,
                         source_clip: trimmed,
                     });
                 }
@@ -939,6 +939,7 @@ impl EditingService {
 
     /// Split clips at region boundaries and return the split commands + interior clip IDs.
     /// Port of C# EditingService.SplitClipsForRegionMove (lines 1135-1143).
+    #[allow(clippy::type_complexity)]
     pub fn split_clips_for_region_move(
         project: &Project,
         region: &SelectionRegion,

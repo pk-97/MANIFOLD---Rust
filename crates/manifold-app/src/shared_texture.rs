@@ -8,6 +8,11 @@
 //! Architecture:
 //!   Content Device ──render──▶ IOSurface-backed texture ◀──read── UI Device
 //!                              (same kernel GPU memory)
+//!
+//! Note: `io_surface` crate is deprecated in favor of `objc2-io-surface`.
+//! Migration planned but deferred — too risky for this pass.
+#![allow(deprecated)]
+#![allow(dead_code)]
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::RwLock;

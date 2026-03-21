@@ -163,9 +163,6 @@ pub struct PlaybackEngine {
     // Port of C# PlaybackController.OnTimeChanged (line 1149).
     pub on_time_changed: Option<Box<dyn Fn(f32) + Send>>,
 
-    // Cached media length resolver. Port of C# PlaybackEngine line 201.
-    cached_get_media_length: HashMap<String, f32>,
-
     // Sort comparator scratch. Port of C# PlaybackEngine lines 211-214.
     // Rust uses closures for sorting — no static delegates needed, but
     // we keep the scratch buffers for zero-alloc iteration.
@@ -224,7 +221,6 @@ impl PlaybackEngine {
             record_command_delegate: None,
             show_debug_logs: false,
             on_time_changed: None,
-            cached_get_media_length: HashMap::with_capacity(32),
             to_pause_list: Vec::with_capacity(8),
         }
     }
@@ -635,30 +631,6 @@ impl PlaybackEngine {
             should_clear_feedback_buffer: false,
             modulation_active: modulation_dirty,
         }
-    }
-
-    /// Build the ready_clips_list from currently active clips.
-    /// Superseded by filter_ready_clips() in the tick loop, but kept for
-    /// potential use in tests or simple queries.
-    #[allow(dead_code)]
-    fn build_ready_clips_list(&mut self) {
-        self.ready_clips_list.clear();
-        for (clip_id, _) in &self.active_clip_renderers {
-            if self.recently_started_times.contains_key(clip_id) {
-                continue;
-            }
-            if let Some(clip) = self.find_timeline_clip_clone(clip_id) {
-                self.ready_clips_list.push(clip);
-            }
-        }
-        // Sort by layer index descending (back to front for compositing)
-        self.ready_clips_list.sort_by(|a, b| b.layer_index.cmp(&a.layer_index));
-    }
-
-    /// Clone a clip by ID for the ready list. Needed because we can't hold refs across mutable ops.
-    #[allow(dead_code)]
-    fn find_timeline_clip_clone(&self, clip_id: &str) -> Option<TimelineClip> {
-        self.find_timeline_clip(clip_id).cloned()
     }
 
     /// Query timeline for active clips at current beat, populating timeline_active_scratch.

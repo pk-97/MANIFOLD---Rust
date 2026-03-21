@@ -14,6 +14,7 @@ use winit::keyboard::{Key, NamedKey};
 ///
 /// Owns zoom state (pending anchor, scroll target) and inspector focus.
 /// The app layer calls `handle_keyboard_input()` on each key press.
+#[allow(dead_code)]
 pub struct InputHandler {
     // ── Zoom state (Unity lines 51-59) ──
     pub needs_zoom_update: bool,
@@ -26,6 +27,7 @@ pub struct InputHandler {
     pub inspector_has_focus: bool,
 }
 
+#[allow(dead_code)]
 impl InputHandler {
     pub fn new() -> Self {
         Self {
@@ -38,6 +40,7 @@ impl InputHandler {
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_inspector_focus(&mut self, focused: bool) {
         self.inspector_has_focus = focused;
     }

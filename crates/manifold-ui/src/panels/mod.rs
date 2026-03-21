@@ -224,6 +224,7 @@ pub enum PanelAction {
     AddEffectClicked(InspectorTab),
     RemoveEffect(usize),
     BrowserSearchClicked,
+    PasteEffects,
 
     // Dropdown results (context-routed from UIRoot)
     SetMidiNote(usize, i32),       // layer_index, note (0-127)

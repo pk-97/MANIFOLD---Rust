@@ -54,7 +54,7 @@ struct OwnerState {
     downsample_rt: RenderTarget,
     readback: ReadbackRequest,
     has_blob_data: bool,
-    pixel_buffer: Vec<u8>,            // new byte[READBACK_WIDTH * READBACK_HEIGHT * 4]
+    _pixel_buffer: Vec<u8>,           // new byte[READBACK_WIDTH * READBACK_HEIGHT * 4]
     native_blob_output: Vec<f32>,     // new float[MAX_BLOBS * 4]
     blob_data_for_shader: Vec<[f32; 4]>, // Vector4[MAX_BLOBS]
     connection_lines: Vec<[f32; 4]>,     // Vector4[MAX_BLOBS]
@@ -109,7 +109,7 @@ pub struct BlobTrackingFX {
     blit_bgl: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
     // BlobTrackingFX.cs line 24 — fontAtlas
-    font_atlas: wgpu::Texture,
+    _font_atlas: wgpu::Texture,
     font_atlas_view: wgpu::TextureView,
     // BlobTrackingFX.cs line 22 — nativeHandle (native blob detector)
     // Native processing runs on a background thread via BackgroundWorker.
@@ -353,7 +353,7 @@ impl BlobTrackingFX {
             blit_pipeline,
             blit_bgl,
             uniform_buffer,
-            font_atlas,
+            _font_atlas: font_atlas,
             font_atlas_view,
             worker,
             pending_worker_owner: None,
@@ -386,7 +386,7 @@ impl BlobTrackingFX {
                 downsample_rt,
                 readback: ReadbackRequest::new(),
                 has_blob_data: false,
-                pixel_buffer,
+                _pixel_buffer: pixel_buffer,
                 native_blob_output,
                 blob_data_for_shader,
                 connection_lines,

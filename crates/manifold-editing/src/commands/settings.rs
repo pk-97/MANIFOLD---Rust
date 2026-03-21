@@ -499,8 +499,8 @@ impl Command for ClearTempoMapCommand {
 /// Stores old/new positions for undo.
 #[derive(Debug)]
 pub struct RescaleBeatsForBpmChangeCommand {
-    old_bpm: f32,
-    new_bpm: f32,
+    _old_bpm: f32,
+    _new_bpm: f32,
     /// (layer_index, clip_index, old_start_beat, new_start_beat)
     clip_moves: Vec<(usize, usize, f32, f32)>,
 }
@@ -527,7 +527,7 @@ impl RescaleBeatsForBpmChangeCommand {
 
         if clip_moves.is_empty() { return None; }
 
-        Some(Self { old_bpm, new_bpm, clip_moves })
+        Some(Self { _old_bpm: old_bpm, _new_bpm: new_bpm, clip_moves })
     }
 }
 

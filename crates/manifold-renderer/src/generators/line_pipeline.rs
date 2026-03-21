@@ -344,7 +344,7 @@ impl LineGeneratorHelper {
         animate: bool,
         speed: f32,
         window: f32,
-        dt: f32,
+        _dt: f32,
         scale: f32,
         dot_scale: f32,
     ) -> &[LineVertex] {

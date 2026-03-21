@@ -73,7 +73,7 @@ impl GenParamState {
 // ── Internal node ID structs ─────────────────────────────────────
 
 struct ToggleParamIds {
-    label_id: i32,
+    _label_id: i32,
     button_id: i32,
 }
 
@@ -294,7 +294,7 @@ impl GenParamPanel {
                     if on { "ON" } else { "OFF" },
                 ) as i32;
 
-                self.toggle_ids[i] = Some(ToggleParamIds { label_id, button_id });
+                self.toggle_ids[i] = Some(ToggleParamIds { _label_id: label_id, button_id });
                 self.toggle_cache[i] = on;
                 cy += ROW_HEIGHT + ROW_SPACING;
             } else {

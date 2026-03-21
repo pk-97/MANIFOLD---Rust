@@ -15,6 +15,7 @@ pub enum DropdownContext {
     MidiNote(usize),
     MidiChannel(usize),
     Resolution,
+    #[allow(dead_code)]
     AddEffect(InspectorTab),
     GenType(usize),
     ClipContext(String),     // right-click on clip: clip_id
@@ -70,6 +71,9 @@ pub struct UIRoot {
     /// Consumed by app.rs to trigger rebuild_scroll_panels.
     pub overlay_dirty: bool,
 
+    /// Effect clipboard count (set by app.rs, used by browser popup).
+    pub effect_clipboard_count: usize,
+
     /// Hover actions produced by continuous cursor movement, drained in process_events.
     cursor_hover_actions: Vec<PanelAction>,
 
@@ -116,6 +120,7 @@ impl UIRoot {
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
             overlay_dirty: false,
+            effect_clipboard_count: 0,
             cursor_hover_actions: Vec::new(),
             viewport_events: Vec::new(),
             last_right_click_pos: Vec2::new(0.0, 0.0),
@@ -302,7 +307,7 @@ impl UIRoot {
                                 actions.push(PanelAction::AddEffect(tab, key as usize));
                             }
                             BrowserPopupAction::Paste => {
-                                // TODO: wire paste
+                                actions.push(PanelAction::PasteEffects);
                             }
                             BrowserPopupAction::Dismissed => {}
                         }
@@ -558,7 +563,7 @@ impl UIRoot {
                     item_keys: keys,
                     item_categories: categories,
                     category_names: cat_names,
-                    paste_count: 0, // TODO: wire clipboard count
+                    paste_count: self.effect_clipboard_count,
                     screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
                 });
                 true

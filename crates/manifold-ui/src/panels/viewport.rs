@@ -1,6 +1,6 @@
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
-use crate::input::{Modifiers, UIEvent};
+use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::tree::UITree;
@@ -10,30 +10,20 @@ use super::{Panel, PanelAction};
 
 const RULER_HEIGHT: f32 = color::RULER_HEIGHT;
 const PLAYHEAD_WIDTH: f32 = color::PLAYHEAD_WIDTH;
-const INSERT_CURSOR_WIDTH: f32 = 2.0;
 const CLIP_VERTICAL_PAD: f32 = 12.0;
-const CLIP_LABEL_PAD: f32 = 4.0;
-const CLIP_CORNER_RADIUS: f32 = 2.0;
-const CLIP_BORDER_WIDTH: f32 = 1.0;
-const CLIP_MIN_WIDTH_PX: f32 = color::CLIP_MIN_WIDTH;
 
 /// Center a vertical line of given width at pixel position `px`.
 #[inline]
 fn centered_line_x(px: f32, width: f32) -> f32 { px - width * 0.5 }
 
-const FONT_SIZE: u16 = 9;
 const RULER_FONT_SIZE: u16 = 9;
 const RULER_TICK_W: f32 = 1.0;
 const RULER_BEAT_TICK_H: f32 = 8.0;
 const RULER_BAR_TICK_H: f32 = 14.0;
 const RULER_LABEL_H: f32 = 14.0;
 const RULER_LABEL_W: f32 = 40.0;
-const GRID_LINE_W: f32 = 1.0;
-
-// Maximum nodes to allocate for grid/ruler/clips (avoid unbounded allocation)
-const MAX_GRID_LINES: usize = 200;
+// Maximum nodes to allocate for ruler ticks (avoid unbounded allocation)
 const MAX_RULER_TICKS: usize = 1500;
-const MAX_VISIBLE_CLIPS: usize = 500;
 
 // ── Data types ──────────────────────────────────────────────────
 
@@ -732,15 +722,6 @@ impl TimelineViewportPanel {
         best_beat
     }
 
-    /// Check if a clip is locked by clip_id.
-    fn clip_is_locked(&self, clip_id: &str) -> bool {
-        for clip in &self.clips {
-            if clip.clip_id == clip_id {
-                return clip.is_locked;
-            }
-        }
-        false
-    }
 
     /// Floor-snap a beat to the current grid subdivision.
     /// Unlike `snap_to_grid` (rounds to nearest), this floors to the grid line
@@ -1112,7 +1093,7 @@ impl TimelineViewportPanel {
                 let rows_per_child = 2.0_f32.min(clamped_h / child_count.max(1) as f32);
                 let palette = &color::LAYER_PALETTE;
                 let (min_beat, max_beat) = self.visible_beat_range();
-                let ppb = self.mapper.pixels_per_beat();
+                let _ppb = self.mapper.pixels_per_beat();
 
                 for (ci, &child_idx) in track.child_layer_indices.iter().enumerate() {
                     let child_y = clamped_y + ci as f32 * rows_per_child;
@@ -1353,35 +1334,6 @@ impl Default for TimelineViewportPanel {
 
 // ── Helpers ──────────────────────────────────────────────────────
 
-/// Determine clip visual color following Unity's priority chain:
-/// locked → selected → hovered → normal.
-/// Muted is a POST-PROCESS blend: average (base + MutedColor) / 2 per channel.
-/// From Unity LayerBitmapRenderer visual state logic.
-fn get_clip_color(clip: &ViewportClip, is_selected: bool, is_hovered: bool) -> Color32 {
-    // Priority: locked → selected → hovered → normal
-    let base = if clip.is_locked {
-        color::CLIP_LOCKED
-    } else if is_selected {
-        if clip.is_generator { color::CLIP_GEN_SELECTED } else { color::CLIP_SELECTED }
-    } else if is_hovered {
-        if clip.is_generator { color::CLIP_GEN_HOVER } else { color::CLIP_HOVER }
-    } else {
-        if clip.is_generator { color::CLIP_GEN_NORMAL } else { clip.color }
-    };
-
-    // Muted post-process: blend 50% with MutedColor (rust-orange tint)
-    if clip.is_muted {
-        let m = color::MUTED_COLOR;
-        Color32::new(
-            ((base.r as u16 + m.r as u16) / 2) as u8,
-            ((base.g as u16 + m.g as u16) / 2) as u8,
-            ((base.b as u16 + m.b as u16) / 2) as u8,
-            base.a,
-        )
-    } else {
-        base
-    }
-}
 
 // ── Tests ────────────────────────────────────────────────────────
 

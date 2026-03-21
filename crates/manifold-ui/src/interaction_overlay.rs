@@ -10,18 +10,18 @@
 use std::collections::HashSet;
 
 use crate::clip_hit_tester::{ClipHitTester, ClipHitResult, HitRegion};
-use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::Modifiers;
 use crate::node::Vec2;
-use crate::panels::viewport::{TimelineViewportPanel, ViewportClip};
+use crate::panels::viewport::TimelineViewportPanel;
 use crate::timeline_editing_host::{TimelineEditingHost, TimelineCursor};
 use crate::ui_state::UIState;
 
 // ── Constants ───────────────────────────────────────────────────
 // Unity InteractionOverlay lines 78-79.
 
-const SNAP_THRESHOLD_PX: f32 = 12.0;
-const MAX_SNAP_BEATS: f32 = 0.5;
+// Note: SNAP_THRESHOLD_PX and MAX_SNAP_BEATS live on TimelineViewportPanel
+// (viewport.rs magnetic_snap). These overlay constants will be needed when
+// overlay-level snapping is ported (Unity InteractionOverlay lines 78-79).
 
 // ── Shift+Click region selection ─────────────────────────────────
 // Port of Unity EditingService.SelectRegionTo (lines 216-262).
@@ -686,7 +686,7 @@ impl InteractionOverlay {
         &mut self,
         mouse_beat: f32,
         host: &mut dyn TimelineEditingHost,
-        ui_state: &UIState,
+        _ui_state: &UIState,
         viewport: &TimelineViewportPanel,
     ) {
         let trim_id = match &self.trim_clip_id {
@@ -736,7 +736,7 @@ impl InteractionOverlay {
         mouse_beat: f32,
         host: &mut dyn TimelineEditingHost,
         ui_state: &mut UIState,
-        viewport: &TimelineViewportPanel,
+        _viewport: &TimelineViewportPanel,
     ) {
         self.drag_mode = DragMode::Move;
 

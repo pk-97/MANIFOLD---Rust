@@ -10,6 +10,7 @@
 
 /// What kind of field is being edited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum TextInputField {
     Bpm,
     Fps,

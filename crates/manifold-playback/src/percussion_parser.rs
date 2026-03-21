@@ -421,8 +421,8 @@ struct RootDto {
 /// Port of Unity EnergyEnvelopeDto [Serializable] class.
 #[derive(Debug, Deserialize)]
 struct EnergyEnvelopeDto {
-    #[serde(default)]
-    resolution: Option<String>,
+    #[serde(default, rename = "resolution")]
+    _resolution: Option<String>,
     #[serde(default = "empty_vec_f32")]
     values: Vec<f32>,
 }

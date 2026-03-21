@@ -9,7 +9,7 @@ use crate::color;
 use crate::node::Color32;
 use crate::node::*;
 use crate::tree::UITree;
-use super::{InspectorTab, PanelAction};
+use super::InspectorTab;
 
 // ── Layout constants (from Unity BrowserPopupPanel.cs + BrowserPopupLayout.cs) ──
 
@@ -42,7 +42,6 @@ const SEARCH_TEXT: Color32 = Color32::new(168, 168, 172, 255);
 const CELL_NORMAL: Color32 = Color32::new(36, 36, 38, 255);
 const CELL_HOVER: Color32 = Color32::new(51, 51, 56, 255);
 const CELL_PRESSED: Color32 = Color32::new(46, 46, 48, 255);
-const CELL_SELECTED: Color32 = Color32::new(45, 65, 95, 255);
 const CHIP_INACTIVE: Color32 = Color32::new(41, 41, 43, 255);
 const CHIP_HOVER: Color32 = Color32::new(56, 56, 58, 255);
 const PASTE_BG: Color32 = Color32::new(40, 40, 42, 255);

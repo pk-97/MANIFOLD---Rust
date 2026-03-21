@@ -1180,7 +1180,7 @@ impl Panel for InspectorCompositePanel {
                     },
                     "+ Add Effect",
                 ) as i32;
-                cy += ADD_EFFECT_BTN_H + SECTION_GAP;
+                // cy not read after this point — total content height used by scroll logic
             }
         }
 

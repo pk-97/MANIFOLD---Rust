@@ -119,7 +119,7 @@ impl Layer {
     /// Uses golden ratio hue distribution for maximum visual separation.
     /// From Unity Layer.cs line 586-590.
     pub fn generate_layer_color(index: usize) -> crate::color::Color {
-        let hue = (index as f32 * 0.618033988749895) % 1.0;
+        let hue = (index as f32 * 0.618_034) % 1.0;
         crate::color::Color::hsv_to_rgb(hue, 0.6, 0.8)
     }
 

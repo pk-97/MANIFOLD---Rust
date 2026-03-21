@@ -450,6 +450,7 @@ impl ChangeParamEnvelopeCommand {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply(clip: &mut manifold_core::clip::TimelineClip, idx: usize,
              a: f32, d: f32, s: f32, r: f32, target: f32, enabled: bool) {
         let envs = clip.envelopes_mut();

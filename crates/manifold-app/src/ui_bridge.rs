@@ -46,6 +46,7 @@ use crate::user_prefs::UserPrefs;
 use crate::ui_root::UIRoot;
 
 /// Result of dispatching a panel action.
+#[allow(dead_code)]
 pub struct DispatchResult {
     /// True if the action was handled.
     pub handled: bool,
@@ -55,6 +56,7 @@ pub struct DispatchResult {
     pub resolution_changed: bool,
 }
 
+#[allow(dead_code)]
 impl DispatchResult {
     fn handled() -> Self { Self { handled: true, structural_change: false, resolution_changed: false } }
     fn structural() -> Self { Self { handled: true, structural_change: true, resolution_changed: false } }
@@ -2257,9 +2259,36 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::ContextImportMidi(layer_idx) => {
-            // TODO: Wire to MIDI import when subsystem is ported
-            log::warn!("Import MIDI to layer {} — not yet implemented", layer_idx);
-            DispatchResult::handled()
+            // Open file dialog for MIDI import
+            let last_dir = dialog_path_memory::get_last_directory(
+                DialogContext::MidiImport, user_prefs,
+            );
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("Import MIDI File")
+                .add_filter("MIDI Files", &["mid", "midi"]);
+            if !last_dir.is_empty() {
+                dialog = dialog.set_directory(&last_dir);
+            }
+            if let Some(path) = dialog.pick_file() {
+                let path_str = path.to_string_lossy().to_string();
+                dialog_path_memory::remember_directory(
+                    DialogContext::MidiImport, &path_str, user_prefs,
+                );
+                // Parse MIDI file and import to layer
+                let notes = manifold_playback::midi_parser::MidiFileParser::parse_file(&path_str);
+                if !notes.is_empty() {
+                    let result = manifold_playback::midi_import::MidiImportService::import_to_layer(
+                        &notes, *layer_idx, 0.0, project,
+                    );
+                    if result.success {
+                        if let Some(undo_cmd) = result.undo_command {
+                            let _ = content_tx.try_send(ContentCommand::Execute(undo_cmd));
+                        }
+                        log::info!("Imported {} clips from MIDI to layer {}", result.added_clips, layer_idx);
+                    }
+                }
+            }
+            DispatchResult::structural()
         }
         PanelAction::ContextGroupSelectedLayers => {
             // TODO: Wire to EditingService.GroupSelectedLayers
@@ -2397,6 +2426,11 @@ pub fn dispatch(
             DispatchResult::handled()
         }
 
+        // Effect paste (intercepted by app.rs — no-op here)
+        PanelAction::PasteEffects => {
+            DispatchResult::handled()
+        }
+
         // Generic dropdown fallback (should not normally fire)
         PanelAction::DropdownSelected(index) => {
             log::debug!("Dropdown selected: {} (no context)", index);
@@ -2408,6 +2442,7 @@ pub fn dispatch(
 /// Update the selection region to encompass all currently selected clips.
 /// Called after Ctrl+Click multi-select, paste, and duplicate.
 /// From Unity InteractionOverlay.UpdateRegionFromClipSelection.
+#[allow(dead_code)]
 fn update_region_from_clip_selection(selection: &mut SelectionState, project: &Project) {
     if selection.selected_clip_ids.len() < 2 {
         // Single or no clips — no region needed

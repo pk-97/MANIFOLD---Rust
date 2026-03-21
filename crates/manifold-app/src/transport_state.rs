@@ -10,10 +10,12 @@ use manifold_ui::color;
 
 use crate::ui_root::UIRoot;
 
+#[allow(dead_code)]
 const TRANSPORT_UPDATE_INTERVAL: f32 = 0.25;
 
 /// Cached state for dirty-checking transport UI updates.
 /// Matches Unity WorkspaceController's cached transport fields exactly.
+#[allow(dead_code)]
 pub struct TransportStateCache {
     playback_state: PlaybackState,
     bpm: f32,
@@ -28,6 +30,7 @@ pub struct TransportStateCache {
     last_update_time: f32,
 }
 
+#[allow(dead_code)]
 impl TransportStateCache {
     pub fn new() -> Self {
         Self {

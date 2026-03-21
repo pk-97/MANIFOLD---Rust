@@ -462,7 +462,7 @@ impl Command for ReorderRackCommand {
 
             // Re-insert at original positions (ascending order)
             let mut pairs: Vec<(usize, EffectInstance)> = original_indices.iter()
-                .zip(members.into_iter())
+                .zip(members)
                 .map(|(&idx, fx)| (idx, fx))
                 .collect();
             pairs.sort_by_key(|(idx, _)| *idx);

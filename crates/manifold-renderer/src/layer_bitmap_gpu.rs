@@ -59,7 +59,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 /// Per-layer GPU texture.
 struct LayerTexture {
     texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    _view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
     width: u32,
     height: u32,
@@ -265,7 +265,7 @@ impl LayerBitmapGpu {
             });
             self.textures[layer_index] = Some(LayerTexture {
                 texture,
-                view,
+                _view: view,
                 bind_group,
                 width: tex_w,
                 height: tex_h,

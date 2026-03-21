@@ -76,7 +76,7 @@ pub struct MriVolumeGenerator {
     // Volume state
     volume_gpu: Option<MriVolumeGpu>,
     volume_cpu: Option<MriVolumeData>,
-    load_requested: bool,
+    _load_requested: bool,
     current_gpu_frame: u32,
     // Scan library
     scan_paths: Vec<PathBuf>,
@@ -225,7 +225,7 @@ impl MriVolumeGenerator {
             sampler,
             volume_gpu: None,
             volume_cpu: None,
-            load_requested: false,
+            _load_requested: false,
             current_gpu_frame: 0,
             scan_paths,
             current_scan_index: -1,

@@ -196,7 +196,7 @@ impl CoordinateMapper {
     }
 
     /// Set Y layout from raw height values. Test utility — bypasses Layer struct.
-    #[cfg(any(test, feature = "test-utils"))]
+    #[cfg(test)]
     pub fn set_layout(&mut self, heights: &[f32]) {
         let count = heights.len();
         self.layer_y_offsets.resize(count, 0.0);

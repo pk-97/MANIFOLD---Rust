@@ -10,6 +10,7 @@ use manifold_playback::audio_sync::PreloadedAudioData;
 use manifold_playback::audio_decoder::DecodedAudio;
 use manifold_playback::stem_audio::PreloadedStemData;
 
+#[allow(dead_code)]
 pub enum ContentCommand {
     // ── Transport ──────────────────────────────────────────────────
     Play,

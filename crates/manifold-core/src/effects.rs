@@ -280,8 +280,8 @@ impl EffectInstance {
             let mut aligned = vec![0.0f32; target];
             let copy_len = self.param_values.len().min(target);
             aligned[..copy_len].copy_from_slice(&self.param_values[..copy_len]);
-            for i in copy_len..target {
-                aligned[i] = def.param_defs.get(i).map(|pd| pd.default_value).unwrap_or(0.0);
+            for (i, slot) in aligned.iter_mut().enumerate().take(target).skip(copy_len) {
+                *slot = def.param_defs.get(i).map(|pd| pd.default_value).unwrap_or(0.0);
             }
             self.param_values = aligned;
 
@@ -289,8 +289,8 @@ impl EffectInstance {
                 let mut aligned_base = vec![0.0f32; target];
                 let base_copy = base.len().min(target);
                 aligned_base[..base_copy].copy_from_slice(&base[..base_copy]);
-                for i in base_copy..target {
-                    aligned_base[i] = def.param_defs.get(i).map(|pd| pd.default_value).unwrap_or(0.0);
+                for (i, slot) in aligned_base.iter_mut().enumerate().take(target).skip(base_copy) {
+                    *slot = def.param_defs.get(i).map(|pd| pd.default_value).unwrap_or(0.0);
                 }
                 self.base_param_values = Some(aligned_base);
             }
@@ -539,10 +539,10 @@ pub mod beat_division_helper {
     /// Unity BeatDivisionHelper.TryCompose lines 170-184.
     pub fn try_compose(base_index: usize, modifier: BeatModifier) -> Option<BeatDivision> {
         match modifier {
-            BeatModifier::Dotted if base_index >= 2 && base_index <= 6 => {
+            BeatModifier::Dotted if (2..=6).contains(&base_index) => {
                 BeatDivision::from_i32((base_index + 9) as i32)
             }
-            BeatModifier::Triplet if base_index >= 2 && base_index <= 5 => {
+            BeatModifier::Triplet if (2..=5).contains(&base_index) => {
                 BeatDivision::from_i32((base_index + 14) as i32)
             }
             BeatModifier::None => {

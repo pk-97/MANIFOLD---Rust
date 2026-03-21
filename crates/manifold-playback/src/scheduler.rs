@@ -19,9 +19,9 @@ pub struct SyncResult {
 pub struct ClipScheduler {
     should_be_active_ids: HashSet<String>,
     // Internal buffers — drained into SyncResult each call, reclaimed next call.
-    merged_list: Vec<TimelineClip>,
-    to_stop: Vec<String>,
-    to_start: Vec<TimelineClip>,
+    _merged_list: Vec<TimelineClip>,
+    _to_stop: Vec<String>,
+    _to_start: Vec<TimelineClip>,
     // Reclaimed buffers from previous SyncResult.
     reclaimed_should_be_active: Vec<TimelineClip>,
     reclaimed_to_stop: Vec<String>,
@@ -32,9 +32,9 @@ impl ClipScheduler {
     pub fn new() -> Self {
         Self {
             should_be_active_ids: HashSet::with_capacity(32),
-            merged_list: Vec::with_capacity(64),
-            to_stop: Vec::with_capacity(16),
-            to_start: Vec::with_capacity(16),
+            _merged_list: Vec::with_capacity(64),
+            _to_stop: Vec::with_capacity(16),
+            _to_start: Vec::with_capacity(16),
             reclaimed_should_be_active: Vec::new(),
             reclaimed_to_stop: Vec::new(),
             reclaimed_to_start: Vec::new(),

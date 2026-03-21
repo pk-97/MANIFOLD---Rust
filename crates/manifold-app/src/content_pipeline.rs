@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::sync::{Arc, RwLock};
 
 use manifold_core::effects::{EffectGroup, EffectInstance};

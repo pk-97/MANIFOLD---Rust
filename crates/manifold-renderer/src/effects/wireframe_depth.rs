@@ -109,6 +109,7 @@ const NATIVE_UPDATE_INTERVAL_SUBJECT: i64  = 4;
 
 // WireframeDepthFX.cs line 41-45
 #[derive(Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum DepthSourceMode {
     Heuristic = 0,
     Dnn       = 1,
@@ -136,14 +137,14 @@ struct OwnerState {
     dnn_readback_pending: bool,
     dnn_has_depth: bool,
     dnn_depth_dirty: bool,
-    dnn_pixel_buffer: Vec<u8>,           // byte[analysisWidth * analysisHeight * 4]
+    _dnn_pixel_buffer: Vec<u8>,          // byte[analysisWidth * analysisHeight * 4]
     dnn_depth_buffer: Vec<f32>,          // float[analysisWidth * analysisHeight]
     dnn_depth_texture: wgpu::Texture,    // Rgba8Unorm CPU-upload texture
     dnn_depth_texture_view: wgpu::TextureView,
     // DNN subject mask CPU path
     dnn_has_subject_mask: bool,
     dnn_subject_dirty: bool,
-    dnn_subject_buffer: Vec<f32>,        // float[analysisWidth * analysisHeight]
+    _dnn_subject_buffer: Vec<f32>,       // float[analysisWidth * analysisHeight]
     dnn_subject_history_buffer: Vec<f32>,// float[analysisWidth * analysisHeight]
     dnn_subject_texture: wgpu::Texture,  // Rgba8Unorm CPU-upload texture
     dnn_subject_texture_view: wgpu::TextureView,
@@ -156,7 +157,7 @@ struct OwnerState {
     native_flow_has_data: bool,
     native_flow_dirty: bool,
     native_flow_ready: bool,
-    cut_score_buffer: Vec<f32>,          // float[1]
+    _cut_score_buffer: Vec<f32>,         // float[1]
     latest_cut_score: f32,
     // Timing
     last_native_request_frame: i64,
@@ -205,7 +206,7 @@ pub struct WireframeDepthFX {
     sampler: wgpu::Sampler,
     uniform_buffer: wgpu::Buffer,
     // 1×1 dummy texture for texture slots unused by a given pass
-    dummy_tex: wgpu::Texture,
+    _dummy_tex: wgpu::Texture,
     dummy_view: wgpu::TextureView,
     // WireframeDepthFX.cs line 92-93
     owner_states: HashMap<i64, OwnerState>,
@@ -517,7 +518,7 @@ impl WireframeDepthFX {
             bind_group_layout,
             sampler,
             uniform_buffer,
-            dummy_tex,
+            _dummy_tex: dummy_tex,
             dummy_view,
             owner_states: HashMap::new(),
             width: 0,
@@ -693,13 +694,13 @@ impl WireframeDepthFX {
             dnn_readback_pending: false,
             dnn_has_depth: false,
             dnn_depth_dirty: false,
-            dnn_pixel_buffer: vec![0u8; pixel_count * 4],
+            _dnn_pixel_buffer: vec![0u8; pixel_count * 4],
             dnn_depth_buffer: vec![0.0f32; pixel_count],
             dnn_depth_texture,
             dnn_depth_texture_view,
             dnn_has_subject_mask: false,
             dnn_subject_dirty: false,
-            dnn_subject_buffer: vec![0.0f32; pixel_count],
+            _dnn_subject_buffer: vec![0.0f32; pixel_count],
             dnn_subject_history_buffer: vec![0.0f32; pixel_count],
             dnn_subject_texture,
             dnn_subject_texture_view,
@@ -711,7 +712,7 @@ impl WireframeDepthFX {
             native_flow_has_data: false,
             native_flow_dirty: false,
             native_flow_ready: false,
-            cut_score_buffer: vec![0.0f32; 1],
+            _cut_score_buffer: vec![0.0f32; 1],
             latest_cut_score: 0.0,
             last_native_request_frame: -1024,
             last_subject_request_frame: -1024,
@@ -826,6 +827,7 @@ impl WireframeDepthFX {
     }
 
     // Helper: run a pass writing to a temporary RenderTarget.
+    #[allow(dead_code)]
     fn run_pass_to_rt(
         &self,
         device: &wgpu::Device,
@@ -1162,6 +1164,7 @@ impl WireframeDepthFX {
     }
 
     // WireframeDepthFX.cs line 715-728 — DisableDnnBackend
+    #[allow(dead_code)]
     fn disable_dnn_backend(&mut self, frame_count: i64) {
         self.workers = None;
         self.dnn_backend_initialized = true;
@@ -1174,7 +1177,7 @@ impl WireframeDepthFX {
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        source: &wgpu::TextureView,
+        _source: &wgpu::TextureView,
         source_tex: &wgpu::Texture,
         owner_key: i64,
         mode: DepthSourceMode,
@@ -1298,7 +1301,7 @@ impl WireframeDepthFX {
         encoder: &mut wgpu::CommandEncoder,
         analysis_view: &wgpu::TextureView,
         state: &mut OwnerState,
-        temporal_smooth: f32,
+        _temporal_smooth: f32,
         ubo: &wgpu::Buffer,
     ) {
         let aw = state.analysis_width;
@@ -1350,7 +1353,7 @@ impl WireframeDepthFX {
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         state: &mut OwnerState,
-        temporal_smooth: f32,
+        _temporal_smooth: f32,
         ubo: &wgpu::Buffer,
     ) -> bool {
         // dnnBackendAvailable checked by caller (ensure_dnn_backend_available)
@@ -1412,7 +1415,7 @@ impl WireframeDepthFX {
         queue: &wgpu::Queue,
         analysis_view: &wgpu::TextureView,
         state: &mut OwnerState,
-        temporal_smooth: f32,
+        _temporal_smooth: f32,
         mesh_rate: i32,
         native_flow_enabled: bool,
         face_warp_enabled: bool,
@@ -1691,6 +1694,7 @@ impl WireframeDepthFX {
     }
 
     // WireframeDepthFX.cs line 927-978 — ClearOwnerState
+    #[allow(dead_code)]
     fn clear_owner_state(encoder: &mut wgpu::CommandEncoder, state: &mut OwnerState) {
         Self::clear_rt(encoder, &state.previous_analysis_tex);
         Self::clear_rt(encoder, &state.depth_tex);
@@ -1977,7 +1981,6 @@ impl PostProcessEffect for WireframeDepthFX {
         // PASS_ANALYSIS: source → analysis (temp RT at analysis resolution)
         let analysis_rt = RenderTarget::new(device, aw, ah, wgpu::TextureFormat::Rgba8Unorm, "WD Analysis");
         {
-            let state = self.owner_states.get(&owner_key).unwrap();
             let bg = self.make_bind_group(device, &ubo_analysis,
                 source,                              // main_tex = source
                 &self.dummy_view, &self.dummy_view, &self.dummy_view,
@@ -1989,20 +1992,13 @@ impl PostProcessEffect for WireframeDepthFX {
 
         // WireframeDepthFX.cs line 388-394 — request native readback
         if native_flow_enabled && flow_lock_enabled {
-            let state = self.owner_states.get(&owner_key).unwrap();
-            let mesh_update_due = mesh_rate <= 1
-                || ctx.frame_count - state.last_mesh_update_frame >= mesh_rate as i64;
+            let mesh_update_due = {
+                let state = self.owner_states.get(&owner_key).unwrap();
+                mesh_rate <= 1
+                    || ctx.frame_count - state.last_mesh_update_frame >= mesh_rate as i64
+            };
             if mesh_update_due {
-                // We need a copy of the source texture at analysis resolution for the readback.
-                // dnn_input_tex is Rgba8Unorm at analysis resolution — copy analysis_rt there.
-                let state = self.owner_states.get(&owner_key).unwrap();
-                let src_tex = &analysis_rt.texture;
-                // We need &mut state below; drop the shared reference first:
-                drop(state);
                 // Copy analysis_rt → dnn_input_tex happens inside request_native_readback via encoder copy
-                let state = self.owner_states.get(&owner_key).unwrap();
-                let src_tex_ref = &analysis_rt.texture;
-                drop(state);
                 self.request_native_readback(
                     device, encoder,
                     &analysis_rt.view, &analysis_rt.texture,

@@ -7,6 +7,7 @@
 //!
 //! Unity's IProjectIOHost callback interface maps to return values —
 //! ProjectIOAction tells the caller (Application) what side-effects to apply.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 

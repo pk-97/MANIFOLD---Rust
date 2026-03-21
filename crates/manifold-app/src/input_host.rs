@@ -30,6 +30,7 @@ pub struct AppInputHost<'a> {
     pub needs_rebuild: &'a mut bool,
     pub needs_structural_sync: &'a mut bool,
     pub needs_scroll_rebuild: &'a mut bool,
+    #[allow(dead_code)]
     pub current_project_path: &'a Option<std::path::PathBuf>,
     pub has_output_window: bool,
     pub pending_close_output: &'a mut bool,
@@ -236,13 +237,43 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn handle_effect_group(&mut self) -> bool {
-        // TODO: Port GroupEffectsCommand when effect racks are ported
-        false
+        let tab = self.ui_root.inspector.last_effect_tab();
+        let indices = self.ui_root.inspector.get_selected_effect_indices();
+        if indices.len() < 2 { return false; }
+        let target = resolve_effect_target(tab, *self.active_layer, self.selection);
+        let cmd = manifold_editing::commands::effect_groups::GroupEffectsCommand::new(
+            target, indices, "Group".to_string(),
+        );
+        let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+        boxed.execute(self.project);
+        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(boxed));
+        *self.needs_rebuild = true;
+        true
     }
 
     fn handle_effect_ungroup(&mut self) -> bool {
-        // TODO: Port UngroupEffectsCommand when effect racks are ported
-        false
+        let tab = self.ui_root.inspector.last_effect_tab();
+        let indices = self.ui_root.inspector.get_selected_effect_indices();
+        if indices.is_empty() { return false; }
+        let primary_idx = indices[0];
+        let target = resolve_effect_target(tab, *self.active_layer, self.selection);
+        // Get the group_id of the primary selected effect
+        let effects = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection);
+        let group_id = effects
+            .and_then(|e| e.get(primary_idx))
+            .and_then(|fx| fx.group_id.clone());
+        if let Some(gid) = group_id {
+            let cmd = manifold_editing::commands::effect_groups::UngroupEffectsCommand::new(
+                target, gid,
+            );
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+            boxed.execute(self.project);
+            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(boxed));
+            *self.needs_rebuild = true;
+            true
+        } else {
+            false
+        }
     }
 
     fn clear_effect_selection(&mut self) {
@@ -440,7 +471,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             if !commands.is_empty() {
                 // Execute locally for read-back (need new clip IDs for selection).
                 // Phase 3 will move this to content thread with sync response.
-                for mut c in commands.iter_mut() { c.execute(project); }
+                for c in commands.iter_mut() { c.execute(project); }
                 let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, "Duplicate clips".into()));
 
                 // Step 4h: find newly created clips and select them
@@ -815,7 +846,15 @@ impl TimelineInputHost for AppInputHost<'_> {
     // ── UIState delegation ──────────────────────────────────────
 
     fn get_selected_clip_ids(&self) -> Vec<String> {
-        self.selection.get_selected_clip_ids()
+        if self.selection.has_region() {
+            let region = self.selection.get_region();
+            EditingService::get_clips_in_region(self.project, region)
+                .into_iter()
+                .map(|(_, id)| id)
+                .collect()
+        } else {
+            self.selection.get_selected_clip_ids()
+        }
     }
 
     fn selection_count(&self) -> usize {

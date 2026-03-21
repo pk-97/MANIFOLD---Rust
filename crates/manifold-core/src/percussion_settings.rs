@@ -375,7 +375,7 @@ impl Default for AlgorithmSettings {
 // ─── PercussionPipelineSettings ───
 
 /// Port of Unity PercussionPipelineSettings ScriptableObject.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PercussionPipelineSettings {
     pub global: GlobalSettings,
     pub demucs: DemucsSettings,
@@ -389,25 +389,6 @@ pub struct PercussionPipelineSettings {
     pub vocal: VocalSettings,
     pub pad: PadSettings,
     pub algorithm: AlgorithmSettings,
-}
-
-impl Default for PercussionPipelineSettings {
-    fn default() -> Self {
-        Self {
-            global: GlobalSettings::default(),
-            demucs: DemucsSettings::default(),
-            kick: KickSettings::default(),
-            snare: SnareSettings::default(),
-            perc: PercSettings::default(),
-            hat: HatSettings::default(),
-            bass: BassSettings::default(),
-            bass_sustained: BassSustainedSettings::default(),
-            synth: SynthSettings::default(),
-            vocal: VocalSettings::default(),
-            pad: PadSettings::default(),
-            algorithm: AlgorithmSettings::default(),
-        }
-    }
 }
 
 impl PercussionPipelineSettings {

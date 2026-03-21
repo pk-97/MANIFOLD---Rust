@@ -187,6 +187,7 @@ pub struct Application {
     needs_structural_sync: bool,
     /// Last data_version seen from content thread. When content_state.data_version
     /// is newer, accept the project snapshot (unless drag is in progress).
+    #[allow(dead_code)]
     last_accepted_data_version: u64,
 }
 
@@ -342,6 +343,7 @@ impl Application {
         self.cursor_manager.set_default();
     }
 
+    #[allow(dead_code)]
     fn navigate_cursor(&mut self, direction: manifold_ui::cursor_nav::Direction) {
         use manifold_ui::cursor_nav::{navigate_cursor, NavResult, NavLayerInfo, NavClipInfo};
 
@@ -467,17 +469,154 @@ impl Application {
                 }
                 self.needs_rebuild = true;
             }
-            TextInputField::EffectParam(_, _) => {
-                // TODO: parse float, clamp to param range, execute ChangeEffectParamCommand
-                log::debug!("Effect param text input: {}", text);
+            TextInputField::EffectParam(effect_idx, param_idx) => {
+                if let Ok(parsed) = text.parse::<f32>() {
+                    let tab = self.ui_root.inspector.last_effect_tab();
+                    // Resolve effect instance to get type + old value
+                    let effect_info = match tab {
+                        manifold_ui::InspectorTab::Master => {
+                            self.local_project.settings.master_effects.get(effect_idx)
+                                .map(|fx| (fx.effect_type, fx.get_base_param(param_idx)))
+                        }
+                        manifold_ui::InspectorTab::Layer => {
+                            self.active_layer_index
+                                .and_then(|li| self.local_project.timeline.layers.get(li))
+                                .and_then(|l| l.effects.as_ref())
+                                .and_then(|e| e.get(effect_idx))
+                                .map(|fx| (fx.effect_type, fx.get_base_param(param_idx)))
+                        }
+                        manifold_ui::InspectorTab::Clip => {
+                            self.selection.primary_selected_clip_id.as_ref()
+                                .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
+                                .and_then(|c| c.effects.get(effect_idx))
+                                .map(|fx| (fx.effect_type, fx.get_base_param(param_idx)))
+                        }
+                    };
+                    if let Some((effect_type, old_val)) = effect_info {
+                        // Clamp to param range from registry
+                        let new_val = if let Some(def) = manifold_core::effect_definition_registry::try_get(effect_type) {
+                            if let Some(pd) = def.param_defs.get(param_idx) {
+                                parsed.clamp(pd.min, pd.max)
+                            } else { parsed }
+                        } else { parsed };
+                        if (old_val - new_val).abs() > f32::EPSILON {
+                            let target = match tab {
+                                manifold_ui::InspectorTab::Master => manifold_editing::commands::effect_target::EffectTarget::Master,
+                                manifold_ui::InspectorTab::Layer => manifold_editing::commands::effect_target::EffectTarget::Layer {
+                                    layer_index: self.active_layer_index.unwrap_or(0),
+                                },
+                                manifold_ui::InspectorTab::Clip => {
+                                    if let Some(cid) = self.selection.primary_selected_clip_id.clone() {
+                                        manifold_editing::commands::effect_target::EffectTarget::Clip { clip_id: cid }
+                                    } else {
+                                        manifold_editing::commands::effect_target::EffectTarget::Layer {
+                                            layer_index: self.active_layer_index.unwrap_or(0),
+                                        }
+                                    }
+                                }
+                            };
+                            let cmd = manifold_editing::commands::effects::ChangeEffectParamCommand::new(
+                                target, effect_idx, param_idx, old_val, new_val,
+                            );
+                            if let Some(project) = Some(&mut self.local_project) {
+                                let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                                boxed.execute(project);
+                                self.send_content_cmd(ContentCommand::Execute(boxed));
+                            }
+                        }
+                    }
+                }
+                self.needs_rebuild = true;
             }
-            TextInputField::GenParam(_) => {
-                // TODO: parse float, clamp to param range, execute ChangeGenParamCommand
-                log::debug!("Gen param text input: {}", text);
+            TextInputField::GenParam(param_idx) => {
+                if let Ok(parsed) = text.parse::<f32>() {
+                    if let Some(layer_idx) = self.active_layer_index {
+                        if let Some(layer) = self.local_project.timeline.layers.get(layer_idx) {
+                            let gen_type = layer.generator_type();
+                            // Clamp to param range from generator registry
+                            let new_val = if let Some(def) = manifold_core::generator_definition_registry::try_get(gen_type) {
+                                if let Some(pd) = def.param_defs.get(param_idx) {
+                                    parsed.clamp(pd.min, pd.max)
+                                } else { parsed }
+                            } else { parsed };
+                            if let Some(gp) = &layer.gen_params {
+                                let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
+                                let old_val = base.get(param_idx).copied().unwrap_or(0.0);
+                                if (old_val - new_val).abs() > f32::EPSILON {
+                                    let mut old_params = base.clone();
+                                    let mut new_params = base.clone();
+                                    if param_idx < new_params.len() {
+                                        new_params[param_idx] = new_val;
+                                    }
+                                    if param_idx < old_params.len() {
+                                        old_params[param_idx] = old_val;
+                                    }
+                                    let cmd = manifold_editing::commands::settings::ChangeGeneratorParamsCommand::new(
+                                        layer_idx, old_params, new_params,
+                                    );
+                                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                                    boxed.execute(&mut self.local_project);
+                                    self.send_content_cmd(ContentCommand::Execute(boxed));
+                                }
+                            }
+                        }
+                    }
+                }
+                self.needs_rebuild = true;
             }
-            TextInputField::GroupRename(_) => {
-                // TODO: execute RenameGroupCommand
-                log::debug!("Group rename: {}", text);
+            TextInputField::GroupRename(group_idx) => {
+                let new_name = text.trim().to_string();
+                if !new_name.is_empty() {
+                    let tab = self.ui_root.inspector.last_effect_tab();
+                    // Find the group by index
+                    let group_info = match tab {
+                        manifold_ui::InspectorTab::Master => {
+                            self.local_project.settings.master_effect_groups.as_ref()
+                                .and_then(|groups| groups.get(group_idx))
+                                .map(|g| (g.id.clone(), g.name.clone()))
+                        }
+                        manifold_ui::InspectorTab::Layer => {
+                            self.active_layer_index
+                                .and_then(|li| self.local_project.timeline.layers.get(li))
+                                .and_then(|l| l.effect_groups.as_ref())
+                                .and_then(|g| g.get(group_idx))
+                                .map(|g| (g.id.clone(), g.name.clone()))
+                        }
+                        manifold_ui::InspectorTab::Clip => {
+                            self.selection.primary_selected_clip_id.as_ref()
+                                .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
+                                .and_then(|c| c.effect_groups.as_ref())
+                                .and_then(|g| g.get(group_idx))
+                                .map(|g| (g.id.clone(), g.name.clone()))
+                        }
+                    };
+                    if let Some((group_id, old_name)) = group_info {
+                        if old_name != new_name {
+                            let target = match tab {
+                                manifold_ui::InspectorTab::Master => manifold_editing::commands::effect_target::EffectTarget::Master,
+                                manifold_ui::InspectorTab::Layer => manifold_editing::commands::effect_target::EffectTarget::Layer {
+                                    layer_index: self.active_layer_index.unwrap_or(0),
+                                },
+                                manifold_ui::InspectorTab::Clip => {
+                                    if let Some(cid) = self.selection.primary_selected_clip_id.clone() {
+                                        manifold_editing::commands::effect_target::EffectTarget::Clip { clip_id: cid }
+                                    } else {
+                                        manifold_editing::commands::effect_target::EffectTarget::Layer {
+                                            layer_index: self.active_layer_index.unwrap_or(0),
+                                        }
+                                    }
+                                }
+                            };
+                            let cmd = manifold_editing::commands::effect_groups::RenameGroupCommand::new(
+                                target, group_id, old_name, new_name,
+                            );
+                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                            boxed.execute(&mut self.local_project);
+                            self.send_content_cmd(ContentCommand::Execute(boxed));
+                        }
+                    }
+                }
+                self.needs_rebuild = true;
             }
             TextInputField::SearchFilter => {
                 // Update browser popup filter — no undo command
@@ -1022,6 +1161,9 @@ impl Application {
         // Route them through the dropdown system now so context menus actually open.
         self.ui_root.intercept_overlay_actions(&mut actions);
 
+        // Update effect clipboard count for browser popup
+        self.ui_root.effect_clipboard_count = self.effect_clipboard.count();
+
         // Consume deferred structural sync flag (set by keyboard shortcuts)
         let mut needs_structural_sync = self.needs_structural_sync;
         self.needs_structural_sync = false;
@@ -1036,6 +1178,46 @@ impl Application {
                 PanelAction::SaveProjectAs => { self.save_project_as(); continue; }
                 PanelAction::OpenProject => { self.open_project(); needs_structural_sync = true; continue; }
                 PanelAction::OpenRecent => { self.open_recent_project(); needs_structural_sync = true; continue; }
+                PanelAction::PasteEffects => {
+                    // Browser popup paste button → route through same logic as Cmd+V
+                    let tab = self.ui_root.inspector.last_effect_tab();
+                    let target = match tab {
+                        manifold_ui::InspectorTab::Master => manifold_editing::commands::effect_target::EffectTarget::Master,
+                        manifold_ui::InspectorTab::Layer => manifold_editing::commands::effect_target::EffectTarget::Layer {
+                            layer_index: self.active_layer_index.unwrap_or(0),
+                        },
+                        manifold_ui::InspectorTab::Clip => {
+                            if let Some(cid) = self.selection.primary_selected_clip_id.clone() {
+                                manifold_editing::commands::effect_target::EffectTarget::Clip { clip_id: cid }
+                            } else {
+                                manifold_editing::commands::effect_target::EffectTarget::Layer {
+                                    layer_index: self.active_layer_index.unwrap_or(0),
+                                }
+                            }
+                        }
+                    };
+                    let effects_len = match tab {
+                        manifold_ui::InspectorTab::Master => self.local_project.settings.master_effects.len(),
+                        manifold_ui::InspectorTab::Layer => self.active_layer_index
+                            .and_then(|li| self.local_project.timeline.layers.get(li))
+                            .and_then(|l| l.effects.as_ref())
+                            .map(|e| e.len()).unwrap_or(0),
+                        manifold_ui::InspectorTab::Clip => self.selection.primary_selected_clip_id.as_ref()
+                            .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
+                            .map(|c| c.effects.len()).unwrap_or(0),
+                    };
+                    let clones = self.effect_clipboard.get_paste_clones();
+                    for (offset, fx) in clones.into_iter().enumerate() {
+                        let cmd = manifold_editing::commands::effects::AddEffectCommand::new(
+                            target.clone(), fx, effects_len + offset,
+                        );
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                        boxed.execute(&mut self.local_project);
+                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                    }
+                    needs_structural_sync = true;
+                    continue;
+                }
                 PanelAction::BrowserSearchClicked => {
                     let r = self.ui_root.browser_popup.search_bar_rect(&self.ui_root.tree);
                     self.text_input.begin(

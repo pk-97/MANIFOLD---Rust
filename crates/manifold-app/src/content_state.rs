@@ -11,6 +11,7 @@ use manifold_playback::stem_audio::STEM_COUNT;
 /// State snapshot sent from the content thread to the UI thread.
 /// The UI thread drains these from a bounded channel and uses the latest.
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct ContentState {
     // ── Transport ──────────────────────────────────────────────────
     pub current_beat: f32,
@@ -21,6 +22,7 @@ pub struct ContentState {
     // ── Content thread perf ─────────────────────────────────────
     pub content_fps: f32,
     pub content_frame_time_ms: f32,
+    pub active_clips: usize,
 
     // ── Editing ────────────────────────────────────────────────────
     pub data_version: u64,
@@ -73,6 +75,7 @@ impl Default for ContentState {
             is_recording: false,
             content_fps: 0.0,
             content_frame_time_ms: 0.0,
+            active_clips: 0,
             data_version: 0,
             editing_is_dirty: false,
             bpm: 120.0,

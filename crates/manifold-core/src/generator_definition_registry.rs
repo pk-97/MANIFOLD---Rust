@@ -34,7 +34,7 @@ pub fn try_get(gen_type: GeneratorType) -> Option<&'static GeneratorDef> {
 }
 
 pub fn is_line_based(gen_type: GeneratorType) -> bool {
-    DEFINITIONS.get(&gen_type).map_or(false, |d| d.is_line_based)
+    DEFINITIONS.get(&gen_type).is_some_and(|d| d.is_line_based)
 }
 
 pub fn get_param_def(gen_type: GeneratorType, index: usize) -> ParamDef {
@@ -73,11 +73,11 @@ pub fn format_gen_value(gen_type: GeneratorType, index: usize, value: f32) -> St
 
 pub fn get_osc_address(gen_type: GeneratorType, index: usize) -> Option<String> {
     let def = DEFINITIONS.get(&gen_type)?;
-    if def.osc_prefix.is_none() { return None }
+    let prefix = def.osc_prefix.as_ref()?;
     if index >= def.param_count { return None }
 
     let suffix = def.param_defs[index].osc_suffix.as_ref()?;
-    Some(format!("/{}/{}", def.osc_prefix.unwrap(), suffix))
+    Some(format!("/{}/{}", prefix, suffix))
 }
 
 pub fn get_osc_address_for_layer(
@@ -87,11 +87,11 @@ pub fn get_osc_address_for_layer(
 ) -> Option<String> {
     if layer_id.is_empty() { return None }
     let def = DEFINITIONS.get(&gen_type)?;
-    if def.osc_prefix.is_none() { return None }
+    let prefix = def.osc_prefix.as_ref()?;
     if index >= def.param_count { return None }
 
     let suffix = def.param_defs[index].osc_suffix.as_ref()?;
-    Some(format!("/layer/{}/gen/{}/{}", layer_id, def.osc_prefix.unwrap(), suffix))
+    Some(format!("/layer/{}/gen/{}/{}", layer_id, prefix, suffix))
 }
 
 pub fn try_get_gen_param_range(gen_type: GeneratorType, index: usize) -> Option<(f32, f32)> {

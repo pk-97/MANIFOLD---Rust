@@ -51,7 +51,7 @@ pub(crate) const WAVEFORM_LABELS: [&str; WAVEFORM_COUNT] = ["Sin", "Tri", "Saw",
 // ── Shared node ID structs ──────────────────────────────────────
 
 pub(crate) struct DriverConfigIds {
-    pub(crate) container_id: i32,
+    pub(crate) _container_id: i32,
     pub(crate) beat_div_btn_ids: [i32; BEAT_DIV_COUNT],
     pub(crate) dot_btn_id: i32,
     pub(crate) triplet_btn_id: i32,
@@ -60,7 +60,7 @@ pub(crate) struct DriverConfigIds {
 }
 
 pub(crate) struct EnvelopeConfigIds {
-    pub(crate) container_id: i32,
+    pub(crate) _container_id: i32,
     pub(crate) attack_slider: SliderNodeIds,
     pub(crate) decay_slider: SliderNodeIds,
     pub(crate) sustain_slider: SliderNodeIds,
@@ -363,7 +363,7 @@ pub(crate) fn build_driver_config(
     ) as i32;
 
     DriverConfigIds {
-        container_id,
+        _container_id: container_id,
         beat_div_btn_ids,
         dot_btn_id,
         triplet_btn_id,
@@ -427,7 +427,7 @@ pub(crate) fn build_envelope_config(
     );
 
     EnvelopeConfigIds {
-        container_id,
+        _container_id: container_id,
         attack_slider,
         decay_slider,
         sustain_slider,

@@ -174,7 +174,7 @@ impl PercussionBeatGrid {
         // Remove non-finite or negative beat times.
         self.beat_times_seconds
             .retain(|&t| t.is_finite() && t >= 0.0);
-        self.beat_times_seconds.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        self.beat_times_seconds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         // Deduplicate near-identical beat markers to keep interpolation stable.
         let mut i = self.beat_times_seconds.len().saturating_sub(1);
@@ -356,7 +356,7 @@ impl PercussionAnalysisData {
     pub fn has_energy_envelope(&self) -> bool {
         self.energy_envelope
             .as_ref()
-            .map_or(false, |e| !e.is_empty())
+            .is_some_and(|e| !e.is_empty())
     }
 
     /// Port of Unity PercussionAnalysisData.EnergyAtBeat().
@@ -420,7 +420,7 @@ impl PercussionAnalysisData {
 
         self.events.retain(|_| true); // no null check needed in Rust
         self.events
-            .sort_by(|a, b| a.time_seconds.partial_cmp(&b.time_seconds).unwrap());
+            .sort_by(|a, b| a.time_seconds.partial_cmp(&b.time_seconds).unwrap_or(std::cmp::Ordering::Equal));
     }
 
     /// Port of Unity PercussionAnalysisData.TryMapSecondsToBeat().
@@ -556,6 +556,7 @@ pub struct PercussionClipPlacement {
 }
 
 impl PercussionClipPlacement {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         trigger_type: PercussionTriggerType,
         layer_index: i32,
@@ -618,7 +619,7 @@ impl PercussionPlacementPlan {
 
     pub fn sort_placements(&mut self) {
         self.placements
-            .sort_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap());
+            .sort_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal));
     }
 }
 

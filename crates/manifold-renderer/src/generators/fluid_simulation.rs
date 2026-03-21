@@ -228,7 +228,7 @@ pub struct FluidSimulationGenerator {
     display_uniform_buf: wgpu::Buffer,
 
     // White texture fallback for display pass when color_density_rt is None
-    white_texture: wgpu::Texture,
+    _white_texture: wgpu::Texture,
     white_view: wgpu::TextureView,
 
     sampler: wgpu::Sampler,
@@ -590,7 +590,7 @@ impl FluidSimulationGenerator {
             sim_uniform_buf,
             seed_uniform_buf,
             display_uniform_buf,
-            white_texture,
+            _white_texture: white_texture,
             white_view,
             sampler,
             active_count: 0,
