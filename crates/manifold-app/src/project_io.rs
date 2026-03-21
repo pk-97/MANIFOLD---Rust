@@ -259,7 +259,7 @@ impl ProjectIOService {
 
         let mut dialog = rfd::FileDialog::new()
             .set_title("Save MANIFOLD Project")
-            .add_filter("MANIFOLD Project", &["json", "manifold"])
+            .add_filter("MANIFOLD Project", &["manifold"])
             .set_file_name(project_name);
 
         if !last_dir.is_empty() {
@@ -268,7 +268,7 @@ impl ProjectIOService {
 
         if let Some(mut path) = dialog.save_file() {
             // Ensure .manifold extension (Unity line 212-213)
-            if path.extension().map_or(true, |e| e != "manifold" && e != "json") {
+            if path.extension().map_or(true, |e| e != "manifold") {
                 path.set_extension("manifold");
             }
 
