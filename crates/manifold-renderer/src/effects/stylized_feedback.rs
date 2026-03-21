@@ -167,6 +167,10 @@ impl PostProcessEffect for StylizedFeedbackFX {
         self.height = height;
         self.states.clear();
     }
+
+    fn cleanup_owner_state(&mut self, owner_key: i64) {
+        self.states.remove(&owner_key);
+    }
 }
 
 impl StatefulEffect for StylizedFeedbackFX {

@@ -663,6 +663,10 @@ impl PostProcessEffect for PixelSortFX {
         // Unity: CleanupAllOwners() called here
         self.per_owner_buffers.clear();
     }
+
+    fn cleanup_owner_state(&mut self, owner_key: i64) {
+        self.per_owner_buffers.remove(&owner_key);
+    }
 }
 
 impl StatefulEffect for PixelSortFX {

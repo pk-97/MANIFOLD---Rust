@@ -210,6 +210,10 @@ impl PostProcessEffect for CrtFX {
             state.quarter_res = RenderTarget::new(device, qw, qh, format, &format!("CrtGlowQuarter_{owner_key}"));
         }
     }
+
+    fn cleanup_owner_state(&mut self, owner_key: i64) {
+        self.states.remove(&owner_key);
+    }
 }
 
 impl StatefulEffect for CrtFX {

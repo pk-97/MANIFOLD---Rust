@@ -2172,6 +2172,10 @@ impl PostProcessEffect for WireframeDepthFX {
         // Per-owner textures are rebuilt lazily in GetOrCreateOwner.
         self.owner_states.clear();
     }
+
+    fn cleanup_owner_state(&mut self, owner_key: i64) {
+        self.owner_states.remove(&owner_key);
+    }
 }
 
 impl StatefulEffect for WireframeDepthFX {

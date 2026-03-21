@@ -88,6 +88,14 @@ impl EffectRegistry {
         }
     }
 
+    /// Clean up per-owner effect state for a specific clip.
+    /// Called when a clip stops playback to release per-clip GPU resources.
+    pub fn cleanup_clip_owner(&mut self, owner_key: i64) {
+        for processor in self.processors.values_mut() {
+            processor.cleanup_owner_state(owner_key);
+        }
+    }
+
     /// Check if any processor is registered.
     pub fn has_any(&self) -> bool {
         !self.processors.is_empty()

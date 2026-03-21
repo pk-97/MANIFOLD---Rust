@@ -372,6 +372,12 @@ impl LayerCompositor {
         )
     }
 
+    /// Clean up per-owner effect state for a stopped clip.
+    pub fn cleanup_clip_owner(&mut self, clip_id: &str) {
+        let owner_key = clip_id_owner_key(clip_id);
+        self.effect_registry.cleanup_clip_owner(owner_key);
+    }
+
     /// Composite all clips into main buffer, grouping by layer.
     fn composite(
         &mut self,
@@ -660,5 +666,9 @@ impl Compositor for LayerCompositor {
 
     fn output_texture(&self) -> &wgpu::Texture {
         &self.tonemap.output.texture
+    }
+
+    fn cleanup_clip_owner(&mut self, clip_id: &str) {
+        self.cleanup_clip_owner(clip_id);
     }
 }

@@ -77,6 +77,12 @@ pub trait PostProcessEffect: Send {
 
     /// Recreate resolution-dependent resources.
     fn resize(&mut self, _device: &wgpu::Device, _width: u32, _height: u32) {}
+
+    /// Clean up per-owner GPU state for a specific owner.
+    /// No-op for non-stateful effects. Stateful effects override to release
+    /// per-owner textures/buffers (e.g., Feedback, Bloom, PixelSort).
+    /// Called when a clip stops to prevent unbounded GPU memory growth.
+    fn cleanup_owner_state(&mut self, _owner_key: i64) {}
 }
 
 /// Extension for effects that maintain per-owner state (e.g., Feedback, Bloom).

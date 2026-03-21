@@ -194,6 +194,14 @@ impl ContentThread {
             self.content_pipeline.render_content(
                 &self.gpu, &mut self.engine, &tick_result, dt, self.frame_count,
             );
+
+            // 7b. Clean up per-owner effect state for clips that stopped this tick.
+            // Releases GPU textures/buffers (Feedback, Bloom, PixelSort, etc.)
+            // to prevent unbounded GPU memory growth.
+            if !tick_result.stopped_clips.is_empty() {
+                self.content_pipeline.cleanup_stopped_clips(&tick_result.stopped_clips);
+            }
+
             self.frame_count += 1;
 
             // 8. Push state to UI

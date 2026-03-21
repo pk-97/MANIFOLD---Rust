@@ -69,6 +69,10 @@ pub struct TickResult {
     /// this frame. The content thread uses this to send a project snapshot so
     /// the UI thread sees modulated slider values in real time.
     pub modulation_active: bool,
+    /// Clip IDs that were stopped during this tick. Used by ContentPipeline
+    /// to release per-owner GPU effect state (Feedback, Bloom, etc.),
+    /// preventing unbounded GPU memory growth.
+    pub stopped_clips: Vec<ClipId>,
 }
 
 // ─── Playback Engine ───
@@ -132,6 +136,9 @@ pub struct PlaybackEngine {
 
     // Pre-allocated scratch buffers
     stop_buffer: Vec<ClipId>,
+    /// Clips stopped during the current tick. Drained into TickResult::stopped_clips
+    /// so the content pipeline can release per-owner GPU effect state.
+    stopped_this_tick: Vec<ClipId>,
     ready_clips_list: Vec<TimelineClip>,
     timeline_active_scratch: Vec<TimelineClip>,
     became_ready_list: Vec<ClipId>,
@@ -204,6 +211,7 @@ impl PlaybackEngine {
             last_realtime_now: 0.0,
             last_frame_count: 0,
             stop_buffer: Vec::with_capacity(16),
+            stopped_this_tick: Vec::with_capacity(16),
             ready_clips_list: Vec::with_capacity(32),
             timeline_active_scratch: Vec::with_capacity(32),
             became_ready_list: Vec::with_capacity(8),
@@ -428,6 +436,7 @@ impl PlaybackEngine {
                         self.renderers[renderer_idx].stop_clip(id);
                     }
                     self.active_clip_ids.remove(id);
+                    self.stopped_this_tick.push(id.clone());
                 }
             }
 
@@ -461,6 +470,7 @@ impl PlaybackEngine {
             return TickResult::default();
         }
         self.is_ticking = true;
+        self.stopped_this_tick.clear();
 
         if self.project.is_none() {
             self.is_ticking = false;
@@ -483,11 +493,16 @@ impl PlaybackEngine {
         self.check_preparing_clips();
 
         // ── Phase 4: Branch on playback state ──
-        let result = if self.current_state == PlaybackState::Playing {
+        let mut result = if self.current_state == PlaybackState::Playing {
             self.tick_playing(ctx)
         } else {
             self.tick_non_playing(ctx)
         };
+
+        // Drain stopped clips into TickResult for per-owner GPU effect state cleanup.
+        if !self.stopped_this_tick.is_empty() {
+            result.stopped_clips = self.stopped_this_tick.drain(..).collect();
+        }
 
         self.is_ticking = false;
         result
@@ -582,6 +597,7 @@ impl PlaybackEngine {
             should_clear_compositor: should_clear,
             should_clear_feedback_buffer: false,
             modulation_active: modulation_dirty,
+            stopped_clips: Vec::new(), // Populated by tick() after this returns
         }
     }
 
@@ -631,6 +647,7 @@ impl PlaybackEngine {
                 && !self.has_pending_clip_state(),
             should_clear_feedback_buffer: false,
             modulation_active: modulation_dirty,
+            stopped_clips: Vec::new(), // Populated by tick() after this returns
         }
     }
 
@@ -700,6 +717,8 @@ impl PlaybackEngine {
         self.pending_pauses.remove(clip_id);
         self.looping_clip_ids.remove(clip_id);
         self.recently_started_times.remove(clip_id);
+        // Track stopped clip for per-owner GPU effect state cleanup.
+        self.stopped_this_tick.push(ClipId::new(clip_id));
         // Notify live clip manager so it can track which live slots are still active.
         // Port of C# PlaybackEngine.StopClip → liveClipManager.NotifyClipStopped (line 684).
         if let Some(mgr) = &mut self.live_clip_manager {
@@ -715,6 +734,8 @@ impl PlaybackEngine {
                 self.renderers[renderer_idx].stop_clip(clip_id);
             }
         }
+        // Track all stopped clips for per-owner GPU effect state cleanup.
+        self.stopped_this_tick.extend(self.stop_buffer.iter().cloned());
         self.active_clip_ids.clear();
         self.preparing_clips.clear();
         self.pending_pauses.clear();

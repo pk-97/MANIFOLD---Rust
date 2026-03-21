@@ -911,6 +911,10 @@ impl PostProcessEffect for BlobTrackingFX {
         // BlobTrackingFX.cs lines 366-368:
         // "Downsample RT is fixed size, no resize needed"
     }
+
+    fn cleanup_owner_state(&mut self, owner_key: i64) {
+        self.owner_states.remove(&owner_key);
+    }
 }
 
 impl StatefulEffect for BlobTrackingFX {

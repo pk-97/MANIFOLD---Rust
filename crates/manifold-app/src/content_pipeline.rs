@@ -391,6 +391,15 @@ impl ContentPipeline {
         self.compositor.dimensions()
     }
 
+    /// Clean up per-owner effect state for stopped clips.
+    /// Called after render_content() to release GPU resources for clips
+    /// that stopped this tick, preventing unbounded GPU memory growth.
+    pub fn cleanup_stopped_clips(&mut self, stopped_clip_ids: &[manifold_core::ClipId]) {
+        for clip_id in stopped_clip_ids {
+            self.compositor.cleanup_clip_owner(clip_id.as_str());
+        }
+    }
+
     /// Pre-tonemap HDR output for export pipeline (GAP-IO-4).
     #[allow(dead_code)]
     pub fn pre_tonemap_output(&self) -> &wgpu::TextureView {
