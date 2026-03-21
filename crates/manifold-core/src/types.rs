@@ -196,6 +196,46 @@ impl EffectType {
     pub fn from_index(i: usize) -> Option<Self> {
         Self::ALL.get(i).copied()
     }
+
+    /// Convert from the integer discriminant value (matches Unity enum values).
+    /// Used by the browser popup which stores `et as i32` as the item key.
+    pub fn from_discriminant(v: i32) -> Option<Self> {
+        match v {
+            0 => Some(Self::Transform),
+            1 => Some(Self::InvertColors),
+            10 => Some(Self::Feedback),
+            11 => Some(Self::PixelSort),
+            12 => Some(Self::Bloom),
+            13 => Some(Self::InfiniteZoom),
+            14 => Some(Self::Kaleidoscope),
+            15 => Some(Self::EdgeStretch),
+            16 => Some(Self::VoronoiPrism),
+            17 => Some(Self::QuadMirror),
+            18 => Some(Self::Dither),
+            19 => Some(Self::Strobe),
+            20 => Some(Self::StylizedFeedback),
+            21 => Some(Self::Mirror),
+            22 => Some(Self::BlobTracking),
+            23 => Some(Self::CRT),
+            24 => Some(Self::FluidDistortion),
+            25 => Some(Self::EdgeGlow),
+            26 => Some(Self::Datamosh),
+            27 => Some(Self::SlitScan),
+            28 => Some(Self::ColorGrade),
+            29 => Some(Self::WireframeDepth),
+            30 => Some(Self::ChromaticAberration),
+            31 => Some(Self::GradientMap),
+            32 => Some(Self::Glitch),
+            33 => Some(Self::FilmGrain),
+            34 => Some(Self::Halation),
+            35 => Some(Self::Microscope),
+            36 => Some(Self::Corruption),
+            37 => Some(Self::Infrared),
+            38 => Some(Self::Surveillance),
+            39 => Some(Self::Redaction),
+            _ => None,
+        }
+    }
 }
 
 impl Serialize for EffectType {

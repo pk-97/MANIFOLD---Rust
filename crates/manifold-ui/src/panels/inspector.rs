@@ -411,6 +411,7 @@ impl InspectorCompositePanel {
 
     /// Unity EffectSelectionManager.SelectCard (lines 89-100)
     /// Select a single card, clearing all others in this tab.
+    /// Note: does NOT update card visuals — call apply_selection_visuals() after.
     fn select_effect(&mut self, tab: InspectorTab, card_index: usize) {
         let cards = self.cards_for_tab(tab);
         if card_index >= cards.len() { return; }
@@ -419,16 +420,11 @@ impl InspectorCompositePanel {
         set.clear();
         set.insert(card_index);
         self.set_last_clicked_for_tab(tab, card_index as i32);
-
-        // Update is_selected on the card structs
-        let cards = self.cards_for_tab_mut(tab);
-        for (i, card) in cards.iter_mut().enumerate() {
-            card.set_selected(i == card_index);
-        }
     }
 
     /// Unity EffectSelectionManager.ToggleCardSelection (lines 103-118)
     /// Cmd+Click: toggle in/out of multi-selection.
+    /// Note: does NOT update card visuals — call apply_selection_visuals() after.
     fn toggle_effect_selection(&mut self, tab: InspectorTab, card_index: usize) {
         let cards = self.cards_for_tab(tab);
         if card_index >= cards.len() { return; }
@@ -440,16 +436,11 @@ impl InspectorCompositePanel {
             set.insert(card_index);
         }
         self.set_last_clicked_for_tab(tab, card_index as i32);
-
-        let selected = self.selection_set_mut(tab).contains(&card_index);
-        let cards = self.cards_for_tab_mut(tab);
-        if let Some(card) = cards.get_mut(card_index) {
-            card.set_selected(selected);
-        }
     }
 
     /// Unity EffectSelectionManager.RangeSelectCards (lines 121-139)
     /// Shift+Click: range select from last clicked anchor to this index.
+    /// Note: does NOT update card visuals — call apply_selection_visuals() after.
     fn range_select_effects(&mut self, tab: InspectorTab, card_index: usize) {
         let cards = self.cards_for_tab(tab);
         if card_index >= cards.len() { return; }
@@ -460,36 +451,33 @@ impl InspectorCompositePanel {
         let lo = anchor.min(card_index);
         let hi = anchor.max(card_index);
 
-        // Clear and rebuild selection
         let set = self.selection_set_mut(tab);
         set.clear();
         for i in lo..=hi {
             set.insert(i);
         }
         // Keep lastClickedIndex as anchor — do not update (Unity line 138)
-
-        let cards = self.cards_for_tab_mut(tab);
-        for (i, card) in cards.iter_mut().enumerate() {
-            card.set_selected(i >= lo && i <= hi);
-        }
     }
 
     /// Clear all effect selection across all tabs.
     /// Unity EffectSelectionManager.ClearSelection (lines 141-146)
     pub fn clear_effect_selection(&mut self) {
         for tab in [InspectorTab::Master, InspectorTab::Layer, InspectorTab::Clip] {
-            let set = self.selection_set_mut(tab);
-            set.clear();
+            self.selection_set_mut(tab).clear();
             self.set_last_clicked_for_tab(tab, -1);
-            let cards = self.cards_for_tab_mut(tab);
-            for card in cards.iter_mut() {
-                card.set_selected(false);
-            }
+        }
+        // Reset is_selected on all cards (visuals deferred to rebuild)
+        for card in self.master_effects.iter_mut()
+            .chain(self.layer_effects.iter_mut())
+            .chain(self.clip_effects.iter_mut())
+        {
+            card.set_selected(false);
         }
     }
 
     /// Apply selection visuals to the tree (call after handle_event when
     /// EffectCardClicked is returned). Updates border colors without rebuild.
+    /// This is the SINGLE place that syncs is_selected + tree style together.
     pub fn apply_selection_visuals(&mut self, tree: &mut UITree) {
         for tab in [InspectorTab::Master, InspectorTab::Layer, InspectorTab::Clip] {
             let (set, _) = self.selection_for_tab(tab);
@@ -1344,7 +1332,7 @@ mod tests {
 
         // Find the master chrome's chevron button and simulate click
         // We can test via route_click
-        let actions = panel.route_click(panel.master_chrome.first_node() as u32 + 1);
+        let actions = panel.route_click(panel.master_chrome.first_node() as u32 + 1, Modifiers::NONE);
         // Node at first_node+1 is the chevron button in master chrome build order
         // This should return MasterCollapseToggle
         if !actions.is_empty() {

@@ -866,6 +866,11 @@ impl Application {
                         self.local_project = *snapshot;
                         // Clear suppression once we've accepted a post-load snapshot
                         self.suppress_snapshot_until = 0;
+                        // Trigger structural sync so UI reflects authoritative state.
+                        // Critical for undo/redo (which only execute on the content
+                        // thread) and guards against stale-snapshot overwrites.
+                        self.needs_structural_sync = true;
+                        self.needs_rebuild = true;
                     }
                 }
                 self.content_state = ContentState {

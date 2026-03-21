@@ -2056,7 +2056,9 @@ pub fn dispatch(
         }
         PanelAction::AddEffect(tab, effect_type_idx) => {
             use manifold_core::types::EffectType;
-            let Some(effect_type) = EffectType::from_index(*effect_type_idx) else {
+            // The browser popup stores `et as i32` (enum discriminant), NOT
+            // an index into EffectType::ALL. Use from_discriminant.
+            let Some(effect_type) = EffectType::from_discriminant(*effect_type_idx as i32) else {
                 return DispatchResult::handled();
             };
             let defaults = manifold_core::effect_definition_registry::get_defaults(effect_type);
