@@ -1,10 +1,10 @@
 {
   "metadata": {
-    "last_updated": "2026-03-19",
+    "last_updated": "2026-03-21",
     "audit_source": "docs/DEFINITIVE_PARITY_AUDIT.md",
     "audit_date": "2026-03-17",
-    "true_functional_completion_pct": 65,
-    "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context. GAP-AUDIO pipeline batch 2026-03-19: Ported entire percussion/audio import pipeline (8 gaps, ~3900 LOC). GAP-INFRA-1 ExternalProcessRunner (process_runner.rs). GAP-AUDIO-1 PercussionAnalysisModels (percussion_analysis.rs + percussion_settings.rs + percussion_binding.rs in manifold-core). GAP-AUDIO-2 PercussionAnalysisParser (percussion_parser.rs). GAP-AUDIO-6 PercussionPipelineBackendResolver (percussion_backend.rs). GAP-AUDIO-3 PercussionTimelinePlanner + PercussionImportService (percussion_planner.rs + percussion_import.rs). GAP-AUDIO-5 MidiFileParser + MidiImportService (midi_parser.rs + midi_import.rs). GAP-AUDIO-4 PercussionImportOrchestrator (percussion_orchestrator.rs). GAP-AUDIO-8 PercussionAlignmentService (percussion_alignment.rs). All in manifold-playback except core types."
+    "true_functional_completion_pct": 68,
+    "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context. GAP-AUDIO pipeline batch 2026-03-19: Ported entire percussion/audio import pipeline (8 gaps, ~3900 LOC). GAP-INFRA-1 ExternalProcessRunner (process_runner.rs). GAP-AUDIO-1 PercussionAnalysisModels (percussion_analysis.rs + percussion_settings.rs + percussion_binding.rs in manifold-core). GAP-AUDIO-2 PercussionAnalysisParser (percussion_parser.rs). GAP-AUDIO-6 PercussionPipelineBackendResolver (percussion_backend.rs). GAP-AUDIO-3 PercussionTimelinePlanner + PercussionImportService (percussion_planner.rs + percussion_import.rs). GAP-AUDIO-5 MidiFileParser + MidiImportService (midi_parser.rs + midi_import.rs). GAP-AUDIO-4 PercussionImportOrchestrator (percussion_orchestrator.rs). GAP-AUDIO-8 PercussionAlignmentService (percussion_alignment.rs). All in manifold-playback except core types. 2026-03-21 bug fix + wiring pass: Fixed CursorLeft drag cancel, undo/redo sync dirty, NaN panics (4 sites), region-aware selection for all keyboard shortcuts. Wired effect/gen param text input commit, browser paste button, effect group/ungroup shortcuts, MIDI import context menu, recording provenance in LiveClipManager. Eliminated ~90 compiler warnings. Deleted dead code across 6 files."
   },
   "subsystems": {
     "core": {
@@ -16,7 +16,7 @@
       "audit_section": 2
     },
     "playback": {
-      "pct": 82,
+      "pct": 85,
       "audit_section": 3
     },
     "effects": {
@@ -32,7 +32,7 @@
       "audit_section": 5
     },
     "ui": {
-      "pct": 72,
+      "pct": 76,
       "audit_section": 7
     },
     "io": {
@@ -40,7 +40,7 @@
       "audit_section": 8
     },
     "app": {
-      "pct": 70,
+      "pct": 76,
       "audit_section": 9
     },
     "audio_percussion": {
@@ -91,7 +91,7 @@
       "est_loc": 800,
       "status": "done",
       "commit": "02f5ea7",
-      "notes": "Full PlaybackController orchestration complete. External beat derivation from Link/MidiClock wired in content_thread.derive_external_beat(). TempoRecorder ported as unit (tempo_recorder.rs) with all 13 methods. Tempo recording session lifecycle wired: update_recording_session_state + apply_resolved_tempo (both recording and non-recording paths). Link beat offset cached at Play/Seek, cleared at Stop/LoadProject. MIDI clock beat alignment at Play() for MidiClock authority. Only remaining stub: perf stats collection (GAP-DIAG-1, separate gap)."
+      "notes": "Full PlaybackController orchestration complete. External beat derivation from Link/MidiClock wired in content_thread.derive_external_beat(). TempoRecorder ported as unit (tempo_recorder.rs) with all 13 methods. Tempo recording session lifecycle wired: update_recording_session_state + apply_resolved_tempo (both recording and non-recording paths). Link beat offset cached at Play/Seek, cleared at Stop/LoadProject. MIDI clock beat alignment at Play() for MidiClock authority. Recording provenance wired in LiveClipManager: RecordingClipStartInfo struct + clip_starts HashMap added, track/finalize/remove methods connected (65fc812). Resolution/FPS restore after undo/redo wired (3f67bfe). Only remaining stub: perf stats collection (GAP-DIAG-1, separate gap)."
     },
     {
       "number": 3,
@@ -259,7 +259,7 @@
       "est_loc": 1500,
       "status": "done",
       "commit": null,
-      "notes": "All 5 panels functional. BrowserPopup: full grid/category/search (554L). OverviewStrip: miniatures + viewport indicator + playhead + scrub. Inspectors: chrome panels with data binding — master opacity, layer opacity, clip slip, clip loop all wired with undo commands. BitmapTextInput (text_input.rs): full inline editing for layer name, clip BPM, BPM, FPS, search filter. Clip name is display-only (matches Unity — auto-derived from source). Minor stubs: effect/gen param text-click commit, group rename commit, master exit path dropdown."
+      "notes": "All 5 panels functional. BrowserPopup: full grid/category/search (554L). OverviewStrip: miniatures + viewport indicator + playhead + scrub. Inspectors: chrome panels with data binding — master opacity, layer opacity, clip slip, clip loop all wired with undo commands. BitmapTextInput (text_input.rs): full inline editing for layer name, clip BPM, BPM, FPS, search filter. Clip name is display-only (matches Unity — auto-derived from source). Effect/gen param text-click commit and group rename commit now wired (2f912bf). Browser popup paste button wired with clipboard count. Remaining stub: master exit path dropdown."
     },
     {
       "number": 17,
@@ -271,7 +271,7 @@
       "est_loc": 400,
       "status": "done",
       "commit": "be4c7f0",
-      "notes": "All EditingService orchestration methods complete. 8 methods in editing crate + 4 UI-coupled methods in app layer: select_region_to (ui_bridge.rs select_region_to_with_engine), on_clip_selected (inspector sync via UIBridge), delete_selected_layers (input_host.rs), group_selected_layers (input_host.rs). All wired into keyboard shortcuts (Delete, Cmd+G) and Shift+Click selection."
+      "notes": "All EditingService orchestration methods complete. 8 methods in editing crate + 4 UI-coupled methods in app layer: select_region_to (ui_bridge.rs select_region_to_with_engine), on_clip_selected (inspector sync via UIBridge), delete_selected_layers (input_host.rs), group_selected_layers (input_host.rs). All wired into keyboard shortcuts (Delete, Cmd+G) and Shift+Click selection. Effect group/ungroup shortcuts (Cmd+G/Cmd+Shift+G) now wired to GroupEffectsCommand/UngroupEffectsCommand (2f912bf). Region-aware selection fix: get_selected_clip_ids() now resolves region clips via EditingService::get_clips_in_region(), fixing Delete/Copy/Cut/Duplicate/Split/Nudge/Mute for marquee selections."
     },
     {
       "number": 18,
@@ -403,7 +403,7 @@
       "est_loc": 400,
       "status": "done",
       "commit": "797f7ce",
-      "notes": "MidiFileParser: pure Rust SMF parser (format 0+1), MThd/MTrk chunks, variable-length quantity, running status, tempo map, tick-to-seconds, NoteOn/NoteOff pairing, MIN_NOTE_DURATION_BEATS=1/128. MidiImportService: timeline clip creation, layer auto-create, generator/video resolution, BasicShapesSnap fallback, overlap trimming, composite AddClipCommand with undo."
+      "notes": "MidiFileParser: pure Rust SMF parser (format 0+1), MThd/MTrk chunks, variable-length quantity, running status, tempo map, tick-to-seconds, NoteOn/NoteOff pairing, MIN_NOTE_DURATION_BEATS=1/128. MidiImportService: timeline clip creation, layer auto-create, generator/video resolution, BasicShapesSnap fallback, overlap trimming, composite AddClipCommand with undo. MIDI import now wired to UI: context menu 'Import MIDI' opens rfd file dialog, parses via MidiFileParser, imports via MidiImportService (2f912bf)."
     },
     {
       "number": 29,
