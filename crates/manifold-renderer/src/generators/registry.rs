@@ -17,6 +17,7 @@ use super::plasma::PlasmaGenerator;
 use super::reaction_diffusion::ReactionDiffusionGenerator;
 use super::strange_attractor::StrangeAttractorGenerator;
 use super::tesseract::TesseractGenerator;
+use super::mri_volume::MriVolumeGenerator;
 use super::wireframe_zoo::WireframeZooGenerator;
 
 /// Factory that maps GeneratorType to concrete Generator instances.
@@ -51,6 +52,7 @@ impl GeneratorRegistry {
             GeneratorType::ComputeStrangeAttractor => Some(Box::new(ComputeStrangeAttractorGenerator::new(device, self.target_format))),
             GeneratorType::FluidSimulation => Some(Box::new(FluidSimulationGenerator::new(device, self.target_format))),
             GeneratorType::FluidSimulation3D => Some(Box::new(FluidSimulation3DGenerator::new(device, self.target_format))),
+            GeneratorType::MriVolume => Some(Box::new(MriVolumeGenerator::new(device, self.target_format))),
             _ => {
                 log::warn!("Generator type {:?} not yet implemented", gen_type);
                 None

@@ -20,6 +20,7 @@ pub mod percussion;
 pub mod percussion_analysis;
 pub mod percussion_settings;
 pub mod percussion_binding;
+pub mod mri;
 
 pub use types::*;
 pub use color::Color;

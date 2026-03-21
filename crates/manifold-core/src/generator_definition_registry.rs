@@ -495,7 +495,7 @@ fn build_definitions() -> HashMap<GeneratorType, GeneratorDef> {
         pd_toggle("Invert", 0.0, 1.0, 0.0, "invert"),
         pd("Sharpen", 0.0, 3.0, 1.0, Some("F1"), "sharpen"),
         pd("Cine Speed", 0.0, 4.0, 1.0, Some("F1"), "cineSpeed"),
-        pd_whole("Scan", 0.0, 5.0, 0.0, "scan"),
+        pd_whole("Scan", 0.0, 6.0, 0.0, "scan"),
         pd("Cam Dist", 1.0, 8.0, 3.0, Some("F1"), "camDist"),
         pd("Rotate X", -1.0, 1.0, 0.0, Some("F2"), "rotX"),
         pd("Rotate Y", -1.0, 1.0, 0.0, Some("F2"), "rotY"),

@@ -2053,11 +2053,13 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "glyphon",
+ "half",
  "log",
  "manifold-core",
  "manifold-native",
  "manifold-playback",
  "manifold-ui",
+ "serde_json",
  "wgpu",
 ]
 

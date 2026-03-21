@@ -347,6 +347,7 @@ pub enum GeneratorType {
     Mycelium = 17,
     ComputeStrangeAttractor = 18,
     FluidSimulation3D = 19,
+    MriVolume = 20,
 }
 
 impl GeneratorType {
@@ -372,6 +373,7 @@ impl GeneratorType {
             Self::Mycelium => "Mycelium",
             Self::ComputeStrangeAttractor => "Compute Attractor",
             Self::FluidSimulation3D => "Fluid Sim 3D",
+            Self::MriVolume => "MRI Volume",
         }
     }
 
@@ -383,6 +385,7 @@ impl GeneratorType {
         Self::OscilloscopeXY, Self::WireframeZoo, Self::ParametricSurface,
         Self::StrangeAttractor, Self::ComputeStrangeAttractor,
         Self::NumberStation, Self::Mycelium,
+        Self::MriVolume,
     ];
 
     pub fn from_index(i: usize) -> Option<Self> {
@@ -421,6 +424,7 @@ impl<'de> Deserialize<'de> for GeneratorType {
                 17 => GeneratorType::Mycelium,
                 18 => GeneratorType::ComputeStrangeAttractor,
                 19 => GeneratorType::FluidSimulation3D,
+                20 => GeneratorType::MriVolume,
                 _ => GeneratorType::None,
             },
             serde_json::Value::String(s) => match s.as_str() {
@@ -443,6 +447,7 @@ impl<'de> Deserialize<'de> for GeneratorType {
                 "Mycelium" => GeneratorType::Mycelium,
                 "ComputeStrangeAttractor" => GeneratorType::ComputeStrangeAttractor,
                 "FluidSimulation3D" => GeneratorType::FluidSimulation3D,
+                "MriVolume" => GeneratorType::MriVolume,
                 _ => GeneratorType::None,
             },
             _ => GeneratorType::None,

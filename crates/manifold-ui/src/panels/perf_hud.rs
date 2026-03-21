@@ -258,7 +258,7 @@ impl PerfHudPanel {
             let bx = x + i as f32 * bar_w;
             let id = tree.add_panel(-1, bx, y, bar_w.max(1.0), 1.0,
                 UIStyle {
-                    bg_color: color::Color32::new(40, 40, 44, 255),
+                    bg_color: Color32::new(40, 40, 44, 255),
                     ..UIStyle::default()
                 },
             ) as i32;
@@ -269,7 +269,7 @@ impl PerfHudPanel {
 }
 
 /// Map frame time to color: green (<8ms), yellow (8-16ms), red (>16ms).
-fn dt_color(ms: f32) -> color::Color32 {
+fn dt_color(ms: f32) -> Color32 {
     if ms < 8.5 {
         color::STATUS_GOOD
     } else if ms < 16.7 {

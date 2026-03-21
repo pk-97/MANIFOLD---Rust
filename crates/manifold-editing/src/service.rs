@@ -91,10 +91,13 @@ impl EditingService {
     pub fn can_redo(&self) -> bool { self.undo_manager.can_redo() }
 
     /// Clear undo history (e.g., on project load).
+    /// Bumps data_version (rather than resetting to 0) so the content thread's
+    /// first post-load snapshot exceeds the app's suppress_snapshot_until
+    /// threshold — allowing modulation snapshots to flow immediately.
     pub fn set_project(&mut self) {
         self.undo_manager.clear();
-        self.data_version = 0;
-        self.saved_at_version = 0;
+        self.data_version += 1;
+        self.saved_at_version = self.data_version;
         self.clipboard.clear();
     }
 
