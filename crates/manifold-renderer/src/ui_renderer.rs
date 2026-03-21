@@ -403,11 +403,19 @@ impl UIRenderer {
     /// Render only the overlay/dropdown nodes (from `start_node` onwards).
     /// Call this AFTER layer bitmaps and playhead so the dropdown sits on top.
     pub fn render_overlay(&mut self, tree: &UITree, start_node: usize) {
+        self.render_overlay_range(tree, start_node, usize::MAX);
+    }
+
+    /// Render nodes in range [start_node, end_node).
+    /// Used for rendering specific overlay sections (e.g. perf HUD between
+    /// bitmap textures and dropdown popups).
+    pub fn render_overlay_range(&mut self, tree: &UITree, start_node: usize, end_node: usize) {
         self.clip_stack.clear();
 
         tree.traverse(|event| match event {
             TraversalEvent::Node(node) => {
-                if (node.id as usize) >= start_node {
+                let id = node.id as usize;
+                if id >= start_node && id < end_node {
                     self.draw_node(node);
                 }
             }

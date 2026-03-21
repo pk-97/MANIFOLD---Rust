@@ -79,6 +79,12 @@ impl PerfHudPanel {
         self.visible
     }
 
+    /// First node index in the tree (for overlay rendering — skip in Pass 1,
+    /// render in a later pass so the HUD draws on top of bitmap textures).
+    pub fn first_node(&self) -> usize {
+        self.first_node
+    }
+
     pub fn set_metrics(&mut self, metrics: PerfMetrics) {
         self.metrics = metrics;
     }

@@ -1510,11 +1510,15 @@ impl Application {
                 let logical_h = (surface_h as f64 / scale) as u32;
 
                 // Pass 1: UITree rects + text (track backgrounds, ruler, chrome panels).
-                // When overlay popups are open, skip their nodes — they render in Pass 4.
+                // Skip overlay nodes — perf HUD renders after bitmaps (Pass 3b),
+                // popups render in Pass 4. Perf HUD comes first in tree order, so
+                // skipping from its first_node also skips popup nodes (correct).
                 // Uses TextMode::Main so base UI text goes to the main TextRenderer's
                 // own vertex buffer, isolated from the overlay TextRenderer.
                 if let Some(ui) = &mut self.ui_renderer {
-                    let skip_from = if self.ui_root.dropdown.is_open() {
+                    let skip_from = if self.ui_root.perf_hud.is_visible() {
+                        Some(self.ui_root.perf_hud.first_node())
+                    } else if self.ui_root.dropdown.is_open() {
                         Some(self.ui_root.dropdown.first_node())
                     } else if self.ui_root.browser_popup.is_open() {
                         Some(self.ui_root.browser_popup.first_node())
@@ -1559,6 +1563,27 @@ impl Application {
                         ui.render(
                             &gpu.device, &gpu.queue, &mut encoder, &surface_view,
                             logical_w, logical_h, scale, TextMode::Skip,
+                        );
+                    }
+                }
+
+                // Pass 3b: Perf HUD — renders on top of bitmaps and playhead.
+                // Uses its own overlay pass so it's not covered by layer textures.
+                if self.ui_root.perf_hud.is_visible() {
+                    if let Some(ui) = &mut self.ui_renderer {
+                        // Render only perf HUD nodes (from first_node up to dropdown/browser start)
+                        let hud_start = self.ui_root.perf_hud.first_node();
+                        let hud_end = if self.ui_root.dropdown.is_open() {
+                            self.ui_root.dropdown.first_node()
+                        } else if self.ui_root.browser_popup.is_open() {
+                            self.ui_root.browser_popup.first_node()
+                        } else {
+                            usize::MAX
+                        };
+                        ui.render_overlay_range(&self.ui_root.tree, hud_start, hud_end);
+                        ui.render(
+                            &gpu.device, &gpu.queue, &mut encoder, &surface_view,
+                            logical_w, logical_h, scale, TextMode::Overlay,
                         );
                     }
                 }
