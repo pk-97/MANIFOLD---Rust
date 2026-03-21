@@ -1225,11 +1225,6 @@ impl Generator for FluidSimulationGenerator {
         let area_scale = (sw as f32 * sh as f32) / SCATTER_REFERENCE_AREA;
         let intensity = 3.0 * area_scale;
 
-        if self.frame_count < 3 {
-            eprintln!("[FluidSim] frame={} sw={} sh={} bw={} bh={} active={} energy={} intensity={:.4} contrast={:.2} slope={:.4}",
-                self.frame_count, sw, sh, bw, bh, active_count, scaled_energy, intensity, contrast, slope);
-        }
-
         let display_uniforms = DisplayUniforms {
             intensity,
             contrast,
