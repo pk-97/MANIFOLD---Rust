@@ -4,6 +4,10 @@ Mechanically translate a Unity C# file (or shader) to Rust, preserving exact arc
 
 User request: $ARGUMENTS
 
+## Context
+
+The Rust codebase uses: Edition 2024, typed IDs (`ClipId`/`LayerId`/`EffectGroupId`), `AHashMap` on hot paths, `parking_lot` mutexes. Use these patterns in ported code. All serialized structs need `#[serde(rename_all = "camelCase")]`.
+
 ## Mandatory Workflow
 
 ### 1. Identify the Unity Source

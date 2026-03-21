@@ -4,6 +4,10 @@ Run this AFTER a porting session to catch value drift, missing edge cases, and s
 
 User request: $ARGUMENTS
 
+## Context
+
+The Rust codebase has authorized divergences from Unity: typed IDs (`ClipId`/`LayerId`/`EffectGroupId`) instead of `String`, `AHashMap` instead of `HashMap`, `parking_lot` instead of `std::sync`, lock-free `AtomicClockState` for MIDI. These are NOT bugs. Check `docs/KNOWN_DIVERGENCES.md` for the full list.
+
 ## Workflow
 
 ### 1. Identify Changed Files

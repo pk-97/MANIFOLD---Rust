@@ -4,6 +4,10 @@ Compare a Rust implementation against its Unity source to identify divergences. 
 
 User request: $ARGUMENTS
 
+## Context
+
+The Rust codebase has been natively transformed: Edition 2024, typed IDs (`ClipId`/`LayerId`/`EffectGroupId`), `AHashMap` on hot paths, `parking_lot` mutexes. Some divergences from Unity are intentional improvements — check `docs/KNOWN_DIVERGENCES.md` and note that `AHashMap` replaces `HashMap`, typed IDs replace `String`, and `parking_lot` replaces `std::sync`. These are authorized.
+
 ## Workflow
 
 ### 1. Identify the Files to Compare

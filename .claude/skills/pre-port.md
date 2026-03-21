@@ -4,6 +4,10 @@ Run this BEFORE porting any Unity file to Rust. Identifies dependencies, checks 
 
 User request: $ARGUMENTS
 
+## Context
+
+The Rust codebase uses: Edition 2024, typed IDs (`ClipId`/`LayerId`/`EffectGroupId`), `AHashMap` on hot paths, `parking_lot` mutexes. The app layer has been split: `ui_bridge/` (7 modules), `app.rs`/`app_render.rs`/`app_lifecycle.rs`. Check for existing inline code in these split files.
+
 ## Workflow
 
 ### 1. Identify the Target
