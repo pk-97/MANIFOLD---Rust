@@ -1223,6 +1223,9 @@ impl Application {
             } else {
                 self.needs_rebuild = false;
                 self.ui_root.build();
+                // Re-apply effect card selection visuals after rebuild —
+                // structural changes recreate cards with is_selected=false.
+                self.ui_root.inspector.apply_selection_visuals(&mut self.ui_root.tree);
             }
         } else if scroll_changed {
             self.ui_root.rebuild_scroll_panels();
