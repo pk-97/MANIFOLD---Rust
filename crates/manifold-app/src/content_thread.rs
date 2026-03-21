@@ -20,7 +20,7 @@ use manifold_playback::osc_receiver::OscReceiver;
 use manifold_playback::osc_sender::OscPositionSender;
 use manifold_playback::osc_sync::OscSyncController;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
-use manifold_playback::sync::{SyncArbiter, SyncTarget, SyncTargetSnapshot};
+use manifold_playback::sync::{SyncArbiter, SyncTargetSnapshot};
 use manifold_playback::tempo_recorder::TempoRecorder;
 use manifold_playback::transport_controller::TransportController;
 use manifold_renderer::gpu::GpuContext;
@@ -225,6 +225,7 @@ impl ContentThread {
                 is_recording: self.engine.is_recording(),
                 content_fps: self.timer.current_fps() as f32,
                 content_frame_time_ms: (self.timer.last_dt() * 1000.0) as f32,
+                active_clips: self.engine.active_clip_count(),
                 data_version: version,
                 editing_is_dirty: self.editing_service.is_dirty(),
                 bpm: self.engine.project().map_or(120.0, |p| p.settings.bpm as f64),
@@ -627,16 +628,58 @@ impl ContentThread {
                 }
             }
             ContentCommand::Undo => {
+                // Capture pre-undo settings so we can detect resolution/FPS changes.
+                // Port of Unity WorkspaceController.OnUndoRedo() which calls
+                // ApplyProjectResolutionFromFooter() + ApplyProjectFpsFromFooter().
+                let pre = self.engine.project().map(|p| {
+                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate)
+                });
                 if let Some(p) = self.engine.project_mut() {
                     self.editing_service.undo(p);
                 }
                 self.engine.mark_compositor_dirty(0.0);
+                self.engine.mark_sync_dirty();
+                // Apply resolution/FPS changes if the undo altered project settings.
+                let post = self.engine.project().map(|p| {
+                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate)
+                });
+                if let (Some((pre_w, pre_h, pre_fps)), Some((post_w, post_h, post_fps))) = (pre, post) {
+                    if post_w != pre_w || post_h != pre_h {
+                        self.content_pipeline.resize(
+                            &self.gpu.device, &mut self.engine,
+                            post_w as u32, post_h as u32,
+                        );
+                    }
+                    if (post_fps - pre_fps).abs() > 0.01 {
+                        self.timer.set_target_fps(post_fps as f64);
+                    }
+                }
             }
             ContentCommand::Redo => {
+                // Same pre/post settings detection as Undo.
+                let pre = self.engine.project().map(|p| {
+                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate)
+                });
                 if let Some(p) = self.engine.project_mut() {
                     self.editing_service.redo(p);
                 }
                 self.engine.mark_compositor_dirty(0.0);
+                self.engine.mark_sync_dirty();
+                // Apply resolution/FPS changes if the redo altered project settings.
+                let post = self.engine.project().map(|p| {
+                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate)
+                });
+                if let (Some((pre_w, pre_h, pre_fps)), Some((post_w, post_h, post_fps))) = (pre, post) {
+                    if post_w != pre_w || post_h != pre_h {
+                        self.content_pipeline.resize(
+                            &self.gpu.device, &mut self.engine,
+                            post_w as u32, post_h as u32,
+                        );
+                    }
+                    if (post_fps - pre_fps).abs() > 0.01 {
+                        self.timer.set_target_fps(post_fps as f64);
+                    }
+                }
             }
             ContentCommand::SetProject => {
                 self.editing_service.set_project();
