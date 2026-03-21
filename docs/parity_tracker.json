@@ -44,7 +44,7 @@
       "audit_section": 9
     },
     "audio_percussion": {
-      "pct": 92,
+      "pct": 100,
       "audit_section": 10
     },
     "midi_input": {
@@ -437,9 +437,9 @@
       "title": "Port StemAudioController (4-stem DAW playback)",
       "severity": "medium",
       "est_loc": 350,
-      "status": "todo",
-      "commit": null,
-      "notes": "4-stem Demucs playback (drums, bass, other, vocals) with per-stem mute/solo. Depends on GAP-AUDIO-7a for base audio sync. Split from original GAP-AUDIO-7."
+      "status": "done",
+      "commit": "8576b25",
+      "notes": "Full port: StemAudioController (621 lines) with 4 kira audio handles, DAW mute/solo, expand/collapse with master auto-mute, lazy loading from project stem paths, sync_single_stem matching Unity's 3-state logic (Playing/Paused/Stopped). ContentCommand variants (StemAudioLoaded, StemSetExpanded, StemToggleMute/Solo, StemReset). ContentState fields for UI sync. Stem lane waveform display fixed (BPM-based duration). GPU texture upload at index 1001. PreloadedStemData for background thread loading."
     },
     {
       "number": 31,
