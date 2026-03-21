@@ -330,7 +330,7 @@ impl EffectCardPanel {
 
         let effect_name = self.effect_name.clone();
 
-        // Border
+        // Border — interactive so clicks on card edge also select
         let border_color = if self.is_selected { color::SELECTED_BORDER } else { color::CARD_BORDER_C32 };
         self.border_id = tree.add_panel(
             -1, rect.x, rect.y, rect.width, self.compute_height() - CARD_BOTTOM_MARGIN,
@@ -340,8 +340,9 @@ impl EffectCardPanel {
                 ..UIStyle::default()
             },
         ) as i32;
+        tree.set_flag(self.border_id as u32, UIFlags::INTERACTIVE);
 
-        // Inner background
+        // Inner background — interactive so clicks anywhere on card body select the card
         let inner = Rect::new(
             rect.x + BORDER_W, rect.y + BORDER_W,
             rect.width - BORDER_W * 2.0,
@@ -355,6 +356,7 @@ impl EffectCardPanel {
                 ..UIStyle::default()
             },
         ) as i32;
+        tree.set_flag(self.inner_bg_id as u32, UIFlags::INTERACTIVE);
 
         let inner_w = inner.width;
         let parent = self.inner_bg_id;
@@ -371,7 +373,7 @@ impl EffectCardPanel {
     }
 
     fn build_header(&mut self, tree: &mut UITree, parent: i32, x: f32, y: f32, w: f32, name: &str) {
-        // Header background
+        // Header background — interactive so clicks anywhere on header select the card
         self.header_bg_id = tree.add_panel(
             parent, x, y, w, HEADER_HEIGHT,
             UIStyle {
@@ -380,6 +382,7 @@ impl EffectCardPanel {
                 ..UIStyle::default()
             },
         ) as i32;
+        tree.set_flag(self.header_bg_id as u32, UIFlags::INTERACTIVE);
 
         // Layout (right-to-left for fixed elements)
         let chevron_x = x + w - PADDING - CHEVRON_W;
@@ -659,8 +662,10 @@ impl EffectCardPanel {
             return vec![PanelAction::EffectDriverConfig(ei, pi, action)];
         }
 
-        // Card selection (any click on header bg)
-        if id == self.header_bg_id || id == self.drag_icon_id || id == self.name_label_id {
+        // Card selection — any click on card background, border, or header triggers selection
+        if id == self.border_id || id == self.header_bg_id || id == self.inner_bg_id
+            || id == self.drag_icon_id || id == self.name_label_id
+        {
             return vec![PanelAction::EffectCardClicked(ei)];
         }
 
