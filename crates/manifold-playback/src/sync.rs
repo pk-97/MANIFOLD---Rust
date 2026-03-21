@@ -27,6 +27,39 @@ pub trait SyncArbiterTarget {
     fn seek(&mut self, time: f32);
 }
 
+/// Snapshot of read-only playback state for use when the engine is also
+/// borrowed mutably as SyncArbiterTarget. Captures values once per frame,
+/// then passed to sync controllers that need both read and write access.
+pub struct SyncTargetSnapshot {
+    state: PlaybackState,
+    time: f32,
+    bpm: f32,
+}
+
+impl SyncTargetSnapshot {
+    /// Capture a snapshot from any SyncTarget implementor.
+    pub fn from_engine(target: &dyn SyncTarget) -> Self {
+        let bpm = target.current_project()
+            .map_or(120.0, |p| p.settings.bpm);
+        Self {
+            state: target.current_state(),
+            time: target.current_time(),
+            bpm,
+        }
+    }
+}
+
+impl SyncTarget for SyncTargetSnapshot {
+    fn current_state(&self) -> PlaybackState { self.state }
+    fn current_time(&self) -> f32 { self.time }
+    fn is_playing(&self) -> bool { self.state == PlaybackState::Playing }
+    fn timeline_beat_to_time(&self, beat: f32) -> f32 {
+        // Fallback: use BPM for beat→time conversion (no tempo map in snapshot).
+        if self.bpm > 0.0 { beat * 60.0 / self.bpm } else { beat * 0.5 }
+    }
+    fn current_project(&self) -> Option<&Project> { None }
+}
+
 /// Structural gatekeeper for sync source authority.
 /// Port of C# SyncArbiter.
 pub struct SyncArbiter {

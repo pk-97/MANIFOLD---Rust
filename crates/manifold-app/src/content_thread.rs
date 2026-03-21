@@ -8,12 +8,17 @@
 
 use crossbeam_channel::{Receiver, Sender};
 
+use manifold_core::types::{ClockAuthority, TempoPointSource};
 use manifold_editing::service::EditingService;
 use manifold_playback::audio_sync::ImportedAudioSyncController;
 use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::midi_input::MidiInputController;
+use manifold_playback::osc_receiver::OscReceiver;
+use manifold_playback::osc_sender::OscPositionSender;
+use manifold_playback::osc_sync::OscSyncController;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
+use manifold_playback::sync::{SyncArbiter, SyncTarget, SyncTargetSnapshot};
 use manifold_playback::transport_controller::TransportController;
 use manifold_renderer::gpu::GpuContext;
 
@@ -41,6 +46,16 @@ pub struct ContentThread {
     /// When true, skip tick+render but still drain commands.
     /// Used while native file dialogs are open on macOS.
     pub rendering_paused: bool,
+
+    // ── Sync infrastructure ──
+    /// Authority gatekeeper — only the active ClockAuthority can issue transport commands.
+    pub sync_arbiter: SyncArbiter,
+    /// OSC UDP listener — background thread receives, main thread dispatches.
+    pub osc_receiver: OscReceiver,
+    /// OSC timecode sync controller (LiveMTC bridge).
+    pub osc_sync: OscSyncController,
+    /// OSC position sender — sends transport state to DAW (LateUpdate equivalent).
+    pub osc_sender: OscPositionSender,
 }
 
 impl ContentThread {
@@ -102,6 +117,11 @@ impl ContentThread {
                 realtime,
             );
 
+            // 3b. Sync controller updates (before engine tick — Unity execution order -100).
+            // Link, MidiClock, and OSC poll their sources and issue gated transport
+            // commands via SyncArbiter. Snapshot read-only state before mutable borrows.
+            self.tick_sync_controllers();
+
             // 4. Tick engine
             let ctx = TickContext {
                 dt_seconds: dt,
@@ -111,6 +131,19 @@ impl ContentThread {
                 export_fixed_dt: 0.0,
             };
             let tick_result = self.engine.tick(ctx);
+
+            // 4b. OscPositionSender (LateUpdate equivalent — after engine tick).
+            if self.transport_controller.osc_sender_enabled {
+                let bpm = self.engine.project().map_or(120.0_f32, |p| p.settings.bpm);
+                let seconds_per_beat = if bpm > 0.0 { 60.0 / bpm } else { 0.5 };
+                self.osc_sender.late_update(
+                    self.engine.is_playing(),
+                    self.engine.current_beat(),
+                    seconds_per_beat,
+                    realtime,
+                    &mut self.sync_arbiter,
+                );
+            }
 
             // 5. Audio sync
             if let Some(ref mut audio_sync) = self.audio_sync {
@@ -163,10 +196,24 @@ impl ContentThread {
                 time_signature_numerator: self.engine.project()
                     .map_or(4, |p| p.settings.time_signature_numerator),
                 link_enabled: self.transport_controller.link_sync.as_ref()
-                    .map_or(false, |s| s.is_enabled()),
+                    .map_or(false, |s| s.is_link_enabled()),
+                link_tempo: self.transport_controller.link_sync.as_ref()
+                    .map_or(120.0, |s| s.link_tempo),
+                link_peers: self.transport_controller.link_sync.as_ref()
+                    .map_or(0, |s| s.num_peers),
+                link_is_playing: self.transport_controller.link_sync.as_ref()
+                    .map_or(false, |s| s.link_is_playing),
                 midi_clock_enabled: self.transport_controller.midi_clock_sync.as_ref()
-                    .map_or(false, |s| s.is_enabled()),
+                    .map_or(false, |s| s.is_midi_clock_enabled()),
+                midi_clock_bpm: self.transport_controller.midi_clock_sync.as_ref()
+                    .map_or(120.0, |s| s.current_clock_bpm()),
+                midi_clock_position_display: self.transport_controller.midi_clock_sync.as_ref()
+                    .map_or_else(String::new, |s| s.current_position_display().to_string()),
+                midi_clock_receiving: self.transport_controller.midi_clock_sync.as_ref()
+                    .map_or(false, |s| s.is_receiving_clock()),
                 osc_sender_enabled: self.transport_controller.osc_sender_enabled,
+                osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
+                osc_timecode_display: self.osc_sync.current_timecode_display.clone(),
                 percussion_importing: self.percussion_orchestrator.is_import_in_progress(),
                 percussion_status_message: perc_msg,
                 percussion_progress: if perc_progress < 0.0 { 0.0 } else { perc_progress.clamp(0.0, 1.0) },
@@ -176,6 +223,68 @@ impl ContentThread {
 
             // Non-blocking send — if the UI is behind, drop the oldest state.
             let _ = state_tx.try_send(state);
+        }
+    }
+
+    /// Tick all sync controllers once per frame. Called before engine tick.
+    /// Handles the borrow-split problem: snapshot read-only engine state first,
+    /// then pass &mut engine for transport commands via SyncArbiter.
+    fn tick_sync_controllers(&mut self) {
+        let authority = self.engine.project()
+            .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
+        let now = self.time_since_start;
+
+        // Link sync — poll beat/phase/tempo from Ableton Link network.
+        if let Some(ref mut link) = self.transport_controller.link_sync {
+            link.update(
+                &mut self.sync_arbiter,
+                &mut self.engine,
+                authority,
+            );
+            // Feed live Link tempo to engine for UI readout.
+            if link.is_link_enabled() && link.has_active_peers() {
+                self.engine.set_live_external_tempo(
+                    true,
+                    link.link_tempo as f32,
+                    TempoPointSource::Link,
+                );
+            }
+        }
+
+        // MIDI Clock sync — poll clock/SPP from midir.
+        // Snapshot SyncTarget state before passing &mut engine as SyncArbiterTarget.
+        if let Some(ref mut clk) = self.transport_controller.midi_clock_sync {
+            let snap = SyncTargetSnapshot::from_engine(&self.engine);
+            clk.update(
+                now,
+                &mut self.sync_arbiter,
+                &mut self.engine,
+                &snap,
+                authority,
+            );
+            // Feed live MIDI Clock BPM to engine.
+            if clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
+                self.engine.set_live_external_tempo(
+                    true,
+                    clk.current_clock_bpm(),
+                    TempoPointSource::MidiClock,
+                );
+            }
+        }
+
+        // OSC receiver — drain queued UDP messages and dispatch to subscribers.
+        self.osc_receiver.update();
+
+        // OSC timecode sync — process pending timecode, manage transport.
+        {
+            let snap = SyncTargetSnapshot::from_engine(&self.engine);
+            self.osc_sync.update(
+                now,
+                &snap,
+                &mut self.sync_arbiter,
+                &mut self.engine,
+                authority,
+            );
         }
     }
 

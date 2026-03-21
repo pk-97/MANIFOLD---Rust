@@ -4,12 +4,12 @@
 //! Pure logic — no UI. The app layer bridges this to the bitmap TransportPanel.
 //! Mechanical translation of Unity TransportController.cs.
 
-use manifold_core::types::{ClockAuthority, TempoPointSource};
 use manifold_core::project::Project;
+use manifold_core::types::ClockAuthority;
 
 use crate::engine::PlaybackEngine;
-use crate::sync::SyncArbiter;
-use crate::sync_source::SyncSource;
+use crate::link_sync::LinkSyncController;
+use crate::midi_clock_sync::MidiClockSyncController;
 
 /// Insert cursor state needed by transport actions.
 /// Mirrors the subset of UIState that TransportController reads.
@@ -21,9 +21,12 @@ pub struct InsertCursorState {
 /// Transport controller — orchestrates sync, BPM, and playback actions.
 /// Port of Unity TransportController.cs.
 pub struct TransportController {
-    // Sync sources (Option because lazy-init, matching Unity pattern)
-    pub link_sync: Option<Box<dyn SyncSource>>,
-    pub midi_clock_sync: Option<Box<dyn SyncSource>>,
+    // Sync sources — concrete types so we can call their typed update() methods.
+    pub link_sync: Option<LinkSyncController>,
+    pub midi_clock_sync: Option<MidiClockSyncController>,
+    /// Whether the OSC sync controller is authority-enabled.
+    /// The OscSyncController itself lives on ContentThread as a sibling.
+    pub osc_enabled: bool,
     pub osc_sender_enabled: bool,
     pub osc_sender_port: i32,
 }
@@ -31,8 +34,9 @@ pub struct TransportController {
 impl TransportController {
     pub fn new() -> Self {
         Self {
-            link_sync: None,
-            midi_clock_sync: None,
+            link_sync: Some(LinkSyncController::new()),
+            midi_clock_sync: Some(MidiClockSyncController::new()),
+            osc_enabled: false,
             osc_sender_enabled: false,
             osc_sender_port: 9001,
         }
@@ -96,34 +100,35 @@ impl TransportController {
             ClockAuthority::Link => {
                 // Disable MIDI Clock and OSC; keep Link
                 if let Some(ref mut clk) = self.midi_clock_sync {
-                    if clk.is_enabled() { clk.disable(); }
+                    if clk.is_midi_clock_enabled() { clk.disable_midi_clock(); }
                 }
-                // OSC sender disabled separately
+                self.osc_enabled = false;
             }
             ClockAuthority::MidiClock => {
-                // Disable OSC only; keep Link optional
-                // (Link can run in background for peer awareness)
+                // Disable OSC; keep Link optional (background peer awareness)
+                self.osc_enabled = false;
             }
             ClockAuthority::Osc => {
                 // Disable MIDI Clock; keep Link optional
                 if let Some(ref mut clk) = self.midi_clock_sync {
-                    if clk.is_enabled() { clk.disable(); }
+                    if clk.is_midi_clock_enabled() { clk.disable_midi_clock(); }
                 }
             }
             ClockAuthority::Internal => {
                 // Disable MIDI Clock and OSC; keep Link optional
                 if let Some(ref mut clk) = self.midi_clock_sync {
-                    if clk.is_enabled() { clk.disable(); }
+                    if clk.is_midi_clock_enabled() { clk.disable_midi_clock(); }
                 }
+                self.osc_enabled = false;
             }
         }
     }
 
     fn is_authority_source_enabled(&self, authority: ClockAuthority) -> bool {
         match authority {
-            ClockAuthority::Link => self.link_sync.as_ref().map_or(false, |s| s.is_enabled()),
-            ClockAuthority::MidiClock => self.midi_clock_sync.as_ref().map_or(false, |s| s.is_enabled()),
-            ClockAuthority::Osc => false, // OscSyncController not ported yet
+            ClockAuthority::Link => self.link_sync.as_ref().map_or(false, |s| s.is_link_enabled()),
+            ClockAuthority::MidiClock => self.midi_clock_sync.as_ref().map_or(false, |s| s.is_midi_clock_enabled()),
+            ClockAuthority::Osc => self.osc_enabled,
             ClockAuthority::Internal => true,
         }
     }
@@ -132,17 +137,18 @@ impl TransportController {
         match authority {
             ClockAuthority::Link => {
                 if let Some(ref mut link) = self.link_sync {
-                    link.enable();
+                    link.enable_link(120.0);
                 }
             }
             ClockAuthority::MidiClock => {
                 if let Some(ref mut clk) = self.midi_clock_sync {
-                    clk.enable();
+                    clk.enable_midi_clock(clk.selected_source_index());
                 }
             }
             ClockAuthority::Osc => {
-                // OscSyncController not ported yet
-                log::info!("[TransportController] OSC sync controller not available");
+                // OscSyncController enable is handled by ContentThread
+                // which has access to the OscReceiver and OscSyncController.
+                self.osc_enabled = true;
             }
             ClockAuthority::Internal => {}
         }
@@ -185,14 +191,15 @@ impl TransportController {
     /// Port of Unity TransportController.ToggleLink.
     pub fn toggle_link(&mut self, engine: &mut PlaybackEngine) {
         if let Some(ref mut link) = self.link_sync {
-            if link.is_enabled() {
-                link.disable();
+            if link.is_link_enabled() {
+                link.disable_link();
                 let auth = Self::get_clock_authority(engine.project());
                 if auth == ClockAuthority::Link {
                     self.apply_authority_exclusively(engine, ClockAuthority::Internal);
                 }
             } else {
-                link.enable();
+                let bpm = engine.project().map_or(120.0, |p| p.settings.bpm as f64);
+                link.enable_link(bpm);
             }
         } else {
             log::info!("[TransportController] Link sync not available");
@@ -204,8 +211,8 @@ impl TransportController {
     /// Port of Unity TransportController.ToggleMidiClock.
     pub fn toggle_midi_clock(&mut self, engine: &mut PlaybackEngine) {
         if let Some(ref mut clk) = self.midi_clock_sync {
-            if clk.is_enabled() {
-                clk.disable();
+            if clk.is_midi_clock_enabled() {
+                clk.disable_midi_clock();
                 let auth = Self::get_clock_authority(engine.project());
                 if auth == ClockAuthority::MidiClock {
                     self.apply_authority_exclusively(engine, ClockAuthority::Internal);

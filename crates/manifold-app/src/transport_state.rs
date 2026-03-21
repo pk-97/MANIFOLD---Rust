@@ -175,8 +175,7 @@ impl TransportStateCache {
 
     fn update_link_state(&mut self, ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
         let enabled = content_state.link_enabled;
-        // For now, no peer count available — will be populated when LinkSyncController exists
-        let peers: i32 = 0;
+        let peers = content_state.link_peers;
 
         if enabled == self.link_enabled && peers == self.link_peers { return; }
         self.link_enabled = enabled;

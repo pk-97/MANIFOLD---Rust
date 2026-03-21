@@ -33,8 +33,16 @@ pub struct ContentState {
 
     // ── Transport controller state ────────────────────────────────
     pub link_enabled: bool,
+    pub link_tempo: f64,
+    pub link_peers: i32,
+    pub link_is_playing: bool,
     pub midi_clock_enabled: bool,
+    pub midi_clock_bpm: f32,
+    pub midi_clock_position_display: String,
+    pub midi_clock_receiving: bool,
     pub osc_sender_enabled: bool,
+    pub osc_receiving_timecode: bool,
+    pub osc_timecode_display: String,
 
     // ── Percussion status ─────────────────────────────────────────
     pub percussion_importing: bool,
@@ -64,8 +72,16 @@ impl Default for ContentState {
             clock_authority: ClockAuthority::Internal,
             time_signature_numerator: 4,
             link_enabled: false,
+            link_tempo: 120.0,
+            link_peers: 0,
+            link_is_playing: false,
             midi_clock_enabled: false,
+            midi_clock_bpm: 120.0,
+            midi_clock_position_display: String::new(),
+            midi_clock_receiving: false,
             osc_sender_enabled: false,
+            osc_receiving_timecode: false,
+            osc_timecode_display: String::new(),
             percussion_importing: false,
             percussion_status_message: String::new(),
             percussion_progress: 0.0,

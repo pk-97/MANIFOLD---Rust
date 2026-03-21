@@ -1992,6 +1992,10 @@ impl ApplicationHandler for Application {
                 midi_input,
                 clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
                 rendering_paused: false,
+                sync_arbiter: manifold_playback::sync::SyncArbiter::new(),
+                osc_receiver: manifold_playback::osc_receiver::OscReceiver::new(),
+                osc_sync: manifold_playback::osc_sync::OscSyncController::new(),
+                osc_sender: manifold_playback::osc_sender::OscPositionSender::new(),
             };
 
             let handle = std::thread::Builder::new()

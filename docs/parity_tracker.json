@@ -16,7 +16,7 @@
       "audit_section": 2
     },
     "playback": {
-      "pct": 72,
+      "pct": 82,
       "audit_section": 3
     },
     "effects": {
@@ -497,9 +497,9 @@
       "title": "Complete sync controllers (Link, MidiClock, OSC)",
       "severity": "medium",
       "est_loc": 1500,
-      "status": "partial",
-      "commit": "be4c7f0",
-      "notes": "LinkSync: SyncTransportFromLink ported, Update body complete (native FFI stubbed). MidiClockSync: FULLY WIRED — MidiClockReceiver (midir) replaces Unity MidiClock native plugin. Real MIDI clock reception via midir: 0xF8 tick accumulator, 0xFA/0xFB/0xFC Start/Continue/Stop, 0xF2 SPP. update() state machine complete with arbiter transport sync, external time sync, and SyncPositionToPlayback (nudge vs seek thresholds match Unity). BPM EMA estimator wired. Observer pattern (last_observed_*) matches Unity's stateChanged logic. [D-30]. OscSyncController: fully ported with SMPTE timecode parsing, transport sync, seek logic. OscReceiver: fully ported with subscription model. OscParameterRegistry: fully ported with singleton pattern. Remaining: 4 OSC bridge classes (~466 lines Unity: MasterEffectOscBridge 109L, LayerEffectOscBridge 102L, LayerOscBridge 148L, GeneratorOscBridge 107L). All registries + infrastructure in place. Bridge closures need Rust-specific buffer-and-apply pattern (can't mutate Project from inside Mutex callback). Blocked by: no live OSC receiver — bridges would be dead code until UDP listener is wired. Native FFI for AbletonLink still pending (native FFI stubbed for now)."
+      "status": "done",
+      "commit": "pending",
+      "notes": "All 3 sync controllers fully wired and functional. LinkSync: rusty_link crate wraps Ableton Link C++ SDK — beat/phase/tempo/peers polling, start/stop sync via SyncArbiter. MidiClockSync: MidiClockReceiver wraps midir for raw MIDI clock/SPP/start/stop — BPM EMA estimator, position sync, transport sync all live [D-30]. OscSync: OscReceiver wired with rosc crate for UDP OSC parsing — SMPTE timecode reception, transport follow, position seek/nudge. SyncArbiter authority gating, SyncTarget/SyncArbiterTarget trait impls on PlaybackEngine. OscPositionSender already complete. All controllers ticked each frame on content thread. ContentState publishes Link tempo/peers, MidiClock BPM/position, OSC timecode to UI. NOTE: rusty_link is GPLv2+ — must obtain Ableton proprietary license before shipping commercially (see memory). 4 OSC bridge classes (parameter exposure) remain as future work — not blocking sync functionality."
     },
     {
       "number": 36,
