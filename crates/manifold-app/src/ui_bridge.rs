@@ -491,7 +491,7 @@ pub fn dispatch(
                         // Build parent ID maps for undo
                         let mut old_parents = std::collections::HashMap::new();
                         let mut new_parents = std::collections::HashMap::new();
-                        for (_i, l) in old_order.iter().enumerate() {
+                        for l in old_order.iter() {
                             old_parents.insert(l.layer_id.clone(), l.parent_layer_id.clone());
                         }
                         // Update moved layer's parent
@@ -2161,7 +2161,7 @@ pub fn dispatch(
         }
         PanelAction::ContextDeleteClip(clip_id) => {
             {
-                let commands = EditingService::delete_clips(project, &[clip_id.clone()], None, 0.0);
+                let commands = EditingService::delete_clips(project, std::slice::from_ref(clip_id), None, 0.0);
                 if !commands.is_empty() {
                     for c in commands { let _ = content_tx.try_send(ContentCommand::Execute(c)); }
                 }
@@ -2179,7 +2179,7 @@ pub fn dispatch(
                     region.is_active = true;
                 }
                 let spb = 60.0 / project.settings.bpm.max(1.0);
-                let commands = EditingService::duplicate_clips(project, &[clip_id.clone()], &region, spb);
+                let commands = EditingService::duplicate_clips(project, std::slice::from_ref(clip_id), &region, spb);
                 if !commands.is_empty() {
                     for c in commands { let _ = content_tx.try_send(ContentCommand::Execute(c)); }
                 }
@@ -2940,12 +2940,12 @@ pub fn push_state(
                         chrome.sync_bpm(tree, "Auto");
                     }
                     // Slip range = source duration - clip duration in seconds
-                    let spb = 60.0 / Some(&*project).map_or(120.0, |p| p.settings.bpm);
+                    let spb = 60.0 / Some(project).map_or(120.0, |p| p.settings.bpm);
                     let clip_dur_s = clip.duration_beats * spb;
                     chrome.set_slip_range(clip_dur_s.max(1.0));
                     chrome.set_loop_range(clip.duration_beats.max(1.0));
                 } else if is_gen {
-                    chrome.sync_name(tree, &format!("{}", clip.generator_type.display_name()));
+                    chrome.sync_name(tree, clip.generator_type.display_name());
                     chrome.sync_gen_type(tree, clip.generator_type.display_name());
                 }
                 if mode_changed {
@@ -3059,9 +3059,9 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
         // - is_muted includes parent group mute (children of muted groups are dimmed)
         // - is_group set correctly for group layers
         // - accent_color set for child layers
-        let tracks: Vec<TrackInfo> = project.timeline.layers.iter().enumerate().map(|(_i, layer)| {
+        let tracks: Vec<TrackInfo> = project.timeline.layers.iter().map(|layer| {
             // Check if muted individually or by parent group
-            let parent_muted = layer.parent_layer_id.as_ref().map_or(false, |pid| {
+            let parent_muted = layer.parent_layer_id.as_ref().is_some_and(|pid| {
                 project.timeline.layers.iter().any(|l| l.layer_id == *pid && l.is_muted)
             });
             let is_muted = layer.is_muted || parent_muted;
@@ -3069,7 +3069,7 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
             // Variable track heights matching Unity CoordinateMapper.RebuildYLayout
             let height = if layer.parent_layer_id.is_some() {
                 // Child of group: check parent collapsed
-                let parent_collapsed = layer.parent_layer_id.as_ref().map_or(false, |pid| {
+                let parent_collapsed = layer.parent_layer_id.as_ref().is_some_and(|pid| {
                     project.timeline.layers.iter().any(|l| l.layer_id == *pid && l.is_collapsed)
                 });
                 if parent_collapsed { 0.0 } else { color::TRACK_HEIGHT }
@@ -3222,7 +3222,7 @@ pub fn sync_inspector_data(
             // Generator params
             let gen_config = layer.gen_params.as_ref()
                 .filter(|gp| gp.generator_type != GeneratorType::None)
-                .map(|gp| gen_params_to_config(gp));
+                .map(gen_params_to_config);
             ui.inspector.configure_gen_params(gen_config.as_ref(), idx);
         } else {
             ui.inspector.configure_layer_effects(&[]);

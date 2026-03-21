@@ -242,7 +242,7 @@ impl MriVolumeGenerator {
             .flatten()
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| p.extension().map_or(false, |ext| ext == "mrivol"))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "mrivol"))
             .collect();
         paths.sort();
         paths
@@ -310,9 +310,7 @@ impl MriVolumeGenerator {
                     rgba16_data.extend_from_slice(&bytes);
                     rgba16_data.extend_from_slice(&bytes);
                 }
-                for _ in 0..pad_bytes {
-                    rgba16_data.push(0);
-                }
+                rgba16_data.extend(std::iter::repeat_n(0u8, pad_bytes));
             }
         }
 

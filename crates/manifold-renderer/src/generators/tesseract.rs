@@ -34,11 +34,11 @@ impl TesseractGenerator {
 
         // 16 vertices from 4-bit patterns
         let mut base_verts = [[0.0f32; 4]; VERTEX_COUNT];
-        for i in 0..VERTEX_COUNT {
-            base_verts[i][0] = if (i & 1) != 0 { 1.0 } else { -1.0 };
-            base_verts[i][1] = if (i & 2) != 0 { 1.0 } else { -1.0 };
-            base_verts[i][2] = if (i & 4) != 0 { 1.0 } else { -1.0 };
-            base_verts[i][3] = if (i & 8) != 0 { 1.0 } else { -1.0 };
+        for (i, vert) in base_verts.iter_mut().enumerate() {
+            vert[0] = if (i & 1) != 0 { 1.0 } else { -1.0 };
+            vert[1] = if (i & 2) != 0 { 1.0 } else { -1.0 };
+            vert[2] = if (i & 4) != 0 { 1.0 } else { -1.0 };
+            vert[3] = if (i & 8) != 0 { 1.0 } else { -1.0 };
         }
 
         // 32 edges: connect i to i^1, i^2, i^4, i^8 where j > i

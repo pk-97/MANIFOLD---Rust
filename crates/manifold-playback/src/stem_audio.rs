@@ -186,7 +186,7 @@ impl StemAudioController {
         self.stems_ready = false;
         self.stems_loaded_count = 0;
 
-        for i in 0..STEM_COUNT {
+        for (i, stem_name) in STEM_FILE_NAMES.iter().enumerate() {
             // Stop and discard previous handle/data.
             if let Some(ref mut h) = self.stems[i].handle {
                 h.stop(Tween::default());
@@ -212,7 +212,7 @@ impl StemAudioController {
                     Err(e) => {
                         log::warn!(
                             "[StemAudioController] Failed to play preloaded stem '{}': {}",
-                            STEM_FILE_NAMES[i], e
+                            stem_name, e
                         );
                     }
                 }

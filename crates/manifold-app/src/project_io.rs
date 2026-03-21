@@ -87,8 +87,7 @@ impl ProjectIOService {
 
     /// Unity ProjectIOService.OnNewProject (lines 81-90).
     pub fn new_project(&self) -> ProjectIOAction {
-        let mut new_project = Project::default();
-        new_project.project_name = "New Project".to_string();
+        let mut new_project = Project { project_name: "New Project".to_string(), ..Default::default() };
         new_project.timeline.add_layer(
             "Layer 0",
             manifold_core::types::LayerType::Video,
@@ -269,7 +268,7 @@ impl ProjectIOService {
 
         if let Some(mut path) = dialog.save_file() {
             // Ensure .manifold extension (Unity line 212-213)
-            if path.extension().map_or(true, |e| e != "manifold") {
+            if path.extension().is_none_or(|e| e != "manifold") {
                 path.set_extension("manifold");
             }
 
@@ -497,8 +496,7 @@ impl ProjectIOService {
         );
 
         if result.success {
-            let mut action = ProjectIOAction::default();
-            action.needs_clip_sync = true;
+            let mut action = ProjectIOAction { needs_clip_sync: true, ..Default::default() };
             if let Some(cmd) = result.undo_command {
                 action.record_commands.push(cmd);
             }

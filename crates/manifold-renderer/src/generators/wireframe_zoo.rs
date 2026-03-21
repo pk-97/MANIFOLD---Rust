@@ -202,8 +202,7 @@ impl Generator for WireframeZooGenerator {
         let proj_scale = PROJ_SCALE * scale;
 
         // Rotate and project
-        for i in 0..vert_count {
-            let [mut x, mut y, mut z] = verts_3d[i];
+        for (i, &[mut x, mut y, mut z]) in verts_3d.iter().enumerate().take(vert_count) {
             rotate_3d(&mut x, &mut y, &mut z, cos_x, sin_x, cos_y, sin_y, cos_z, sin_z);
             self.helper.projected_x[i] = x * proj_scale;
             self.helper.projected_y[i] = y * proj_scale;

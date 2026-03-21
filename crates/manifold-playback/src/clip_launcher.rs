@@ -8,6 +8,14 @@ use manifold_core::video::VideoClip;
 
 use crate::live_clip_manager::{LiveClipHost, LiveClipManager};
 
+/// Callback type for clip launch events.
+/// Args: midi_note, video_clip_id, layer_index, start_time, in_point
+type ClipLaunchedCallback = Option<Box<dyn FnMut(i32, String, i32, f32, f32) + Send>>;
+
+/// Callback type for clip stop events.
+/// Args: midi_note, layer_index, stop_time
+type ClipStoppedCallback = Option<Box<dyn FnMut(i32, i32, f32) + Send>>;
+
 /// Bridges MIDI input to LiveClipManager.
 /// Handles random clip selection, random in-point generation,
 /// and NoteOff tracking. All clips use hold-to-play (NoteOff) behaviour.
@@ -24,12 +32,10 @@ pub struct ClipLauncher {
     last_triggered_clip_id: HashMap<i32, String>,
 
     /// Fired when a clip is launched (for Phase 4 recording).
-    /// Args: midi_note, video_clip_id, layer_index, start_time, in_point
-    pub on_clip_launched: Option<Box<dyn FnMut(i32, String, i32, f32, f32) + Send>>,
+    pub on_clip_launched: ClipLaunchedCallback,
 
     /// Fired when a clip is stopped via NoteOff (for Phase 4 recording).
-    /// Args: midi_note, layer_index, stop_time
-    pub on_clip_stopped: Option<Box<dyn FnMut(i32, i32, f32) + Send>>,
+    pub on_clip_stopped: ClipStoppedCallback,
 }
 
 /// Tracks an active note for NoteOff matching.

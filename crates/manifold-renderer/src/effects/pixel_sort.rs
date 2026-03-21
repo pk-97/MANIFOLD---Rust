@@ -395,28 +395,26 @@ impl PixelSortFX {
     ) -> &OwnerBuffers {
         let padded_dim = next_power_of_two(sort_dim);
 
-        // Check if existing buffers still match
-        if let Some(buf) = self.per_owner_buffers.get(&owner_key) {
-            if buf.padded_width == padded_dim && buf.sort_height == rows {
-                return self.per_owner_buffers.get(&owner_key).unwrap();
-            }
+        // Check if existing buffers still match — skip reallocation if so
+        let needs_realloc = !matches!(self.per_owner_buffers.get(&owner_key), Some(buf) if buf.padded_width == padded_dim && buf.sort_height == rows);
+
+        if needs_realloc {
+            // Release old (drop happens automatically), allocate new
+            // ComputeSortEffect.cs line 282: ComputeBuffer(paddedDim * rows, 8) — uint2 = 8 bytes
+            let element_count = padded_dim * rows;
+            let sort_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(&format!("PixelSort SortBuffer owner={owner_key}")),
+                size: element_count as u64 * 8, // uint2 = 8 bytes per element
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+
+            self.per_owner_buffers.insert(owner_key, OwnerBuffers {
+                sort_buffer,
+                padded_width: padded_dim,
+                sort_height:  rows,
+            });
         }
-
-        // Release old (drop happens automatically), allocate new
-        // ComputeSortEffect.cs line 282: ComputeBuffer(paddedDim * rows, 8) — uint2 = 8 bytes
-        let element_count = padded_dim * rows;
-        let sort_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("PixelSort SortBuffer owner={owner_key}")),
-            size: element_count as u64 * 8, // uint2 = 8 bytes per element
-            usage: wgpu::BufferUsages::STORAGE,
-            mapped_at_creation: false,
-        });
-
-        self.per_owner_buffers.insert(owner_key, OwnerBuffers {
-            sort_buffer,
-            padded_width: padded_dim,
-            sort_height:  rows,
-        });
 
         self.per_owner_buffers.get(&owner_key).unwrap()
     }

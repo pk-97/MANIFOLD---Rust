@@ -1,9 +1,9 @@
-/// GPU pipeline for wet/dry lerp blending in effect groups.
-///
-/// Matches Unity's GroupWetDryLerp.shader: `lerp(dry, wet, wetDry)`.
-/// - dry = snapshot taken before group effects ran
-/// - wet = buffer after group effects ran
-/// - wetDry = 1.0 → fully wet (all effects), 0.0 → fully dry (bypass)
+//! GPU pipeline for wet/dry lerp blending in effect groups.
+//!
+//! Matches Unity's GroupWetDryLerp.shader: `lerp(dry, wet, wetDry)`.
+//! - dry = snapshot taken before group effects ran
+//! - wet = buffer after group effects ran
+//! - wetDry = 1.0 -> fully wet (all effects), 0.0 -> fully dry (bypass)
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]

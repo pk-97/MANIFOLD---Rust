@@ -1,12 +1,12 @@
-/// Lightweight inline text input system.
-///
-/// When active, keyboard events are intercepted for text editing.
-/// The app layer renders a small text field overlay at the anchor position.
-/// Enter commits, Escape cancels.
-///
-/// Port of Unity BitmapTextInput — a session-based coordinator between UI
-/// callers and the text field renderer. Only ONE session active at a time;
-/// `begin()` auto-cancels any existing session (matches Unity behavior).
+//! Lightweight inline text input system.
+//!
+//! When active, keyboard events are intercepted for text editing.
+//! The app layer renders a small text field overlay at the anchor position.
+//! Enter commits, Escape cancels.
+//!
+//! Port of Unity BitmapTextInput -- a session-based coordinator between UI
+//! callers and the text field renderer. Only ONE session active at a time;
+//! `begin()` auto-cancels any existing session (matches Unity behavior).
 
 /// What kind of field is being edited.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

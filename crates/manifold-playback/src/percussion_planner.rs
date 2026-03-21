@@ -107,18 +107,15 @@ impl<'a> PercussionTimelinePlanner<'a> {
             let spacing_key = ((binding.trigger_type as i32).wrapping_mul(397)) ^ binding.layer_index;
 
             // Duration priority: per-event (from model) > binding (from SO) > default.
-            let duration_beats: f32;
-            if percussion_event.has_duration() && analysis.bpm > 0.0 {
+            let duration_beats: f32 = if percussion_event.has_duration() && analysis.bpm > 0.0 {
                 let seconds_per_beat = 60.0 / analysis.bpm;
                 let raw = percussion_event.duration_seconds / seconds_per_beat;
-                duration_beats = raw.clamp(0.0625, 32.0);
+                raw.clamp(0.0625, 32.0)
+            } else if binding.duration_beats > 0.0 {
+                binding.duration_beats
             } else {
-                duration_beats = if binding.duration_beats > 0.0 {
-                    binding.duration_beats
-                } else {
-                    options.default_clip_duration_beats
-                };
-            }
+                options.default_clip_duration_beats
+            };
 
             let placement = PercussionClipPlacement::new(
                 binding.trigger_type,

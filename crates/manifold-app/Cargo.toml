@@ -33,3 +33,6 @@ foreign-types = "0.5"
 core-foundation = "0.10"
 wgpu-hal = "28"
 wgpu-types = "28"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }

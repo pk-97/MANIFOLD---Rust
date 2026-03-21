@@ -178,9 +178,7 @@ impl MriVolumeGpu {
                     rgba16_data.extend_from_slice(&bytes);
                 }
                 // Pad row to 256-byte alignment
-                for _ in 0..pad_bytes {
-                    rgba16_data.push(0);
-                }
+                rgba16_data.extend(std::iter::repeat_n(0u8, pad_bytes));
             }
         }
 

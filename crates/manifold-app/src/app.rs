@@ -808,7 +808,7 @@ impl Application {
 
                 // Send loaded audio to content thread
                 self.send_content_cmd(ContentCommand::AudioLoaded {
-                    preloaded: result.preloaded,
+                    preloaded: Box::new(result.preloaded),
                     waveform: None,
                 });
 
@@ -962,7 +962,7 @@ impl Application {
         }
 
         let id = window.id();
-        let resolved_index = display_index.or_else(|| {
+        let resolved_index = display_index.or({
             if monitors.len() > 1 { Some(1) } else { Some(0) }
         });
 
@@ -1021,7 +1021,7 @@ impl Application {
                         let has_audio_path = self.local_project.percussion_import
                             .as_ref()
                             .and_then(|p| p.audio_path.as_ref())
-                            .map_or(false, |s| !s.is_empty());
+                            .is_some_and(|s| !s.is_empty());
                         if has_audio_path && !self.ui_root.layout.waveform_lane_visible {
                             self.ui_root.layout.waveform_lane_visible = true;
                             self.needs_rebuild = true;
@@ -2216,7 +2216,7 @@ impl ApplicationHandler for Application {
             // Give the content pipeline the IOSurface bridge so it can copy output + signal.
             #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.shared_texture_bridge {
-                let content_tex = unsafe { bridge.import_texture(&*content_gpu.device) };
+                let content_tex = unsafe { bridge.import_texture(&content_gpu.device) };
                 content_pipeline.set_shared_texture(content_tex, Arc::clone(bridge));
             }
             self.content_pipeline_output = Some(content_pipeline.shared_output());
@@ -2405,7 +2405,6 @@ impl ApplicationHandler for Application {
                         // This handles: CursorBeat/CursorLayerIndex tracking, per-layer bitmap
                         // invalidation on hover change, and cursor shape feedback.
                         if let Some(content_tx) = self.content_tx.as_ref() {
-                            let content_tx = content_tx;
                             let mut host = crate::editing_host::AppEditingHost::new(
                                 &mut self.local_project,
                                 content_tx,
@@ -2779,14 +2778,11 @@ impl ApplicationHandler for Application {
 
                 // Output window management (only when key wasn't consumed by app shortcuts)
                 if !consumed {
-                    match &logical_key {
-                        Key::Named(NamedKey::Escape) => {
-                            if !is_primary {
-                                self.window_registry.remove(&window_id);
-                                log::info!("Closed output window");
-                            }
+                    if let Key::Named(NamedKey::Escape) = &logical_key {
+                        if !is_primary {
+                            self.window_registry.remove(&window_id);
+                            log::info!("Closed output window");
                         }
-                        _ => {}
                     }
                 }
             }
@@ -2853,7 +2849,7 @@ impl ApplicationHandler for Application {
                     );
                     if let Some(project) = Some(&mut self.local_project) {
                         let action = self.project_io.process_dropped_files(
-                            &[path.clone()],
+                            std::slice::from_ref(&path),
                             drop_beat,
                             drop_layer,
                             project,
@@ -2975,7 +2971,7 @@ fn render_text_input_overlay(
     // Blinking cursor
     if !ti.select_all {
         let elapsed = timer.realtime_since_start();
-        let blink_on = (elapsed / TEXT_INPUT_BLINK_PERIOD) as u64 % 2 == 0;
+        let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
         if blink_on {
             let chars_before = ti.text[..ti.cursor].chars().count();
             let cursor_x = text_x + chars_before as f32 * fs * 0.6;
@@ -2984,6 +2980,21 @@ fn render_text_input_overlay(
                 TEXT_INPUT_CURSOR_W, bg_h - pad_v * 2.0,
                 TEXT_INPUT_CURSOR,
             );
+        }
+    }
+}
+
+impl Drop for Application {
+    fn drop(&mut self) {
+        // Ensure the content thread is shut down even on abnormal exit (panic, etc.).
+        // Normal exit already handles this in WindowEvent::CloseRequested, but if the
+        // Application is dropped without that event, the content thread would leak.
+        if let Some(tx) = self.content_tx.take() {
+            let _ = tx.send(ContentCommand::Shutdown);
+        }
+        if let Some(handle) = self.content_thread_handle.take() {
+            let _ = handle.join();
+            log::info!("[Application::Drop] content thread joined");
         }
     }
 }

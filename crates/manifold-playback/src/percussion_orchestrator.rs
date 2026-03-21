@@ -691,8 +691,8 @@ impl PercussionImportOrchestrator {
                 editing_service,
             );
             self.percussion_import_in_progress = false;
-            if self.percussion_import_status_message.is_empty() {
-                if imported {
+            if self.percussion_import_status_message.is_empty()
+                && imported {
                     self.set_percussion_import_status(
                         "Perc JSON import finished",
                         COLOR_GREEN,
@@ -702,7 +702,6 @@ impl PercussionImportOrchestrator {
                         false,
                     );
                 }
-            }
             return;
         }
 
@@ -1231,7 +1230,7 @@ impl PercussionImportOrchestrator {
             .percussion_import
             .as_ref()
             .and_then(|s| s.audio_path.as_ref())
-            .map_or(false, |p| !p.is_empty());
+            .is_some_and(|p| !p.is_empty());
 
         if !audio_ready {
             if set_status {
@@ -1304,7 +1303,7 @@ impl PercussionImportOrchestrator {
             .percussion_import
             .as_ref()
             .and_then(|s| s.audio_path.as_ref())
-            .map_or(false, |p| !p.is_empty());
+            .is_some_and(|p| !p.is_empty());
 
         if !audio_ready {
             if set_status {
@@ -1382,7 +1381,7 @@ impl PercussionImportOrchestrator {
             .percussion_import
             .as_ref()
             .and_then(|s| s.audio_path.as_ref())
-            .map_or(false, |p| !p.is_empty());
+            .is_some_and(|p| !p.is_empty());
         if !audio_ready {
             return false;
         }
@@ -1463,7 +1462,7 @@ impl PercussionImportOrchestrator {
             .percussion_import
             .as_ref()
             .and_then(|s| s.audio_path.as_ref())
-            .map_or(false, |p| !p.is_empty());
+            .is_some_and(|p| !p.is_empty());
 
         if audio_ready {
             let old_audio_start = audio_start;
@@ -1806,7 +1805,7 @@ impl PercussionImportOrchestrator {
                                 // Auto-align: shift audio so first detected downbeat lands on a bar line.
                                 let settings = &project.settings;
                                 let beats_per_bar =
-                                    (settings.time_signature_numerator as i32).max(1);
+                                    settings.time_signature_numerator.max(1);
                                 let aligned_start_beat = self.align_start_beat_to_downbeat(
                                     Some(&analysis),
                                     start_beat,
@@ -1962,7 +1961,6 @@ impl PercussionImportOrchestrator {
                     let temp_json = state.temp_output_json.clone();
 
                     if !ok {
-                        let details = details;
                         let group_label = instrument_group.to_uppercase();
                         log::error!(
                             "[PercussionImportOrchestrator] Re-analysis failed for {}. {}",
@@ -2047,7 +2045,6 @@ impl PercussionImportOrchestrator {
                     let _ = std::fs::remove_file(&temp_json);
 
                     if !ok {
-                        let details = details;
                         log::error!(
                             "[PercussionImportOrchestrator] Stem re-import failed. {}",
                             details
@@ -2127,7 +2124,7 @@ impl PercussionImportOrchestrator {
         // Skip BPM auto-apply — trigger re-analysis does not change project BPM.
 
         let start_beat_offset = self.last_import_aligned_start_beat;
-        let _beats_per_bar = (project.settings.time_signature_numerator as i32).max(1);
+        let _beats_per_bar = project.settings.time_signature_numerator.max(1);
         let _bpm = project.settings.bpm;
 
         let options = PercussionImportOptionsFactory::create_default_with_settings(
@@ -2270,7 +2267,7 @@ impl PercussionImportOrchestrator {
         }
 
         let bpm = project.settings.bpm;
-        let beats_per_bar = (project.settings.time_signature_numerator as i32).max(1);
+        let beats_per_bar = project.settings.time_signature_numerator.max(1);
         let aligned_offset =
             self.align_start_beat_to_downbeat(Some(&analysis), start_beat_offset, bpm, beats_per_bar);
         self.last_import_aligned_start_beat = aligned_offset;
@@ -2453,7 +2450,7 @@ impl PercussionImportOrchestrator {
 
         let any_stem = stem_paths.iter().any(|s| s.is_some());
         let flat_paths: Option<Vec<String>> = if any_stem {
-            Some(stem_paths.into_iter().filter_map(|s| s).collect())
+            Some(stem_paths.into_iter().flatten().collect())
         } else {
             None
         };
@@ -2464,7 +2461,7 @@ impl PercussionImportOrchestrator {
             // Defensive: ensure hash is stamped after fresh pipeline run.
             if any_stem
                 && state.audio_hash.is_none()
-                && state.audio_path.as_deref().map_or(false, |p| !p.is_empty())
+                && state.audio_path.as_deref().is_some_and(|p| !p.is_empty())
             {
                 let path = state.audio_path.clone().unwrap_or_default();
                 state.audio_hash = Some(compute_audio_hash(&path));
@@ -2918,7 +2915,7 @@ fn drive_pipeline_run(
     );
     let output_exists = output_json
         .as_deref()
-        .map_or(false, |p| std::path::Path::new(p).exists());
+        .is_some_and(|p| std::path::Path::new(p).exists());
 
     if exit_code == 0 && output_exists {
         // Success.

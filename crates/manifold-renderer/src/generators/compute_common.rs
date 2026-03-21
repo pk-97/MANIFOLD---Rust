@@ -1,7 +1,7 @@
-/// Shared compute infrastructure for particle and agent-based generators.
-///
-/// Provides buffer creation helpers and the shared Particle struct layout
-/// that matches Unity's ParticleCommon.cginc (48 bytes per particle).
+//! Shared compute infrastructure for particle and agent-based generators.
+//!
+//! Provides buffer creation helpers and the shared Particle struct layout
+//! that matches Unity's ParticleCommon.cginc (48 bytes per particle).
 
 /// Create a storage buffer with the given byte size.
 pub fn create_storage_buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {

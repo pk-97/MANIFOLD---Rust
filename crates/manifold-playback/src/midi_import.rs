@@ -8,21 +8,13 @@ use crate::midi_parser::MidiNote;
 
 /// Result of a MIDI import operation.
 /// Port of C# MidiImportService.cs MidiImportResult struct.
+#[derive(Default)]
 pub struct MidiImportResult {
     pub added_clips: i32,
     pub success: bool,
     pub undo_command: Option<Box<dyn Command>>,
 }
 
-impl Default for MidiImportResult {
-    fn default() -> Self {
-        Self {
-            added_clips: 0,
-            success: false,
-            undo_command: None,
-        }
-    }
-}
 
 /// Applies parsed MIDI notes to a timeline layer as clips.
 /// Handles overlap trimming, clip type resolution, and undo recording.
@@ -89,28 +81,26 @@ impl MidiImportService {
         let mut source_index: usize = 0;
 
         for note in &placements {
-            let clip: TimelineClip;
-
-            if use_generator {
-                clip = TimelineClip::new_generator(
+            let clip: TimelineClip = if use_generator {
+                TimelineClip::new_generator(
                     resolved_gen_type,
                     target_layer_index as i32,
                     note.start_beat,
                     note.duration_beats,
-                );
+                )
             } else {
                 // Round-robin through source clips
                 let video_clip_id = source_clip_ids[source_index % source_clip_ids.len()].clone();
                 source_index += 1;
 
-                clip = TimelineClip::new_video(
+                TimelineClip::new_video(
                     video_clip_id,
                     target_layer_index as i32,
                     note.start_beat,
                     note.duration_beats,
                     0.0,
-                );
-            }
+                )
+            };
 
             project.timeline.layers[target_layer_index].add_clip(clip.clone());
             commands.push(Box::new(AddClipCommand::new(clip, target_layer_index as i32)));
@@ -156,8 +146,8 @@ fn build_trimmed_placements(notes: &[MidiNote], start_beat_offset: f32) -> Vec<M
     // Trim overlaps: each note truncates the previous if they overlap
     let mut result: Vec<MidiNote> = Vec::with_capacity(sorted.len());
 
-    for i in 0..sorted.len() {
-        let current = sorted[i];
+    for current in &sorted {
+        let current = *current;
 
         if !result.is_empty() {
             let prev = result.last_mut().unwrap();

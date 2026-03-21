@@ -908,7 +908,7 @@ impl WireframeDepthFX {
         let mut pixels = vec![0u8; count * 4];
         for i in 0..count {
             let v = (state.dnn_depth_buffer[i].clamp(0.0, 1.0) * 255.0) as u8;
-            pixels[i * 4 + 0] = v;
+            pixels[i * 4] = v;
             pixels[i * 4 + 1] = v;
             pixels[i * 4 + 2] = v;
             pixels[i * 4 + 3] = 255;
@@ -944,7 +944,7 @@ impl WireframeDepthFX {
         let mut pixels = vec![0u8; count * 4];
         for i in 0..count {
             let v = (state.dnn_subject_history_buffer[i].clamp(0.0, 1.0) * 255.0) as u8;
-            pixels[i * 4 + 0] = v;
+            pixels[i * 4] = v;
             pixels[i * 4 + 1] = v;
             pixels[i * 4 + 2] = v;
             pixels[i * 4 + 3] = 255;

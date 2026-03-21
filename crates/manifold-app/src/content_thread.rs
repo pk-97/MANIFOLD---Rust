@@ -235,26 +235,26 @@ impl ContentThread {
                 time_signature_numerator: self.engine.project()
                     .map_or(4, |p| p.settings.time_signature_numerator),
                 link_enabled: self.transport_controller.link_sync.as_ref()
-                    .map_or(false, |s| s.is_link_enabled()),
+                    .is_some_and(|s| s.is_link_enabled()),
                 link_tempo: self.transport_controller.link_sync.as_ref()
                     .map_or(120.0, |s| s.link_tempo),
                 link_peers: self.transport_controller.link_sync.as_ref()
                     .map_or(0, |s| s.num_peers),
                 link_is_playing: self.transport_controller.link_sync.as_ref()
-                    .map_or(false, |s| s.link_is_playing),
+                    .is_some_and(|s| s.link_is_playing),
                 midi_clock_enabled: self.transport_controller.midi_clock_sync.as_ref()
-                    .map_or(false, |s| s.is_midi_clock_enabled()),
+                    .is_some_and(|s| s.is_midi_clock_enabled()),
                 midi_clock_bpm: self.transport_controller.midi_clock_sync.as_ref()
                     .map_or(120.0, |s| s.current_clock_bpm()),
                 midi_clock_position_display: self.transport_controller.midi_clock_sync.as_ref()
                     .map_or_else(String::new, |s| s.current_position_display().to_string()),
                 midi_clock_receiving: self.transport_controller.midi_clock_sync.as_ref()
-                    .map_or(false, |s| s.is_receiving_clock()),
+                    .is_some_and(|s| s.is_receiving_clock()),
                 osc_sender_enabled: self.transport_controller.osc_sender_enabled,
                 osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
                 osc_timecode_display: self.osc_sync.current_timecode_display.clone(),
-                stem_expanded: self.stem_audio.as_ref().map_or(false, |s| s.is_expanded()),
-                stem_ready: self.stem_audio.as_ref().map_or(false, |s| s.stems_ready()),
+                stem_expanded: self.stem_audio.as_ref().is_some_and(|s| s.is_expanded()),
+                stem_ready: self.stem_audio.as_ref().is_some_and(|s| s.stems_ready()),
                 stem_muted: self.stem_audio.as_ref().map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
                     core::array::from_fn(|i| s.is_muted(i))
                 }),
@@ -769,7 +769,7 @@ impl ContentThread {
             // ── Audio ──────────────────────────────────────────────
             ContentCommand::AudioLoaded { preloaded, waveform: _ } => {
                 if let Some(ref mut audio_sync) = self.audio_sync {
-                    if let Err(e) = audio_sync.apply_preloaded(preloaded) {
+                    if let Err(e) = audio_sync.apply_preloaded(*preloaded) {
                         log::warn!("[ContentThread] Failed to apply loaded audio: {}", e);
                     }
                 }
@@ -783,7 +783,7 @@ impl ContentThread {
             // ── Stem audio ────────────────────────────────────────
             ContentCommand::StemAudioLoaded(preloaded) => {
                 if let Some(ref mut stem) = self.stem_audio {
-                    stem.apply_preloaded_stems(preloaded);
+                    stem.apply_preloaded_stems(*preloaded);
                 }
             }
             ContentCommand::StemSetExpanded(expand) => {

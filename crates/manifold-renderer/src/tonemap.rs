@@ -1,8 +1,8 @@
-/// ACES tonemapping pipeline — mechanical translation of Unity's
-/// CompositorStack.ApplyTonemap() + ACESTonemap.shader.
-///
-/// Owned by the compositor. Applied as the final step after master effects,
-/// before the blit to the display surface.
+//! ACES tonemapping pipeline — mechanical translation of Unity's
+//! CompositorStack.ApplyTonemap() + ACESTonemap.shader.
+//!
+//! Owned by the compositor. Applied as the final step after master effects,
+//! before the blit to the display surface.
 
 use crate::render_target::RenderTarget;
 

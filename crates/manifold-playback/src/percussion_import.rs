@@ -33,6 +33,7 @@ pub enum PercussionBpmDecision {
 // ─── PercussionImportResult ───
 
 /// Port of Unity PercussionImportResult struct.
+#[derive(Default)]
 pub struct PercussionImportResult {
     pub added_clips: i32,
     pub cleared_clips: i32,
@@ -41,17 +42,6 @@ pub struct PercussionImportResult {
     pub undo_command: Option<Box<dyn Command>>,
 }
 
-impl Default for PercussionImportResult {
-    fn default() -> Self {
-        Self {
-            added_clips: 0,
-            cleared_clips: 0,
-            cleared_layers: 0,
-            success: false,
-            undo_command: None,
-        }
-    }
-}
 
 // ─── PercussionImportService ───
 
@@ -160,9 +150,7 @@ impl PercussionImportService {
                 }
             }
 
-            let timeline_clip: TimelineClip;
-
-            if placement.is_generator() {
+            let timeline_clip: TimelineClip = if placement.is_generator() {
                 // Use the layer's current generator type — respects user customisation
                 // (e.g. user swapped Flash→Voronoi on the Kick layer).
                 let effective_gen_type = {
@@ -178,12 +166,12 @@ impl PercussionImportService {
                     }
                 };
 
-                timeline_clip = TimelineClip::new_generator(
+                TimelineClip::new_generator(
                     effective_gen_type,
                     target_layer_index,
                     placement.start_beat,
                     placement.duration_beats,
-                );
+                )
             } else {
                 let video_clip_id = match &placement.video_clip_id {
                     Some(id) if !id.is_empty() => id.clone(),
@@ -193,14 +181,14 @@ impl PercussionImportService {
                     continue;
                 }
 
-                timeline_clip = TimelineClip::new_video(
+                TimelineClip::new_video(
                     video_clip_id,
                     target_layer_index,
                     placement.start_beat,
                     placement.duration_beats,
                     0.0,
-                );
-            }
+                )
+            };
 
             // Enforce non-overlap: trim any existing clip that extends past this clip's start,
             // and remove any fully-contained clips.
@@ -249,7 +237,7 @@ impl PercussionImportService {
                 clip_id,
                 source_time_seconds: placement.source_time_seconds,
                 start_beat_offset: options.map_or(0.0, |o| o.start_beat_offset),
-                quantize_to_grid: options.map_or(false, |o| o.quantize_to_grid),
+                quantize_to_grid: options.is_some_and(|o| o.quantize_to_grid),
                 quantize_step_beats: options.map_or(0.0, |o| o.quantize_step_beats),
                 alignment_offset_beats: 0.0,
                 alignment_slope_beats_per_second: 0.0,

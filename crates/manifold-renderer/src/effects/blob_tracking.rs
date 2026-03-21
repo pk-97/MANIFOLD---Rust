@@ -452,7 +452,7 @@ impl BlobTrackingFX {
 
         // For each new detection, find closest unmatched tracked blob
         for d in 0..response.blob_count as usize {
-            let dx = state.native_blob_output[d * 4 + 0];
+            let dx = state.native_blob_output[d * 4];
             // The C++ plugin outputs Y in Unity UV convention (v=0 at bottom).
             // Keep as-is: the overlay shader uses a Y-flipped draw_uv that matches
             // Unity's convention, so blob positions flow through unchanged.

@@ -76,9 +76,10 @@ impl ActiveTimelineClipWindow {
 
         self.ensure_index(project);
 
-        if !self.initialized {
-            self.rebuild_active_set_at_beat(beat);
-        } else if beat + BACKWARD_EPSILON < self.last_beat || (beat - self.last_beat) > LARGE_JUMP_BEATS {
+        if !self.initialized
+            || beat + BACKWARD_EPSILON < self.last_beat
+            || (beat - self.last_beat) > LARGE_JUMP_BEATS
+        {
             self.rebuild_active_set_at_beat(beat);
         } else {
             self.advance_active_set_forward(beat);
@@ -285,11 +286,10 @@ impl ActiveTimelineClipWindow {
                         .filter(|&pi| pi < layer_count)
                         .map(|pi| &layers[pi]);
 
-                    if parent.is_some_and(|p| p.is_muted) {
-                        visible = false;
-                    } else if any_solo
-                        && !layer.is_solo
-                        && !parent.is_some_and(|p| p.is_solo)
+                    if parent.is_some_and(|p| p.is_muted)
+                        || (any_solo
+                            && !layer.is_solo
+                            && !parent.is_some_and(|p| p.is_solo))
                     {
                         visible = false;
                     }

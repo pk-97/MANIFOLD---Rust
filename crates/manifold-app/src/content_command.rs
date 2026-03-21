@@ -49,14 +49,14 @@ pub enum ContentCommand {
 
     // ── Audio ──────────────────────────────────────────────────────
     AudioLoaded {
-        preloaded: PreloadedAudioData,
+        preloaded: Box<PreloadedAudioData>,
         waveform: Option<DecodedAudio>,
     },
     ResetAudio,
 
     // ── Stem audio ──────────────────────────────────────────────────
     /// Apply pre-loaded stem data on the content thread (fast — no I/O).
-    StemAudioLoaded(PreloadedStemData),
+    StemAudioLoaded(Box<PreloadedStemData>),
     /// Toggle expand/collapse of stem playback.
     /// Port of C# StemAudioController.SetExpanded(bool).
     StemSetExpanded(bool),
