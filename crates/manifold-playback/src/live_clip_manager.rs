@@ -1,5 +1,7 @@
 use manifold_core::clip::TimelineClip;
+use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
+use manifold_core::recording::RecordedClipProvenance;
 use manifold_core::types::{GeneratorType, QuantizeMode, TempoPointSource};
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::AddClipCommand;
@@ -46,6 +48,21 @@ struct PendingLiveLaunch {
 /// Port of C# ClipLauncher STALE_NOTE_OFF_THRESHOLD (lines 129-143).
 const NOTE_OFF_TIMING_GUARD: f64 = 0.005;
 
+/// Start-of-clip recording provenance snapshot.
+/// Port of C# TempoRecorder.RecordingClipStartInfo (lines 254-265).
+#[allow(dead_code)]
+struct RecordingClipStartInfo {
+    clip_id: String,
+    video_clip_id: String,
+    layer_index: i32,
+    midi_note: i32,
+    start_time_seconds: f32,
+    start_beat: f32,
+    start_absolute_tick: i32,
+    start_bpm: f32,
+    start_tempo_source: TempoPointSource,
+}
+
 /// Manages phantom (live-triggered) clips for MIDI performance.
 /// Port of C# LiveClipManager.
 pub struct LiveClipManager {
@@ -66,6 +83,10 @@ pub struct LiveClipManager {
     // Port of C# ClipLauncher.TrackedNote.CreationTime / CreationSequence.
     slot_creation_times: HashMap<i32, f64>,
     slot_creation_sequences: HashMap<i32, i32>,
+
+    // Recording provenance: pending clip start snapshots.
+    // Port of C# TempoRecorder.clipStarts (line 22-23).
+    clip_starts: HashMap<String, RecordingClipStartInfo>,
 }
 
 impl LiveClipManager {
@@ -80,6 +101,7 @@ impl LiveClipManager {
             last_live_trigger_at: 0.0,
             slot_creation_times: HashMap::with_capacity(8),
             slot_creation_sequences: HashMap::with_capacity(8),
+            clip_starts: HashMap::with_capacity(8),
         }
     }
 
@@ -102,6 +124,7 @@ impl LiveClipManager {
         self.pending_by_tick.clear();
         self.slot_creation_times.clear();
         self.slot_creation_sequences.clear();
+        self.clip_starts.clear();
     }
 
     /// Clear live slots on large seek. Only clears when seek_delta > 1.0.
@@ -285,6 +308,8 @@ impl LiveClipManager {
             }
             self.live_slot_clip_ids.remove(&old_clip.id);
             self.live_slots_list.retain(|(l, _)| *l != layer_index);
+            // Port of C# ActivateLiveSlotNow line 337.
+            self.remove_recording_clip_start(&old_clip.id);
         }
 
         self.live_slot_clip_ids.insert(clip.id.clone());
@@ -400,6 +425,7 @@ impl LiveClipManager {
         beat_stamp: Option<f32>,
         event_absolute_tick: i32,
         realtime_now: f64,
+        midi_note: i32,
     ) -> Option<TimelineClip> {
         // Ensure enough layers exist
         project.timeline.ensure_layer_count((layer_index + 1) as usize);
@@ -443,12 +469,15 @@ impl LiveClipManager {
                 clip: clip.clone(),
                 layer_index,
                 target_tick,
-                midi_note: -1,
+                midi_note,
             };
             self.queue_pending(clip.id.clone(), launch);
         } else {
             self.activate_live_slot_now(layer_index, clip.clone());
         }
+
+        // Track recording provenance. Port of C# ActivateLiveSlotNow line 350.
+        self.track_recording_clip_start(host, project, &clip, midi_note);
 
         // Record creation timestamps for 5ms NoteOff timing guard
         self.slot_creation_times.insert(layer_index, realtime_now);
@@ -472,6 +501,7 @@ impl LiveClipManager {
         beat_stamp: Option<f32>,
         event_absolute_tick: i32,
         realtime_now: f64,
+        midi_note: i32,
     ) -> Option<TimelineClip> {
         project.timeline.ensure_layer_count((layer_index + 1) as usize);
 
@@ -505,12 +535,15 @@ impl LiveClipManager {
                 clip: clip.clone(),
                 layer_index,
                 target_tick,
-                midi_note: -1,
+                midi_note,
             };
             self.queue_pending(clip.id.clone(), launch);
         } else {
             self.activate_live_slot_now(layer_index, clip.clone());
         }
+
+        // Track recording provenance. Port of C# ActivateLiveSlotNow line 350.
+        self.track_recording_clip_start(host, project, &clip, midi_note);
 
         // Record creation timestamps for 5ms NoteOff timing guard
         self.slot_creation_times.insert(layer_index, realtime_now);
@@ -558,6 +591,7 @@ impl LiveClipManager {
 
     /// Commit a live clip (NoteOff). If recording, adds to timeline.
     /// Port of C# ClipLauncher.HandleNoteOff with 5ms timing guard.
+    #[allow(clippy::too_many_arguments)]
     pub fn commit_live_clip(
         &mut self,
         project: &mut Project,
@@ -567,6 +601,7 @@ impl LiveClipManager {
         beat_stamp: Option<f32>,
         event_absolute_tick: i32,
         realtime_now: f64,
+        midi_note: i32,
     ) {
         // 5ms timing guard: reject NoteOff that arrives within 5ms of NoteOn.
         // Port of C# ClipLauncher.cs lines 129-143.
@@ -647,7 +682,28 @@ impl LiveClipManager {
         self.slot_creation_times.remove(&layer_index);
         self.slot_creation_sequences.remove(&layer_index);
 
+        // Compute end beat for provenance.
+        // Port of C# LiveClipManager.CommitLiveClip lines 698-707.
+        let beat_now = if event_absolute_tick >= 0 {
+            let raw_snap = Self::compute_snap_beat_from_tick(
+                event_absolute_tick,
+                project.settings.quantize_mode,
+                project.settings.time_signature_numerator,
+                false,
+            );
+            if project.settings.quantize_mode != QuantizeMode::Off {
+                start_beat + held_beats
+            } else {
+                raw_snap
+            }
+        } else {
+            beat_stamp.unwrap_or_else(|| host.get_beat_snapped_beat())
+        };
+
+        let live_clip_id = live_clip.id.clone();
+
         // If recording, commit to timeline
+        let mut committed_clip: Option<TimelineClip> = None;
         if host.is_recording() {
             let original_duration = live_clip.duration_beats;
 
@@ -669,7 +725,25 @@ impl LiveClipManager {
             project.timeline.mark_clip_lookup_dirty();
 
             host.register_clip_lookup(&committed.id, &committed);
+            committed_clip = Some(committed.clone());
             host.record_command(Box::new(AddClipCommand::new(committed, layer_index)));
+        }
+
+        // Recording provenance finalization.
+        // Port of C# LiveClipManager.CommitLiveClip lines 803-810.
+        let resolved_end_tick = if event_absolute_tick >= 0 {
+            event_absolute_tick
+        } else {
+            (beat_now * MIDI_CLOCK_TICKS_PER_BEAT as f32).round() as i32
+        };
+
+        if let Some(ref recorded) = committed_clip {
+            self.finalize_recording_clip(
+                host, project, &live_clip_id, recorded,
+                beat_now, resolved_end_tick, midi_note,
+            );
+        } else {
+            self.remove_recording_clip_start(&live_clip_id);
         }
 
         host.mark_sync_dirty();
@@ -679,37 +753,113 @@ impl LiveClipManager {
     // ─── Recording provenance (Phase 7C) ───
 
     /// Track recording clip start for tempo/provenance metadata.
-    /// Port of C# LiveClipManager.TrackRecordingClipStart (lines 820-834).
-    /// Requires TempoRecorder (not yet ported) — stubbed.
+    /// Port of C# LiveClipManager.TrackRecordingClipStart (lines 820-834)
+    /// + TempoRecorder.TrackClipStart (lines 173-196).
     pub fn track_recording_clip_start(
-        &self,
-        _host: &dyn LiveClipHost,
-        _clip: &TimelineClip,
-        _midi_note: i32,
+        &mut self,
+        host: &dyn LiveClipHost,
+        project: &mut Project,
+        clip: &TimelineClip,
+        midi_note: i32,
     ) {
-        // TODO: Port TempoRecorder.TrackClipStart() when RecordingProvenance is ported.
-        // Unity tracks: clip ID, video clip ID, layer index, MIDI note, start beat,
-        // start absolute tick, timeline time, BPM, tempo source, MIDI clock PPQ.
+        if !host.is_recording() || !host.is_playing() {
+            return;
+        }
+
+        let start_beat = clip.start_beat;
+        let start_bpm = host.get_bpm_at_beat(start_beat);
+        let start_source = host.get_tempo_source_at_beat(start_beat);
+
+        // Port of C# TempoRecorder.CaptureProjectBpm (line 179).
+        project.recording_provenance
+            .set_recorded_project_bpm(start_bpm, start_source, false);
+
+        // Resolve start tick. Port of C# TempoRecorder.TrackClipStart lines 181-183.
+        let resolved_start_tick = if clip.start_absolute_tick >= 0 {
+            clip.start_absolute_tick
+        } else {
+            (start_beat * MIDI_CLOCK_TICKS_PER_BEAT as f32).round() as i32
+        };
+
+        self.clip_starts.insert(clip.id.clone(), RecordingClipStartInfo {
+            clip_id: clip.id.clone(),
+            video_clip_id: clip.video_clip_id.clone(),
+            layer_index: clip.layer_index,
+            midi_note,
+            start_time_seconds: host.beat_to_timeline_time(start_beat),
+            start_beat,
+            start_absolute_tick: resolved_start_tick,
+            start_bpm,
+            start_tempo_source: start_source,
+        });
     }
 
     /// Finalize recording clip provenance metadata.
-    /// Port of C# LiveClipManager.FinalizeRecordingClip (lines 836-849).
+    /// Port of C# LiveClipManager.FinalizeRecordingClip (lines 836-849)
+    /// + TempoRecorder.FinalizeClip (lines 202-241).
     pub fn finalize_recording_clip(
-        &self,
-        _host: &dyn LiveClipHost,
-        _live_clip: &TimelineClip,
-        _recorded_clip: &TimelineClip,
-        _end_beat: f32,
-        _end_absolute_tick: i32,
-        _midi_note: i32,
+        &mut self,
+        host: &dyn LiveClipHost,
+        project: &mut Project,
+        live_clip_id: &str,
+        recorded_clip: &TimelineClip,
+        end_beat: f32,
+        end_absolute_tick: i32,
+        midi_note: i32,
     ) {
-        // TODO: Port TempoRecorder.FinalizeClip() when RecordingProvenance is ported.
+        let start = match self.clip_starts.remove(live_clip_id) {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Resolve end tick. Port of C# TempoRecorder.FinalizeClip lines 214-216.
+        let resolved_end_tick = if end_absolute_tick >= 0 {
+            end_absolute_tick
+        } else {
+            (end_beat * MIDI_CLOCK_TICKS_PER_BEAT as f32).round() as i32
+        };
+
+        // Resolve MIDI note. Port of C# TempoRecorder.FinalizeClip line 217.
+        let resolved_midi_note = if midi_note >= 0 { midi_note } else { start.midi_note };
+
+        // Use recorded clip's identity/layer if available.
+        // Port of C# TempoRecorder.FinalizeClip lines 219-221.
+        let saved_clip_id = recorded_clip.id.clone();
+        let saved_video_id = recorded_clip.video_clip_id.clone();
+        let saved_layer = recorded_clip.layer_index;
+
+        let end_bpm = host.get_bpm_at_beat(end_beat);
+        let end_source = host.get_tempo_source_at_beat(end_beat);
+        let end_time = host.beat_to_timeline_time(end_beat);
+
+        let entry = RecordedClipProvenance {
+            clip_id: saved_clip_id,
+            video_clip_id: saved_video_id,
+            layer_index: saved_layer.max(0),
+            midi_note: resolved_midi_note,
+            start_time_seconds: BeatQuantizer::quantize_time_seconds(start.start_time_seconds),
+            end_time_seconds: BeatQuantizer::quantize_time_seconds(end_time),
+            start_beat: BeatQuantizer::quantize_beat(start.start_beat),
+            end_beat: BeatQuantizer::quantize_beat(end_beat),
+            start_absolute_tick: start.start_absolute_tick,
+            end_absolute_tick: resolved_end_tick,
+            start_bpm: BeatQuantizer::quantize_bpm(start.start_bpm),
+            end_bpm: BeatQuantizer::quantize_bpm(end_bpm),
+            start_tempo_source: start.start_tempo_source,
+            end_tempo_source: end_source,
+        };
+
+        project.recording_provenance.add_recorded_clip(entry);
     }
 
     /// Remove a recording clip start tracking entry.
-    /// Port of C# LiveClipManager.RemoveRecordingClipStart (lines 851-858).
-    pub fn remove_recording_clip_start(&self, _clip_id: &str) {
-        // TODO: Port when RecordingProvenance is ported.
+    /// Port of C# LiveClipManager.RemoveRecordingClipStart (lines 851-858)
+    /// + TempoRecorder.RemoveClipStart (lines 243-248).
+    pub fn remove_recording_clip_start(&mut self, clip_id: &str) {
+        if clip_id.is_empty() {
+            return;
+        }
+        self.clip_starts.remove(clip_id);
     }
 
     // ─── Prewarm candidates (Phase 7D) ───
