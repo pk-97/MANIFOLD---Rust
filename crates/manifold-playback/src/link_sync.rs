@@ -3,11 +3,9 @@
 //!
 //! One-way sync: Ableton controls MANIFOLD transport + tempo when Link
 //! is selected as clock authority.
-//!
-//! STUB: Full implementation requires `ableton-link` crate or native FFI.
-//! This file provides the correct interface and state tracking so the rest
-//! of the transport system can compile and wire correctly.
 
+use manifold_core::types::ClockAuthority;
+use crate::sync::{SyncArbiter, SyncArbiterTarget};
 use crate::sync_source::SyncSource;
 
 /// Link sync controller state.
@@ -25,6 +23,10 @@ pub struct LinkSyncController {
     // Private state
     last_link_is_playing: bool,
     last_num_peers: i32,
+
+    // rusty_link handles
+    link: Option<rusty_link::AblLink>,
+    session_state: rusty_link::SessionState,
 }
 
 impl LinkSyncController {
@@ -40,62 +42,72 @@ impl LinkSyncController {
             quantum: 4.0,
             last_link_is_playing: false,
             last_num_peers: 0,
+            link: None,
+            session_state: rusty_link::SessionState::new(),
         }
     }
 
     pub fn is_link_enabled(&self) -> bool { self.is_link_enabled }
     pub fn has_active_peers(&self) -> bool { self.is_link_enabled && self.num_peers > 0 }
 
-    /// Enable Link. STUB: logs that native plugin is not available.
-    pub fn enable_link(&mut self, _initial_bpm: f64) {
+    /// Enable Link with initial BPM.
+    /// Port of C# LinkSyncController.EnableLink.
+    pub fn enable_link(&mut self, initial_bpm: f64) {
         if self.is_link_enabled { return; }
-        // TODO: Initialize AbletonLink native plugin
-        // link = AbletonLink::init(initial_bpm);
-        // link.set_quantum(self.quantum);
-        // if self.enable_start_stop_sync { link.enable_start_stop_sync(true); }
-        log::info!("[LinkSync] Enable requested (native plugin not available in Rust port)");
+        let link = rusty_link::AblLink::new(initial_bpm);
+        link.enable(true);
+        if self.enable_start_stop_sync {
+            link.enable_start_stop_sync(true);
+        }
+        self.link = Some(link);
         self.is_link_enabled = true;
         self.last_link_is_playing = false;
         self.last_num_peers = 0;
+        log::info!("[LinkSync] Enabled (BPM: {:.1}, quantum: {})", initial_bpm, self.quantum);
     }
 
     pub fn disable_link(&mut self) {
         if !self.is_link_enabled { return; }
+        if let Some(ref link) = self.link {
+            link.enable(false);
+        }
+        self.link = None;
         self.is_link_enabled = false;
         self.num_peers = 0;
         self.link_is_playing = false;
-        // TODO: AbletonLink::shutdown()
         log::info!("[LinkSync] Disabled");
     }
 
     /// Poll Link state each frame.
     /// Port of C# LinkSyncController.Update (lines 165-190).
-    /// STUB: native AbletonLink polling not yet available.
-    /// When native plugin is available, uncomment the native calls below.
-    pub fn update(&mut self) {
+    pub fn update(
+        &mut self,
+        arbiter: &mut SyncArbiter,
+        arb_target: &mut dyn SyncArbiterTarget,
+        authority: ClockAuthority,
+    ) {
         if !self.is_link_enabled { return; }
 
-        // TODO: Poll native Link plugin:
-        // self.current_beat = link.beat();
-        // self.current_phase = link.phase();
-        // self.link_tempo = link.tempo();
-        // let new_num_peers = link.num_peers();
-        // let new_is_playing = link.is_playing();
+        if let Some(ref link) = self.link {
+            link.capture_app_session_state(&mut self.session_state);
+            let time = link.clock_micros();
+            self.current_beat = self.session_state.beat_at_time(time, self.quantum);
+            self.current_phase = self.session_state.phase_at_time(time, self.quantum);
+            self.link_tempo = self.session_state.tempo();
+            let new_num_peers = link.num_peers() as i32;
+            let new_is_playing = self.session_state.is_playing();
 
-        // (Stubbed — use current values until native plugin available)
-        let new_num_peers = self.num_peers;
-        let new_is_playing = self.link_is_playing;
-
-        // Log peer changes
-        if new_num_peers != self.last_num_peers {
-            log::info!("[LinkSync] Peers: {} → {}", self.last_num_peers, new_num_peers);
-            self.last_num_peers = new_num_peers;
+            // Log peer changes
+            if new_num_peers != self.last_num_peers {
+                log::info!("[LinkSync] Peers: {} → {}", self.last_num_peers, new_num_peers);
+                self.last_num_peers = new_num_peers;
+            }
+            self.num_peers = new_num_peers;
+            self.link_is_playing = new_is_playing;
         }
-        self.num_peers = new_num_peers;
-        self.link_is_playing = new_is_playing;
 
         // Sync transport from Link state
-        self.sync_transport_from_link();
+        self.sync_transport_from_link(arbiter, arb_target, authority);
 
         self.last_link_is_playing = self.link_is_playing;
     }
@@ -103,7 +115,12 @@ impl LinkSyncController {
     /// Sync MANIFOLD transport state from Link's playing state.
     /// Port of C# LinkSyncController.SyncTransportFromLink (lines 165-190).
     /// When Link starts playing, MANIFOLD follows. When Link stops, MANIFOLD follows.
-    fn sync_transport_from_link(&mut self) {
+    fn sync_transport_from_link(
+        &mut self,
+        arbiter: &mut SyncArbiter,
+        arb_target: &mut dyn SyncArbiterTarget,
+        authority: ClockAuthority,
+    ) {
         if !self.enable_start_stop_sync {
             return;
         }
@@ -112,13 +129,11 @@ impl LinkSyncController {
         let is_playing = self.link_is_playing;
 
         if is_playing && !was_playing {
-            // Link started → tell MANIFOLD to play via SyncArbiter
-            // TODO: Call sync_arbiter.play(ClockAuthority::AbletonLink, authority, target)
-            log::info!("[LinkSync] Link started playing — would trigger MANIFOLD play");
+            arbiter.play(ClockAuthority::Link, authority, arb_target);
+            log::info!("[LinkSync] Link started playing — MANIFOLD play");
         } else if !is_playing && was_playing {
-            // Link stopped → tell MANIFOLD to pause via SyncArbiter
-            // TODO: Call sync_arbiter.pause(ClockAuthority::AbletonLink, authority, target)
-            log::info!("[LinkSync] Link stopped playing — would trigger MANIFOLD pause");
+            arbiter.pause(ClockAuthority::Link, authority, arb_target, false);
+            log::info!("[LinkSync] Link stopped playing — MANIFOLD pause");
         }
     }
 }
