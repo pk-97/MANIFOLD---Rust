@@ -7,14 +7,10 @@
 //! Unity's OscJack callbacks fire on a background thread. This class queues
 //! incoming messages and dispatches them on the main thread in update().
 //! The Rust port preserves this threading model exactly.
-//!
-//! STUB: Full implementation requires a native OSC crate (e.g. `rosc`).
-//! This file provides the correct interface, state tracking, and dispatch
-//! logic so the rest of the sync system can compile and wire correctly.
-//! The UDP receive loop is stubbed with TODO comments.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Callback type for OSC subscribers. Receives (address, values) on the main thread.
 /// Port of Unity `Action<string, float[]>`.
@@ -102,8 +98,10 @@ pub struct OscReceiver {
     /// Port of `dispatchBuffer`.
     dispatch_buffer: Vec<PendingMessage>,
 
-    // TODO: native OSC server handle
-    // server: Option<rosc::OscServer>,
+    /// Signals the background receive thread to exit.
+    shutdown_flag: Arc<AtomicBool>,
+    /// Background UDP receive thread handle.
+    recv_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl OscReceiver {
@@ -115,6 +113,8 @@ impl OscReceiver {
             queue: Arc::new(Mutex::new(MessageQueue::default())),
             subscribers: HashMap::new(),
             dispatch_buffer: Vec::new(),
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
+            recv_thread: None,
         }
     }
 
@@ -130,30 +130,68 @@ impl OscReceiver {
     pub fn start_listening(&mut self) {
         if self.is_listening { return; }
 
-        // TODO: Bind UDP socket on self.listen_port and spawn background receive thread.
-        // let socket = std::net::UdpSocket::bind(format!("0.0.0.0:{}", self.listen_port))
-        //     .expect("[OscReceiver] Failed to bind UDP socket");
-        // let queue = Arc::clone(&self.queue);
-        // std::thread::spawn(move || {
-        //     let mut buf = [0u8; 65536];
-        //     loop {
-        //         let (sz, _) = socket.recv_from(&mut buf).unwrap();
-        //         if let Ok(rosc::OscPacket::Message(msg)) = rosc::decoder::decode(&buf[..sz]) {
-        //             let values: Vec<f32> = msg.args.iter().filter_map(|a| match a {
-        //                 rosc::OscType::Float(f) => Some(*f),
-        //                 rosc::OscType::Int(i) => Some(*i as f32),
-        //                 _ => None,
-        //             }).collect();
-        //             let count = values.len();
-        //             // Reuse existing array if same size, otherwise allocate.
-        //             // (matches Unity's background-thread allocation logic)
-        //             queue.lock().unwrap().push(msg.addr.clone(), values);
-        //         }
-        //     }
-        // });
+        let addr = format!("0.0.0.0:{}", self.listen_port);
+        let socket = match std::net::UdpSocket::bind(&addr) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("[OscReceiver] Failed to bind UDP socket on {}: {}", addr, e);
+                return;
+            }
+        };
 
+        // Short timeout so the thread checks shutdown_flag periodically.
+        if let Err(e) = socket.set_read_timeout(Some(std::time::Duration::from_millis(100))) {
+            log::error!("[OscReceiver] Failed to set socket timeout: {}", e);
+            return;
+        }
+
+        let queue = Arc::clone(&self.queue);
+        let shutdown_flag = Arc::clone(&self.shutdown_flag);
+        self.shutdown_flag.store(false, Ordering::Relaxed);
+
+        let handle = std::thread::spawn(move || {
+            let mut buf = [0u8; 65536];
+            loop {
+                if shutdown_flag.load(Ordering::Relaxed) { break; }
+
+                let size = match socket.recv_from(&mut buf) {
+                    Ok((sz, _)) => sz,
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock
+                               || e.kind() == std::io::ErrorKind::TimedOut => continue,
+                    Err(e) => {
+                        log::error!("[OscReceiver] recv_from error: {}", e);
+                        continue;
+                    }
+                };
+
+                match rosc::decoder::decode_udp(&buf[..size]) {
+                    Ok((_, packet)) => Self::handle_packet(packet, &queue),
+                    Err(e) => log::error!("[OscReceiver] OSC decode error: {}", e),
+                }
+            }
+        });
+
+        self.recv_thread = Some(handle);
         self.is_listening = true;
-        log::info!("[OscReceiver] Listening on port {} (native OSC not available in Rust port)", self.listen_port);
+        log::info!("[OscReceiver] Listening on port {}", self.listen_port);
+    }
+
+    fn handle_packet(packet: rosc::OscPacket, queue: &Arc<Mutex<MessageQueue>>) {
+        match packet {
+            rosc::OscPacket::Message(msg) => {
+                let values: Vec<f32> = msg.args.iter().filter_map(|a| match a {
+                    rosc::OscType::Float(f) => Some(*f),
+                    rosc::OscType::Int(i) => Some(*i as f32),
+                    _ => None,
+                }).collect();
+                queue.lock().unwrap().push(msg.addr, values);
+            }
+            rosc::OscPacket::Bundle(bundle) => {
+                for inner in bundle.content {
+                    Self::handle_packet(inner, queue);
+                }
+            }
+        }
     }
 
     /// Stop the OSC UDP server and clear pending messages.
@@ -161,11 +199,20 @@ impl OscReceiver {
     pub fn stop_listening(&mut self) {
         if !self.is_listening { return; }
 
-        // TODO: OscServer::shutdown() / drop native socket handle
+        // Signal the background thread to exit and wait for it.
+        self.shutdown_flag.store(true, Ordering::Relaxed);
+        if let Some(handle) = self.recv_thread.take() {
+            let _ = handle.join();
+        }
 
         self.is_listening = false;
-        self.queue.lock().unwrap().latest.clear();
-        self.queue.lock().unwrap().latest_list.clear();
+        {
+            let mut q = self.queue.lock().unwrap();
+            q.latest.clear();
+            q.latest_list.clear();
+        }
+        // Reset flag so start_listening() can be called again.
+        self.shutdown_flag.store(false, Ordering::Relaxed);
 
         log::info!("[OscReceiver] Stopped");
     }
