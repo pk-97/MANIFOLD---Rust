@@ -99,6 +99,57 @@ pub enum UIEvent {
     KeyDown { node_id: u32, key: Key, modifiers: Modifiers },
 }
 
+impl UIEvent {
+    /// Create a copy with all position fields offset by (dx, dy).
+    /// Used to convert screen-space events to panel-local coordinates.
+    pub fn with_offset(&self, dx: f32, dy: f32) -> Self {
+        let off = |v: Vec2| Vec2::new(v.x + dx, v.y + dy);
+        match self {
+            Self::Click { node_id, pos, modifiers } =>
+                Self::Click { node_id: *node_id, pos: off(*pos), modifiers: *modifiers },
+            Self::DoubleClick { node_id, pos, modifiers } =>
+                Self::DoubleClick { node_id: *node_id, pos: off(*pos), modifiers: *modifiers },
+            Self::RightClick { node_id, pos, modifiers } =>
+                Self::RightClick { node_id: *node_id, pos: off(*pos), modifiers: *modifiers },
+            Self::Scroll { pos, delta, modifiers } =>
+                Self::Scroll { pos: off(*pos), delta: *delta, modifiers: *modifiers },
+            Self::PointerDown { node_id, pos } =>
+                Self::PointerDown { node_id: *node_id, pos: off(*pos) },
+            Self::PointerUp { node_id, pos } =>
+                Self::PointerUp { node_id: *node_id, pos: off(*pos) },
+            Self::HoverEnter { node_id, pos } =>
+                Self::HoverEnter { node_id: *node_id, pos: off(*pos) },
+            Self::HoverExit { node_id } =>
+                Self::HoverExit { node_id: *node_id },
+            Self::DragBegin { node_id, pos, origin, modifiers } =>
+                Self::DragBegin { node_id: *node_id, pos: off(*pos), origin: off(*origin), modifiers: *modifiers },
+            Self::Drag { node_id, pos, delta } =>
+                Self::Drag { node_id: *node_id, pos: off(*pos), delta: *delta },
+            Self::DragEnd { node_id, pos } =>
+                Self::DragEnd { node_id: *node_id, pos: off(*pos) },
+            Self::KeyDown { node_id, key, modifiers } =>
+                Self::KeyDown { node_id: *node_id, key: *key, modifiers: *modifiers },
+        }
+    }
+
+    /// Extract the position from events that carry one, or None for position-less events.
+    pub fn pos(&self) -> Option<Vec2> {
+        match self {
+            Self::Click { pos, .. } => Some(*pos),
+            Self::DoubleClick { pos, .. } => Some(*pos),
+            Self::RightClick { pos, .. } => Some(*pos),
+            Self::Scroll { pos, .. } => Some(*pos),
+            Self::PointerDown { pos, .. } => Some(*pos),
+            Self::PointerUp { pos, .. } => Some(*pos),
+            Self::HoverEnter { pos, .. } => Some(*pos),
+            Self::DragBegin { pos, .. } => Some(*pos),
+            Self::Drag { pos, .. } => Some(*pos),
+            Self::DragEnd { pos, .. } => Some(*pos),
+            Self::HoverExit { .. } | Self::KeyDown { .. } => None,
+        }
+    }
+}
+
 /// Processes pointer and keyboard input, dispatches UI events.
 ///
 /// Maintains hover/press/focus state and manages:

@@ -369,6 +369,68 @@ impl UIRoot {
             panel_actions = self.inspector.handle_event(event, &self.tree);
             actions.append(&mut panel_actions);
 
+            // Waveform lane & stem lanes: route events with local coordinate conversion.
+            // Bitmap-rendered panels have no UITree nodes — hit-test against rects.
+            {
+                let wf_rect = self.viewport.waveform_lane_rect();
+                let sl_rect = if self.stem_lanes.is_expanded() {
+                    self.viewport.stem_lanes_rect()
+                } else {
+                    manifold_ui::node::Rect::ZERO
+                };
+
+                let wf_active = self.waveform_lane.is_interacting();
+                let mut consumed_by_lane = false;
+
+                // Scroll events pass through to viewport (Unity: WaveformLaneScrollForwarder).
+                let is_scroll = matches!(event, UIEvent::Scroll { .. });
+
+                if let Some(pos) = event.pos() {
+                    if !is_scroll && wf_rect.width > 0.0 && wf_rect.height > 0.0 && wf_rect.contains(pos) {
+                        // Event is inside the waveform lane rect
+                        let local = event.with_offset(-wf_rect.x, -wf_rect.y);
+                        panel_actions = self.waveform_lane.handle_event(&local, &self.tree);
+                        actions.append(&mut panel_actions);
+                        consumed_by_lane = true;
+                    } else if !is_scroll && sl_rect.width > 0.0 && sl_rect.height > 0.0 && sl_rect.contains(pos) {
+                        // Event is inside the stem lanes rect
+                        let local = event.with_offset(-sl_rect.x, -sl_rect.y);
+                        panel_actions = self.stem_lanes.handle_event(&local, &self.tree);
+                        actions.append(&mut panel_actions);
+                        consumed_by_lane = true;
+                    } else if wf_active {
+                        // Active scrub/drag started inside waveform lane but moved outside.
+                        // Continue routing Drag/PointerUp/DragEnd so the interaction completes.
+                        match event {
+                            UIEvent::Drag { .. } | UIEvent::PointerUp { .. } | UIEvent::DragEnd { .. } => {
+                                let local = event.with_offset(-wf_rect.x, -wf_rect.y);
+                                panel_actions = self.waveform_lane.handle_event(&local, &self.tree);
+                                actions.append(&mut panel_actions);
+                                consumed_by_lane = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Route PointerUp/DragEnd even for position-less events
+                // to ensure scrub/drag state is cleared.
+                if !consumed_by_lane && wf_active {
+                    match event {
+                        UIEvent::PointerUp { .. } | UIEvent::DragEnd { .. } => {
+                            panel_actions = self.waveform_lane.handle_event(event, &self.tree);
+                            actions.append(&mut panel_actions);
+                        }
+                        _ => {}
+                    }
+                }
+
+                if consumed_by_lane {
+                    // Don't pass to viewport/overlay — event was in waveform/stem area
+                    continue;
+                }
+            }
+
             // Viewport: ruler events handled by viewport panel (Seek/scrub).
             // Tracks-area events stashed for InteractionOverlay in app.rs.
             panel_actions = self.viewport.handle_event(event, &self.tree);

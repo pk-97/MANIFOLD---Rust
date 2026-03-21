@@ -572,6 +572,11 @@ impl Panel for WaveformLanePanel {
 }
 
 impl WaveformLanePanel {
+    /// True when the panel has an active scrub or drag in progress.
+    pub fn is_interacting(&self) -> bool {
+        self.is_scrubbing || self.is_dragging
+    }
+
     /// Current pixels per beat from cached mapper state.
     fn pixels_per_beat(&self) -> f32 {
         if self.waveform_duration_beats > 0.0 && self.cached_waveform_width > 0.0 {

@@ -271,8 +271,11 @@ pub fn dispatch(
                 );
                 // Send percussion import request to content thread
                 let _ = content_tx.try_send(ContentCommand::PercussionImport(path_str));
+                // Show waveform lane immediately for visual feedback.
+                ui.layout.waveform_lane_visible = true;
             }
-            DispatchResult::handled()
+            // Structural rebuild: waveform_lane_visible may have changed.
+            DispatchResult::structural()
         }
         PanelAction::ToggleMonitor => {
             // Deferred — needs ActiveEventLoop which is only available in about_to_wait.
@@ -2289,8 +2292,10 @@ pub fn dispatch(
                 );
                 // Send percussion import request to content thread
                 let _ = content_tx.try_send(ContentCommand::PercussionImport(path_str));
+                // Show waveform lane immediately for visual feedback.
+                ui.layout.waveform_lane_visible = true;
             }
-            DispatchResult::handled()
+            DispatchResult::structural()
         }
         PanelAction::RemoveAudioClicked => {
             log::info!("Remove audio clicked");
@@ -2301,7 +2306,8 @@ pub fn dispatch(
             ui.stem_lanes.clear_all_stems();
             ui.layout.waveform_lane_visible = true;
             ui.layout.stem_lanes_expanded = false;
-            DispatchResult::handled()
+            // Structural rebuild: stem_lanes_expanded change affects track_header_height().
+            DispatchResult::structural()
         }
         PanelAction::WaveformScrub(screen_x, _screen_y) => {
             let beat = ui.viewport.pixel_to_beat(*screen_x).max(0.0);
@@ -2357,7 +2363,9 @@ pub fn dispatch(
                     }
                 }
             }
-            DispatchResult::handled()
+            // Structural rebuild required: stem expansion changes track_header_height()
+            // which moves tracks_rect, waveform_lane_rect, and stem_lanes_rect.
+            DispatchResult::structural()
         }
         PanelAction::ReAnalyzeDrums => {
             // Re-analyze runs on content thread

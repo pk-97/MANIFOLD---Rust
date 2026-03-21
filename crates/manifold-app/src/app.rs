@@ -680,6 +680,8 @@ impl Application {
                         decoded.sample_rate,
                     );
                     self.ui_root.layout.waveform_lane_visible = true;
+                    // Rebuild viewport so tracks_rect accounts for waveform lane height.
+                    self.needs_rebuild = true;
                     log::info!("[Waveform] Decoded audio for waveform display");
                 }
 
@@ -873,6 +875,19 @@ impl Application {
                         self.local_project = *snapshot;
                         // Clear suppression once we've accepted a post-load snapshot
                         self.suppress_snapshot_until = 0;
+
+                        // Sync waveform lane visibility from project state.
+                        // Content thread may have imported/removed audio (PercussionImport,
+                        // ResetAudio) — keep layout.waveform_lane_visible in sync.
+                        let has_audio_path = self.local_project.percussion_import
+                            .as_ref()
+                            .and_then(|p| p.audio_path.as_ref())
+                            .map_or(false, |s| !s.is_empty());
+                        if has_audio_path && !self.ui_root.layout.waveform_lane_visible {
+                            self.ui_root.layout.waveform_lane_visible = true;
+                            self.needs_rebuild = true;
+                        }
+
                         // Only trigger structural sync when data_version changed
                         // (editing commands, undo/redo). Modulation-only snapshots
                         // just update param_values — push_state() syncs sliders
@@ -1281,7 +1296,7 @@ impl Application {
                 ui_frame_time_ms: (self.frame_timer.last_dt() * 1000.0) as f32,
                 render_fps: self.content_state.content_fps,
                 render_frame_time_ms: self.content_state.content_frame_time_ms,
-                active_clips: 0, // TODO: wire from tick_result
+                active_clips: self.content_state.active_clips,
                 preparing_clips: 0,
                 current_beat: self.content_state.current_beat,
                 current_time_secs: self.content_state.current_time,
@@ -2364,7 +2379,7 @@ impl ApplicationHandler for Application {
                                 .unwrap_or_else(|| {
                                     levels.iter().enumerate()
                                         .min_by(|(_, a), (_, b)| {
-                                            (*a - current_ppb).abs().partial_cmp(&(*b - current_ppb).abs()).unwrap()
+                                            (*a - current_ppb).abs().partial_cmp(&(*b - current_ppb).abs()).unwrap_or(std::cmp::Ordering::Equal)
                                         })
                                         .map(|(i, _)| i)
                                         .unwrap_or(0)
@@ -2593,6 +2608,23 @@ impl ApplicationHandler for Application {
                     }
                 }
             }
+
+            // ── Cursor left window → cancel in-progress drags ────────
+            WindowEvent::CursorLeft { .. } => {
+                if is_primary && self.mouse_pressed {
+                    log::debug!("Cursor left window — synthesizing PointerUp to cancel drag");
+                    self.ui_root.pointer_event(
+                        self.cursor_pos,
+                        PointerAction::Up,
+                        self.time_since_start,
+                    );
+                    self.mouse_pressed = false;
+                    if self.ui_root.inspector_resize_dragging {
+                        self.ui_root.end_inspector_resize();
+                    }
+                }
+            }
+            WindowEvent::CursorEntered { .. } => {}
 
             // ── Focus loss → cancel in-progress drags ──────────────
             WindowEvent::Focused(false) => {
