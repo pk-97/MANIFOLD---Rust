@@ -46,31 +46,43 @@ fn hash_float3(seed: u32) -> vec3<f32> {
     return vec3<f32>(f32(h1), f32(h2), f32(h3)) / 4294967296.0;
 }
 
-// ── 2D Simplex noise ────────────────────────────────────────────────
+// ── 2D Simplex noise — port of ParticleCommon.cginc SimplexNoise2D ──
+// Returns [0, 1] centered at 0.5 (matching Unity exactly).
+// 8 fixed unit gradient directions, +10000 offset, XOR hash combining.
 
-fn simplex_noise_2d(p: vec2<f32>) -> f32 {
-    let K1: f32 = 0.366025403784;  // (sqrt(3)-1)/2
-    let K2: f32 = 0.211324865405;  // (3-sqrt(3))/6
+const SIMPLEX_GRAD2_X: array<f32, 8> = array<f32, 8>(1.0, 0.7071, 0.0, -0.7071, -1.0, -0.7071, 0.0, 0.7071);
+const SIMPLEX_GRAD2_Y: array<f32, 8> = array<f32, 8>(0.0, 0.7071, 1.0, 0.7071, 0.0, -0.7071, -1.0, -0.7071);
 
-    let i = floor(p + (p.x + p.y) * K1);
-    let a = p - i + (i.x + i.y) * K2;
-    let o = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), a.x > a.y);
-    let b = a - o + K2;
-    let c = a - 1.0 + 2.0 * K2;
+fn simplex_noise_2d(v: vec2<f32>) -> f32 {
+    let F2: f32 = 0.36602540378;
+    let G2: f32 = 0.21132486540;
 
-    let h = max(vec3<f32>(0.5) - vec3<f32>(dot(a, a), dot(b, b), dot(c, c)), vec3<f32>(0.0));
-    let h4 = h * h * h * h;
+    let s = (v.x + v.y) * F2;
+    let i = floor(v + s);
+    let t = (i.x + i.y) * G2;
+    let x0 = v - (i - t);
 
-    let seed0 = u32(i.x * 73856093.0 + i.y * 19349663.0);
-    let seed1 = u32((i.x + o.x) * 73856093.0 + (i.y + o.y) * 19349663.0);
-    let seed2 = u32((i.x + 1.0) * 73856093.0 + (i.y + 1.0) * 19349663.0);
+    let i1 = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), x0.x > x0.y);
+    let x1 = x0 - i1 + G2;
+    let x2 = x0 - 1.0 + 2.0 * G2;
 
-    let g0 = hash_float2(seed0) * 2.0 - 1.0;
-    let g1 = hash_float2(seed1) * 2.0 - 1.0;
-    let g2 = hash_float2(seed2) * 2.0 - 1.0;
+    let h0 = wang_hash(u32(i.x + 10000.0) * 73856093u ^ u32(i.y + 10000.0) * 19349663u);
+    let h1 = wang_hash(u32(i.x + i1.x + 10000.0) * 73856093u ^ u32(i.y + i1.y + 10000.0) * 19349663u);
+    let h2 = wang_hash(u32(i.x + 1.0 + 10000.0) * 73856093u ^ u32(i.y + 1.0 + 10000.0) * 19349663u);
 
-    let n = vec3<f32>(dot(g0, a), dot(g1, b), dot(g2, c));
-    return dot(h4, n) * 70.0;
+    let g0 = vec2<f32>(SIMPLEX_GRAD2_X[h0 & 7u], SIMPLEX_GRAD2_Y[h0 & 7u]);
+    let g1 = vec2<f32>(SIMPLEX_GRAD2_X[h1 & 7u], SIMPLEX_GRAD2_Y[h1 & 7u]);
+    let g2 = vec2<f32>(SIMPLEX_GRAD2_X[h2 & 7u], SIMPLEX_GRAD2_Y[h2 & 7u]);
+
+    let t0 = 0.5 - dot(x0, x0);
+    let t1 = 0.5 - dot(x1, x1);
+    let t2 = 0.5 - dot(x2, x2);
+
+    let n0 = select(0.0, t0 * t0 * t0 * t0 * dot(g0, x0), t0 >= 0.0);
+    let n1 = select(0.0, t1 * t1 * t1 * t1 * dot(g1, x1), t1 >= 0.0);
+    let n2 = select(0.0, t2 * t2 * t2 * t2 * dot(g2, x2), t2 >= 0.0);
+
+    return clamp((n0 + n1 + n2) * 35.0 + 0.5, 0.0, 1.0);
 }
 
 // ── 2D Curl noise (from simplex gradient) ───────────────────────────

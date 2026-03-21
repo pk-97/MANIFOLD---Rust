@@ -83,34 +83,51 @@ fn hash_float3(seed: u32) -> vec3<f32> {
     );
 }
 
-// --- Simplex noise 2D (matches ParticleCommon.cginc SimplexNoise2D) ---
-fn simplex_noise_2d(p: vec2<f32>) -> f32 {
-    let K1: f32 = 0.366025403784;
-    let K2: f32 = 0.211324865405;
+// --- Simplex noise 2D — line-by-line port of ParticleCommon.cginc SimplexNoise2D ---
+// Returns [0, 1] centered at 0.5 (matching Unity exactly).
+// Uses 8 fixed unit gradient directions (no random gradients — same spatial structure as Unity).
+// Hash uses +10000 offset to avoid negative-to-uint issues, XOR combining (matching Unity).
 
-    let i = floor(p + (p.x + p.y) * K1);
-    let a = p - i + (i.x + i.y) * K2;
-    let o = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), a.x > a.y);
-    let b = a - o + K2;
-    let c = a - 1.0 + 2.0 * K2;
+// 8 evenly-spaced unit gradient directions (matches Unity SIMPLEX_GRAD2)
+const SIMPLEX_GRAD2_X: array<f32, 8> = array<f32, 8>(1.0, 0.7071, 0.0, -0.7071, -1.0, -0.7071, 0.0, 0.7071);
+const SIMPLEX_GRAD2_Y: array<f32, 8> = array<f32, 8>(0.0, 0.7071, 1.0, 0.7071, 0.0, -0.7071, -1.0, -0.7071);
 
-    let h = max(vec3<f32>(0.5) - vec3<f32>(dot(a, a), dot(b, b), dot(c, c)), vec3<f32>(0.0));
-    let h4 = h * h * h * h;
+fn simplex_noise_2d(v: vec2<f32>) -> f32 {
+    let F2: f32 = 0.36602540378;  // (sqrt(3)-1)/2
+    let G2: f32 = 0.21132486540;  // (3-sqrt(3))/6
 
-    let seed0 = u32(i.x * 73856093.0 + i.y * 19349663.0);
-    let seed1 = u32((i.x + o.x) * 73856093.0 + (i.y + o.y) * 19349663.0);
-    let seed2 = u32((i.x + 1.0) * 73856093.0 + (i.y + 1.0) * 19349663.0);
+    // Skew to simplex cell
+    let s = (v.x + v.y) * F2;
+    let i = floor(v + s);
+    let t = (i.x + i.y) * G2;
+    let x0 = v - (i - t);
 
-    let h2a = vec2<f32>(f32(wang_hash(seed0)), f32(wang_hash(wang_hash(seed0)))) / 4294967296.0;
-    let h2b = vec2<f32>(f32(wang_hash(seed1)), f32(wang_hash(wang_hash(seed1)))) / 4294967296.0;
-    let h2c = vec2<f32>(f32(wang_hash(seed2)), f32(wang_hash(wang_hash(seed2)))) / 4294967296.0;
+    // Which simplex triangle?
+    let i1 = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), x0.x > x0.y);
+    let x1 = x0 - i1 + G2;
+    let x2 = x0 - 1.0 + 2.0 * G2;
 
-    let g0 = h2a * 2.0 - 1.0;
-    let g1 = h2b * 2.0 - 1.0;
-    let g2 = h2c * 2.0 - 1.0;
+    // Hash corners (offset by 10000 to avoid negative-to-uint issues — matches Unity)
+    let h0 = wang_hash(u32(i.x + 10000.0) * 73856093u ^ u32(i.y + 10000.0) * 19349663u);
+    let h1 = wang_hash(u32(i.x + i1.x + 10000.0) * 73856093u ^ u32(i.y + i1.y + 10000.0) * 19349663u);
+    let h2 = wang_hash(u32(i.x + 1.0 + 10000.0) * 73856093u ^ u32(i.y + 1.0 + 10000.0) * 19349663u);
 
-    let n = vec3<f32>(dot(g0, a), dot(g1, b), dot(g2, c));
-    return dot(h4, n) * 70.0;
+    // Gradient from hash table (8 directions, no trig — matches Unity)
+    let g0 = vec2<f32>(SIMPLEX_GRAD2_X[h0 & 7u], SIMPLEX_GRAD2_Y[h0 & 7u]);
+    let g1 = vec2<f32>(SIMPLEX_GRAD2_X[h1 & 7u], SIMPLEX_GRAD2_Y[h1 & 7u]);
+    let g2 = vec2<f32>(SIMPLEX_GRAD2_X[h2 & 7u], SIMPLEX_GRAD2_Y[h2 & 7u]);
+
+    // Radial falloff contributions
+    let t0 = 0.5 - dot(x0, x0);
+    let t1 = 0.5 - dot(x1, x1);
+    let t2 = 0.5 - dot(x2, x2);
+
+    let n0 = select(0.0, t0 * t0 * t0 * t0 * dot(g0, x0), t0 >= 0.0);
+    let n1 = select(0.0, t1 * t1 * t1 * t1 * dot(g1, x1), t1 >= 0.0);
+    let n2 = select(0.0, t2 * t2 * t2 * t2 * dot(g2, x2), t2 >= 0.0);
+
+    // Scale to [0, 1] — Unity: clamp((n0+n1+n2) * 35.0 + 0.5, 0, 1)
+    return clamp((n0 + n1 + n2) * 35.0 + 0.5, 0.0, 1.0);
 }
 
 // --- Container SDFs (matches FluidSimulation3DSimulate.compute) ---
