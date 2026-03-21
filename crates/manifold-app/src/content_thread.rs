@@ -152,6 +152,8 @@ impl ContentThread {
                 current_time: self.engine.current_time(),
                 is_playing: self.engine.is_playing(),
                 is_recording: self.engine.is_recording(),
+                content_fps: timer.current_fps() as f32,
+                content_frame_time_ms: (timer.last_dt() * 1000.0) as f32,
                 data_version: version,
                 editing_is_dirty: self.editing_service.is_dirty(),
                 bpm: self.engine.project().map_or(120.0, |p| p.settings.bpm as f64),

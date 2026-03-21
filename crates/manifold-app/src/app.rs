@@ -1244,8 +1244,10 @@ impl Application {
                 .map(|p| p.settings.clock_authority.display_name().to_string())
                 .unwrap_or_else(|| "Internal".to_string());
             self.ui_root.perf_hud.set_metrics(manifold_ui::panels::perf_hud::PerfMetrics {
-                fps: self.frame_timer.current_fps() as f32,
-                frame_time_ms: (self.frame_timer.last_dt() * 1000.0) as f32,
+                ui_fps: self.frame_timer.current_fps() as f32,
+                ui_frame_time_ms: (self.frame_timer.last_dt() * 1000.0) as f32,
+                render_fps: self.content_state.content_fps,
+                render_frame_time_ms: self.content_state.content_frame_time_ms,
                 active_clips: 0, // TODO: wire from tick_result
                 preparing_clips: 0,
                 current_beat: self.content_state.current_beat,

@@ -17,6 +17,10 @@ pub struct ContentState {
     pub is_playing: bool,
     pub is_recording: bool,
 
+    // ── Content thread perf ─────────────────────────────────────
+    pub content_fps: f32,
+    pub content_frame_time_ms: f32,
+
     // ── Editing ────────────────────────────────────────────────────
     pub data_version: u64,
     pub editing_is_dirty: bool,
@@ -51,6 +55,8 @@ impl Default for ContentState {
             current_time: 0.0,
             is_playing: false,
             is_recording: false,
+            content_fps: 0.0,
+            content_frame_time_ms: 0.0,
             data_version: 0,
             editing_is_dirty: false,
             bpm: 120.0,

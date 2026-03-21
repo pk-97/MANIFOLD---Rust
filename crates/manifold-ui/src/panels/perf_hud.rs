@@ -11,7 +11,7 @@ use crate::tree::UITree;
 use super::{Panel, PanelAction};
 
 const HUD_WIDTH: f32 = 250.0;
-const HUD_HEIGHT: f32 = 280.0;
+const HUD_HEIGHT: f32 = 320.0;
 const ROW_HEIGHT: f32 = 14.0;
 const LABEL_FONT: u16 = 9;
 const VALUE_FONT: u16 = 9;
@@ -21,8 +21,10 @@ const PAD: f32 = 8.0;
 /// Performance metrics pushed from the app each frame.
 #[derive(Debug, Clone, Default)]
 pub struct PerfMetrics {
-    pub fps: f32,
-    pub frame_time_ms: f32,
+    pub ui_fps: f32,
+    pub ui_frame_time_ms: f32,
+    pub render_fps: f32,
+    pub render_frame_time_ms: f32,
     pub active_clips: usize,
     pub preparing_clips: usize,
     pub current_beat: f32,
@@ -39,8 +41,10 @@ pub struct PerfHudPanel {
     first_node: usize,
     node_count: usize,
     // Node IDs for push-based value updates
-    fps_value_id: i32,
-    frame_time_id: i32,
+    ui_fps_value_id: i32,
+    ui_frame_time_id: i32,
+    render_fps_value_id: i32,
+    render_frame_time_id: i32,
     active_clips_id: i32,
     beat_id: i32,
     time_id: i32,
@@ -55,8 +59,10 @@ impl PerfHudPanel {
             metrics: PerfMetrics::default(),
             first_node: 0,
             node_count: 0,
-            fps_value_id: -1,
-            frame_time_id: -1,
+            ui_fps_value_id: -1,
+            ui_frame_time_id: -1,
+            render_fps_value_id: -1,
+            render_frame_time_id: -1,
             active_clips_id: -1,
             beat_id: -1,
             time_id: -1,
@@ -83,11 +89,17 @@ impl PerfHudPanel {
         if !self.visible { return; }
         let m = &self.metrics;
 
-        if self.fps_value_id >= 0 {
-            tree.set_text(self.fps_value_id as u32, &format!("{:.0}", m.fps));
+        if self.ui_fps_value_id >= 0 {
+            tree.set_text(self.ui_fps_value_id as u32, &format!("{:.0}", m.ui_fps));
         }
-        if self.frame_time_id >= 0 {
-            tree.set_text(self.frame_time_id as u32, &format!("{:.1} ms", m.frame_time_ms));
+        if self.ui_frame_time_id >= 0 {
+            tree.set_text(self.ui_frame_time_id as u32, &format!("{:.1} ms", m.ui_frame_time_ms));
+        }
+        if self.render_fps_value_id >= 0 {
+            tree.set_text(self.render_fps_value_id as u32, &format!("{:.0}", m.render_fps));
+        }
+        if self.render_frame_time_id >= 0 {
+            tree.set_text(self.render_frame_time_id as u32, &format!("{:.1} ms", m.render_frame_time_ms));
         }
         if self.active_clips_id >= 0 {
             tree.set_text(self.active_clips_id as u32, &format!("{} / {}", m.active_clips, m.preparing_clips));
@@ -166,12 +178,19 @@ impl Panel for PerfHudPanel {
         );
         cy += 16.0 + SECTION_GAP;
 
-        // Frame timing section
+        // UI timing section
         let lx = x + PAD;
-        let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "FPS");
-        self.fps_value_id = id; cy = ny;
-        let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Frame Time");
-        self.frame_time_id = id; cy = ny;
+        let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "UI FPS");
+        self.ui_fps_value_id = id; cy = ny;
+        let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "UI Frame");
+        self.ui_frame_time_id = id; cy = ny;
+        cy += SECTION_GAP;
+
+        // Render timing section
+        let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Render FPS");
+        self.render_fps_value_id = id; cy = ny;
+        let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Render Frame");
+        self.render_frame_time_id = id; cy = ny;
         cy += SECTION_GAP;
 
         // Clip scheduling

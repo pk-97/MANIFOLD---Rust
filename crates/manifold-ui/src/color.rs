@@ -30,7 +30,7 @@ pub const PROGRESS_BAR_BG: Color32 = Color32::new(36, 36, 38, 242);
 pub const TRANSPORT_BAR_BG: Color32 = Color32::new(16, 16, 16, 255);
 pub const FOOTER_BG: Color32 = Color32::new(19, 19, 20, 255);
 pub const OVERLAY_BG: Color32 = Color32::new(13, 13, 14, 237);
-pub const HUD_BG: Color32 = Color32::new(10, 10, 11, 230);
+pub const HUD_BG: Color32 = Color32::new(10, 10, 11, 255);
 
 // ── Accent colors ─────────────────────────────────────────────────
 pub const ACCENT_BLUE: Color32 = Color32::new(89, 148, 235, 255);
