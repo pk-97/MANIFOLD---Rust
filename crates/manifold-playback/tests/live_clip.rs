@@ -99,7 +99,7 @@ fn trigger_creates_phantom_clip() {
     let clip = mgr.trigger_live_clip(
         &mut project, &host,
         "video1".into(), 0, 2.0, 0.0,
-        None, -1, 0.0,
+        None, -1, 0.0, -1,
     );
 
     assert!(clip.is_some());
@@ -116,7 +116,7 @@ fn trigger_live_generator_clip() {
     let clip = mgr.trigger_live_generator_clip(
         &mut project, &host,
         GeneratorType::Plasma, 0, 4.0,
-        None, -1, 0.0,
+        None, -1, 0.0, -1,
     );
 
     assert!(clip.is_some());
@@ -134,13 +134,13 @@ fn second_trigger_on_same_layer_replaces() {
     let clip1 = mgr.trigger_live_clip(
         &mut project, &host,
         "video1".into(), 0, 2.0, 0.0,
-        None, -1, 0.0,
+        None, -1, 0.0, -1,
     ).unwrap();
 
     let clip2 = mgr.trigger_live_clip(
         &mut project, &host,
         "video2".into(), 0, 3.0, 0.0,
-        None, -1, 1.0,
+        None, -1, 1.0, -1,
     ).unwrap();
 
     assert_eq!(mgr.live_slots().len(), 1);
@@ -154,8 +154,8 @@ fn multiple_layers_independent_slots() {
     let host = MockHost::new();
     let mut mgr = LiveClipManager::new();
 
-    mgr.trigger_live_clip(&mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0);
-    mgr.trigger_live_clip(&mut project, &host, "v2".into(), 1, 2.0, 0.0, None, -1, 0.0);
+    mgr.trigger_live_clip(&mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0, -1);
+    mgr.trigger_live_clip(&mut project, &host, "v2".into(), 1, 2.0, 0.0, None, -1, 0.0, -1);
 
     assert_eq!(mgr.live_slots().len(), 2);
 }
@@ -171,12 +171,12 @@ fn commit_with_recording_adds_to_timeline() {
     let clip = mgr.trigger_live_clip(
         &mut project, &host,
         "video1".into(), 0, 2.0, 0.0,
-        None, -1, 0.0,
+        None, -1, 0.0, -1,
     ).unwrap();
     let clip_id = clip.id.clone();
 
     host.beat = 4.0; // held for 4 beats
-    mgr.commit_live_clip(&mut project, &mut host, 0, Some(&clip_id), Some(4.0), -1, 1.0);
+    mgr.commit_live_clip(&mut project, &mut host, 0, Some(&clip_id), Some(4.0), -1, 1.0, -1);
 
     // Clip should be committed to timeline
     assert_eq!(project.timeline.layers[0].clips.len(), 1);
@@ -194,10 +194,10 @@ fn commit_without_recording_discards() {
     let clip = mgr.trigger_live_clip(
         &mut project, &host,
         "video1".into(), 0, 2.0, 0.0,
-        None, -1, 0.0,
+        None, -1, 0.0, -1,
     ).unwrap();
 
-    mgr.commit_live_clip(&mut project, &mut host, 0, Some(&clip.id), Some(4.0), -1, 1.0);
+    mgr.commit_live_clip(&mut project, &mut host, 0, Some(&clip.id), Some(4.0), -1, 1.0, -1);
 
     // Clip should NOT be in timeline
     assert_eq!(project.timeline.layers[0].clips.len(), 0);
@@ -216,7 +216,7 @@ fn pending_launch_queue_activates_at_tick() {
     let clip = mgr.trigger_live_clip(
         &mut project, &host,
         "video1".into(), 0, 2.0, 0.0,
-        None, 0, 0.0,
+        None, 0, 0.0, -1,
     ).unwrap();
 
     // Might be queued as pending or activated immediately depending on snap
@@ -243,7 +243,7 @@ fn clear_on_seek_small_delta_no_clear() {
     let host = MockHost::new();
     let mut mgr = LiveClipManager::new();
 
-    mgr.trigger_live_clip(&mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0);
+    mgr.trigger_live_clip(&mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0, -1);
     assert_eq!(mgr.live_slots().len(), 1);
 
     // Small seek delta (< 1.0) should NOT clear
@@ -258,8 +258,8 @@ fn clear_on_seek_large_delta_clears() {
     let host = MockHost::new();
     let mut mgr = LiveClipManager::new();
 
-    mgr.trigger_live_clip(&mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0);
-    mgr.trigger_live_clip(&mut project, &host, "v2".into(), 1, 2.0, 0.0, None, -1, 0.0);
+    mgr.trigger_live_clip(&mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0, -1);
+    mgr.trigger_live_clip(&mut project, &host, "v2".into(), 1, 2.0, 0.0, None, -1, 0.0, -1);
     assert_eq!(mgr.live_slots().len(), 2);
 
     // Large seek delta (> 1.0) should clear and call stop for each
@@ -277,7 +277,7 @@ fn notify_clip_stopped_removes_only_clip_id() {
     let mut mgr = LiveClipManager::new();
 
     let clip = mgr.trigger_live_clip(
-        &mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0,
+        &mut project, &host, "v1".into(), 0, 2.0, 0.0, None, -1, 0.0, -1,
     ).unwrap();
 
     mgr.notify_clip_stopped(&clip.id);

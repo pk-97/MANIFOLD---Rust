@@ -100,6 +100,7 @@ impl ClipLauncher {
                 beat_stamp,
                 event_absolute_tick,
                 realtime_now,
+                midi_note,
             );
         }
 
@@ -149,6 +150,7 @@ impl ClipLauncher {
             beat_stamp,
             event_absolute_tick,
             realtime_now,
+            midi_note,
         );
 
         let clip = match clip {
@@ -242,6 +244,7 @@ impl ClipLauncher {
             beat_stamp,
             event_absolute_tick,
             realtime_now,
+            midi_note,
         );
 
         let current_time = host.current_time();
@@ -289,6 +292,7 @@ impl ClipLauncher {
                 beat_stamp,
                 event_absolute_tick,
                 realtime_now,
+                midi_note,
             );
         }
 
@@ -333,6 +337,7 @@ impl ClipLauncher {
                 beat_stamp,
                 event_absolute_tick,
                 realtime_now,
+                midi_note,
             );
 
             let gen_clip = match gen_clip {
@@ -437,6 +442,7 @@ impl ClipLauncher {
             beat_stamp,
             event_absolute_tick,
             realtime_now,
+            midi_note,
         );
 
         let clip = match clip {
