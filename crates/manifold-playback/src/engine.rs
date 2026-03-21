@@ -63,6 +63,10 @@ pub struct TickResult {
     pub compositor_dirty: bool,
     pub should_clear_compositor: bool,
     pub should_clear_feedback_buffer: bool,
+    /// True when modulation (LFO drivers / ADSR envelopes) changed param_values
+    /// this frame. The content thread uses this to send a project snapshot so
+    /// the UI thread sees modulated slider values in real time.
+    pub modulation_active: bool,
 }
 
 // ─── Playback Engine ───
@@ -589,6 +593,7 @@ impl PlaybackEngine {
             compositor_dirty,
             should_clear_compositor: should_clear,
             should_clear_feedback_buffer: false,
+            modulation_active: modulation_dirty,
         }
     }
 
@@ -606,11 +611,15 @@ impl PlaybackEngine {
 
         // 3. Evaluate modulation pipeline even when stopped (for scrub preview / inspector).
         //    Port of C# DriverController — runs in all states.
-        if let Some(project) = &mut self.project {
-            if crate::modulation::evaluate_modulation(project, self.current_beat) {
+        let modulation_dirty = if let Some(project) = &mut self.project {
+            let dirty = crate::modulation::evaluate_modulation(project, self.current_beat);
+            if dirty {
                 self.mark_compositor_dirty(ctx.realtime_now);
             }
-        }
+            dirty
+        } else {
+            false
+        };
 
         // 4. Filter ready clips for compositor.
         //    Port of C# UpdateCompositor (lines 1126-1132).
@@ -633,6 +642,7 @@ impl PlaybackEngine {
                 && self.active_clip_renderers.is_empty()
                 && !self.has_pending_clip_state(),
             should_clear_feedback_buffer: false,
+            modulation_active: modulation_dirty,
         }
     }
 
@@ -938,6 +948,20 @@ impl PlaybackEngine {
         if let Some(project) = &mut self.project {
             TempoMapConverter::beat_to_seconds(
                 &mut project.tempo_map,
+                beat,
+                project.settings.bpm,
+            )
+        } else {
+            beat * 0.5 // fallback: 120 bpm
+        }
+    }
+
+    /// Immutable version of beat_to_timeline_time. Used by StemAudioController
+    /// which borrows engine immutably for sync.
+    pub fn beat_to_timeline_time_immut(&self, beat: f32) -> f32 {
+        if let Some(project) = &self.project {
+            TempoMapConverter::beat_to_seconds_immut(
+                &project.tempo_map,
                 beat,
                 project.settings.bpm,
             )

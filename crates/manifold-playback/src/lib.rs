@@ -17,6 +17,7 @@ pub mod osc_registry;
 pub mod osc_sync;
 pub mod audio_sync;
 pub mod audio_decoder;
+pub mod stem_audio;
 pub mod process_runner;
 pub mod percussion_parser;
 pub mod percussion_backend;

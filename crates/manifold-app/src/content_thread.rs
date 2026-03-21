@@ -11,6 +11,7 @@ use crossbeam_channel::{Receiver, Sender};
 use manifold_core::types::{ClockAuthority, TempoPointSource};
 use manifold_editing::service::EditingService;
 use manifold_playback::audio_sync::ImportedAudioSyncController;
+use manifold_playback::stem_audio::StemAudioController;
 use manifold_playback::clip_launcher::ClipLauncher;
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::midi_input::MidiInputController;
@@ -33,6 +34,7 @@ pub struct ContentThread {
     pub editing_service: EditingService,
     pub content_pipeline: ContentPipeline,
     pub audio_sync: Option<ImportedAudioSyncController>,
+    pub stem_audio: Option<StemAudioController>,
     pub percussion_orchestrator: PercussionImportOrchestrator,
     pub transport_controller: TransportController,
     pub gpu: GpuContext,
@@ -151,6 +153,13 @@ impl ContentThread {
                 audio_sync.update_sync(&mut self.engine);
             }
 
+            // 5b. Stem audio sync (after master — matches Unity Update() ordering).
+            if let Some(ref mut stem_audio) = self.stem_audio {
+                if let Some(ref audio_sync) = self.audio_sync {
+                    stem_audio.update_sync(audio_sync, &self.engine);
+                }
+            }
+
             // 6. Percussion tick
             let beat = self.engine.current_beat();
             if let Some(p) = self.engine.project_mut() {
@@ -221,6 +230,17 @@ impl ContentThread {
                 osc_sender_enabled: self.transport_controller.osc_sender_enabled,
                 osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
                 osc_timecode_display: self.osc_sync.current_timecode_display.clone(),
+                stem_expanded: self.stem_audio.as_ref().map_or(false, |s| s.is_expanded()),
+                stem_ready: self.stem_audio.as_ref().map_or(false, |s| s.stems_ready()),
+                stem_muted: self.stem_audio.as_ref().map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
+                    core::array::from_fn(|i| s.is_muted(i))
+                }),
+                stem_soloed: self.stem_audio.as_ref().map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
+                    core::array::from_fn(|i| s.is_soloed(i))
+                }),
+                stem_available: self.stem_audio.as_ref().map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
+                    core::array::from_fn(|i| s.is_stem_available(i))
+                }),
                 percussion_importing: self.percussion_orchestrator.is_import_in_progress(),
                 percussion_status_message: perc_msg,
                 percussion_progress: if perc_progress < 0.0 { 0.0 } else { perc_progress.clamp(0.0, 1.0) },
@@ -352,6 +372,9 @@ impl ContentThread {
                 if let Some(ref mut audio) = self.audio_sync {
                     audio.reset_audio();
                 }
+                if let Some(ref mut stem) = self.stem_audio {
+                    stem.reset_stems(self.audio_sync.as_mut());
+                }
                 self.engine.initialize(*project);
                 // Resize content pipeline to project dims
                 if let Some(p) = self.engine.project() {
@@ -430,6 +453,49 @@ impl ContentThread {
             ContentCommand::ResetAudio => {
                 if let Some(ref mut audio_sync) = self.audio_sync {
                     audio_sync.reset_audio();
+                }
+            }
+
+            // ── Stem audio ────────────────────────────────────────
+            ContentCommand::StemAudioLoaded(preloaded) => {
+                if let Some(ref mut stem) = self.stem_audio {
+                    stem.apply_preloaded_stems(preloaded);
+                }
+            }
+            ContentCommand::StemSetExpanded(expand) => {
+                if let Some(ref mut stem) = self.stem_audio {
+                    // Auto-load stems on first expand if paths available but not yet loaded.
+                    // Port of Unity WorkspaceController.EnsureStemAudioController lazy init.
+                    if expand && !stem.stems_ready() {
+                        if let Some(stem_paths_vec) = self.engine.project()
+                            .and_then(|p| p.percussion_import.as_ref())
+                            .and_then(|perc| perc.stem_paths.as_ref())
+                        {
+                            let mut paths: [Option<String>; manifold_playback::stem_audio::STEM_COUNT] = Default::default();
+                            for (i, p) in stem_paths_vec.iter().enumerate() {
+                                if i < manifold_playback::stem_audio::STEM_COUNT {
+                                    paths[i] = Some(p.clone());
+                                }
+                            }
+                            stem.load_stems(&paths);
+                        }
+                    }
+                    stem.set_expanded(expand, self.audio_sync.as_mut());
+                }
+            }
+            ContentCommand::StemToggleMute(index) => {
+                if let Some(ref mut stem) = self.stem_audio {
+                    stem.toggle_muted(index);
+                }
+            }
+            ContentCommand::StemToggleSolo(index) => {
+                if let Some(ref mut stem) = self.stem_audio {
+                    stem.toggle_soloed(index);
+                }
+            }
+            ContentCommand::StemReset => {
+                if let Some(ref mut stem) = self.stem_audio {
+                    stem.reset_stems(self.audio_sync.as_mut());
                 }
             }
 

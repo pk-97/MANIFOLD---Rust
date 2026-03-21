@@ -64,6 +64,15 @@ impl ImportedAudioSyncController {
         self.on_clip_changed = callback;
     }
 
+    /// Set the master audio volume. Used by StemAudioController to mute/unmute
+    /// the master when expanding/collapsing stems.
+    /// Port of C# masterController.Source.volume = value.
+    pub fn set_volume(&mut self, volume: f32) {
+        if let Some(ref mut handle) = self.sound_handle {
+            handle.set_volume(volume as f64, Tween::default());
+        }
+    }
+
     // ─── LoadAudioAsync (port of C# IEnumerator LoadAudioAsync) ───
 
     /// Loads and decodes an audio file synchronously (kira decodes into memory).

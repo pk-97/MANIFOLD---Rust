@@ -2296,9 +2296,11 @@ pub fn dispatch(
             log::info!("Remove audio clicked");
             // Send to content thread
             let _ = content_tx.try_send(ContentCommand::ResetAudio);
+            let _ = content_tx.try_send(ContentCommand::StemReset);
             ui.waveform_lane.clear_audio();
             ui.stem_lanes.clear_all_stems();
             ui.layout.waveform_lane_visible = true;
+            ui.layout.stem_lanes_expanded = false;
             DispatchResult::handled()
         }
         PanelAction::WaveformScrub(screen_x, _screen_y) => {
@@ -2323,6 +2325,38 @@ pub fn dispatch(
             ui.waveform_lane.set_expanded_state(*expanded);
             ui.stem_lanes.set_expanded(*expanded);
             ui.layout.stem_lanes_expanded = *expanded;
+            // Send to content thread — controls master mute and stem playback.
+            let _ = content_tx.try_send(ContentCommand::StemSetExpanded(*expanded));
+
+            // On first expand: load stem waveform data for UI display.
+            // Port of Unity: WorkspaceController.OnStemExpandToggled → EnsureStemAudioController
+            // → OnStemsLoaded → stemLaneGroup.SetStemClip().
+            if *expanded {
+                if let Some(stem_paths) = project.percussion_import
+                    .as_ref()
+                    .and_then(|perc| perc.stem_paths.as_ref())
+                {
+                    for (i, path) in stem_paths.iter().enumerate() {
+                        if i >= manifold_playback::stem_audio::STEM_COUNT {
+                            break;
+                        }
+                        // Decode stem audio for waveform display (UI-thread only).
+                        match manifold_playback::audio_decoder::decode_audio_to_pcm(path) {
+                            Ok(decoded) => {
+                                ui.stem_lanes.set_stem_audio(
+                                    i,
+                                    &decoded.samples,
+                                    decoded.channels,
+                                    decoded.sample_rate,
+                                );
+                            }
+                            Err(e) => {
+                                log::warn!("[StemWaveform] Failed to decode stem {}: {}", i, e);
+                            }
+                        }
+                    }
+                }
+            }
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeDrums => {
@@ -2347,13 +2381,11 @@ pub fn dispatch(
             DispatchResult::handled()
         }
         PanelAction::StemMuteToggled(stem_index) => {
-            // Toggle mute for stem
-            log::info!("Stem {} mute toggled — stem audio not yet wired", stem_index);
+            let _ = content_tx.try_send(ContentCommand::StemToggleMute(*stem_index));
             DispatchResult::handled()
         }
         PanelAction::StemSoloToggled(stem_index) => {
-            // Toggle solo for stem
-            log::info!("Stem {} solo toggled — stem audio not yet wired", stem_index);
+            let _ = content_tx.try_send(ContentCommand::StemToggleSolo(*stem_index));
             DispatchResult::handled()
         }
 

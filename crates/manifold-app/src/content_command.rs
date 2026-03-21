@@ -8,6 +8,7 @@ use manifold_core::project::Project;
 use manifold_editing::command::Command;
 use manifold_playback::audio_sync::PreloadedAudioData;
 use manifold_playback::audio_decoder::DecodedAudio;
+use manifold_playback::stem_audio::PreloadedStemData;
 
 pub enum ContentCommand {
     // ── Transport ──────────────────────────────────────────────────
@@ -51,6 +52,21 @@ pub enum ContentCommand {
         waveform: Option<DecodedAudio>,
     },
     ResetAudio,
+
+    // ── Stem audio ──────────────────────────────────────────────────
+    /// Apply pre-loaded stem data on the content thread (fast — no I/O).
+    StemAudioLoaded(PreloadedStemData),
+    /// Toggle expand/collapse of stem playback.
+    /// Port of C# StemAudioController.SetExpanded(bool).
+    StemSetExpanded(bool),
+    /// Toggle mute for a stem index.
+    /// Port of C# StemAudioController.ToggleMuted(int).
+    StemToggleMute(usize),
+    /// Toggle solo for a stem index.
+    /// Port of C# StemAudioController.ToggleSoloed(int).
+    StemToggleSolo(usize),
+    /// Reset all stems (on project switch/audio remove).
+    StemReset,
 
     // ── Clipboard ────────────────────────────────────────────────
     /// Copy clips to clipboard on the content thread (EditingService owns clipboard).

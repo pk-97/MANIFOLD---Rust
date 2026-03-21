@@ -82,6 +82,7 @@ pub struct StemLaneGroupPanel {
     waveform_start_beat: f32,
     playhead_beat: f32,
     scroll_offset_x: f32,
+    bpm: f32,
 
     // ── Hover tracking (used for button highlight feedback) ──
     #[allow(dead_code)]
@@ -109,6 +110,7 @@ impl StemLaneGroupPanel {
             waveform_start_beat: 0.0,
             playhead_beat: 0.0,
             scroll_offset_x: 0.0,
+            bpm: 120.0,
             hovered_stem: None,
             hovered_mute: false,
             hovered_solo: false,
@@ -202,6 +204,7 @@ impl StemLaneGroupPanel {
         waveform_start_beat: f32,
         playhead_beat: f32,
         scroll_offset_x: f32,
+        bpm: f32,
         _mapper: &CoordinateMapper,
     ) {
         if !self.expanded {
@@ -210,12 +213,14 @@ impl StemLaneGroupPanel {
 
         let changed = (self.waveform_start_beat - waveform_start_beat).abs() > 0.001
             || (self.playhead_beat - playhead_beat).abs() > 0.001
-            || (self.scroll_offset_x - scroll_offset_x).abs() > 0.5;
+            || (self.scroll_offset_x - scroll_offset_x).abs() > 0.5
+            || (self.bpm - bpm).abs() > 0.01;
 
         if changed {
             self.waveform_start_beat = waveform_start_beat;
             self.playhead_beat = playhead_beat;
             self.scroll_offset_x = scroll_offset_x;
+            self.bpm = bpm;
             self.dirty = true;
         }
     }
@@ -272,7 +277,7 @@ impl StemLaneGroupPanel {
                 // The stem's actual audio duration determines its beat span.
                 // Use a simple duration estimate: same proportional width as master
                 let stem_width = mapper.beat_duration_to_width(
-                    self.waveform_duration_beats_for_stem(i, mapper),
+                    self.waveform_duration_beats_for_stem(i),
                 );
 
                 if stem_width > 0.0 {
@@ -348,33 +353,18 @@ impl StemLaneGroupPanel {
     }
 
     /// Compute beat duration for a stem from its audio length.
-    /// In Unity this uses PlaybackController.TimelineBeatToTime/TimelineTimeToBeat.
-    /// We approximate using the mapper's BPM-derived pixels_per_beat.
-    fn waveform_duration_beats_for_stem(
-        &self,
-        index: usize,
-        mapper: &CoordinateMapper,
-    ) -> f32 {
+    /// Unity: StemWaveformLane.UpdateOverlay uses PlaybackController.TimelineBeatToTime/
+    /// TimelineTimeToBeat. We convert seconds to beats using BPM.
+    fn waveform_duration_beats_for_stem(&self, index: usize) -> f32 {
         if index >= STEM_COUNT {
             return 0.0;
         }
         let dur_sec = self.lanes[index].renderer.clip_duration_seconds();
-        if dur_sec <= 0.0 {
+        if dur_sec <= 0.0 || self.bpm <= 0.0 {
             return 0.0;
         }
-        // Convert seconds to beats using the mapper's implicit BPM.
-        // pixels_per_beat / (screen_pixels_per_second) = seconds_per_beat
-        // For now, approximate: use the same ratio as whatever is driving
-        // the master waveform's duration beats.
-        // This will be refined when beat_to_time is properly wired.
-        let ppb = mapper.pixels_per_beat();
-        if ppb <= 0.0 {
-            return 0.0;
-        }
-        // We don't have direct BPM access here — the app layer should
-        // pre-compute stem_duration_beats and pass it in.
-        // For now, return 0 and let the app layer handle this.
-        0.0
+        // seconds_to_beats: dur_sec * (bpm / 60)
+        dur_sec * (self.bpm / 60.0)
     }
 
     /// Hit-test a position against mute/solo buttons.

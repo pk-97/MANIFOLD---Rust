@@ -921,6 +921,15 @@ impl Application {
             }
         }
 
+        // 1f. Sync stem mute/solo state from content thread to UI panels.
+        // Port of Unity: WorkspaceController.OnStemMuteToggled/OnStemSoloToggled refreshing button visuals.
+        {
+            for i in 0..manifold_playback::stem_audio::STEM_COUNT {
+                self.ui_root.stem_lanes.set_mute_state(i, self.content_state.stem_muted[i]);
+                self.ui_root.stem_lanes.set_solo_state(i, self.content_state.stem_soloed[i]);
+            }
+        }
+
         // 2. Process UI events and dispatch actions
         let mut actions = self.ui_root.process_events();
 
@@ -1315,6 +1324,22 @@ impl Application {
                     mapper,
                 );
             }
+
+            // 6a-ii. Update stem lane overlay (same position/scroll as master).
+            if self.ui_root.stem_lanes.is_expanded() {
+                let start_beat = self.local_project.percussion_import
+                    .as_ref()
+                    .map_or(0.0, |perc| perc.audio_start_beat);
+                let bpm = self.local_project.settings.bpm.max(1.0);
+                let mapper = self.ui_root.viewport.mapper();
+                self.ui_root.stem_lanes.update_overlay(
+                    start_beat,
+                    playhead_beat,
+                    scroll_x,
+                    bpm,
+                    mapper,
+                );
+            }
         }
 
         // 6b. Repaint dirty layer bitmaps (CPU pixel painting).
@@ -1369,6 +1394,28 @@ impl Application {
                             1000, &wf.pixel_buffer,
                             wf.buffer_width as u32, wf.buffer_height as u32,
                         );
+                    }
+                }
+            }
+
+            // 6e. Repaint + upload stem lanes if dirty
+            if self.ui_root.stem_lanes.is_expanded() {
+                let sl_rect = self.ui_root.viewport.stem_lanes_rect();
+                if sl_rect.width > 0.0 && sl_rect.height > 0.0 {
+                    let sl = &mut self.ui_root.stem_lanes;
+                    let mapper = self.ui_root.viewport.mapper();
+                    if sl.buffer_width != sl_rect.width as usize {
+                        sl.dirty = true;
+                    }
+                    if sl.dirty {
+                        sl.repaint(sl_rect.width as usize, mapper);
+                        if sl.buffer_width > 0 && sl.buffer_height > 0 && !sl.pixel_buffer.is_empty() {
+                            bitmap_gpu.upload_layer(
+                                &gpu.device, &gpu.queue,
+                                1001, &sl.pixel_buffer,
+                                sl.buffer_width as u32, sl.buffer_height as u32,
+                            );
+                        }
                     }
                 }
             }
@@ -1564,6 +1611,14 @@ impl Application {
                     let wf_rect = self.ui_root.viewport.waveform_lane_rect();
                     if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
                         rects.push((1000, wf_rect));
+                    }
+
+                    // Add stem lanes rect (texture at reserved index 1001)
+                    if self.ui_root.stem_lanes.is_expanded() {
+                        let sl_rect = self.ui_root.viewport.stem_lanes_rect();
+                        if sl_rect.width > 0.0 && sl_rect.height > 0.0 {
+                            rects.push((1001, sl_rect));
+                        }
                     }
 
                     if !rects.is_empty() {
@@ -1977,6 +2032,14 @@ impl ApplicationHandler for Application {
                 }
             };
 
+            let stem_audio = match manifold_playback::stem_audio::StemAudioController::new() {
+                Ok(ctrl) => Some(ctrl),
+                Err(e) => {
+                    log::warn!("[StemAudio] Failed to initialize stem audio controller: {}", e);
+                    None
+                }
+            };
+
             let mut midi_input = manifold_playback::midi_input::MidiInputController::new();
             midi_input.start();
 
@@ -1985,6 +2048,7 @@ impl ApplicationHandler for Application {
                 editing_service: EditingService::new(),
                 content_pipeline,
                 audio_sync,
+                stem_audio,
                 percussion_orchestrator: PercussionImportOrchestrator::new(
                     None,
                     std::env::current_exe()
