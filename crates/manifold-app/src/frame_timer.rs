@@ -38,6 +38,12 @@ impl FrameTimer {
         self.last_tick_time.elapsed() >= self.target_frame_duration
     }
 
+    /// Time remaining until next frame deadline.
+    /// Returns Duration::ZERO if already past the deadline.
+    pub fn time_until_next_tick(&self) -> Duration {
+        self.target_frame_duration.saturating_sub(self.last_tick_time.elapsed())
+    }
+
     /// Consume the tick, returning delta time in seconds.
     pub fn consume_tick(&mut self) -> f64 {
         let now = Instant::now();

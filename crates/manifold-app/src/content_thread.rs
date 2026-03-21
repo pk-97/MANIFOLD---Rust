@@ -77,7 +77,17 @@ impl ContentThread {
                 continue;
             }
             if !timer.should_tick() {
-                std::thread::sleep(std::time::Duration::from_micros(500));
+                // Precise sleep: compute exact time to next frame, sleep most of it,
+                // then spin for the final sub-ms to avoid macOS sleep overshoot (~1-2ms).
+                let remaining = timer.time_until_next_tick();
+                if remaining > std::time::Duration::from_millis(2) {
+                    // Sleep for most of the remaining time, leaving 1.5ms margin for spin-wait
+                    std::thread::sleep(remaining - std::time::Duration::from_micros(1500));
+                } else if remaining > std::time::Duration::from_micros(100) {
+                    // Close to deadline — yield to OS scheduler instead of sleeping
+                    std::thread::yield_now();
+                }
+                // Below 100μs: fall through to re-check should_tick() immediately
                 continue;
             }
             let dt = timer.consume_tick();

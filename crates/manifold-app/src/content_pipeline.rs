@@ -6,6 +6,7 @@ use manifold_renderer::compositor::{Compositor, CompositeLayerDescriptor, Compos
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu::GpuContext;
 use manifold_renderer::layer_compositor::CompositeClipDescriptor;
+#[cfg(not(target_os = "macos"))]
 use manifold_renderer::render_target::RenderTarget;
 use manifold_renderer::tonemap::TonemapSettings;
 use manifold_playback::engine::{PlaybackEngine, TickResult};
@@ -49,8 +50,9 @@ impl SharedOutputView {
     }
 }
 
-/// Output format for double-buffered compositor output.
+/// Output format for double-buffered compositor output (non-macOS fallback).
 /// Matches compositor's tonemap output format.
+#[cfg(not(target_os = "macos"))]
 const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Self-contained content rendering pipeline.
@@ -64,9 +66,11 @@ const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub struct ContentPipeline {
     compositor: Box<dyn Compositor>,
     /// Double-buffered output textures. UI reads front, content writes to back.
-    /// Lazily initialized on first render (needs device + dimensions).
+    /// NOT used on macOS (IOSurface path bypasses double-buffering).
+    #[cfg(not(target_os = "macos"))]
     output_buffers: Option<[RenderTarget; 2]>,
     /// Which buffer is the front (0 or 1). Back is always `1 - front_index`.
+    #[cfg(not(target_os = "macos"))]
     front_index: usize,
     /// Content frame rate tracking (for separate cadence mode).
     content_interval_secs: f64,
@@ -90,7 +94,9 @@ impl ContentPipeline {
         let shared = Arc::new(SharedOutputView::new());
         Self {
             compositor,
+            #[cfg(not(target_os = "macos"))]
             output_buffers: None,
+            #[cfg(not(target_os = "macos"))]
             front_index: 0,
             content_interval_secs: 1.0 / 60.0,
             last_content_time: 0.0,
@@ -123,6 +129,8 @@ impl ContentPipeline {
     }
 
     /// Lazily create the double-buffer pair at compositor dimensions.
+    /// Only used on non-macOS (macOS uses IOSurface zero-copy path).
+    #[cfg(not(target_os = "macos"))]
     fn ensure_output_buffers(&mut self, device: &wgpu::Device) {
         if self.output_buffers.is_some() {
             return;
@@ -146,6 +154,7 @@ impl ContentPipeline {
         dt: f64,
         frame_count: u64,
     ) {
+        #[cfg(not(target_os = "macos"))]
         self.ensure_output_buffers(&gpu.device);
 
         // Extract timing values before split borrow
@@ -199,8 +208,9 @@ impl ContentPipeline {
         }
 
         // Build layer descriptors for compositor
-        let empty_effects: Vec<EffectInstance> = Vec::new();
-        let empty_groups: Vec<EffectGroup> = Vec::new();
+        // Use static empty slices instead of per-frame Vec allocations.
+        let empty_effects: &[EffectInstance] = &[];
+        let empty_groups: &[EffectGroup] = &[];
         let layer_descs: Vec<CompositeLayerDescriptor> = layers.iter().map(|layer| {
             CompositeLayerDescriptor {
                 layer_index: layer.index,
@@ -208,16 +218,16 @@ impl ContentPipeline {
                 opacity: layer.opacity,
                 is_muted: layer.is_muted,
                 is_solo: layer.is_solo,
-                effects: layer.effects.as_deref().unwrap_or(&empty_effects),
-                effect_groups: layer.effect_groups.as_deref().unwrap_or(&empty_groups),
+                effects: layer.effects.as_deref().unwrap_or(empty_effects),
+                effect_groups: layer.effect_groups.as_deref().unwrap_or(empty_groups),
             }
         }).collect();
 
         // Composite
-        let master_effects = project.map_or(&empty_effects[..], |p| &p.settings.master_effects);
+        let master_effects = project.map_or(empty_effects, |p| &p.settings.master_effects);
         let master_effect_groups = project
             .and_then(|p| p.settings.master_effect_groups.as_deref())
-            .unwrap_or(&empty_groups);
+            .unwrap_or(empty_groups);
 
         let frame = CompositorFrame {
             time,
@@ -306,12 +316,17 @@ impl ContentPipeline {
             self.shared_output.set_view(front_view);
         }
 
-        // Update shared dimensions for UI aspect ratio
-        self.shared_output.set_dimensions(comp_w, comp_h);
+        // Update shared dimensions for UI aspect ratio (only when changed).
+        let (old_w, old_h) = self.shared_output.get_dimensions();
+        if old_w != comp_w || old_h != comp_h {
+            self.shared_output.set_dimensions(comp_w, comp_h);
+        }
     }
 
     /// The stable output texture view. UI reads this for blitting.
     /// Returns None only before the first render.
+    /// Only used on non-macOS (macOS reads via IOSurface).
+    #[cfg(not(target_os = "macos"))]
     pub fn output_view(&self) -> Option<&wgpu::TextureView> {
         self.output_buffers.as_ref().map(|bufs| &bufs[self.front_index].view)
     }
@@ -343,7 +358,8 @@ impl ContentPipeline {
                 break;
             }
         }
-        // Recreate output buffers at new dimensions
+        // Recreate output buffers at new dimensions (non-macOS only)
+        #[cfg(not(target_os = "macos"))]
         if self.output_buffers.is_some() {
             self.output_buffers = Some([
                 RenderTarget::new(device, width, height, OUTPUT_FORMAT, "ContentOutput_Front"),

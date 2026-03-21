@@ -509,9 +509,9 @@
       "title": "ComputeCompositor fast path",
       "severity": "medium",
       "est_loc": 200,
-      "status": "todo",
-      "commit": null,
-      "notes": "Single-pass compute compositor batches up to 8 effect-free layers. Performance optimization."
+      "status": "done",
+      "commit": "excluded",
+      "notes": "Intentionally excluded — too complex with minimal gain. Approved by Peter / 2026-03-21."
     },
     {
       "number": 37,

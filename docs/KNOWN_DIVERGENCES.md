@@ -207,6 +207,13 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Approved by:** Peter / 2026-03-21
 - **Files affected:** `manifold-renderer/src/effects/`, `manifold-core/src/effect_definition_registry.rs`
 
+### [D-29] ComputeCompositor fast path excluded
+- **Unity does:** `ComputeCompositor` batches up to 8 effect-free layers into a single compute pass for performance.
+- **Rust does:** All layers go through the standard compositor path (per-layer blit with blend).
+- **Why:** Too complex with minimal gain. The standard path is performant enough.
+- **Approved by:** Peter / 2026-03-21
+- **Files affected:** `manifold-renderer/src/compositor/`
+
 ---
 
 ## Add new divergences above this line.
