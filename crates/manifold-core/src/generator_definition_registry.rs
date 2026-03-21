@@ -474,7 +474,7 @@ fn build_definitions() -> HashMap<GeneratorType, GeneratorDef> {
         pd("Zone Force", 0.0, 0.02, 0.005, Some("F3"), "zoneForce"),
         // 3D-specific params (indices 20-27)
         pd_whole_labels("Container", 0.0, 3.0, 0.0, &["None", "Cube", "Sphere", "Torus"], "container"),
-        pd("Ctr Scale", 0.2, 1.0, 0.8, Some("F2"), "containerScale"),
+        pd("Ctr Scale", 0.2, 3.0, 0.8, Some("F2"), "containerScale"),
         pd_whole_labels("Vol Res", 0.0, 2.0, 0.0, &["64", "128", "256"], "volumeRes"),
         pd("Cam Dist", 1.0, 8.0, 3.0, Some("F1"), "camDist"),
         pd("Rotate X", -1.0, 1.0, 0.0, Some("F2"), "rotX"),
