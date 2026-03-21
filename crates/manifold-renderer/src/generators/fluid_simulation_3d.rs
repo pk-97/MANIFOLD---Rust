@@ -661,28 +661,13 @@ impl FluidSimulation3DGenerator {
         }
     }
 
-    fn init_resources(
-        &mut self,
-        device:        &wgpu::Device,
-        queue:         &wgpu::Queue,
-        output_width:  u32,
-        output_height: u32,
-        active_count:  u32,
-        vol_res:       u32,
-        field_res:     f32,
-    ) {
-        self.active_count = active_count;
-        self.vol_res      = vol_res;
-
-        // Unity: displayResW = Max(16, RoundToInt(rt.width * fieldRes))
-        //        displayResH = Max(16, RoundToInt(rt.height * fieldRes))
-        let dw = ((output_width  as f32 * field_res).round() as u32).max(16);
-        let dh = ((output_height as f32 * field_res).round() as u32).max(16);
-        self.disp_w = dw;
-        self.disp_h = dh;
-
-        // Particle buffer: active_count * 64 bytes (WGSL Particle = 64 bytes)
-        let particle_buf_size = active_count as u64 * PARTICLE_SIZE_BYTES;
+    /// Unity ComputeParticleGeneratorBase.Initialize: create and seed particle buffer.
+    /// Called once; buffer is always MAX_PARTICLES. activeCount is dispatch-only.
+    /// Unity NEVER recreates the particle buffer when the count slider changes.
+    fn init_particles(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        // Unity: particleBuffer = new ComputeBuffer(ParticleCount, PARTICLE_STRIDE)
+        // ParticleCount = MAX_PARTICLES = 8_000_000 (constant, not slider-driven)
+        let particle_buf_size = MAX_PARTICLES as u64 * PARTICLE_SIZE_BYTES;
         let particle_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("FluidSim3D Particle Buffer"),
             size:  particle_buf_size,
@@ -690,29 +675,38 @@ impl FluidSimulation3DGenerator {
             mapped_at_creation: false,
         });
 
-        // Initialize particles: uniform random positions [0,1]^3, life=1, age=-1, color=(0.005,...)
         // Unity InitParticles: seeded RNG(42), matching Unity lines 201-228
-        {
-            let mut rng_state: u64 = 42;
-            let particle_data: Vec<Particle> = (0..active_count as usize).map(|_| {
-                let px = lcg_next_f32(&mut rng_state);
-                let py = lcg_next_f32(&mut rng_state);
-                let pz = lcg_next_f32(&mut rng_state);
-                Particle {
-                    position: [px, py, pz],
-                    _pad0:    0.0,
-                    velocity: [0.0, 0.0, 0.0],
-                    life:     1.0,
-                    age:      -1.0,
-                    _pad1:    [0.0, 0.0, 0.0],
-                    color:    [0.005, 0.005, 0.005, 1.0],
-                }
-            }).collect();
-            queue.write_buffer(&particle_buffer, 0, bytemuck::cast_slice(&particle_data));
+        let mut rng_state: u64 = 42;
+        let particle_data: Vec<Particle> = (0..MAX_PARTICLES as usize).map(|_| {
+            let px = lcg_next_f32(&mut rng_state);
+            let py = lcg_next_f32(&mut rng_state);
+            let pz = lcg_next_f32(&mut rng_state);
+            Particle {
+                position: [px, py, pz],
+                _pad0:    0.0,
+                velocity: [0.0, 0.0, 0.0],
+                life:     1.0,
+                age:      -1.0,
+                _pad1:    [0.0, 0.0, 0.0],
+                color:    [0.005, 0.005, 0.005, 1.0],
+            }
+        }).collect();
+        queue.write_buffer(&particle_buffer, 0, bytemuck::cast_slice(&particle_data));
+
+        self.particle_buffer = Some(particle_buffer);
+        self.initialized     = true;
+    }
+
+    /// Unity EnsureVolumeResources: recreate 3D volumes + accumulator only when vol_res changes.
+    /// Does NOT touch particles or display resources.
+    fn ensure_volume_resources(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, vol_res: u32) {
+        if self.accum_3d.is_some() && self.vol_res == vol_res {
+            return;
         }
 
+        self.vol_res = vol_res;
+
         // 3D accumulator: vol_res^3 * 4 bytes (uint per voxel)
-        // Unity: new ComputeBuffer(volumeRes * volumeRes * depth, sizeof(uint))
         let accum_3d_size = (vol_res as u64).pow(3) * 4;
         let accum_3d = device.create_buffer(&wgpu::BufferDescriptor {
             label:  Some("FluidSim3D Accum3D"),
@@ -722,8 +716,31 @@ impl FluidSimulation3DGenerator {
         });
         queue.write_buffer(&accum_3d, 0, &vec![0u8; accum_3d_size as usize]);
 
+        // 3D volumes: density (R32Float), vector field (Rgba16Float), ping-pong temps
+        let density_volume    = Volume3D::new(device, vol_res, DENSITY_3D_FORMAT, "FluidSim3D DensityVolume");
+        let density_blur_temp = Volume3D::new(device, vol_res, DENSITY_3D_FORMAT, "FluidSim3D DensityBlurTemp");
+        let vector_volume     = Volume3D::new(device, vol_res, VECTOR_3D_FORMAT,  "FluidSim3D VectorVolume");
+        let vector_blur_temp  = Volume3D::new(device, vol_res, VECTOR_3D_FORMAT,  "FluidSim3D VectorBlurTemp");
+
+        self.accum_3d          = Some(accum_3d);
+        self.density_volume    = Some(density_volume);
+        self.density_blur_temp = Some(density_blur_temp);
+        self.vector_volume     = Some(vector_volume);
+        self.vector_blur_temp  = Some(vector_blur_temp);
+        self.frame_count       = 0;
+    }
+
+    /// Unity EnsureDisplayResources: recreate 2D display accumulator + density RT only when
+    /// display dimensions change (from field_res or output size). Does NOT touch particles or volumes.
+    fn ensure_display_resources(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, dw: u32, dh: u32) {
+        if self.display_accum.is_some() && self.disp_w == dw && self.disp_h == dh {
+            return;
+        }
+
+        self.disp_w = dw;
+        self.disp_h = dh;
+
         // 2D display accumulator: dw * dh * 4 bytes
-        // Unity: new ComputeBuffer(w * h, sizeof(uint))
         let display_accum_size = (dw as u64) * (dh as u64) * 4;
         let display_accum = device.create_buffer(&wgpu::BufferDescriptor {
             label:  Some("FluidSim3D DisplayAccum"),
@@ -733,27 +750,11 @@ impl FluidSimulation3DGenerator {
         });
         queue.write_buffer(&display_accum, 0, &vec![0u8; display_accum_size as usize]);
 
-        // 3D volumes: density (R32Float), vector field (Rgba16Float), ping-pong temps
-        // Unity CreateVolumeTex: RHalf -> R32Float (Metal storage), ARGBHalf -> Rgba16Float
-        let density_volume    = Volume3D::new(device, vol_res, DENSITY_3D_FORMAT, "FluidSim3D DensityVolume");
-        let density_blur_temp = Volume3D::new(device, vol_res, DENSITY_3D_FORMAT, "FluidSim3D DensityBlurTemp");
-        let vector_volume     = Volume3D::new(device, vol_res, VECTOR_3D_FORMAT,  "FluidSim3D VectorVolume");
-        let vector_blur_temp  = Volume3D::new(device, vol_res, VECTOR_3D_FORMAT,  "FluidSim3D VectorBlurTemp");
-
         // Display density RT: Rgba16Float (filterable for display fragment)
-        // Unity: RFloat, but Metal can't filter R32Float — use Rgba16Float (KNOWN_DIVERGENCES)
         let display_density_rt = RenderTarget::new(device, dw, dh, DISPLAY_DENSITY_FORMAT, "FluidSim3D DisplayDensity");
 
-        self.particle_buffer    = Some(particle_buffer);
-        self.accum_3d           = Some(accum_3d);
         self.display_accum      = Some(display_accum);
-        self.density_volume     = Some(density_volume);
-        self.density_blur_temp  = Some(density_blur_temp);
-        self.vector_volume      = Some(vector_volume);
-        self.vector_blur_temp   = Some(vector_blur_temp);
         self.display_density_rt = Some(display_density_rt);
-        self.frame_count        = 0;
-        self.initialized        = true;
     }
 
     // ── 3D blur scalar (R32Float density) ──
@@ -880,18 +881,26 @@ impl Generator for FluidSimulation3DGenerator {
         let snap_mode       = snap_mode_f.round() as i32;
 
         // Unity: Clamp(RoundToInt(millions * 1_000_000), 100_000, MAX_PARTICLES)
-        let desired_count   = active_count_from_param(particles_param);
+        let active_count    = active_count_from_param(particles_param);
         let desired_vol_res = vol_res_from_param(vol_res_param);
 
-        // Lazy-init or reinit on particle count / volume resolution change
-        if !self.initialized
-            || desired_count   != self.active_count
-            || desired_vol_res != self.vol_res
-        {
-            self.init_resources(device, queue, ctx.width, ctx.height, desired_count, desired_vol_res, field_res);
+        // Unity: displayResW = Max(16, RoundToInt(rt.width * fieldRes))
+        let desired_dw = ((ctx.width  as f32 * field_res).round() as u32).max(16);
+        let desired_dh = ((ctx.height as f32 * field_res).round() as u32).max(16);
+
+        // Unity: particles created once in Initialize(), never recreated for param changes.
+        // Buffer is always MAX_PARTICLES; activeCount is dispatch-only.
+        if !self.initialized {
+            self.init_particles(device, queue);
         }
 
-        let active_count = self.active_count;
+        // Unity EnsureVolumeResources: only recreate when vol_res changes
+        self.ensure_volume_resources(device, queue, desired_vol_res);
+
+        // Unity EnsureDisplayResources: only recreate when display dims change
+        self.ensure_display_resources(device, queue, desired_dw, desired_dh);
+
+        self.active_count = active_count;
         let vol_res      = self.vol_res;
         let dw           = self.disp_w;
         let dh           = self.disp_h;
@@ -1388,7 +1397,13 @@ impl Generator for FluidSimulation3DGenerator {
     }
 
     fn resize(&mut self, _device: &wgpu::Device, _width: u32, _height: u32) {
-        self.initialized = false;
+        // Invalidate display resources (output dimensions changed) but keep particles alive.
+        // Volume resources are also invalidated since display depends on output size.
+        // Unity: Resize only releases display RTs, not particle buffer.
+        self.display_accum      = None;
+        self.display_density_rt = None;
+        self.disp_w = 0;
+        self.disp_h = 0;
     }
 }
 
