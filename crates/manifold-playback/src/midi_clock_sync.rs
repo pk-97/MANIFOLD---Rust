@@ -8,31 +8,70 @@
 //! midir provides raw MIDI byte access — same CoreMIDI backend on macOS, ALSA on Linux.
 
 use std::sync::Arc;
-use parking_lot::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use manifold_core::types::ClockAuthority;
 
 use crate::sync::{SyncArbiter, SyncArbiterTarget, SyncTarget};
 use crate::sync_source::SyncSource;
 
-// ── MidiClockState ────────────────────────────────────────────────────────────
+// ── MidiClockState (lock-free, packed into AtomicU64) ─────────────────────────
 
-/// Thread-safe MIDI clock state shared between midir callback and main thread.
-/// Replaces the fields polled from Unity's native MidiClock_Update() P/Invoke.
-#[derive(Default)]
+/// Lock-free MIDI clock state shared between midir callback and main thread.
+/// Packed into a single u64 for atomic read-modify-write without locks.
+///
+/// Layout (64 bits):
+///   bits  0..31  position_sixteenths (i32, stored as u32)
+///   bits 32..47  clock_tick (i16, stored as u16, only uses 0-5)
+///   bit  48      is_playing
+///   bit  49      has_received_clock
+struct AtomicClockState(AtomicU64);
+
+/// Unpacked snapshot of MIDI clock state.
+#[derive(Clone, Copy, Default)]
 struct MidiClockState {
-    /// Position in sixteenth notes (SPP base + accumulated clock ticks).
-    /// Equivalent to MidiClock.PositionSixteenths in Unity.
     position_sixteenths: i32,
-    /// Sub-sixteenth clock tick (0-5). 6 clock ticks = 1 sixteenth note.
-    /// Equivalent to MidiClock.ClockTick in Unity.
     clock_tick: i32,
-    /// Whether MIDI transport is playing (Start/Continue received, no Stop).
-    /// Equivalent to MidiClock.IsPlaying in Unity.
     is_playing: bool,
-    /// True after first clock/SPP/transport message is received.
-    /// Equivalent to MidiClock.HasReceivedClock in Unity.
     has_received_clock: bool,
+}
+
+impl MidiClockState {
+    fn pack(self) -> u64 {
+        let pos = self.position_sixteenths as u32 as u64;
+        let tick = (self.clock_tick as u16 as u64) << 32;
+        let playing = (self.is_playing as u64) << 48;
+        let received = (self.has_received_clock as u64) << 49;
+        pos | tick | playing | received
+    }
+
+    fn unpack(bits: u64) -> Self {
+        Self {
+            position_sixteenths: bits as u32 as i32,
+            clock_tick: ((bits >> 32) & 0xFFFF) as i32,
+            is_playing: (bits >> 48) & 1 != 0,
+            has_received_clock: (bits >> 49) & 1 != 0,
+        }
+    }
+}
+
+impl AtomicClockState {
+    fn new() -> Self {
+        Self(AtomicU64::new(MidiClockState::default().pack()))
+    }
+
+    /// Atomically read the current state.
+    fn load(&self) -> MidiClockState {
+        MidiClockState::unpack(self.0.load(Ordering::Acquire))
+    }
+
+    /// Atomically update the state via a closure (CAS loop).
+    /// The closure receives the current state and returns the new state.
+    fn update(&self, f: impl Fn(MidiClockState) -> MidiClockState) {
+        let _ = self.0.fetch_update(Ordering::Release, Ordering::Acquire, |bits| {
+            Some(f(MidiClockState::unpack(bits)).pack())
+        });
+    }
 }
 
 
@@ -45,15 +84,18 @@ struct MidiClockState {
 /// PositionSixteenths + ClockTick from 0xF8 ticks and 0xF2 SPP. midir delivers
 /// raw bytes — we reconstruct the same fields in the callback.
 /// See docs/KNOWN_DIVERGENCES.md.
+///
+/// LOCK-FREE: State is packed into AtomicU64, updated via CAS in the midir
+/// callback. No Mutex — the OS MIDI thread never blocks.
 struct MidiClockReceiver {
-    state: Arc<Mutex<MidiClockState>>,
-    connection: Option<midir::MidiInputConnection<Arc<Mutex<MidiClockState>>>>,
+    state: Arc<AtomicClockState>,
+    connection: Option<midir::MidiInputConnection<Arc<AtomicClockState>>>,
 }
 
 impl MidiClockReceiver {
     fn new() -> Self {
         Self {
-            state: Arc::new(Mutex::new(MidiClockState::default())),
+            state: Arc::new(AtomicClockState::new()),
             connection: None,
         }
     }
@@ -87,50 +129,63 @@ impl MidiClockReceiver {
         let connection = match midi_in.connect(
             port,
             "manifold-clock-conn",
-            move |_timestamp_us: u64, message: &[u8], state_arc: &mut Arc<Mutex<MidiClockState>>| {
+            move |_timestamp_us: u64, message: &[u8], state_arc: &mut Arc<AtomicClockState>| {
                 if message.is_empty() {
                     return;
                 }
 
                 let status = message[0];
-                let mut state = state_arc.lock();
 
                 match status {
                     // Timing Clock — 24 per quarter note, 6 per sixteenth.
                     0xF8 => {
-                        state.clock_tick += 1;
-                        if state.clock_tick >= 6 {
-                            state.clock_tick = 0;
-                            state.position_sixteenths += 1;
-                        }
-                        state.has_received_clock = true;
+                        state_arc.update(|mut s| {
+                            s.clock_tick += 1;
+                            if s.clock_tick >= 6 {
+                                s.clock_tick = 0;
+                                s.position_sixteenths += 1;
+                            }
+                            s.has_received_clock = true;
+                            s
+                        });
                     }
                     // Start — reset position to 0.
                     0xFA => {
-                        state.is_playing = true;
-                        state.position_sixteenths = 0;
-                        state.clock_tick = 0;
-                        state.has_received_clock = true;
+                        state_arc.update(|mut s| {
+                            s.is_playing = true;
+                            s.position_sixteenths = 0;
+                            s.clock_tick = 0;
+                            s.has_received_clock = true;
+                            s
+                        });
                     }
                     // Continue — resume without resetting position.
                     0xFB => {
-                        state.is_playing = true;
-                        state.has_received_clock = true;
+                        state_arc.update(|mut s| {
+                            s.is_playing = true;
+                            s.has_received_clock = true;
+                            s
+                        });
                     }
                     // Stop.
                     0xFC => {
-                        state.is_playing = false;
-                        state.has_received_clock = true;
+                        state_arc.update(|mut s| {
+                            s.is_playing = false;
+                            s.has_received_clock = true;
+                            s
+                        });
                     }
                     // Song Position Pointer — 2 data bytes: LSB, MSB.
                     0xF2 if message.len() >= 3 => {
-                        // SPP is in MIDI beats (sixteenth notes).
-                        // position_sixteenths = MSB<<7 | LSB.
                         let lsb = message[1] as i32;
                         let msb = message[2] as i32;
-                        state.position_sixteenths = (msb << 7) | lsb;
-                        state.clock_tick = 0;
-                        state.has_received_clock = true;
+                        let pos = (msb << 7) | lsb;
+                        state_arc.update(|mut s| {
+                            s.position_sixteenths = pos;
+                            s.clock_tick = 0;
+                            s.has_received_clock = true;
+                            s
+                        });
                     }
                     _ => {}
                 }
@@ -155,17 +210,12 @@ impl MidiClockReceiver {
         log::info!("[MidiClockSync] midir clock receiver disconnected");
     }
 
-    /// Snapshot current state from the shared Arc.
+    /// Snapshot current state — lock-free atomic read.
     /// Equivalent to MidiClock_Update() P/Invoke in Unity.
     /// Returns (position_sixteenths, clock_tick, is_playing, has_received_clock).
     fn update_state(&self) -> (i32, i32, bool, bool) {
-        let state = self.state.lock();
-        (
-            state.position_sixteenths,
-            state.clock_tick,
-            state.is_playing,
-            state.has_received_clock,
-        )
+        let s = self.state.load();
+        (s.position_sixteenths, s.clock_tick, s.is_playing, s.has_received_clock)
     }
 
     /// Number of available MIDI input ports.

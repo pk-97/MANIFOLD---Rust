@@ -87,11 +87,10 @@ pub(super) fn dispatch_inspector(
 
         // ── Layer chrome ───────────────────────────────────────────
         PanelAction::LayerOpacitySnapshot => {
-            if let Some(idx) = *active_layer {
-                if let Some(layer) = project.timeline.layers.get(idx) {
+            if let Some(idx) = *active_layer
+                && let Some(layer) = project.timeline.layers.get(idx) {
                     *drag_snapshot = Some(layer.opacity);
                 }
-            }
             DispatchResult::handled()
         }
         PanelAction::LayerOpacityChanged(val) => {
@@ -111,15 +110,14 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::LayerOpacityCommit => {
             if let Some(old_val) = drag_snapshot.take()
-                && let Some(idx) = *active_layer {
-                    if let Some(layer) = project.timeline.layers.get(idx) {
+                && let Some(idx) = *active_layer
+                    && let Some(layer) = project.timeline.layers.get(idx) {
                         let new_val = layer.opacity;
                         if (old_val - new_val).abs() > f32::EPSILON {
                             let cmd = ChangeLayerOpacityCommand::new(idx, old_val, new_val);
                             let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
-                }
             DispatchResult::handled()
         }
         PanelAction::LayerChromeCollapseToggle => {
@@ -127,8 +125,8 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::LayerOpacityRightClick => {
-            if let Some(idx) = *active_layer {
-                if let Some(layer) = project.timeline.layers.get_mut(idx) {
+            if let Some(idx) = *active_layer
+                && let Some(layer) = project.timeline.layers.get_mut(idx) {
                     let old = layer.opacity;
                     if (old - 1.0).abs() > f32::EPSILON {
                         layer.opacity = 1.0;
@@ -136,7 +134,6 @@ pub(super) fn dispatch_inspector(
                         let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                     }
                 }
-            }
             DispatchResult::handled()
         }
 
@@ -163,11 +160,10 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::ClipSlipSnapshot => {
-            if let Some(clip_id) = &selection.primary_selected_clip_id {
-                if let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
+            if let Some(clip_id) = &selection.primary_selected_clip_id
+                && let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
                     *drag_snapshot = Some(clip.in_point);
                 }
-            }
             DispatchResult::handled()
         }
         PanelAction::ClipSlipChanged(val) => {
@@ -200,11 +196,10 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::ClipLoopSnapshot => {
-            if let Some(clip_id) = &selection.primary_selected_clip_id {
-                if let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
+            if let Some(clip_id) = &selection.primary_selected_clip_id
+                && let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
                     *drag_snapshot = Some(clip.loop_duration_beats);
                 }
-            }
             DispatchResult::handled()
         }
         PanelAction::ClipLoopChanged(val) => {
@@ -890,12 +885,11 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
         PanelAction::GenParamSnapshot(param_idx) => {
-            if let Some(layer_idx) = *active_layer {
-                if let Some(layer) = project.timeline.layers.get(layer_idx)
+            if let Some(layer_idx) = *active_layer
+                && let Some(layer) = project.timeline.layers.get(layer_idx)
                     && let Some(gp) = &layer.gen_params {
                         *drag_snapshot = Some(gp.get_param_base(*param_idx));
                     }
-            }
             DispatchResult::handled()
         }
         PanelAction::GenParamChanged(param_idx, val) => {
@@ -918,8 +912,8 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::GenParamCommit(param_idx) => {
             if let Some(old_val) = drag_snapshot.take()
-                && let Some(layer_idx) = *active_layer {
-                    if let Some(layer) = project.timeline.layers.get(layer_idx)
+                && let Some(layer_idx) = *active_layer
+                    && let Some(layer) = project.timeline.layers.get(layer_idx)
                         && let Some(gp) = &layer.gen_params {
                             let new_val = gp.get_param_base(*param_idx);
                             if (old_val - new_val).abs() > f32::EPSILON {
@@ -936,22 +930,20 @@ pub(super) fn dispatch_inspector(
                                 let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                             }
                         }
-                }
             DispatchResult::handled()
         }
         PanelAction::GenParamToggle(param_idx) => {
-            if let Some(layer_idx) = *active_layer {
-                if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
+            if let Some(layer_idx) = *active_layer
+                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = &mut layer.gen_params {
                         let cur = gp.get_param_base(*param_idx);
                         gp.set_param_base(*param_idx, if cur > 0.5 { 0.0 } else { 1.0 });
                     }
-            }
             DispatchResult::handled()
         }
         PanelAction::GenParamRightClick(param_idx, default_val) => {
-            if let Some(layer_idx) = *active_layer {
-                if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
+            if let Some(layer_idx) = *active_layer
+                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = &mut layer.gen_params {
                         let old = gp.get_param_base(*param_idx);
                         if (old - *default_val).abs() > f32::EPSILON {
@@ -967,7 +959,6 @@ pub(super) fn dispatch_inspector(
                             let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
-            }
             DispatchResult::handled()
         }
 
@@ -1004,8 +995,8 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::GenEnvelopeToggle(pi) => {
-            if let Some(layer_idx) = *active_layer {
-                if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
+            if let Some(layer_idx) = *active_layer
+                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = &mut layer.gen_params {
                         let envs = gp.envelopes.get_or_insert_with(Vec::new);
                         let env_idx = envs.iter().position(|e| e.param_index == *pi as i32);
@@ -1025,7 +1016,6 @@ pub(super) fn dispatch_inspector(
                             });
                         }
                     }
-            }
             DispatchResult::structural()
         }
         PanelAction::GenDriverConfig(pi, cfg) => {
