@@ -84,7 +84,7 @@ impl FrameTimer {
         let elapsed = (now - self.fps_sample_start).as_secs_f64();
         if elapsed >= FPS_SAMPLE_INTERVAL {
             self.current_fps = self.fps_frame_count as f64 / elapsed;
-            log::info!("FPS: {:.1}", self.current_fps);
+            log::debug!("FPS: {:.1}", self.current_fps);
             self.fps_sample_start = now;
             self.fps_frame_count = 0;
         }
