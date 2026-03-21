@@ -7,6 +7,8 @@ mod dialog_path_memory;
 mod editing_host;
 mod frame_timer;
 mod input_handler;
+#[cfg(target_os = "macos")]
+mod shared_texture;
 mod input_host;
 mod project_io;
 mod text_input;

@@ -71,9 +71,15 @@ pub struct ContentPipeline {
     /// Content frame rate tracking (for separate cadence mode).
     content_interval_secs: f64,
     last_content_time: f64,
-    /// Shared output view for cross-thread access. The UI thread holds an Arc
-    /// to this and reads the front buffer view for blitting.
+    /// Shared output view for cross-thread access (fallback for non-macOS).
     shared_output: Arc<SharedOutputView>,
+    /// IOSurface-backed texture on the content device. Compositor output is
+    /// copied here; the UI device reads the same GPU memory via its own texture.
+    #[cfg(target_os = "macos")]
+    shared_texture: Option<wgpu::Texture>,
+    /// IOSurface bridge for signaling frame completion.
+    #[cfg(target_os = "macos")]
+    shared_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
 }
 
 impl ContentPipeline {
@@ -86,7 +92,23 @@ impl ContentPipeline {
             content_interval_secs: 1.0 / 60.0,
             last_content_time: 0.0,
             shared_output: shared,
+            #[cfg(target_os = "macos")]
+            shared_texture: None,
+            #[cfg(target_os = "macos")]
+            shared_bridge: None,
         }
+    }
+
+    /// Set the IOSurface shared texture and bridge. Called during init after
+    /// the bridge imports a texture on the content device.
+    #[cfg(target_os = "macos")]
+    pub fn set_shared_texture(
+        &mut self,
+        texture: wgpu::Texture,
+        bridge: Arc<crate::shared_texture::SharedTextureBridge>,
+    ) {
+        self.shared_texture = Some(texture);
+        self.shared_bridge = Some(bridge);
     }
 
     /// Get a clone of the shared output handle. The UI thread holds this
@@ -233,13 +255,45 @@ impl ContentPipeline {
             copy_size,
         );
 
-        // Submit all GPU work (generators + compositor + texture copy)
+        // Copy compositor output → IOSurface shared texture (zero-copy GPU memory).
+        // The UI device reads the same IOSurface memory via its own imported texture.
+        #[cfg(target_os = "macos")]
+        if let Some(ref shared_tex) = self.shared_texture {
+            let shared_copy_size = wgpu::Extent3d {
+                width: comp_w,
+                height: comp_h,
+                depth_or_array_layers: 1,
+            };
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: self.compositor.output_texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: shared_tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                shared_copy_size,
+            );
+        }
+
+        // Signal the shared event so the UI device knows this frame is ready.
+        #[cfg(target_os = "macos")]
+        if let Some(ref bridge) = self.shared_bridge {
+            unsafe { bridge.signal_from_encoder(&mut encoder); }
+        }
+
+        // Submit all GPU work (generators + compositor + copies + signal)
         gpu.queue.submit(std::iter::once(encoder.finish()));
 
         // Swap: back becomes front
         self.front_index = back_index;
 
-        // Update shared output view for the UI thread (zero copy — same device)
+        // Update shared output view (fallback for non-macOS / debugging)
         let bufs = self.output_buffers.as_ref().unwrap();
         let front_view = bufs[self.front_index].texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.shared_output.set_view(front_view);

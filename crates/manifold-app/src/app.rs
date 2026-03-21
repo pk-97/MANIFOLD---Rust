@@ -95,10 +95,21 @@ pub struct Application {
     target_snapshot: Option<f32>,
 
     // Rendering
-    /// Shared reference to the content pipeline's output texture.
-    /// Both threads share a single wgpu Device, so the TextureView is directly
-    /// usable by the UI thread — zero copy.
+    /// Shared reference to the content pipeline's output dimensions.
     content_pipeline_output: Option<Arc<crate::content_pipeline::SharedOutputView>>,
+    /// IOSurface bridge for cross-device texture sharing (macOS).
+    /// Content device writes compositor output to the IOSurface; UI device reads it.
+    #[cfg(target_os = "macos")]
+    shared_texture_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    /// UI-side wgpu::Texture imported from the IOSurface. Same GPU memory as
+    /// the content-side texture — zero copy.
+    #[cfg(target_os = "macos")]
+    ui_shared_texture: Option<wgpu::Texture>,
+    #[cfg(target_os = "macos")]
+    ui_shared_view: Option<wgpu::TextureView>,
+    /// Last frame counter seen from the bridge (to detect new frames).
+    #[cfg(target_os = "macos")]
+    last_bridge_frame: u64,
     blit_pipeline: Option<BlitPipeline>,
     output_blit_pipeline: Option<BlitPipeline>,
     output_blit_format: Option<wgpu::TextureFormat>,
@@ -197,6 +208,14 @@ impl Application {
             adsr_snapshot: None,
             target_snapshot: None,
             content_pipeline_output: None,
+            #[cfg(target_os = "macos")]
+            shared_texture_bridge: None,
+            #[cfg(target_os = "macos")]
+            ui_shared_texture: None,
+            #[cfg(target_os = "macos")]
+            ui_shared_view: None,
+            #[cfg(target_os = "macos")]
+            last_bridge_frame: 0,
             blit_pipeline: None,
             output_blit_pipeline: None,
             output_blit_format: None,
@@ -1338,12 +1357,24 @@ impl Application {
             None => return,
         };
 
-        // Present using SharedOutputView (zero copy — same device as content thread).
-        // Content thread swaps the front buffer atomically after each render.
-        let compositor_view = self.content_pipeline_output.as_ref()
-            .and_then(|shared| shared.get_view());
-        if let Some(ref view) = compositor_view {
-            self.present_all_windows(view);
+        // Present using IOSurface shared texture (dual device, zero GPU copy).
+        // The content thread writes to the IOSurface-backed texture on its device;
+        // the UI device reads the same GPU memory via its own imported texture.
+        #[cfg(target_os = "macos")]
+        {
+            let view = self.ui_shared_view.clone();
+            if let Some(ref v) = view {
+                self.present_all_windows(v);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            // Fallback: single-device SharedOutputView (non-macOS)
+            let compositor_view = self.content_pipeline_output.as_ref()
+                .and_then(|shared| shared.get_view());
+            if let Some(ref view) = compositor_view {
+                self.present_all_windows(view);
+            }
         }
 
         self.frame_count += 1;
@@ -1827,21 +1858,46 @@ impl ApplicationHandler for Application {
             }
         };
 
-        // Spawn content thread — shares the same GPU device (Arc<Device>, Arc<Queue>).
-        // Both threads submit to the same queue. The content thread's output textures
-        // are directly readable by the UI thread via SharedOutputView — zero copy.
+        // Spawn content thread with its OWN GPU device (separate queue for isolation).
+        // Compositor output is shared via IOSurface — zero copy, GPU-to-GPU.
         {
             let (cmd_tx, cmd_rx) = crossbeam_channel::bounded::<ContentCommand>(64);
             let (state_tx, state_rx) = crossbeam_channel::bounded::<ContentState>(4);
+
+            // Create a secondary GPU device for the content thread.
+            // Same adapter, independent queue — heavy compute can't block UI rendering.
+            let content_gpu = pollster::block_on(gpu.create_secondary_device("Content Device"));
 
             let output_w = self.local_project.settings.output_width.max(1) as u32;
             let output_h = self.local_project.settings.output_height.max(1) as u32;
             let compositor_format = wgpu::TextureFormat::Rgba16Float;
 
+            // Create IOSurface bridge for cross-device texture sharing.
+            // Both devices get their own MTLTexture backed by the same IOSurface memory.
+            #[cfg(target_os = "macos")]
+            {
+                let raw_device = unsafe {
+                    gpu.device
+                        .as_hal::<wgpu_hal::api::Metal>()
+                        .expect("Not Metal backend")
+                        .raw_device()
+                        .clone()
+                };
+                let bridge = crate::shared_texture::SharedTextureBridge::new(
+                    &raw_device, output_w, output_h,
+                );
+                let bridge = Arc::new(bridge);
+                // Import the IOSurface texture on the UI device
+                let ui_tex = unsafe { bridge.import_texture(&gpu.device) };
+                self.ui_shared_view = Some(ui_tex.create_view(&wgpu::TextureViewDescriptor::default()));
+                self.ui_shared_texture = Some(ui_tex);
+                self.shared_texture_bridge = Some(Arc::clone(&bridge));
+            }
+
             let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
                 Box::new(StubRenderer::new_video()),
                 Box::new(GeneratorRenderer::new(
-                    Arc::clone(&gpu.device),
+                    Arc::clone(&content_gpu.device),
                     output_w,
                     output_h,
                     compositor_format,
@@ -1851,9 +1907,15 @@ impl ApplicationHandler for Application {
             let mut engine = PlaybackEngine::new(renderers);
             engine.initialize(self.local_project.clone());
 
-            let content_pipeline = crate::content_pipeline::ContentPipeline::new(
-                Box::new(LayerCompositor::new(&gpu.device, &gpu.queue, output_w, output_h)),
+            let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(
+                Box::new(LayerCompositor::new(&content_gpu.device, &content_gpu.queue, output_w, output_h)),
             );
+            // Give the content pipeline the IOSurface bridge so it can copy output + signal.
+            #[cfg(target_os = "macos")]
+            if let Some(ref bridge) = self.shared_texture_bridge {
+                let content_tex = unsafe { bridge.import_texture(&*content_gpu.device) };
+                content_pipeline.set_shared_texture(content_tex, Arc::clone(bridge));
+            }
             self.content_pipeline_output = Some(content_pipeline.shared_output());
 
             let audio_sync = match ImportedAudioSyncController::new() {
@@ -1883,8 +1945,8 @@ impl ApplicationHandler for Application {
                 gpu: GpuContext {
                     instance: gpu.instance.clone(),
                     adapter: gpu.adapter.clone(),
-                    device: Arc::clone(&gpu.device),
-                    queue: Arc::clone(&gpu.queue),
+                    device: content_gpu.device,
+                    queue: content_gpu.queue,
                 },
                 frame_count: 0,
                 time_since_start: 0.0,
@@ -1904,7 +1966,7 @@ impl ApplicationHandler for Application {
             self.content_tx = Some(cmd_tx);
             self.state_rx = Some(state_rx);
             self.content_thread_handle = Some(handle);
-            log::info!("[ContentThread] spawned (shared device)");
+            log::info!("[ContentThread] spawned (dual device + IOSurface bridge)");
         }
 
         self.gpu = Some(gpu);

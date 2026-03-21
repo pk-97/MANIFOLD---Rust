@@ -23,3 +23,13 @@ rfd = "0.15"
 serde = { workspace = true }
 serde_json = { workspace = true }
 crossbeam-channel = "0.5"
+
+# IOSurface bridge for cross-device GPU texture sharing (macOS)
+[target.'cfg(target_os = "macos")'.dependencies]
+io-surface = "0.16"
+metal = "0.33"
+objc = "0.2"
+foreign-types = "0.5"
+core-foundation = "0.10"
+wgpu-hal = "28"
+wgpu-types = "28"
