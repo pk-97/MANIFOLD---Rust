@@ -270,9 +270,7 @@ pub fn dispatch(
                     DialogContext::PercussionImport, &path_str, user_prefs,
                 );
                 // Send percussion import request to content thread
-                let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |_p| {
-                    log::info!("[Percussion] Import requested for: {}", path_str);
-                })));
+                let _ = content_tx.try_send(ContentCommand::PercussionImport(path_str));
             }
             DispatchResult::handled()
         }
@@ -2282,9 +2280,7 @@ pub fn dispatch(
                     DialogContext::PercussionImport, &path_str, user_prefs,
                 );
                 // Send percussion import request to content thread
-                let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |_p| {
-                    log::info!("[Percussion] Import requested for: {}", path_str);
-                })));
+                let _ = content_tx.try_send(ContentCommand::PercussionImport(path_str));
             }
             DispatchResult::handled()
         }

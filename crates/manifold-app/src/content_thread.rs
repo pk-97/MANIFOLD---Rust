@@ -170,8 +170,14 @@ impl ContentThread {
 
             // 8. Push state to UI
             let version = self.editing_service.data_version();
-            let snapshot = if version != self.last_data_version {
+            let version_changed = version != self.last_data_version;
+            if version_changed {
                 self.last_data_version = version;
+            }
+            // Send a project snapshot when data_version changes (editing commands)
+            // OR when modulation is active (LFO/envelope writes to param_values
+            // without bumping data_version — UI needs live modulated values).
+            let snapshot = if version_changed || tick_result.modulation_active {
                 self.engine.project().map(|p| Box::new(p.clone()))
             } else {
                 None
@@ -458,6 +464,22 @@ impl ContentThread {
                     let _ = result_tx.send(result.pasted_clip_ids);
                 } else {
                     let _ = result_tx.send(Vec::new());
+                }
+            }
+
+            // ── Percussion ────────────────────────────────────────
+            ContentCommand::PercussionImport(path) => {
+                let beat = self.engine.current_beat();
+                let beats_per_bar = self.engine.project()
+                    .map_or(4, |p| p.settings.time_signature_numerator.max(1));
+                if let Some(p) = self.engine.project_mut() {
+                    self.percussion_orchestrator.on_import_percussion_map(
+                        Some(path),
+                        p,
+                        &mut self.editing_service,
+                        beat,
+                        beats_per_bar,
+                    );
                 }
             }
 

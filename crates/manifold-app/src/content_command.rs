@@ -75,6 +75,11 @@ pub enum ContentCommand {
     /// the project through the provided oneshot sender.
     RequestProjectSnapshot(std::sync::mpsc::Sender<Project>),
 
+    // ── Percussion ─────────────────────────────────────────────────
+    /// Trigger percussion import pipeline with the selected audio/JSON file path.
+    /// Port of Unity: percussionImportController.OnImportPercussionMap(path).
+    PercussionImport(String),
+
     // ── Compositor ────────────────────────────────────────────────
     MarkCompositorDirty,
 
