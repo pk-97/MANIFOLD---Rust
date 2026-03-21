@@ -380,14 +380,17 @@ impl BrowserPopupPanel {
         for (fi, &src_idx) in self.filtered_indices.iter().enumerate() {
             let col = fi % self.columns;
             let row = fi / self.columns;
-            // Positions are relative to clip region origin
-            let cell_x = col as f32 * (CELL_WIDTH + CELL_SPACING);
-            let cell_y = row as f32 * (CELL_HEIGHT + CELL_SPACING) - self.scroll_offset;
+            // Relative Y for culling check (viewport-local)
+            let rel_y = row as f32 * (CELL_HEIGHT + CELL_SPACING) - self.scroll_offset;
 
             // Cull cells entirely outside viewport
-            if cell_y + CELL_HEIGHT < 0.0 || cell_y > vp_h {
+            if rel_y + CELL_HEIGHT < 0.0 || rel_y > vp_h {
                 continue;
             }
+
+            // Absolute positions — UITree uses screen coordinates for all nodes
+            let cell_x = cx + col as f32 * (CELL_WIDTH + CELL_SPACING);
+            let cell_y = vp_top + rel_y;
 
             // Category accent bar
             if src_idx < self.item_categories.len() && !self.item_categories[src_idx].is_empty() {
