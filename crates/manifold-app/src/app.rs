@@ -855,22 +855,32 @@ impl Application {
                 // Accept project snapshot if data_version changed (unless drag in progress)
                 if let Some(snapshot) = state.project_snapshot {
                     let drag_active = self.overlay.drag_mode() != manifold_ui::interaction_overlay::DragMode::None;
-                    // Also guard against inspector slider/param drags — these mutate
-                    // local_project directly during drag without sending commands.
-                    // Accepting a snapshot mid-drag would overwrite the drag value.
-                    let inspector_dragging = self.ui_root.inspector.is_dragging();
                     // Suppress snapshots until content thread catches up after a local project load.
                     let suppressed = state.data_version < self.suppress_snapshot_until;
 
-                    if !drag_active && !inspector_dragging && !suppressed {
+                    // Inspector drags (slider/trim/target/ADSR) are safe to accept
+                    // snapshots through — handle_drag() writes the dragged value back
+                    // to local_project in the same tick (via dispatch()), so the
+                    // snapshot value is immediately overwritten. Accepting snapshots
+                    // during inspector drag lets modulation-driven slider animations
+                    // continue for non-dragged params.
+                    //
+                    // Overlay drags (clip move/trim in viewport) write clip positions
+                    // directly via the host — those would be overwritten by the
+                    // snapshot, so we still suppress for overlay drags.
+                    if !drag_active && !suppressed {
+                        let version_changed = state.data_version != self.content_state.data_version;
                         self.local_project = *snapshot;
                         // Clear suppression once we've accepted a post-load snapshot
                         self.suppress_snapshot_until = 0;
-                        // Trigger structural sync so UI reflects authoritative state.
-                        // Critical for undo/redo (which only execute on the content
-                        // thread) and guards against stale-snapshot overwrites.
-                        self.needs_structural_sync = true;
-                        self.needs_rebuild = true;
+                        // Only trigger structural sync when data_version changed
+                        // (editing commands, undo/redo). Modulation-only snapshots
+                        // just update param_values — push_state() syncs sliders
+                        // every frame without needing a structural rebuild.
+                        if version_changed {
+                            self.needs_structural_sync = true;
+                            self.needs_rebuild = true;
+                        }
                     }
                 }
                 self.content_state = ContentState {
