@@ -549,6 +549,12 @@ impl TimelineViewportPanel {
         (px - self.tracks_rect.x) / self.mapper.pixels_per_beat() + self.scroll_x_beats
     }
 
+    /// Convert panel-local pixel X (0 = left edge of tracks area) to beat position.
+    /// Used by waveform/stem scrub where events are already offset to local coords.
+    pub fn local_pixel_to_beat(&self, local_px: f32) -> f32 {
+        local_px / self.mapper.pixels_per_beat() + self.scroll_x_beats
+    }
+
     /// Convert beat duration to pixel width.
     pub fn beat_duration_to_width(&self, beats: f32) -> f32 {
         self.mapper.beat_duration_to_width(beats)

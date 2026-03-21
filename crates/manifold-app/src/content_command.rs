@@ -96,6 +96,12 @@ pub enum ContentCommand {
     /// Trigger percussion import pipeline with the selected audio/JSON file path.
     /// Port of Unity: percussionImportController.OnImportPercussionMap(path).
     PercussionImport(String),
+    /// Re-analyze triggers for a specific instrument group (e.g. "drums", "bass").
+    /// Port of Unity: percussionImportController.OnReAnalyzeTriggers(instrumentGroup).
+    ReAnalyzeTriggers(String),
+    /// Re-import stems from current audio file (re-runs Demucs).
+    /// Port of Unity: percussionImportController.OnReImportStems().
+    ReImportStems,
 
     // ── Compositor ────────────────────────────────────────────────
     MarkCompositorDirty,
@@ -111,6 +117,20 @@ pub enum ContentCommand {
     PauseRendering,
     /// Resume rendering after a dialog closes.
     ResumeRendering,
+
+    // ── Profiling ────────────────────────────────────────────────
+    /// Start a profiling session on the content thread.
+    #[cfg(feature = "profiling")]
+    StartProfiling {
+        project_name: String,
+        project_path: String,
+        resolution: (u32, u32),
+        target_fps: f32,
+        gpu_name: String,
+    },
+    /// Stop profiling and dump session data to disk.
+    #[cfg(feature = "profiling")]
+    StopProfiling,
 
     // ── Shutdown ──────────────────────────────────────────────────
     Shutdown,

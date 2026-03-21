@@ -52,6 +52,8 @@ pub struct WaveformLanePanel {
     is_dragging: bool,
     accumulated_beats: f32,
     total_snapped_delta: f32,
+    /// Pre-drag audio_start_beat — captured on first DragDelta for undo.
+    drag_start_beat: Option<f32>,
 
     // ── Scrub handler state (ImportedAudioWaveformScrubHandler.cs) ──
     is_scrubbing: bool,
@@ -139,6 +141,7 @@ impl WaveformLanePanel {
             is_dragging: false,
             accumulated_beats: 0.0,
             total_snapped_delta: 0.0,
+            drag_start_beat: None,
             is_scrubbing: false,
             hovered_button: None,
             cached_waveform_x: f32::NAN,
@@ -580,6 +583,36 @@ impl WaveformLanePanel {
     /// True when the panel has an active scrub or drag in progress.
     pub fn is_interacting(&self) -> bool {
         self.is_scrubbing || self.is_dragging
+    }
+
+    /// Capture the pre-drag audio start beat for undo (first call only).
+    pub fn set_drag_start_beat(&mut self, beat: f32) {
+        if self.drag_start_beat.is_none() {
+            self.drag_start_beat = Some(beat);
+        }
+    }
+
+    /// Take and clear the pre-drag start beat (called on drag end).
+    pub fn take_drag_start_beat(&mut self) -> Option<f32> {
+        self.drag_start_beat.take()
+    }
+
+    /// Update button hover state from continuous cursor tracking.
+    /// Called by UIRoot on every PointerAction::Move when cursor is in the lane.
+    pub fn update_hover(&mut self, local_x: f32, local_y: f32) {
+        let new_hover = self.hit_test_button(local_x, local_y);
+        if new_hover != self.hovered_button {
+            self.hovered_button = new_hover;
+            self.dirty = true;
+        }
+    }
+
+    /// Clear hover state when cursor leaves the lane.
+    pub fn clear_hover(&mut self) {
+        if self.hovered_button.is_some() {
+            self.hovered_button = None;
+            self.dirty = true;
+        }
     }
 
     /// Current pixels per beat from cached mapper state.

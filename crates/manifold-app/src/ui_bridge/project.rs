@@ -173,18 +173,46 @@ pub(super) fn dispatch_project(
             ui.layout.stem_lanes_expanded = false;
             DispatchResult::structural()
         }
-        PanelAction::WaveformScrub(screen_x, _screen_y) => {
-            let beat = ui.viewport.pixel_to_beat(*screen_x).max(0.0);
+        PanelAction::WaveformScrub(local_x, _local_y) => {
+            // Events arrive in panel-local coords (offset by wf_rect.x in ui_root),
+            // so use local_pixel_to_beat which doesn't subtract tracks_rect.x again.
+            let beat = ui.viewport.local_pixel_to_beat(*local_x).max(0.0);
             let _ = content_tx.try_send(ContentCommand::SeekToBeat(beat));
             DispatchResult::handled()
         }
         PanelAction::WaveformDragDelta(delta_beats) => {
+            // Capture pre-drag state for undo (first delta only).
+            if let Some(state) = project.percussion_import.as_ref() {
+                ui.waveform_lane.set_drag_start_beat(state.audio_start_beat);
+            }
+            // Mutate local project copy (live preview).
             if let Some(state) = project.percussion_import.as_mut() {
                 state.audio_start_beat = (state.audio_start_beat + *delta_beats).max(0.0);
             }
+            // Sync to content thread so audio playback follows.
+            let db = *delta_beats;
+            let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                if let Some(state) = p.percussion_import.as_mut() {
+                    state.audio_start_beat = (state.audio_start_beat + db).max(0.0);
+                }
+            })));
             DispatchResult::handled()
         }
         PanelAction::WaveformDragEnd(_total_delta) => {
+            // Record undo command for the complete drag operation.
+            if let Some(old_start) = ui.waveform_lane.take_drag_start_beat() {
+                let new_start = project.percussion_import
+                    .as_ref()
+                    .map_or(0.0, |s| s.audio_start_beat);
+                if (new_start - old_start).abs() > 0.0001 {
+                    let cmd = manifold_editing::commands::settings::SetAudioStartBeatCommand::new(
+                        old_start, new_start,
+                    );
+                    // State already at new_start — send command for undo stack only.
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                    let _ = content_tx.try_send(ContentCommand::Execute(boxed));
+                }
+            }
             DispatchResult::handled()
         }
         PanelAction::ExpandStemsToggled(expanded) => {
@@ -220,23 +248,23 @@ pub(super) fn dispatch_project(
             DispatchResult::structural()
         }
         PanelAction::ReAnalyzeDrums => {
-            log::info!("[Percussion] Re-analyze drums requested");
+            let _ = content_tx.try_send(ContentCommand::ReAnalyzeTriggers("drums".into()));
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeBass => {
-            log::info!("[Percussion] Re-analyze bass requested");
+            let _ = content_tx.try_send(ContentCommand::ReAnalyzeTriggers("bass".into()));
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeSynth => {
-            log::info!("[Percussion] Re-analyze synth requested");
+            let _ = content_tx.try_send(ContentCommand::ReAnalyzeTriggers("synth".into()));
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeVocal => {
-            log::info!("[Percussion] Re-analyze vocal requested");
+            let _ = content_tx.try_send(ContentCommand::ReAnalyzeTriggers("vocal".into()));
             DispatchResult::handled()
         }
         PanelAction::ReImportStems => {
-            log::info!("[Percussion] Re-import stems requested");
+            let _ = content_tx.try_send(ContentCommand::ReImportStems);
             DispatchResult::handled()
         }
         PanelAction::StemMuteToggled(stem_index) => {

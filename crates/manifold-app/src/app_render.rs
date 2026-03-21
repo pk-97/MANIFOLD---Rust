@@ -115,6 +115,10 @@ impl Application {
                 self.ui_root.stem_lanes.set_mute_state(i, self.content_state.stem_muted[i]);
                 self.ui_root.stem_lanes.set_solo_state(i, self.content_state.stem_soloed[i]);
             }
+            // 1g. Sync stem availability — drives Expand button visibility on waveform lane.
+            // Port of Unity: WorkspaceController sets SetStemsAvailable after stem resolution.
+            let any_stem_available = self.content_state.stem_available.iter().any(|&a| a);
+            self.ui_root.waveform_lane.set_stems_available(any_stem_available);
         }
 
         // 2. Process UI events and dispatch actions
@@ -519,6 +523,8 @@ impl Application {
                 clock_source,
                 is_playing: self.content_state.is_playing,
                 data_version: self.content_state.data_version,
+                profiling_active: self.content_state.profiling_active,
+                profiling_frame_count: self.content_state.profiling_frame_count,
             });
         }
 

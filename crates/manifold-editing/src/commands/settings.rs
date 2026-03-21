@@ -552,3 +552,33 @@ impl Command for RescaleBeatsForBpmChangeCommand {
 
     fn description(&self) -> &str { "Rescale beats for BPM change" }
 }
+
+/// Undoable command for changing the imported audio start beat.
+/// Port of Unity SetImportedAudioCommand (audio_start_beat portion).
+#[derive(Debug)]
+pub struct SetAudioStartBeatCommand {
+    old_start_beat: f32,
+    new_start_beat: f32,
+}
+
+impl SetAudioStartBeatCommand {
+    pub fn new(old_start_beat: f32, new_start_beat: f32) -> Self {
+        Self { old_start_beat, new_start_beat }
+    }
+}
+
+impl Command for SetAudioStartBeatCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(state) = project.percussion_import.as_mut() {
+            state.audio_start_beat = self.new_start_beat;
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(state) = project.percussion_import.as_mut() {
+            state.audio_start_beat = self.old_start_beat;
+        }
+    }
+
+    fn description(&self) -> &str { "Drag audio start beat" }
+}

@@ -239,6 +239,18 @@ impl UIRoot {
         if action == PointerAction::Move {
             let mut hover_actions = self.viewport.update_hover_at(pos);
             self.cursor_hover_actions.append(&mut hover_actions);
+
+            // Update waveform button hover state on cursor move.
+            // Bitmap panels have no UITree nodes so HoverEnter/HoverExit won't fire
+            // for individual buttons — track hover directly on every pointer move.
+            if !self.waveform_lane.is_interacting() {
+                let wf_rect = self.viewport.waveform_lane_rect();
+                if wf_rect.width > 0.0 && wf_rect.height > 0.0 && wf_rect.contains(pos) {
+                    self.waveform_lane.update_hover(pos.x - wf_rect.x, pos.y - wf_rect.y);
+                } else {
+                    self.waveform_lane.clear_hover();
+                }
+            }
         }
     }
 

@@ -70,6 +70,11 @@ pub struct ContentThread {
     /// Link's cumulative beat counter keeps the offset valid across BPM changes.
     /// Port of C# PlaybackController.linkBeatOffset field (line 74).
     pub link_beat_offset: f64,
+
+    // ── Profiling ──
+    /// Active profiling session (only present when feature = "profiling").
+    #[cfg(feature = "profiling")]
+    pub profiler: Option<manifold_profiler::ProfileSession>,
 }
 
 impl ContentThread {
@@ -122,17 +127,30 @@ impl ContentThread {
             let realtime = self.timer.realtime_since_start();
             self.time_since_start = realtime as f32;
 
+            // Profiling: frame start timestamp
+            #[cfg(feature = "profiling")]
+            let _frame_start = std::time::Instant::now();
+
             // 3. Process MIDI input (before engine tick — matches Unity Update() ordering).
             // Drains hardware note events and routes them to ClipLauncher → LiveClipManager.
+            #[cfg(feature = "profiling")]
+            let _t0 = std::time::Instant::now();
+
             self.engine.tick_midi_input(
                 &mut self.midi_input,
                 &mut self.clip_launcher,
                 realtime,
             );
 
+            #[cfg(feature = "profiling")]
+            let _midi_input_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
             // 3b. Sync controller updates (before engine tick — Unity execution order -100).
             // Link, MidiClock, and OSC poll their sources and issue gated transport
             // commands via SyncArbiter. Snapshot read-only state before mutable borrows.
+            #[cfg(feature = "profiling")]
+            let _t0 = std::time::Instant::now();
+
             self.tick_sync_controllers();
 
             // 3c. External beat derivation + tempo recording/resolution.
@@ -145,7 +163,13 @@ impl ContentThread {
             self.update_recording_session_state(authority);
             self.apply_resolved_tempo(authority);
 
+            #[cfg(feature = "profiling")]
+            let _sync_controllers_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
             // 4. Tick engine
+            #[cfg(feature = "profiling")]
+            let _t0 = std::time::Instant::now();
+
             let ctx = TickContext {
                 dt_seconds: dt,
                 realtime_now: realtime,
@@ -190,19 +214,70 @@ impl ContentThread {
                 );
             }
 
+            #[cfg(feature = "profiling")]
+            let _engine_tick_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
             // 7. Render content
+            #[cfg(feature = "profiling")]
+            let _t0 = std::time::Instant::now();
+
             self.content_pipeline.render_content(
                 &self.gpu, &mut self.engine, &tick_result, dt, self.frame_count,
             );
 
+            #[cfg(feature = "profiling")]
+            let _render_content_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+            #[cfg(feature = "profiling")]
+            let _gpu_poll_ms = self.content_pipeline.last_gpu_poll_ms();
+
             // 7b. Clean up per-owner effect state for clips that stopped this tick.
             // Releases GPU textures/buffers (Feedback, Bloom, PixelSort, etc.)
             // to prevent unbounded GPU memory growth.
+            #[cfg(feature = "profiling")]
+            let _t0 = std::time::Instant::now();
+
             if !tick_result.stopped_clips.is_empty() {
                 self.content_pipeline.cleanup_stopped_clips(&tick_result.stopped_clips);
             }
 
+            #[cfg(feature = "profiling")]
+            let _cleanup_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
             self.frame_count += 1;
+
+            // Profiling: record frame data
+            #[cfg(feature = "profiling")]
+            if let Some(ref mut profiler) = self.profiler
+                && profiler.is_recording()
+            {
+                let frame_wall_ms = _frame_start.elapsed().as_secs_f64() * 1000.0;
+                let current_beat = self.engine.current_beat();
+                let time_sig = self.engine.project()
+                    .map_or(4, |p| p.settings.time_signature_numerator.max(1));
+                let bar = (current_beat / time_sig as f32).floor() as u32;
+                let budget_ms = 1000.0 / self.timer.target_fps();
+                let active_layers = self.engine.project()
+                    .map_or(0, |p| p.timeline.layers.len());
+
+                profiler.record_frame(manifold_profiler::FrameRecord {
+                    index: self.frame_count - 1,
+                    beat: current_beat,
+                    bar,
+                    wall_time_ms: frame_wall_ms,
+                    budget_exceeded: frame_wall_ms > budget_ms,
+                    content_thread: manifold_profiler::ContentTimings {
+                        total_ms: frame_wall_ms,
+                        midi_input_ms: _midi_input_ms,
+                        sync_controllers_ms: _sync_controllers_ms,
+                        engine_tick_ms: _engine_tick_ms,
+                        render_content_ms: _render_content_ms,
+                        gpu_poll_ms: _gpu_poll_ms,
+                        cleanup_ms: _cleanup_ms,
+                    },
+                    active_clips: tick_result.ready_clips.len(),
+                    active_layers,
+                });
+            }
 
             // 8. Push state to UI
             let version = self.editing_service.data_version();
@@ -273,6 +348,18 @@ impl ContentThread {
                 percussion_status_message: perc_msg,
                 percussion_progress: if perc_progress < 0.0 { 0.0 } else { perc_progress.clamp(0.0, 1.0) },
                 percussion_show_progress: perc_show,
+                profiling_active: {
+                    #[cfg(feature = "profiling")]
+                    { self.profiler.as_ref().is_some_and(|p| p.is_recording()) }
+                    #[cfg(not(feature = "profiling"))]
+                    { false }
+                },
+                profiling_frame_count: {
+                    #[cfg(feature = "profiling")]
+                    { self.profiler.as_ref().map_or(0, |p| p.frame_count()) }
+                    #[cfg(not(feature = "profiling"))]
+                    { 0 }
+                },
                 project_snapshot: snapshot,
             };
 
@@ -865,6 +952,19 @@ impl ContentThread {
                     );
                 }
             }
+            ContentCommand::ReAnalyzeTriggers(instrument_group) => {
+                if let Some(p) = self.engine.project_mut() {
+                    self.percussion_orchestrator.on_re_analyze_triggers(
+                        &instrument_group,
+                        p,
+                    );
+                }
+            }
+            ContentCommand::ReImportStems => {
+                if let Some(p) = self.engine.project_mut() {
+                    self.percussion_orchestrator.on_re_import_stems(p);
+                }
+            }
 
             // ── Compositor ─────────────────────────────────────────
             ContentCommand::MarkCompositorDirty => {
@@ -894,6 +994,35 @@ impl ContentThread {
             ContentCommand::ResumeRendering => {
                 self.rendering_paused = false;
                 log::info!("[ContentThread] rendering resumed");
+            }
+
+            // ── Profiling ────────────────────────────────────────────
+            #[cfg(feature = "profiling")]
+            ContentCommand::StartProfiling {
+                project_name, project_path, resolution, target_fps, gpu_name,
+            } => {
+                log::info!("[ContentThread] profiling session started");
+                self.profiler = Some(manifold_profiler::ProfileSession::new(
+                    project_name, project_path, resolution, target_fps, gpu_name,
+                ));
+            }
+            #[cfg(feature = "profiling")]
+            ContentCommand::StopProfiling => {
+                if let Some(ref mut profiler) = self.profiler {
+                    match profiler.stop_and_dump() {
+                        Ok(path) => {
+                            log::info!(
+                                "[ContentThread] profiling session saved: {} ({} frames)",
+                                path.display(),
+                                profiler.frame_count(),
+                            );
+                        }
+                        Err(e) => {
+                            log::error!("[ContentThread] profiling dump failed: {}", e);
+                        }
+                    }
+                }
+                self.profiler = None;
             }
         }
         false
