@@ -235,69 +235,79 @@ impl ContentPipeline {
         // Render compositor (records into encoder, returns view into tonemap output)
         let _compositor_view = self.compositor.render(&gpu.device, &gpu.queue, &mut encoder, &frame);
 
-        // Copy compositor tonemap output → back buffer via texture copy
-        let back_index = 1 - self.front_index;
-        let bufs = self.output_buffers.as_ref().unwrap();
         let (comp_w, comp_h) = self.compositor.dimensions();
-        let copy_size = wgpu::Extent3d {
-            width: comp_w.min(bufs[back_index].width),
-            height: comp_h.min(bufs[back_index].height),
-            depth_or_array_layers: 1,
-        };
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: self.compositor.output_texture(),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &bufs[back_index].texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            copy_size,
-        );
 
-        // Copy compositor output → IOSurface shared texture (zero-copy GPU memory).
-        // The UI device reads the same IOSurface memory via its own imported texture.
-        // Guard: only copy if shared texture dimensions match compositor output.
+        // Copy compositor output to the appropriate destination.
+        // macOS: IOSurface shared texture (UI reads via its own imported texture).
+        // Other: double-buffered output textures (UI reads via SharedOutputView).
         #[cfg(target_os = "macos")]
-        if let Some(ref shared_tex) = self.shared_texture {
-            if shared_tex.width() == comp_w && shared_tex.height() == comp_h {
-                encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: self.compositor.output_texture(),
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: shared_tex,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: comp_w,
-                        height: comp_h,
-                        depth_or_array_layers: 1,
-                    },
-                );
+        {
+            if let Some(ref shared_tex) = self.shared_texture {
+                if shared_tex.width() == comp_w && shared_tex.height() == comp_h {
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: self.compositor.output_texture(),
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: shared_tex,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: comp_w,
+                            height: comp_h,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
             }
         }
 
-        // Submit all GPU work (generators + compositor + copies)
+        #[cfg(not(target_os = "macos"))]
+        {
+            let back_index = 1 - self.front_index;
+            let bufs = self.output_buffers.as_ref().unwrap();
+            let copy_size = wgpu::Extent3d {
+                width: comp_w.min(bufs[back_index].width),
+                height: comp_h.min(bufs[back_index].height),
+                depth_or_array_layers: 1,
+            };
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: self.compositor.output_texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &bufs[back_index].texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                copy_size,
+            );
+        }
+
+        // Submit all GPU work (generators + compositor + copy)
         gpu.queue.submit(std::iter::once(encoder.finish()));
 
-        // Swap: back becomes front
-        self.front_index = back_index;
+        // Swap + update shared output view (non-macOS fallback path)
+        #[cfg(not(target_os = "macos"))]
+        {
+            let back_index = 1 - self.front_index;
+            self.front_index = back_index;
+            let bufs = self.output_buffers.as_ref().unwrap();
+            let front_view = bufs[self.front_index].texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.shared_output.set_view(front_view);
+        }
 
-        // Update shared output view (fallback for non-macOS / debugging)
-        let bufs = self.output_buffers.as_ref().unwrap();
-        let front_view = bufs[self.front_index].texture.create_view(&wgpu::TextureViewDescriptor::default());
-        self.shared_output.set_view(front_view);
+        // Update shared dimensions for UI aspect ratio
+        self.shared_output.set_dimensions(comp_w, comp_h);
     }
 
     /// The stable output texture view. UI reads this for blitting.
