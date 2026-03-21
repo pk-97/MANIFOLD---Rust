@@ -1,7 +1,7 @@
 // Mechanical port of Unity BloomFX.cs + BloomEffect.shader.
 // Same logic, same variables, same constants, same edge cases.
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
@@ -45,7 +45,7 @@ struct BloomState {
 // BloomFX.cs line 12 — BloomFX : SimpleBlitEffect, IStatefulEffect
 pub struct BloomFX {
     helper: DualTextureBlitHelper,
-    states: HashMap<i64, BloomState>,
+    states: AHashMap<i64, BloomState>,
     width: u32,  // BloomFX.cs line 17 — _width
     height: u32, // BloomFX.cs line 17 — _height
 }
@@ -59,7 +59,7 @@ impl BloomFX {
                 "Bloom",
                 std::mem::size_of::<BloomUniforms>() as u64,
             ),
-            states: HashMap::new(),
+            states: AHashMap::new(),
             width: 0,
             height: 0,
         }

@@ -526,7 +526,7 @@ pub(crate) fn check_driver_config_click(
     driver_config_ids: &[Option<DriverConfigIds>],
 ) -> Option<(usize, DriverClickResult)> {
     for (pi, cfg) in driver_config_ids.iter().enumerate() {
-        if let Some(ref c) = cfg {
+        if let Some(c) = cfg {
             for (j, &bid) in c.beat_div_btn_ids.iter().enumerate() {
                 if node_id == bid { return Some((pi, DriverClickResult::BeatDiv(j))); }
             }

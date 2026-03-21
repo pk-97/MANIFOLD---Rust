@@ -16,6 +16,7 @@ pub mod perf_hud;
 pub mod waveform_lane;
 pub mod stem_lane;
 
+use manifold_core::ClipId;
 use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
 use crate::tree::UITree;
@@ -212,7 +213,7 @@ pub enum PanelAction {
     RegionDragEnded,
     TrackClicked(f32, usize, Modifiers),           // beat, layer, modifiers
     TrackDoubleClicked(f32, usize),                // beat, layer (create clip)
-    ViewportHoverChanged(Option<String>),           // clip_id or None
+    ViewportHoverChanged(Option<ClipId>),           // clip_id or None
     ClipRightClicked(String),                        // clip_id (context menu)
     TrackRightClicked(f32, usize),                   // beat, layer (context menu)
 

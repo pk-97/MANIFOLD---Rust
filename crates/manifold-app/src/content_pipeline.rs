@@ -1,5 +1,6 @@
 #![allow(dead_code)]
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::types::BlendMode;
@@ -32,22 +33,22 @@ impl SharedOutputView {
 
     /// Read the current front buffer view (called by UI thread).
     pub fn get_view(&self) -> Option<wgpu::TextureView> {
-        self.view.read().unwrap().clone()
+        self.view.read().clone()
     }
 
     /// Update the front buffer view (called by content thread after swap).
     pub fn set_view(&self, view: wgpu::TextureView) {
-        *self.view.write().unwrap() = Some(view);
+        *self.view.write() = Some(view);
     }
 
     /// Update dimensions (called by content thread on resize).
     pub fn set_dimensions(&self, w: u32, h: u32) {
-        *self.dimensions.write().unwrap() = (w, h);
+        *self.dimensions.write() = (w, h);
     }
 
     /// Get current output dimensions (called by UI thread for aspect ratio).
     pub fn get_dimensions(&self) -> (u32, u32) {
-        *self.dimensions.read().unwrap()
+        *self.dimensions.read()
     }
 }
 
@@ -174,8 +175,8 @@ impl ContentPipeline {
 
         // Render generators via downcast (GPU rendering needs queue + encoder)
         for renderer in renderers.iter_mut() {
-            if let Some(gen) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
-                gen.render_all(&gpu.queue, &mut encoder, time, beat, dt as f32, layers);
+            if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
+                gen_renderer.render_all(&gpu.queue, &mut encoder, time, beat, dt as f32, layers);
                 break;
             }
         }
@@ -187,7 +188,7 @@ impl ContentPipeline {
         for clip in &tick_result.ready_clips {
             let texture_view = renderers.iter().find_map(|r| {
                 r.as_any().downcast_ref::<GeneratorRenderer>()
-                    .and_then(|gen| gen.get_clip_texture_view(&clip.id))
+                    .and_then(|gen_r| gen_r.get_clip_texture_view(&clip.id))
             });
             if let Some(view) = texture_view {
                 let layer = layers.get(clip.layer_index as usize);
@@ -253,8 +254,8 @@ impl ContentPipeline {
         // Other: double-buffered output textures (UI reads via SharedOutputView).
         #[cfg(target_os = "macos")]
         {
-            if let Some(ref shared_tex) = self.shared_texture {
-                if shared_tex.width() == comp_w && shared_tex.height() == comp_h {
+            if let Some(ref shared_tex) = self.shared_texture
+                && shared_tex.width() == comp_w && shared_tex.height() == comp_h {
                     encoder.copy_texture_to_texture(
                         wgpu::TexelCopyTextureInfo {
                             texture: self.compositor.output_texture(),
@@ -275,7 +276,6 @@ impl ContentPipeline {
                         },
                     );
                 }
-            }
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -361,8 +361,8 @@ impl ContentPipeline {
         // Resize generator renderer via engine downcast
         let (renderers, _) = engine.split_renderer_project();
         for renderer in renderers.iter_mut() {
-            if let Some(gen) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
-                gen.resize_gpu(width, height);
+            if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
+                gen_renderer.resize_gpu(width, height);
                 break;
             }
         }

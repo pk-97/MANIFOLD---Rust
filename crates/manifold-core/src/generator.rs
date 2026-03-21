@@ -57,11 +57,10 @@ impl GeneratorParamState {
     /// Read the user-set base value (before modulation).
     /// Unity GeneratorParamState.cs lines 64-69.
     pub fn get_param_base(&self, index: usize) -> f32 {
-        if let Some(base) = &self.base_param_values {
-            if index < base.len() {
+        if let Some(base) = &self.base_param_values
+            && index < base.len() {
                 return base[index];
             }
-        }
         self.get_param(index)
     }
 
@@ -78,11 +77,10 @@ impl GeneratorParamState {
                 let clamped = generator_definition_registry::clamp_param(
                     self.generator_type, index, value
                 );
-                if let Some(base) = &mut self.base_param_values {
-                    if index < base.len() {
+                if let Some(base) = &mut self.base_param_values
+                    && index < base.len() {
                         base[index] = clamped;
                     }
-                }
                 self.param_values[index] = clamped;
             }
         }

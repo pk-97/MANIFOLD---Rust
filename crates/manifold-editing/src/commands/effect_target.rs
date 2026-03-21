@@ -1,3 +1,4 @@
+use manifold_core::ClipId;
 use manifold_core::effects::{EffectInstance, EffectGroup};
 use manifold_core::project::Project;
 
@@ -5,7 +6,7 @@ use manifold_core::project::Project;
 /// Replaces C#'s `IList<EffectInstance>` parameter pattern.
 #[derive(Debug, Clone)]
 pub enum EffectTarget {
-    Clip { clip_id: String },
+    Clip { clip_id: ClipId },
     Layer { layer_index: usize },
     Master,
 }

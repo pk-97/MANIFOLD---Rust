@@ -545,33 +545,28 @@ impl LayerHeaderPanel {
     }
 
     pub fn set_layer_name(&mut self, tree: &mut UITree, index: usize, name: &str) {
-        if let Some(row) = self.rows.get(index) {
-            if row.name >= 0 { tree.set_text(row.name as u32, name); }
-        }
+        if let Some(row) = self.rows.get(index)
+            && row.name >= 0 { tree.set_text(row.name as u32, name); }
     }
 
     pub fn set_blend_mode_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index) {
-            if row.blend_mode >= 0 { tree.set_text(row.blend_mode as u32, text); }
-        }
+        if let Some(row) = self.rows.get(index)
+            && row.blend_mode >= 0 { tree.set_text(row.blend_mode as u32, text); }
     }
 
     pub fn set_midi_note_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index) {
-            if row.midi_input >= 0 { tree.set_text(row.midi_input as u32, text); }
-        }
+        if let Some(row) = self.rows.get(index)
+            && row.midi_input >= 0 { tree.set_text(row.midi_input as u32, text); }
     }
 
     pub fn set_midi_channel_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index) {
-            if row.ch_dropdown >= 0 { tree.set_text(row.ch_dropdown as u32, text); }
-        }
+        if let Some(row) = self.rows.get(index)
+            && row.ch_dropdown >= 0 { tree.set_text(row.ch_dropdown as u32, text); }
     }
 
     pub fn set_info_text(&mut self, tree: &mut UITree, index: usize, text: &str) {
-        if let Some(row) = self.rows.get(index) {
-            if row.info >= 0 { tree.set_text(row.info as u32, text); }
-        }
+        if let Some(row) = self.rows.get(index)
+            && row.info >= 0 { tree.set_text(row.info as u32, text); }
     }
 
     // ── Drag-reorder (separate from Panel trait — needs &mut UITree) ──
@@ -643,12 +638,11 @@ impl LayerHeaderPanel {
         self.hide_insert_indicator(tree);
 
         // Restore source layer appearance
-        if let Some(row) = self.rows.get(source) {
-            if row.bg >= 0 {
+        if let Some(row) = self.rows.get(source)
+            && row.bg >= 0 {
                 let selected = self.cached_selected.get(source).copied().unwrap_or(false);
                 tree.set_style(row.bg as u32, bg_style(selected));
             }
-        }
 
         if source != target {
             vec![PanelAction::LayerDragEnded(source, target)]

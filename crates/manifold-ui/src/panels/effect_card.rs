@@ -516,22 +516,20 @@ impl EffectCardPanel {
             ));
 
             // Trim handles (if driver expanded)
-            if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
-                if let Some(ref slider) = self.slider_ids[i] {
+            if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false)
+                && let Some(ref slider) = self.slider_ids[i] {
                     self.trim_ids[i] = Some(build_trim_handles(
                         tree, slider.track as i32, slider.track_rect, &self.state.mod_state, i,
                     ));
                 }
-            }
 
             // Envelope target (if envelope expanded)
-            if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
-                if let Some(ref slider) = self.slider_ids[i] {
+            if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false)
+                && let Some(ref slider) = self.slider_ids[i] {
                     self.target_ids[i] = Some(build_envelope_target(
                         tree, slider.track as i32, slider.track_rect, &self.state.mod_state, i,
                     ));
                 }
-            }
 
             // D/E buttons (right side of row)
             let btn_x = x + PADDING + slider_w + DE_BUTTON_GAP;
@@ -677,17 +675,16 @@ impl EffectCardPanel {
 
         // Check envelope target bars first (highest priority)
         for (pi, target) in self.target_ids.iter().enumerate() {
-            if let Some(ref t) = target {
-                if node_id as i32 == t.target_bar_id {
+            if let Some(t) = target
+                && node_id as i32 == t.target_bar_id {
                     self.drag.dragging_target_param = pi as i32;
                     return vec![PanelAction::EffectTargetSnapshot(ei, pi)];
                 }
-            }
         }
 
         // Check trim bars
         for (pi, trim) in self.trim_ids.iter().enumerate() {
-            if let Some(ref t) = trim {
+            if let Some(t) = trim {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_trim_param = pi as i32;
                     self.drag.dragging_trim_is_min = true;
@@ -703,7 +700,7 @@ impl EffectCardPanel {
 
         // Check ADSR slider tracks
         for (pi, env_cfg) in self.envelope_config_ids.iter().enumerate() {
-            if let Some(ref c) = env_cfg {
+            if let Some(c) = env_cfg {
                 if node_id == c.attack_slider.track {
                     self.drag.dragging_env_param = pi as i32;
                     self.drag.dragging_env_slot = 0;
@@ -737,18 +734,18 @@ impl EffectCardPanel {
         // Unity: same 4px bars but event system delivers to correct child; we
         // use a wider hit zone (8px each side) for robustness.
         for (pi, slider) in self.slider_ids.iter().enumerate() {
-            if let Some(ref ids) = slider {
-                if node_id == ids.track || {
+            if let Some(ids) = slider
+                && (node_id == ids.track || {
                     // Also accept clicks on trim bar / fill / target nodes that are children of this track
-                    self.trim_ids.get(pi).and_then(|t| t.as_ref()).map_or(false, |t|
+                    self.trim_ids.get(pi).and_then(|t| t.as_ref()).is_some_and(|t|
                         node_id as i32 == t.fill_id || node_id as i32 == t.min_bar_id || node_id as i32 == t.max_bar_id
-                    ) || self.target_ids.get(pi).and_then(|t| t.as_ref()).map_or(false, |t|
+                    ) || self.target_ids.get(pi).and_then(|t| t.as_ref()).is_some_and(|t|
                         node_id as i32 == t.target_bar_id
                     )
-                } {
+                }) {
                     // If driver is expanded, check proximity to trim handles before falling through to param drag
-                    if self.state.mod_state.driver_expanded.get(pi).copied().unwrap_or(false) {
-                        if let Some(ref trim) = self.trim_ids.get(pi).and_then(|t| t.as_ref()) {
+                    if self.state.mod_state.driver_expanded.get(pi).copied().unwrap_or(false)
+                        && let Some(ref trim) = self.trim_ids.get(pi).and_then(|t| t.as_ref()) {
                             let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
                             let base_x = ids.track_rect.x + OVERLAY_INSET;
                             let tmin = self.state.mod_state.trim_min.get(pi).copied().unwrap_or(0.0);
@@ -772,7 +769,6 @@ impl EffectCardPanel {
                                 return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
                             }
                         }
-                    }
 
                     // If envelope is expanded, check proximity to target bar before falling through
                     if self.state.mod_state.envelope_expanded.get(pi).copied().unwrap_or(false) {
@@ -799,7 +795,6 @@ impl EffectCardPanel {
                         PanelAction::EffectParamChanged(ei, pi, val),
                     ];
                 }
-            }
         }
 
         Vec::new()
@@ -811,14 +806,14 @@ impl EffectCardPanel {
         // Target bar drag — update state, reposition bar node, dispatch action
         if self.drag.dragging_target_param >= 0 {
             let pi = self.drag.dragging_target_param as usize;
-            if let Some(ref slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
+            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
                 if let Some(ref mut state) = self.state.mod_state.target_norm.get_mut(pi) {
                     **state = norm;
                 }
 
                 // Visual update: reposition target bar node in the tree
-                if let Some(ref t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
+                if let Some(t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
                     let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
                     let base_x = slider.track_rect.x + OVERLAY_INSET;
                     let bar_x = base_x + norm * usable - TARGET_BAR_W * 0.5;
@@ -836,7 +831,7 @@ impl EffectCardPanel {
         // Trim bar drag — update state, reposition bar nodes, dispatch action
         if self.drag.dragging_trim_param >= 0 {
             let pi = self.drag.dragging_trim_param as usize;
-            if let Some(ref slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
+            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
                 let tmin = self.state.mod_state.trim_min.get(pi).copied().unwrap_or(0.0);
                 let tmax = self.state.mod_state.trim_max.get(pi).copied().unwrap_or(1.0);
@@ -849,7 +844,7 @@ impl EffectCardPanel {
                 if let Some(v) = self.state.mod_state.trim_max.get_mut(pi) { *v = new_max; }
 
                 // Visual update: reposition trim bar nodes in the tree
-                if let Some(ref t) = self.trim_ids.get(pi).and_then(|t| t.as_ref()) {
+                if let Some(t) = self.trim_ids.get(pi).and_then(|t| t.as_ref()) {
                     let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
                     let base_x = slider.track_rect.x + OVERLAY_INSET;
                     let fill_x = base_x + new_min * usable;
@@ -875,7 +870,7 @@ impl EffectCardPanel {
         // ADSR drag
         if self.drag.dragging_env_param >= 0 {
             let pi = self.drag.dragging_env_param as usize;
-            if let Some(ref cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref()) {
+            if let Some(cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref()) {
                 let (slider, param, max) = match self.drag.dragging_env_slot {
                     0 => (&cfg.attack_slider, EnvelopeParam::Attack, ENV_ADR_MAX),
                     1 => (&cfg.decay_slider, EnvelopeParam::Decay, ENV_ADR_MAX),
@@ -893,7 +888,7 @@ impl EffectCardPanel {
         // Param slider drag
         if self.drag.dragging_param >= 0 {
             let pi = self.drag.dragging_param as usize;
-            if let Some(ref ids) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
+            if let Some(ids) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let info = &self.param_info[pi];
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
@@ -938,12 +933,11 @@ impl EffectCardPanel {
     pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
         let ei = self.effect_index;
         for (pi, slider) in self.slider_ids.iter().enumerate() {
-            if let Some(ref ids) = slider {
-                if node_id == ids.track {
+            if let Some(ids) = slider
+                && node_id == ids.track {
                     let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
                     return vec![PanelAction::EffectParamRightClick(ei, pi, default)];
                 }
-            }
         }
         Vec::new()
     }

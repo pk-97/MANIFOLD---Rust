@@ -236,7 +236,7 @@ fn parse_trigger_type(raw_type: &str) -> PercussionTriggerType {
 
 // ─── FirstNonEmpty ───
 
-fn first_non_empty<'a>(values: &[&'a str]) -> String {
+fn first_non_empty(values: &[&str]) -> String {
     for &v in values {
         if !v.trim().is_empty() {
             return v.to_string();
@@ -289,8 +289,8 @@ fn parse_beat_grid(root: &RootDto) -> (Option<PercussionBeatGrid>, f32, f32) {
     let grid_confidence =
         first_finite_non_negative(&[dto.confidence, dto.bpm_confidence, dto.tempo_confidence]);
     let mode = {
-        let m = first_non_empty(&[dto.mode.as_deref().unwrap_or(""), "beat_times"]);
-        m
+        
+        first_non_empty(&[dto.mode.as_deref().unwrap_or(""), "beat_times"])
     };
     let onset_to_peak = first_finite_non_negative(&[dto.onset_to_peak_seconds]);
 
@@ -347,23 +347,13 @@ fn convert_non_negative(values: Option<&[i32]>) -> Vec<i32> {
 // ─── FirstNonEmptyArray (float overload) ───
 
 fn first_non_empty_float_array<'a>(arrays: &[&'a [f32]]) -> Option<&'a [f32]> {
-    for &arr in arrays {
-        if !arr.is_empty() {
-            return Some(arr);
-        }
-    }
-    None
+    arrays.iter().find(|&&arr| !arr.is_empty()).copied().map(|v| v as _)
 }
 
 // ─── FirstNonEmptyArray (int overload) ───
 
 fn first_non_empty_int_array<'a>(arrays: &[&'a [i32]]) -> Option<&'a [i32]> {
-    for &arr in arrays {
-        if !arr.is_empty() {
-            return Some(arr);
-        }
-    }
-    None
+    arrays.iter().find(|&&arr| !arr.is_empty()).copied().map(|v| v as _)
 }
 
 // ─── DTOs ───

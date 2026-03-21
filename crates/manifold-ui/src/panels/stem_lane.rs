@@ -93,6 +93,12 @@ pub struct StemLaneGroupPanel {
     hovered_solo: bool,
 }
 
+impl Default for StemLaneGroupPanel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StemLaneGroupPanel {
     pub fn new() -> Self {
         Self {
@@ -280,8 +286,8 @@ impl StemLaneGroupPanel {
                     self.waveform_duration_beats_for_stem(i),
                 );
 
-                if stem_width > 0.0 {
-                    if let Some(level) = lane.renderer.select_level_for_zoom(stem_width, 1.0) {
+                if stem_width > 0.0
+                    && let Some(level) = lane.renderer.select_level_for_zoom(stem_width, 1.0) {
                         let draw_left = (waveform_x - self.scroll_offset_x) as i32;
                         let draw_right =
                             ((waveform_x + stem_width - self.scroll_offset_x) as i32)
@@ -304,7 +310,6 @@ impl StemLaneGroupPanel {
                             );
                         }
                     }
-                }
             }
 
             // Draw playhead

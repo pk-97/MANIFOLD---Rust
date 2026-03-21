@@ -4,8 +4,6 @@
 //! The content thread owns all authoritative state: the engine (which owns the
 //! project), the editing service (undo/redo), audio sync, percussion, and the
 //! GPU content pipeline (generators + compositor).
-
-
 use crossbeam_channel::{Receiver, Sender};
 
 use manifold_core::math::BeatQuantizer;
@@ -176,11 +174,10 @@ impl ContentThread {
             }
 
             // 5b. Stem audio sync (after master — matches Unity Update() ordering).
-            if let Some(ref mut stem_audio) = self.stem_audio {
-                if let Some(ref audio_sync) = self.audio_sync {
+            if let Some(ref mut stem_audio) = self.stem_audio
+                && let Some(ref audio_sync) = self.audio_sync {
                     stem_audio.update_sync(audio_sync, &self.engine);
                 }
-            }
 
             // 6. Percussion tick
             let beat = self.engine.current_beat();
@@ -352,25 +349,22 @@ impl ContentThread {
 
         match authority {
             ClockAuthority::Link => {
-                if let Some(ref link) = self.transport_controller.link_sync {
-                    if link.is_link_enabled()
+                if let Some(ref link) = self.transport_controller.link_sync
+                    && link.is_link_enabled()
                         && link.has_active_peers()
                         && !self.link_beat_offset.is_nan()
                     {
                         self.engine
                             .set_beat((link.current_beat - self.link_beat_offset) as f32);
                     }
-                }
             }
             ClockAuthority::MidiClock => {
-                if !self.sync_arbiter.manifold_owns_playback {
-                    if let Some(ref clk) = self.transport_controller.midi_clock_sync {
-                        if clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
+                if !self.sync_arbiter.manifold_owns_playback
+                    && let Some(ref clk) = self.transport_controller.midi_clock_sync
+                        && clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
                             self.engine.set_beat(clk.current_clock_beat());
                         }
                         // else: beat derived from time (engine handles this in advance_time)
-                    }
-                }
             }
             // ClockAuthority::Internal | Osc: beat derived from time (engine handles this)
             _ => {}
@@ -466,8 +460,8 @@ impl ContentThread {
 
         let mut tempo_map_changed = false;
 
-        if let Some(project) = self.engine.project_mut() {
-            if authority != ClockAuthority::Osc {
+        if let Some(project) = self.engine.project_mut()
+            && authority != ClockAuthority::Osc {
                 if should_record {
                     // Studio recording: append tempo automation points over time.
                     // Port of C# ApplyResolvedTempo lines 1117-1122.
@@ -502,7 +496,6 @@ impl ContentThread {
                     }
                 }
             }
-        }
 
         if tempo_map_changed {
             // Re-derive beat from time after tempo map change.
@@ -555,16 +548,13 @@ impl ContentThread {
                     .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
                 if authority == ClockAuthority::MidiClock
                     && !self.sync_arbiter.manifold_owns_playback
-                {
-                    if let Some(ref clk) = self.transport_controller.midi_clock_sync {
-                        if clk.is_midi_clock_enabled() {
+                    && let Some(ref clk) = self.transport_controller.midi_clock_sync
+                        && clk.is_midi_clock_enabled() {
                             let midi_beat = clk.current_clock_beat();
                             self.engine.set_beat(midi_beat);
                             let time = self.engine.beat_to_timeline_time(midi_beat);
                             self.engine.set_time(time.max(0.0) as f64);
                         }
-                    }
-                }
                 self.engine.play();
                 self.cache_link_beat_offset();
             }
@@ -589,16 +579,13 @@ impl ContentThread {
                         .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
                     if authority == ClockAuthority::MidiClock
                         && !self.sync_arbiter.manifold_owns_playback
-                    {
-                        if let Some(ref clk) = self.transport_controller.midi_clock_sync {
-                            if clk.is_midi_clock_enabled() {
+                        && let Some(ref clk) = self.transport_controller.midi_clock_sync
+                            && clk.is_midi_clock_enabled() {
                                 let midi_beat = clk.current_clock_beat();
                                 self.engine.set_beat(midi_beat);
                                 let time = self.engine.beat_to_timeline_time(midi_beat);
                                 self.engine.set_time(time.max(0.0) as f64);
                             }
-                        }
-                    }
                     self.engine.play();
                     self.cache_link_beat_offset();
                 }
@@ -635,7 +622,7 @@ impl ContentThread {
                     (p.settings.output_width, p.settings.output_height, p.settings.frame_rate)
                 });
                 if let Some(p) = self.engine.project_mut() {
-                    self.editing_service.undo(p);
+                    let _ = self.editing_service.undo(p);
                 }
                 self.engine.mark_compositor_dirty(0.0);
                 self.engine.mark_sync_dirty();
@@ -661,7 +648,7 @@ impl ContentThread {
                     (p.settings.output_width, p.settings.output_height, p.settings.frame_rate)
                 });
                 if let Some(p) = self.engine.project_mut() {
-                    self.editing_service.redo(p);
+                    let _ = self.editing_service.redo(p);
                 }
                 self.engine.mark_compositor_dirty(0.0);
                 self.engine.mark_sync_dirty();
@@ -768,11 +755,10 @@ impl ContentThread {
 
             // ── Audio ──────────────────────────────────────────────
             ContentCommand::AudioLoaded { preloaded, waveform: _ } => {
-                if let Some(ref mut audio_sync) = self.audio_sync {
-                    if let Err(e) = audio_sync.apply_preloaded(*preloaded) {
+                if let Some(ref mut audio_sync) = self.audio_sync
+                    && let Err(e) = audio_sync.apply_preloaded(*preloaded) {
                         log::warn!("[ContentThread] Failed to apply loaded audio: {}", e);
                     }
-                }
             }
             ContentCommand::ResetAudio => {
                 if let Some(ref mut audio_sync) = self.audio_sync {
@@ -790,8 +776,8 @@ impl ContentThread {
                 if let Some(ref mut stem) = self.stem_audio {
                     // Auto-load stems on first expand if paths available but not yet loaded.
                     // Port of Unity WorkspaceController.EnsureStemAudioController lazy init.
-                    if expand && !stem.stems_ready() {
-                        if let Some(stem_paths_vec) = self.engine.project()
+                    if expand && !stem.stems_ready()
+                        && let Some(stem_paths_vec) = self.engine.project()
                             .and_then(|p| p.percussion_import.as_ref())
                             .and_then(|perc| perc.stem_paths.as_ref())
                         {
@@ -803,7 +789,6 @@ impl ContentThread {
                             }
                             stem.load_stems(&paths);
                         }
-                    }
                     stem.set_expanded(expand, self.audio_sync.as_mut());
                 }
             }
@@ -883,10 +868,10 @@ impl ContentThread {
                 // Port of C# PlaybackController.NotifyGeneratorTypeChanged().
                 let (renderers, _) = self.engine.split_renderer_project();
                 for renderer in renderers.iter_mut() {
-                    if let Some(gen) = renderer.as_any_mut()
+                    if let Some(gen_renderer) = renderer.as_any_mut()
                         .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
                     {
-                        gen.update_active_types_for_layer(layer_index, new_type);
+                        gen_renderer.update_active_types_for_layer(layer_index, new_type);
                         break;
                     }
                 }

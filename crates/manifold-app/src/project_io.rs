@@ -330,15 +330,14 @@ impl ProjectIOService {
         // Route MIDI files separately (Unity lines 252-259)
         for raw_path in file_paths {
             let file_path = resolve_dropped_file_path(raw_path);
-            if let Some(ref fp) = file_path {
-                if fp.exists() && is_supported_midi_extension(fp) {
+            if let Some(ref fp) = file_path
+                && fp.exists() && is_supported_midi_extension(fp) {
                     let midi_action = self.process_dropped_midi_file(fp, drop_beat, drop_layer_index, project);
                     if midi_action.needs_clip_sync {
                         action.needs_clip_sync = true;
                     }
                     action.record_commands.extend(midi_action.record_commands);
                 }
-            }
         }
 
         // Process video files (Unity lines 261-326)
@@ -524,11 +523,10 @@ impl ProjectIOService {
 
         if duration <= 0.0 {
             // Try preview metadata cache (Unity lines 332-339)
-            if let Some(&preview_seconds) = self.file_drop_preview_duration_seconds.get(file_path) {
-                if preview_seconds > 0.0 && seconds_per_beat > 0.0 {
+            if let Some(&preview_seconds) = self.file_drop_preview_duration_seconds.get(file_path)
+                && preview_seconds > 0.0 && seconds_per_beat > 0.0 {
                     return (preview_seconds / seconds_per_beat).max(FILE_DROP_MIN_DURATION_BEATS);
                 }
-            }
             return FILE_DROP_DEFAULT_DURATION_BEATS;
         }
 

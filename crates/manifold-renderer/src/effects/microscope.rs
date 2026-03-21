@@ -1,7 +1,7 @@
 // Mechanical port of Unity MicroscopeFX.cs + MicroscopeEffect.shader.
 // Same logic, same variables, same constants, same edge cases.
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
@@ -28,7 +28,7 @@ pub struct MicroscopeFX {
     uniform_buffer: wgpu::Buffer,
     /// 1x1 dummy texture for blur_tex / edge_tex when those passes don't need them.
     dummy_view: wgpu::TextureView,
-    states: HashMap<i64, MicroscopeState>,
+    states: AHashMap<i64, MicroscopeState>,
     width: u32,  // MicroscopeFX.cs line 20 — _width
     height: u32, // MicroscopeFX.cs line 20 — _height
 }
@@ -203,7 +203,7 @@ impl MicroscopeFX {
             sampler,
             uniform_buffer,
             dummy_view,
-            states: HashMap::new(),
+            states: AHashMap::new(),
             width: 0,
             height: 0,
         }

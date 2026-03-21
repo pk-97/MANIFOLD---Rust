@@ -287,12 +287,11 @@ impl UIRoot {
                 let mut consumed = false;
 
                 // Escape key
-                if let UIEvent::KeyDown { key: Key::Escape, .. } = event {
-                    if let Some(_) = self.browser_popup.handle_escape() {
+                if let UIEvent::KeyDown { key: Key::Escape, .. } = event
+                    && self.browser_popup.handle_escape().is_some() {
                         self.overlay_dirty = true;
                         consumed = true;
                     }
-                }
 
                 // Click events
                 if let UIEvent::Click { node_id, .. } = event {
@@ -334,15 +333,14 @@ impl UIRoot {
             }
 
             // Dropdown gets first crack at all events.
-            if self.dropdown.is_open() {
-                if let Some(dd_action) = self.dropdown.handle_event(event, &mut self.tree) {
+            if self.dropdown.is_open()
+                && let Some(dd_action) = self.dropdown.handle_event(event, &mut self.tree) {
                     match dd_action {
                         DropdownAction::Selected(index) => {
-                            if let Some(ctx) = self.dropdown_context.take() {
-                                if let Some(action) = self.dropdown_to_action(ctx, index) {
+                            if let Some(ctx) = self.dropdown_context.take()
+                                && let Some(action) = self.dropdown_to_action(ctx, index) {
                                     actions.push(action);
                                 }
-                            }
                         }
                         DropdownAction::Dismissed => {
                             // Only clear context if dropdown actually closed
@@ -354,7 +352,6 @@ impl UIRoot {
                     }
                     continue; // Event consumed by dropdown.
                 }
-            }
 
             // Route to panels.
             let mut panel_actions;

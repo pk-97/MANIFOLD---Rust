@@ -99,9 +99,8 @@ impl TransportController {
         match authority {
             ClockAuthority::Link => {
                 // Disable MIDI Clock and OSC; keep Link
-                if let Some(ref mut clk) = self.midi_clock_sync {
-                    if clk.is_midi_clock_enabled() { clk.disable_midi_clock(); }
-                }
+                if let Some(ref mut clk) = self.midi_clock_sync
+                    && clk.is_midi_clock_enabled() { clk.disable_midi_clock(); }
                 self.osc_enabled = false;
             }
             ClockAuthority::MidiClock => {
@@ -110,15 +109,13 @@ impl TransportController {
             }
             ClockAuthority::Osc => {
                 // Disable MIDI Clock; keep Link optional
-                if let Some(ref mut clk) = self.midi_clock_sync {
-                    if clk.is_midi_clock_enabled() { clk.disable_midi_clock(); }
-                }
+                if let Some(ref mut clk) = self.midi_clock_sync
+                    && clk.is_midi_clock_enabled() { clk.disable_midi_clock(); }
             }
             ClockAuthority::Internal => {
                 // Disable MIDI Clock and OSC; keep Link optional
-                if let Some(ref mut clk) = self.midi_clock_sync {
-                    if clk.is_midi_clock_enabled() { clk.disable_midi_clock(); }
-                }
+                if let Some(ref mut clk) = self.midi_clock_sync
+                    && clk.is_midi_clock_enabled() { clk.disable_midi_clock(); }
                 self.osc_enabled = false;
             }
         }
@@ -126,8 +123,8 @@ impl TransportController {
 
     fn is_authority_source_enabled(&self, authority: ClockAuthority) -> bool {
         match authority {
-            ClockAuthority::Link => self.link_sync.as_ref().map_or(false, |s| s.is_link_enabled()),
-            ClockAuthority::MidiClock => self.midi_clock_sync.as_ref().map_or(false, |s| s.is_midi_clock_enabled()),
+            ClockAuthority::Link => self.link_sync.as_ref().is_some_and(|s| s.is_link_enabled()),
+            ClockAuthority::MidiClock => self.midi_clock_sync.as_ref().is_some_and(|s| s.is_midi_clock_enabled()),
             ClockAuthority::Osc => self.osc_enabled,
             ClockAuthority::Internal => true,
         }

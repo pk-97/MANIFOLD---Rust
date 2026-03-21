@@ -282,11 +282,10 @@ impl MidiInputController {
             if self.show_debug_logs {
                 log::debug!("[MidiInputController] Native CLK note path: active");
             }
-        } else if !native_path_active && self.native_clock_path_active_last_frame {
-            if self.show_debug_logs {
+        } else if !native_path_active && self.native_clock_path_active_last_frame
+            && self.show_debug_logs {
                 log::debug!("[MidiInputController] Native CLK note path: inactive");
             }
-        }
 
         self.native_clock_path_active_last_frame = native_path_active;
 

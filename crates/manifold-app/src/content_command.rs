@@ -3,7 +3,7 @@
 //! The UI thread communicates with the content thread via a bounded
 //! crossbeam channel. Each variant represents an action that must
 //! execute on the content thread where PlaybackEngine and EditingService live.
-
+use manifold_core::ClipId;
 use manifold_core::project::Project;
 use manifold_editing::command::Command;
 use manifold_playback::audio_sync::PreloadedAudioData;
@@ -72,7 +72,7 @@ pub enum ContentCommand {
     // ── Clipboard ────────────────────────────────────────────────
     /// Copy clips to clipboard on the content thread (EditingService owns clipboard).
     CopyClips {
-        clip_ids: Vec<String>,
+        clip_ids: Vec<ClipId>,
         region: Option<manifold_core::selection::SelectionRegion>,
     },
     /// Paste from clipboard at target position. Content thread mutates project and
@@ -80,7 +80,7 @@ pub enum ContentCommand {
     PasteClips {
         target_beat: f32,
         target_layer: i32,
-        result_tx: std::sync::mpsc::Sender<Vec<String>>,
+        result_tx: std::sync::mpsc::Sender<Vec<ClipId>>,
     },
 
     // ── Direct project mutation ────────────────────────────────────

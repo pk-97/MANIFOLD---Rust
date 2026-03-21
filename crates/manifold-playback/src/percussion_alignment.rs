@@ -1,3 +1,4 @@
+use manifold_core::ClipId;
 // Port of Unity PercussionAlignmentService.cs (538 lines).
 // Application-layer service for percussion alignment calibration, nudge, reset, and reprojection.
 // No UI dependencies.
@@ -18,7 +19,7 @@ const CALIBRATION_EPSILON_BEATS: f32 = 0.0001;
 /// and mutate through the project.
 #[derive(Debug, Clone)]
 pub struct PercussionAlignmentSnapshot {
-    pub clip_id: String,
+    pub clip_id: ClipId,
     pub old_offset_beats: f32,
     pub old_slope_beats_per_second: f32,
     pub old_pivot_seconds: f32,
@@ -29,7 +30,7 @@ pub struct PercussionAlignmentSnapshot {
 
 impl PercussionAlignmentSnapshot {
     pub fn new(
-        clip_id: String,
+        clip_id: ClipId,
         old_offset_beats: f32,
         old_slope_beats_per_second: f32,
         old_pivot_seconds: f32,
@@ -52,6 +53,7 @@ impl PercussionAlignmentSnapshot {
 // ─── AlignmentResult ───
 
 /// Port of Unity AlignmentResult struct.
+#[derive(Default)]
 pub struct AlignmentResult {
     pub success: bool,
     pub moved: i32,
@@ -60,21 +62,11 @@ pub struct AlignmentResult {
     pub undo_command: Option<Box<dyn Command>>,
 }
 
-impl Default for AlignmentResult {
-    fn default() -> Self {
-        Self {
-            success: false,
-            moved: 0,
-            missing: 0,
-            invalid: 0,
-            undo_command: None,
-        }
-    }
-}
 
 // ─── ReprojectionResult ───
 
 /// Port of Unity ReprojectionResult struct.
+#[derive(Default)]
 pub struct ReprojectionResult {
     pub success: bool,
     pub moved: i32,
@@ -84,18 +76,6 @@ pub struct ReprojectionResult {
     pub undo_command: Option<Box<dyn Command>>,
 }
 
-impl Default for ReprojectionResult {
-    fn default() -> Self {
-        Self {
-            success: false,
-            moved: 0,
-            missing: 0,
-            invalid: 0,
-            tracked: 0,
-            undo_command: None,
-        }
-    }
-}
 
 // ─── PercussionAlignmentService ───
 
@@ -129,7 +109,7 @@ impl PercussionAlignmentService {
     ) -> AlignmentResult {
         let has_placements = project
             .imported_percussion_clip_placements()
-            .map_or(false, |p| !p.is_empty());
+            .is_some_and(|p| !p.is_empty());
         if !has_placements {
             return AlignmentResult::default();
         }
@@ -203,7 +183,7 @@ impl PercussionAlignmentService {
 
         let has_placements = project
             .imported_percussion_clip_placements()
-            .map_or(false, |p| !p.is_empty());
+            .is_some_and(|p| !p.is_empty());
         if !has_placements {
             return AlignmentResult::default();
         }
@@ -255,7 +235,7 @@ impl PercussionAlignmentService {
             }
 
             snapshots.push(PercussionAlignmentSnapshot::new(
-                placement.clip_id.clone(),
+                ClipId::new(placement.clip_id.clone()),
                 old_offset,
                 old_slope,
                 old_pivot,
@@ -295,7 +275,7 @@ impl PercussionAlignmentService {
 
         let has_placements = project
             .imported_percussion_clip_placements()
-            .map_or(false, |p| !p.is_empty());
+            .is_some_and(|p| !p.is_empty());
         if !has_placements {
             return result;
         }
@@ -352,7 +332,7 @@ impl PercussionAlignmentService {
             }
 
             commands.push(Box::new(MoveClipCommand::new(
-                placement.clip_id.clone(),
+                ClipId::new(placement.clip_id.clone()),
                 old_beat,
                 projected_beat,
                 layer_index,
@@ -417,7 +397,7 @@ impl PercussionAlignmentService {
 
         let has_placements = project
             .imported_percussion_clip_placements()
-            .map_or(false, |p| !p.is_empty());
+            .is_some_and(|p| !p.is_empty());
         if !has_placements {
             return AlignmentResult::default();
         }
@@ -440,7 +420,7 @@ impl PercussionAlignmentService {
             let old_pivot = placement.alignment_pivot_seconds;
 
             snapshots.push(PercussionAlignmentSnapshot::new(
-                placement.clip_id.clone(),
+                ClipId::new(placement.clip_id.clone()),
                 old_offset,
                 old_slope,
                 old_pivot,
@@ -592,12 +572,7 @@ impl PercussionAlignmentService {
 pub fn find_first_valid_placement(
     provenance: &[ImportedPercussionClipPlacement],
 ) -> Option<&ImportedPercussionClipPlacement> {
-    for placement in provenance {
-        if placement.is_valid() {
-            return Some(placement);
-        }
-    }
-    None
+    provenance.iter().find(|&placement| placement.is_valid()).map(|v| v as _)
 }
 
 /// Returns the clip_id of the first valid placement (for borrow-safe callers).
@@ -653,7 +628,7 @@ fn build_reprojection_move_commands_inner(
         }
 
         commands.push(Box::new(MoveClipCommand::new(
-            placement.clip_id.clone(),
+            ClipId::new(placement.clip_id.clone()),
             old_beat,
             projected_beat,
             layer_index,

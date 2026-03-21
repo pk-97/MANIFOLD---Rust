@@ -163,11 +163,10 @@ impl OscSyncController {
     pub fn disable_osc(&mut self, receiver: Option<&mut OscReceiver>) {
         if !self.is_osc_enabled { return; }
 
-        if let Some(rcv) = receiver {
-            if !self.timecode_address.is_empty() {
+        if let Some(rcv) = receiver
+            && !self.timecode_address.is_empty() {
                 rcv.unsubscribe_all(&self.timecode_address);
             }
-        }
 
         self.is_osc_enabled = false;
         self.is_receiving_timecode = false;
@@ -220,7 +219,7 @@ impl OscSyncController {
                 self.current_timecode_display =
                     format!("{:02}:{:02}:{:02}:{:02}", hours, minutes, seconds, frames);
             }
-        } else if values.len() >= 1 {
+        } else if !values.is_empty() {
             self.pending_timecode_seconds = values[0] + self.timecode_offset;
             let total_sec = self.pending_timecode_seconds as i32;
             let h = total_sec / 3600;

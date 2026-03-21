@@ -401,14 +401,13 @@ impl LayerCompositor {
             let layer_desc = frame.layers.iter().find(|l| l.layer_index == layer_idx);
 
             // Check mute/solo
-            if let Some(ld) = layer_desc {
-                if ld.is_muted || (any_solo && !ld.is_solo) {
+            if let Some(ld) = layer_desc
+                && (ld.is_muted || (any_solo && !ld.is_solo)) {
                     while i < clips.len() && clips[i].layer_index == layer_idx {
                         i += 1;
                     }
                     continue;
                 }
-            }
 
             // Count clips in this layer group
             let group_start = i;
@@ -423,7 +422,7 @@ impl LayerCompositor {
 
             // Check if this layer has layer-level effects (Unity: CompositorStack.cs lines 414-449)
             let has_layer_effects = layer_desc
-                .map_or(false, |ld| has_enabled_effects(ld.effects));
+                .is_some_and(|ld| has_enabled_effects(ld.effects));
 
             if group.len() == 1 && !has_layer_effects {
                 // Single clip with NO layer effects: blit directly into main with layer blend mode

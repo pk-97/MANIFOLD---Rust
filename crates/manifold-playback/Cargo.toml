@@ -1,7 +1,7 @@
 [package]
 name = "manifold-playback"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
@@ -14,6 +14,8 @@ serde_json = { workspace = true }
 midir = "0.9"
 rosc = "0.10"
 rusty_link = "0.4"
+parking_lot = { workspace = true }
+ahash = { workspace = true }
 
 [dev-dependencies]
 manifold-io = { path = "../manifold-io" }

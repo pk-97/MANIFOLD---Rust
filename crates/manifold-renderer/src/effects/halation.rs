@@ -1,7 +1,7 @@
 // Mechanical port of Unity HalationFX.cs + HalationEffect.shader.
 // Same logic, same variables, same constants, same edge cases.
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
@@ -35,7 +35,7 @@ struct HalationState {
 // HalationFX.cs line 12 — HalationFX : SimpleBlitEffect, IStatefulEffect
 pub struct HalationFX {
     helper: DualTextureBlitHelper,
-    states: HashMap<i64, HalationState>,
+    states: AHashMap<i64, HalationState>,
     width: u32,  // HalationFX.cs line 17 — _width
     height: u32, // HalationFX.cs line 17 — _height
 }
@@ -49,7 +49,7 @@ impl HalationFX {
                 "Halation",
                 std::mem::size_of::<HalationUniforms>() as u64,
             ),
-            states: HashMap::new(),
+            states: AHashMap::new(),
             width: 0,
             height: 0,
         }

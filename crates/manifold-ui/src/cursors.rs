@@ -1,16 +1,16 @@
-/// Cursor management for timeline interaction feedback.
-/// 1:1 port of Unity Cursors.cs — maps procedural cursor types to winit CursorIcon values.
-///
-/// Unity generates 24×24 procedural textures for each cursor shape.
-/// In Rust/winit we use the platform's built-in cursor icons instead,
-/// which gives native appearance and automatic HiDPI support.
-///
-/// Cursor types (from Unity Cursors.cs):
-/// - Default: standard arrow (no special interaction)
-/// - ResizeHorizontal: ↔ double-headed arrow (inspector resize, trim handles)
-/// - ResizeVertical: ↕ double-headed arrow (video/timeline split handle)
-/// - Move: ✥ four-way cross (clip drag move)
-/// - Blocked: ⊘ not-allowed (invalid cross-layer drag)
+// Cursor management for timeline interaction feedback.
+// 1:1 port of Unity Cursors.cs — maps procedural cursor types to winit CursorIcon values.
+//
+// Unity generates 24x24 procedural textures for each cursor shape.
+// In Rust/winit we use the platform's built-in cursor icons instead,
+// which gives native appearance and automatic HiDPI support.
+//
+// Cursor types (from Unity Cursors.cs):
+// - Default: standard arrow (no special interaction)
+// - ResizeHorizontal: double-headed arrow (inspector resize, trim handles)
+// - ResizeVertical: double-headed arrow (video/timeline split handle)
+// - Move: four-way cross (clip drag move)
+// - Blocked: not-allowed (invalid cross-layer drag)
 
 /// The cursor shapes used by the timeline UI.
 /// Maps 1:1 to Unity's Cursors static methods.
@@ -38,6 +38,12 @@ pub enum TimelineCursor {
 pub struct CursorManager {
     current: TimelineCursor,
     pending: TimelineCursor,
+}
+
+impl Default for CursorManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CursorManager {

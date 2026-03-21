@@ -8,7 +8,7 @@
 // Time.frameCount → EffectContext.frame_count.
 // Graphics.Blit → render pass with bind group per call.
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
 use wgpu::util::DeviceExt;
@@ -209,7 +209,7 @@ pub struct WireframeDepthFX {
     _dummy_tex: wgpu::Texture,
     dummy_view: wgpu::TextureView,
     // WireframeDepthFX.cs line 92-93
-    owner_states: HashMap<i64, OwnerState>,
+    owner_states: AHashMap<i64, OwnerState>,
     width: u32,
     height: u32,
     // WireframeDepthFX.cs line 96-101 — DNN backend state
@@ -520,7 +520,7 @@ impl WireframeDepthFX {
             uniform_buffer,
             _dummy_tex: dummy_tex,
             dummy_view,
-            owner_states: HashMap::new(),
+            owner_states: AHashMap::new(),
             width: 0,
             height: 0,
             workers,
@@ -1775,14 +1775,13 @@ impl PostProcessEffect for WireframeDepthFX {
             Some(WorkerMode::Parallel { depth_worker, flow_worker, subject_worker }) => {
                 if let Some(resp) = depth_worker.try_recv() {
                     let ok = self.pending_depth_owner.take().unwrap_or(owner_key);
-                    if let Some(state) = self.owner_states.get_mut(&ok) {
-                        if let Some(ref depth) = resp.depth_buffer {
+                    if let Some(state) = self.owner_states.get_mut(&ok)
+                        && let Some(ref depth) = resp.depth_buffer {
                             let copy_len = depth.len().min(state.dnn_depth_buffer.len());
                             state.dnn_depth_buffer[..copy_len].copy_from_slice(&depth[..copy_len]);
                             state.dnn_has_depth = true;
                             state.dnn_depth_dirty = true;
                         }
-                    }
                 }
                 if let Some(resp) = flow_worker.try_recv() {
                     let ok = self.pending_flow_owner.take().unwrap_or(owner_key);
@@ -1806,14 +1805,13 @@ impl PostProcessEffect for WireframeDepthFX {
                         self.dnn_subject_api_available = false;
                     }
                     let ok = self.pending_subject_owner.take().unwrap_or(owner_key);
-                    if let Some(state) = self.owner_states.get_mut(&ok) {
-                        if let Some(ref blended) = resp.subject_history_blended {
+                    if let Some(state) = self.owner_states.get_mut(&ok)
+                        && let Some(ref blended) = resp.subject_history_blended {
                             let copy_len = blended.len().min(state.dnn_subject_history_buffer.len());
                             state.dnn_subject_history_buffer[..copy_len].copy_from_slice(&blended[..copy_len]);
                             state.dnn_has_subject_mask = true;
                             state.dnn_subject_dirty = true;
                         }
-                    }
                 }
             }
             Some(WorkerMode::Monolithic { worker }) => {
@@ -1831,9 +1829,9 @@ impl PostProcessEffect for WireframeDepthFX {
         }
 
         // ── Poll GPU readback → submit to background worker(s) ──
-        if let Some(state) = self.owner_states.get_mut(&owner_key) {
-            if state.dnn_readback_pending {
-                if let Some(pixels) = state.readback.try_read(device) {
+        if let Some(state) = self.owner_states.get_mut(&owner_key)
+            && state.dnn_readback_pending
+                && let Some(pixels) = state.readback.try_read(device) {
                     state.dnn_readback_pending = false;
                     let aw = state.analysis_width as i32;
                     let ah = state.analysis_height as i32;
@@ -1888,8 +1886,6 @@ impl PostProcessEffect for WireframeDepthFX {
                     state.prev_native_pixel_buffer[..copy_len].copy_from_slice(&pixels[..copy_len]);
                     state.has_prev_native_frame = true;
                 }
-            }
-        }
 
         // Check DNN backend for this frame
         let dnn_available = self.ensure_dnn_backend_available(ctx.frame_count);

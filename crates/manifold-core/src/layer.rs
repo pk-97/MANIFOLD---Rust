@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::id::LayerId;
 use crate::types::{BlendMode, ClipDurationMode, GeneratorType, LayerType};
 use crate::clip::TimelineClip;
 use crate::color::Color;
@@ -10,7 +11,7 @@ use crate::generator::GeneratorParamState;
 #[serde(rename_all = "camelCase")]
 pub struct Layer {
     #[serde(default)]
-    pub layer_id: String,
+    pub layer_id: LayerId,
     #[serde(default)]
     pub index: i32,
     #[serde(default)]
@@ -18,7 +19,7 @@ pub struct Layer {
     #[serde(default)]
     pub layer_type: LayerType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_layer_id: Option<String>,
+    pub parent_layer_id: Option<LayerId>,
     #[serde(default)]
     pub is_collapsed: bool,
 
@@ -105,7 +106,7 @@ pub struct Layer {
 impl Layer {
     pub fn new(name: String, layer_type: LayerType, index: i32) -> Self {
         Self {
-            layer_id: crate::short_id(),
+            layer_id: LayerId::new(crate::short_id()),
             index,
             name,
             layer_type,
@@ -478,7 +479,7 @@ impl crate::effects::EffectContainer for Layer {
 impl Default for Layer {
     fn default() -> Self {
         Self {
-            layer_id: String::new(),
+            layer_id: LayerId::default(),
             index: 0,
             name: String::new(),
             layer_type: LayerType::Video,

@@ -76,6 +76,12 @@ pub struct WaveformRenderer {
     clip_channels: usize,
 }
 
+impl Default for WaveformRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WaveformRenderer {
     pub fn new() -> Self {
         Self {
@@ -212,7 +218,7 @@ impl WaveformRenderer {
 
         // Unity: `while (previous.Length > 64)` (line 190)
         while previous.len() > 64 {
-            let next_length = (previous.len() + 1) / 2;
+            let next_length = previous.len().div_ceil(2);
             let mut next = vec![0.0f32; next_length];
             let mut next_colors = vec![Color32::TRANSPARENT; next_length];
 

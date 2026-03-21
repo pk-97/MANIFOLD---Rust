@@ -1,5 +1,6 @@
 use crate::command::Command;
 use crate::commands::effect_target::{EffectTarget, with_effects_mut};
+use manifold_core::EffectGroupId;
 use manifold_core::project::Project;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 
@@ -13,7 +14,7 @@ pub struct GroupEffectsCommand {
     /// Indices into the effects list at the time of construction.
     effect_indices: Vec<usize>,
     group: Option<EffectGroup>,
-    old_group_ids: Vec<Option<String>>,
+    old_group_ids: Vec<Option<EffectGroupId>>,
     /// Original indices before MakeContiguous — used for undo RestoreOriginalOrder.
     original_indices: Vec<usize>,
 }
@@ -151,13 +152,13 @@ impl Command for GroupEffectsCommand {
 #[derive(Debug)]
 pub struct UngroupEffectsCommand {
     target: EffectTarget,
-    group_id: String,
+    group_id: EffectGroupId,
     group: Option<EffectGroup>,
     member_indices: Vec<usize>,
 }
 
 impl UngroupEffectsCommand {
-    pub fn new(target: EffectTarget, group_id: String) -> Self {
+    pub fn new(target: EffectTarget, group_id: EffectGroupId) -> Self {
         Self { target, group_id, group: None, member_indices: Vec::new() }
     }
 }
@@ -209,13 +210,13 @@ impl Command for UngroupEffectsCommand {
 #[derive(Debug)]
 pub struct ToggleGroupCommand {
     target: EffectTarget,
-    group_id: String,
+    group_id: EffectGroupId,
     old_enabled: bool,
     new_enabled: bool,
 }
 
 impl ToggleGroupCommand {
-    pub fn new(target: EffectTarget, group_id: String, old_enabled: bool, new_enabled: bool) -> Self {
+    pub fn new(target: EffectTarget, group_id: EffectGroupId, old_enabled: bool, new_enabled: bool) -> Self {
         Self { target, group_id, old_enabled, new_enabled }
     }
 }
@@ -248,13 +249,13 @@ impl Command for ToggleGroupCommand {
 #[derive(Debug)]
 pub struct RenameGroupCommand {
     target: EffectTarget,
-    group_id: String,
+    group_id: EffectGroupId,
     old_name: String,
     new_name: String,
 }
 
 impl RenameGroupCommand {
-    pub fn new(target: EffectTarget, group_id: String, old_name: String, new_name: String) -> Self {
+    pub fn new(target: EffectTarget, group_id: EffectGroupId, old_name: String, new_name: String) -> Self {
         Self { target, group_id, old_name, new_name }
     }
 }
@@ -287,13 +288,13 @@ impl Command for RenameGroupCommand {
 #[derive(Debug)]
 pub struct ChangeGroupWetDryCommand {
     target: EffectTarget,
-    group_id: String,
+    group_id: EffectGroupId,
     old_wet_dry: f32,
     new_wet_dry: f32,
 }
 
 impl ChangeGroupWetDryCommand {
-    pub fn new(target: EffectTarget, group_id: String, old_wet_dry: f32, new_wet_dry: f32) -> Self {
+    pub fn new(target: EffectTarget, group_id: EffectGroupId, old_wet_dry: f32, new_wet_dry: f32) -> Self {
         Self { target, group_id, old_wet_dry, new_wet_dry }
     }
 }
@@ -329,8 +330,8 @@ pub struct MoveEffectToRackCommand {
     target: EffectTarget,
     #[allow(dead_code)]
     effect_index: usize,
-    old_group_id: Option<String>,
-    new_group_id: Option<String>,
+    old_group_id: Option<EffectGroupId>,
+    new_group_id: Option<EffectGroupId>,
     old_index: usize,
     new_index: usize,
 }
@@ -339,8 +340,8 @@ impl MoveEffectToRackCommand {
     pub fn new(
         target: EffectTarget,
         effect_index: usize,
-        old_group_id: Option<String>,
-        new_group_id: Option<String>,
+        old_group_id: Option<EffectGroupId>,
+        new_group_id: Option<EffectGroupId>,
         old_index: usize,
         new_index: usize,
     ) -> Self {
@@ -389,14 +390,14 @@ impl Command for MoveEffectToRackCommand {
 #[derive(Debug)]
 pub struct ReorderRackCommand {
     target: EffectTarget,
-    group_id: String,
+    group_id: EffectGroupId,
     target_insert_index: usize,
     /// Original indices of all group members, captured on first execute.
     original_indices: Vec<usize>,
 }
 
 impl ReorderRackCommand {
-    pub fn new(target: EffectTarget, group_id: String, target_insert_index: usize) -> Self {
+    pub fn new(target: EffectTarget, group_id: EffectGroupId, target_insert_index: usize) -> Self {
         Self {
             target,
             group_id,

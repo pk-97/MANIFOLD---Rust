@@ -100,8 +100,8 @@ impl BitmapSlider {
         let h = rect.height;
 
         // ── Label (fixed width, left) ──
-        if let Some(label_text) = label {
-            if !label_text.is_empty() {
+        if let Some(label_text) = label
+            && !label_text.is_empty() {
                 ids.label = tree.add_label(
                     parent_id,
                     x, y, label_width, h,
@@ -115,7 +115,6 @@ impl BitmapSlider {
                 ) as i32;
                 x += label_width + GAP;
             }
-        }
 
         // ── Value text (fixed width, right) ──
         let value_x = rect.x + rect.width - VALUE_WIDTH;

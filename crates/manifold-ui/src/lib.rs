@@ -27,7 +27,7 @@ pub mod driver_waveform_icons;
 
 pub use node::*;
 pub use tree::UITree;
-pub use input::{UIInputSystem, UIEvent, PointerAction};
+pub use input::{UIInputSystem, UIEvent, PointerAction, Modifiers};
 pub use layout::ScreenLayout;
 pub use slider::{BitmapSlider, SliderNodeIds, SliderColors};
 pub use panels::{Panel, PanelAction, SyncSource, InspectorTab, DriverConfigAction, EnvelopeParam, HitRegion};

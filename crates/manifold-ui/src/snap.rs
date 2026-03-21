@@ -1,9 +1,9 @@
-/// Pure functions for grid and magnetic snapping.
-///
-/// These match the Unity InteractionOverlay.cs snapping behavior exactly:
-/// - Grid interval depends on zoom level (pixels-per-beat)
-/// - Magnetic snap finds nearest candidate within a pixel threshold
-/// - Candidates include grid lines AND neighboring clip edges
+// Pure functions for grid and magnetic snapping.
+//
+// These match the Unity InteractionOverlay.cs snapping behavior exactly:
+// - Grid interval depends on zoom level (pixels-per-beat)
+// - Magnetic snap finds nearest candidate within a pixel threshold
+// - Candidates include grid lines AND neighboring clip edges
 
 /// Threshold in pixels — snap engages within this distance.
 pub const SNAP_THRESHOLD_PX: f32 = 12.0;

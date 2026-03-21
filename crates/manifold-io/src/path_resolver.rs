@@ -102,8 +102,8 @@ impl PathResolver {
         // Resolve percussion audio path
         if let Some(ref mut perc) = project.percussion_import {
             // Audio path
-            if let Some(ref audio_path) = perc.audio_path.clone() {
-                if !audio_path.is_empty() && !Path::new(audio_path).exists() {
+            if let Some(ref audio_path) = perc.audio_path.clone()
+                && !audio_path.is_empty() && !Path::new(audio_path).exists() {
                     let resolved = Self::try_resolve(
                         audio_path,
                         perc.relative_audio_path.as_deref(),
@@ -122,7 +122,6 @@ impl PathResolver {
                         result.unresolved.push(audio_path.clone());
                     }
                 }
-            }
 
             // Resolve stem paths
             if let Some(ref mut stem_paths) = perc.stem_paths.clone() {
@@ -153,11 +152,10 @@ impl PathResolver {
                         if rel_stems.is_none() {
                             rel_stems = Some(vec![String::new(); stem_paths.len()]);
                         }
-                        if let Some(ref mut rs) = rel_stems {
-                            if i < rs.len() {
+                        if let Some(ref mut rs) = rel_stems
+                            && i < rs.len() {
                                 rs[i] = relative.unwrap_or_default();
                             }
-                        }
                         changed = true;
                         result.resolved_count += 1;
                     } else {
@@ -202,30 +200,27 @@ impl PathResolver {
 
         // Layer video folder paths
         for layer in &mut project.timeline.layers {
-            if let Some(ref folder_path) = layer.video_folder_path {
-                if !folder_path.is_empty() {
+            if let Some(ref folder_path) = layer.video_folder_path
+                && !folder_path.is_empty() {
                     layer.relative_video_folder_path =
                         Self::make_relative(folder_path, project_dir);
                 }
-            }
         }
 
         // Percussion
         if let Some(ref mut perc) = project.percussion_import {
-            if let Some(ref audio_path) = perc.audio_path {
-                if !audio_path.is_empty() {
+            if let Some(ref audio_path) = perc.audio_path
+                && !audio_path.is_empty() {
                     perc.relative_audio_path = Self::make_relative(audio_path, project_dir);
                 }
-            }
 
             if let Some(ref stem_paths) = perc.stem_paths {
                 let mut rel_stems = vec![String::new(); stem_paths.len()];
                 for (i, stem_path) in stem_paths.iter().enumerate() {
-                    if !stem_path.is_empty() {
-                        if let Some(rel) = Self::make_relative(stem_path, project_dir) {
+                    if !stem_path.is_empty()
+                        && let Some(rel) = Self::make_relative(stem_path, project_dir) {
                             rel_stems[i] = rel;
                         }
-                    }
                 }
                 perc.relative_stem_paths = Some(rel_stems);
             }
@@ -248,16 +243,14 @@ impl PathResolver {
         search_dirs: &HashSet<String>,
     ) -> Option<String> {
         // Step 1: Try relative path from project location
-        if let Some(rel_path) = relative_path {
-            if !rel_path.is_empty() && !project_dir.is_empty() {
+        if let Some(rel_path) = relative_path
+            && !rel_path.is_empty() && !project_dir.is_empty() {
                 let candidate = PathBuf::from(project_dir).join(rel_path);
-                if let Ok(canonical) = std::fs::canonicalize(&candidate) {
-                    if canonical.exists() {
+                if let Ok(canonical) = std::fs::canonicalize(&candidate)
+                    && canonical.exists() {
                         return Some(canonical.to_string_lossy().to_string());
                     }
-                }
             }
-        }
 
         // Step 2: Filename+size search in known directories
         let file_name = Path::new(absolute_path).file_name()?.to_string_lossy().to_string();
@@ -276,11 +269,10 @@ impl PathResolver {
                     return Some(candidate.to_string_lossy().to_string());
                 }
 
-                if let Ok(metadata) = std::fs::metadata(&candidate) {
-                    if metadata.len() as i64 == expected_file_size {
+                if let Ok(metadata) = std::fs::metadata(&candidate)
+                    && metadata.len() as i64 == expected_file_size {
                         return Some(candidate.to_string_lossy().to_string());
                     }
-                }
             }
         }
 
@@ -296,16 +288,14 @@ impl PathResolver {
         search_dirs: &HashSet<String>,
     ) -> Option<String> {
         // Step 1: Try relative path
-        if let Some(rel_path) = relative_path {
-            if !rel_path.is_empty() && !project_dir.is_empty() {
+        if let Some(rel_path) = relative_path
+            && !rel_path.is_empty() && !project_dir.is_empty() {
                 let candidate = PathBuf::from(project_dir).join(rel_path);
-                if let Ok(canonical) = std::fs::canonicalize(&candidate) {
-                    if canonical.is_dir() {
+                if let Ok(canonical) = std::fs::canonicalize(&candidate)
+                    && canonical.is_dir() {
                         return Some(canonical.to_string_lossy().to_string());
                     }
-                }
             }
-        }
 
         // Step 2: Search by folder name in known parent directories
         let trimmed = absolute_path
@@ -343,10 +333,7 @@ impl PathResolver {
 
         // Use pathdiff for cross-platform relative path computation
         // (equivalent to C#'s Uri.MakeRelativeUri)
-        match pathdiff::diff_paths(abs, base) {
-            Some(rel) => Some(rel.to_string_lossy().to_string()),
-            None => None,
-        }
+        pathdiff::diff_paths(abs, base).map(|rel| rel.to_string_lossy().to_string())
     }
 
     /// Build the set of directories to search when doing filename-based re-linking.
@@ -367,11 +354,10 @@ impl PathResolver {
                 // Also add immediate subdirectories of parent
                 if let Ok(entries) = std::fs::read_dir(parent_dir) {
                     for entry in entries.flatten() {
-                        if let Ok(ft) = entry.file_type() {
-                            if ft.is_dir() {
+                        if let Ok(ft) = entry.file_type()
+                            && ft.is_dir() {
                                 dirs.insert(entry.path().to_string_lossy().to_string());
                             }
-                        }
                     }
                 }
             }
@@ -398,16 +384,14 @@ impl PathResolver {
         }
 
         // 4. Percussion audio directory
-        if let Some(ref perc) = project.percussion_import {
-            if let Some(ref audio_path) = perc.audio_path {
-                if let Some(audio_dir) = Path::new(audio_path).parent() {
+        if let Some(ref perc) = project.percussion_import
+            && let Some(ref audio_path) = perc.audio_path
+                && let Some(audio_dir) = Path::new(audio_path).parent() {
                     let dir_str = audio_dir.to_string_lossy().to_string();
                     if !dir_str.is_empty() && audio_dir.is_dir() {
                         dirs.insert(dir_str);
                     }
                 }
-            }
-        }
 
         dirs
     }

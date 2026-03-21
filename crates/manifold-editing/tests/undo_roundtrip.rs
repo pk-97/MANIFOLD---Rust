@@ -156,20 +156,20 @@ fn undo_manager_multi_command_roundtrip() {
 
     // Undo command 2
     assert!(undo_mgr.can_undo());
-    undo_mgr.undo(&mut project);
+    assert!(undo_mgr.undo(&mut project));
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert!((clip.start_beat - original_beat).abs() < 0.001);
     assert!((project.settings.bpm - 120.0).abs() < 0.01); // BPM unchanged
 
     // Undo command 1
-    undo_mgr.undo(&mut project);
+    assert!(undo_mgr.undo(&mut project));
     assert!((project.settings.bpm - original_bpm).abs() < 0.01);
 
     // Redo both
-    undo_mgr.redo(&mut project);
+    assert!(undo_mgr.redo(&mut project));
     assert!((project.settings.bpm - 120.0).abs() < 0.01);
 
-    undo_mgr.redo(&mut project);
+    assert!(undo_mgr.redo(&mut project));
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert!((clip.start_beat - (original_beat + 8.0)).abs() < 0.001);
 }

@@ -7,7 +7,8 @@
 //! MidiClockReceiver replaces Unity's MidiClock native CoreMIDI plugin (MidiClock.cs).
 //! midir provides raw MIDI byte access — same CoreMIDI backend on macOS, ALSA on Linux.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 use manifold_core::types::ClockAuthority;
 
@@ -18,6 +19,7 @@ use crate::sync_source::SyncSource;
 
 /// Thread-safe MIDI clock state shared between midir callback and main thread.
 /// Replaces the fields polled from Unity's native MidiClock_Update() P/Invoke.
+#[derive(Default)]
 struct MidiClockState {
     /// Position in sixteenth notes (SPP base + accumulated clock ticks).
     /// Equivalent to MidiClock.PositionSixteenths in Unity.
@@ -33,16 +35,6 @@ struct MidiClockState {
     has_received_clock: bool,
 }
 
-impl Default for MidiClockState {
-    fn default() -> Self {
-        Self {
-            position_sixteenths: 0,
-            clock_tick: 0,
-            is_playing: false,
-            has_received_clock: false,
-        }
-    }
-}
 
 // ── MidiClockReceiver ─────────────────────────────────────────────────────────
 
@@ -101,10 +93,7 @@ impl MidiClockReceiver {
                 }
 
                 let status = message[0];
-                let mut state = match state_arc.lock() {
-                    Ok(s) => s,
-                    Err(_) => return,
-                };
+                let mut state = state_arc.lock();
 
                 match status {
                     // Timing Clock — 24 per quarter note, 6 per sixteenth.
@@ -170,10 +159,7 @@ impl MidiClockReceiver {
     /// Equivalent to MidiClock_Update() P/Invoke in Unity.
     /// Returns (position_sixteenths, clock_tick, is_playing, has_received_clock).
     fn update_state(&self) -> (i32, i32, bool, bool) {
-        let state = match self.state.lock() {
-            Ok(s) => s,
-            Err(_) => return (0, 0, false, false),
-        };
+        let state = self.state.lock();
         (
             state.position_sixteenths,
             state.clock_tick,
@@ -567,7 +553,7 @@ impl MidiClockSyncController {
         self.tempo_accum_ticks = 0;
         self.tempo_accum_time = 0.0;
 
-        if raw_bpm < 20.0 || raw_bpm > 300.0 { return; }
+        if !(20.0..=300.0).contains(&raw_bpm) { return; }
 
         // Port of C# line 354: Mathf.Lerp clamps t to [0,1].
         let alpha = self.bpm_ema_alpha.clamp(0.0, 1.0);
@@ -611,7 +597,7 @@ impl MidiClockSyncController {
             self.transport_time_integrator_initialized = true;
         } else {
             let delta_ticks = absolute_tick - self.last_transport_absolute_tick;
-            if delta_ticks < 0 || delta_ticks > 384 {
+            if !(0..=384).contains(&delta_ticks) {
                 // Song-position jump / restart: re-anchor (port of C# lines 387-391).
                 is_transport_jump = true;
             }

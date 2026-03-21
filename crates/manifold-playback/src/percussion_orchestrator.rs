@@ -1,3 +1,4 @@
+use manifold_core::ClipId;
 // Port of Unity PercussionImportOrchestrator.cs (1501 lines).
 // Central orchestration class for all percussion import operations.
 //
@@ -1201,11 +1202,10 @@ impl PercussionImportOrchestrator {
 
         // Validate stems against audio content identity.
         let validated = self.validate_stem_ownership(project, &path);
-        if let Some(ref stems) = validated {
-            if let Some(state) = project.percussion_import.as_mut() {
+        if let Some(ref stems) = validated
+            && let Some(state) = project.percussion_import.as_mut() {
                 state.stem_paths = Some(stems.clone());
             }
-        }
         validated
     }
 
@@ -1747,11 +1747,10 @@ impl PercussionImportOrchestrator {
                     &self.pipeline_progress_parser,
                 );
 
-                if done {
-                    if let OrchestratorPhase::ImportAudioOnly(s) = &mut self.phase {
+                if done
+                    && let OrchestratorPhase::ImportAudioOnly(s) = &mut self.phase {
                         s.sub_phase = ImportAudioOnlySubPhase::ParsingBpm { pipeline_ok: ok };
                     }
-                }
             }
 
             ImportAudioOnlySubPhase::ParsingBpm { pipeline_ok } => {
@@ -2778,14 +2777,14 @@ impl Command for SetAudioStartBeatCommand {
 /// Port of the move-beat portion of Unity MoveClipCommand.
 #[derive(Debug)]
 pub struct MoveClipBeatCommand {
-    clip_id: String,
+    clip_id: ClipId,
     layer_index: i32,
     old_start_beat: f32,
     new_start_beat: f32,
 }
 
 impl MoveClipBeatCommand {
-    pub fn new(clip_id: String, layer_index: i32, old_start_beat: f32, new_start_beat: f32) -> Self {
+    pub fn new(clip_id: ClipId, layer_index: i32, old_start_beat: f32, new_start_beat: f32) -> Self {
         Self {
             clip_id,
             layer_index,
@@ -2795,11 +2794,10 @@ impl MoveClipBeatCommand {
     }
 
     fn apply(project: &mut Project, clip_id: &str, layer_index: i32, start_beat: f32) {
-        if let Some(layer) = project.timeline.layers.get_mut(layer_index as usize) {
-            if let Some(clip) = layer.clips.iter_mut().find(|c| c.id == clip_id) {
+        if let Some(layer) = project.timeline.layers.get_mut(layer_index as usize)
+            && let Some(clip) = layer.clips.iter_mut().find(|c| c.id == clip_id) {
                 clip.start_beat = start_beat;
             }
-        }
     }
 }
 

@@ -737,7 +737,7 @@ impl FluidSimulationGenerator {
         });
         pass.set_pipeline(&self.seed_pipeline);
         pass.set_bind_group(0, &bg, &[]);
-        pass.dispatch_workgroups((self.active_count + 255) / 256, 1, 1);
+        pass.dispatch_workgroups(self.active_count.div_ceil(256), 1, 1);
     }
 
     fn run_blur_pass(
@@ -973,7 +973,7 @@ impl Generator for FluidSimulationGenerator {
             });
             pass.set_pipeline(&self.splat_pipeline);
             pass.set_bind_group(0, &splat_bg, &[]);
-            pass.dispatch_workgroups((active_count + 255) / 256, 1, 1);
+            pass.dispatch_workgroups(active_count.div_ceil(256), 1, 1);
         }
 
         // Resolve accumulator to density texture
@@ -997,7 +997,7 @@ impl Generator for FluidSimulationGenerator {
             });
             pass.set_pipeline(&self.resolve_pipeline);
             pass.set_bind_group(0, &resolve_bg, &[]);
-            pass.dispatch_workgroups((sw + 15) / 16, (sh + 15) / 16, 1);
+            pass.dispatch_workgroups(sw.div_ceil(16), sh.div_ceil(16), 1);
         }
 
         // ================================================================
@@ -1039,7 +1039,7 @@ impl Generator for FluidSimulationGenerator {
                 });
                 pass.set_pipeline(&self.splat_color_pipeline);
                 pass.set_bind_group(0, &splat_color_bg, &[]);
-                pass.dispatch_workgroups((active_count + 255) / 256, 1, 1);
+                pass.dispatch_workgroups(active_count.div_ceil(256), 1, 1);
             }
 
             let resolve_color_uniforms = ResolveColorUniforms { width: sw, height: sh, _pad0: 0, _pad1: 0 };
@@ -1062,7 +1062,7 @@ impl Generator for FluidSimulationGenerator {
                 });
                 pass.set_pipeline(&self.resolve_color_pipeline);
                 pass.set_bind_group(0, &resolve_color_bg, &[]);
-                pass.dispatch_workgroups((sw + 15) / 16, (sh + 15) / 16, 1);
+                pass.dispatch_workgroups(sw.div_ceil(16), sh.div_ceil(16), 1);
             }
         }
 
@@ -1214,7 +1214,7 @@ impl Generator for FluidSimulationGenerator {
             });
             pass.set_pipeline(&self.simulate_pipeline);
             pass.set_bind_group(0, &sim_bg, &[]);
-            pass.dispatch_workgroups((active_count + 255) / 256, 1, 1);
+            pass.dispatch_workgroups(active_count.div_ceil(256), 1, 1);
         }
 
         // ================================================================

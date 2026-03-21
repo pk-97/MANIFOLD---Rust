@@ -25,11 +25,10 @@ pub fn reset_all_effectives(project: &mut Project) {
     let layers = &mut project.timeline.layers;
     for layer in layers.iter_mut() {
         // Generator params: reset only driven/enveloped params (per Unity semantics)
-        if layer.layer_type == LayerType::Generator {
-            if let Some(gp) = &mut layer.gen_params {
+        if layer.layer_type == LayerType::Generator
+            && let Some(gp) = &mut layer.gen_params {
                 gp.reset_effectives();
             }
-        }
 
         // Layer effect params: reset all (copy base → effective)
         if let Some(effects) = &mut layer.effects {
@@ -88,8 +87,8 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: f32) -> bool {
         }
 
         // Generator param drivers
-        if layer.layer_type == LayerType::Generator {
-            if let Some(gp) = &mut layer.gen_params {
+        if layer.layer_type == LayerType::Generator
+            && let Some(gp) = &mut layer.gen_params {
                 let gen_type = gp.generator_type;
                 let gen_def = generator_definition_registry::get(gen_type);
                 let gen_defs = &gen_def.param_defs;
@@ -136,7 +135,6 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: f32) -> bool {
                     }
                 }
             }
-        }
     }
 
     any_driven
@@ -266,11 +264,10 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
 
                 // Write back currentLevel for UI visualization (Phase 9B fix).
                 // Port of C# EnvelopeEvaluator line 96: env.currentLevel = adsrValue.
-                if let Some(envs) = &mut clip.envelopes {
-                    if let Some(env) = envs.get_mut(ei) {
+                if let Some(envs) = &mut clip.envelopes
+                    && let Some(env) = envs.get_mut(ei) {
                         env.current_level = adsr_value;
                     }
-                }
 
                 // Find the target effect on this clip
                 let target_fx = clip.effects.iter_mut().find(|f| {
@@ -335,11 +332,10 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
 
                 // Write back currentLevel (Phase 9B).
                 // Port of C# EnvelopeEvaluator line 192.
-                if let Some(envs) = &mut layer.envelopes {
-                    if let Some(env) = envs.get_mut(ei) {
+                if let Some(envs) = &mut layer.envelopes
+                    && let Some(env) = envs.get_mut(ei) {
                         env.current_level = adsr_value;
                     }
-                }
 
                 let layer_effects = match &mut layer.effects {
                     Some(effects) => effects,
@@ -456,11 +452,10 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: f32) ->
 
             // Write back currentLevel (Phase 9B).
             // Port of C# EnvelopeEvaluator line 270.
-            if let Some(envs) = &mut gp.envelopes {
-                if let Some(env) = envs.get_mut(ei) {
+            if let Some(envs) = &mut gp.envelopes
+                && let Some(env) = envs.get_mut(ei) {
                     env.current_level = adsr_level;
                 }
-            }
 
             // Additive composition: push current toward target
             let current_value = gp.param_values[idx];

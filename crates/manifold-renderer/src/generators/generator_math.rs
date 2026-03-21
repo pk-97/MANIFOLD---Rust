@@ -6,7 +6,7 @@ pub const PROJ_SCALE: f32 = 0.25;
 /// Unity ref: GeneratorMath.HashBeat
 #[inline]
 pub fn hash_beat(n: f32) -> f32 {
-    ((n * 127.1).sin() * 43758.5453).abs().fract()
+    ((n * 127.1).sin() * 43_758.547).abs().fract()
 }
 
 /// Default dot radius in normalized screen space.

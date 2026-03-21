@@ -63,12 +63,11 @@ pub fn save_v2_archive(
     }
 
     // Create parent directory if needed (Unity line 139-141)
-    if let Some(directory) = Path::new(path).parent() {
-        if !directory.as_os_str().is_empty() && !directory.exists() {
+    if let Some(directory) = Path::new(path).parent()
+        && !directory.as_os_str().is_empty() && !directory.exists() {
             std::fs::create_dir_all(directory)
                 .map_err(|e| format!("Failed to create directory: {e}"))?;
         }
-    }
 
     let project_bytes = project_json.as_bytes();
 
@@ -115,12 +114,10 @@ pub fn save_v2_archive(
         // Push previous state to history (Unity lines 192-196)
         if let (Some(prev_bytes), Some(prev_hash)) =
             (&previous_project_bytes, &previous_hash)
-        {
-            if !prev_hash.is_empty() {
+            && !prev_hash.is_empty() {
                 let entry_name = format!("{}{}.json.gz", HISTORY_FOLDER, prev_hash);
                 write_gzip_entry(&mut zip, &entry_name, prev_bytes)?;
             }
-        }
 
         // Write current project.json — uncompressed for fast reads (Unity line 199)
         zip.start_file(PROJECT_ENTRY, options_no_compress)
@@ -289,14 +286,13 @@ pub fn revert_to(path: &str, hash: &str) -> bool {
         copy_history_entries(path, &mut zip)?;
 
         // Push current state to history (if not already there as a file)
-        if let Some(ref cur_bytes) = current_bytes {
-            if !current_hash.is_empty() {
+        if let Some(ref cur_bytes) = current_bytes
+            && !current_hash.is_empty() {
                 let current_history_entry = format!("{}{}.json.gz", HISTORY_FOLDER, current_hash);
                 if !history_entry_exists(path, &current_history_entry) {
                     write_gzip_entry(&mut zip, &current_history_entry, cur_bytes)?;
                 }
             }
-        }
 
         // Write reverted snapshot as current project.json
         zip.start_file(PROJECT_ENTRY, options)

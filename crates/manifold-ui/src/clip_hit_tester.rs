@@ -4,6 +4,7 @@
 //! No MonoBehaviour, no allocations on the hot path.
 //! The struct is stateless — CoordinateMapper and clip data are passed as parameters.
 
+use manifold_core::ClipId;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::panels::viewport::ViewportClip;
 
@@ -22,7 +23,7 @@ pub enum HitRegion {
 /// Matches Unity ClipHitResult struct (ClipHitTester.cs lines 9-17).
 #[derive(Debug, Clone)]
 pub struct ClipHitResult {
-    pub clip_id: String,
+    pub clip_id: ClipId,
     pub layer_index: usize,
     pub region: HitRegion,
 }
@@ -136,7 +137,7 @@ impl ClipHitTester {
         clips: &[ViewportClip],
         layer_count: usize,
         is_group_layer: impl Fn(usize) -> bool,
-    ) -> Vec<String> {
+    ) -> Vec<ClipId> {
         let mut results = Vec::new();
 
         // Unity lines 111-113: clamp layer bounds
@@ -180,7 +181,7 @@ mod tests {
 
     fn make_clip(id: &str, layer: usize, start: f32, duration: f32) -> ViewportClip {
         ViewportClip {
-            clip_id: id.to_string(),
+            clip_id: ClipId::new(id),
             layer_index: layer,
             start_beat: start,
             duration_beats: duration,
@@ -288,10 +289,10 @@ mod tests {
         ];
         // Region: beats 1-4, layers 0-1
         let result = ClipHitTester::box_select(1.0, 4.0, 0, 1, &clips, 3, no_groups);
-        assert!(result.contains(&"c1".to_string())); // 0-2 overlaps 1-4
-        assert!(result.contains(&"c2".to_string())); // 3-5 overlaps 1-4
-        assert!(result.contains(&"c3".to_string())); // 1-4 overlaps 1-4
-        assert!(!result.contains(&"c4".to_string())); // layer 2 outside
+        assert!(result.contains(&ClipId::new("c1"))); // 0-2 overlaps 1-4
+        assert!(result.contains(&ClipId::new("c2"))); // 3-5 overlaps 1-4
+        assert!(result.contains(&ClipId::new("c3"))); // 1-4 overlaps 1-4
+        assert!(!result.contains(&ClipId::new("c4"))); // layer 2 outside
     }
 
     #[test]
@@ -302,7 +303,7 @@ mod tests {
         ];
         // Layer 0 is a group
         let result = ClipHitTester::box_select(0.0, 4.0, 0, 1, &clips, 2, |i| i == 0);
-        assert!(!result.contains(&"c1".to_string())); // group layer skipped
-        assert!(result.contains(&"c2".to_string()));  // non-group collected
+        assert!(!result.contains(&ClipId::new("c1"))); // group layer skipped
+        assert!(result.contains(&ClipId::new("c2")));  // non-group collected
     }
 }

@@ -45,7 +45,8 @@ static SHARED_LIB: OnceLock<Option<Arc<SharedDepthLib>>> = OnceLock::new();
 fn get_or_load_shared_lib() -> Option<Arc<SharedDepthLib>> {
     SHARED_LIB.get_or_init(|| {
         // Set KMP_DUPLICATE_LIB_OK before loading (matches Unity's EnsureOmpEnvironmentSafety)
-        std::env::set_var("KMP_DUPLICATE_LIB_OK", "TRUE");
+        // SAFETY: Called once during initialization, before any threads use OpenMP.
+        unsafe { std::env::set_var("KMP_DUPLICATE_LIB_OK", "TRUE") };
 
         let path = super::resolve_bundle_path("DepthEstimator")?;
         let library = unsafe { Library::new(&path) }.ok()?;

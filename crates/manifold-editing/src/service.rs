@@ -1,6 +1,7 @@
 use crate::command::{Command, CompositeCommand};
 use crate::undo::UndoRedoManager;
 use crate::commands::clip::*;
+use manifold_core::ClipId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::selection::SelectionRegion;
@@ -27,8 +28,9 @@ struct ClipboardEntry {
 }
 
 /// Result of a paste operation.
+#[must_use]
 pub struct PasteResult {
-    pub pasted_clip_ids: Vec<String>,
+    pub pasted_clip_ids: Vec<ClipId>,
     pub skipped_count: usize,
     pub skip_reason: Option<String>,
     pub commands: Vec<Box<dyn Command>>,
@@ -68,6 +70,7 @@ impl EditingService {
     }
 
     /// Undo the most recent command.
+    #[must_use]
     pub fn undo(&mut self, project: &mut Project) -> bool {
         if self.undo_manager.undo(project) {
             self.data_version += 1;
@@ -78,6 +81,7 @@ impl EditingService {
     }
 
     /// Redo the most recently undone command.
+    #[must_use]
     pub fn redo(&mut self, project: &mut Project) -> bool {
         if self.undo_manager.redo(project) {
             self.data_version += 1;
@@ -122,7 +126,7 @@ impl EditingService {
     // ─── Selection helpers ───
 
     /// Get clips in a selection region.
-    pub fn get_clips_in_region(project: &Project, region: &SelectionRegion) -> Vec<(usize, String)> {
+    pub fn get_clips_in_region(project: &Project, region: &SelectionRegion) -> Vec<(usize, ClipId)> {
         if !region.is_active {
             return Vec::new();
         }
@@ -152,7 +156,7 @@ impl EditingService {
         project: &Project,
         placed_clip: &TimelineClip,
         layer_index: usize,
-        ignore_ids: &HashSet<String>,
+        ignore_ids: &HashSet<ClipId>,
         spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
@@ -244,15 +248,15 @@ impl EditingService {
     pub fn copy_clips(
         &mut self,
         project: &Project,
-        clip_ids: &[String],
+        clip_ids: &[ClipId],
         region: Option<&SelectionRegion>,
         spb: f32,
     ) {
         self.clipboard.clear();
 
         // Region mode: trim clips at boundaries, use region origin
-        if let Some(region) = region {
-            if region.is_active {
+        if let Some(region) = region
+            && region.is_active {
                 // Find overlapping clips in region (matching Unity CopySelectedClips)
                 let overlapping: Vec<&TimelineClip> = project.timeline.layers.iter()
                     .flat_map(|l| l.clips.iter())
@@ -280,7 +284,6 @@ impl EditingService {
                 }
                 return;
             }
-        }
 
         // Individual mode: copy full clips, earliest-clip origin
         if clip_ids.is_empty() {
@@ -441,7 +444,7 @@ impl EditingService {
 
         for li in start_layer..=end_layer {
             // Snapshot clip IDs (splits add new clips)
-            let clip_ids: Vec<String> = project.timeline.layers[li]
+            let clip_ids: Vec<ClipId> = project.timeline.layers[li]
                 .clips.iter().map(|c| c.id.clone()).collect();
 
             for clip_id in &clip_ids {
@@ -456,18 +459,16 @@ impl EditingService {
 
                 // Split at region end FIRST (so the original's EndBeat is still valid
                 // when we split at region start)
-                if clip.end_beat() > region.end_beat {
-                    if let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region.end_beat, spb) {
+                if clip.end_beat() > region.end_beat
+                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region.end_beat, spb) {
                         commands.push(cmd);
                     }
-                }
 
                 // Split at region start
-                if clip.start_beat < region.start_beat {
-                    if let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region.start_beat, spb) {
+                if clip.start_beat < region.start_beat
+                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region.start_beat, spb) {
                         commands.push(cmd);
                     }
-                }
             }
         }
 
@@ -509,7 +510,7 @@ impl EditingService {
         beat: f32,
         layer_index: usize,
         duration_beats: f32,
-    ) -> (Box<dyn Command>, String) {
+    ) -> (Box<dyn Command>, ClipId) {
         let layer = project.timeline.layers.get(layer_index);
         let is_generator = layer.is_some_and(|l| l.layer_type == LayerType::Generator);
 
@@ -537,7 +538,7 @@ impl EditingService {
     /// Matches Unity DuplicateSelectedClips.
     pub fn duplicate_clips(
         project: &Project,
-        clip_ids: &[String],
+        clip_ids: &[ClipId],
         region: &SelectionRegion,
         spb: f32,
     ) -> Vec<Box<dyn Command>> {
@@ -598,14 +599,14 @@ impl EditingService {
     /// then deletes only the interior segments. Matches Unity DeleteSelectedClips.
     pub fn delete_clips(
         project: &Project,
-        clip_ids: &[String],
+        clip_ids: &[ClipId],
         region: Option<&SelectionRegion>,
         spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
 
-        if let Some(region) = region {
-            if region.is_active {
+        if let Some(region) = region
+            && region.is_active {
                 // Region mode: split at boundaries, then delete clips inside region
                 let split_cmds = Self::split_clips_at_region_boundaries(project, region, spb);
                 commands.extend(split_cmds);
@@ -620,7 +621,6 @@ impl EditingService {
 
                 return commands;
             }
-        }
 
         // Individual selection path
         for (li, layer) in project.timeline.layers.iter().enumerate() {
@@ -641,12 +641,12 @@ impl EditingService {
     /// Matches Unity NudgeSelectedClips.
     pub fn nudge_clips(
         project: &Project,
-        clip_ids: &[String],
+        clip_ids: &[ClipId],
         beat_delta: f32,
         spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
-        let mut nudged_ids: HashSet<String> = HashSet::new();
+        let mut nudged_ids: HashSet<ClipId> = HashSet::new();
 
         // Collect move commands for each nudged clip
         // We build "virtual" post-move clips to compute overlap enforcement
@@ -706,7 +706,7 @@ impl EditingService {
     /// Matches Unity ExtendSelectedClipsByGridStep.
     pub fn extend_clips_by_grid(
         project: &Project,
-        clip_ids: &[String],
+        clip_ids: &[ClipId],
         grid_step: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
@@ -757,7 +757,7 @@ impl EditingService {
     /// Shrink selected clips by one grid step.
     pub fn shrink_clips_by_grid(
         project: &Project,
-        clip_ids: &[String],
+        clip_ids: &[ClipId],
         grid_step: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
@@ -849,17 +849,16 @@ impl EditingService {
     /// Port of C# EditingService.GetEffectiveSelectedClips (lines 192-206).
     pub fn get_effective_selected_clips<'a>(
         project: &'a Project,
-        selected_clip_ids: &[String],
+        selected_clip_ids: &[ClipId],
         region: Option<&SelectionRegion>,
     ) -> Vec<&'a TimelineClip> {
-        if let Some(region) = region {
-            if region.is_active {
+        if let Some(region) = region
+            && region.is_active {
                 let clips_in_region = Self::get_clips_in_region(project, region);
                 return clips_in_region.iter().filter_map(|(li, id)| {
                     project.timeline.layers.get(*li).and_then(|l| l.find_clip(id))
                 }).collect();
             }
-        }
 
         let mut result = Vec::with_capacity(selected_clip_ids.len());
         for layer in &project.timeline.layers {
@@ -874,7 +873,7 @@ impl EditingService {
 
     /// Select all clips on all layers. Returns clip IDs for the caller to add to selection.
     /// Port of C# EditingService.SelectAllClips (lines 264-276).
-    pub fn select_all_clip_ids(project: &Project) -> Vec<(String, i32)> {
+    pub fn select_all_clip_ids(project: &Project) -> Vec<(ClipId, i32)> {
         let mut result = Vec::new();
         for layer in &project.timeline.layers {
             for clip in &layer.clips {
@@ -889,7 +888,7 @@ impl EditingService {
     /// Port of C# EditingService.UpdateRegionFromClipSelection (lines 283-303).
     pub fn compute_region_from_clip_selection(
         project: &Project,
-        selected_clip_ids: &[String],
+        selected_clip_ids: &[ClipId],
     ) -> Option<(f32, f32, i32, i32)> {
         if selected_clip_ids.len() < 2 {
             return None;
@@ -926,7 +925,7 @@ impl EditingService {
     pub fn cut_clips(
         &mut self,
         project: &mut Project,
-        clip_ids: &[String],
+        clip_ids: &[ClipId],
         region: Option<&SelectionRegion>,
         spb: f32,
     ) -> Vec<Box<dyn Command>> {
@@ -944,7 +943,7 @@ impl EditingService {
         project: &Project,
         region: &SelectionRegion,
         spb: f32,
-    ) -> (Vec<Box<dyn Command>>, Vec<(usize, String)>) {
+    ) -> (Vec<Box<dyn Command>>, Vec<(usize, ClipId)>) {
         let split_cmds = Self::split_clips_at_region_boundaries(project, region, spb);
         let interior = Self::get_clips_in_region(project, region);
         (split_cmds, interior)
@@ -955,12 +954,12 @@ impl EditingService {
     /// Returns (split_commands, tail_clip_ids) for the caller to update selection.
     pub fn split_clips_at_beat_batch(
         project: &Project,
-        clip_ids: &[String],
+        clip_ids: &[ClipId],
         split_beat: f32,
         spb: f32,
-    ) -> (Vec<Box<dyn Command>>, Vec<String>) {
+    ) -> (Vec<Box<dyn Command>>, Vec<ClipId>) {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
-        let mut tail_clip_ids: Vec<String> = Vec::new();
+        let mut tail_clip_ids: Vec<ClipId> = Vec::new();
 
         for layer in &project.timeline.layers {
             for clip in &layer.clips {
@@ -991,7 +990,7 @@ impl EditingService {
     /// Port of C# EditingService.ToggleMuteSelectedClips (lines 418-449).
     pub fn toggle_mute_clips(
         project: &Project,
-        clip_ids: &[String],
+        clip_ids: &[ClipId],
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
 
@@ -1028,7 +1027,7 @@ impl EditingService {
     /// Port of C# EditingService.DuplicateSelectedClips region restoration (lines 743-758).
     pub fn duplicate_clips_with_region(
         project: &Project,
-        clip_ids: &[String],
+        clip_ids: &[ClipId],
         region: &SelectionRegion,
         spb: f32,
     ) -> (Vec<Box<dyn Command>>, Option<SelectionRegion>) {

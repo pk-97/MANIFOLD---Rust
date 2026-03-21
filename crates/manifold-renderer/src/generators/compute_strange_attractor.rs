@@ -499,7 +499,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
                 });
                 pass.set_pipeline(&self.seed_pipeline);
                 pass.set_bind_group(0, &seed_bg, &[]);
-                let groups = (active_count + THREAD_GROUP_SIZE - 1) / THREAD_GROUP_SIZE;
+                let groups = active_count.div_ceil(THREAD_GROUP_SIZE);
                 pass.dispatch_workgroups(groups, 1, 1);
             }
 
@@ -540,7 +540,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
             });
             pass.set_pipeline(&self.sim_pipeline);
             pass.set_bind_group(0, &sim_bg, &[]);
-            let groups = (active_count + THREAD_GROUP_SIZE - 1) / THREAD_GROUP_SIZE;
+            let groups = active_count.div_ceil(THREAD_GROUP_SIZE);
             pass.dispatch_workgroups(groups, 1, 1);
         }
 
@@ -573,7 +573,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
             });
             pass.set_pipeline(&self.splat_pipeline);
             pass.set_bind_group(0, &splat_bg, &[]);
-            let groups = (active_count + THREAD_GROUP_SIZE - 1) / THREAD_GROUP_SIZE;
+            let groups = active_count.div_ceil(THREAD_GROUP_SIZE);
             pass.dispatch_workgroups(groups, 1, 1);
         }
 
@@ -599,8 +599,8 @@ impl Generator for ComputeStrangeAttractorGenerator {
             });
             pass.set_pipeline(&self.resolve_pipeline);
             pass.set_bind_group(0, &resolve_bg, &[]);
-            let gx = (sw + 15) / 16;
-            let gy = (sh + 15) / 16;
+            let gx = sw.div_ceil(16);
+            let gy = sh.div_ceil(16);
             pass.dispatch_workgroups(gx, gy, 1);
         }
 

@@ -1,3 +1,4 @@
+use manifold_core::ClipId;
 use manifold_core::layer::Layer;
 use manifold_core::types::{ClockAuthority, GeneratorType, LayerType, PlaybackState, TempoPointSource};
 use manifold_core::clip::TimelineClip;
@@ -10,7 +11,8 @@ use crate::scheduler::ClipScheduler;
 use crate::active_window::ActiveTimelineClipWindow;
 use crate::live_clip_manager::LiveClipManager;
 
-use std::collections::{HashMap, HashSet};
+use ahash::{AHashMap, AHashSet};
+use std::collections::HashMap;
 
 // ─── Playback notification trait ───
 
@@ -91,12 +93,12 @@ pub struct PlaybackEngine {
     renderers: Vec<Box<dyn ClipRenderer>>,
 
     // Active clip tracking
-    active_clip_renderers: HashMap<String, usize>,  // clip_id → renderer index
-    active_clip_ids: HashSet<String>,
-    preparing_clips: HashSet<String>,
-    pending_pauses: HashMap<String, f64>,  // clip_id → pause deadline
-    looping_clip_ids: HashSet<String>,
-    recently_started_times: HashMap<String, f64>,  // clip_id → start realtime
+    active_clip_renderers: AHashMap<ClipId, usize>,  // clip_id → renderer index
+    active_clip_ids: AHashSet<ClipId>,
+    preparing_clips: AHashSet<ClipId>,
+    pending_pauses: AHashMap<ClipId, f64>,  // clip_id → pause deadline
+    looping_clip_ids: AHashSet<ClipId>,
+    recently_started_times: AHashMap<ClipId, f64>,  // clip_id → start realtime
 
     // Scheduling
     scheduler: ClipScheduler,
@@ -129,17 +131,17 @@ pub struct PlaybackEngine {
     last_frame_count: i32,
 
     // Pre-allocated scratch buffers
-    stop_buffer: Vec<String>,
+    stop_buffer: Vec<ClipId>,
     ready_clips_list: Vec<TimelineClip>,
     timeline_active_scratch: Vec<TimelineClip>,
-    became_ready_list: Vec<String>,
-    clips_to_stop_drift: Vec<String>,
+    became_ready_list: Vec<ClipId>,
+    clips_to_stop_drift: Vec<ClipId>,
     prewarm_candidates: Vec<TimelineClip>,
     compositor_fallback_clips: Vec<TimelineClip>,
 
     // Prewarm state. Port of C# PlaybackEngine prewarm fields.
     next_prewarm_at: f64,
-    last_prewarm_ids: HashSet<String>,
+    last_prewarm_ids: AHashSet<String>,
 
     // Re-entrancy guard
     is_ticking: bool,
@@ -166,7 +168,7 @@ pub struct PlaybackEngine {
     // Sort comparator scratch. Port of C# PlaybackEngine lines 211-214.
     // Rust uses closures for sorting — no static delegates needed, but
     // we keep the scratch buffers for zero-alloc iteration.
-    to_pause_list: Vec<String>,
+    to_pause_list: Vec<ClipId>,
 }
 
 impl PlaybackEngine {
@@ -181,12 +183,12 @@ impl PlaybackEngine {
             external_time_sync: false,
             project: None,
             renderers,
-            active_clip_renderers: HashMap::with_capacity(32),
-            active_clip_ids: HashSet::with_capacity(32),
-            preparing_clips: HashSet::with_capacity(8),
-            pending_pauses: HashMap::with_capacity(8),
-            looping_clip_ids: HashSet::with_capacity(16),
-            recently_started_times: HashMap::with_capacity(8),
+            active_clip_renderers: AHashMap::with_capacity(32),
+            active_clip_ids: AHashSet::with_capacity(32),
+            preparing_clips: AHashSet::with_capacity(8),
+            pending_pauses: AHashMap::with_capacity(8),
+            looping_clip_ids: AHashSet::with_capacity(16),
+            recently_started_times: AHashMap::with_capacity(8),
             scheduler: ClipScheduler::new(),
             active_window: ActiveTimelineClipWindow::new(),
             live_clip_manager: None,
@@ -209,7 +211,7 @@ impl PlaybackEngine {
             prewarm_candidates: Vec::with_capacity(32),
             compositor_fallback_clips: Vec::with_capacity(32),
             next_prewarm_at: 0.0,
-            last_prewarm_ids: HashSet::with_capacity(16),
+            last_prewarm_ids: AHashSet::with_capacity(16),
             is_ticking: false,
             log: None,
             log_warning: None,
@@ -327,7 +329,7 @@ impl PlaybackEngine {
         self.sync_clips_to_time();
 
         // Resume paused clips that were pre-warmed during Stop/LoadProject
-        if self.active_clip_renderers.len() > 0 {
+        if !self.active_clip_renderers.is_empty() {
             self.resume_ready_clips();
         }
     }
@@ -413,9 +415,9 @@ impl PlaybackEngine {
         // Note: live_clip_manager.clear_on_seek needs a stop callback.
         // The engine's stop_clip handles renderer cleanup, but we can't call it here
         // due to borrow conflict. Instead, collect IDs and stop after the borrow.
-        if beat_delta > 1.0 {
-            if let Some(mgr) = &mut self.live_clip_manager {
-                let ids_to_stop: Vec<String> = mgr.live_slots_list()
+        if beat_delta > 1.0
+            && let Some(mgr) = &mut self.live_clip_manager {
+                let ids_to_stop: Vec<ClipId> = mgr.live_slots_list()
                     .iter()
                     .map(|(_, c)| c.id.clone())
                     .collect();
@@ -428,7 +430,6 @@ impl PlaybackEngine {
                     self.active_clip_ids.remove(id);
                 }
             }
-        }
 
         // Re-sync clips at new position — unconditional, matching Unity's
         // PlaybackController.Seek() which always calls SyncClipsToTime() + SeekActiveClips()
@@ -658,13 +659,11 @@ impl PlaybackEngine {
 
     pub fn start_clip(&mut self, clip: &TimelineClip, realtime_now: f64) {
         // Fix 6: Never start clips on group layers
-        if let Some(project) = &self.project {
-            if let Some(layer) = project.timeline.layers.get(clip.layer_index as usize) {
-                if layer.layer_type == LayerType::Group {
+        if let Some(project) = &self.project
+            && let Some(layer) = project.timeline.layers.get(clip.layer_index as usize)
+                && layer.layer_type == LayerType::Group {
                     return;
                 }
-            }
-        }
 
         // Find renderer
         let renderer_idx = self.renderers.iter().position(|r| r.can_handle(clip));
@@ -726,8 +725,8 @@ impl PlaybackEngine {
     // ─── Pending pauses ───
 
     pub fn process_pending_pauses(&mut self, realtime_now: f64) {
-        let expired: Vec<String> = self.pending_pauses.iter()
-            .filter(|(_, &deadline)| realtime_now >= deadline)
+        let expired: Vec<ClipId> = self.pending_pauses.iter()
+            .filter(|(_, deadline)| realtime_now >= **deadline)
             .map(|(id, _)| id.clone())
             .collect();
 
@@ -1069,43 +1068,40 @@ impl PlaybackEngine {
     /// Resume all paused clips that are ready (for Play from paused/stopped).
     /// Port of C# PlaybackEngine.ResumeReadyClips (lines 1141-1155).
     pub fn resume_ready_clips(&mut self) {
-        let clip_ids: Vec<String> = self.active_clip_renderers.keys().cloned().collect();
+        let clip_ids: Vec<ClipId> = self.active_clip_renderers.keys().cloned().collect();
         for clip_id in &clip_ids {
-            if let Some(&idx) = self.active_clip_renderers.get(clip_id.as_str()) {
-                if self.renderers[idx].needs_prepare_phase()
+            if let Some(&idx) = self.active_clip_renderers.get(clip_id.as_str())
+                && self.renderers[idx].needs_prepare_phase()
                     && self.renderers[idx].is_clip_ready(clip_id)
                     && !self.renderers[idx].is_clip_playing(clip_id)
                     && !self.preparing_clips.contains(clip_id)
                 {
                     self.renderers[idx].resume_clip(clip_id);
                 }
-            }
         }
     }
 
     /// Pause all active seekable clips (for transport Pause).
     /// Port of C# PlaybackEngine.PauseActiveClips (lines 1157-1168).
     pub fn pause_active_clips(&mut self) {
-        let clip_ids: Vec<String> = self.active_clip_renderers.keys().cloned().collect();
+        let clip_ids: Vec<ClipId> = self.active_clip_renderers.keys().cloned().collect();
         for clip_id in &clip_ids {
-            if let Some(&idx) = self.active_clip_renderers.get(clip_id.as_str()) {
-                if self.renderers[idx].needs_prepare_phase()
+            if let Some(&idx) = self.active_clip_renderers.get(clip_id.as_str())
+                && self.renderers[idx].needs_prepare_phase()
                     && self.renderers[idx].is_clip_playing(clip_id)
                 {
                     self.renderers[idx].pause_clip(clip_id);
                 }
-            }
         }
     }
 
     /// Find a clip by ID — checks live slots first, then shared timeline lookup.
     /// Port of C# PlaybackEngine.FindTimelineClip (lines 1065-1074).
     pub fn find_timeline_clip(&self, clip_id: &str) -> Option<&TimelineClip> {
-        if let Some(mgr) = &self.live_clip_manager {
-            if let Some(clip) = mgr.find_live_clip(clip_id) {
+        if let Some(mgr) = &self.live_clip_manager
+            && let Some(clip) = mgr.find_live_clip(clip_id) {
                 return Some(clip);
             }
-        }
         // Timeline.find_clip_by_id requires &mut self for cache, so fall back to linear scan
         self.project.as_ref().and_then(|p| {
             for layer in &p.timeline.layers {
@@ -1165,12 +1161,11 @@ impl PlaybackEngine {
         if clip.recorded_bpm > 0.0 {
             return clip.recorded_bpm;
         }
-        if let Some(project) = &self.project {
-            if project.recording_provenance.has_recorded_project_bpm {
+        if let Some(project) = &self.project
+            && project.recording_provenance.has_recorded_project_bpm {
                 let bpm = project.recording_provenance.recorded_project_bpm;
                 return bpm.clamp(20.0, 300.0);
             }
-        }
         0.0
     }
 
@@ -1284,7 +1279,7 @@ impl PlaybackEngine {
 
         self.became_ready_list.clear();
 
-        let preparing_list: Vec<String> = self.preparing_clips.iter().cloned().collect();
+        let preparing_list: Vec<ClipId> = self.preparing_clips.iter().cloned().collect();
         for clip_id in &preparing_list {
             let renderer_idx = match self.active_clip_renderers.get(clip_id.as_str()) {
                 Some(&idx) => idx,
@@ -1341,7 +1336,7 @@ impl PlaybackEngine {
     /// Enforce custom loop boundaries for looping clips with custom loop durations.
     /// Port of C# PlaybackEngine.CheckCustomLoopBoundaries (lines 820-854).
     pub fn check_custom_loop_boundaries(&mut self) {
-        let looping_list: Vec<String> = self.looping_clip_ids.iter().cloned().collect();
+        let looping_list: Vec<ClipId> = self.looping_clip_ids.iter().cloned().collect();
         for clip_id in &looping_list {
             let renderer_idx = match self.active_clip_renderers.get(clip_id.as_str()) {
                 Some(&idx) => idx,
@@ -1384,7 +1379,7 @@ impl PlaybackEngine {
 
         self.clips_to_stop_drift.clear();
 
-        let active_list: Vec<(String, usize)> = self.active_clip_renderers
+        let active_list: Vec<(ClipId, usize)> = self.active_clip_renderers
             .iter()
             .map(|(k, &v)| (k.clone(), v))
             .collect();
@@ -1474,7 +1469,7 @@ impl PlaybackEngine {
         }
 
         // Stop clips that exceeded their out-point (deferred to avoid borrow conflict)
-        let to_stop: Vec<String> = self.clips_to_stop_drift.drain(..).collect();
+        let to_stop: Vec<ClipId> = self.clips_to_stop_drift.drain(..).collect();
         for clip_id in &to_stop {
             self.stop_clip(clip_id);
         }
@@ -1483,7 +1478,7 @@ impl PlaybackEngine {
     /// Re-apply playback rates to all active clips.
     /// Port of C# PlaybackEngine.UpdateActiveClipPlaybackRates (lines 952-962).
     pub fn update_active_clip_playback_rates(&mut self) {
-        let active_list: Vec<(String, usize)> = self.active_clip_renderers
+        let active_list: Vec<(ClipId, usize)> = self.active_clip_renderers
             .iter()
             .map(|(k, &v)| (k.clone(), v))
             .collect();
@@ -1501,7 +1496,7 @@ impl PlaybackEngine {
     /// Re-seek all active seekable clips to current playhead position.
     /// Port of C# PlaybackEngine.SeekActiveClips (lines 967-987).
     pub fn seek_active_clips(&mut self) {
-        let active_list: Vec<(String, usize)> = self.active_clip_renderers
+        let active_list: Vec<(ClipId, usize)> = self.active_clip_renderers
             .iter()
             .map(|(k, &v)| (k.clone(), v))
             .collect();
@@ -1618,7 +1613,7 @@ impl PlaybackEngine {
     /// Compute pre-warm candidates: clips near the playhead that should have decoders started.
     /// Port of C# PlaybackEngine.ComputePrewarmCandidates (lines 1251-1330).
     pub fn compute_prewarm_candidates(&mut self, force: bool) -> Option<HashMap<String, crate::video_time::PrewarmCandidate>> {
-        if self.project.as_ref().map_or(true, |p| p.video_library.clips.is_empty()) {
+        if self.project.as_ref().is_none_or(|p| p.video_library.clips.is_empty()) {
             return None;
         }
 

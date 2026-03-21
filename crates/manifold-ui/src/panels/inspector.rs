@@ -253,7 +253,7 @@ impl InspectorCompositePanel {
             || self.master_effects.iter().any(|e| e.is_dragging())
             || self.layer_effects.iter().any(|e| e.is_dragging())
             || self.clip_effects.iter().any(|e| e.is_dragging())
-            || self.gen_params.as_ref().map_or(false, |p| p.is_dragging())
+            || self.gen_params.as_ref().is_some_and(|p| p.is_dragging())
     }
 
     // ── Scrolling ─────────────────────────────────────────────────
@@ -553,11 +553,10 @@ impl InspectorCompositePanel {
             if in_range(idx, self.clip_chrome.first_node(), self.clip_chrome.node_count()) {
                 return Some(PressedTarget::ClipChrome);
             }
-            if let Some(ref gp) = self.gen_params {
-                if in_range(idx, gp.first_node(), gp.node_count()) {
+            if let Some(ref gp) = self.gen_params
+                && in_range(idx, gp.first_node(), gp.node_count()) {
                     return Some(PressedTarget::GenParam);
                 }
-            }
             for (i, card) in self.clip_effects.iter().enumerate() {
                 if in_range(idx, card.first_node(), card.node_count()) {
                     return Some(PressedTarget::ClipEffect(i));

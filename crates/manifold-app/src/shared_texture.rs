@@ -15,7 +15,7 @@
 #![allow(dead_code)]
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 use core_foundation::base::TCFType;
 use core_foundation::dictionary::CFMutableDictionary;
@@ -111,7 +111,7 @@ impl SharedTextureBridge {
     ///
     /// # Safety
     /// `wgpu_device` must be from the same adapter (same underlying MTLDevice).
-    pub unsafe fn import_texture(&self, wgpu_device: &wgpu::Device) -> wgpu::Texture {
+    pub unsafe fn import_texture(&self, wgpu_device: &wgpu::Device) -> wgpu::Texture { unsafe {
         let width = self.width.load(Ordering::Acquire);
         let height = self.height.load(Ordering::Acquire);
 
@@ -138,7 +138,7 @@ impl SharedTextureBridge {
         descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
 
         // 3. Call [MTLDevice newTextureWithDescriptor:iosurface:plane:]
-        let io_surface_guard = self.io_surface.read().unwrap();
+        let io_surface_guard = self.io_surface.read();
         let io_surface_ref = io_surface_guard.as_concrete_TypeRef();
         let raw_mtl_texture: *mut objc::runtime::Object = objc::msg_send![
             raw_device,
@@ -189,7 +189,7 @@ impl SharedTextureBridge {
                 view_formats: &[],
             },
         )
-    }
+    }}
 
     /// Resize the bridge. Creates a new IOSurface at the new dimensions.
     /// Both devices must re-import their textures after this call
@@ -197,7 +197,7 @@ impl SharedTextureBridge {
     pub fn resize(&self, width: u32, height: u32) {
         let new_surface = Self::create_io_surface(width, height);
         {
-            let mut guard = self.io_surface.write().unwrap();
+            let mut guard = self.io_surface.write();
             *guard = new_surface;
         }
         self.width.store(width, Ordering::Release);

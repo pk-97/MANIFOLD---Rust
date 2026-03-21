@@ -534,21 +534,19 @@ impl RescaleBeatsForBpmChangeCommand {
 impl Command for RescaleBeatsForBpmChangeCommand {
     fn execute(&mut self, project: &mut Project) {
         for &(li, ci, _, new_beat) in &self.clip_moves {
-            if let Some(layer) = project.timeline.layers.get_mut(li) {
-                if let Some(clip) = layer.clips.get_mut(ci) {
+            if let Some(layer) = project.timeline.layers.get_mut(li)
+                && let Some(clip) = layer.clips.get_mut(ci) {
                     clip.start_beat = new_beat;
                 }
-            }
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
         for &(li, ci, old_beat, _) in &self.clip_moves {
-            if let Some(layer) = project.timeline.layers.get_mut(li) {
-                if let Some(clip) = layer.clips.get_mut(ci) {
+            if let Some(layer) = project.timeline.layers.get_mut(li)
+                && let Some(clip) = layer.clips.get_mut(ci) {
                     clip.start_beat = old_beat;
                 }
-            }
         }
     }
 

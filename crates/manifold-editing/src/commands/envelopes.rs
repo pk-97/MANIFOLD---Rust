@@ -1,3 +1,4 @@
+use manifold_core::ClipId;
 use crate::command::Command;
 use manifold_core::project::Project;
 use manifold_core::effects::ParamEnvelope;
@@ -6,12 +7,12 @@ use manifold_core::types::EffectType;
 /// Add a param envelope to a clip.
 #[derive(Debug)]
 pub struct AddParamEnvelopeCommand {
-    clip_id: String,
+    clip_id: ClipId,
     envelope: ParamEnvelope,
 }
 
 impl AddParamEnvelopeCommand {
-    pub fn new(clip_id: String, envelope: ParamEnvelope) -> Self {
+    pub fn new(clip_id: ClipId, envelope: ParamEnvelope) -> Self {
         Self { clip_id, envelope }
     }
 }
@@ -35,13 +36,13 @@ impl Command for AddParamEnvelopeCommand {
 /// Remove a param envelope from a clip.
 #[derive(Debug)]
 pub struct RemoveParamEnvelopeCommand {
-    clip_id: String,
+    clip_id: ClipId,
     envelope: Option<ParamEnvelope>,
     removed_index: usize,
 }
 
 impl RemoveParamEnvelopeCommand {
-    pub fn new(clip_id: String, envelope: ParamEnvelope, removed_index: usize) -> Self {
+    pub fn new(clip_id: ClipId, envelope: ParamEnvelope, removed_index: usize) -> Self {
         Self { clip_id, envelope: Some(envelope), removed_index }
     }
 }
@@ -57,13 +58,12 @@ impl Command for RemoveParamEnvelopeCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(envelope) = &self.envelope {
-            if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
+        if let Some(envelope) = &self.envelope
+            && let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
                 let envs = clip.envelopes_mut();
                 let idx = self.removed_index.min(envs.len());
                 envs.insert(idx, envelope.clone());
             }
-        }
     }
 
     fn description(&self) -> &str { "Remove Envelope" }
@@ -72,7 +72,7 @@ impl Command for RemoveParamEnvelopeCommand {
 /// Change ADSR values on an envelope.
 #[derive(Debug)]
 pub struct ChangeEnvelopeADSRCommand {
-    clip_id: String,
+    clip_id: ClipId,
     env_index: usize,
     old_attack: f32,
     old_decay: f32,
@@ -87,7 +87,7 @@ pub struct ChangeEnvelopeADSRCommand {
 impl ChangeEnvelopeADSRCommand {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        clip_id: String,
+        clip_id: ClipId,
         env_index: usize,
         old_attack: f32, old_decay: f32, old_sustain: f32, old_release: f32,
         new_attack: f32, new_decay: f32, new_sustain: f32, new_release: f32,
@@ -129,7 +129,7 @@ impl Command for ChangeEnvelopeADSRCommand {
 /// Change envelope routing (effect type + param index).
 #[derive(Debug)]
 pub struct ChangeEnvelopeRoutingCommand {
-    clip_id: String,
+    clip_id: ClipId,
     env_index: usize,
     old_effect_type: EffectType,
     old_param_index: i32,
@@ -139,7 +139,7 @@ pub struct ChangeEnvelopeRoutingCommand {
 
 impl ChangeEnvelopeRoutingCommand {
     pub fn new(
-        clip_id: String,
+        clip_id: ClipId,
         env_index: usize,
         old_effect_type: EffectType,
         old_param_index: i32,
@@ -178,14 +178,14 @@ impl Command for ChangeEnvelopeRoutingCommand {
 /// Matches Unity's ChangeParamEnvelopeCommand which changes targetNormalized.
 #[derive(Debug)]
 pub struct ChangeEnvelopeTargetNormalizedCommand {
-    clip_id: String,
+    clip_id: ClipId,
     env_index: usize,
     old_target: f32,
     new_target: f32,
 }
 
 impl ChangeEnvelopeTargetNormalizedCommand {
-    pub fn new(clip_id: String, env_index: usize, old_target: f32, new_target: f32) -> Self {
+    pub fn new(clip_id: ClipId, env_index: usize, old_target: f32, new_target: f32) -> Self {
         Self { clip_id, env_index, old_target, new_target }
     }
 }
@@ -215,14 +215,14 @@ impl Command for ChangeEnvelopeTargetNormalizedCommand {
 /// Toggle envelope enabled state.
 #[derive(Debug)]
 pub struct ToggleEnvelopeEnabledCommand {
-    clip_id: String,
+    clip_id: ClipId,
     env_index: usize,
     old_enabled: bool,
     new_enabled: bool,
 }
 
 impl ToggleEnvelopeEnabledCommand {
-    pub fn new(clip_id: String, env_index: usize, old_enabled: bool, new_enabled: bool) -> Self {
+    pub fn new(clip_id: ClipId, env_index: usize, old_enabled: bool, new_enabled: bool) -> Self {
         Self { clip_id, env_index, old_enabled, new_enabled }
     }
 }
@@ -303,13 +303,12 @@ impl Command for RemoveLayerEnvelopeCommand {
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(envelope) = &self.envelope {
-            if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some(envelope) = &self.envelope
+            && let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
                 let envs = layer.envelopes_mut();
                 let idx = self.removed_index.min(envs.len());
                 envs.insert(idx, envelope.clone());
             }
-        }
     }
 
     fn description(&self) -> &str { "Remove Layer Envelope" }
@@ -415,7 +414,7 @@ impl Command for ChangeLayerEnvelopeTargetCommand {
 /// into separate ADSR/target/enabled commands. This atomic version matches Unity.
 #[derive(Debug)]
 pub struct ChangeParamEnvelopeCommand {
-    clip_id: String,
+    clip_id: ClipId,
     env_index: usize,
     old_attack: f32,
     old_decay: f32,
@@ -434,7 +433,7 @@ pub struct ChangeParamEnvelopeCommand {
 impl ChangeParamEnvelopeCommand {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        clip_id: String,
+        clip_id: ClipId,
         env_index: usize,
         old_attack: f32, old_decay: f32, old_sustain: f32, old_release: f32,
         old_target_normalized: f32, old_enabled: bool,

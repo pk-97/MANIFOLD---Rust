@@ -6,7 +6,7 @@
 //! The wrapper struct `AppEditingHost` borrows individual Application fields
 //! to avoid borrowing the entire Application — this lets the overlay
 //! simultaneously borrow ui_root and selection from Application.
-
+use manifold_core::ClipId;
 use std::collections::HashSet;
 
 use manifold_core::clip::TimelineClip;
@@ -170,7 +170,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Clip operations ─────────────────────────────────────────
 
-    fn create_clip_at_position(&mut self, beat: f32, layer: usize, grid_step: f32) -> Option<String> {
+    fn create_clip_at_position(&mut self, beat: f32, layer: usize, grid_step: f32) -> Option<ClipId> {
         // Port of Unity EditingService.CreateClipAtPosition.
         // Beat arrives pre-snapped from the overlay. grid_step is the clip duration.
         let duration = grid_step.max(0.25); // minimum 1/16th note
@@ -201,11 +201,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 Vec::new()
             }
         };
-        if !overlap_cmds.is_empty() {
-            if let Some(project) = Some(&mut *self.project) {
+        if !overlap_cmds.is_empty()
+            && let Some(project) = Some(&mut *self.project) {
                 for mut c in overlap_cmds { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(c)); }
             }
-        }
         *self.needs_structural_sync = true;
         Some(clip_id)
     }
@@ -332,7 +331,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Overlap enforcement ─────────────────────────────────────
 
-    fn enforce_non_overlap(&mut self, clip_id: &str, ignore_ids: &HashSet<String>) {
+    fn enforce_non_overlap(&mut self, clip_id: &str, ignore_ids: &HashSet<ClipId>) {
         // Port of Unity InteractionOverlay overlap enforcement during drag.
         // Commands are executed immediately (model consistency) and stored in
         // command_batch for composite undo on commit_command_batch.
@@ -358,8 +357,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 Vec::new()
             }
         };
-        if !overlap_cmds.is_empty() {
-            if let Some(project) = Some(&mut *self.project) {
+        if !overlap_cmds.is_empty()
+            && let Some(project) = Some(&mut *self.project) {
                 // Execute overlap commands immediately for model consistency,
                 // then store in batch for composite undo on commit.
                 for mut cmd in overlap_cmds {
@@ -367,7 +366,6 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                     self.command_batch.push(cmd);
                 }
             }
-        }
     }
 
     // ── Region-partial move ─────────────────────────────────────
@@ -429,7 +427,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         old_layer: usize, new_layer: usize,
     ) {
         let cmd = manifold_editing::commands::clip::MoveClipCommand::new(
-            clip_id.to_string(),
+            ClipId::new(clip_id),
             old_start, new_start,
             old_layer as i32, new_layer as i32,
         );
@@ -444,7 +442,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         old_in_point: f32, new_in_point: f32,
     ) {
         let cmd = manifold_editing::commands::clip::TrimClipCommand::new(
-            clip_id.to_string(),
+            ClipId::new(clip_id),
             old_start, new_start,
             old_duration, new_duration,
             old_in_point, new_in_point,

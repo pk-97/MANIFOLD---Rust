@@ -1,3 +1,4 @@
+use manifold_core::ClipId;
 // Port of Unity PercussionImportService.cs (405 lines).
 // Application-layer service for applying percussion import results to the timeline.
 // Owns layer resolution, clip creation, BPM auto-apply, and undo recording.
@@ -140,15 +141,12 @@ impl PercussionImportService {
 
             // Set trigger-based layer name if not already matching.
             let trigger_layer_name = get_trigger_layer_name(placement.trigger_type);
-            if !trigger_layer_name.is_empty() {
-                if let Some(target_layer) =
+            if !trigger_layer_name.is_empty()
+                && let Some(target_layer) =
                     project.timeline.layers.get_mut(target_layer_index as usize)
-                {
-                    if target_layer.name != trigger_layer_name {
+                    && target_layer.name != trigger_layer_name {
                         target_layer.name = trigger_layer_name.clone();
                     }
-                }
-            }
 
             let timeline_clip: TimelineClip = if placement.is_generator() {
                 // Use the layer's current generator type — respects user customisation
@@ -201,8 +199,8 @@ impl PercussionImportService {
                 let clip_end = timeline_clip.end_beat();
 
                 // Collect indices to remove and IDs to trim — avoid borrow issues.
-                let mut ids_to_remove: Vec<String> = Vec::new();
-                let mut ids_to_trim: Vec<(String, f32)> = Vec::new();
+                let mut ids_to_remove: Vec<ClipId> = Vec::new();
+                let mut ids_to_trim: Vec<(ClipId, f32)> = Vec::new();
 
                 for existing in target_layer.clips.iter() {
                     if existing.start_beat < clip_start && existing.end_beat() > clip_start {
@@ -234,7 +232,7 @@ impl PercussionImportService {
             result.added_clips += 1;
 
             import_provenance.push(ImportedPercussionClipPlacement {
-                clip_id,
+                clip_id: clip_id.into(),
                 source_time_seconds: placement.source_time_seconds,
                 start_beat_offset: options.map_or(0.0, |o| o.start_beat_offset),
                 quantize_to_grid: options.is_some_and(|o| o.quantize_to_grid),

@@ -1,7 +1,7 @@
 // Mechanical port of Unity CrtFX.cs + CrtEffect.shader.
 // Same logic, same variables, same constants, same edge cases.
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
@@ -35,7 +35,7 @@ struct CrtState {
 // CrtFX.cs line 13 — CrtFX : SimpleBlitEffect, IStatefulEffect
 pub struct CrtFX {
     helper: DualTextureBlitHelper,
-    states: HashMap<i64, CrtState>, // CrtFX.cs: ownerStates
+    states: AHashMap<i64, CrtState>, // CrtFX.cs: ownerStates
     width: u32,  // CrtFX.cs: _width
     height: u32, // CrtFX.cs: _height
 }
@@ -49,7 +49,7 @@ impl CrtFX {
                 "CRT",
                 std::mem::size_of::<CrtUniforms>() as u64,
             ),
-            states: HashMap::new(),
+            states: AHashMap::new(),
             width: 0,
             height: 0,
         }

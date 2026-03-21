@@ -9,7 +9,8 @@
 //! The Rust port preserves this threading model exactly.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Callback type for OSC subscribers. Receives (address, values) on the main thread.
@@ -65,7 +66,7 @@ impl MessageQueue {
     /// Drain all pending messages into `out`, clearing internal state.
     /// Called from the main thread under lock.
     fn drain(&mut self, out: &mut Vec<PendingMessage>) {
-        out.extend(self.latest_list.drain(..));
+        out.append(&mut self.latest_list);
         self.latest.clear();
     }
 
@@ -184,7 +185,7 @@ impl OscReceiver {
                     rosc::OscType::Int(i) => Some(*i as f32),
                     _ => None,
                 }).collect();
-                queue.lock().unwrap().push(msg.addr, values);
+                queue.lock().push(msg.addr, values);
             }
             rosc::OscPacket::Bundle(bundle) => {
                 for inner in bundle.content {
@@ -207,7 +208,7 @@ impl OscReceiver {
 
         self.is_listening = false;
         {
-            let mut q = self.queue.lock().unwrap();
+            let mut q = self.queue.lock();
             q.latest.clear();
             q.latest_list.clear();
         }
@@ -236,7 +237,7 @@ impl OscReceiver {
     pub fn update(&mut self) {
         // Snapshot latest messages under lock, dispatch outside lock.
         {
-            let mut q = self.queue.lock().unwrap();
+            let mut q = self.queue.lock();
             if q.is_empty() { return; }
             q.drain(&mut self.dispatch_buffer);
         }
@@ -310,11 +311,10 @@ impl OscReceiver {
     /// Uses swap_remove for O(1) removal; ordering of remaining callbacks
     /// is not preserved (matches Unity semantics — order is unspecified).
     pub fn unsubscribe_keyed(&mut self, address: &str, key: usize) {
-        if let Some(list) = self.subscribers.get_mut(address) {
-            if key < list.len() {
+        if let Some(list) = self.subscribers.get_mut(address)
+            && key < list.len() {
                 let _ = list.swap_remove(key);
             }
-        }
     }
 }
 

@@ -38,7 +38,7 @@ fn migrate_v100_to_v110(root: &mut Value) {
     move_field(root, "percussionEnergyEnvelope", &mut perc_import, "energyEnvelope");
     move_field(root, "importedStemPaths", &mut perc_import, "stemPaths");
     move_field(root, "importedPercussionAudioHash", &mut perc_import, "audioHash");
-    if let Value::Object(ref mut map) = root {
+    if let Value::Object(map) = root {
         map.insert("percussionImport".to_string(), Value::Object(perc_import));
     }
 
@@ -55,7 +55,7 @@ fn migrate_v100_to_v110(root: &mut Value) {
             move_field(layer, "genParamBaseValues", &mut gen_params, "baseParamValues");
             move_field(layer, "genDrivers", &mut gen_params, "drivers");
             move_field(layer, "genParamEnvelopes", &mut gen_params, "envelopes");
-            if let Value::Object(ref mut map) = layer {
+            if let Value::Object(map) = layer {
                 map.insert("genParams".to_string(), Value::Object(gen_params));
             }
         }
@@ -63,11 +63,10 @@ fn migrate_v100_to_v110(root: &mut Value) {
 }
 
 fn move_field(source: &mut Value, source_key: &str, target: &mut serde_json::Map<String, Value>, target_key: &str) {
-    if let Value::Object(ref mut map) = source {
-        if let Some(val) = map.remove(source_key) {
+    if let Value::Object(map) = source
+        && let Some(val) = map.remove(source_key) {
             target.insert(target_key.to_string(), val);
         }
-    }
 }
 
 fn is_version_less_than(version: &str, threshold: &str) -> bool {

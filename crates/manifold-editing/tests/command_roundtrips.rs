@@ -11,6 +11,7 @@ use manifold_editing::commands::envelopes::*;
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::layer::Layer;
+use manifold_core::LayerId;
 use manifold_core::types::*;
 use manifold_core::effects::*;
 
@@ -242,7 +243,7 @@ fn reorder_layer_undo_roundtrip() {
 fn group_layers_undo_roundtrip() {
     let mut project = make_test_project();
     let initial_count = project.timeline.layers.len();
-    let layer_ids: Vec<String> = project.timeline.layers.iter().map(|l| l.layer_id.clone()).collect();
+    let layer_ids: Vec<LayerId> = project.timeline.layers.iter().map(|l| l.layer_id.clone()).collect();
     let original_order = project.timeline.layers.clone();
 
     let mut cmd = GroupLayersCommand::new(layer_ids, original_order);

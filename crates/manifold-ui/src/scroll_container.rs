@@ -1,20 +1,18 @@
-/// Reusable scroll container primitive.
-///
-/// Manages a scrollable viewport with clip-region-based content clipping.
-/// Matches Unity's BitmapScrollContainer pattern:
-/// 1. Creates a ClipRegion node at the viewport bounds
-/// 2. All scrolled content is parented under the clip node
-/// 3. Content Y positions are offset by -scroll_offset
-/// 4. The UITree's traversal + renderer automatically clip children
-///    to the clip node's bounds via CLIPS_CHILDREN flag.
-///
-/// Usage:
-/// ```ignore
-/// let mut sc = ScrollContainer::new();
-/// let clip_id = sc.begin(tree, viewport_rect);
-/// // ... add child nodes with parent_id = clip_id ...
-/// sc.set_content_height(total_content_h);
-/// ```
+// Reusable scroll container primitive.
+//
+// Manages a scrollable viewport with clip-region-based content clipping.
+// Matches Unity's BitmapScrollContainer pattern:
+// 1. Creates a ClipRegion node at the viewport bounds
+// 2. All scrolled content is parented under the clip node
+// 3. Content Y positions are offset by -scroll_offset
+// 4. The UITree's traversal + renderer automatically clip children
+//    to the clip node's bounds via CLIPS_CHILDREN flag.
+//
+// Usage:
+//   let mut sc = ScrollContainer::new();
+//   let clip_id = sc.begin(tree, viewport_rect);
+//   // ... add child nodes with parent_id = clip_id ...
+//   sc.set_content_height(total_content_h);
 
 use crate::node::*;
 use crate::tree::UITree;

@@ -1,8 +1,8 @@
-/// Shared inspector panel dimensions used by MasterInspector, LayerInspector,
-/// ClipInspector, and GenParamPresenter.
-/// All spatial values scale with `widget_layout::SCALE`.
-///
-/// Mechanical translation of Assets/Scripts/UI/Timeline/Core/InspectorLayout.cs.
+// Shared inspector panel dimensions used by MasterInspector, LayerInspector,
+// ClipInspector, and GenParamPresenter.
+// All spatial values scale with `widget_layout::SCALE`.
+//
+// Mechanical translation of Assets/Scripts/UI/Timeline/Core/InspectorLayout.cs.
 
 use crate::widget_layout::SCALE as S;
 

@@ -4,7 +4,7 @@
 //! Plain Rust struct — NOT a MonoBehaviour equivalent.
 //! Calls through TimelineInputHost trait for all operations that need
 //! engine/editing/UI access. Owns zoom state and inspector focus.
-
+use manifold_core::ClipId;
 use manifold_ui::input::Modifiers;
 use manifold_ui::timeline_input_host::TimelineInputHost;
 
@@ -75,7 +75,7 @@ impl InputHandler {
         }
 
         // ── Backtick — toggle performance HUD (Unity line 217) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "`") && m.is_none() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "`") && m.is_none() {
             host.toggle_performance_hud();
             return true;
         }
@@ -105,19 +105,19 @@ impl InputHandler {
         }
 
         // ── Undo: Cmd+Shift+Z (Unity line 235) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "z") && m.is_command_shift() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "z") && m.is_command_shift() {
             host.redo();
             host.on_undo_redo();
             return true;
         }
         // ── Undo: Cmd+Z (Unity line 241) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "z") && m.is_command_only() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "z") && m.is_command_only() {
             host.undo();
             host.on_undo_redo();
             return true;
         }
         // ── Redo: Cmd+Y (Unity line 247) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "y") && m.is_command_only() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "y") && m.is_command_only() {
             host.redo();
             host.on_undo_redo();
             return true;
@@ -127,28 +127,28 @@ impl InputHandler {
         // These require rfd dialogs and window handles that AppInputHost
         // cannot access. Return false to let the legacy block handle them.
         // TODO: Move to host when legacy block is deleted (use flag pattern).
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "s") && m.is_command_only() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "s") && m.is_command_only() {
             return false; // handled by legacy block
         }
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "o") && m.is_command_only() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "o") && m.is_command_only() {
             return false; // handled by legacy block
         }
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "n") && m.is_command_only() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "n") && m.is_command_only() {
             return false; // handled by legacy block
         }
 
         // ── Select all: Cmd+A (Unity line 289) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "a") && m.is_command_only() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "a") && m.is_command_only() {
             host.select_all_clips();
             return true;
         }
 
         // ── Copy: Cmd+C (context-sensitive: effects vs clips) (Unity line 296) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "c") && m.is_command_only() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "c") && m.is_command_only() {
             if self.inspector_has_focus && host.handle_effect_copy() {
                 return true;
             }
-            let ids: Vec<String> = host.get_selected_clip_ids();
+            let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.copy_clips(&ids);
             }
@@ -156,11 +156,11 @@ impl InputHandler {
         }
 
         // ── Cut: Cmd+X (context-sensitive) (Unity line 302) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "x") && m.is_command_only() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "x") && m.is_command_only() {
             if self.inspector_has_focus && host.handle_effect_cut() {
                 return true;
             }
-            let ids: Vec<String> = host.get_selected_clip_ids();
+            let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.cut_clips(&ids, host.has_region());
             }
@@ -168,7 +168,7 @@ impl InputHandler {
         }
 
         // ── Paste: Cmd+V (context-sensitive) (Unity line 308) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "v") && m.is_command_only() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "v") && m.is_command_only() {
             if self.inspector_has_focus && host.handle_effect_paste() {
                 return true;
             }
@@ -181,8 +181,8 @@ impl InputHandler {
         }
 
         // ── Duplicate: Cmd+D (Unity line 316) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "d") && m.is_command_only() {
-            let ids: Vec<String> = host.get_selected_clip_ids();
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "d") && m.is_command_only() {
+            let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.duplicate_clips(&ids);
             }
@@ -190,7 +190,7 @@ impl InputHandler {
         }
 
         // ── Ungroup: Cmd+Shift+G (context-sensitive) (Unity line 323) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "g" || c.as_str() == "G")
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "g" || c.as_str() == "G")
             && m.is_command_shift()
         {
             if self.inspector_has_focus {
@@ -200,7 +200,7 @@ impl InputHandler {
         }
 
         // ── Group: Cmd+G (context-sensitive) (Unity line 328) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "g") && m.is_command_only() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "g") && m.is_command_only() {
             if self.inspector_has_focus {
                 host.handle_effect_group();
             } else {
@@ -227,7 +227,7 @@ impl InputHandler {
                 return true;
             }
             // Priority 3: delete selected clips (region-aware)
-            let ids: Vec<String> = host.get_selected_clip_ids();
+            let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.delete_clips(&ids, host.has_region());
                 host.clear_selection();
@@ -256,8 +256,8 @@ impl InputHandler {
         }
 
         // ── S — split at playhead (bare S, no modifiers) (Unity line 393) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "s") && m.is_none() {
-            let ids: Vec<String> = host.get_selected_clip_ids();
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "s") && m.is_none() {
+            let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.split_clips_at_playhead(&ids);
             }
@@ -265,10 +265,10 @@ impl InputHandler {
         }
 
         // ── Shift+E — shrink by grid step (check before bare E) (Unity line 400) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "E" || c.as_str() == "e")
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "E" || c.as_str() == "e")
             && m.is_shift_only()
         {
-            let ids: Vec<String> = host.get_selected_clip_ids();
+            let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 let step = host.grid_step();
                 host.shrink_clips(&ids, step);
@@ -277,8 +277,8 @@ impl InputHandler {
         }
 
         // ── E — extend by grid step (bare E) (Unity line 405) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "e") && m.is_none() {
-            let ids: Vec<String> = host.get_selected_clip_ids();
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "e") && m.is_none() {
+            let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 let step = host.grid_step();
                 host.extend_clips(&ids, step);
@@ -287,7 +287,7 @@ impl InputHandler {
         }
 
         // ── F — zoom to fit (Unity line 412) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "f") && m.is_none() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "f") && m.is_none() {
             host.zoom_to_fit();
             self.needs_zoom_update = true;
             return true;
@@ -295,8 +295,8 @@ impl InputHandler {
 
         // ── 0 / Numpad0 — toggle mute (Unity line 419-420) ──
         // winit: Numpad0 with numlock on produces Key::Character("0"), same as main row.
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "0") && m.is_none() {
-            let ids: Vec<String> = host.get_selected_clip_ids();
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "0") && m.is_none() {
+            let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.toggle_mute_clips(&ids);
             }
@@ -316,7 +316,7 @@ impl InputHandler {
                 // Nudge selected clips (Unity lines 443-452)
                 let grid = host.grid_step();
                 let step = if m.shift { 1.0 / 16.0 } else { grid };
-                let ids: Vec<String> = host.get_selected_clip_ids();
+                let ids: Vec<ClipId> = host.get_selected_clip_ids();
 
                 match logical_key {
                     Key::Named(NamedKey::ArrowLeft) => host.nudge_clips(&ids, -step),
@@ -341,19 +341,19 @@ impl InputHandler {
         }
 
         // ── Export markers: Alt variants first (Unity lines 461-481) ──
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "i") && m.is_alt_only() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "i") && m.is_alt_only() {
             host.clear_export_in();
             return true;
         }
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "o") && m.is_alt_only() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "o") && m.is_alt_only() {
             host.clear_export_out();
             return true;
         }
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "i") && m.is_none() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "i") && m.is_none() {
             host.set_export_in_at_playhead();
             return true;
         }
-        if matches!(logical_key, Key::Character(ref c) if c.as_str() == "o") && m.is_none() {
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "o") && m.is_none() {
             host.set_export_out_at_playhead();
             return true;
         }

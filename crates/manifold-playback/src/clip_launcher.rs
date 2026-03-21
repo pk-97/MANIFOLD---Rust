@@ -1,3 +1,4 @@
+use manifold_core::ClipId;
 use std::collections::HashMap;
 
 use manifold_core::midi::MidiNoteMapping;
@@ -42,7 +43,7 @@ pub struct ClipLauncher {
 /// Port of C# ClipLauncher.NoteOffTracking.
 struct NoteOffTracking {
     layer_index: i32,
-    clip_id: String,
+    clip_id: ClipId,
     source_channel: i32,
     #[allow(dead_code)]
     source_device_id: i32,

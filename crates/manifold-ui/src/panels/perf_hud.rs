@@ -2,7 +2,6 @@
 /// 1:1 port of Unity PerformanceHUDPanel.cs (493 lines).
 /// Shows FPS, frame time, sync state, MIDI state, clip scheduling metrics.
 /// Toggled via Backtick (`) key.
-
 use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
@@ -97,6 +96,12 @@ pub struct PerfHudPanel {
     graph_x: f32,
     /// Width of the graph area.
     graph_w: f32,
+}
+
+impl Default for PerfHudPanel {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PerfHudPanel {

@@ -5,7 +5,7 @@
 // The "frame" counter maps to an app-managed frame_count in EffectContext.
 // Unity's OnReadbackComplete callback maps to try_read() polled at apply() start.
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
 use crate::background_worker::BackgroundWorker;
@@ -117,7 +117,7 @@ pub struct BlobTrackingFX {
     // Track which owner submitted the in-flight worker request.
     pending_worker_owner: Option<i64>,
     // BlobTrackingFX.cs line 70 — ownerStates
-    owner_states: HashMap<i64, OwnerState>,
+    owner_states: AHashMap<i64, OwnerState>,
 }
 
 impl BlobTrackingFX {
@@ -357,7 +357,7 @@ impl BlobTrackingFX {
             font_atlas_view,
             worker,
             pending_worker_owner: None,
-            owner_states: HashMap::new(),
+            owner_states: AHashMap::new(),
         }
     }
 
@@ -408,15 +408,14 @@ impl BlobTrackingFX {
     //   2. Poll GPU readback for new pixel data → submit to worker
     fn poll_readback(&mut self, device: &wgpu::Device, owner_key: i64) {
         // ── Phase 1: check if the background worker has a result ──
-        if let Some(worker) = &mut self.worker {
-            if let Some(response) = worker.try_recv() {
+        if let Some(worker) = &mut self.worker
+            && let Some(response) = worker.try_recv() {
                 // Route result to the owner that submitted it.
                 let result_owner = self.pending_worker_owner.take().unwrap_or(owner_key);
                 if let Some(state) = self.owner_states.get_mut(&result_owner) {
                     Self::apply_blob_response(state, &response);
                 }
             }
-        }
 
         // ── Phase 2: check for new pixel data from GPU readback ──
         let Some(state) = self.owner_states.get_mut(&owner_key) else { return };

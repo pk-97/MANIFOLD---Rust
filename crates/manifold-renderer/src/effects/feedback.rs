@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use ahash::AHashMap;
 use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
@@ -45,7 +45,7 @@ pub struct FeedbackFX {
     uniform_buffer: wgpu::Buffer,
     /// Passthrough blit for copying result into feedback state buffer.
     copy_blit: SimpleBlitHelper,
-    states: HashMap<i64, FeedbackState>,
+    states: AHashMap<i64, FeedbackState>,
     width: u32,
     height: u32,
 }
@@ -186,7 +186,7 @@ impl FeedbackFX {
             sampler,
             uniform_buffer,
             copy_blit,
-            states: HashMap::new(),
+            states: AHashMap::new(),
             width: 0,
             height: 0,
         }

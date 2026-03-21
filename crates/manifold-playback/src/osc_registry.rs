@@ -67,19 +67,17 @@ impl OscParameterRegistry {
     /// Find or create OscReceiver and start listening.
     /// Port of Unity OscParameterRegistry.EnsureReceiver().
     fn ensure_receiver(&mut self) {
-        if let Some(ref r) = self.osc_receiver {
-            if r.is_listening() { return; }
-        }
+        if let Some(ref r) = self.osc_receiver
+            && r.is_listening() { return; }
 
         if self.osc_receiver.is_none() {
             self.osc_receiver = Some(OscReceiver::new());
         }
 
-        if let Some(ref mut r) = self.osc_receiver {
-            if !r.is_listening() {
+        if let Some(ref mut r) = self.osc_receiver
+            && !r.is_listening() {
                 r.start_listening();
             }
-        }
     }
 
     pub fn registered_count(&self) -> usize { self.parameters.len() }
@@ -124,13 +122,12 @@ impl OscParameterRegistry {
     /// Unregister a single parameter by address.
     /// Port of Unity OscParameterRegistry.Unregister().
     pub fn unregister(&mut self, address: &str) {
-        if !self.parameters.remove(address).is_some() { return; }
+        if self.parameters.remove(address).is_none() { return; }
 
-        if let Some(ref mut receiver) = self.osc_receiver {
-            if let Some(_key) = self.osc_callback_keys.remove(address) {
+        if let Some(ref mut receiver) = self.osc_receiver
+            && let Some(_key) = self.osc_callback_keys.remove(address) {
                 receiver.unsubscribe_all(address);
             }
-        }
     }
 
     /// Unregister all parameters whose address starts with prefix.

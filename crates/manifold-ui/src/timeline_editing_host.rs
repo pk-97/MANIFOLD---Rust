@@ -12,6 +12,7 @@
 //! on manifold-editing.
 
 use std::collections::HashSet;
+use manifold_core::ClipId;
 use manifold_core::selection::SelectionRegion;
 use crate::node::Vec2;
 
@@ -29,7 +30,7 @@ pub enum TimelineCursor {
 /// Matches Unity EditingService.RegionSplitResult.
 pub struct RegionSplitResult {
     /// Clip IDs of the interior segments (the clips being dragged).
-    pub interior_clip_ids: Vec<String>,
+    pub interior_clip_ids: Vec<ClipId>,
     /// Number of split commands generated (stored in the host's command batch).
     pub split_count: usize,
 }
@@ -37,7 +38,7 @@ pub struct RegionSplitResult {
 /// Lightweight clip reference returned by `find_clip_by_id`.
 /// Avoids passing mutable project references through the trait.
 pub struct ClipRef {
-    pub clip_id: String,
+    pub clip_id: ClipId,
     pub start_beat: f32,
     pub duration_beats: f32,
     pub end_beat: f32,
@@ -99,7 +100,7 @@ pub trait TimelineEditingHost {
     /// Beat should be pre-snapped by the caller. `grid_step` is the current
     /// grid interval in beats (used as the new clip's default duration).
     /// Unity: CreateClipAtPosition(float, int).
-    fn create_clip_at_position(&mut self, beat: f32, layer: usize, grid_step: f32) -> Option<String>;
+    fn create_clip_at_position(&mut self, beat: f32, layer: usize, grid_step: f32) -> Option<ClipId>;
 
     /// Move a clip to a different layer (cross-layer drag).
     /// Unity: MoveClipToLayer(TimelineClip, int).
@@ -157,7 +158,7 @@ pub trait TimelineEditingHost {
     /// DaVinci-style overlap enforcement on a placed clip.
     /// Commands are collected internally by the host (added to the current batch).
     /// Unity: EnforceNonOverlap(TimelineClip, HashSet<string>).
-    fn enforce_non_overlap(&mut self, clip_id: &str, ignore_ids: &HashSet<String>);
+    fn enforce_non_overlap(&mut self, clip_id: &str, ignore_ids: &HashSet<ClipId>);
 
     // ── Region-partial move ─────────────────────────────────────────
 

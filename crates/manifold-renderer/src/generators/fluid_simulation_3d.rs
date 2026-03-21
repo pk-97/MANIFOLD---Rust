@@ -798,7 +798,7 @@ impl FluidSimulation3DGenerator {
         });
 
         // Blur shader uses @workgroup_size(4,4,4); dispatch (res+3)/4 per axis
-        let wg = (self.vol_res + 3) / 4;
+        let wg = self.vol_res.div_ceil(4);
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D BlurScalar"), timestamp_writes: None });
         pass.set_pipeline(&self.blur_scalar_pipeline);
         pass.set_bind_group(0, &bg, &[]);
@@ -836,7 +836,7 @@ impl FluidSimulation3DGenerator {
         });
 
         // Blur shader uses @workgroup_size(4,4,4); dispatch (res+3)/4 per axis
-        let wg = (self.vol_res + 3) / 4;
+        let wg = self.vol_res.div_ceil(4);
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D BlurVector"), timestamp_writes: None });
         pass.set_pipeline(&self.blur_vector_pipeline);
         pass.set_bind_group(0, &bg, &[]);
@@ -1019,7 +1019,7 @@ impl Generator for FluidSimulation3DGenerator {
         // ── Temporal amortization (Unity lines 867-899) ──
         // Toggle parity every frame; force update when snap is active.
         // Unity: volumeFrameParity = !volumeFrameParity; updateVolume = parity || snapEnvelope > 0.01f
-        let volume_frame_parity = self.frame_count % 2 == 0;
+        let volume_frame_parity = self.frame_count.is_multiple_of(2);
         let update_volume = volume_frame_parity || self.snap_envelope > 0.01;
 
         // ── Blur radius (Unity lines 882-885) ──
@@ -1081,7 +1081,7 @@ impl Generator for FluidSimulation3DGenerator {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Splat3D"), timestamp_writes: None });
                 pass.set_pipeline(&self.splat_3d_pipeline);
                 pass.set_bind_group(0, &bg, &[]);
-                pass.dispatch_workgroups((active_count + THREAD_GROUP_SIZE - 1) / THREAD_GROUP_SIZE, 1, 1);
+                pass.dispatch_workgroups(active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1);
             }
 
             // ── Pass 1b: Resolve 3D ──
@@ -1106,7 +1106,7 @@ impl Generator for FluidSimulation3DGenerator {
                         wgpu::BindGroupEntry { binding: 2, resource: self.resolve_3d_uniform_buf.as_entire_binding() },
                     ],
                 });
-                let wg = (vol_res + BAKE_GROUP_SIZE - 1) / BAKE_GROUP_SIZE;
+                let wg = vol_res.div_ceil(BAKE_GROUP_SIZE);
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Resolve3D"), timestamp_writes: None });
                 pass.set_pipeline(&self.resolve_3d_pipeline);
                 pass.set_bind_group(0, &bg, &[]);
@@ -1173,7 +1173,7 @@ impl Generator for FluidSimulation3DGenerator {
                         wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&vector_vol.view) },
                     ],
                 });
-                let wg = (vol_res + BAKE_GROUP_SIZE - 1) / BAKE_GROUP_SIZE;
+                let wg = vol_res.div_ceil(BAKE_GROUP_SIZE);
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D GradientCurl3D"), timestamp_writes: None });
                 pass.set_pipeline(&self.gradient_curl_3d_pipeline);
                 pass.set_bind_group(0, &bg, &[]);
@@ -1263,7 +1263,7 @@ impl Generator for FluidSimulation3DGenerator {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Simulate3D"), timestamp_writes: None });
             pass.set_pipeline(&self.simulate_3d_pipeline);
             pass.set_bind_group(0, &bg, &[]);
-            pass.dispatch_workgroups((active_count + THREAD_GROUP_SIZE - 1) / THREAD_GROUP_SIZE, 1, 1);
+            pass.dispatch_workgroups(active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1);
         }
 
         // ════════════════════════════════════════════════════════════════
@@ -1308,7 +1308,7 @@ impl Generator for FluidSimulation3DGenerator {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D SplatProjected"), timestamp_writes: None });
             pass.set_pipeline(&self.splat_projected_pipeline);
             pass.set_bind_group(0, &bg, &[]);
-            pass.dispatch_workgroups((active_count + THREAD_GROUP_SIZE - 1) / THREAD_GROUP_SIZE, 1, 1);
+            pass.dispatch_workgroups(active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1);
         }
 
         // ── Pass 6b: Resolve Display ──
@@ -1338,7 +1338,7 @@ impl Generator for FluidSimulation3DGenerator {
             pass.set_pipeline(&self.resolve_display_pipeline);
             pass.set_bind_group(0, &bg, &[]);
             // Unity: resolveGroupsX = CeilToInt(w/16f), resolveGroupsY = CeilToInt(h/16f)
-            pass.dispatch_workgroups((dw + 15) / 16, (dh + 15) / 16, 1);
+            pass.dispatch_workgroups(dw.div_ceil(16), dh.div_ceil(16), 1);
         }
 
         // ════════════════════════════════════════════════════════════════
@@ -1460,7 +1460,7 @@ impl FluidSimulation3DGenerator {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D SeedPattern"), timestamp_writes: None });
         pass.set_pipeline(&self.seed_pattern_pipeline);
         pass.set_bind_group(0, &bg, &[]);
-        pass.dispatch_workgroups((self.active_count + THREAD_GROUP_SIZE - 1) / THREAD_GROUP_SIZE, 1, 1);
+        pass.dispatch_workgroups(self.active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1);
     }
 }
 

@@ -171,6 +171,12 @@ impl InternalBlit {
     }
 }
 
+impl Default for EffectChain {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EffectChain {
     pub fn new() -> Self {
         Self {
@@ -294,17 +300,16 @@ impl EffectChain {
             let fx_group_id = fx.group_id.as_deref();
             if fx_group_id != current_group_id {
                 // Leaving a group — apply wet/dry lerp if needed
-                if let Some(prev_gid) = current_group_id {
-                    if let Some(group) = groups.iter().find(|g| g.id == prev_gid) {
+                if let Some(prev_gid) = current_group_id
+                    && let Some(group) = groups.iter().find(|g| g.id == prev_gid) {
                         self.apply_wet_dry_lerp(
                             device, queue, encoder, group.wet_dry, wet_dry_lerp,
                         );
                     }
-                }
 
                 // Entering a new group — snapshot dry state if wet_dry < 1.0
-                if let Some(gid) = fx_group_id {
-                    if let Some(group) = groups.iter().find(|g| g.id == gid) {
+                if let Some(gid) = fx_group_id
+                    && let Some(group) = groups.iter().find(|g| g.id == gid) {
                         if !group.enabled {
                             current_group_id = Some(gid);
                             continue;
@@ -319,24 +324,21 @@ impl EffectChain {
                             );
                         }
                     }
-                }
 
                 current_group_id = fx_group_id;
             }
 
             // Check if group is disabled — skip effect
-            if let Some(gid) = fx_group_id {
-                if let Some(group) = groups.iter().find(|g| g.id == gid) {
-                    if !group.enabled {
+            if let Some(gid) = fx_group_id
+                && let Some(group) = groups.iter().find(|g| g.id == gid)
+                    && !group.enabled {
                         continue;
                     }
-                }
-            }
 
             // Apply the effect (skip if ShouldSkip — no GPU work, no swap)
             // Unity ref: CompositorStack checks ShouldSkip before Apply + buffer swap.
-            if let Some(processor) = registry.get_mut(fx.effect_type) {
-                if !processor.should_skip(fx) {
+            if let Some(processor) = registry.get_mut(fx.effect_type)
+                && !processor.should_skip(fx) {
                     processor.apply(
                         device, queue, encoder,
                         self.source_view(),
@@ -345,17 +347,15 @@ impl EffectChain {
                     );
                     self.swap();
                 }
-            }
         }
 
         // Final group exit — apply wet/dry if needed
-        if let Some(prev_gid) = current_group_id {
-            if let Some(group) = groups.iter().find(|g| g.id == prev_gid) {
+        if let Some(prev_gid) = current_group_id
+            && let Some(group) = groups.iter().find(|g| g.id == prev_gid) {
                 self.apply_wet_dry_lerp(
                     device, queue, encoder, group.wet_dry, wet_dry_lerp,
                 );
             }
-        }
 
         Some(self.source_view())
     }

@@ -1,10 +1,10 @@
-/// Pure functions for insert cursor arrow-key navigation.
-///
-/// Matches the Unity InputHandler.cs arrow key behavior:
-/// - Left/Right: move by grid step (Shift = 1/16 beat fine nudge)
-/// - Up/Down: move to adjacent layer, skipping zero-height (collapsed) layers
-/// - If a clip exists at the new position, auto-select it (Ableton behavior)
-/// - Beat clamped >= 0, layer clamped to valid range
+// Pure functions for insert cursor arrow-key navigation.
+//
+// Matches the Unity InputHandler.cs arrow key behavior:
+// - Left/Right: move by grid step (Shift = 1/16 beat fine nudge)
+// - Up/Down: move to adjacent layer, skipping zero-height (collapsed) layers
+// - If a clip exists at the new position, auto-select it (Ableton behavior)
+// - Beat clamped >= 0, layer clamped to valid range
 
 /// 1/16 beat — fine nudge step when Shift is held.
 pub const FINE_NUDGE_BEATS: f32 = 1.0 / 16.0;
@@ -27,10 +27,12 @@ pub struct NavLayerInfo {
     pub height: f32,
 }
 
+use manifold_core::ClipId;
+
 /// Info about a clip for auto-select during navigation.
 #[derive(Debug, Clone)]
 pub struct NavClipInfo {
-    pub clip_id: String,
+    pub clip_id: ClipId,
     pub layer_index: usize,
     pub start_beat: f32,
     pub end_beat: f32,
@@ -40,7 +42,7 @@ pub struct NavClipInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub enum NavResult {
     /// A clip was found at the new position — select it.
-    SelectClip(String),
+    SelectClip(ClipId),
     /// No clip at position — set insert cursor here.
     SetCursor { beat: f32, layer: usize },
     /// Navigation was not possible (at boundary).
@@ -108,7 +110,7 @@ pub fn navigate_cursor(
 }
 
 /// Find a clip that contains the given beat on the given layer.
-fn find_clip_at<'a>(clips: &'a [NavClipInfo], beat: f32, layer: usize) -> Option<&'a NavClipInfo> {
+fn find_clip_at(clips: &[NavClipInfo], beat: f32, layer: usize) -> Option<&NavClipInfo> {
     clips.iter().find(|c| {
         c.layer_index == layer && c.start_beat <= beat && c.end_beat > beat
     })
@@ -126,7 +128,7 @@ fn find_adjacent_visible_layer(
             return None;
         }
         for i in (0..current).rev() {
-            if layers.get(i).map_or(false, |l| l.height > 0.0) {
+            if layers.get(i).is_some_and(|l| l.height > 0.0) {
                 return Some(i);
             }
         }
@@ -134,7 +136,7 @@ fn find_adjacent_visible_layer(
     } else {
         // Down = higher index
         for i in (current + 1)..layers.len() {
-            if layers.get(i).map_or(false, |l| l.height > 0.0) {
+            if layers.get(i).is_some_and(|l| l.height > 0.0) {
                 return Some(i);
             }
         }
@@ -156,7 +158,7 @@ mod tests {
 
     fn make_clip(id: &str, layer: usize, start: f32, dur: f32) -> NavClipInfo {
         NavClipInfo {
-            clip_id: id.to_string(),
+            clip_id: ClipId::new(id),
             layer_index: layer,
             start_beat: start,
             end_beat: start + dur,
@@ -238,7 +240,7 @@ mod tests {
             Direction::Right, 4.0, 0, 1.0, false, &layers, &clips,
         );
         // Beat moves to 5.0, clip-a spans [5.0, 7.0) — auto-select
-        assert_eq!(result, NavResult::SelectClip("clip-a".to_string()));
+        assert_eq!(result, NavResult::SelectClip(ClipId::new("clip-a")));
     }
 
     #[test]
@@ -259,6 +261,6 @@ mod tests {
             Direction::Down, 4.0, 0, 1.0, false, &layers, &clips,
         );
         // Moves to layer 1 at beat 4.0 — clip-b contains beat 4.0
-        assert_eq!(result, NavResult::SelectClip("clip-b".to_string()));
+        assert_eq!(result, NavResult::SelectClip(ClipId::new("clip-b")));
     }
 }

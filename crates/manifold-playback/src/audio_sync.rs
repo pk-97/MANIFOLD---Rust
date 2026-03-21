@@ -435,11 +435,10 @@ fn probe_encoder_delay_seconds(audio_path: &str) -> f32 {
     };
 
     let trimmed = output.trim();
-    if let Ok(start_time) = trimmed.parse::<f32>() {
-        if start_time > 0.0001 && start_time <= MAX_ENCODER_DELAY_SECONDS {
+    if let Ok(start_time) = trimmed.parse::<f32>()
+        && start_time > 0.0001 && start_time <= MAX_ENCODER_DELAY_SECONDS {
             return start_time;
         }
-    }
 
     0.0
 }
@@ -473,22 +472,18 @@ fn run_ffprobe_query(ffprobe_path: &str, audio_path: &str) -> Option<String> {
 /// Searches standard locations for the ffprobe binary.
 fn resolve_ffprobe_binary() -> Option<String> {
     // 1. Explicit env var.
-    if let Ok(env_path) = std::env::var("FFPROBE_PATH") {
-        if !env_path.is_empty() && Path::new(&env_path).exists() {
+    if let Ok(env_path) = std::env::var("FFPROBE_PATH")
+        && !env_path.is_empty() && Path::new(&env_path).exists() {
             return Some(env_path);
         }
-    }
 
     // 2. Derive from FFMPEG_PATH by replacing the binary name.
-    if let Ok(ffmpeg_env) = std::env::var("FFMPEG_PATH") {
-        if !ffmpeg_env.is_empty() {
-            if let Some(derived) = derive_ffprobe_from_ffmpeg_path(&ffmpeg_env) {
-                if Path::new(&derived).exists() {
+    if let Ok(ffmpeg_env) = std::env::var("FFMPEG_PATH")
+        && !ffmpeg_env.is_empty()
+            && let Some(derived) = derive_ffprobe_from_ffmpeg_path(&ffmpeg_env)
+                && Path::new(&derived).exists() {
                     return Some(derived);
                 }
-            }
-        }
-    }
 
     // 3. Common system paths.
     let candidates = [

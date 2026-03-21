@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::LayerId;
 use manifold_core::project::Project;
 use manifold_core::layer::Layer;
 use manifold_core::types::{LayerType, GeneratorType};
@@ -12,7 +13,7 @@ pub struct AddLayerCommand {
     layer_type: LayerType,
     gen_type: GeneratorType,
     insert_index: usize,
-    parent_group_id: Option<String>,
+    parent_group_id: Option<LayerId>,
 }
 
 impl AddLayerCommand {
@@ -21,7 +22,7 @@ impl AddLayerCommand {
         layer_type: LayerType,
         gen_type: GeneratorType,
         insert_index: usize,
-        parent_group_id: Option<String>,
+        parent_group_id: Option<LayerId>,
     ) -> Self {
         Self { layer: None, name, layer_type, gen_type, insert_index, parent_group_id }
     }
@@ -46,11 +47,10 @@ impl Command for AddLayerCommand {
 
     fn undo(&mut self, project: &mut Project) {
         // Find the layer we inserted by ID
-        if let Some(layer) = &self.layer {
-            if let Some(idx) = project.timeline.layers.iter().position(|l| l.layer_id == layer.layer_id) {
+        if let Some(layer) = &self.layer
+            && let Some(idx) = project.timeline.layers.iter().position(|l| l.layer_id == layer.layer_id) {
                 project.timeline.remove_layer(idx);
             }
-        }
     }
 
     fn description(&self) -> &str { "Add Layer" }
@@ -92,21 +92,21 @@ impl Command for DeleteLayerCommand {
 pub struct ReorderLayerCommand {
     old_order: Vec<Layer>,
     new_order: Vec<Layer>,
-    old_parent_ids: HashMap<String, Option<String>>,
-    new_parent_ids: HashMap<String, Option<String>>,
+    old_parent_ids: HashMap<LayerId, Option<LayerId>>,
+    new_parent_ids: HashMap<LayerId, Option<LayerId>>,
 }
 
 impl ReorderLayerCommand {
     pub fn new(
         old_order: Vec<Layer>,
         new_order: Vec<Layer>,
-        old_parent_ids: HashMap<String, Option<String>>,
-        new_parent_ids: HashMap<String, Option<String>>,
+        old_parent_ids: HashMap<LayerId, Option<LayerId>>,
+        new_parent_ids: HashMap<LayerId, Option<LayerId>>,
     ) -> Self {
         Self { old_order, new_order, old_parent_ids, new_parent_ids }
     }
 
-    fn apply_parent_ids(layers: &mut [Layer], parent_ids: &HashMap<String, Option<String>>) {
+    fn apply_parent_ids(layers: &mut [Layer], parent_ids: &HashMap<LayerId, Option<LayerId>>) {
         for layer in layers {
             if let Some(parent_id) = parent_ids.get(&layer.layer_id) {
                 layer.parent_layer_id = parent_id.clone();
@@ -134,16 +134,16 @@ impl Command for ReorderLayerCommand {
 /// Group selected layers into a new group layer.
 #[derive(Debug)]
 pub struct GroupLayersCommand {
-    selected_layer_ids: Vec<String>,
+    selected_layer_ids: Vec<LayerId>,
     group_layer: Option<Layer>,
     #[allow(dead_code)]
     original_order: Vec<Layer>,
-    original_parent_ids: HashMap<String, Option<String>>,
+    original_parent_ids: HashMap<LayerId, Option<LayerId>>,
 }
 
 impl GroupLayersCommand {
     pub fn new(
-        selected_layer_ids: Vec<String>,
+        selected_layer_ids: Vec<LayerId>,
         original_order: Vec<Layer>,
     ) -> Self {
         let original_parent_ids = original_order.iter()
@@ -184,11 +184,10 @@ impl Command for GroupLayersCommand {
 
     fn undo(&mut self, project: &mut Project) {
         // Remove group layer
-        if let Some(group) = &self.group_layer {
-            if let Some(idx) = project.timeline.layers.iter().position(|l| l.layer_id == group.layer_id) {
+        if let Some(group) = &self.group_layer
+            && let Some(idx) = project.timeline.layers.iter().position(|l| l.layer_id == group.layer_id) {
                 project.timeline.remove_layer(idx);
             }
-        }
         // Restore parent IDs
         for layer in &mut project.timeline.layers {
             if let Some(parent_id) = self.original_parent_ids.get(&layer.layer_id) {
@@ -206,7 +205,7 @@ pub struct UngroupLayersCommand {
     group_layer: Option<Layer>,
     #[allow(dead_code)]
     group_index: usize,
-    child_layer_ids: Vec<String>,
+    child_layer_ids: Vec<LayerId>,
     original_order: Vec<Layer>,
 }
 
@@ -214,7 +213,7 @@ impl UngroupLayersCommand {
     pub fn new(
         group_layer: Layer,
         group_index: usize,
-        child_layer_ids: Vec<String>,
+        child_layer_ids: Vec<LayerId>,
         original_order: Vec<Layer>,
     ) -> Self {
         Self { group_layer: Some(group_layer), group_index, child_layer_ids, original_order }
@@ -226,7 +225,7 @@ impl Command for UngroupLayersCommand {
         // Clear parent IDs on children
         if let Some(group) = &self.group_layer {
             for layer in &mut project.timeline.layers {
-                if self.child_layer_ids.contains(&layer.layer_id) && layer.parent_layer_id.as_deref() == Some(&group.layer_id) {
+                if self.child_layer_ids.contains(&layer.layer_id) && layer.parent_layer_id.as_ref() == Some(&group.layer_id) {
                     layer.parent_layer_id = None;
                 }
             }

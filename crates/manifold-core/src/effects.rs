@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::id::EffectGroupId;
 use crate::types::{BeatDivision, DriverWaveform, EffectType};
 
 // ─── Param Definition ───
@@ -94,7 +95,7 @@ pub struct EffectInstance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drivers: Option<Vec<ParameterDriver>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group_id: Option<String>,
+    pub group_id: Option<EffectGroupId>,
 
     // Legacy flat param fields (V1.0.0 format)
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "param0")]
@@ -155,11 +156,10 @@ impl EffectInstance {
 
     /// Read the user-set base value (before modulation). Unity lines 104-110.
     pub fn get_base_param(&self, index: usize) -> f32 {
-        if let Some(base) = &self.base_param_values {
-            if index < base.len() {
+        if let Some(base) = &self.base_param_values
+            && index < base.len() {
                 return base[index];
             }
-        }
         // Fall through to effective for backward compat
         self.get_param(index)
     }
@@ -259,8 +259,8 @@ impl EffectInstance {
             ];
             self.param_values = migrated;
             // Migrate base values too
-            if let Some(ref base) = self.base_param_values {
-                if base.len() == 14 {
+            if let Some(ref base) = self.base_param_values
+                && base.len() == 14 {
                     let migrated_base = vec![
                         base[0], base[1], base[2], base[3], base[4],
                         base[7], base[8], base[9], base[10], base[11], base[12],
@@ -268,7 +268,6 @@ impl EffectInstance {
                     ];
                     self.base_param_values = Some(migrated_base);
                 }
-            }
         }
 
         if let Some(def) = effect_definition_registry::try_get(self.effect_type) {
@@ -368,7 +367,7 @@ impl ParamSource for EffectInstance {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EffectGroup {
-    pub id: String,
+    pub id: EffectGroupId,
     #[serde(default = "default_group_name")]
     pub name: String,
     #[serde(default = "default_true")]
@@ -378,13 +377,13 @@ pub struct EffectGroup {
     #[serde(default = "default_one")]
     pub wet_dry: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_group_id: Option<String>,
+    pub parent_group_id: Option<EffectGroupId>,
 }
 
 impl EffectGroup {
     pub fn new(name: String) -> Self {
         Self {
-            id: crate::short_id(),
+            id: EffectGroupId::new(crate::short_id()),
             name,
             enabled: true,
             collapsed: false,
@@ -395,7 +394,7 @@ impl EffectGroup {
 
     pub fn clone_with_new_id(&self) -> Self {
         let mut cloned = self.clone();
-        cloned.id = crate::short_id();
+        cloned.id = EffectGroupId::new(crate::short_id());
         cloned
     }
 }

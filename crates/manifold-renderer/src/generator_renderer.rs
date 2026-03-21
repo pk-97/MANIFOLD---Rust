@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::HashMap;
+use ahash::AHashMap;
 use std::sync::Arc;
 use manifold_core::GeneratorType;
 use manifold_core::clip::TimelineClip;
@@ -35,8 +35,8 @@ pub struct GeneratorRenderer {
     height: u32,
     format: wgpu::TextureFormat,
     registry: GeneratorRegistry,
-    active_clips: HashMap<String, ActiveClip>,
-    layer_generators: HashMap<i32, LayerGeneratorState>,
+    active_clips: AHashMap<String, ActiveClip>,
+    layer_generators: AHashMap<i32, LayerGeneratorState>,
     available_rts: Vec<RenderTarget>,
     /// Pre-allocated scratch buffer for render iteration (avoids per-frame alloc).
     render_scratch: Vec<String>,
@@ -67,8 +67,8 @@ impl GeneratorRenderer {
             height,
             format,
             registry: GeneratorRegistry::new(format),
-            active_clips: HashMap::with_capacity(16),
-            layer_generators: HashMap::with_capacity(8),
+            active_clips: AHashMap::with_capacity(16),
+            layer_generators: AHashMap::with_capacity(8),
             available_rts,
             render_scratch: Vec::with_capacity(16),
         }
@@ -93,11 +93,11 @@ impl GeneratorRenderer {
             .is_none_or(|ls| ls.generator_type != gen_type);
 
         if needs_create {
-            if let Some(gen) = self.registry.create(&self.device, gen_type) {
+            if let Some(generator) = self.registry.create(&self.device, gen_type) {
                 self.layer_generators.insert(
                     layer_index,
                     LayerGeneratorState {
-                        generator: gen,
+                        generator,
                         generator_type: gen_type,
                         trigger_count: 0,
                     },
@@ -168,14 +168,13 @@ impl GeneratorRenderer {
             // Build GeneratorContext from layer params (zero allocation)
             let mut params = [0.0f32; MAX_GEN_PARAMS];
             let mut param_count = 0u32;
-            if let Some(layer) = layers.get(layer_index as usize) {
-                if let Some(gp) = &layer.gen_params {
+            if let Some(layer) = layers.get(layer_index as usize)
+                && let Some(gp) = &layer.gen_params {
                     param_count = gp.param_values.len().min(MAX_GEN_PARAMS) as u32;
                     for (i, val) in gp.param_values.iter().take(MAX_GEN_PARAMS).enumerate() {
                         params[i] = *val;
                     }
                 }
-            }
 
             let trigger_count = self
                 .layer_generators
@@ -197,8 +196,8 @@ impl GeneratorRenderer {
 
             // Split borrows: get generator and active clip's RT view separately
             let _ = gen_type; // used for type matching if needed
-            if let Some(layer_state) = self.layer_generators.get_mut(&layer_index) {
-                if let Some(active) = self.active_clips.get_mut(id) {
+            if let Some(layer_state) = self.layer_generators.get_mut(&layer_index)
+                && let Some(active) = self.active_clips.get_mut(id) {
                     let new_progress = layer_state.generator.render(
                         &self.device,
                         queue,
@@ -208,7 +207,6 @@ impl GeneratorRenderer {
                     );
                     active.anim_progress = new_progress;
                 }
-            }
         }
     }
 
@@ -253,11 +251,11 @@ impl GeneratorRenderer {
                 .layer_generators
                 .get(&layer_index)
                 .map_or(0, |ls| ls.trigger_count);
-            if let Some(gen) = self.registry.create(&self.device, new_type) {
+            if let Some(generator) = self.registry.create(&self.device, new_type) {
                 self.layer_generators.insert(
                     layer_index,
                     LayerGeneratorState {
-                        generator: gen,
+                        generator,
                         generator_type: new_type,
                         trigger_count: old_trigger_count,
                     },

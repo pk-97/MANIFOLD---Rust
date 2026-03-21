@@ -201,7 +201,7 @@ fn commit_without_recording_discards() {
 
     // Clip should NOT be in timeline
     assert_eq!(project.timeline.layers[0].clips.len(), 0);
-    assert!(host.stopped_clips.contains(&clip.id));
+    assert!(host.stopped_clips.iter().any(|s| *s == clip.id));
 }
 
 // ─── Pending launches ───

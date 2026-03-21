@@ -79,8 +79,8 @@ impl ProcessHandle {
         }
 
         // Check if the process has finished (exit code sent).
-        if self.exit_code.is_none() {
-            if let Some(rx) = &self.finished_rx {
+        if self.exit_code.is_none()
+            && let Some(rx) = &self.finished_rx {
                 match rx.try_recv() {
                     Ok(code) => {
                         self.exit_code = Some(code);
@@ -97,7 +97,6 @@ impl ProcessHandle {
                     }
                 }
             }
-        }
 
         lines
     }

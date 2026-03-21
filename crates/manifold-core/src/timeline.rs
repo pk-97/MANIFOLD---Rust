@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use ahash::AHashMap;
+use crate::id::ClipId;
 use crate::clip::TimelineClip;
 use crate::layer::Layer;
 
@@ -20,7 +21,7 @@ pub struct Timeline {
 
     /// Runtime clip lookup cache: clip_id → (layer_index, clip_index).
     #[serde(skip)]
-    clip_lookup: HashMap<String, (usize, usize)>,
+    clip_lookup: AHashMap<ClipId, (usize, usize)>,
     #[serde(skip)]
     clip_lookup_dirty: bool,
 }
@@ -91,7 +92,7 @@ impl Timeline {
 
     /// Register a single clip in the lookup (incremental add).
     pub fn register_clip_in_lookup(&mut self, clip_id: &str, layer_index: usize, clip_index: usize) {
-        self.clip_lookup.insert(clip_id.to_string(), (layer_index, clip_index));
+        self.clip_lookup.insert(ClipId::new(clip_id), (layer_index, clip_index));
     }
 
     /// Get total duration in beats (max clip EndBeat across all layers).

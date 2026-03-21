@@ -20,6 +20,12 @@ pub struct ReadbackRequest {
     map_rx: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
+impl Default for ReadbackRequest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReadbackRequest {
     pub fn new() -> Self {
         Self {

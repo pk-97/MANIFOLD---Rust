@@ -157,11 +157,11 @@ pub struct UIRenderer {
     /// Matches Unity's approach: Font.GetCharacterInfo() serves cached glyph data
     /// from the font atlas; only new glyphs trigger rasterization. Here, we cache
     /// shaped TextBuffers so identical text across frames avoids re-shaping.
-    text_buffer_cache: std::collections::HashMap<(String, u16), TextBuffer>,
+    text_buffer_cache: ahash::AHashMap<(String, u16), TextBuffer>,
     /// Frame generation counter for cache eviction.
     text_cache_generation: u64,
     /// Per-entry generation (tracks last-used frame for eviction).
-    text_cache_used: std::collections::HashMap<(String, u16), u64>,
+    text_cache_used: ahash::AHashMap<(String, u16), u64>,
 
     // Draw queues
     rect_commands: Vec<RectCommand>,
@@ -300,9 +300,9 @@ impl UIRenderer {
             overlay_text_renderer,
             viewport,
             text_buffers: Vec::new(),
-            text_buffer_cache: std::collections::HashMap::with_capacity(256),
+            text_buffer_cache: ahash::AHashMap::with_capacity(256),
             text_cache_generation: 0,
-            text_cache_used: std::collections::HashMap::with_capacity(256),
+            text_cache_used: ahash::AHashMap::with_capacity(256),
             rect_commands: Vec::with_capacity(256),
             text_commands: Vec::with_capacity(128),
             vertices: Vec::with_capacity(1024),
@@ -379,11 +379,10 @@ impl UIRenderer {
 
         tree.traverse(|event| match event {
             TraversalEvent::Node(node) => {
-                if let Some(start) = skip_from {
-                    if node.id as usize >= start {
+                if let Some(start) = skip_from
+                    && node.id as usize >= start {
                         return;
                     }
-                }
                 self.draw_node(node);
             }
             TraversalEvent::PushClip(rect) => {
@@ -507,8 +506,8 @@ impl UIRenderer {
         }
 
         // Text
-        if let Some(text) = &node.text {
-            if !text.is_empty() {
+        if let Some(text) = &node.text
+            && !text.is_empty() {
                 // Cached measurement — only shapes on first encounter or content change.
                 // Matches Unity's Font.GetCharacterInfo() which returns cached glyph metrics.
                 let text_size = self.measure_text_cached(text, style.font_size);
@@ -531,7 +530,6 @@ impl UIRenderer {
                     clip_bounds,
                 });
             }
-        }
     }
 
     /// Text measurement using cached TextBuffer.
@@ -690,10 +688,10 @@ impl UIRenderer {
             // so the generation counter increments once per frame, not per pass).
             if matches!(text_mode, TextMode::Main) {
                 self.text_cache_generation += 1;
-                if self.text_cache_generation % 60 == 0 {
-                    let gen = self.text_cache_generation;
+                if self.text_cache_generation.is_multiple_of(60) {
+                    let current_gen = self.text_cache_generation;
                     let stale: Vec<_> = self.text_cache_used.iter()
-                        .filter(|(_, &last_used)| gen - last_used > 120)
+                        .filter(|(_, last_used)| current_gen - **last_used > 120)
                         .map(|(k, _)| k.clone())
                         .collect();
                     for key in stale {

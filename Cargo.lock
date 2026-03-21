@@ -1981,6 +1981,7 @@ dependencies = [
  "manifold-ui",
  "metal",
  "objc",
+ "parking_lot",
  "pollster",
  "rfd",
  "serde",
@@ -1995,6 +1996,7 @@ dependencies = [
 name = "manifold-core"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "serde",
  "serde_json",
  "uuid",
@@ -2034,12 +2036,14 @@ dependencies = [
 name = "manifold-playback"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "kira",
  "log",
  "manifold-core",
  "manifold-editing",
  "manifold-io",
  "midir",
+ "parking_lot",
  "rosc",
  "rusty_link",
  "serde",
@@ -2051,6 +2055,7 @@ dependencies = [
 name = "manifold-renderer"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "bytemuck",
  "glyphon",
  "half",

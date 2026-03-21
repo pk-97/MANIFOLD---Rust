@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::ClipId;
 use manifold_core::project::Project;
 use manifold_core::clip::TimelineClip;
 use manifold_core::types::{GeneratorType, LayerType};
@@ -8,7 +9,7 @@ use manifold_core::types::{GeneratorType, LayerType};
 /// generator-type adoption when moving to a generator layer, and undo restores the original type.
 #[derive(Debug)]
 pub struct MoveClipCommand {
-    clip_id: String,
+    clip_id: ClipId,
     old_start_beat: f32,
     new_start_beat: f32,
     old_layer_index: i32,
@@ -21,13 +22,13 @@ pub struct MoveClipCommand {
 impl MoveClipCommand {
     /// Create a MoveClipCommand. `old_generator_type` captures the clip's generator type
     /// at the time the command is created (matching Unity constructor behavior).
-    pub fn new_with_gen_type(clip_id: String, old_start_beat: f32, new_start_beat: f32, old_layer_index: i32, new_layer_index: i32, old_generator_type: GeneratorType) -> Self {
+    pub fn new_with_gen_type(clip_id: ClipId, old_start_beat: f32, new_start_beat: f32, old_layer_index: i32, new_layer_index: i32, old_generator_type: GeneratorType) -> Self {
         Self { clip_id, old_start_beat, new_start_beat, old_layer_index, new_layer_index, old_generator_type }
     }
 
     /// Convenience constructor that defaults generator type to None.
     /// For callers that know the clip isn't a generator or will look it up themselves.
-    pub fn new(clip_id: String, old_start_beat: f32, new_start_beat: f32, old_layer_index: i32, new_layer_index: i32) -> Self {
+    pub fn new(clip_id: ClipId, old_start_beat: f32, new_start_beat: f32, old_layer_index: i32, new_layer_index: i32) -> Self {
         Self { clip_id, old_start_beat, new_start_beat, old_layer_index, new_layer_index, old_generator_type: GeneratorType::None }
     }
 }
@@ -49,11 +50,10 @@ impl Command for MoveClipCommand {
                 c.layer_index = self.new_layer_index;
 
                 // Generator-type adoption: when target is a generator layer, adopt its type.
-                if let Some(target) = project.timeline.layers.get(dst) {
-                    if target.layer_type == LayerType::Generator {
+                if let Some(target) = project.timeline.layers.get(dst)
+                    && target.layer_type == LayerType::Generator {
                         c.generator_type = target.generator_type();
                     }
-                }
             }
 
             // Add clip to target layer.
@@ -124,7 +124,7 @@ impl Command for MoveClipCommand {
 /// Calls mark_clips_unsorted when StartBeat changes (matches Unity TrimClipCommand).
 #[derive(Debug)]
 pub struct TrimClipCommand {
-    clip_id: String,
+    clip_id: ClipId,
     layer_index: Option<i32>,
     old_start_beat: f32,
     new_start_beat: f32,
@@ -136,7 +136,7 @@ pub struct TrimClipCommand {
 
 impl TrimClipCommand {
     pub fn new(
-        clip_id: String,
+        clip_id: ClipId,
         old_start_beat: f32, new_start_beat: f32,
         old_duration_beats: f32, new_duration_beats: f32,
         old_in_point: f32, new_in_point: f32,
@@ -159,13 +159,11 @@ impl Command for TrimClipCommand {
             clip.in_point = self.new_in_point;
         }
 
-        if (self.old_start_beat - self.new_start_beat).abs() > f32::EPSILON {
-            if let Some(li) = self.layer_index {
-                if let Some(layer) = project.timeline.layers.get_mut(li as usize) {
+        if (self.old_start_beat - self.new_start_beat).abs() > f32::EPSILON
+            && let Some(li) = self.layer_index
+                && let Some(layer) = project.timeline.layers.get_mut(li as usize) {
                     layer.mark_clips_unsorted();
                 }
-            }
-        }
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -175,13 +173,11 @@ impl Command for TrimClipCommand {
             clip.in_point = self.old_in_point;
         }
 
-        if (self.old_start_beat - self.new_start_beat).abs() > f32::EPSILON {
-            if let Some(li) = self.layer_index {
-                if let Some(layer) = project.timeline.layers.get_mut(li as usize) {
+        if (self.old_start_beat - self.new_start_beat).abs() > f32::EPSILON
+            && let Some(li) = self.layer_index
+                && let Some(layer) = project.timeline.layers.get_mut(li as usize) {
                     layer.mark_clips_unsorted();
                 }
-            }
-        }
     }
 
     fn description(&self) -> &str { "Trim Clip" }
@@ -255,7 +251,7 @@ impl Command for AddClipCommand {
 /// Swap the video source of a clip.
 #[derive(Debug)]
 pub struct SwapVideoCommand {
-    clip_id: String,
+    clip_id: ClipId,
     old_video_clip_id: String,
     new_video_clip_id: String,
     old_in_point: f32,
@@ -266,7 +262,7 @@ pub struct SwapVideoCommand {
 
 impl SwapVideoCommand {
     pub fn new(
-        clip_id: String,
+        clip_id: ClipId,
         old_video_clip_id: String, new_video_clip_id: String,
         old_in_point: f32, new_in_point: f32,
         old_duration_beats: f32, new_duration_beats: f32,
@@ -298,13 +294,13 @@ impl Command for SwapVideoCommand {
 /// Slip a clip's in-point without changing timeline position.
 #[derive(Debug)]
 pub struct SlipClipCommand {
-    clip_id: String,
+    clip_id: ClipId,
     old_in_point: f32,
     new_in_point: f32,
 }
 
 impl SlipClipCommand {
-    pub fn new(clip_id: String, old_in_point: f32, new_in_point: f32) -> Self {
+    pub fn new(clip_id: ClipId, old_in_point: f32, new_in_point: f32) -> Self {
         Self { clip_id, old_in_point, new_in_point }
     }
 }
@@ -339,13 +335,13 @@ pub struct ClipEffectsSnapshot {
 
 #[derive(Debug)]
 pub struct ClipEffectsCommand {
-    clip_id: String,
+    clip_id: ClipId,
     old: ClipEffectsSnapshot,
     new: ClipEffectsSnapshot,
 }
 
 impl ClipEffectsCommand {
-    pub fn new(clip_id: String, old: ClipEffectsSnapshot, new: ClipEffectsSnapshot) -> Self {
+    pub fn new(clip_id: ClipId, old: ClipEffectsSnapshot, new: ClipEffectsSnapshot) -> Self {
         Self { clip_id, old, new }
     }
 
@@ -379,7 +375,7 @@ impl Command for ClipEffectsCommand {
 /// Change clip loop settings.
 #[derive(Debug)]
 pub struct ChangeClipLoopCommand {
-    clip_id: String,
+    clip_id: ClipId,
     old_looping: bool,
     new_looping: bool,
     old_loop_duration: f32,
@@ -387,7 +383,7 @@ pub struct ChangeClipLoopCommand {
 }
 
 impl ChangeClipLoopCommand {
-    pub fn new(clip_id: String, old_looping: bool, new_looping: bool, old_loop_duration: f32, new_loop_duration: f32) -> Self {
+    pub fn new(clip_id: ClipId, old_looping: bool, new_looping: bool, old_loop_duration: f32, new_loop_duration: f32) -> Self {
         Self { clip_id, old_looping, new_looping, old_loop_duration, new_loop_duration }
     }
 }
@@ -413,13 +409,13 @@ impl Command for ChangeClipLoopCommand {
 /// Change clip recorded BPM.
 #[derive(Debug)]
 pub struct ChangeClipRecordedBpmCommand {
-    clip_id: String,
+    clip_id: ClipId,
     old_bpm: f32,
     new_bpm: f32,
 }
 
 impl ChangeClipRecordedBpmCommand {
-    pub fn new(clip_id: String, old_bpm: f32, new_bpm: f32) -> Self {
+    pub fn new(clip_id: ClipId, old_bpm: f32, new_bpm: f32) -> Self {
         Self { clip_id, old_bpm, new_bpm }
     }
 }
@@ -443,7 +439,7 @@ impl Command for ChangeClipRecordedBpmCommand {
 /// Split a clip at a given beat, creating a tail clip.
 #[derive(Debug)]
 pub struct SplitClipCommand {
-    clip_id: String,
+    clip_id: ClipId,
     layer_index: i32,
     old_duration_beats: f32,
     new_duration_beats: f32,
@@ -452,7 +448,7 @@ pub struct SplitClipCommand {
 
 impl SplitClipCommand {
     pub fn new(
-        clip_id: String,
+        clip_id: ClipId,
         layer_index: i32,
         old_duration_beats: f32,
         new_duration_beats: f32,
@@ -493,13 +489,13 @@ impl Command for SplitClipCommand {
 /// Mute/unmute a clip.
 #[derive(Debug)]
 pub struct MuteClipCommand {
-    clip_id: String,
+    clip_id: ClipId,
     old_muted: bool,
     new_muted: bool,
 }
 
 impl MuteClipCommand {
-    pub fn new(clip_id: String, old_muted: bool, new_muted: bool) -> Self {
+    pub fn new(clip_id: ClipId, old_muted: bool, new_muted: bool) -> Self {
         Self { clip_id, old_muted, new_muted }
     }
 }

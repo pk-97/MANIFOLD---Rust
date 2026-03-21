@@ -697,7 +697,7 @@ impl Generator for MyceliumGenerator {
             });
             pass.set_pipeline(&self.agent_update_pipeline);
             pass.set_bind_group(0, &agent_bg, &[]);
-            pass.dispatch_workgroups((agent_count + 255) / 256, 1, 1);
+            pass.dispatch_workgroups(agent_count.div_ceil(256), 1, 1);
         }
 
         // ── Pass 2: Resolve (compute) ──
@@ -740,7 +740,7 @@ impl Generator for MyceliumGenerator {
             });
             pass.set_pipeline(&self.resolve_pipeline);
             pass.set_bind_group(0, &resolve_bg, &[]);
-            pass.dispatch_workgroups((tw + 15) / 16, (th + 15) / 16, 1);
+            pass.dispatch_workgroups(tw.div_ceil(16), th.div_ceil(16), 1);
         }
 
         // ── Pass 3: Diffuse (3 fragment blits) ──

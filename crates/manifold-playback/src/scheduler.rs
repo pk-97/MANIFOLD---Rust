@@ -1,5 +1,6 @@
+use manifold_core::ClipId;
 use manifold_core::clip::TimelineClip;
-use std::collections::HashSet;
+use ahash::AHashSet;
 
 /// Result of a sync computation.
 /// ALIASING CONTRACT: The Vec fields are moved out of scheduler-internal buffers.
@@ -9,7 +10,7 @@ pub struct SyncResult {
     /// All clips that should be playing (timeline + live slots).
     pub should_be_active: Vec<TimelineClip>,
     /// Clip IDs to deactivate (were active, no longer should be).
-    pub to_stop: Vec<String>,
+    pub to_stop: Vec<ClipId>,
     /// Clips to activate (should be active, aren't yet).
     pub to_start: Vec<TimelineClip>,
 }
@@ -17,21 +18,21 @@ pub struct SyncResult {
 /// Pure clip scheduling logic. Port of C# ClipScheduler.
 /// No platform dependencies. Zero per-frame allocations (pre-allocated collections reused).
 pub struct ClipScheduler {
-    should_be_active_ids: HashSet<String>,
+    should_be_active_ids: AHashSet<ClipId>,
     // Internal buffers — drained into SyncResult each call, reclaimed next call.
     _merged_list: Vec<TimelineClip>,
-    _to_stop: Vec<String>,
+    _to_stop: Vec<ClipId>,
     _to_start: Vec<TimelineClip>,
     // Reclaimed buffers from previous SyncResult.
     reclaimed_should_be_active: Vec<TimelineClip>,
-    reclaimed_to_stop: Vec<String>,
+    reclaimed_to_stop: Vec<ClipId>,
     reclaimed_to_start: Vec<TimelineClip>,
 }
 
 impl ClipScheduler {
     pub fn new() -> Self {
         Self {
-            should_be_active_ids: HashSet::with_capacity(32),
+            should_be_active_ids: AHashSet::with_capacity(32),
             _merged_list: Vec::with_capacity(64),
             _to_stop: Vec::with_capacity(16),
             _to_start: Vec::with_capacity(16),
@@ -60,8 +61,8 @@ impl ClipScheduler {
         current_beat: f32,
         timeline_active_clips: &[TimelineClip],
         live_slots: &[(i32, TimelineClip)],
-        currently_active_ids: &HashSet<String>,
-        looping_clip_ids: &HashSet<String>,
+        currently_active_ids: &AHashSet<ClipId>,
+        looping_clip_ids: &AHashSet<ClipId>,
         min_remaining_beats: f32,
     ) -> SyncResult {
         // Reclaim buffers from previous result to avoid allocation.
@@ -144,7 +145,7 @@ mod tests {
 
     fn make_clip(id: &str, start_beat: f32, duration_beats: f32) -> TimelineClip {
         TimelineClip {
-            id: id.to_string(),
+            id: ClipId::new(id),
             start_beat,
             duration_beats,
             ..Default::default()
@@ -154,8 +155,8 @@ mod tests {
     #[test]
     fn empty_timeline_returns_empty() {
         let mut sched = ClipScheduler::new();
-        let active = HashSet::new();
-        let looping = HashSet::new();
+        let active = AHashSet::new();
+        let looping = AHashSet::new();
         let result = sched.compute_sync(0.0, 0.0, &[], &[], &active, &looping, 0.1);
         assert!(result.should_be_active.is_empty());
         assert!(result.to_stop.is_empty());
@@ -166,8 +167,8 @@ mod tests {
     fn single_active_clip_starts() {
         let mut sched = ClipScheduler::new();
         let clip = make_clip("c1", 2.0, 4.0);
-        let active = HashSet::new();
-        let looping = HashSet::new();
+        let active = AHashSet::new();
+        let looping = AHashSet::new();
         let result = sched.compute_sync(3.0, 3.0, &[clip.clone()], &[], &active, &looping, 0.1);
         assert_eq!(result.should_be_active.len(), 1);
         assert_eq!(result.to_start.len(), 1);
@@ -178,9 +179,9 @@ mod tests {
     fn already_active_not_restarted() {
         let mut sched = ClipScheduler::new();
         let clip = make_clip("c1", 2.0, 4.0);
-        let mut active = HashSet::new();
-        active.insert("c1".to_string());
-        let looping = HashSet::new();
+        let mut active = AHashSet::new();
+        active.insert(ClipId::new("c1"));
+        let looping = AHashSet::new();
         let result = sched.compute_sync(3.0, 3.0, &[clip], &[], &active, &looping, 0.1);
         assert_eq!(result.to_start.len(), 0);
         assert_eq!(result.to_stop.len(), 0);
@@ -189,9 +190,9 @@ mod tests {
     #[test]
     fn clip_no_longer_active_stopped() {
         let mut sched = ClipScheduler::new();
-        let mut active = HashSet::new();
-        active.insert("gone".to_string());
-        let looping = HashSet::new();
+        let mut active = AHashSet::new();
+        active.insert(ClipId::new("gone"));
+        let looping = AHashSet::new();
         let result = sched.compute_sync(7.0, 7.0, &[], &[], &active, &looping, 0.1);
         assert_eq!(result.to_stop.len(), 1);
         assert_eq!(result.to_stop[0], "gone");
@@ -201,8 +202,8 @@ mod tests {
     fn micro_clip_skip_short_remaining() {
         let mut sched = ClipScheduler::new();
         let clip = make_clip("short", 2.0, 4.0); // ends at 6.0
-        let active = HashSet::new();
-        let looping = HashSet::new();
+        let active = AHashSet::new();
+        let looping = AHashSet::new();
         // current_beat = 5.95, remaining = 0.05 < 0.1 threshold
         let result = sched.compute_sync(5.95, 5.95, &[clip], &[], &active, &looping, 0.1);
         assert_eq!(result.to_start.len(), 0);
@@ -212,9 +213,9 @@ mod tests {
     fn micro_clip_skip_bypassed_for_looping() {
         let mut sched = ClipScheduler::new();
         let clip = make_clip("loop", 2.0, 4.0);
-        let active = HashSet::new();
-        let mut looping = HashSet::new();
-        looping.insert("loop".to_string());
+        let active = AHashSet::new();
+        let mut looping = AHashSet::new();
+        looping.insert(ClipId::new("loop"));
         let result = sched.compute_sync(5.95, 5.95, &[clip], &[], &active, &looping, 0.1);
         assert_eq!(result.to_start.len(), 1);
     }
@@ -226,8 +227,8 @@ mod tests {
         let mut sched = ClipScheduler::new();
         let live_clip = make_clip("live1", 2.0, 4.0);
         let live_slots = vec![(0i32, live_clip)];
-        let active = HashSet::new();
-        let looping = HashSet::new();
+        let active = AHashSet::new();
+        let looping = AHashSet::new();
         // current_beat = 3.0 >= live_clip.start_beat (2.0) + 0.0001
         let result = sched.compute_sync(3.0, 3.0, &[], &live_slots, &active, &looping, 0.1);
         assert_eq!(result.should_be_active.len(), 1);
@@ -240,8 +241,8 @@ mod tests {
         let mut sched = ClipScheduler::new();
         let live_clip = make_clip("live1", 5.0, 4.0);
         let live_slots = vec![(0i32, live_clip)];
-        let active = HashSet::new();
-        let looping = HashSet::new();
+        let active = AHashSet::new();
+        let looping = AHashSet::new();
         // current_beat = 3.0 < live_clip.start_beat (5.0) - 0.0001
         let result = sched.compute_sync(3.0, 3.0, &[], &live_slots, &active, &looping, 0.1);
         assert_eq!(result.should_be_active.len(), 0);
@@ -253,8 +254,8 @@ mod tests {
         let mut sched = ClipScheduler::new();
         let live_clip = make_clip("live1", 2.0, 2.0); // ends at beat 4.0
         let live_slots = vec![(0i32, live_clip)];
-        let active = HashSet::new();
-        let looping = HashSet::new();
+        let active = AHashSet::new();
+        let looping = AHashSet::new();
         // current_beat = 5.0 > EndBeat (4.0) — but live slots persist until NoteOff
         let result = sched.compute_sync(5.0, 5.0, &[], &live_slots, &active, &looping, 0.1);
         assert_eq!(result.should_be_active.len(), 1);
@@ -266,8 +267,8 @@ mod tests {
         let timeline_clip = make_clip("t1", 0.0, 10.0);
         let live_clip = make_clip("live1", 3.0, 4.0);
         let live_slots = vec![(1i32, live_clip)];
-        let active = HashSet::new();
-        let looping = HashSet::new();
+        let active = AHashSet::new();
+        let looping = AHashSet::new();
         let result = sched.compute_sync(5.0, 5.0, &[timeline_clip], &live_slots, &active, &looping, 0.1);
         assert_eq!(result.should_be_active.len(), 2);
         assert_eq!(result.to_start.len(), 2);
@@ -280,11 +281,11 @@ mod tests {
         let t2 = make_clip("t2", 4.0, 4.0);
         let live = make_clip("live1", 1.0, 10.0);
         let live_slots = vec![(0i32, live)];
-        let active = HashSet::new();
-        let looping = HashSet::new();
+        let active = AHashSet::new();
+        let looping = AHashSet::new();
         let result = sched.compute_sync(5.0, 5.0, &[t1, t2], &live_slots, &active, &looping, 0.1);
         assert_eq!(result.should_be_active.len(), 3);
-        let ids: HashSet<String> = result.should_be_active.iter().map(|c| c.id.clone()).collect();
+        let ids: AHashSet<ClipId> = result.should_be_active.iter().map(|c| c.id.clone()).collect();
         assert!(ids.contains("t1"));
         assert!(ids.contains("t2"));
         assert!(ids.contains("live1"));
@@ -296,8 +297,8 @@ mod tests {
         let clips = vec![make_clip("c1", 2.0, 4.0)];
         let live_clip = make_clip("live1", 1.0, 10.0);
         let live_slots = vec![(0i32, live_clip)];
-        let active = HashSet::new();
-        let looping = HashSet::new();
+        let active = AHashSet::new();
+        let looping = AHashSet::new();
         let original_count = clips.len();
         let _ = sched.compute_sync(3.0, 3.0, &clips, &live_slots, &active, &looping, 0.1);
         assert_eq!(clips.len(), original_count);
@@ -307,16 +308,16 @@ mod tests {
     fn reclaim_reuses_buffers() {
         let mut sched = ClipScheduler::new();
         let clip = make_clip("c1", 0.0, 10.0);
-        let active = HashSet::new();
-        let looping = HashSet::new();
+        let active = AHashSet::new();
+        let looping = AHashSet::new();
 
         let result = sched.compute_sync(1.0, 1.0, &[clip.clone()], &[], &active, &looping, 0.1);
         assert_eq!(result.to_start.len(), 1);
 
         // Reclaim and run again — should reuse buffers without new allocation
         sched.reclaim(result);
-        let mut active2 = HashSet::new();
-        active2.insert("c1".to_string());
+        let mut active2 = AHashSet::new();
+        active2.insert(ClipId::new("c1"));
         let result2 = sched.compute_sync(1.0, 1.0, &[clip], &[], &active2, &looping, 0.1);
         assert_eq!(result2.to_start.len(), 0);
         assert_eq!(result2.to_stop.len(), 0);

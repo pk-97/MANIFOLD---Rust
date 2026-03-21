@@ -33,8 +33,8 @@ pub fn get_category_for_generator(_gen_type: GeneratorType) -> &'static str {
 /// Get all effect types in a given category.
 pub fn get_effects_in_category(category: &str) -> Vec<EffectType> {
     EFFECT_CATEGORIES.iter()
-        .filter(|(_, &cat)| cat == category)
-        .map(|(&et, _)| et)
+        .filter(|(_, cat)| **cat == category)
+        .map(|(et, _)| *et)
         .collect()
 }
 

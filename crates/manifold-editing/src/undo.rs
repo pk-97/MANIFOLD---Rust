@@ -33,6 +33,7 @@ impl UndoRedoManager {
     }
 
     /// Undo the most recent command.
+    #[must_use]
     pub fn undo(&mut self, project: &mut Project) -> bool {
         if let Some(mut cmd) = self.undo_stack.pop_back() {
             cmd.undo(project);
@@ -44,6 +45,7 @@ impl UndoRedoManager {
     }
 
     /// Redo the most recently undone command.
+    #[must_use]
     pub fn redo(&mut self, project: &mut Project) -> bool {
         if let Some(mut cmd) = self.redo_stack.pop() {
             cmd.execute(project);
@@ -113,11 +115,11 @@ mod tests {
         assert_eq!(project.settings.bpm, 140.0);
         assert!(mgr.can_undo());
 
-        mgr.undo(&mut project);
+        assert!(mgr.undo(&mut project));
         assert_eq!(project.settings.bpm, 120.0);
         assert!(mgr.can_redo());
 
-        mgr.redo(&mut project);
+        assert!(mgr.redo(&mut project));
         assert_eq!(project.settings.bpm, 140.0);
     }
 }

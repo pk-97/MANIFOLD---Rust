@@ -310,22 +310,20 @@ impl GenParamPanel {
                 ));
 
                 // Trim handles (if driver expanded)
-                if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
-                    if let Some(ref slider) = self.slider_ids[i] {
+                if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false)
+                    && let Some(ref slider) = self.slider_ids[i] {
                         self.trim_ids[i] = Some(build_trim_handles(
                             tree, slider.track as i32, slider.track_rect, &self.state.mod_state, i,
                         ));
                     }
-                }
 
                 // Envelope target
-                if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
-                    if let Some(ref slider) = self.slider_ids[i] {
+                if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false)
+                    && let Some(ref slider) = self.slider_ids[i] {
                         self.target_ids[i] = Some(build_envelope_target(
                             tree, slider.track as i32, slider.track_rect, &self.state.mod_state, i,
                         ));
                     }
-                }
 
                 // D/E buttons
                 let btn_x = cx + slider_w + DE_BUTTON_GAP;
@@ -413,11 +411,10 @@ impl GenParamPanel {
 
         // Toggle buttons
         for (pi, toggle) in self.toggle_ids.iter().enumerate() {
-            if let Some(ref t) = toggle {
-                if id == t.button_id {
+            if let Some(t) = toggle
+                && id == t.button_id {
                     return vec![PanelAction::GenParamToggle(pi)];
                 }
-            }
         }
 
         // D/E buttons (skip toggles)
@@ -452,17 +449,16 @@ impl GenParamPanel {
     pub fn handle_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
         // Check envelope targets
         for (pi, target) in self.target_ids.iter().enumerate() {
-            if let Some(ref t) = target {
-                if node_id as i32 == t.target_bar_id {
+            if let Some(t) = target
+                && node_id as i32 == t.target_bar_id {
                     self.drag.dragging_target_param = pi as i32;
                     return vec![PanelAction::GenTargetSnapshot(pi)];
                 }
-            }
         }
 
         // Check trim bars
         for (pi, trim) in self.trim_ids.iter().enumerate() {
-            if let Some(ref t) = trim {
+            if let Some(t) = trim {
                 if node_id as i32 == t.min_bar_id {
                     self.drag.dragging_trim_param = pi as i32;
                     self.drag.dragging_trim_is_min = true;
@@ -478,7 +474,7 @@ impl GenParamPanel {
 
         // Check ADSR slider tracks
         for (pi, env_cfg) in self.envelope_config_ids.iter().enumerate() {
-            if let Some(ref c) = env_cfg {
+            if let Some(c) = env_cfg {
                 let slots = [
                     (&c.attack_slider, EnvelopeParam::Attack, ENV_ADR_MAX),
                     (&c.decay_slider, EnvelopeParam::Decay, ENV_ADR_MAX),
@@ -499,8 +495,8 @@ impl GenParamPanel {
         // Check param slider tracks (skip toggles)
         for (pi, slider) in self.slider_ids.iter().enumerate() {
             if self.param_info.get(pi).map(|i| i.is_toggle).unwrap_or(false) { continue; }
-            if let Some(ref ids) = slider {
-                if node_id == ids.track {
+            if let Some(ids) = slider
+                && node_id == ids.track {
                     self.drag.dragging_param = pi as i32;
                     let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                     let info = &self.param_info[pi];
@@ -511,7 +507,6 @@ impl GenParamPanel {
                         PanelAction::GenParamChanged(pi, val),
                     ];
                 }
-            }
         }
 
         Vec::new()
@@ -521,12 +516,12 @@ impl GenParamPanel {
         // Target bar drag — update state, reposition bar node, dispatch action
         if self.drag.dragging_target_param >= 0 {
             let pi = self.drag.dragging_target_param as usize;
-            if let Some(ref slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
+            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
                 if let Some(v) = self.state.mod_state.target_norm.get_mut(pi) { *v = norm; }
 
                 // Visual update: reposition target bar node in the tree
-                if let Some(ref t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
+                if let Some(t) = self.target_ids.get(pi).and_then(|t| t.as_ref()) {
                     let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
                     let base_x = slider.track_rect.x + OVERLAY_INSET;
                     let bar_x = base_x + norm * usable - TARGET_BAR_W * 0.5;
@@ -544,7 +539,7 @@ impl GenParamPanel {
         // Trim bar drag — update state, reposition bar nodes, dispatch action
         if self.drag.dragging_trim_param >= 0 {
             let pi = self.drag.dragging_trim_param as usize;
-            if let Some(ref slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
+            if let Some(slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
                 let tmin = self.state.mod_state.trim_min.get(pi).copied().unwrap_or(0.0);
                 let tmax = self.state.mod_state.trim_max.get(pi).copied().unwrap_or(1.0);
@@ -557,7 +552,7 @@ impl GenParamPanel {
                 if let Some(v) = self.state.mod_state.trim_max.get_mut(pi) { *v = new_max; }
 
                 // Visual update: reposition trim bar nodes in the tree
-                if let Some(ref t) = self.trim_ids.get(pi).and_then(|t| t.as_ref()) {
+                if let Some(t) = self.trim_ids.get(pi).and_then(|t| t.as_ref()) {
                     let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
                     let base_x = slider.track_rect.x + OVERLAY_INSET;
                     let fill_x = base_x + new_min * usable;
@@ -583,7 +578,7 @@ impl GenParamPanel {
         // ADSR drag
         if self.drag.dragging_env_param >= 0 {
             let pi = self.drag.dragging_env_param as usize;
-            if let Some(ref cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref()) {
+            if let Some(cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref()) {
                 let (slider, param, max) = match self.drag.dragging_env_slot {
                     0 => (&cfg.attack_slider, EnvelopeParam::Attack, ENV_ADR_MAX),
                     1 => (&cfg.decay_slider, EnvelopeParam::Decay, ENV_ADR_MAX),
@@ -601,7 +596,7 @@ impl GenParamPanel {
         // Param slider drag
         if self.drag.dragging_param >= 0 {
             let pi = self.drag.dragging_param as usize;
-            if let Some(ref ids) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
+            if let Some(ids) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let info = &self.param_info[pi];
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
@@ -643,12 +638,11 @@ impl GenParamPanel {
     pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
         for (pi, slider) in self.slider_ids.iter().enumerate() {
             if self.param_info.get(pi).map(|i| i.is_toggle).unwrap_or(false) { continue; }
-            if let Some(ref ids) = slider {
-                if node_id == ids.track {
+            if let Some(ids) = slider
+                && node_id == ids.track {
                     let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
                     return vec![PanelAction::GenParamRightClick(pi, default)];
                 }
-            }
         }
         Vec::new()
     }

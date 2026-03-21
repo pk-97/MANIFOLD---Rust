@@ -1,3 +1,4 @@
+use manifold_core::ClipId;
 use std::collections::HashMap;
 
 use manifold_core::recording::{RecordedClipProvenance, RecordedTempoChange, RecordingProvenance};
@@ -14,7 +15,7 @@ pub struct TempoRecorder {
     last_recorded_bpm: f32,
     session_active: bool,
 
-    clip_starts: HashMap<String, RecordingClipStartInfo>,
+    clip_starts: HashMap<ClipId, RecordingClipStartInfo>,
 }
 
 /// Constants matching Unity TempoRecorder.cs.
@@ -24,7 +25,7 @@ impl TempoRecorder {
 }
 
 struct RecordingClipStartInfo {
-    clip_id: String,
+    clip_id: ClipId,
     video_clip_id: String,
     layer_index: i32,
     midi_note: i32,
@@ -38,6 +39,12 @@ struct RecordingClipStartInfo {
 // =================================================================
 // LIFECYCLE
 // =================================================================
+
+impl Default for TempoRecorder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl TempoRecorder {
     pub fn new() -> Self {
@@ -234,9 +241,9 @@ impl TempoRecorder {
         };
 
         self.clip_starts.insert(
-            clip_id.to_string(),
+            ClipId::new(clip_id),
             RecordingClipStartInfo {
-                clip_id: clip_id.to_string(),
+                clip_id: ClipId::new(clip_id),
                 video_clip_id: video_clip_id.to_string(),
                 layer_index,
                 midi_note,

@@ -127,6 +127,12 @@ pub struct BrowserPopupPanel {
     screen_h: f32,
 }
 
+impl Default for BrowserPopupPanel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BrowserPopupPanel {
     pub fn new() -> Self {
         Self {
@@ -219,11 +225,10 @@ impl BrowserPopupPanel {
         let filter_lower = self.current_filter.to_lowercase();
         for (i, name) in self.item_names.iter().enumerate() {
             // Category filter
-            if let Some(ref cat) = self.active_category {
-                if i < self.item_categories.len() && self.item_categories[i] != *cat {
+            if let Some(ref cat) = self.active_category
+                && i < self.item_categories.len() && self.item_categories[i] != *cat {
                     continue;
                 }
-            }
             // Search filter — case-insensitive substring
             if !filter_lower.is_empty() && !name.to_lowercase().contains(&filter_lower) {
                 continue;

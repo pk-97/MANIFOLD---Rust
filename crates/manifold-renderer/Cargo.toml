@@ -1,7 +1,7 @@
 [package]
 name = "manifold-renderer"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
@@ -14,3 +14,4 @@ bytemuck = { version = "1", features = ["derive"] }
 glyphon = "0.10"
 half = "2"
 serde_json = "1"
+ahash = { workspace = true }

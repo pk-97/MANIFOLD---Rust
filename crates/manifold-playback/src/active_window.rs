@@ -1,7 +1,8 @@
+use manifold_core::{ClipId, LayerId};
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::timeline::Timeline;
-use std::collections::HashMap;
+use ahash::AHashMap;
 
 /// Runtime active-clip window for timeline playback.
 /// Maintains an incremental time-domain set of active clips and advances via
@@ -11,13 +12,13 @@ pub struct ActiveTimelineClipWindow {
     clips_by_start: Vec<TimelineClip>,
     clips_by_end: Vec<TimelineClip>,
     /// O(1) active lookup by clip id.
-    active_by_id: HashMap<String, TimelineClip>,
+    active_by_id: AHashMap<ClipId, TimelineClip>,
     /// Parallel iteration list — avoids HashMap values enumerator allocation.
     /// PERF: The HashMap is retained for O(1) keyed lookup in advance_active_set_forward.
     /// DO NOT REMOVE. Kept in sync with active_by_id at all times.
     active_by_id_values: Vec<TimelineClip>,
     visible_scratch: Vec<TimelineClip>,
-    layer_id_to_index: HashMap<String, usize>,
+    layer_id_to_index: AHashMap<LayerId, usize>,
     visible_layers: Vec<bool>,
     indexed_layer_clip_counts: Vec<usize>,
 
@@ -35,10 +36,10 @@ impl ActiveTimelineClipWindow {
         Self {
             clips_by_start: Vec::with_capacity(256),
             clips_by_end: Vec::with_capacity(256),
-            active_by_id: HashMap::with_capacity(256),
+            active_by_id: AHashMap::with_capacity(256),
             active_by_id_values: Vec::with_capacity(256),
             visible_scratch: Vec::with_capacity(128),
-            layer_id_to_index: HashMap::with_capacity(32),
+            layer_id_to_index: AHashMap::with_capacity(32),
             visible_layers: Vec::new(),
             indexed_layer_clip_counts: Vec::new(),
             initialized: false,
@@ -406,7 +407,7 @@ mod tests {
 
     fn make_clip(id: &str, layer_index: i32, start_beat: f32, duration_beats: f32) -> TimelineClip {
         TimelineClip {
-            id: id.to_string(),
+            id: ClipId::new(id),
             layer_index,
             start_beat,
             duration_beats,
@@ -542,7 +543,7 @@ mod tests {
         let mut group = make_group_layer(0);
         group.is_muted = true;
 
-        let child_layer_id = "child-layer-id".to_string();
+        let child_layer_id = LayerId::new("child-layer-id");
         let mut child = make_video_layer(1, vec![clip_child]);
         child.layer_id = child_layer_id.clone();
         child.parent_layer_id = Some(group.layer_id.clone());

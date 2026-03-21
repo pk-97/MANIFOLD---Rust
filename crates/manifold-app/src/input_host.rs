@@ -3,7 +3,7 @@
 //! Wraps Application fields to implement the TimelineInputHost trait.
 //! Same split-borrow pattern as AppEditingHost — borrows individual fields
 //! so InputHandler, UIState, and viewport can be borrowed separately.
-
+use manifold_core::{ClipId, LayerId};
 use manifold_editing::commands::clip::MuteClipCommand;
 use manifold_editing::commands::effects::RemoveEffectCommand;
 use manifold_editing::commands::effect_target::EffectTarget;
@@ -164,14 +164,13 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Remove in reverse index order (Unity lines 242-246)
         for &idx in indices.iter().rev() {
             let effects_slice = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection);
-            if let Some(effects) = effects_slice {
-                if let Some(fx) = effects.get(idx) {
+            if let Some(effects) = effects_slice
+                && let Some(fx) = effects.get(idx) {
                     let cmd = RemoveEffectCommand::new(target.clone(), fx.clone(), idx);
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                     boxed.execute(self.project);
                     let _ = self.content_tx.try_send(ContentCommand::Execute(boxed));
                 }
-            }
         }
 
         self.ui_root.inspector.clear_effect_selection();
@@ -220,14 +219,13 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Remove in reverse index order (Unity lines 274-289)
         for &idx in indices.iter().rev() {
             let effects_slice = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection);
-            if let Some(effects) = effects_slice {
-                if let Some(fx) = effects.get(idx) {
+            if let Some(effects) = effects_slice
+                && let Some(fx) = effects.get(idx) {
                     let cmd = RemoveEffectCommand::new(target.clone(), fx.clone(), idx);
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                     boxed.execute(self.project);
                     let _ = self.content_tx.try_send(ContentCommand::Execute(boxed));
                 }
-            }
         }
 
         self.ui_root.inspector.clear_effect_selection();
@@ -379,10 +377,10 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_structural_sync = true;
     }
 
-    fn copy_clips(&mut self, clip_ids: &[String]) {
+    fn copy_clips(&mut self, clip_ids: &[ClipId]) {
         // Send copy to content thread (EditingService owns the clipboard)
         let region = if self.selection.has_region() {
-            Some(self.selection.get_region().clone())
+            Some(*self.selection.get_region())
         } else {
             None
         };
@@ -392,10 +390,10 @@ impl TimelineInputHost for AppInputHost<'_> {
         });
     }
 
-    fn cut_clips(&mut self, clip_ids: &[String], has_region: bool) {
+    fn cut_clips(&mut self, clip_ids: &[ClipId], has_region: bool) {
         // Copy first (via content thread), then delete locally + record commands
         let region = if has_region {
-            Some(self.selection.get_region().clone())
+            Some(*self.selection.get_region())
         } else {
             None
         };
@@ -407,7 +405,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let project = &mut *self.project;
         let spb = 60.0 / project.settings.bpm.max(1.0);
         let del_region = if has_region {
-            Some(self.selection.get_region().clone())
+            Some(*self.selection.get_region())
         } else {
             None
         };
@@ -427,8 +425,8 @@ impl TimelineInputHost for AppInputHost<'_> {
             result_tx: tx,
         });
         // Wait briefly for pasted IDs to select them in the UI
-        if let Ok(pasted_ids) = rx.recv_timeout(std::time::Duration::from_millis(100)) {
-            if !pasted_ids.is_empty() {
+        if let Ok(pasted_ids) = rx.recv_timeout(std::time::Duration::from_millis(100))
+            && !pasted_ids.is_empty() {
                 self.selection.clear_selection();
                 for id in &pasted_ids {
                     self.selection.selected_clip_ids.insert(id.clone());
@@ -437,11 +435,10 @@ impl TimelineInputHost for AppInputHost<'_> {
                 self.selection.selection_version += 1;
                 // Region update will happen when project snapshot arrives
             }
-        }
         *self.needs_structural_sync = true;
     }
 
-    fn duplicate_clips(&mut self, clip_ids: &[String]) {
+    fn duplicate_clips(&mut self, clip_ids: &[ClipId]) {
         // Unity EditingService.DuplicateSelectedClips (line 767-778):
         // After duplicate, select the new clips and update region.
         if let Some(project) = Some(&mut *self.project) {
@@ -462,7 +459,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 region.end_beat = max_beat;
             }
             // Snapshot existing IDs to find new ones after execute
-            let before_ids: std::collections::HashSet<String> = project.timeline.layers.iter()
+            let before_ids: std::collections::HashSet<ClipId> = project.timeline.layers.iter()
                 .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
                 .collect();
 
@@ -475,7 +472,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, "Duplicate clips".into()));
 
                 // Step 4h: find newly created clips and select them
-                let new_ids: Vec<String> = project.timeline.layers.iter()
+                let new_ids: Vec<ClipId> = project.timeline.layers.iter()
                     .flat_map(|l| l.clips.iter()
                         .filter(|c| !before_ids.contains(&c.id))
                         .map(|c| c.id.clone()))
@@ -494,12 +491,12 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_structural_sync = true;
     }
 
-    fn delete_clips(&mut self, clip_ids: &[String], has_region: bool) {
+    fn delete_clips(&mut self, clip_ids: &[ClipId], has_region: bool) {
         if let Some(project) = Some(&mut *self.project) {
             let spb = 60.0 / project.settings.bpm;
             // Step 4i: pass actual region from UIState when active
             let region = if has_region {
-                Some(self.selection.get_region().clone())
+                Some(*self.selection.get_region())
             } else {
                 None
             };
@@ -512,19 +509,17 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn delete_layer(&mut self, layer_index: usize) {
-        if let Some(project) = Some(&mut *self.project) {
-            if project.timeline.layers.len() > 1 {
-                if let Some(layer) = project.timeline.layers.get(layer_index) {
+        if let Some(project) = Some(&mut *self.project)
+            && project.timeline.layers.len() > 1
+                && let Some(layer) = project.timeline.layers.get(layer_index) {
                     let layer_clone = layer.clone();
                     let cmd = manifold_editing::commands::layer::DeleteLayerCommand::new(layer_clone, layer_index);
                     let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(Box::new(cmd)));
                 }
-            }
-        }
         *self.needs_rebuild = true;
     }
 
-    fn split_clips_at_playhead(&mut self, clip_ids: &[String]) {
+    fn split_clips_at_playhead(&mut self, clip_ids: &[ClipId]) {
         let beat = self.content_state.current_beat;
         if let Some(project) = Some(&mut *self.project) {
             let spb = 60.0 / project.settings.bpm;
@@ -540,7 +535,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         }
     }
 
-    fn extend_clips(&mut self, clip_ids: &[String], grid_step: f32) {
+    fn extend_clips(&mut self, clip_ids: &[ClipId], grid_step: f32) {
         if let Some(project) = Some(&mut *self.project) {
             let commands = EditingService::extend_clips_by_grid(project, clip_ids, grid_step);
             if !commands.is_empty() {
@@ -549,7 +544,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         }
     }
 
-    fn shrink_clips(&mut self, clip_ids: &[String], grid_step: f32) {
+    fn shrink_clips(&mut self, clip_ids: &[ClipId], grid_step: f32) {
         if let Some(project) = Some(&mut *self.project) {
             let commands = EditingService::shrink_clips_by_grid(project, clip_ids, grid_step);
             if !commands.is_empty() {
@@ -558,7 +553,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         }
     }
 
-    fn nudge_clips(&mut self, clip_ids: &[String], beat_delta: f32) {
+    fn nudge_clips(&mut self, clip_ids: &[ClipId], beat_delta: f32) {
         if let Some(project) = Some(&mut *self.project) {
             let spb = 60.0 / project.settings.bpm;
             let commands = EditingService::nudge_clips(project, clip_ids, beat_delta, spb);
@@ -569,13 +564,13 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_structural_sync = true;
     }
 
-    fn toggle_mute_clips(&mut self, clip_ids: &[String]) {
+    fn toggle_mute_clips(&mut self, clip_ids: &[ClipId]) {
         // Unity EditingService.ToggleMuteSelectedClips (line 418-448):
         // Group-mute semantics: if ANY unmuted → mute ALL, else unmute ALL.
         // Records undo via MuteClipCommand. Marks compositor dirty.
         if let Some(project) = Some(&mut *self.project) {
             // First pass: collect current mute state for each clip
-            let mut clip_states: Vec<(String, bool)> = Vec::new();
+            let mut clip_states: Vec<(ClipId, bool)> = Vec::new();
             for layer in &project.timeline.layers {
                 for clip in &layer.clips {
                     if clip_ids.contains(&clip.id) {
@@ -615,7 +610,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             return;
         }
 
-        let selected_ids: Vec<String> = self.selection.selected_layer_ids.iter().cloned().collect();
+        let selected_ids: Vec<LayerId> = self.selection.selected_layer_ids.iter().cloned().collect();
 
         if let Some(project) = Some(&*self.project) {
             // Validate: none are nested (have parent) or group layers
@@ -654,7 +649,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             return;
         }
 
-        let selected_ids: Vec<String> = self.selection.selected_layer_ids.iter().cloned().collect();
+        let selected_ids: Vec<LayerId> = self.selection.selected_layer_ids.iter().cloned().collect();
 
         if let Some(project) = Some(&mut *self.project) {
             // Find indices to delete (in reverse order for safe removal)
@@ -845,7 +840,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     // ── UIState delegation ──────────────────────────────────────
 
-    fn get_selected_clip_ids(&self) -> Vec<String> {
+    fn get_selected_clip_ids(&self) -> Vec<ClipId> {
         if self.selection.has_region() {
             let region = self.selection.get_region();
             EditingService::get_clips_in_region(self.project, region)

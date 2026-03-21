@@ -4,9 +4,12 @@
 //! Implemented by the app layer (WorkspaceController equivalent) as thin delegations.
 //! InputHandler calls through this trait for operations that need engine/UI access.
 
+use manifold_core::ClipId;
+
 /// Callback interface for InputHandler → host communication.
 /// Port of ITimelineInputHost.cs — every method maps 1:1.
 pub trait TimelineInputHost {
+    // NOTE: Clip ID parameters use ClipId (typed wrapper) for compile-time safety.
     /// Handle inspector-specific keyboard input (e.g., arrow key stepping for loop duration).
     /// Returns true if the key was consumed by the inspector.
     fn handle_inspector_keyboard(&mut self) -> bool;
@@ -116,37 +119,37 @@ pub trait TimelineInputHost {
     fn select_all_clips(&mut self);
 
     /// Copy selected clips to clipboard.
-    fn copy_clips(&mut self, clip_ids: &[String]);
+    fn copy_clips(&mut self, clip_ids: &[ClipId]);
 
     /// Cut selected clips (copy + delete).
-    fn cut_clips(&mut self, clip_ids: &[String], has_region: bool);
+    fn cut_clips(&mut self, clip_ids: &[ClipId], has_region: bool);
 
     /// Paste clips at target position.
     fn paste_clips(&mut self, target_beat: f32, target_layer: i32);
 
     /// Duplicate selected clips.
-    fn duplicate_clips(&mut self, clip_ids: &[String]);
+    fn duplicate_clips(&mut self, clip_ids: &[ClipId]);
 
     /// Delete selected clips (region-aware).
-    fn delete_clips(&mut self, clip_ids: &[String], has_region: bool);
+    fn delete_clips(&mut self, clip_ids: &[ClipId], has_region: bool);
 
     /// Delete a layer by index.
     fn delete_layer(&mut self, layer_index: usize);
 
     /// Split selected clips at the current playhead beat.
-    fn split_clips_at_playhead(&mut self, clip_ids: &[String]);
+    fn split_clips_at_playhead(&mut self, clip_ids: &[ClipId]);
 
     /// Extend selected clips by grid step.
-    fn extend_clips(&mut self, clip_ids: &[String], grid_step: f32);
+    fn extend_clips(&mut self, clip_ids: &[ClipId], grid_step: f32);
 
     /// Shrink selected clips by grid step.
-    fn shrink_clips(&mut self, clip_ids: &[String], grid_step: f32);
+    fn shrink_clips(&mut self, clip_ids: &[ClipId], grid_step: f32);
 
     /// Nudge selected clips by beat delta.
-    fn nudge_clips(&mut self, clip_ids: &[String], beat_delta: f32);
+    fn nudge_clips(&mut self, clip_ids: &[ClipId], beat_delta: f32);
 
     /// Toggle mute on selected clips.
-    fn toggle_mute_clips(&mut self, clip_ids: &[String]);
+    fn toggle_mute_clips(&mut self, clip_ids: &[ClipId]);
 
     /// Group selected layers.
     fn group_selected_layers(&mut self);
@@ -189,7 +192,7 @@ pub trait TimelineInputHost {
     // ── UIState delegation (InputHandler reads selection through host) ──
 
     /// Get IDs of all selected clips.
-    fn get_selected_clip_ids(&self) -> Vec<String>;
+    fn get_selected_clip_ids(&self) -> Vec<ClipId>;
 
     /// Number of selected clips.
     fn selection_count(&self) -> usize;

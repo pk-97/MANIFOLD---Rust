@@ -1,7 +1,7 @@
 [package]
 name = "manifold-app"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [[bin]]
 name = "manifold"
@@ -23,6 +23,7 @@ rfd = "0.15"
 serde = { workspace = true }
 serde_json = { workspace = true }
 crossbeam-channel = "0.5"
+parking_lot = { workspace = true }
 
 # IOSurface bridge for cross-device GPU texture sharing (macOS)
 [target.'cfg(target_os = "macos")'.dependencies]

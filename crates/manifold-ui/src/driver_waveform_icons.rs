@@ -157,12 +157,7 @@ fn dist_to_segment(px: f32, py: f32, a: [f32; 2], b: [f32; 2]) -> f32 {
         return (dx * dx + dy * dy).sqrt();
     }
 
-    let mut t = ((px - a[0]) * abx + (py - a[1]) * aby) / len_sq;
-    if t < 0.0 {
-        t = 0.0;
-    } else if t > 1.0 {
-        t = 1.0;
-    }
+    let t = (((px - a[0]) * abx + (py - a[1]) * aby) / len_sq).clamp(0.0, 1.0);
 
     let cx = a[0] + abx * t - px;
     let cy = a[1] + aby * t - py;

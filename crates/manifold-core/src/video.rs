@@ -77,13 +77,12 @@ impl VideoLibrary {
     /// Remove a clip from the library by ID.
     /// Unity VideoLibrary.cs RemoveClip lines 74-87.
     pub fn remove_clip(&mut self, id: &str) -> Option<VideoClip> {
-        if let Some(&idx) = self.clip_lookup.get(id) {
-            if idx < self.clips.len() {
+        if let Some(&idx) = self.clip_lookup.get(id)
+            && idx < self.clips.len() {
                 let clip = self.clips.remove(idx);
                 self.rebuild_lookup();
                 return Some(clip);
             }
-        }
         None
     }
 

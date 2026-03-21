@@ -5,6 +5,7 @@ use serde::ser::Serializer;
 // ─── Blend Modes ───
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum BlendMode {
     #[default]
     Normal = 0,
@@ -50,7 +51,7 @@ impl BlendMode {
     ];
 
     pub fn from_index(i: usize) -> Self {
-        Self::ALL.get(i).copied().unwrap_or(Self::Normal)
+        Self::try_from(i as i32).unwrap_or(Self::Normal)
     }
 }
 
@@ -104,6 +105,7 @@ impl<'de> Deserialize<'de> for BlendMode {
 // ─── Effect Types ───
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum EffectType {
     #[default]
     Transform = 0,
@@ -200,41 +202,7 @@ impl EffectType {
     /// Convert from the integer discriminant value (matches Unity enum values).
     /// Used by the browser popup which stores `et as i32` as the item key.
     pub fn from_discriminant(v: i32) -> Option<Self> {
-        match v {
-            0 => Some(Self::Transform),
-            1 => Some(Self::InvertColors),
-            10 => Some(Self::Feedback),
-            11 => Some(Self::PixelSort),
-            12 => Some(Self::Bloom),
-            13 => Some(Self::InfiniteZoom),
-            14 => Some(Self::Kaleidoscope),
-            15 => Some(Self::EdgeStretch),
-            16 => Some(Self::VoronoiPrism),
-            17 => Some(Self::QuadMirror),
-            18 => Some(Self::Dither),
-            19 => Some(Self::Strobe),
-            20 => Some(Self::StylizedFeedback),
-            21 => Some(Self::Mirror),
-            22 => Some(Self::BlobTracking),
-            23 => Some(Self::CRT),
-            24 => Some(Self::FluidDistortion),
-            25 => Some(Self::EdgeGlow),
-            26 => Some(Self::Datamosh),
-            27 => Some(Self::SlitScan),
-            28 => Some(Self::ColorGrade),
-            29 => Some(Self::WireframeDepth),
-            30 => Some(Self::ChromaticAberration),
-            31 => Some(Self::GradientMap),
-            32 => Some(Self::Glitch),
-            33 => Some(Self::FilmGrain),
-            34 => Some(Self::Halation),
-            35 => Some(Self::Microscope),
-            36 => Some(Self::Corruption),
-            37 => Some(Self::Infrared),
-            38 => Some(Self::Surveillance),
-            39 => Some(Self::Redaction),
-            _ => None,
-        }
+        Self::try_from(v).ok()
     }
 }
 
@@ -326,6 +294,7 @@ impl<'de> Deserialize<'de> for EffectType {
 // ─── Generator Types ───
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub enum GeneratorType {
     #[default]
     None = 0,
@@ -1063,5 +1032,132 @@ impl<'de> Deserialize<'de> for ClipDurationMode {
         // Only one variant exists; accept any integer or string representation.
         let _value = serde_json::Value::deserialize(deserializer)?;
         Ok(ClipDurationMode::NoteOff)
+    }
+}
+
+// ─── Display impls ───
+
+impl std::fmt::Display for EffectType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.display_name())
+    }
+}
+
+impl std::fmt::Display for GeneratorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.display_name())
+    }
+}
+
+impl std::fmt::Display for BlendMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.display_name())
+    }
+}
+
+impl std::fmt::Display for PlaybackState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stopped => f.write_str("Stopped"),
+            Self::Playing => f.write_str("Playing"),
+            Self::Paused => f.write_str("Paused"),
+        }
+    }
+}
+
+// ─── TryFrom<i32> impls ───
+
+impl TryFrom<i32> for EffectType {
+    type Error = ();
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Transform),
+            1 => Ok(Self::InvertColors),
+            10 => Ok(Self::Feedback),
+            11 => Ok(Self::PixelSort),
+            12 => Ok(Self::Bloom),
+            13 => Ok(Self::InfiniteZoom),
+            14 => Ok(Self::Kaleidoscope),
+            15 => Ok(Self::EdgeStretch),
+            16 => Ok(Self::VoronoiPrism),
+            17 => Ok(Self::QuadMirror),
+            18 => Ok(Self::Dither),
+            19 => Ok(Self::Strobe),
+            20 => Ok(Self::StylizedFeedback),
+            21 => Ok(Self::Mirror),
+            22 => Ok(Self::BlobTracking),
+            23 => Ok(Self::CRT),
+            24 => Ok(Self::FluidDistortion),
+            25 => Ok(Self::EdgeGlow),
+            26 => Ok(Self::Datamosh),
+            27 => Ok(Self::SlitScan),
+            28 => Ok(Self::ColorGrade),
+            29 => Ok(Self::WireframeDepth),
+            30 => Ok(Self::ChromaticAberration),
+            31 => Ok(Self::GradientMap),
+            32 => Ok(Self::Glitch),
+            33 => Ok(Self::FilmGrain),
+            34 => Ok(Self::Halation),
+            35 => Ok(Self::Microscope),
+            36 => Ok(Self::Corruption),
+            37 => Ok(Self::Infrared),
+            38 => Ok(Self::Surveillance),
+            39 => Ok(Self::Redaction),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<i32> for GeneratorType {
+    type Error = ();
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::None),
+            2 => Ok(Self::BasicShapesSnap),
+            3 => Ok(Self::Duocylinder),
+            4 => Ok(Self::Tesseract),
+            5 => Ok(Self::ConcentricTunnel),
+            6 => Ok(Self::Plasma),
+            7 => Ok(Self::Lissajous),
+            8 => Ok(Self::FractalZoom),
+            9 => Ok(Self::OscilloscopeXY),
+            10 => Ok(Self::WireframeZoo),
+            11 => Ok(Self::ReactionDiffusion),
+            12 => Ok(Self::Flowfield),
+            13 => Ok(Self::ParametricSurface),
+            14 => Ok(Self::StrangeAttractor),
+            15 => Ok(Self::FluidSimulation),
+            16 => Ok(Self::NumberStation),
+            17 => Ok(Self::Mycelium),
+            18 => Ok(Self::ComputeStrangeAttractor),
+            19 => Ok(Self::FluidSimulation3D),
+            20 => Ok(Self::MriVolume),
+            _ => Err(()),
+        }
+    }
+}
+
+impl TryFrom<i32> for BlendMode {
+    type Error = ();
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Normal),
+            1 => Ok(Self::Additive),
+            2 => Ok(Self::Multiply),
+            3 => Ok(Self::Screen),
+            4 => Ok(Self::Overlay),
+            5 => Ok(Self::Stencil),
+            6 => Ok(Self::Opaque),
+            7 => Ok(Self::Difference),
+            8 => Ok(Self::Exclusion),
+            9 => Ok(Self::Subtract),
+            10 => Ok(Self::ColorDodge),
+            11 => Ok(Self::Lighten),
+            12 => Ok(Self::Darken),
+            _ => Err(()),
+        }
     }
 }

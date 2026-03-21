@@ -269,7 +269,7 @@ impl LayerChromePanel {
     }
 
     pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
-        if self.opacity.ids().map_or(false, |ids| node_id == ids.track) {
+        if self.opacity.ids().is_some_and(|ids| node_id == ids.track) {
             return vec![PanelAction::LayerOpacityRightClick];
         }
         Vec::new()

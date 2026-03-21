@@ -113,6 +113,12 @@ const REANALYZE_BUTTONS: [(&str, i32); 5] = [
     ("STEMS", 48),
 ];
 
+impl Default for WaveformLanePanel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WaveformLanePanel {
     pub fn new() -> Self {
         Self {
@@ -275,8 +281,8 @@ impl WaveformLanePanel {
         let waveform_x = self.cached_waveform_x;
         let waveform_width = self.cached_waveform_width;
 
-        if waveform_width > 0.0 {
-            if let Some(level) = self.renderer.select_level_for_zoom(waveform_width, 1.0) {
+        if waveform_width > 0.0
+            && let Some(level) = self.renderer.select_level_for_zoom(waveform_width, 1.0) {
                 // Clamp drawing to visible region
                 let draw_left = (waveform_x - self.scroll_offset_x) as i32;
                 let draw_right =
@@ -300,7 +306,6 @@ impl WaveformLanePanel {
                     );
                 }
             }
-        }
 
         // Draw playhead
         let playhead_screen_x = (self.cached_playhead_x - self.scroll_offset_x) as i32;

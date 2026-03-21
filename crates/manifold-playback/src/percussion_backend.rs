@@ -110,11 +110,10 @@ impl PercussionPipelineBackendResolver {
     /// Checks MANIFOLD_PYTHON_PATH env var first, then bundled runtime paths.
     fn resolve_python(runtime_root: &str) -> Option<String> {
         // Env var escape hatch for development.
-        if let Ok(p) = std::env::var("MANIFOLD_PYTHON_PATH") {
-            if !p.trim().is_empty() && Path::new(&p).exists() {
+        if let Ok(p) = std::env::var("MANIFOLD_PYTHON_PATH")
+            && !p.trim().is_empty() && Path::new(&p).exists() {
                 return Some(p);
             }
-        }
 
         let candidates = [
             Path::new(runtime_root).join("python").join("bin").join("python3"),
@@ -145,11 +144,10 @@ impl PercussionPipelineBackendResolver {
     /// Find ffmpeg in the bundled runtime or system paths.
     fn resolve_ffmpeg(runtime_root: &str) -> Option<String> {
         // Env var escape hatch.
-        if let Ok(p) = std::env::var("FFMPEG_PATH") {
-            if !p.trim().is_empty() && Path::new(&p).exists() {
+        if let Ok(p) = std::env::var("FFMPEG_PATH")
+            && !p.trim().is_empty() && Path::new(&p).exists() {
                 return Some(p);
             }
-        }
 
         let candidates = [
             Path::new(runtime_root).join("bin").join("ffmpeg"),
@@ -244,12 +242,11 @@ fn build_default_arguments(
 
     append_demucs_defaults(&mut args);
 
-    if let Some(bin) = ffmpeg_bin {
-        if !bin.trim().is_empty() {
+    if let Some(bin) = ffmpeg_bin
+        && !bin.trim().is_empty() {
             args.push("--ffmpeg-bin".to_string());
             args.push(bin.to_string());
         }
-    }
 
     args
 }
@@ -311,19 +308,17 @@ fn build_settings_arguments(
         args.push("on".to_string());
     }
 
-    if let Some(bin) = ffmpeg_bin {
-        if !bin.trim().is_empty() {
+    if let Some(bin) = ffmpeg_bin
+        && !bin.trim().is_empty() {
             args.push("--ffmpeg-bin".to_string());
             args.push(bin.to_string());
         }
-    }
 
-    if let Some(instr) = instruments {
-        if !instr.trim().is_empty() {
+    if let Some(instr) = instruments
+        && !instr.trim().is_empty() {
             args.push("--instruments".to_string());
             args.push(instr.to_string());
         }
-    }
 
     // Demucs stem caching (only if explicitly enabled via env var).
     append_demucs_cache_arguments(&mut args);

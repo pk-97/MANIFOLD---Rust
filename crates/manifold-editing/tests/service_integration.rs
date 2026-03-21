@@ -1,3 +1,4 @@
+use manifold_core::ClipId;
 use manifold_editing::service::EditingService;
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
@@ -15,7 +16,7 @@ fn make_project() -> Project {
     project
 }
 
-fn add_clip(project: &mut Project, layer: usize, start: f32, dur: f32) -> String {
+fn add_clip(project: &mut Project, layer: usize, start: f32, dur: f32) -> ClipId {
     let clip = TimelineClip {
         start_beat: start,
         duration_beats: dur,
@@ -319,10 +320,10 @@ fn data_version_increments() {
     service.execute(cmd, &mut project);
     assert_eq!(service.data_version(), 1);
 
-    service.undo(&mut project);
+    let _ = service.undo(&mut project);
     assert_eq!(service.data_version(), 2);
 
-    service.redo(&mut project);
+    let _ = service.redo(&mut project);
     assert_eq!(service.data_version(), 3);
 }
 
@@ -340,7 +341,7 @@ fn dirty_flag_tracks_saves() {
     service.mark_clean();
     assert!(!service.is_dirty());
 
-    service.undo(&mut project);
+    let _ = service.undo(&mut project);
     assert!(service.is_dirty());
 }
 
@@ -438,7 +439,7 @@ fn get_clips_in_region() {
     };
 
     let results = EditingService::get_clips_in_region(&project, &region);
-    let result_ids: Vec<&String> = results.iter().map(|(_, id)| id).collect();
+    let result_ids: Vec<&ClipId> = results.iter().map(|(_, id)| id).collect();
     assert!(result_ids.contains(&&id1));
     assert!(result_ids.contains(&&id3));
     assert_eq!(results.len(), 2);

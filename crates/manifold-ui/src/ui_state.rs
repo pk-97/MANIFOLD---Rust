@@ -1,31 +1,32 @@
-/// UI-specific state for timeline editor (session-only, not serialized).
-/// Tracks selection, drag state, hover, and zoom.
-///
-/// Mechanical 1:1 port of Unity UIState.cs.
-/// Replaces the former app::SelectionState + app::ClipDragState.
+// UI-specific state for timeline editor (session-only, not serialized).
+// Tracks selection, drag state, hover, and zoom.
+//
+// Mechanical 1:1 port of Unity UIState.cs.
+// Replaces the former app::SelectionState + app::ClipDragState.
 
 use std::collections::HashSet;
+use manifold_core::{ClipId, LayerId};
 use manifold_core::selection::SelectionRegion;
 
 pub struct UIState {
     // ── Clip Selection ──
-    pub selected_clip_ids: HashSet<String>,
+    pub selected_clip_ids: HashSet<ClipId>,
 
     /// Monotonically increasing counter — bumped on every selection/hover change.
     /// Used for cheap dirty-checking by viewport and layer headers.
     pub selection_version: u64,
 
     /// Most recently selected clip ID (for footer info, property display).
-    pub primary_selected_clip_id: Option<String>,
+    pub primary_selected_clip_id: Option<ClipId>,
 
     /// Layer index of the primary selected clip (-1 maps to None).
     pub selected_layer_index: Option<usize>,
 
     // ── Layer Selection (mutually exclusive with clip selection) ──
-    pub selected_layer_ids: HashSet<String>,
+    pub selected_layer_ids: HashSet<LayerId>,
 
     /// Most recently selected layer ID (for inspector display).
-    pub primary_selected_layer_id: Option<String>,
+    pub primary_selected_layer_id: Option<LayerId>,
 
     // ── Region Selection ──
     selection_region: SelectionRegion,
@@ -39,11 +40,11 @@ pub struct UIState {
     pub insert_cursor_layer_index: Option<usize>,
 
     // ── Hover ──
-    pub hovered_clip_id: Option<String>,
+    pub hovered_clip_id: Option<ClipId>,
 
     // ── Drag state ──
     pub is_dragging: bool,
-    pub drag_clip_id: Option<String>,
+    pub drag_clip_id: Option<ClipId>,
     pub drag_start_beat: f32,
     pub drag_start_layer: usize,
     pub drag_offset_beats: f32, // offset from clip StartBeat to mouse beat
@@ -51,7 +52,7 @@ pub struct UIState {
     // ── Trim state (originals preserved for undo) ──
     pub is_trimming: bool,
     pub trim_from_left: bool, // true = left edge, false = right edge
-    pub trim_clip_id: Option<String>,
+    pub trim_clip_id: Option<ClipId>,
     pub trim_original_start_beat: f32,
     pub trim_original_duration_beats: f32,
     pub trim_original_in_point: f32, // seconds (video source offset)
@@ -61,6 +62,12 @@ pub struct UIState {
 
     // ── Zoom ──
     pub current_zoom_index: usize,
+}
+
+impl Default for UIState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UIState {
@@ -98,7 +105,7 @@ impl UIState {
 
     /// Select a single clip (clears previous selection and region). Called on normal click.
     /// Unity UIState.cs SelectClip (lines 167-178).
-    pub fn select_clip(&mut self, clip_id: String, layer_index: usize) {
+    pub fn select_clip(&mut self, clip_id: ClipId, layer_index: usize) {
         self.selection_region = SelectionRegion::default();
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_index = None;
@@ -112,7 +119,7 @@ impl UIState {
 
     /// Toggle a clip in/out of the selection set. Called on Ctrl+Click.
     /// Unity UIState.cs ToggleClipSelection (lines 183-208).
-    pub fn toggle_clip_selection(&mut self, clip_id: String, layer_index: usize) {
+    pub fn toggle_clip_selection(&mut self, clip_id: ClipId, layer_index: usize) {
         self.clear_layer_selection();
         if self.selected_clip_ids.contains(&clip_id) {
             self.selected_clip_ids.remove(&clip_id);
@@ -154,7 +161,7 @@ impl UIState {
     }
 
     /// Get a copy of all selected clip IDs.
-    pub fn get_selected_clip_ids(&self) -> Vec<String> {
+    pub fn get_selected_clip_ids(&self) -> Vec<ClipId> {
         self.selected_clip_ids.iter().cloned().collect()
     }
 
@@ -259,7 +266,7 @@ impl UIState {
 
     /// Select a single layer (clears previous clip, layer, and region selection).
     /// Unity UIState.cs SelectLayer (lines 247-259).
-    pub fn select_layer(&mut self, layer_id: String) {
+    pub fn select_layer(&mut self, layer_id: LayerId) {
         self.selection_region = SelectionRegion::default();
         self.selected_clip_ids.clear();
         self.primary_selected_clip_id = None;
@@ -274,7 +281,7 @@ impl UIState {
 
     /// Toggle a layer in/out of the selection set. Called on Cmd+Click.
     /// Unity UIState.cs ToggleLayerSelection (lines 264-291).
-    pub fn toggle_layer_selection(&mut self, layer_id: String) {
+    pub fn toggle_layer_selection(&mut self, layer_id: LayerId) {
         self.selected_clip_ids.clear();
         self.primary_selected_clip_id = None;
         self.selected_layer_index = None;
@@ -305,12 +312,12 @@ impl UIState {
         let primary = match &self.primary_selected_layer_id {
             Some(id) => id.clone(),
             None => {
-                self.select_layer(target_layer_id.to_string());
+                self.select_layer(LayerId::new(target_layer_id));
                 return;
             }
         };
 
-        let anchor_idx = layers.iter().position(|l| l.layer_id == primary);
+        let anchor_idx = layers.iter().position(|l| l.layer_id == *primary);
         let target_idx = layers.iter().position(|l| l.layer_id == target_layer_id);
 
         match (anchor_idx, target_idx) {
@@ -318,14 +325,14 @@ impl UIState {
                 let lo = a.min(t);
                 let hi = a.max(t);
                 self.selected_layer_ids.clear();
-                for i in lo..=hi {
-                    self.selected_layer_ids.insert(layers[i].layer_id.clone());
+                for layer in &layers[lo..=hi] {
+                    self.selected_layer_ids.insert(layer.layer_id.clone());
                 }
                 // Keep primary as the anchor (first clicked), not the range end
                 self.selection_version += 1;
             }
             _ => {
-                self.select_layer(target_layer_id.to_string());
+                self.select_layer(LayerId::new(target_layer_id));
             }
         }
     }
@@ -380,9 +387,9 @@ impl UIState {
 
     /// Begin a clip move drag.
     /// Unity UIState.cs BeginDrag (lines 374-381).
-    pub fn begin_drag(&mut self, clip_id: &str, start_beat: f32, layer_index: usize, mouse_beat: f32) {
+    pub fn begin_drag(&mut self, clip_id: &ClipId, start_beat: f32, layer_index: usize, mouse_beat: f32) {
         self.is_dragging = true;
-        self.drag_clip_id = Some(clip_id.to_string());
+        self.drag_clip_id = Some(clip_id.clone());
         self.drag_start_beat = start_beat;
         self.drag_start_layer = layer_index;
         self.drag_offset_beats = mouse_beat - start_beat;
@@ -399,10 +406,10 @@ impl UIState {
 
     /// Begin a left-edge trim.
     /// Unity UIState.cs BeginTrimLeft (lines 389-397).
-    pub fn begin_trim_left(&mut self, clip_id: &str, start_beat: f32, duration_beats: f32, in_point: f32) {
+    pub fn begin_trim_left(&mut self, clip_id: &ClipId, start_beat: f32, duration_beats: f32, in_point: f32) {
         self.is_trimming = true;
         self.trim_from_left = true;
-        self.trim_clip_id = Some(clip_id.to_string());
+        self.trim_clip_id = Some(clip_id.clone());
         self.trim_original_start_beat = start_beat;
         self.trim_original_duration_beats = duration_beats;
         self.trim_original_in_point = in_point;
@@ -410,10 +417,10 @@ impl UIState {
 
     /// Begin a right-edge trim.
     /// Unity UIState.cs BeginTrimRight (lines 399-407).
-    pub fn begin_trim_right(&mut self, clip_id: &str, start_beat: f32, duration_beats: f32, in_point: f32) {
+    pub fn begin_trim_right(&mut self, clip_id: &ClipId, start_beat: f32, duration_beats: f32, in_point: f32) {
         self.is_trimming = true;
         self.trim_from_left = false;
-        self.trim_clip_id = Some(clip_id.to_string());
+        self.trim_clip_id = Some(clip_id.clone());
         self.trim_original_start_beat = start_beat;
         self.trim_original_duration_beats = duration_beats;
         self.trim_original_in_point = in_point;

@@ -1,10 +1,10 @@
-/// Pure functions for clip trim calculations.
-///
-/// These match the Unity InteractionOverlay.cs trim behavior:
-/// - Video clips cannot extend left past original start
-/// - Generator clips can extend freely in either direction
-/// - Minimum clip duration is 0.25 beats (1/16 note)
-/// - Right trim on non-looping video clips clamps to source length
+// Pure functions for clip trim calculations.
+//
+// These match the Unity InteractionOverlay.cs trim behavior:
+// - Video clips cannot extend left past original start
+// - Generator clips can extend freely in either direction
+// - Minimum clip duration is 0.25 beats (1/16 note)
+// - Right trim on non-looping video clips clamps to source length
 
 /// Minimum clip duration in beats (1/16 note).
 pub const MIN_CLIP_DURATION_BEATS: f32 = 0.25;
@@ -100,16 +100,14 @@ pub fn compute_right_trim(
     let mut new_end = mouse_beat.max(clip_start + min_duration);
 
     // Non-looping video clips: clamp to source length
-    if !is_generator && !is_looping {
-        if let Some(video_len) = video_length_seconds {
-            if spb > 0.0 {
+    if !is_generator && !is_looping
+        && let Some(video_len) = video_length_seconds
+            && spb > 0.0 {
                 let max_duration_beats = (video_len - original_in_point).max(0.0) / spb;
                 new_end = new_end.min(clip_start + max_duration_beats);
                 // Re-enforce minimum after clamping
                 new_end = new_end.max(clip_start + min_duration);
             }
-        }
-    }
 
     let new_duration = new_end - clip_start;
 

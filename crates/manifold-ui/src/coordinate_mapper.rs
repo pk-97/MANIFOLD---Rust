@@ -1,9 +1,9 @@
-/// Converts between timeline beats and UI pixel coordinates.
-/// Core utility for positioning clips and playhead on the timeline.
-/// Zoom is in pixels per beat (BPM-independent).
-///
-/// Mechanical 1:1 port of Unity CoordinateMapper.cs.
-/// Shared by viewport, layer headers, and hit tester.
+// Converts between timeline beats and UI pixel coordinates.
+// Core utility for positioning clips and playhead on the timeline.
+// Zoom is in pixels per beat (BPM-independent).
+//
+// Mechanical 1:1 port of Unity CoordinateMapper.cs.
+// Shared by viewport, layer headers, and hit tester.
 
 use crate::color;
 use crate::snap;
@@ -16,6 +16,12 @@ pub struct CoordinateMapper {
     layer_y_offsets: Vec<f32>,
     layer_heights: Vec<f32>,
     total_content_height: f32,
+}
+
+impl Default for CoordinateMapper {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CoordinateMapper {
@@ -136,7 +142,7 @@ impl CoordinateMapper {
             if layer.parent_layer_id.is_some() {
                 // Child layer — check parent collapsed state
                 let parent = find_parent_in_list(layers, layer.parent_layer_id.as_deref());
-                height = if parent.map_or(false, |p| p.is_collapsed) {
+                height = if parent.is_some_and(|p| p.is_collapsed) {
                     0.0 // Hidden: parent is collapsed
                 } else {
                     color::TRACK_HEIGHT
@@ -182,12 +188,7 @@ impl CoordinateMapper {
         if self.layer_y_offsets.is_empty() {
             return None;
         }
-        for i in (0..self.layer_y_offsets.len()).rev() {
-            if y_in_tracks >= self.layer_y_offsets[i] && self.layer_heights[i] > 0.0 {
-                return Some(i);
-            }
-        }
-        None
+        (0..self.layer_y_offsets.len()).rev().find(|&i| y_in_tracks >= self.layer_y_offsets[i] && self.layer_heights[i] > 0.0)
     }
 
     /// Number of layers in the current Y layout.
@@ -379,12 +380,12 @@ mod tests {
 
         let mut video = make_layer("V", LayerType::Video, 0);
         video.is_collapsed = true;
-        let mut gen = make_layer("G", LayerType::Generator, 1);
-        gen.is_collapsed = true;
+        let mut gen_layer = make_layer("G", LayerType::Generator, 1);
+        gen_layer.is_collapsed = true;
         let mut group = make_layer("Grp", LayerType::Group, 2);
         group.is_collapsed = true;
 
-        let layers = vec![video, gen, group];
+        let layers = vec![video, gen_layer, group];
         mapper.rebuild_y_layout(&layers);
 
         // Collapsed video → 48, collapsed generator → 62, collapsed group → 70

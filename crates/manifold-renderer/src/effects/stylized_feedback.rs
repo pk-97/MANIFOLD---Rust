@@ -1,7 +1,7 @@
 // Mechanical port of StylizedFeedbackFX.cs.
 // Same logic, same variables, same constants, same edge cases.
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
@@ -52,7 +52,7 @@ pub struct StylizedFeedbackFX {
     helper: DualTextureBlitHelper,
     /// Passthrough blit for copying result into feedback state buffer.
     copy_blit: SimpleBlitHelper,
-    states: HashMap<i64, StylizedFeedbackState>,
+    states: AHashMap<i64, StylizedFeedbackState>,
     width: u32,
     height: u32,
 }
@@ -93,7 +93,7 @@ impl StylizedFeedbackFX {
                 "StylizedFeedback Copy",
                 16, // vec4 pad
             ),
-            states: HashMap::new(),
+            states: AHashMap::new(),
             width: 0,
             height: 0,
         }

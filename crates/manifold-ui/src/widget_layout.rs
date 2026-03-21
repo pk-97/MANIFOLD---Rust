@@ -1,8 +1,8 @@
-/// Shared widget building-block dimensions used by UIElementBuilder
-/// and all consumers of sliders, drivers, toggles, and dropdowns.
-/// All spatial values are multiplied by `SCALE` for uniform sizing.
-///
-/// Mechanical translation of Assets/Scripts/UI/Timeline/Core/WidgetLayout.cs.
+// Shared widget building-block dimensions used by UIElementBuilder
+// and all consumers of sliders, drivers, toggles, and dropdowns.
+// All spatial values are multiplied by `SCALE` for uniform sizing.
+//
+// Mechanical translation of Assets/Scripts/UI/Timeline/Core/WidgetLayout.cs.
 
 /// Uniform scale factor for all effect-card widget dimensions.
 pub const SCALE: f32 = 1.25;

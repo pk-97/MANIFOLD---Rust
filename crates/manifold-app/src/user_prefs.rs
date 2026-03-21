@@ -93,12 +93,11 @@ impl UserPrefs {
     /// Persist all prefs to disk.
     /// Equivalent to `PlayerPrefs.Save()`.
     pub fn save(&self) {
-        if let Some(parent) = self.file_path.parent() {
-            if let Err(e) = fs::create_dir_all(parent) {
+        if let Some(parent) = self.file_path.parent()
+            && let Err(e) = fs::create_dir_all(parent) {
                 log::error!("[UserPrefs] Failed to create dir {}: {e}", parent.display());
                 return;
             }
-        }
         match serde_json::to_string_pretty(&self.data) {
             Ok(json) => {
                 if let Err(e) = fs::write(&self.file_path, &json) {

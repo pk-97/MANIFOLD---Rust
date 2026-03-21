@@ -1,4 +1,5 @@
 use std::any::Any;
+use manifold_core::ClipId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 
@@ -42,7 +43,7 @@ pub trait ClipRenderer: Any + Send {
 
 /// Stub renderer for testing. Tracks active clips without doing real rendering.
 pub struct StubRenderer {
-    active_clips: std::collections::HashMap<String, StubClipState>,
+    active_clips: std::collections::HashMap<ClipId, StubClipState>,
     is_generator: bool,
 }
 

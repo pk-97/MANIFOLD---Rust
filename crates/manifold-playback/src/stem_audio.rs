@@ -544,14 +544,12 @@ impl StemAudioController {
                     continue;
                 }
 
-                if let Ok(meta) = std::fs::metadata(&stems_dir) {
-                    if let Ok(modified) = meta.modified() {
-                        if modified > best_modified {
+                if let Ok(meta) = std::fs::metadata(&stems_dir)
+                    && let Ok(modified) = meta.modified()
+                        && modified > best_modified {
                             best_modified = modified;
                             best_stems_dir = Some(stems_dir);
                         }
-                    }
-                }
             }
         }
 

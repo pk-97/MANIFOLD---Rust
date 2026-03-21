@@ -18,8 +18,8 @@ pub fn resolve_bundle_path(name: &str) -> Option<PathBuf> {
         }
     }
 
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent() {
             let candidate = exe_dir
                 .join("assets/plugins")
                 .join(format!("{}.bundle", name))
@@ -39,7 +39,6 @@ pub fn resolve_bundle_path(name: &str) -> Option<PathBuf> {
                 }
             }
         }
-    }
 
     let cwd_candidate = Path::new("assets/plugins")
         .join(format!("{}.bundle", name))

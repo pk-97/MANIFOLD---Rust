@@ -47,6 +47,7 @@ fn engine_tick_while_stopped_has_no_active_clips() {
         realtime_now: 0.0,
         pre_render_dt: 1.0 / 60.0,
         frame_count: 0,
+        export_fixed_dt: 0.0,
     };
 
     let result = engine.tick(ctx);
@@ -70,6 +71,7 @@ fn engine_advances_time_when_playing() {
             realtime_now: realtime,
             pre_render_dt: dt as f32,
             frame_count: i,
+            export_fixed_dt: 0.0,
         };
         engine.tick(ctx);
         realtime += dt;
@@ -112,6 +114,7 @@ fn engine_schedules_clips_at_correct_beats() {
             realtime_now: realtime,
             pre_render_dt: dt as f32,
             frame_count: i,
+            export_fixed_dt: 0.0,
         };
         let result = engine.tick(ctx);
         if !result.ready_clips.is_empty() {
@@ -144,6 +147,7 @@ fn engine_tick_1000_frames_no_panic() {
             realtime_now: realtime,
             pre_render_dt: dt as f32,
             frame_count: i,
+            export_fixed_dt: 0.0,
         };
         let _result = engine.tick(ctx);
         realtime += dt;
@@ -211,6 +215,7 @@ fn engine_waypoints_stress_test() {
             realtime_now: realtime,
             pre_render_dt: dt as f32,
             frame_count: i,
+            export_fixed_dt: 0.0,
         };
         let result = engine.tick(ctx);
         total_ready += result.ready_clips.len();

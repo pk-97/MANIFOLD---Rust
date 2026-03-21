@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::id::ClipId;
 use crate::types::TempoPointSource;
 use crate::tempo::{TempoMap, TempoPoint};
 use crate::math::BeatQuantizer;
@@ -7,7 +8,7 @@ use crate::math::BeatQuantizer;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordedClipProvenance {
-    pub clip_id: String,
+    pub clip_id: ClipId,
     #[serde(default)]
     pub video_clip_id: String,
     #[serde(default)]

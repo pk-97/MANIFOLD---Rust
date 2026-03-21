@@ -21,12 +21,11 @@ pub fn save_project(
     let path_str = path.to_string_lossy().to_string();
 
     // Create parent directory if needed (Unity line 139-141)
-    if let Some(directory) = path.parent() {
-        if !directory.as_os_str().is_empty() && !directory.exists() {
+    if let Some(directory) = path.parent()
+        && !directory.as_os_str().is_empty() && !directory.exists() {
             std::fs::create_dir_all(directory)
                 .map_err(|e| SaveError::Io(format!("Failed to create directory: {e}")))?;
         }
-    }
 
     // Compute relative paths before serialization (Unity line 144)
     let project_dir = path.parent()
@@ -46,7 +45,7 @@ pub fn save_project(
         label,
         is_auto,
     )
-    .map_err(|e| SaveError::Io(e))?;
+    .map_err(SaveError::Io)?;
 
     // Update last_saved_path after successful save (Unity line 231)
     project.last_saved_path = path_str;
@@ -57,12 +56,11 @@ pub fn save_project(
 /// Save a project as plain JSON (V1 format, for backwards compatibility or testing).
 pub fn save_project_v1(project: &Project, path: &Path) -> Result<(), SaveError> {
     // Create parent directory if needed
-    if let Some(directory) = path.parent() {
-        if !directory.as_os_str().is_empty() && !directory.exists() {
+    if let Some(directory) = path.parent()
+        && !directory.as_os_str().is_empty() && !directory.exists() {
             std::fs::create_dir_all(directory)
                 .map_err(|e| SaveError::Io(format!("Failed to create directory: {e}")))?;
         }
-    }
 
     let json = serde_json::to_string_pretty(project)
         .map_err(|e| SaveError::Serialize(e.to_string()))?;

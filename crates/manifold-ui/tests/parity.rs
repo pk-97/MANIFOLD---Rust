@@ -210,7 +210,7 @@ fn generator_param_count_compute_attractor() { assert_eq!(generator_definition_r
 #[test]
 fn generator_param_count_fluid_sim() { assert_eq!(generator_definition_registry::get(GeneratorType::FluidSimulation).param_count, 20); }
 #[test]
-fn generator_param_count_fluid_sim_3d() { assert_eq!(generator_definition_registry::get(GeneratorType::FluidSimulation3D).param_count, 26); }
+fn generator_param_count_fluid_sim_3d() { assert_eq!(generator_definition_registry::get(GeneratorType::FluidSimulation3D).param_count, 28); }
 
 #[test]
 fn generator_all_types_have_params() {
@@ -222,10 +222,10 @@ fn generator_all_types_have_params() {
 
 #[test]
 fn generator_max_param_count() {
-    // FluidSimulation3D has the most params (26)
+    // FluidSimulation3D has the most params (28)
     let max = GeneratorType::ALL.iter()
         .map(|g| generator_definition_registry::get(*g).param_count)
         .max()
         .unwrap_or(0);
-    assert_eq!(max, 26);
+    assert_eq!(max, 28);
 }

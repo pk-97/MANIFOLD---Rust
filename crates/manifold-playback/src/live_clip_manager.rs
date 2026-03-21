@@ -1,3 +1,4 @@
+use manifold_core::ClipId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
@@ -52,7 +53,7 @@ const NOTE_OFF_TIMING_GUARD: f64 = 0.005;
 /// Port of C# TempoRecorder.RecordingClipStartInfo (lines 254-265).
 #[allow(dead_code)]
 struct RecordingClipStartInfo {
-    clip_id: String,
+    clip_id: ClipId,
     video_clip_id: String,
     layer_index: i32,
     midi_note: i32,
@@ -69,12 +70,12 @@ pub struct LiveClipManager {
     // Active live slots: layer_index → phantom clip
     live_slots: HashMap<i32, TimelineClip>,
     live_slots_list: Vec<(i32, TimelineClip)>,
-    live_slot_clip_ids: HashSet<String>,
+    live_slot_clip_ids: HashSet<ClipId>,
 
     // Pending launches (queued for future ticks)
-    pending_by_clip_id: HashMap<String, PendingLiveLaunch>,
-    pending_by_layer: HashMap<i32, String>,
-    pending_by_tick: BTreeMap<i32, Vec<String>>,
+    pending_by_clip_id: HashMap<ClipId, PendingLiveLaunch>,
+    pending_by_layer: HashMap<i32, ClipId>,
+    pending_by_tick: BTreeMap<i32, Vec<ClipId>>,
 
     // Tracking
     last_live_trigger_at: f64,
@@ -86,7 +87,7 @@ pub struct LiveClipManager {
 
     // Recording provenance: pending clip start snapshots.
     // Port of C# TempoRecorder.clipStarts (line 22-23).
-    clip_starts: HashMap<String, RecordingClipStartInfo>,
+    clip_starts: HashMap<ClipId, RecordingClipStartInfo>,
 }
 
 impl LiveClipManager {
@@ -109,7 +110,7 @@ impl LiveClipManager {
 
     pub fn live_slots(&self) -> &HashMap<i32, TimelineClip> { &self.live_slots }
     pub fn live_slots_list(&self) -> &[(i32, TimelineClip)] { &self.live_slots_list }
-    pub fn live_slot_clip_ids(&self) -> &HashSet<String> { &self.live_slot_clip_ids }
+    pub fn live_slot_clip_ids(&self) -> &HashSet<ClipId> { &self.live_slot_clip_ids }
     pub fn pending_launch_count(&self) -> usize { self.pending_by_clip_id.len() }
     pub fn last_live_trigger_at(&self) -> f64 { self.last_live_trigger_at }
 
@@ -264,7 +265,7 @@ impl LiveClipManager {
 
     // ─── Pending launch queue ───
 
-    fn queue_pending(&mut self, clip_id: String, launch: PendingLiveLaunch) {
+    fn queue_pending(&mut self, clip_id: ClipId, launch: PendingLiveLaunch) {
         let tick = launch.target_tick;
         let layer = launch.layer_index;
 
@@ -612,23 +613,20 @@ impl LiveClipManager {
                 return;
             }
             // Sequence-based guard: reject if NoteOff tick <= NoteOn tick (out of order)
-            if event_absolute_tick > 0 {
-                if let Some(&creation_seq) = self.slot_creation_sequences.get(&layer_index) {
-                    if creation_seq > 0 && event_absolute_tick <= creation_seq {
+            if event_absolute_tick > 0
+                && let Some(&creation_seq) = self.slot_creation_sequences.get(&layer_index)
+                    && creation_seq > 0 && event_absolute_tick <= creation_seq {
                         return;
                     }
-                }
-            }
         }
 
         // Check for pending launch cancellation
         if !self.live_slots.contains_key(&layer_index) {
-            if let Some(pending_id) = self.pending_by_layer.get(&layer_index).cloned() {
-                if clip_id.is_none_or(|id| id == pending_id) {
+            if let Some(pending_id) = self.pending_by_layer.get(&layer_index).cloned()
+                && clip_id.is_none_or(|id| id == pending_id) {
                     self.remove_pending_by_clip_id(&pending_id);
                     return;
                 }
-            }
             return;
         }
 
@@ -638,11 +636,10 @@ impl LiveClipManager {
         };
 
         // If a specific clip_id was given but doesn't match, skip
-        if let Some(id) = clip_id {
-            if id != live_clip.id {
+        if let Some(id) = clip_id
+            && id != live_clip.id {
                 return;
             }
-        }
 
         let start_beat = live_clip.start_beat;
 
@@ -877,11 +874,11 @@ impl LiveClipManager {
         &self,
         _candidates: &mut Vec<TimelineClip>,
         _max_unique: usize,
-        _existing_ids: &HashSet<String>,
+        _existing_ids: &HashSet<ClipId>,
     ) {
         // TODO: Port full prewarm logic when MidiMapping and VideoLibrary are ported.
         // For now, add currently active live slot clips as prewarm candidates.
-        for (_, clip) in &self.live_slots {
+        for clip in self.live_slots.values() {
             if _candidates.len() >= _max_unique {
                 break;
             }

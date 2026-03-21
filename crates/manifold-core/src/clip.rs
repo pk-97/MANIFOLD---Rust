@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::id::ClipId;
 use crate::types::GeneratorType;
 use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope};
 
@@ -6,7 +7,7 @@ use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineClip {
-    pub id: String,
+    pub id: ClipId,
     #[serde(default)]
     pub video_clip_id: String,
     #[serde(default)]
@@ -119,7 +120,7 @@ impl TimelineClip {
     /// Deep clone with new ID.
     pub fn clone_with_new_id(&self) -> Self {
         let mut cloned = self.clone();
-        cloned.id = crate::short_id();
+        cloned.id = ClipId::new(crate::short_id());
         cloned
     }
 
@@ -280,7 +281,7 @@ impl crate::effects::EffectContainer for TimelineClip {
 impl Default for TimelineClip {
     fn default() -> Self {
         Self {
-            id: crate::short_id(),
+            id: ClipId::new(crate::short_id()),
             video_clip_id: String::new(),
             layer_index: 0,
             start_beat: 0.0,

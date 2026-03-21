@@ -8,6 +8,8 @@ use crate::bitmap_painter::{self, INSERT_CURSOR_COLOR, REGION_HIGHLIGHT_COLOR};
 use crate::color;
 use crate::node::Color32;
 use crate::panels::viewport::{SelectionRegion, ViewportClip};
+#[cfg(test)]
+use manifold_core::ClipId;
 
 // ── Constants (Unity LayerBitmapRenderer lines 47-48) ──
 
@@ -338,9 +340,9 @@ impl LayerBitmapRenderer {
         }
 
         // Paint region highlight ON TOP of clips (Unity lines 234-249)
-        if state.has_region {
-            if let Some(region) = state.region {
-                if self.layer_index >= region.start_layer
+        if state.has_region
+            && let Some(region) = state.region
+                && self.layer_index >= region.start_layer
                     && self.layer_index <= region.end_layer
                 {
                     let region_start_px =
@@ -362,8 +364,6 @@ impl LayerBitmapRenderer {
                         );
                     }
                 }
-            }
-        }
 
         // Paint insert cursor line on the active layer only (Unity lines 251-260)
         if state.has_insert_cursor && state.insert_cursor_layer == Some(self.layer_index) {
@@ -516,7 +516,7 @@ fn paint_grid_lines(
         let is_beat = (subdiv_beat - subdiv_beat.round()).abs() < 0.001;
 
         let (line_color, line_width) = if is_bar {
-            (bar_color, 2.min((tex_w as i32 - col) as i32))
+            (bar_color, 2.min(tex_w as i32 - col))
         } else if is_beat {
             if !show_beat_lines {
                 subdiv_beat += step;
@@ -563,7 +563,7 @@ mod tests {
 
     fn make_clip(id: &str, start: f32, dur: f32) -> ViewportClip {
         ViewportClip {
-            clip_id: id.to_string(),
+            clip_id: ClipId::new(id),
             layer_index: 0,
             start_beat: start,
             duration_beats: dur,

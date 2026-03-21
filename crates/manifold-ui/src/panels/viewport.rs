@@ -1,3 +1,4 @@
+use manifold_core::ClipId;
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
@@ -30,7 +31,7 @@ const MAX_RULER_TICKS: usize = 1500;
 /// A clip to be rendered in the timeline viewport.
 #[derive(Debug, Clone)]
 pub struct ViewportClip {
-    pub clip_id: String,
+    pub clip_id: ClipId,
     pub layer_index: usize,
     pub start_beat: f32,
     pub duration_beats: f32,
@@ -52,7 +53,7 @@ pub enum HitRegion {
 /// Result of a clip hit-test in the viewport.
 #[derive(Debug, Clone)]
 pub struct ClipHitResult {
-    pub clip_id: String,
+    pub clip_id: ClipId,
     pub layer_index: usize,
     pub region: HitRegion,
 }
@@ -122,8 +123,8 @@ pub struct TimelineViewportPanel {
     insert_cursor_beat: f32,
     is_playing: bool,
     selection_region: Option<SelectionRegion>,
-    selected_clip_ids: Vec<String>,
-    hovered_clip_id: Option<String>,
+    selected_clip_ids: Vec<ClipId>,
+    hovered_clip_id: Option<ClipId>,
 
     // Viewport rects
     viewport_rect: Rect,
@@ -320,10 +321,8 @@ impl TimelineViewportPanel {
 
     pub fn set_render_scale(&mut self, scale: f32) {
         self.render_scale = scale.max(1.0);
-        for renderer in &mut self.bitmap_renderers {
-            if let Some(r) = renderer {
-                r.set_render_scale(self.render_scale);
-            }
+        for r in self.bitmap_renderers.iter_mut().flatten() {
+            r.set_render_scale(self.render_scale);
         }
     }
 
@@ -479,11 +478,11 @@ impl TimelineViewportPanel {
         self.selection_region = region;
     }
 
-    pub fn set_selected_clip_ids(&mut self, ids: Vec<String>) {
+    pub fn set_selected_clip_ids(&mut self, ids: Vec<ClipId>) {
         self.selected_clip_ids = ids;
     }
 
-    pub fn set_hovered_clip_id(&mut self, id: Option<String>) {
+    pub fn set_hovered_clip_id(&mut self, id: Option<ClipId>) {
         self.hovered_clip_id = id;
     }
 
@@ -535,7 +534,7 @@ impl TimelineViewportPanel {
 
     /// Whether a layer is a group track (not directly renderable).
     pub fn is_group_layer(&self, layer_index: usize) -> bool {
-        self.tracks.get(layer_index).map_or(false, |t| t.is_group)
+        self.tracks.get(layer_index).is_some_and(|t| t.is_group)
     }
 
     // ── Coordinate mapping ────────────────────────────────────────
@@ -679,7 +678,7 @@ impl TimelineViewportPanel {
     /// Returns the nearest snap point within `SNAP_THRESHOLD_PX` pixels (12px),
     /// or `beat` unchanged if nothing is within threshold.
     /// `ignore_ids` are clip IDs being dragged (don't snap to self).
-    pub fn magnetic_snap(&self, beat: f32, layer_index: usize, ignore_ids: &[String]) -> f32 {
+    pub fn magnetic_snap(&self, beat: f32, layer_index: usize, ignore_ids: &[ClipId]) -> f32 {
         use crate::snap::SNAP_THRESHOLD_PX;
 
         // Clamp threshold to avoid snapping across bars at low zoom
@@ -994,8 +993,7 @@ impl TimelineViewportPanel {
         // Clip miniatures — cap to avoid thousands of nodes at low zoom.
         // At 1258 clips, uncapped overview creates 1258 panel nodes.
         const MAX_OVERVIEW_CLIPS: usize = 200;
-        let mut overview_count = 0;
-        for clip in &self.clips {
+        for (overview_count, clip) in self.clips.iter().enumerate() {
             if overview_count >= MAX_OVERVIEW_CLIPS { break; }
             let start_norm = clip.start_beat / max_beat;
             let end_norm = (clip.start_beat + clip.duration_beats) / max_beat;
@@ -1008,7 +1006,6 @@ impl TimelineViewportPanel {
             tree.add_panel(-1, x, y, w, row_h,
                 UIStyle { bg_color: clip_color, ..UIStyle::default() },
             );
-            overview_count += 1;
         }
 
         // Viewport indicator (semi-transparent blue showing visible portion)
@@ -1076,15 +1073,14 @@ impl TimelineViewportPanel {
             self.track_bg_ids.push(id);
 
             // Group accent bar (only if top is visible)
-            if track.is_group && y >= tr_top {
-                if let Some(accent) = track.accent_color {
+            if track.is_group && y >= tr_top
+                && let Some(accent) = track.accent_color {
                     tree.add_panel(
                         -1, tr.x, clamped_y,
                         color::GROUP_ACCENT_BAR_WIDTH, clamped_h,
                         UIStyle { bg_color: accent, ..UIStyle::default() },
                     );
                 }
-            }
 
             // Collapsed group preview: miniature clip rects of child layers.
             // From Unity ViewportManager.GenerateCollapsedGroupTexture (lines 700-770).
@@ -1342,6 +1338,7 @@ mod tests {
     use super::*;
     use crate::tree::UITree;
     use crate::layout::ScreenLayout;
+    use crate::input::Modifiers;
 
     fn test_layout() -> ScreenLayout {
         ScreenLayout::new(1920.0, 1080.0)

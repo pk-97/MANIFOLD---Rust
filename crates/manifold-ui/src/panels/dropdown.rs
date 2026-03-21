@@ -378,11 +378,10 @@ impl DropdownPanel {
                 None
             }
             UIEvent::HoverExit { node_id } => {
-                if let Some(index) = self.item_index_for_node(*node_id) {
-                    if self.hovered_index == index as i32 {
+                if let Some(index) = self.item_index_for_node(*node_id)
+                    && self.hovered_index == index as i32 {
                         self.hovered_index = -1;
                     }
-                }
                 None
             }
             UIEvent::KeyDown { key, .. } => {

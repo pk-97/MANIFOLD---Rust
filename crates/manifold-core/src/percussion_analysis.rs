@@ -395,18 +395,15 @@ impl PercussionAnalysisData {
         if let Some(ref mut grid) = self.beat_grid {
             grid.ensure_valid();
         }
-        if self.bpm <= 0.0 {
-            if let Some(ref grid) = self.beat_grid {
-                if grid.bpm_derived_clamped() > 0.0 {
+        if self.bpm <= 0.0
+            && let Some(ref grid) = self.beat_grid
+                && grid.bpm_derived_clamped() > 0.0 {
                     self.bpm = grid.bpm_derived_clamped();
                 }
-            }
-        }
-        if self.bpm_confidence <= 0.0 {
-            if let Some(ref grid) = self.beat_grid {
+        if self.bpm_confidence <= 0.0
+            && let Some(ref grid) = self.beat_grid {
                 self.bpm_confidence = grid.confidence_clamped();
             }
-        }
 
         if let Some(ref mut envelope) = self.energy_envelope {
             for val in envelope.iter_mut() {

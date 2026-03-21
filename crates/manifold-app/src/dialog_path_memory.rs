@@ -49,13 +49,12 @@ pub fn get_last_directory(context: DialogContext, prefs: &mut UserPrefs) -> Stri
 
     // Migrate from legacy keys on first access.
     let legacy = get_legacy_path(context, prefs);
-    if !legacy.is_empty() {
-        if let Some(legacy_dir) = extract_directory(&legacy) {
+    if !legacy.is_empty()
+        && let Some(legacy_dir) = extract_directory(&legacy) {
             prefs.set_string(&key, &legacy_dir);
             prefs.save();
             return legacy_dir;
         }
-    }
 
     String::new()
 }

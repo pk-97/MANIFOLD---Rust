@@ -1,4 +1,6 @@
 mod app;
+mod app_lifecycle;
+mod app_render;
 mod content_command;
 mod content_pipeline;
 mod content_state;

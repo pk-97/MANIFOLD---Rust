@@ -11,7 +11,7 @@
 //   2. Bitonic sort   (compute) — BitonicSortStep kernel, O(log²N) dispatches
 //   3. Visualization  (render)  — fragment shader scatter
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 use manifold_core::EffectType;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
@@ -105,7 +105,7 @@ pub struct PixelSortFX {
     viz_sampler:         wgpu::Sampler,
 
     // ComputeSortEffect.cs lines 101-102 — per-owner sort buffers
-    per_owner_buffers: HashMap<i64, OwnerBuffers>,
+    per_owner_buffers: AHashMap<i64, OwnerBuffers>,
 
     // ComputeSortEffect.cs lines 90-92
     output_width:  u32,
@@ -375,7 +375,7 @@ impl PixelSortFX {
             bitonic_pipeline,
             bitonic_bgl,
             bitonic_uniform_buf,
-            per_owner_buffers: HashMap::new(),
+            per_owner_buffers: AHashMap::new(),
             viz_pipeline,
             viz_bgl,
             viz_uniform_buf,
