@@ -12,6 +12,8 @@ symphonia = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 midir = "0.9"
+rosc = "0.10"
+rusty_link = "0.4"
 
 [dev-dependencies]
 manifold-io = { path = "../manifold-io" }

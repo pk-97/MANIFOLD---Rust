@@ -1809,3 +1809,49 @@ impl LiveClipHost for PlaybackEngine {
         }
     }
 }
+
+// ─── Sync trait implementations ───
+// SyncTarget (read-only) and SyncArbiterTarget (write) allow sync controllers
+// to read playback state and issue gated transport commands via SyncArbiter.
+// Port of Unity ISyncTarget + ISyncArbiterTarget implemented by PlaybackController.
+
+impl crate::sync::SyncTarget for PlaybackEngine {
+    fn current_state(&self) -> PlaybackState { self.current_state }
+    fn current_time(&self) -> f32 { self.current_time }
+    fn is_playing(&self) -> bool { self.current_state == PlaybackState::Playing }
+
+    fn timeline_beat_to_time(&self, beat: f32) -> f32 {
+        if let Some(project) = &self.project {
+            TempoMapConverter::beat_to_seconds_immut(
+                &project.tempo_map,
+                beat,
+                project.settings.bpm,
+            )
+        } else {
+            beat * 0.5 // fallback: 120 bpm
+        }
+    }
+
+    fn current_project(&self) -> Option<&Project> { self.project.as_ref() }
+}
+
+impl crate::sync::SyncArbiterTarget for PlaybackEngine {
+    fn current_project(&self) -> Option<&Project> { self.project.as_ref() }
+    fn external_time_sync(&self) -> bool { self.external_time_sync }
+    fn set_external_time_sync(&mut self, value: bool) { self.external_time_sync = value; }
+
+    fn play(&mut self) { self.play(); }
+
+    fn pause(&mut self, clear_recording: bool) {
+        self.pause();
+        if clear_recording { self.set_recording(false); }
+    }
+
+    fn nudge_time(&mut self, time: f32) {
+        self.set_time(time as f64);
+    }
+
+    fn seek(&mut self, time: f32) {
+        self.seek_to(time);
+    }
+}

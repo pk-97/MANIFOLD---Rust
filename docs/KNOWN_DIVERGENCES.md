@@ -214,6 +214,13 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Approved by:** Peter / 2026-03-21
 - **Files affected:** `manifold-renderer/src/compositor/`
 
+### [D-30] MidiClockSyncController: MidiClock native CoreMIDI plugin → midir receiver
+- **Unity does:** `MidiClock.cs` wraps a native CoreMIDI DLL (`MidiClock_Update()` P/Invoke) that maintains `PositionSixteenths` (SPP base) and `ClockTick` (0–5 sub-sixteenth) internally. The C# side polls once per frame via `UpdateState()` and reads the resulting fields.
+- **Rust does:** `MidiClockReceiver` wraps a `midir::MidiInputConnection` callback. The callback receives raw MIDI bytes and reconstructs `position_sixteenths` and `clock_tick` inline: `0xF8` increments `clock_tick` (wraps at 6, increments `position_sixteenths`); `0xF2` SPP resets `position_sixteenths = (msb<<7)|lsb, clock_tick = 0`; `0xFA` Start resets both to 0; `0xFB`/`0xFC` Continue/Stop set `is_playing` without resetting position. State is snapshotted once per frame via `update_state()` using `Arc<Mutex<MidiClockState>>`.
+- **Why:** midir IS the native CoreMIDI backend on macOS (D-26). Standard MIDI protocol — the byte-to-field reconstruction is deterministic and equivalent to what Unity's native plugin does internally. No P/Invoke required.
+- **Approved by:** Peter / task spec
+- **Files affected:** `manifold-playback/src/midi_clock_sync.rs`
+
 ---
 
 ## Add new divergences above this line.

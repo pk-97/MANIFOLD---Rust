@@ -871,6 +871,17 @@ impl InspectorCompositePanel {
 
     // ── Internal event routing ───────────────────────────────────
 
+    /// Auto-select an effect card on any interaction (click, pointer down).
+    /// Unity: any card interaction implicitly selects it (single-select, no modifiers).
+    fn auto_select_effect(&mut self, target: &PressedTarget) {
+        match *target {
+            PressedTarget::MasterEffect(i) => self.select_effect(InspectorTab::Master, i),
+            PressedTarget::LayerEffect(i) => self.select_effect(InspectorTab::Layer, i),
+            PressedTarget::ClipEffect(i) => self.select_effect(InspectorTab::Clip, i),
+            _ => {}
+        }
+    }
+
     fn route_click(&mut self, node_id: u32, modifiers: Modifiers) -> Vec<PanelAction> {
         let id = node_id as i32;
         // Add Effect buttons
@@ -894,9 +905,11 @@ impl InspectorCompositePanel {
                     let actions = self.master_effects.get_mut(i)
                         .map(|c| c.handle_click(node_id))
                         .unwrap_or_default();
-                    // Intercept EffectCardClicked to handle selection
+                    // Header click: modifier-aware selection. Any other click: auto-select.
                     if actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         self.on_effect_card_clicked(InspectorTab::Master, i, modifiers);
+                    } else if !actions.is_empty() {
+                        self.auto_select_effect(&PressedTarget::MasterEffect(i));
                     }
                     actions
                 }
@@ -906,6 +919,8 @@ impl InspectorCompositePanel {
                         .unwrap_or_default();
                     if actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         self.on_effect_card_clicked(InspectorTab::Layer, i, modifiers);
+                    } else if !actions.is_empty() {
+                        self.auto_select_effect(&PressedTarget::LayerEffect(i));
                     }
                     actions
                 }
@@ -915,6 +930,8 @@ impl InspectorCompositePanel {
                         .unwrap_or_default();
                     if actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         self.on_effect_card_clicked(InspectorTab::Clip, i, modifiers);
+                    } else if !actions.is_empty() {
+                        self.auto_select_effect(&PressedTarget::ClipEffect(i));
                     }
                     actions
                 }
@@ -936,10 +953,26 @@ impl InspectorCompositePanel {
         // Record which tab this interaction targets (survives drag_end)
         if let Some(ref t) = target {
             self.update_last_effect_tab(t);
+            // Auto-select on any pointer-down interaction (slider drag, trim, etc.)
+            self.auto_select_effect(t);
         }
 
         if let Some(target) = target {
-            match target {
+            // For effect targets, prepend EffectCardClicked to trigger visual update
+            let select_action = match target {
+                PressedTarget::MasterEffect(i) => {
+                    Some(PanelAction::EffectCardClicked(self.master_effects.get(i).map(|c| c.effect_index()).unwrap_or(0)))
+                }
+                PressedTarget::LayerEffect(i) => {
+                    Some(PanelAction::EffectCardClicked(self.layer_effects.get(i).map(|c| c.effect_index()).unwrap_or(0)))
+                }
+                PressedTarget::ClipEffect(i) => {
+                    Some(PanelAction::EffectCardClicked(self.clip_effects.get(i).map(|c| c.effect_index()).unwrap_or(0)))
+                }
+                _ => None,
+            };
+
+            let mut actions = match target {
                 PressedTarget::MasterChrome => self.master_chrome.handle_pointer_down(node_id, pos),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_pointer_down(node_id, pos),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_pointer_down(node_id, pos),
@@ -967,7 +1000,13 @@ impl InspectorCompositePanel {
                     self.dragging_scrollbar = true;
                     Vec::new()
                 }
+            };
+
+            // Prepend EffectCardClicked so dispatch applies selection visuals
+            if let Some(sa) = select_action {
+                actions.insert(0, sa);
             }
+            actions
         } else {
             Vec::new()
         }
