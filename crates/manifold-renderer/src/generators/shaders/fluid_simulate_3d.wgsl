@@ -53,8 +53,8 @@ struct Particle {
 
 @group(0) @binding(0) var<storage, read_write> particles: array<Particle>;
 @group(0) @binding(1) var t_field:   texture_3d<f32>;   // blurred vector field (Rgba16Float, filterable)
-@group(0) @binding(2) var s_field:   sampler;            // linear clamp
-@group(0) @binding(3) var t_density: texture_3d<f32>;   // blurred density (R32Float, not filterable on Metal — textureLoad)
+@group(0) @binding(2) var s_field:   sampler;            // linear clamp (shared for vector field + density)
+@group(0) @binding(3) var t_density: texture_3d<f32>;   // blurred density (Rgba16Float, filterable — textureSampleLevel)
 @group(0) @binding(4) var<uniform>  params: SimUniforms;
 
 // --- Wang hash (matches ParticleCommon.cginc WangHash) ---
@@ -180,14 +180,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         force += textureSampleLevel(t_field, s_field, pos, 0.0).xyz;
 
         // Sample blurred density for density-adaptive noise/refresh
-        // R32Float not filterable on Metal — use textureLoad
-        let vol_dim = vec3<u32>(textureDimensions(t_density));
-        let d_coord = vec3<i32>(
-            i32(pos.x * f32(vol_dim.x)) % i32(vol_dim.x),
-            i32(pos.y * f32(vol_dim.y)) % i32(vol_dim.y),
-            i32(pos.z * f32(vol_dim.z)) % i32(vol_dim.z),
-        );
-        local_density = textureLoad(t_density, d_coord, 0).r;
+        // Unity: _DensityTex.SampleLevel(sampler_linear_clamp, pos, 0).r
+        // Density volume is Rgba16Float (filterable) — matches Unity bilinear sampling.
+        local_density = textureSampleLevel(t_density, s_field, pos, 0.0).r;
     }
 
     // cappedDensity = localDensity / (1.0 + localDensity)  — soft clamp: 0->0, inf->1

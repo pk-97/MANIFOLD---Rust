@@ -74,28 +74,13 @@ const THREAD_GROUP_SIZE: u32 = 256;
 const FORCE_SCALE: f32 = 500.0;
 
 // Texture formats:
-// Unity densityVolume:   RHalf -> R16Float, but R16Float lacks STORAGE_BINDING on Metal -> R32Float
+// Unity densityVolume:   RHalf (R16Float). R16Float lacks STORAGE_BINDING on Metal.
+//   Use Rgba16Float: supports STORAGE_BINDING + filterable textureSample (matching Unity's
+//   bilinear-filtered SampleLevel). Same 16-bit precision as Unity RHalf.
 // Unity vectorFieldVolume: ARGBHalf -> Rgba16Float (filterable, storage OK on Metal)
-// Unity displayDensityRT:  RFloat -> R32Float (not filterable on Metal, use textureLoad in sim;
-//                          but display uses blit/fragment which samples it — need filterable RT)
-//                          Solution: display density RT uses R32Float for storage, the display
-//                          fragment shader samples it via a sampler (wgpu will warn but Metal
-//                          allows non-filterable with float sampler).
-//                          Actually for fragment shader sampling we need Rgba16Float.
-//                          Unity uses RFloat for display density — keep R32Float, display shader
-//                          will use textureLoad or we keep filterable sampler path.
-//                          For now use Rgba16Float only for the display fragment path (KNOWN_DIVERGENCES).
-const DENSITY_3D_FORMAT:  wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+// Unity displayDensityRT:  RFloat -> use Rgba16Float (filterable for display fragment).
+const DENSITY_3D_FORMAT:  wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const VECTOR_3D_FORMAT:   wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-// Display density: R32Float for compute resolve (Unity RFloat), needs to be sampled by display
-// fragment. R32Float is not filterable on Metal so we use Rgba16Float for the display RT.
-// The compute resolve_display writes to R32Float storage, display reads it.
-// We use a single R32Float RT: resolve writes to it as storage, display samples via textureLoad
-// through a separate non-filterable binding. But the existing display shader uses textureSample...
-// Per KNOWN_DIVERGENCES: use R32Float for display density — it IS the Unity format.
-// The display fragment needs to sample it, so we use a filterable format here (Rgba16Float)
-// while Unity gets away with RFloat because Unity's shader samples RFloat with bilinear.
-// This is a Metal platform constraint (FM-10 exception): R32Float not filterable on Metal.
 const DISPLAY_DENSITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 const PARTICLE_SIZE_BYTES: u64 = std::mem::size_of::<Particle>() as u64;
@@ -523,7 +508,7 @@ impl FluidSimulation3DGenerator {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fluid_blur_3d.wgsl").into()),
         });
 
-        // Blur scalar BGL: uniforms, density in (unfilterable R32Float), density out (storage R32Float)
+        // Blur scalar BGL: uniforms, density in (textureLoad, no filtering needed), density out (storage Rgba16Float)
         let blur_scalar_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("FluidSim3D BlurScalar BGL"),
             entries: &[
@@ -573,7 +558,7 @@ impl FluidSimulation3DGenerator {
                 bgl_storage_rw(0, wgpu::ShaderStages::COMPUTE),             // particles rw
                 bgl_texture_3d(1, wgpu::ShaderStages::COMPUTE),             // vector field (Rgba16Float, filterable)
                 bgl_sampler(2, wgpu::ShaderStages::COMPUTE),                // linear clamp sampler
-                bgl_texture_3d_unfilterable(3, wgpu::ShaderStages::COMPUTE),// density (R32Float, textureLoad)
+                bgl_texture_3d(3, wgpu::ShaderStages::COMPUTE),             // density (Rgba16Float, filterable — textureSampleLevel)
                 bgl_uniform(4, wgpu::ShaderStages::COMPUTE),
             ],
         });
