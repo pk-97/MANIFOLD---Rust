@@ -20,7 +20,9 @@ use super::compute_common::Particle;
 //        SCALE=7, PARTICLES=8, SNAP=9, SNAP_MODE=10, SPLAT_SIZE=11, DENSITY_RES=12,
 //        DENSITY_NOISE=13, DIFFUSION=14, REFRESH=15, DENSITY_REFRESH=16,
 //        COLOR_MODE=17, COLOR_BRIGHT=18, INJECT_FORCE=19,
-//        CONTAINER=20, CONTAINER_SCALE=21, VOLUME_RES=22, CAM_DIST=23, CAM_TILT=24, FLATTEN=25
+//        CONTAINER=20, CONTAINER_SCALE=21, VOLUME_RES=22, CAM_DIST=23,
+//        ROT_X=24, ROT_Y=25, ROT_Z=26, FLATTEN=27
+// DIVERGENCE: Unity has auto-orbit + CAM_TILT; Rust uses manual Rotate X/Y/Z sliders
 const FLOW:          usize = 0;   // SLOPE
 const FEATHER:       usize = 1;   // BLUR
 const CURL:          usize = 2;   // ROTATION
@@ -47,8 +49,10 @@ const CTR_SCALE:     usize = 21;
 const VOL_RES:       usize = 22;
 const CAM_DIST:      usize = 23;
 const CAM_DIST_DEFAULT: f32 = 3.0;
-const CAM_TILT:      usize = 24;
-const FLATTEN:       usize = 25;
+const ROT_X:         usize = 24;
+const ROT_Y:         usize = 25;
+const ROT_Z:         usize = 26;
+const FLATTEN:       usize = 27;
 
 const MAX_PARTICLES: u32 = 8_000_000;  // Unity: MAX_PARTICLES = 8_000_000 (FM-11)
 const BAKE_GROUP_SIZE: u32 = 8;        // Unity: BAKE_GROUP_SIZE = 8
@@ -115,51 +119,70 @@ fn active_count_from_param(val: f32) -> u32 {
     ((val * 1_000_000.0).round() as i32).clamp(100_000, MAX_PARTICLES as i32) as u32
 }
 
-// Precompute camera vectors from orbit angle + tilt (Unity DispatchProjectedScatter / Render)
-// angle = ctx.Time * animSpeed * 0.25
-// tiltAngle = camTilt * PI * 0.5   (DIFF-1: must convert tilt param with * PI * 0.5)
-fn compute_camera_vectors(angle: f32, tilt: f32, cam_dist: f32) -> (
+// Compute camera vectors from Euler rotation sliders (Rotate X / Y / Z).
+// DIVERGENCE: Unity uses auto-orbit (ctx.Time * speed * 0.25) + CAM_TILT.
+// Rust uses user-controlled Euler angles for decoupled 3D rotation.
+//
+// rot_x/rot_y/rot_z are in [-1, 1] mapped to [-π, π].
+// Application order: Y (horizontal spin) → X (vertical tilt) → Z (roll).
+// This gives intuitive turntable-like control:
+//   Rotate Y = turntable (spin object left/right)
+//   Rotate X = tilt (nod object up/down)
+//   Rotate Z = roll (tilt object sideways)
+fn compute_camera_vectors_euler(rot_x: f32, rot_y: f32, rot_z: f32, cam_dist: f32) -> (
     [f32; 3], // cam_pos
     [f32; 3], // cam_fwd
     [f32; 3], // cam_right
     [f32; 3], // cam_up
 ) {
-    let tilt_angle = tilt * PI * 0.5;  // DIFF-1: Unity line 490
-    let cos_t = tilt_angle.cos();
-    let sin_t = tilt_angle.sin();
+    let ax = rot_x * PI;  // pitch
+    let ay = rot_y * PI;  // yaw
+    let az = rot_z * PI;  // roll
 
+    // Camera position on sphere: start at [0, 0, cam_dist], apply Y then X rotation
     let cam_pos = [
-        angle.cos() * cam_dist * cos_t,
-        sin_t * cam_dist,
-        angle.sin() * cam_dist * cos_t,
+        ay.sin() * ax.cos() * cam_dist,
+        -ax.sin() * cam_dist,
+        ay.cos() * ax.cos() * cam_dist,
     ];
 
-    let cam_fwd_raw = [-cam_pos[0], -cam_pos[1], -cam_pos[2]];
-    let cam_fwd = normalize3(cam_fwd_raw);
+    let cam_fwd = normalize3([-cam_pos[0], -cam_pos[1], -cam_pos[2]]);
 
+    // Derive right/up before roll
     let world_up: [f32; 3] = if cam_fwd[1].abs() > 0.999 {
-        [0.0, 0.0, 1.0]  // Vector3.forward
+        [0.0, 0.0, 1.0]
     } else {
-        [0.0, 1.0, 0.0]  // Vector3.up
+        [0.0, 1.0, 0.0]
     };
 
-    let cam_right = normalize3(cross3(world_up, cam_fwd));
-    let cam_up    = cross3(cam_fwd, cam_right);
+    let right_raw = normalize3(cross3(world_up, cam_fwd));
+    let up_raw    = cross3(cam_fwd, right_raw);
+
+    // Apply Z roll to right/up vectors
+    let cos_z = az.cos();
+    let sin_z = az.sin();
+    let cam_right = [
+        right_raw[0] * cos_z + up_raw[0] * sin_z,
+        right_raw[1] * cos_z + up_raw[1] * sin_z,
+        right_raw[2] * cos_z + up_raw[2] * sin_z,
+    ];
+    let cam_up = [
+        -right_raw[0] * sin_z + up_raw[0] * cos_z,
+        -right_raw[1] * sin_z + up_raw[1] * cos_z,
+        -right_raw[2] * sin_z + up_raw[2] * cos_z,
+    ];
 
     (cam_pos, cam_fwd, cam_right, cam_up)
 }
 
-// Unity Render: camFwdDir = normalize([-cos(angle)*cosT, -sinT, -sin(angle)*cosT])
-// This is the same as -cam_pos normalized (cam_fwd above), which is what Unity computes.
-// The Render method computes camFwdDir separately for the flatten uniform.
-fn compute_cam_fwd_for_simulate(angle: f32, tilt: f32) -> [f32; 3] {
-    let tilt_angle = tilt * PI * 0.5;
-    let cos_t = tilt_angle.cos();
-    let sin_t = tilt_angle.sin();
+// Camera forward for simulation flatten uniform — same as the projection camera forward.
+fn compute_cam_fwd_euler(rot_x: f32, rot_y: f32) -> [f32; 3] {
+    let ax = rot_x * PI;
+    let ay = rot_y * PI;
     normalize3([
-        -angle.cos() * cos_t,
-        -sin_t,
-        -angle.sin() * cos_t,
+        -(ay.sin() * ax.cos()),
+        ax.sin(),
+        -(ay.cos() * ax.cos()),
     ])
 }
 
@@ -873,7 +896,9 @@ impl Generator for FluidSimulation3DGenerator {
         let ctr_scale      = param(ctx, CTR_SCALE,      0.8);
         let vol_res_param  = param(ctx, VOL_RES,        1.0);
         let cam_dist       = param(ctx, CAM_DIST,       CAM_DIST_DEFAULT);
-        let cam_tilt       = param(ctx, CAM_TILT,       0.3);
+        let rot_x          = param(ctx, ROT_X,          0.0);
+        let rot_y          = param(ctx, ROT_Y,          0.0);
+        let rot_z          = param(ctx, ROT_Z,          0.0);
         let flatten        = param(ctx, FLATTEN,        0.0);
 
         let container_type  = container_f.round() as u32;
@@ -905,11 +930,10 @@ impl Generator for FluidSimulation3DGenerator {
         let dw           = self.disp_w;
         let dh           = self.disp_h;
 
-        // ── Camera vectors (Unity Render: camOrbitAngle, camTiltRad) ──
-        // Unity: camOrbitAngle = ctx.Time * camAnimSpeed * 0.25f
-        //        camTiltRad    = camTiltVal * Mathf.PI * 0.5f  (DIFF-1)
-        let cam_orbit_angle = ctx.time * speed * 0.25;
-        let cam_fwd_sim     = compute_cam_fwd_for_simulate(cam_orbit_angle, cam_tilt);
+        // ── Camera vectors from Euler rotation sliders ──
+        // DIVERGENCE: Unity uses auto-orbit (ctx.Time * speed * 0.25) + CAM_TILT.
+        // Rust uses manual Rotate X/Y/Z sliders for user-controlled 3D rotation.
+        let cam_fwd_sim = compute_cam_fwd_euler(rot_x, rot_y);
 
         // ── Snap envelope (Unity Render lines 818-852) ──
         let snap_active = snap > 0.5;
@@ -1035,10 +1059,9 @@ impl Generator for FluidSimulation3DGenerator {
         let proj_energy      = 0.005 * particle_size / 3.0 * (1_000_000.0 / active_count as f32);
         let scaled_energy_proj = (proj_energy * 4096.0 + 0.5) as u32;
 
-        // ── Camera vectors for projected scatter (DIFF-1) ──
-        // Unity DispatchProjectedScatter lines 583-603
+        // ── Camera vectors for projected scatter ──
         let (cam_pos, cam_fwd, cam_right, cam_up) =
-            compute_camera_vectors(cam_orbit_angle, cam_tilt, cam_dist);
+            compute_camera_vectors_euler(rot_x, rot_y, rot_z, cam_dist);
 
         // Ortho when no container (Unity line 613)
         let ortho: u32 = if container_type == 0 { 1 } else { 0 };

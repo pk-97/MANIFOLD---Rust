@@ -472,15 +472,38 @@ fn build_definitions() -> HashMap<GeneratorType, GeneratorDef> {
         pd_whole_labels("Color", 0.0, 5.0, 0.0, &["Mono", "Blush", "Sunset", "Ocean", "Vivid", "White"], "color"),
         pd("Color Bright", 0.5, 5.0, 2.0, Some("F1"), "colorBright"),
         pd("Zone Force", 0.0, 0.02, 0.005, Some("F3"), "zoneForce"),
-        // 3D-specific params (indices 20-25)
+        // 3D-specific params (indices 20-27)
         pd_whole_labels("Container", 0.0, 3.0, 0.0, &["None", "Cube", "Sphere", "Torus"], "container"),
         pd("Ctr Scale", 0.2, 1.0, 0.8, Some("F2"), "containerScale"),
         pd_whole_labels("Vol Res", 0.0, 2.0, 0.0, &["64", "128", "256"], "volumeRes"),
         pd("Cam Dist", 1.0, 8.0, 3.0, Some("F1"), "camDist"),
-        pd("Cam Tilt", -1.0, 1.0, 0.3, Some("F2"), "camTilt"),
+        pd("Rotate X", -1.0, 1.0, 0.0, Some("F2"), "rotX"),
+        pd("Rotate Y", -1.0, 1.0, 0.0, Some("F2"), "rotY"),
+        pd("Rotate Z", -1.0, 1.0, 0.0, Some("F2"), "rotZ"),
         pd("Flatten", 0.0, 1.0, 0.0, Some("F2"), "flatten"),
     ];
     m.insert(GeneratorType::FluidSimulation3D, create_def("Fluid Simulation 3D", false, "generator/fluidSimulation3D", params));
+
+    // ── MRI Volume ──
+    let params = vec![
+        pd_whole_labels("Mode", 0.0, 1.0, 0.0, &["Slice", "Volume"], "mode"),
+        pd_whole_labels("Slice Axis", 0.0, 2.0, 0.0, &["Axial", "Sagittal", "Coronal"], "sliceAxis"),
+        pd("Slice Pos", 0.0, 1.0, 0.5, Some("F2"), "slicePos"),
+        pd("Window Center", 0.0, 1.0, 0.5, Some("F2"), "wCenter"),
+        pd("Window Width", 0.01, 1.0, 0.8, Some("F2"), "wWidth"),
+        pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
+        pd_toggle("Invert", 0.0, 1.0, 0.0, "invert"),
+        pd("Sharpen", 0.0, 3.0, 1.0, Some("F1"), "sharpen"),
+        pd("Cine Speed", 0.0, 4.0, 1.0, Some("F1"), "cineSpeed"),
+        pd_whole("Scan", 0.0, 5.0, 0.0, "scan"),
+        pd("Cam Dist", 1.0, 8.0, 3.0, Some("F1"), "camDist"),
+        pd("Rotate X", -1.0, 1.0, 0.0, Some("F2"), "rotX"),
+        pd("Rotate Y", -1.0, 1.0, 0.0, Some("F2"), "rotY"),
+        pd("Rotate Z", -1.0, 1.0, 0.0, Some("F2"), "rotZ"),
+        pd("Opacity", 0.1, 10.0, 2.0, Some("F1"), "opacity"),
+        pd_whole("Steps", 32.0, 256.0, 128.0, "steps"),
+    ];
+    m.insert(GeneratorType::MriVolume, create_def("MRI Volume", false, "generator/mriVolume", params));
 
     m
 }
