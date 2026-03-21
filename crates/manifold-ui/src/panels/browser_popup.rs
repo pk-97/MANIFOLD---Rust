@@ -41,9 +41,13 @@ const SEARCH_BG: Color32 = Color32::new(31, 31, 32, 255);
 const SEARCH_TEXT: Color32 = Color32::new(168, 168, 172, 255);
 const CELL_NORMAL: Color32 = Color32::new(36, 36, 38, 255);
 const CELL_HOVER: Color32 = Color32::new(51, 51, 56, 255);
+const CELL_PRESSED: Color32 = Color32::new(46, 46, 48, 255);
 const CELL_SELECTED: Color32 = Color32::new(45, 65, 95, 255);
 const CHIP_INACTIVE: Color32 = Color32::new(41, 41, 43, 255);
+const CHIP_HOVER: Color32 = Color32::new(56, 56, 58, 255);
 const PASTE_BG: Color32 = Color32::new(40, 40, 42, 255);
+const PASTE_HOVER: Color32 = Color32::new(55, 55, 59, 255);
+const SEARCH_HOVER: Color32 = Color32::new(38, 38, 40, 255);
 const TEXT_PRIMARY: Color32 = Color32::new(224, 224, 224, 255);
 const TEXT_DIM: Color32 = Color32::new(120, 120, 124, 255);
 
@@ -316,7 +320,14 @@ impl BrowserPopupPanel {
         // Search bar
         self.search_bar_id = tree.add_button(
             -1, cx, cy, content_w, SEARCH_BAR_HEIGHT,
-            UIStyle { bg_color: SEARCH_BG, corner_radius: 4.0, font_size: SEARCH_FONT, text_color: SEARCH_TEXT, ..UIStyle::default() },
+            UIStyle {
+                bg_color: SEARCH_BG,
+                hover_bg_color: SEARCH_HOVER,
+                corner_radius: 4.0,
+                font_size: SEARCH_FONT,
+                text_color: SEARCH_TEXT,
+                ..UIStyle::default()
+            },
             &if self.current_filter.is_empty() { "  Search...".to_string() } else { format!("  {}", self.current_filter) },
         ) as i32;
         cy += SEARCH_BAR_HEIGHT + SECTION_SPACING;
@@ -333,6 +344,7 @@ impl BrowserPopupPanel {
                 -1, chip_x, cy, all_w, chip_h,
                 UIStyle {
                     bg_color: if all_active { color::ACCENT_BLUE } else { CHIP_INACTIVE },
+                    hover_bg_color: if all_active { color::ACCENT_BLUE } else { CHIP_HOVER },
                     corner_radius: chip_h * 0.5,
                     font_size: CELL_FONT,
                     text_color: if all_active { Color32::WHITE } else { TEXT_DIM },
@@ -351,6 +363,7 @@ impl BrowserPopupPanel {
                     -1, chip_x, cy, w, chip_h,
                     UIStyle {
                         bg_color: if is_active { color::ACCENT_BLUE } else { CHIP_INACTIVE },
+                        hover_bg_color: if is_active { color::ACCENT_BLUE } else { CHIP_HOVER },
                         corner_radius: chip_h * 0.5,
                         font_size: CELL_FONT,
                         text_color: if is_active { Color32::WHITE } else { TEXT_DIM },
@@ -407,6 +420,8 @@ impl BrowserPopupPanel {
                 clip_id, cell_x, cell_y, CELL_WIDTH, CELL_HEIGHT,
                 UIStyle {
                     bg_color: CELL_NORMAL,
+                    hover_bg_color: CELL_HOVER,
+                    pressed_bg_color: CELL_PRESSED,
                     corner_radius: CELL_RADIUS,
                     font_size: CELL_FONT,
                     text_color: TEXT_PRIMARY,
@@ -431,6 +446,7 @@ impl BrowserPopupPanel {
                 -1, cx, cy, content_w, PASTE_BUTTON_HEIGHT,
                 UIStyle {
                     bg_color: PASTE_BG,
+                    hover_bg_color: PASTE_HOVER,
                     corner_radius: 4.0,
                     font_size: CELL_FONT,
                     text_color: color::ACCENT_BLUE,
