@@ -38,6 +38,7 @@ const COLOR_BRIGHT: usize = 18;
 const INJECT_FORCE: usize = 19;
 
 // Unity constants
+const MAX_PARTICLES: u32 = 8_000_000; // Unity: ParticleCount => 8000000
 const PATTERN_COUNT: u32 = 7;
 const SNAP_DECAY_RATE: f32 = 12.0; // ~200ms to near-zero
 const PRE_SHRINK: u32 = 2;
@@ -608,33 +609,53 @@ impl FluidSimulationGenerator {
         }
     }
 
-    fn init_resources(
+    /// Unity ComputeParticleGeneratorBase.Initialize: create and seed particle buffer.
+    /// Called once; buffer is always MAX_PARTICLES (8M). activeCount is dispatch-only.
+    /// Unity NEVER recreates the particle buffer when the count slider changes.
+    fn init_particles(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        output_width: u32,
-        output_height: u32,
-        active_count: u32,
-        density_res: f32,
+        encoder: &mut wgpu::CommandEncoder,
     ) {
-        self.active_count = active_count;
-        self.current_density_res = density_res;
-
-        // Scatter resolution = output * density_res (Unity: currentDensityRes drives InternalResolutionScale)
-        let field_scale = density_res.clamp(0.125, 1.0);
-        let sw = ((output_width as f32 * field_scale) as u32).max(64);
-        let sh = ((output_height as f32 * field_scale) as u32).max(64);
-        self.scatter_width = sw;
-        self.scatter_height = sh;
-
-        // Particle buffer: 8M × 48 bytes max, but we allocate only active_count
-        let particle_buf_size = active_count as u64 * PARTICLE_SIZE_BYTES;
+        let particle_buf_size = MAX_PARTICLES as u64 * PARTICLE_SIZE_BYTES;
         let particle_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("FluidSim Particle Buffer"),
             size: particle_buf_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        self.particle_buffer = Some(particle_buffer);
+        self.initialized = true;
+
+        // Seed particles (Unity: InitParticles fills uniform random positions)
+        // Pattern index 255 hits the default branch = uniform random (matching Unity's CPU init)
+        self.dispatch_seed(queue, encoder, device, 255, 42);
+    }
+
+    /// Unity Resize / density_res change: recreate scatter-resolution resources only.
+    /// Does NOT touch the particle buffer. Unity comment: "Particle buffer is
+    /// resolution-independent — no rebuild needed."
+    fn ensure_scatter_resources(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        output_width: u32,
+        output_height: u32,
+        density_res: f32,
+    ) {
+        let field_scale = density_res.clamp(0.125, 1.0);
+        let sw = ((output_width as f32 * field_scale) as u32).max(64);
+        let sh = ((output_height as f32 * field_scale) as u32).max(64);
+
+        // Early out if dimensions haven't changed
+        if self.scatter_accum.is_some() && self.scatter_width == sw && self.scatter_height == sh {
+            return;
+        }
+
+        self.current_density_res = density_res;
+        self.scatter_width = sw;
+        self.scatter_height = sh;
 
         // Scatter accum: sw × sh × 4 bytes (atomic u32, scalar density)
         let accum_size = (sw as u64) * (sh as u64) * 4;
@@ -669,7 +690,6 @@ impl FluidSimulationGenerator {
         // Color density RT: same resolution as scatter (bilinear sampling in display)
         let color_density_rt = RenderTarget::new(device, sw, sh, DENSITY_FORMAT, "FluidSim Color Density");
 
-        self.particle_buffer = Some(particle_buffer);
         self.scatter_accum = Some(scatter_accum);
         self.color_accum = Some(color_accum);
         self.density_rt = Some(density_rt);
@@ -678,7 +698,6 @@ impl FluidSimulationGenerator {
         self.blur_temp_rt = Some(blur_temp_rt);
         self.color_density_rt = Some(color_density_rt);
         self.frame_count = 0;
-        self.initialized = true;
     }
 
     fn dispatch_seed(
@@ -815,27 +834,21 @@ impl Generator for FluidSimulationGenerator {
 
         let color_mode = color_mode_f.round() as i32;
 
-        // Unity: ParticleCount => 8_000_000 (FM-11: match Unity exactly)
-        let desired_count = ((particles_param * 1_000_000.0) as u32).clamp(100_000, 8_000_000);
+        // Unity: activeCount is dispatch-only. Buffer is always MAX_PARTICLES.
+        let active_count = ((particles_param * 1_000_000.0) as u32).clamp(100_000, MAX_PARTICLES);
 
-        // --- Dynamic density resolution ---
-        // Unity: if densityRes != currentDensityRes -> Resize(rt.width, rt.height)
-        let needs_reinit = !self.initialized
-            || desired_count != self.active_count
-            || (density_res - self.current_density_res).abs() > 0.001;
-
-        if needs_reinit {
-            self.init_resources(device, queue, ctx.width, ctx.height, desired_count, density_res);
-            // Seed particles on first init (Unity: InitParticles fills uniform random positions)
-            // Pattern index 255 hits the default branch = uniform random (matching Unity's CPU init)
-            self.dispatch_seed(queue, encoder, device, 255, 42);
-            eprintln!("[FluidSim] init: active_count={} scatter={}x{} density_res={}",
-                desired_count, self.scatter_width, self.scatter_height, density_res);
+        // Unity: particles created once in Initialize(), never recreated for param changes.
+        if !self.initialized {
+            self.init_particles(device, queue, encoder);
         }
 
+        // Unity: density_res change → Resize() which only rebuilds scatter-resolution RTs.
+        // "Particle buffer is resolution-independent — no rebuild needed."
+        self.ensure_scatter_resources(device, queue, ctx.width, ctx.height, density_res);
+
+        self.active_count = active_count;
         let sw = self.scatter_width;
         let sh = self.scatter_height;
-        let active_count = self.active_count;
         let bw = (sw / PRE_SHRINK).max(1);
         let bh = (sh / PRE_SHRINK).max(1);
 
@@ -1277,8 +1290,11 @@ impl Generator for FluidSimulationGenerator {
     }
 
     fn resize(&mut self, _device: &wgpu::Device, _width: u32, _height: u32) {
-        // Force reinit on next render (safe: DefaultDecay=0, no accumulated state)
-        self.initialized = false;
+        // Invalidate scatter resources (output dimensions changed) but keep particles alive.
+        // Unity Resize: "Particle buffer is resolution-independent — no rebuild needed"
+        self.scatter_accum = None;
+        self.scatter_width = 0;
+        self.scatter_height = 0;
     }
 }
 
