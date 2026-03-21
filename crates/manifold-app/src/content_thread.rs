@@ -46,6 +46,8 @@ pub struct ContentThread {
     /// When true, skip tick+render but still drain commands.
     /// Used while native file dialogs are open on macOS.
     pub rendering_paused: bool,
+    /// Content frame timer — target FPS synced from project settings.
+    pub timer: FrameTimer,
 
     // ── Sync infrastructure ──
     /// Authority gatekeeper — only the active ClockAuthority can issue transport commands.
@@ -66,7 +68,6 @@ impl ContentThread {
         state_tx: Sender<ContentState>,
     ) {
         log::info!("[ContentThread] started");
-        let mut timer = FrameTimer::new(60.0);
 
         loop {
             // 1. Drain ALL pending commands
@@ -91,10 +92,10 @@ impl ContentThread {
                 std::thread::sleep(std::time::Duration::from_millis(16));
                 continue;
             }
-            if !timer.should_tick() {
+            if !self.timer.should_tick() {
                 // Precise sleep: compute exact time to next frame, sleep most of it,
                 // then spin for the final sub-ms to avoid macOS sleep overshoot (~1-2ms).
-                let remaining = timer.time_until_next_tick();
+                let remaining = self.timer.time_until_next_tick();
                 if remaining > std::time::Duration::from_millis(2) {
                     // Sleep for most of the remaining time, leaving 1.5ms margin for spin-wait
                     std::thread::sleep(remaining - std::time::Duration::from_micros(1500));
@@ -105,8 +106,8 @@ impl ContentThread {
                 // Below 100μs: fall through to re-check should_tick() immediately
                 continue;
             }
-            let dt = timer.consume_tick();
-            let realtime = timer.realtime_since_start();
+            let dt = self.timer.consume_tick();
+            let realtime = self.timer.realtime_since_start();
             self.time_since_start = realtime as f32;
 
             // 3. Process MIDI input (before engine tick — matches Unity Update() ordering).
@@ -185,8 +186,8 @@ impl ContentThread {
                 current_time: self.engine.current_time(),
                 is_playing: self.engine.is_playing(),
                 is_recording: self.engine.is_recording(),
-                content_fps: timer.current_fps() as f32,
-                content_frame_time_ms: (timer.last_dt() * 1000.0) as f32,
+                content_fps: self.timer.current_fps() as f32,
+                content_frame_time_ms: (self.timer.last_dt() * 1000.0) as f32,
                 data_version: version,
                 editing_is_dirty: self.editing_service.is_dirty(),
                 bpm: self.engine.project().map_or(120.0, |p| p.settings.bpm as f64),
@@ -352,6 +353,10 @@ impl ContentThread {
                     let h = p.settings.output_height.max(1) as u32;
                     self.content_pipeline.resize(&self.gpu.device, &mut self.engine, w, h);
                 }
+                // Sync frame timer to loaded project's frame rate.
+                if let Some(p) = self.engine.project() {
+                    self.timer.set_target_fps(p.settings.frame_rate as f64);
+                }
                 // Update MIDI mapping config from the newly loaded project.
                 // Port of C# PlaybackController.OnProjectLoaded → midiInputController.SetMidiConfig().
                 if let Some(p) = self.engine.project() {
@@ -361,6 +366,10 @@ impl ContentThread {
             ContentCommand::NewProject(project) => {
                 self.engine.initialize(*project);
                 self.editing_service.set_project();
+                // Sync frame timer to new project's frame rate.
+                if let Some(p) = self.engine.project() {
+                    self.timer.set_target_fps(p.settings.frame_rate as f64);
+                }
                 // Update MIDI mapping config for new project.
                 if let Some(p) = self.engine.project() {
                     self.midi_input.set_midi_config(p.midi_config.clone());
@@ -377,6 +386,7 @@ impl ContentThread {
                 if let Some(p) = self.engine.project_mut() {
                     p.settings.frame_rate = fps as f32;
                 }
+                self.timer.set_target_fps(fps);
             }
 
             // ── GPU ────────────────────────────────────────────────

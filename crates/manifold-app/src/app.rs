@@ -1995,6 +1995,9 @@ impl ApplicationHandler for Application {
                 midi_input,
                 clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
                 rendering_paused: false,
+                timer: crate::frame_timer::FrameTimer::new(
+                    self.local_project.settings.frame_rate as f64,
+                ),
                 sync_arbiter: manifold_playback::sync::SyncArbiter::new(),
                 osc_receiver: manifold_playback::osc_receiver::OscReceiver::new(),
                 osc_sync: manifold_playback::osc_sync::OscSyncController::new(),
