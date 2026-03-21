@@ -5,14 +5,12 @@
 //! the same underlying MTLDevice. IOSurface provides kernel-managed GPU memory
 //! that multiple MTLTextures (from any Device) can bind to — zero copy.
 //!
-//! Synchronization: MTLSharedEvent signals after the content thread's render
-//! completes. The UI thread waits on the event before reading the texture.
-//!
 //! Architecture:
 //!   Content Device ──render──▶ IOSurface-backed texture ◀──read── UI Device
-//!                        signal SharedEvent           wait SharedEvent
+//!                              (same kernel GPU memory)
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::RwLock;
 
 use core_foundation::base::TCFType;
 use core_foundation::dictionary::CFMutableDictionary;
@@ -24,22 +22,19 @@ use objc::{msg_send, sel, sel_impl};
 
 /// Shared state between content and UI threads for the IOSurface bridge.
 /// Created once during init, Arc-shared between both threads.
+/// Uses interior mutability (RwLock) so resize works through Arc.
 pub struct SharedTextureBridge {
     /// IOSurface kernel object — owns the GPU memory both textures bind to.
-    io_surface: io_surface::IOSurface,
-    /// Metal shared event for GPU-to-GPU synchronization.
-    /// Content thread signals after render; UI thread waits before read.
-    shared_event: metal::SharedEvent,
-    /// Monotonically increasing frame counter used as the shared event value.
-    frame_counter: AtomicU64,
-    /// Texture dimensions.
-    pub width: u32,
-    pub height: u32,
+    /// Behind RwLock for resize (rare write, frequent read via import_texture).
+    io_surface: RwLock<io_surface::IOSurface>,
+    /// Texture dimensions (atomic for lock-free dimension checks).
+    width: AtomicU32,
+    height: AtomicU32,
+    /// Generation counter — incremented on resize so both sides detect stale textures.
+    generation: AtomicU64,
 }
 
 // SAFETY: IOSurface is a kernel-managed object safe to share across threads.
-// SharedEvent is explicitly designed for cross-queue/cross-thread use.
-// Both are refcounted Obj-C objects.
 unsafe impl Send for SharedTextureBridge {}
 unsafe impl Sync for SharedTextureBridge {}
 
@@ -51,26 +46,19 @@ const PIXEL_FORMAT_RGBA16_FLOAT: i32 = 0x52476841u32 as i32;
 
 impl SharedTextureBridge {
     /// Create a new IOSurface bridge at the given dimensions.
-    ///
-    /// `raw_device` must be the underlying MTLDevice shared by both wgpu Devices
-    /// (obtained via `device.as_hal::<Metal>()` → `raw_device()`).
-    pub fn new(raw_device: &metal::DeviceRef, width: u32, height: u32) -> Self {
+    pub fn new(width: u32, height: u32) -> Self {
         let io_surface = Self::create_io_surface(width, height);
-        let shared_event = raw_device.new_shared_event();
 
         log::info!(
             "[SharedTextureBridge] created IOSurface {}x{} Rgba16Float ({} bytes)",
-            width,
-            height,
-            width * height * BPP,
+            width, height, width * height * BPP,
         );
 
         Self {
-            io_surface,
-            shared_event,
-            frame_counter: AtomicU64::new(0),
-            width,
-            height,
+            io_surface: RwLock::new(io_surface),
+            width: AtomicU32::new(width),
+            height: AtomicU32::new(height),
+            generation: AtomicU64::new(0),
         }
     }
 
@@ -119,6 +107,9 @@ impl SharedTextureBridge {
     /// # Safety
     /// `wgpu_device` must be from the same adapter (same underlying MTLDevice).
     pub unsafe fn import_texture(&self, wgpu_device: &wgpu::Device) -> wgpu::Texture {
+        let width = self.width.load(Ordering::Acquire);
+        let height = self.height.load(Ordering::Acquire);
+
         // 1. Get the raw MTLDevice from wgpu
         let hal_device_guard = wgpu_device
             .as_hal::<wgpu_hal::api::Metal>()
@@ -128,8 +119,8 @@ impl SharedTextureBridge {
         // 2. Create an MTLTextureDescriptor
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
-        descriptor.set_width(self.width as u64);
-        descriptor.set_height(self.height as u64);
+        descriptor.set_width(width as u64);
+        descriptor.set_height(height as u64);
         descriptor.set_depth(1);
         descriptor.set_mipmap_level_count(1);
         descriptor.set_sample_count(1);
@@ -142,13 +133,15 @@ impl SharedTextureBridge {
         descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
 
         // 3. Call [MTLDevice newTextureWithDescriptor:iosurface:plane:]
-        let io_surface_ref = self.io_surface.as_concrete_TypeRef();
+        let io_surface_guard = self.io_surface.read().unwrap();
+        let io_surface_ref = io_surface_guard.as_concrete_TypeRef();
         let raw_mtl_texture: *mut objc::runtime::Object = objc::msg_send![
             raw_device,
             newTextureWithDescriptor:descriptor.as_ref()
             iosurface:io_surface_ref
             plane:0usize
         ];
+        drop(io_surface_guard); // Release read lock before wgpu calls
         assert!(
             !raw_mtl_texture.is_null(),
             "newTextureWithDescriptor:iosurface:plane: failed"
@@ -165,8 +158,8 @@ impl SharedTextureBridge {
             1, // array_layers
             1, // mip_levels
             wgpu_hal::CopyExtent {
-                width: self.width,
-                height: self.height,
+                width,
+                height,
                 depth: 1,
             },
         );
@@ -177,8 +170,8 @@ impl SharedTextureBridge {
             &wgpu::TextureDescriptor {
                 label: Some("IOSurface Shared Texture"),
                 size: wgpu::Extent3d {
-                    width: self.width,
-                    height: self.height,
+                    width,
+                    height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -193,60 +186,36 @@ impl SharedTextureBridge {
         )
     }
 
-    /// Signal the shared event from the content thread's command encoder.
-    /// Call this AFTER encoding all render work, BEFORE submit.
-    ///
-    /// # Safety
-    /// `encoder` must be from the content device and about to be submitted.
-    pub unsafe fn signal_from_encoder(&self, encoder: &mut wgpu::CommandEncoder) {
-        let frame = self.frame_counter.fetch_add(1, Ordering::AcqRel) + 1;
-
-        encoder.as_hal_mut::<wgpu_hal::api::Metal, _, _>(|hal_encoder| {
-            if let Some(enc) = hal_encoder {
-                if let Some(cmd_buf) = enc.raw_command_buffer() {
-                    cmd_buf.encode_signal_event(&self.shared_event, frame);
-                }
-            }
-        });
-    }
-
-    /// Wait on the shared event from the UI thread's command encoder.
-    /// Call this BEFORE encoding any read of the shared texture.
-    ///
-    /// # Safety
-    /// `encoder` must be from the UI device.
-    pub unsafe fn wait_from_encoder(&self, encoder: &mut wgpu::CommandEncoder) {
-        let frame = self.frame_counter.load(Ordering::Acquire);
-        if frame == 0 {
-            return; // No frames rendered yet
-        }
-
-        encoder.as_hal_mut::<wgpu_hal::api::Metal, _, _>(|hal_encoder| {
-            if let Some(enc) = hal_encoder {
-                if let Some(cmd_buf) = enc.raw_command_buffer() {
-                    cmd_buf.encode_wait_for_event(&self.shared_event, frame);
-                }
-            }
-        });
-    }
-
-    /// Get the current frame counter (for UI to detect new frames).
-    pub fn frame_counter(&self) -> u64 {
-        self.frame_counter.load(Ordering::Acquire)
-    }
-
     /// Resize the bridge. Creates a new IOSurface at the new dimensions.
-    /// Both devices must re-import their textures after this call.
-    pub fn resize(&mut self, raw_device: &metal::DeviceRef, width: u32, height: u32) {
-        self.width = width;
-        self.height = height;
-        self.io_surface = Self::create_io_surface(width, height);
-        self.frame_counter.store(0, Ordering::Release);
-        self.shared_event = raw_device.new_shared_event();
+    /// Both devices must re-import their textures after this call
+    /// (detected via generation counter).
+    pub fn resize(&self, width: u32, height: u32) {
+        let new_surface = Self::create_io_surface(width, height);
+        {
+            let mut guard = self.io_surface.write().unwrap();
+            *guard = new_surface;
+        }
+        self.width.store(width, Ordering::Release);
+        self.height.store(height, Ordering::Release);
+        self.generation.fetch_add(1, Ordering::Release);
         log::info!(
             "[SharedTextureBridge] resized IOSurface to {}x{}",
-            width,
-            height,
+            width, height,
         );
+    }
+
+    /// Current dimensions.
+    pub fn width(&self) -> u32 {
+        self.width.load(Ordering::Acquire)
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height.load(Ordering::Acquire)
+    }
+
+    /// Generation counter — changes on resize. Both sides compare against
+    /// their last-seen generation to know when to re-import.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
     }
 }

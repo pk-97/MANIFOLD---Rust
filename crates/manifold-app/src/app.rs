@@ -1362,6 +1362,17 @@ impl Application {
         // the UI device reads the same GPU memory via its own imported texture.
         #[cfg(target_os = "macos")]
         {
+            // Detect bridge resize (generation changed) and re-import UI texture.
+            if let Some(ref bridge) = self.shared_texture_bridge {
+                let gen = bridge.generation();
+                if gen != self.last_bridge_frame {
+                    self.last_bridge_frame = gen;
+                    let ui_tex = unsafe { bridge.import_texture(&gpu.device) };
+                    self.ui_shared_view = Some(ui_tex.create_view(&wgpu::TextureViewDescriptor::default()));
+                    self.ui_shared_texture = Some(ui_tex);
+                    log::info!("[UI] re-imported IOSurface texture after resize (gen={})", gen);
+                }
+            }
             let view = self.ui_shared_view.clone();
             if let Some(ref v) = view {
                 self.present_all_windows(v);
@@ -1876,15 +1887,8 @@ impl ApplicationHandler for Application {
             // Both devices get their own MTLTexture backed by the same IOSurface memory.
             #[cfg(target_os = "macos")]
             {
-                let raw_device = unsafe {
-                    gpu.device
-                        .as_hal::<wgpu_hal::api::Metal>()
-                        .expect("Not Metal backend")
-                        .raw_device()
-                        .clone()
-                };
                 let bridge = crate::shared_texture::SharedTextureBridge::new(
-                    &raw_device, output_w, output_h,
+                    output_w, output_h,
                 );
                 let bridge = Arc::new(bridge);
                 // Import the IOSurface texture on the UI device

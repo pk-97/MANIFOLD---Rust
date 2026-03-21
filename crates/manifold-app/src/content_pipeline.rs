@@ -77,9 +77,12 @@ pub struct ContentPipeline {
     /// copied here; the UI device reads the same GPU memory via its own texture.
     #[cfg(target_os = "macos")]
     shared_texture: Option<wgpu::Texture>,
-    /// IOSurface bridge for signaling frame completion.
+    /// IOSurface bridge for cross-device sharing.
     #[cfg(target_os = "macos")]
     shared_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    /// Last seen bridge generation — used to detect resize and re-import.
+    #[cfg(target_os = "macos")]
+    shared_generation: u64,
 }
 
 impl ContentPipeline {
@@ -96,6 +99,8 @@ impl ContentPipeline {
             shared_texture: None,
             #[cfg(target_os = "macos")]
             shared_bridge: None,
+            #[cfg(target_os = "macos")]
+            shared_generation: 0,
         }
     }
 
@@ -257,28 +262,30 @@ impl ContentPipeline {
 
         // Copy compositor output → IOSurface shared texture (zero-copy GPU memory).
         // The UI device reads the same IOSurface memory via its own imported texture.
+        // Guard: only copy if shared texture dimensions match compositor output.
         #[cfg(target_os = "macos")]
         if let Some(ref shared_tex) = self.shared_texture {
-            let shared_copy_size = wgpu::Extent3d {
-                width: comp_w,
-                height: comp_h,
-                depth_or_array_layers: 1,
-            };
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: self.compositor.output_texture(),
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: shared_tex,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                shared_copy_size,
-            );
+            if shared_tex.width() == comp_w && shared_tex.height() == comp_h {
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: self.compositor.output_texture(),
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: shared_tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: comp_w,
+                        height: comp_h,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
         }
 
         // Submit all GPU work (generators + compositor + copies)
@@ -333,6 +340,13 @@ impl ContentPipeline {
                 RenderTarget::new(device, width, height, OUTPUT_FORMAT, "ContentOutput_Back"),
             ]);
             self.front_index = 0;
+        }
+        // Resize IOSurface bridge and re-import content texture
+        #[cfg(target_os = "macos")]
+        if let Some(ref bridge) = self.shared_bridge {
+            bridge.resize(width, height);
+            self.shared_texture = Some(unsafe { bridge.import_texture(device) });
+            self.shared_generation = bridge.generation();
         }
         // Update shared dimensions for UI thread
         self.shared_output.set_dimensions(width, height);
