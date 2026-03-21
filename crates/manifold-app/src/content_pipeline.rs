@@ -306,6 +306,13 @@ impl ContentPipeline {
         // Submit all GPU work (generators + compositor + copy)
         gpu.queue.submit(std::iter::once(encoder.finish()));
 
+        // Wait for GPU to finish this frame before returning. Prevents command
+        // buffer pileup that causes periodic stalls (3 frames queue, 4th blocks hard).
+        // Makes frame timing consistent: GPU-bound frames run at steady reduced FPS
+        // instead of 60-60-60-stall judder. Only blocks the content device — UI is
+        // on its own device/queue and is completely unaffected.
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+
         // Swap + update shared output view (non-macOS fallback path)
         #[cfg(not(target_os = "macos"))]
         {
