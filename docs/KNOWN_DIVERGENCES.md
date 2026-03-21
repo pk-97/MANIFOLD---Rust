@@ -200,6 +200,13 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Approved by:** Peter / task spec
 - **Files affected:** `manifold-playback/src/midi_input.rs`
 
+### [D-28] 10 effects intentionally excluded from Rust port
+- **Unity does:** Has InfiniteZoom, Datamosh, SlitScan, Corruption (stateful), FluidDistortion (complex), GradientMap, Surveillance, Redaction (simple) as post-process effects.
+- **Rust does:** These effects are not ported and not available in the effect dropdown.
+- **Why:** Intentionally excluded — not wanted in the Rust port.
+- **Approved by:** Peter / 2026-03-21
+- **Files affected:** `manifold-renderer/src/effects/`, `manifold-core/src/effect_definition_registry.rs`
+
 ---
 
 ## Add new divergences above this line.

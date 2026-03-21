@@ -177,7 +177,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         let clip_id = {
             let project = Some(&mut *self.project)?;
             let (cmd, id) = EditingService::create_clip_at_position(project, beat, layer, duration);
-            { let mut cmd = cmd; cmd.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(cmd)); }
+            { let mut cmd = cmd; cmd.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(cmd)); }
             id
         };
         // Enforce non-overlap on the newly created clip
@@ -203,7 +203,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         };
         if !overlap_cmds.is_empty() {
             if let Some(project) = Some(&mut *self.project) {
-                for mut c in overlap_cmds { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
+                for mut c in overlap_cmds { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(c)); }
             }
         }
         *self.needs_structural_sync = true;
@@ -469,10 +469,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         // Use record() not execute() — just push to undo stack.
         if commands.len() == 1 {
             let cmd = commands.into_iter().next().unwrap();
-            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(cmd));
+            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(cmd));
         } else {
             let composite = CompositeCommand::new(commands, description.to_string());
-            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(Box::new(composite)));
+            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(Box::new(composite)));
         }
         *self.needs_structural_sync = true;
     }

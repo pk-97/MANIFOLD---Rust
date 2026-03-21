@@ -5,6 +5,7 @@ pub mod layer_header;
 pub mod master_chrome;
 pub mod layer_chrome;
 pub mod clip_chrome;
+pub mod param_slider_shared;
 pub mod effect_card;
 pub mod gen_param;
 pub mod inspector;
@@ -175,8 +176,20 @@ pub enum PanelAction {
     GenEnvelopeToggle(usize),
     GenDriverConfig(usize, DriverConfigAction),
     GenEnvParamChanged(usize, EnvelopeParam, f32),
+    /// Snapshot ADSR state before drag (for undo). Unity: onEnvConfigSnapshot.
+    GenEnvParamSnapshot(usize),
+    /// Commit ADSR drag (record undo command). Unity: onEnvConfigCommit.
+    GenEnvParamCommit(usize),
     GenTrimChanged(usize, f32, f32),
+    /// Snapshot trim state before drag (for undo). Unity: onTrimSnapshot.
+    GenTrimSnapshot(usize),
+    /// Commit trim drag (record undo command). Unity: onTrimCommit.
+    GenTrimCommit(usize),
     GenTargetChanged(usize, f32),
+    /// Snapshot target state before drag (for undo). Unity: onTargetSnapshot.
+    GenTargetSnapshot(usize),
+    /// Commit target drag (record undo command). Unity: onTargetCommit.
+    GenTargetCommit(usize),
 
     // Inspector scroll
     InspectorScrolled(f32),

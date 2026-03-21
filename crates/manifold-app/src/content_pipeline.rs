@@ -12,6 +12,9 @@ use manifold_playback::engine::{PlaybackEngine, TickResult};
 
 /// Thread-safe shared output view. The content thread writes a new view
 /// after each swap; the UI thread reads it for blitting to screen.
+///
+/// Both threads share a single wgpu Device, so TextureViews created by
+/// the content thread are directly usable by the UI thread — zero copy.
 pub struct SharedOutputView {
     view: RwLock<Option<wgpu::TextureView>>,
     dimensions: RwLock<(u32, u32)>,
@@ -56,7 +59,8 @@ const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// The PlaybackEngine (which owns GeneratorRenderer) is borrowed for each frame.
 ///
 /// Double-buffered output: content writes to back buffer, swaps on completion.
-/// UI always reads from the stable front buffer via `output_view()`.
+/// UI always reads from the stable front buffer via SharedOutputView (zero copy —
+/// both threads share the same wgpu Device).
 pub struct ContentPipeline {
     compositor: Box<dyn Compositor>,
     /// Double-buffered output textures. UI reads front, content writes to back.
@@ -229,13 +233,13 @@ impl ContentPipeline {
             copy_size,
         );
 
-        // Submit all work (generators + compositor + copy)
+        // Submit all GPU work (generators + compositor + texture copy)
         gpu.queue.submit(std::iter::once(encoder.finish()));
 
         // Swap: back becomes front
         self.front_index = back_index;
 
-        // Update shared output view for the UI thread
+        // Update shared output view for the UI thread (zero copy — same device)
         let bufs = self.output_buffers.as_ref().unwrap();
         let front_view = bufs[self.front_index].texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.shared_output.set_view(front_view);

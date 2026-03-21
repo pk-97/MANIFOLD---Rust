@@ -253,9 +253,8 @@ impl TimelineInputHost for AppInputHost<'_> {
             None
         };
         let commands = EditingService::delete_clips(project, clip_ids, del_region.as_ref(), spb);
-        for mut c in commands {
-            c.execute(project);
-            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c));
+        if !commands.is_empty() {
+            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, "Delete clips".into()));
         }
         self.selection.clear_selection();
     }
@@ -309,9 +308,12 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .collect();
 
             let spb = 60.0 / project.settings.bpm.max(1.0);
-            let commands = EditingService::duplicate_clips(project, clip_ids, &region, spb);
+            let mut commands = EditingService::duplicate_clips(project, clip_ids, &region, spb);
             if !commands.is_empty() {
-                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
+                // Execute locally for read-back (need new clip IDs for selection).
+                // Phase 3 will move this to content thread with sync response.
+                for mut c in commands.iter_mut() { c.execute(project); }
+                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, "Duplicate clips".into()));
 
                 // Step 4h: find newly created clips and select them
                 let new_ids: Vec<String> = project.timeline.layers.iter()
@@ -343,7 +345,9 @@ impl TimelineInputHost for AppInputHost<'_> {
                 None
             };
             let commands = EditingService::delete_clips(project, clip_ids, region.as_ref(), spb);
-            for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
+            if !commands.is_empty() {
+                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, "Delete clips".into()));
+            }
         }
         *self.needs_structural_sync = true;
     }
@@ -354,7 +358,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 if let Some(layer) = project.timeline.layers.get(layer_index) {
                     let layer_clone = layer.clone();
                     let cmd = manifold_editing::commands::layer::DeleteLayerCommand::new(layer_clone, layer_index);
-                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(boxed)); }
+                    let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(Box::new(cmd)));
                 }
             }
         }
@@ -372,7 +376,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 }
             }
             if !commands.is_empty() {
-                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
+                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
         }
     }
@@ -381,7 +385,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if let Some(project) = Some(&mut *self.project) {
             let commands = EditingService::extend_clips_by_grid(project, clip_ids, grid_step);
             if !commands.is_empty() {
-                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
+                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
         }
     }
@@ -390,7 +394,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if let Some(project) = Some(&mut *self.project) {
             let commands = EditingService::shrink_clips_by_grid(project, clip_ids, grid_step);
             if !commands.is_empty() {
-                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
+                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
         }
     }
@@ -400,7 +404,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             let spb = 60.0 / project.settings.bpm;
             let commands = EditingService::nudge_clips(project, clip_ids, beat_delta, spb);
             if !commands.is_empty() {
-                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
+                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
         }
         *self.needs_structural_sync = true;
@@ -437,7 +441,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
             if !commands.is_empty() {
                 let _label = if new_muted { "Mute clips" } else { "Unmute clips" };
-                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
+                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
         }
         let _ = self.content_tx.try_send(crate::content_command::ContentCommand::MarkCompositorDirty);
@@ -475,9 +479,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 layers_to_group, original_order,
             );
 
-            if let Some(project) = Some(&mut *self.project) {
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(boxed)); }
-            }
+            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(Box::new(cmd)));
         }
 
         self.selection.clear_selection();
@@ -529,7 +531,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             }
 
             if !commands.is_empty() {
-                for mut c in commands { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Record(c)); }
+                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
         }
 

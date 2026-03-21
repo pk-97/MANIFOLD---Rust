@@ -96,7 +96,8 @@ pub struct Application {
 
     // Rendering
     /// Shared reference to the content pipeline's output texture.
-    /// The content thread renders to it; UI thread reads output_view().
+    /// Both threads share a single wgpu Device, so the TextureView is directly
+    /// usable by the UI thread — zero copy.
     content_pipeline_output: Option<Arc<crate::content_pipeline::SharedOutputView>>,
     blit_pipeline: Option<BlitPipeline>,
     output_blit_pipeline: Option<BlitPipeline>,
@@ -104,8 +105,6 @@ pub struct Application {
     ui_renderer: Option<UIRenderer>,
     layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
     surface_format: wgpu::TextureFormat,
-    /// Content pipeline dimensions (for aspect-correct blitting).
-    content_dimensions: (u32, u32),
 
     // UI
     ui_root: UIRoot,
@@ -204,9 +203,10 @@ impl Application {
             ui_renderer: None,
             layer_bitmap_gpu: None,
             surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
-            content_dimensions: (1920, 1080),
             ui_root: UIRoot::new(),
-            frame_timer: FrameTimer::new(60.0),
+            // UI frame rate: uncapped (120fps target, vsync limits actual present).
+            // Content thread has its own timer at project FPS — fully decoupled.
+            frame_timer: FrameTimer::new(120.0),
             frame_count: 0,
             cursor_pos: Vec2::ZERO,
             mouse_pressed: false,
@@ -387,7 +387,7 @@ impl Application {
                             let cmd = manifold_editing::commands::settings::ChangeBpmCommand::new(
                                 old_bpm, new_bpm,
                             );
-                            { let mut boxed_cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed_cmd.execute(project); self.send_content_cmd(ContentCommand::Record(boxed_cmd)); }
+                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); self.send_content_cmd(ContentCommand::Execute(boxed)); }
                         }
                     }
                     self.needs_rebuild = true;
@@ -400,10 +400,10 @@ impl Application {
                         let cmd = manifold_editing::commands::settings::ChangeFrameRateCommand::new(
                             project.settings.frame_rate, fps,
                         );
-                        { let mut boxed_cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed_cmd.execute(project); self.send_content_cmd(ContentCommand::Record(boxed_cmd)); }
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); self.send_content_cmd(ContentCommand::Execute(boxed)); }
                     }
-                    // Unity: Application.targetFrameRate = newFps
-                    self.frame_timer.set_target_fps(fps as f64);
+                    // Content thread renders at project FPS; UI always runs at display rate.
+                    self.send_content_cmd(ContentCommand::SetFrameRate(fps as f64));
                     self.needs_rebuild = true;
                 }
             }
@@ -438,7 +438,7 @@ impl Application {
                             let cmd = manifold_editing::commands::clip::ChangeClipRecordedBpmCommand::new(
                                 clip_id, old_bpm, new_bpm,
                             );
-                            { let mut boxed_cmd: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed_cmd.execute(project); self.send_content_cmd(ContentCommand::Record(boxed_cmd)); }
+                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); self.send_content_cmd(ContentCommand::Execute(boxed)); }
                         }
                     }
                 }
@@ -562,7 +562,6 @@ impl Application {
                 let w = self.local_project.settings.output_width.max(1) as u32;
                 let h = self.local_project.settings.output_height.max(1) as u32;
                 self.send_content_cmd(ContentCommand::ResizeContent(w, h));
-                self.content_dimensions = (w, h);
                 eprintln!("[PROJECT LOAD] GPU resize sent: {}x{}", w, h);
             }
 
@@ -611,8 +610,8 @@ impl Application {
             self.active_layer_index = Some(0);
             self.needs_rebuild = true;
 
-            // Sync frame timer to project's frame rate (Unity: Application.targetFrameRate)
-            self.frame_timer.set_target_fps(self.local_project.settings.frame_rate as f64);
+            // Content thread renders at project FPS; UI always runs at display rate.
+            // Don't sync UI frame timer to project FPS — that couples UI to render cadence.
 
             eprintln!("[PROJECT LOAD] total sync time: {:.1}ms (audio loading continues in background)", t_total.elapsed().as_secs_f64() * 1000.0);
         }
@@ -843,6 +842,7 @@ impl Application {
                     let inspector_dragging = self.ui_root.inspector.is_dragging();
                     // Suppress snapshots until content thread catches up after a local project load.
                     let suppressed = state.data_version < self.suppress_snapshot_until;
+
                     if !drag_active && !inspector_dragging && !suppressed {
                         self.local_project = *snapshot;
                         // Clear suppression once we've accepted a post-load snapshot
@@ -1130,7 +1130,6 @@ impl Application {
             });
             if let Some((w, h)) = dims {
                 self.send_content_cmd(ContentCommand::ResizeContent(w, h));
-                self.content_dimensions = (w, h);
                 log::info!("Resolution changed to {}x{}", w, h);
             }
         }
@@ -1334,16 +1333,17 @@ impl Application {
             }
         }
 
-        let _gpu = match &self.gpu {
+        let gpu = match &self.gpu {
             Some(g) => g,
             None => return,
         };
-        // Content rendering now happens on the content thread.
-        // Read the shared output view for presentation.
-        if let Some(ref shared_output) = self.content_pipeline_output {
-            if let Some(output_view) = shared_output.get_view() {
-                self.present_all_windows(&output_view);
-            }
+
+        // Present using SharedOutputView (zero copy — same device as content thread).
+        // Content thread swaps the front buffer atomically after each render.
+        let compositor_view = self.content_pipeline_output.as_ref()
+            .and_then(|shared| shared.get_view());
+        if let Some(ref view) = compositor_view {
+            self.present_all_windows(view);
         }
 
         self.frame_count += 1;
@@ -1819,33 +1819,6 @@ impl ApplicationHandler for Application {
             // Create layer bitmap GPU (textured quad pipeline for per-layer bitmaps)
             self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(&device, format));
 
-            // Create generator renderer and compositor at project resolution
-            let output_w = self.local_project.settings.output_width.max(1) as u32;
-            let output_h = self.local_project.settings.output_height.max(1) as u32;
-            let compositor_format = wgpu::TextureFormat::Rgba16Float;
-
-            // Create engine with real GeneratorRenderer
-            let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
-                Box::new(StubRenderer::new_video()),
-                Box::new(GeneratorRenderer::new(
-                    Arc::clone(&device),
-                    output_w,
-                    output_h,
-                    compositor_format,
-                    8,
-                )),
-            ];
-            let mut engine = PlaybackEngine::new(renderers);
-            engine.initialize(self.local_project.clone());
-
-            // Create content pipeline with compositor
-            let content_pipeline = crate::content_pipeline::ContentPipeline::new(
-                Box::new(LayerCompositor::new(&device, &queue, output_w, output_h)),
-            );
-            self.content_pipeline_output = Some(content_pipeline.shared_output());
-            self.content_dimensions = (output_w, output_h);
-            eprintln!("[GPU INIT] generator/compositor resolution: {}x{}", output_w, output_h);
-
             GpuContext {
                 instance,
                 adapter,
@@ -1854,12 +1827,13 @@ impl ApplicationHandler for Application {
             }
         };
 
-        // Spawn content thread
+        // Spawn content thread — shares the same GPU device (Arc<Device>, Arc<Queue>).
+        // Both threads submit to the same queue. The content thread's output textures
+        // are directly readable by the UI thread via SharedOutputView — zero copy.
         {
             let (cmd_tx, cmd_rx) = crossbeam_channel::bounded::<ContentCommand>(64);
             let (state_tx, state_rx) = crossbeam_channel::bounded::<ContentState>(4);
 
-            // Create engine and editing service for content thread
             let output_w = self.local_project.settings.output_width.max(1) as u32;
             let output_h = self.local_project.settings.output_height.max(1) as u32;
             let compositor_format = wgpu::TextureFormat::Rgba16Float;
@@ -1881,7 +1855,6 @@ impl ApplicationHandler for Application {
                 Box::new(LayerCompositor::new(&gpu.device, &gpu.queue, output_w, output_h)),
             );
             self.content_pipeline_output = Some(content_pipeline.shared_output());
-            self.content_dimensions = (output_w, output_h);
 
             let audio_sync = match ImportedAudioSyncController::new() {
                 Ok(ctrl) => Some(ctrl),
@@ -1931,7 +1904,7 @@ impl ApplicationHandler for Application {
             self.content_tx = Some(cmd_tx);
             self.state_rx = Some(state_rx);
             self.content_thread_handle = Some(handle);
-            log::info!("[ContentThread] spawned");
+            log::info!("[ContentThread] spawned (shared device)");
         }
 
         self.gpu = Some(gpu);
@@ -2048,8 +2021,8 @@ impl ApplicationHandler for Application {
                         // Route hover through InteractionOverlay (port of Unity OnPointerMove).
                         // This handles: CursorBeat/CursorLayerIndex tracking, per-layer bitmap
                         // invalidation on hover change, and cursor shape feedback.
-                        {
-                            let content_tx = self.content_tx.as_ref().unwrap();
+                        if let Some(content_tx) = self.content_tx.as_ref() {
+                            let content_tx = content_tx;
                             let mut host = crate::editing_host::AppEditingHost::new(
                                 &mut self.local_project,
                                 content_tx,

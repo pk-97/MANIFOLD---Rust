@@ -3,14 +3,9 @@ use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
 use super::{PanelAction, DriverConfigAction, EnvelopeParam};
+use super::param_slider_shared::*;
 
-// ── Layout constants (from GenParamBitmapPanel.cs) ────────────────
-
-const ROW_HEIGHT: f32 = 20.0;
-const ROW_SPACING: f32 = 2.0;
-const PADDING: f32 = 4.0;
-const GAP: f32 = 4.0;
-const FONT_SIZE: u16 = 10;
+// ── Layout constants unique to GenParamPanel ────────────────────
 
 const GEN_TYPE_ROW_H: f32 = 22.0;
 const SECTION_LABEL_H: f32 = 18.0;
@@ -18,36 +13,7 @@ const DIVIDER_H: f32 = 1.0;
 const TOGGLE_BTN_W: f32 = 40.0;
 const TOGGLE_BTN_H: f32 = 16.0;
 
-const DE_BUTTON_SIZE: f32 = 20.0;
-const DE_BUTTON_GAP: f32 = 2.0;
-
-const DRIVER_CONFIG_HEIGHT: f32 = 52.0;
-const DRIVER_ROW_HEIGHT: f32 = 22.0;
-const BEAT_DIV_BTN_W: f32 = 27.0;
-const BEAT_DIV_SPACING: f32 = 1.0;
-const WAVE_BTN_W: f32 = 30.0;
-const DRIVER_PAD_H: f32 = 5.0;
-const BEAT_DIV_COUNT: usize = 11;
-const WAVEFORM_COUNT: usize = 5;
-
-const ENV_CONFIG_HEIGHT: f32 = 55.0;
-const ENV_ROW_HEIGHT: f32 = 22.0;
-const ENV_LABEL_W: f32 = 17.0;
-const ENV_PAD_H: f32 = 5.0;
-
-const TRIM_BAR_W: f32 = 4.0;
-const TARGET_BAR_W: f32 = 6.0;
-const OVERLAY_INSET: f32 = 1.0;
-
-const ENV_ADR_MAX: f32 = 8.0;
-const ENV_S_MAX: f32 = 1.0;
-
 const CHANGE_BTN_W: f32 = 100.0;
-
-const BEAT_DIV_LABELS: [&str; BEAT_DIV_COUNT] = [
-    "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8", "16", "32", "64",
-];
-const WAVEFORM_LABELS: [&str; WAVEFORM_COUNT] = ["Sin", "Tri", "Saw", "Sqr", "Rnd"];
 
 // ── Panel-specific colors (imported from color module) ───────────
 
@@ -90,40 +56,16 @@ pub struct GenParamConfig {
 }
 
 /// Per-parameter expansion state for generator params.
+/// Wraps ParamModState for shared modulation state.
 pub struct GenParamState {
-    pub driver_expanded: Vec<bool>,
-    pub envelope_expanded: Vec<bool>,
-    pub trim_min: Vec<f32>,
-    pub trim_max: Vec<f32>,
-    pub target_norm: Vec<f32>,
-    pub env_attack: Vec<f32>,
-    pub env_decay: Vec<f32>,
-    pub env_sustain: Vec<f32>,
-    pub env_release: Vec<f32>,
-    pub driver_beat_div_idx: Vec<i32>,
-    pub driver_waveform_idx: Vec<i32>,
-    pub driver_reversed: Vec<bool>,
-    pub driver_dotted: Vec<bool>,
-    pub driver_triplet: Vec<bool>,
+    /// Shared per-param modulation state (driver/envelope expansion, trim, target, ADSR, driver config).
+    pub mod_state: ParamModState,
 }
 
 impl GenParamState {
     pub fn new(param_count: usize) -> Self {
         Self {
-            driver_expanded: vec![false; param_count],
-            envelope_expanded: vec![false; param_count],
-            trim_min: vec![0.0; param_count],
-            trim_max: vec![1.0; param_count],
-            target_norm: vec![0.5; param_count],
-            env_attack: vec![0.1; param_count],
-            env_decay: vec![0.3; param_count],
-            env_sustain: vec![0.7; param_count],
-            env_release: vec![0.5; param_count],
-            driver_beat_div_idx: vec![-1; param_count],
-            driver_waveform_idx: vec![-1; param_count],
-            driver_reversed: vec![false; param_count],
-            driver_dotted: vec![false; param_count],
-            driver_triplet: vec![false; param_count],
+            mod_state: ParamModState::allocate(param_count),
         }
     }
 }
@@ -133,30 +75,6 @@ impl GenParamState {
 struct ToggleParamIds {
     label_id: i32,
     button_id: i32,
-}
-
-struct DriverConfigIds {
-    beat_div_btn_ids: [i32; BEAT_DIV_COUNT],
-    dot_btn_id: i32,
-    triplet_btn_id: i32,
-    wave_btn_ids: [i32; WAVEFORM_COUNT],
-    reverse_btn_id: i32,
-}
-
-struct EnvelopeConfigIds {
-    attack_slider: SliderNodeIds,
-    decay_slider: SliderNodeIds,
-    sustain_slider: SliderNodeIds,
-    release_slider: SliderNodeIds,
-}
-
-struct TrimHandleIds {
-    min_bar_id: i32,
-    max_bar_id: i32,
-}
-
-struct EnvelopeTargetIds {
-    target_bar_id: i32,
 }
 
 // ── GenParamPanel ────────────────────────────────────────────────
@@ -182,12 +100,7 @@ pub struct GenParamPanel {
     target_ids: Vec<Option<EnvelopeTargetIds>>,
 
     // Drag state
-    dragging_param: i32,
-    dragging_env_param: i32,
-    dragging_env_slot: usize,
-    dragging_trim_param: i32,
-    dragging_trim_is_min: bool,
-    dragging_target_param: i32,
+    drag: ParamDragState,
 
     // Cache
     param_cache: Vec<f32>,
@@ -214,12 +127,7 @@ impl GenParamPanel {
             envelope_config_ids: Vec::new(),
             trim_ids: Vec::new(),
             target_ids: Vec::new(),
-            dragging_param: -1,
-            dragging_env_param: -1,
-            dragging_env_slot: 0,
-            dragging_trim_param: -1,
-            dragging_trim_is_min: false,
-            dragging_target_param: -1,
+            drag: ParamDragState::new(),
             param_cache: Vec::new(),
             toggle_cache: Vec::new(),
             first_node: 0,
@@ -233,22 +141,23 @@ impl GenParamPanel {
 
         let n = config.params.len();
         self.state = GenParamState::new(n);
-        for i in 0..n {
-            self.state.driver_expanded[i] = config.driver_active.get(i).copied().unwrap_or(false);
-            self.state.envelope_expanded[i] = config.envelope_active.get(i).copied().unwrap_or(false);
-            self.state.trim_min[i] = config.trim_min.get(i).copied().unwrap_or(0.0);
-            self.state.trim_max[i] = config.trim_max.get(i).copied().unwrap_or(1.0);
-            self.state.target_norm[i] = config.target_norm.get(i).copied().unwrap_or(1.0);
-            self.state.env_attack[i] = config.env_attack.get(i).copied().unwrap_or(0.0);
-            self.state.env_decay[i] = config.env_decay.get(i).copied().unwrap_or(0.0);
-            self.state.env_sustain[i] = config.env_sustain.get(i).copied().unwrap_or(0.0);
-            self.state.env_release[i] = config.env_release.get(i).copied().unwrap_or(0.0);
-            self.state.driver_beat_div_idx[i] = config.driver_beat_div_idx.get(i).copied().unwrap_or(-1);
-            self.state.driver_waveform_idx[i] = config.driver_waveform_idx.get(i).copied().unwrap_or(-1);
-            self.state.driver_reversed[i] = config.driver_reversed.get(i).copied().unwrap_or(false);
-            self.state.driver_dotted[i] = config.driver_dotted.get(i).copied().unwrap_or(false);
-            self.state.driver_triplet[i] = config.driver_triplet.get(i).copied().unwrap_or(false);
-        }
+        self.state.mod_state.sync_from_config(
+            n,
+            &config.driver_active,
+            &config.envelope_active,
+            &config.trim_min,
+            &config.trim_max,
+            &config.target_norm,
+            &config.env_attack,
+            &config.env_decay,
+            &config.env_sustain,
+            &config.env_release,
+            &config.driver_beat_div_idx,
+            &config.driver_waveform_idx,
+            &config.driver_reversed,
+            &config.driver_dotted,
+            &config.driver_triplet,
+        );
         self.slider_ids = vec![None; n];
         self.toggle_ids = Vec::new();
         self.toggle_ids.resize_with(n, || None);
@@ -270,8 +179,7 @@ impl GenParamPanel {
     pub fn node_count(&self) -> usize { self.node_count }
     pub fn state_mut(&mut self) -> &mut GenParamState { &mut self.state }
     pub fn is_dragging(&self) -> bool {
-        self.dragging_param >= 0 || self.dragging_env_param >= 0
-            || self.dragging_trim_param >= 0 || self.dragging_target_param >= 0
+        self.drag.is_dragging()
     }
 
     pub fn compute_height(&self) -> f32 {
@@ -281,10 +189,10 @@ impl GenParamPanel {
                 h += ROW_HEIGHT + ROW_SPACING;
             } else {
                 h += ROW_HEIGHT + ROW_SPACING;
-                if self.state.driver_expanded.get(i).copied().unwrap_or(false) {
+                if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
                     h += DRIVER_CONFIG_HEIGHT;
                 }
-                if self.state.envelope_expanded.get(i).copied().unwrap_or(false) {
+                if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
                     h += ENV_CONFIG_HEIGHT;
                 }
             }
@@ -379,7 +287,7 @@ impl GenParamPanel {
                     -1, cx + content_w - TOGGLE_BTN_W,
                     cy + (ROW_HEIGHT - TOGGLE_BTN_H) * 0.5,
                     TOGGLE_BTN_W, TOGGLE_BTN_H,
-                    toggle_style(on),
+                    toggle_btn_style(on),
                     if on { "ON" } else { "OFF" },
                 ) as i32;
 
@@ -399,58 +307,20 @@ impl GenParamPanel {
                 ));
 
                 // Trim handles (if driver expanded)
-                if self.state.driver_expanded.get(i).copied().unwrap_or(false) {
+                if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
                     if let Some(ref slider) = self.slider_ids[i] {
-                        let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
-                        let tmin = self.state.trim_min.get(i).copied().unwrap_or(0.0);
-                        let tmax = self.state.trim_max.get(i).copied().unwrap_or(1.0);
-                        let min_x = slider.track_rect.x + OVERLAY_INSET + tmin * usable - TRIM_BAR_W * 0.5;
-                        let max_x = slider.track_rect.x + OVERLAY_INSET + tmax * usable - TRIM_BAR_W * 0.5;
-
-                        let min_bar_id = tree.add_button(
-                            slider.track as i32, min_x, slider.track_rect.y,
-                            TRIM_BAR_W, slider.track_rect.height,
-                            UIStyle {
-                                bg_color: color::DRIVER_ACTIVE_C32,
-                                hover_bg_color: color::TRIM_BAR_HOVER_C32,
-                                corner_radius: 1.0,
-                                ..UIStyle::default()
-                            },
-                            "",
-                        ) as i32;
-                        let max_bar_id = tree.add_button(
-                            slider.track as i32, max_x, slider.track_rect.y,
-                            TRIM_BAR_W, slider.track_rect.height,
-                            UIStyle {
-                                bg_color: color::DRIVER_ACTIVE_C32,
-                                hover_bg_color: color::TRIM_BAR_HOVER_C32,
-                                corner_radius: 1.0,
-                                ..UIStyle::default()
-                            },
-                            "",
-                        ) as i32;
-                        self.trim_ids[i] = Some(TrimHandleIds { min_bar_id, max_bar_id });
+                        self.trim_ids[i] = Some(build_trim_handles(
+                            tree, slider.track as i32, slider.track_rect, &self.state.mod_state, i,
+                        ));
                     }
                 }
 
                 // Envelope target
-                if self.state.envelope_expanded.get(i).copied().unwrap_or(false) {
+                if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
                     if let Some(ref slider) = self.slider_ids[i] {
-                        let usable = slider.track_rect.width - OVERLAY_INSET * 2.0;
-                        let norm_t = self.state.target_norm.get(i).copied().unwrap_or(0.5);
-                        let bar_x = slider.track_rect.x + OVERLAY_INSET + norm_t * usable - TARGET_BAR_W * 0.5;
-                        let target_bar_id = tree.add_button(
-                            slider.track as i32, bar_x, slider.track_rect.y - 2.0,
-                            TARGET_BAR_W, slider.track_rect.height + 4.0,
-                            UIStyle {
-                                bg_color: color::ENVELOPE_ACTIVE_C32,
-                                hover_bg_color: color::TARGET_BAR_HOVER_C32,
-                                corner_radius: 1.0,
-                                ..UIStyle::default()
-                            },
-                            "",
-                        ) as i32;
-                        self.target_ids[i] = Some(EnvelopeTargetIds { target_bar_id });
+                        self.target_ids[i] = Some(build_envelope_target(
+                            tree, slider.track as i32, slider.track_rect, &self.state.mod_state, i,
+                        ));
                     }
                 }
 
@@ -458,14 +328,14 @@ impl GenParamPanel {
                 let btn_x = cx + slider_w + DE_BUTTON_GAP;
                 let btn_y = cy + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
 
-                let env_active = self.state.envelope_expanded.get(i).copied().unwrap_or(false);
+                let env_active = self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false);
                 self.envelope_btn_ids[i] = tree.add_button(
                     -1, btn_x, btn_y, DE_BUTTON_SIZE, DE_BUTTON_SIZE,
                     de_btn_style(env_active, color::ENVELOPE_ACTIVE_C32),
                     "E",
                 ) as i32;
 
-                let drv_active = self.state.driver_expanded.get(i).copied().unwrap_or(false);
+                let drv_active = self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false);
                 self.driver_btn_ids[i] = tree.add_button(
                     -1, btn_x + DE_BUTTON_SIZE + DE_BUTTON_GAP, btn_y,
                     DE_BUTTON_SIZE, DE_BUTTON_SIZE,
@@ -476,14 +346,14 @@ impl GenParamPanel {
                 cy += ROW_HEIGHT + ROW_SPACING;
 
                 // Envelope config
-                if self.state.envelope_expanded.get(i).copied().unwrap_or(false) {
-                    self.envelope_config_ids[i] = Some(self.build_envelope_config(tree, cx, cy, slider_w, i));
+                if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
+                    self.envelope_config_ids[i] = Some(build_envelope_config(tree, -1, cx, cy, slider_w, &self.state.mod_state, i));
                     cy += ENV_CONFIG_HEIGHT;
                 }
 
                 // Driver config
-                if self.state.driver_expanded.get(i).copied().unwrap_or(false) {
-                    self.driver_config_ids[i] = Some(self.build_driver_config(tree, cx, cy, slider_w, i));
+                if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
+                    self.driver_config_ids[i] = Some(build_driver_config(tree, -1, cx, cy, slider_w, &self.state.mod_state, i, FONT_SIZE));
                     cy += DRIVER_CONFIG_HEIGHT;
                 }
             }
@@ -492,121 +362,6 @@ impl GenParamPanel {
         self.node_count = tree.count() - self.first_node;
     }
 
-    fn build_driver_config(&self, tree: &mut UITree, x: f32, y: f32, w: f32, param_idx: usize) -> DriverConfigIds {
-        let container_id = tree.add_panel(
-            -1, x, y, w, DRIVER_CONFIG_HEIGHT,
-            UIStyle { bg_color: color::CONFIG_BG_C32, corner_radius: 2.0, ..UIStyle::default() },
-        ) as i32;
-
-        let active_div = self.state.driver_beat_div_idx.get(param_idx).copied().unwrap_or(-1);
-        let active_wave = self.state.driver_waveform_idx.get(param_idx).copied().unwrap_or(-1);
-        let is_reversed = self.state.driver_reversed.get(param_idx).copied().unwrap_or(false);
-        let is_dotted = self.state.driver_dotted.get(param_idx).copied().unwrap_or(false);
-        let is_triplet = self.state.driver_triplet.get(param_idx).copied().unwrap_or(false);
-        let no_mod = !is_dotted && !is_triplet;
-
-        let mut cx = x + DRIVER_PAD_H;
-        let row1_y = y + 4.0;
-        let avail_w = w - DRIVER_PAD_H * 2.0;
-        let btn_w = (avail_w - BEAT_DIV_SPACING * (BEAT_DIV_COUNT as f32 - 1.0)) / BEAT_DIV_COUNT as f32;
-
-        let mut beat_div_btn_ids = [-1i32; BEAT_DIV_COUNT];
-        for j in 0..BEAT_DIV_COUNT {
-            let active = j as i32 == active_div && no_mod;
-            beat_div_btn_ids[j] = tree.add_button(
-                container_id, cx, row1_y, btn_w, DRIVER_ROW_HEIGHT,
-                config_btn_style(active),
-                BEAT_DIV_LABELS[j],
-            ) as i32;
-            cx += btn_w + BEAT_DIV_SPACING;
-        }
-
-        let row2_y = row1_y + DRIVER_ROW_HEIGHT + 4.0;
-        cx = x + DRIVER_PAD_H;
-
-        let dot_btn_id = tree.add_button(
-            container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
-            config_btn_style(is_dotted), ".",
-        ) as i32;
-        cx += WAVE_BTN_W + BEAT_DIV_SPACING;
-
-        let triplet_btn_id = tree.add_button(
-            container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
-            config_btn_style(is_triplet), "T",
-        ) as i32;
-        cx += WAVE_BTN_W + GAP;
-
-        let mut wave_btn_ids = [-1i32; WAVEFORM_COUNT];
-        for j in 0..WAVEFORM_COUNT {
-            let active = j as i32 == active_wave;
-            wave_btn_ids[j] = tree.add_button(
-                container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
-                config_btn_style(active), WAVEFORM_LABELS[j],
-            ) as i32;
-            cx += WAVE_BTN_W + BEAT_DIV_SPACING;
-        }
-
-        let reverse_w = 32.0;
-        let reverse_x = x + w - DRIVER_PAD_H - reverse_w;
-        let reverse_btn_id = tree.add_button(
-            container_id, reverse_x, row2_y, reverse_w, DRIVER_ROW_HEIGHT,
-            config_btn_style(is_reversed), "Rev",
-        ) as i32;
-
-        DriverConfigIds {
-            beat_div_btn_ids,
-            dot_btn_id,
-            triplet_btn_id,
-            wave_btn_ids,
-            reverse_btn_id,
-        }
-    }
-
-    fn build_envelope_config(&self, tree: &mut UITree, x: f32, y: f32, w: f32, param_idx: usize) -> EnvelopeConfigIds {
-        let container_id = tree.add_panel(
-            -1, x, y, w, ENV_CONFIG_HEIGHT,
-            UIStyle { bg_color: color::CONFIG_BG_C32, corner_radius: 2.0, ..UIStyle::default() },
-        ) as i32;
-
-        let half_w = (w - ENV_PAD_H * 2.0 - GAP) * 0.5;
-        let sx = x + ENV_PAD_H;
-        let row1_y = y + 4.0;
-        let row2_y = row1_y + ENV_ROW_HEIGHT + 4.0;
-
-        let attack_val = self.state.env_attack.get(param_idx).copied().unwrap_or(0.1);
-        let decay_val = self.state.env_decay.get(param_idx).copied().unwrap_or(0.3);
-        let sustain_val = self.state.env_sustain.get(param_idx).copied().unwrap_or(0.7);
-        let release_val = self.state.env_release.get(param_idx).copied().unwrap_or(0.5);
-
-        let env_colors = SliderColors::envelope();
-
-        let attack_slider = BitmapSlider::build(
-            tree, container_id,
-            Rect::new(sx, row1_y, half_w, ENV_ROW_HEIGHT),
-            Some("A"), attack_val / ENV_ADR_MAX,
-            &format!("{:.2}", attack_val), &env_colors, FONT_SIZE, ENV_LABEL_W,
-        );
-        let decay_slider = BitmapSlider::build(
-            tree, container_id,
-            Rect::new(sx + half_w + GAP, row1_y, half_w, ENV_ROW_HEIGHT),
-            Some("D"), decay_val / ENV_ADR_MAX,
-            &format!("{:.2}", decay_val), &env_colors, FONT_SIZE, ENV_LABEL_W,
-        );
-        let sustain_slider = BitmapSlider::build(
-            tree, container_id,
-            Rect::new(sx, row2_y, half_w, ENV_ROW_HEIGHT),
-            Some("S"), sustain_val / ENV_S_MAX,
-            &format!("{:.2}", sustain_val), &env_colors, FONT_SIZE, ENV_LABEL_W,
-        );
-        let release_slider = BitmapSlider::build(
-            tree, container_id,
-            Rect::new(sx + half_w + GAP, row2_y, half_w, ENV_ROW_HEIGHT),
-            Some("R"), release_val / ENV_ADR_MAX,
-            &format!("{:.2}", release_val), &env_colors, FONT_SIZE, ENV_LABEL_W,
-        );
-
-        EnvelopeConfigIds { attack_slider, decay_slider, sustain_slider, release_slider }
-    }
 
     // ── Sync methods ─────────────────────────────────────────────
 
@@ -618,7 +373,7 @@ impl GenParamPanel {
                 if on != self.toggle_cache[i] {
                     self.toggle_cache[i] = on;
                     if let Some(ref ids) = self.toggle_ids[i] {
-                        tree.set_style(ids.button_id as u32, toggle_style(on));
+                        tree.set_style(ids.button_id as u32, toggle_btn_style(on));
                         tree.set_text(ids.button_id as u32, if on { "ON" } else { "OFF" });
                     }
                 }
@@ -673,18 +428,15 @@ impl GenParamPanel {
         }
 
         // Driver config buttons
-        for (pi, cfg) in self.driver_config_ids.iter().enumerate() {
-            if let Some(ref c) = cfg {
-                for (j, &bid) in c.beat_div_btn_ids.iter().enumerate() {
-                    if id == bid { return vec![PanelAction::GenDriverConfig(pi, DriverConfigAction::BeatDiv(j))]; }
-                }
-                if id == c.dot_btn_id { return vec![PanelAction::GenDriverConfig(pi, DriverConfigAction::Dot)]; }
-                if id == c.triplet_btn_id { return vec![PanelAction::GenDriverConfig(pi, DriverConfigAction::Triplet)]; }
-                for (j, &wid) in c.wave_btn_ids.iter().enumerate() {
-                    if id == wid { return vec![PanelAction::GenDriverConfig(pi, DriverConfigAction::Wave(j))]; }
-                }
-                if id == c.reverse_btn_id { return vec![PanelAction::GenDriverConfig(pi, DriverConfigAction::Reverse)]; }
-            }
+        if let Some((pi, result)) = check_driver_config_click(id, &self.driver_config_ids) {
+            let action = match result {
+                DriverClickResult::BeatDiv(j) => DriverConfigAction::BeatDiv(j),
+                DriverClickResult::Dot => DriverConfigAction::Dot,
+                DriverClickResult::Triplet => DriverConfigAction::Triplet,
+                DriverClickResult::Wave(j) => DriverConfigAction::Wave(j),
+                DriverClickResult::Reverse => DriverConfigAction::Reverse,
+            };
+            return vec![PanelAction::GenDriverConfig(pi, action)];
         }
 
         Vec::new()
@@ -695,8 +447,8 @@ impl GenParamPanel {
         for (pi, target) in self.target_ids.iter().enumerate() {
             if let Some(ref t) = target {
                 if node_id as i32 == t.target_bar_id {
-                    self.dragging_target_param = pi as i32;
-                    return Vec::new();
+                    self.drag.dragging_target_param = pi as i32;
+                    return vec![PanelAction::GenTargetSnapshot(pi)];
                 }
             }
         }
@@ -705,14 +457,14 @@ impl GenParamPanel {
         for (pi, trim) in self.trim_ids.iter().enumerate() {
             if let Some(ref t) = trim {
                 if node_id as i32 == t.min_bar_id {
-                    self.dragging_trim_param = pi as i32;
-                    self.dragging_trim_is_min = true;
-                    return Vec::new();
+                    self.drag.dragging_trim_param = pi as i32;
+                    self.drag.dragging_trim_is_min = true;
+                    return vec![PanelAction::GenTrimSnapshot(pi)];
                 }
                 if node_id as i32 == t.max_bar_id {
-                    self.dragging_trim_param = pi as i32;
-                    self.dragging_trim_is_min = false;
-                    return Vec::new();
+                    self.drag.dragging_trim_param = pi as i32;
+                    self.drag.dragging_trim_is_min = false;
+                    return vec![PanelAction::GenTrimSnapshot(pi)];
                 }
             }
         }
@@ -728,10 +480,10 @@ impl GenParamPanel {
                 ];
                 for (slot, (slider, param, max)) in slots.iter().enumerate() {
                     if node_id == slider.track {
-                        self.dragging_env_param = pi as i32;
-                        self.dragging_env_slot = slot;
+                        self.drag.dragging_env_param = pi as i32;
+                        self.drag.dragging_env_slot = slot;
                         let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                        return vec![PanelAction::GenEnvParamChanged(pi, *param, norm * max)];
+                        return vec![PanelAction::GenEnvParamSnapshot(pi), PanelAction::GenEnvParamChanged(pi, *param, norm * max)];
                     }
                 }
             }
@@ -742,7 +494,7 @@ impl GenParamPanel {
             if self.param_info.get(pi).map(|i| i.is_toggle).unwrap_or(false) { continue; }
             if let Some(ref ids) = slider {
                 if node_id == ids.track {
-                    self.dragging_param = pi as i32;
+                    self.drag.dragging_param = pi as i32;
                     let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                     let info = &self.param_info[pi];
                     let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
@@ -760,38 +512,38 @@ impl GenParamPanel {
 
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         // Target bar drag
-        if self.dragging_target_param >= 0 {
-            let pi = self.dragging_target_param as usize;
+        if self.drag.dragging_target_param >= 0 {
+            let pi = self.drag.dragging_target_param as usize;
             if let Some(ref slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                if let Some(v) = self.state.target_norm.get_mut(pi) { *v = norm; }
+                if let Some(v) = self.state.mod_state.target_norm.get_mut(pi) { *v = norm; }
                 return vec![PanelAction::GenTargetChanged(pi, norm)];
             }
         }
 
         // Trim bar drag
-        if self.dragging_trim_param >= 0 {
-            let pi = self.dragging_trim_param as usize;
+        if self.drag.dragging_trim_param >= 0 {
+            let pi = self.drag.dragging_trim_param as usize;
             if let Some(ref slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                let tmin = self.state.trim_min.get(pi).copied().unwrap_or(0.0);
-                let tmax = self.state.trim_max.get(pi).copied().unwrap_or(1.0);
-                let (new_min, new_max) = if self.dragging_trim_is_min {
+                let tmin = self.state.mod_state.trim_min.get(pi).copied().unwrap_or(0.0);
+                let tmax = self.state.mod_state.trim_max.get(pi).copied().unwrap_or(1.0);
+                let (new_min, new_max) = if self.drag.dragging_trim_is_min {
                     (norm.min(tmax), tmax)
                 } else {
                     (tmin, norm.max(tmin))
                 };
-                if let Some(v) = self.state.trim_min.get_mut(pi) { *v = new_min; }
-                if let Some(v) = self.state.trim_max.get_mut(pi) { *v = new_max; }
+                if let Some(v) = self.state.mod_state.trim_min.get_mut(pi) { *v = new_min; }
+                if let Some(v) = self.state.mod_state.trim_max.get_mut(pi) { *v = new_max; }
                 return vec![PanelAction::GenTrimChanged(pi, new_min, new_max)];
             }
         }
 
         // ADSR drag
-        if self.dragging_env_param >= 0 {
-            let pi = self.dragging_env_param as usize;
+        if self.drag.dragging_env_param >= 0 {
+            let pi = self.drag.dragging_env_param as usize;
             if let Some(ref cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref()) {
-                let (slider, param, max) = match self.dragging_env_slot {
+                let (slider, param, max) = match self.drag.dragging_env_slot {
                     0 => (&cfg.attack_slider, EnvelopeParam::Attack, ENV_ADR_MAX),
                     1 => (&cfg.decay_slider, EnvelopeParam::Decay, ENV_ADR_MAX),
                     2 => (&cfg.sustain_slider, EnvelopeParam::Sustain, ENV_S_MAX),
@@ -806,8 +558,8 @@ impl GenParamPanel {
         }
 
         // Param slider drag
-        if self.dragging_param >= 0 {
-            let pi = self.dragging_param as usize;
+        if self.drag.dragging_param >= 0 {
+            let pi = self.drag.dragging_param as usize;
             if let Some(ref ids) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let info = &self.param_info[pi];
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
@@ -824,12 +576,24 @@ impl GenParamPanel {
     }
 
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
-        if self.dragging_target_param >= 0 { self.dragging_target_param = -1; return Vec::new(); }
-        if self.dragging_trim_param >= 0 { self.dragging_trim_param = -1; return Vec::new(); }
-        if self.dragging_env_param >= 0 { self.dragging_env_param = -1; return Vec::new(); }
-        if self.dragging_param >= 0 {
-            let pi = self.dragging_param as usize;
-            self.dragging_param = -1;
+        if self.drag.dragging_target_param >= 0 {
+            let pi = self.drag.dragging_target_param as usize;
+            self.drag.dragging_target_param = -1;
+            return vec![PanelAction::GenTargetCommit(pi)];
+        }
+        if self.drag.dragging_trim_param >= 0 {
+            let pi = self.drag.dragging_trim_param as usize;
+            self.drag.dragging_trim_param = -1;
+            return vec![PanelAction::GenTrimCommit(pi)];
+        }
+        if self.drag.dragging_env_param >= 0 {
+            let pi = self.drag.dragging_env_param as usize;
+            self.drag.dragging_env_param = -1;
+            return vec![PanelAction::GenEnvParamCommit(pi)];
+        }
+        if self.drag.dragging_param >= 0 {
+            let pi = self.drag.dragging_param as usize;
+            self.drag.dragging_param = -1;
             return vec![PanelAction::GenParamCommit(pi)];
         }
         Vec::new()
@@ -851,106 +615,6 @@ impl GenParamPanel {
 
 impl Default for GenParamPanel {
     fn default() -> Self { Self::new() }
-}
-
-// ── Helpers ──────────────────────────────────────────────────────
-
-fn format_param_value(val: f32, whole_numbers: bool, value_labels: Option<&[String]>) -> String {
-    if let Some(labels) = value_labels {
-        let idx = (val.round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
-        return labels[idx].clone();
-    }
-    if whole_numbers { format!("{}", val.round() as i32) } else { format!("{:.2}", val) }
-}
-
-fn toggle_style(on: bool) -> UIStyle {
-    if on {
-        UIStyle {
-            bg_color: color::ACCENT_BLUE_C32,
-            hover_bg_color: color::ACCENT_BLUE_HOVER_C32,
-            pressed_bg_color: color::ACCENT_BLUE_PRESS_C32,
-            text_color: color::TEXT_WHITE_C32,
-            font_size: 8,
-            font_weight: FontWeight::Bold,
-            corner_radius: color::BUTTON_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    } else {
-        UIStyle {
-            bg_color: color::BUTTON_INACTIVE_C32,
-            hover_bg_color: color::BUTTON_INACTIVE_HOVER_C32,
-            pressed_bg_color: color::BUTTON_INACTIVE_PRESS_C32,
-            text_color: color::TEXT_DIMMED_C32,
-            font_size: 8,
-            font_weight: FontWeight::Bold,
-            corner_radius: color::BUTTON_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    }
-}
-
-fn de_btn_style(active: bool, active_color: Color32) -> UIStyle {
-    if active {
-        UIStyle {
-            bg_color: active_color,
-            hover_bg_color: Color32::new(
-                active_color.r.saturating_add(20),
-                active_color.g.saturating_add(20),
-                active_color.b.saturating_add(20),
-                active_color.a,
-            ),
-            pressed_bg_color: Color32::new(
-                active_color.r.saturating_sub(10),
-                active_color.g.saturating_sub(10),
-                active_color.b.saturating_sub(10),
-                active_color.a,
-            ),
-            text_color: color::TEXT_WHITE_C32,
-            font_size: 8,
-            corner_radius: 2.0,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    } else {
-        UIStyle {
-            bg_color: color::DRIVER_INACTIVE_C32,
-            hover_bg_color: color::DRIVER_INACTIVE_HOVER_C32,
-            pressed_bg_color: color::DRIVER_INACTIVE_PRESS_C32,
-            text_color: color::TEXT_DIMMED_C32,
-            font_size: 8,
-            corner_radius: 2.0,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    }
-}
-
-fn config_btn_style(active: bool) -> UIStyle {
-    if active {
-        UIStyle {
-            bg_color: color::DRIVER_ACTIVE_C32,
-            hover_bg_color: color::DRIVER_ACTIVE_HOVER_C32,
-            pressed_bg_color: color::DRIVER_ACTIVE_PRESS_C32,
-            text_color: color::TEXT_WHITE_C32,
-            font_size: FONT_SIZE,
-            corner_radius: 1.0,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    } else {
-        UIStyle {
-            bg_color: color::CONFIG_BTN_INACTIVE_C32,
-            hover_bg_color: color::CONFIG_BTN_HOVER_C32,
-            pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
-            text_color: color::TEXT_DIMMED_C32,
-            font_size: FONT_SIZE,
-            corner_radius: 1.0,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1041,7 +705,7 @@ mod tests {
         panel.configure(&test_config());
 
         let base_h = panel.compute_height();
-        panel.state.driver_expanded[0] = true;
+        panel.state.mod_state.driver_expanded[0] = true;
         let expanded_h = panel.compute_height();
 
         assert!(expanded_h > base_h);

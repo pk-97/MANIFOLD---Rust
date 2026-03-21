@@ -112,7 +112,7 @@ pub fn dispatch(
                 let old_points = project.tempo_map.clone_points();
                 let bpm = project.settings.bpm;
                 let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(old_points, bpm);
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
             }
             DispatchResult::handled()
         }
@@ -196,7 +196,7 @@ pub fn dispatch(
             let snapped = manifold_ui::snap::floor_beat_to_grid(*beat, grid_step);
             {
                 let (cmd, _clip_id) = EditingService::create_clip_at_position(project, snapped, *layer, 4.0);
-                { let mut cmd = cmd; cmd.execute(project); let _ = content_tx.try_send(ContentCommand::Record(cmd)); }
+                { let _ = content_tx.try_send(ContentCommand::Execute(cmd)); }
                 // Enforce non-overlap for the newly created clip
                 if let Some(new_layer) = project.timeline.layers.get(*layer) {
                     if let Some(new_clip) = new_layer.clips.last() {
@@ -207,7 +207,7 @@ pub fn dispatch(
                             project, &new_clip_clone, *layer, &ignore, spb,
                         );
                         for cmd in overlap_cmds {
-                            { let mut cmd = cmd; cmd.execute(project); let _ = content_tx.try_send(ContentCommand::Record(cmd)); }
+                            { let _ = content_tx.try_send(ContentCommand::Execute(cmd)); }
                         }
                         // Select the newly created clip
                         selection.select_clip(new_clip_clone.id, *layer);
@@ -290,7 +290,7 @@ pub fn dispatch(
                 let old = project.settings.quantize_mode;
                 let new = old.next();
                 let cmd = ChangeQuantizeModeCommand::new(old, new);
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
             }
             DispatchResult::handled()
         }
@@ -405,7 +405,7 @@ pub fn dispatch(
                     let old_mode = layer.default_blend_mode;
                     if let Some(new_mode) = BlendMode::ALL.iter().find(|m| format!("{:?}", m) == *mode_str) {
                         let cmd = ChangeLayerBlendModeCommand::new(*idx, old_mode, *new_mode);
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                     }
                 }
             }
@@ -435,7 +435,7 @@ pub fn dispatch(
             let beat = content_state.current_beat;
             {
                 let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
-                { let mut cmd = cmd; cmd.execute(project); let _ = content_tx.try_send(ContentCommand::Record(cmd)); }
+                { let _ = content_tx.try_send(ContentCommand::Execute(cmd)); }
             }
             DispatchResult::structural()
         }
@@ -443,7 +443,7 @@ pub fn dispatch(
             let beat = content_state.current_beat;
             {
                 let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
-                { let mut cmd = cmd; cmd.execute(project); let _ = content_tx.try_send(ContentCommand::Record(cmd)); }
+                { let _ = content_tx.try_send(ContentCommand::Execute(cmd)); }
             }
             DispatchResult::structural()
         }
@@ -501,7 +501,7 @@ pub fn dispatch(
                         let cmd = manifold_editing::commands::layer::ReorderLayerCommand::new(
                             old_order, new_order, old_parents, new_parents,
                         );
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                     }
                 }
             }
@@ -520,7 +520,7 @@ pub fn dispatch(
                     count,
                     None,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
             }
             DispatchResult::structural()
         }
@@ -530,7 +530,7 @@ pub fn dispatch(
                     if let Some(layer) = project.timeline.layers.get(*idx) {
                         let layer_clone = layer.clone();
                         let cmd = DeleteLayerCommand::new(layer_clone, *idx);
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                         // Fix active_layer if needed
                         if let Some(al) = active_layer {
                             if *al >= project.timeline.layers.len() {
@@ -553,6 +553,11 @@ pub fn dispatch(
         PanelAction::MasterOpacityChanged(val) => {
             {
                 project.settings.master_opacity = *val;
+                // Sync live value to content thread so GPU rendering updates during drag
+                let v = *val;
+                let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                    p.settings.master_opacity = v;
+                })));
             }
             DispatchResult::handled()
         }
@@ -562,7 +567,7 @@ pub fn dispatch(
                     let new_val = project.settings.master_opacity;
                     if (old_val - new_val).abs() > f32::EPSILON {
                         let cmd = ChangeMasterOpacityCommand::new(old_val, new_val);
-                        let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                        let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                     }
                 }
             }
@@ -582,7 +587,7 @@ pub fn dispatch(
                 if (old - 1.0).abs() > f32::EPSILON {
                     project.settings.master_opacity = 1.0;
                     let cmd = ChangeMasterOpacityCommand::new(old, 1.0);
-                    let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                    let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                 }
             }
             DispatchResult::handled()
@@ -605,6 +610,14 @@ pub fn dispatch(
                     if let Some(layer) = project.timeline.layers.get_mut(idx) {
                         layer.opacity = *val;
                     }
+                    // Sync live value to content thread so GPU rendering updates during drag
+                    let v = *val;
+                    let i = idx;
+                    let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                        if let Some(layer) = p.timeline.layers.get_mut(i) {
+                            layer.opacity = v;
+                        }
+                    })));
                 }
             }
             DispatchResult::handled()
@@ -617,7 +630,7 @@ pub fn dispatch(
                             let new_val = layer.opacity;
                             if (old_val - new_val).abs() > f32::EPSILON {
                                 let cmd = ChangeLayerOpacityCommand::new(idx, old_val, new_val);
-                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                                let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                             }
                         }
                     }
@@ -638,7 +651,7 @@ pub fn dispatch(
                         if (old - 1.0).abs() > f32::EPSILON {
                             layer.opacity = 1.0;
                             let cmd = ChangeLayerOpacityCommand::new(idx, old, 1.0);
-                            let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                            let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
                 }
@@ -665,7 +678,7 @@ pub fn dispatch(
                         let cmd = ChangeClipLoopCommand::new(
                             clip_id, old_loop, !old_loop, old_dur, old_dur,
                         );
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                     }
                 }
             }
@@ -687,6 +700,13 @@ pub fn dispatch(
                     if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
                         clip.in_point = val.max(0.0);
                     }
+                    let v = val.max(0.0);
+                    let cid = clip_id.clone();
+                    let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                        if let Some(clip) = p.timeline.find_clip_by_id_mut(&cid) {
+                            clip.in_point = v;
+                        }
+                    })));
                 }
             }
             DispatchResult::handled()
@@ -700,7 +720,7 @@ pub fn dispatch(
                             let new_val = clip.in_point;
                             if (old_val - new_val).abs() > f32::EPSILON {
                                 let cmd = SlipClipCommand::new(clip_id, old_val, new_val);
-                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                                let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                             }
                         }
                     }
@@ -724,6 +744,13 @@ pub fn dispatch(
                     if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
                         clip.loop_duration_beats = val.max(0.0);
                     }
+                    let v = val.max(0.0);
+                    let cid = clip_id.clone();
+                    let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                        if let Some(clip) = p.timeline.find_clip_by_id_mut(&cid) {
+                            clip.loop_duration_beats = v;
+                        }
+                    })));
                 }
             }
             DispatchResult::handled()
@@ -740,7 +767,7 @@ pub fn dispatch(
                                 let cmd = ChangeClipLoopCommand::new(
                                     clip_id, is_looping, is_looping, old_val, new_val,
                                 );
-                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                                let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                             }
                         }
                     }
@@ -759,7 +786,7 @@ pub fn dispatch(
                         if old.abs() > f32::EPSILON {
                             clip.in_point = 0.0;
                             let cmd = SlipClipCommand::new(clip_id, old, 0.0);
-                            let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                            let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
                 }
@@ -780,7 +807,7 @@ pub fn dispatch(
                             let cmd = ChangeClipLoopCommand::new(
                                 clip_id, is_looping, is_looping, old_dur, full_dur,
                             );
-                            let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                            let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
                 }
@@ -799,7 +826,7 @@ pub fn dispatch(
                     if let Some(fx) = effects.get(*fx_idx) {
                         let old = fx.enabled;
                         let cmd = ToggleEffectCommand::new(target, *fx_idx, old, !old);
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                     }
                 }
             }
@@ -834,7 +861,7 @@ pub fn dispatch(
                             let cmd = ChangeEffectParamCommand::new(
                                 target, *fx_idx, *param_idx, old, *default_val,
                             );
-                            let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                            let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
                 }
@@ -860,6 +887,24 @@ pub fn dispatch(
                         fx.set_base_param(*param_idx, *val);
                     }
                 }
+                // Sync live value to content thread so GPU rendering updates during drag
+                let fi = *fx_idx;
+                let pi = *param_idx;
+                let v = *val;
+                let layer_idx = *active_layer;
+                let clip_id = selection.primary_selected_clip_id.clone();
+                let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                    let effects: Option<&mut Vec<EffectInstance>> = match tab {
+                        InspectorTab::Master => Some(&mut p.settings.master_effects),
+                        InspectorTab::Layer => layer_idx.and_then(|i| p.timeline.layers.get_mut(i)).map(|l| l.effects_mut()),
+                        InspectorTab::Clip => clip_id.as_ref().and_then(|cid| p.timeline.find_clip_by_id_mut(cid).map(|c| &mut c.effects)),
+                    };
+                    if let Some(effects) = effects {
+                        if let Some(fx) = effects.get_mut(fi) {
+                            fx.set_base_param(pi, v);
+                        }
+                    }
+                })));
             }
             DispatchResult::handled()
         }
@@ -875,7 +920,7 @@ pub fn dispatch(
                             let cmd = ChangeEffectParamCommand::new(
                                 target, *fx_idx, *param_idx, old_val, new_val,
                             );
-                            let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                            let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
                 }
@@ -904,7 +949,7 @@ pub fn dispatch(
                             let cmd = ToggleDriverEnabledCommand::new(
                                 driver_target, di, old, !old,
                             );
-                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                         } else {
                             let driver = ParameterDriver {
                                 param_index: *pi as i32,
@@ -919,7 +964,7 @@ pub fn dispatch(
                                 is_paused_by_user: false,
                             };
                             let cmd = AddDriverCommand::new(driver_target, driver);
-                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                         }
                     }
                 }
@@ -1002,7 +1047,7 @@ pub fn dispatch(
                                         let cmd = ChangeDriverBeatDivCommand::new(
                                             target, di, driver.beat_division, new_div,
                                         );
-                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                                     }
                                 }
                                 DriverConfigAction::Wave(idx) => {
@@ -1010,7 +1055,7 @@ pub fn dispatch(
                                         let cmd = ChangeDriverWaveformCommand::new(
                                             target, di, driver.waveform, new_wave,
                                         );
-                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                                     }
                                 }
                                 DriverConfigAction::Dot => {
@@ -1018,7 +1063,7 @@ pub fn dispatch(
                                         let cmd = ChangeDriverBeatDivCommand::new(
                                             target, di, driver.beat_division, new_div,
                                         );
-                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                                     }
                                 }
                                 DriverConfigAction::Triplet => {
@@ -1026,14 +1071,14 @@ pub fn dispatch(
                                         let cmd = ChangeDriverBeatDivCommand::new(
                                             target, di, driver.beat_division, new_div,
                                         );
-                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                                     }
                                 }
                                 DriverConfigAction::Reverse => {
                                     let cmd = ToggleDriverReversedCommand::new(
                                         target, di, driver.reversed, !driver.reversed,
                                     );
-                                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                                 }
                             }
                         }
@@ -1045,11 +1090,11 @@ pub fn dispatch(
         PanelAction::EffectEnvParamChanged(ei, pi, param, val) => {
             // Live ADSR mutation during drag — routes via last_effect_tab.
             let tab = ui.inspector.last_effect_tab();
+            let effect_type = {
+                let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+            };
             {
-                let effect_type = {
-                    let effects = resolve_effects_ref(tab, project, *active_layer, selection);
-                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
-                };
                 if let Some(et) = effect_type {
                     let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                         InspectorTab::Layer => active_layer.and_then(|idx|
@@ -1077,6 +1122,40 @@ pub fn dispatch(
                     }
                 }
             }
+            // Sync to content thread
+            if let Some(et) = effect_type {
+                let param_i = *pi as i32;
+                let p = *param;
+                let v = *val;
+                let layer_idx = *active_layer;
+                let clip_id = selection.primary_selected_clip_id.clone();
+                let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |proj| {
+                    let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
+                        InspectorTab::Layer => layer_idx.and_then(|idx|
+                            proj.timeline.layers.get_mut(idx).map(|l| l.envelopes_mut())
+                        ),
+                        InspectorTab::Clip => clip_id.as_ref().and_then(|cid|
+                            proj.timeline.layers.iter_mut()
+                                .flat_map(|l| l.clips.iter_mut())
+                                .find(|c| c.id == *cid)
+                                .map(|c| c.envelopes_mut())
+                        ),
+                        InspectorTab::Master => None,
+                    };
+                    if let Some(envs) = envs {
+                        if let Some(env) = envs.iter_mut().find(|e|
+                            e.target_effect_type == et && e.param_index == param_i
+                        ) {
+                            match p {
+                                manifold_ui::EnvelopeParam::Attack => env.attack_beats = v,
+                                manifold_ui::EnvelopeParam::Decay => env.decay_beats = v,
+                                manifold_ui::EnvelopeParam::Sustain => env.sustain_level = v,
+                                manifold_ui::EnvelopeParam::Release => env.release_beats = v,
+                            }
+                        }
+                    }
+                })));
+            }
             DispatchResult::handled()
         }
         PanelAction::EffectTrimChanged(ei, pi, min, max) => {
@@ -1094,17 +1173,40 @@ pub fn dispatch(
                         }
                     }
                 }
+                let fi = *ei;
+                let param_i = *pi as i32;
+                let mn = *min;
+                let mx = *max;
+                let layer_idx = *active_layer;
+                let clip_id = selection.primary_selected_clip_id.clone();
+                let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                    let effects: Option<&mut Vec<EffectInstance>> = match tab {
+                        InspectorTab::Master => Some(&mut p.settings.master_effects),
+                        InspectorTab::Layer => layer_idx.and_then(|i| p.timeline.layers.get_mut(i)).map(|l| l.effects_mut()),
+                        InspectorTab::Clip => clip_id.as_ref().and_then(|cid| p.timeline.find_clip_by_id_mut(cid).map(|c| &mut c.effects)),
+                    };
+                    if let Some(effects) = effects {
+                        if let Some(fx) = effects.get_mut(fi) {
+                            if let Some(driver) = fx.drivers_mut().iter_mut()
+                                .find(|d| d.param_index == param_i)
+                            {
+                                driver.trim_min = mn;
+                                driver.trim_max = mx;
+                            }
+                        }
+                    }
+                })));
             }
             DispatchResult::handled()
         }
         PanelAction::EffectTargetChanged(ei, pi, norm) => {
             // Live target normalized mutation during drag — routes via last_effect_tab.
             let tab = ui.inspector.last_effect_tab();
+            let effect_type = {
+                let effects = resolve_effects_ref(tab, project, *active_layer, selection);
+                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+            };
             {
-                let effect_type = {
-                    let effects = resolve_effects_ref(tab, project, *active_layer, selection);
-                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
-                };
                 if let Some(et) = effect_type {
                     let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                         InspectorTab::Layer => active_layer.and_then(|idx|
@@ -1126,6 +1228,34 @@ pub fn dispatch(
                         }
                     }
                 }
+            }
+            // Sync to content thread
+            if let Some(et) = effect_type {
+                let param_i = *pi as i32;
+                let n = *norm;
+                let layer_idx = *active_layer;
+                let clip_id = selection.primary_selected_clip_id.clone();
+                let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                    let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
+                        InspectorTab::Layer => layer_idx.and_then(|idx|
+                            p.timeline.layers.get_mut(idx).map(|l| l.envelopes_mut())
+                        ),
+                        InspectorTab::Clip => clip_id.as_ref().and_then(|cid|
+                            p.timeline.layers.iter_mut()
+                                .flat_map(|l| l.clips.iter_mut())
+                                .find(|c| c.id == *cid)
+                                .map(|c| c.envelopes_mut())
+                        ),
+                        InspectorTab::Master => None,
+                    };
+                    if let Some(envs) = envs {
+                        if let Some(env) = envs.iter_mut().find(|e|
+                            e.target_effect_type == et && e.param_index == param_i
+                        ) {
+                            env.target_normalized = n;
+                        }
+                    }
+                })));
             }
             DispatchResult::handled()
         }
@@ -1163,7 +1293,7 @@ pub fn dispatch(
                             if (old_min - new_min).abs() > f32::EPSILON || (old_max - new_max).abs() > f32::EPSILON {
                                 let target = DriverTarget::Effect { effect_target, effect_index: *ei };
                                 let cmd = ChangeTrimCommand::new(target, di, old_min, old_max, new_min, new_max);
-                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                                let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                             }
                         }
                     }
@@ -1223,7 +1353,7 @@ pub fn dispatch(
                                         {
                                             if (old_target - env.target_normalized).abs() > f32::EPSILON {
                                                 let cmd = ChangeLayerEnvelopeTargetCommand::new(idx, env_idx, old_target, env.target_normalized);
-                                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                                                let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                                             }
                                         }
                                     }
@@ -1241,7 +1371,7 @@ pub fn dispatch(
                                         {
                                             if (old_target - env.target_normalized).abs() > f32::EPSILON {
                                                 let cmd = ChangeEnvelopeTargetNormalizedCommand::new(clip_id.clone(), env_idx, old_target, env.target_normalized);
-                                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                                                let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                                             }
                                         }
                                     }
@@ -1314,7 +1444,7 @@ pub fn dispatch(
                                                 || (old_s - ns).abs() > f32::EPSILON || (old_r - nr).abs() > f32::EPSILON
                                             {
                                                 let cmd = ChangeLayerEnvelopeADSRCommand::new(idx, env_idx, old_a, old_d, old_s, old_r, na, nd, ns, nr);
-                                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                                                let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                                             }
                                         }
                                     }
@@ -1335,7 +1465,7 @@ pub fn dispatch(
                                                 || (old_s - ns).abs() > f32::EPSILON || (old_r - nr).abs() > f32::EPSILON
                                             {
                                                 let cmd = ChangeEnvelopeADSRCommand::new(clip_id.clone(), env_idx, old_a, old_d, old_s, old_r, na, nd, ns, nr);
-                                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                                                let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                                             }
                                         }
                                     }
@@ -1365,7 +1495,7 @@ pub fn dispatch(
                 if let Some(effects) = effects_ref {
                     if let Some(fx) = effects.get(*fx_idx) {
                         let cmd = RemoveEffectCommand::new(target, fx.clone(), *fx_idx);
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                     }
                 }
             }
@@ -1376,7 +1506,7 @@ pub fn dispatch(
             {
                 let target = resolve_effect_target(tab, *active_layer);
                 let cmd = ReorderEffectCommand::new(target, *from_idx, *to_idx);
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
             }
             DispatchResult::structural()
         }
@@ -1406,6 +1536,17 @@ pub fn dispatch(
                             gp.set_param_base(*param_idx, *val);
                         }
                     }
+                    // Sync live value to content thread so GPU rendering updates during drag
+                    let pi = *param_idx;
+                    let v = *val;
+                    let li = layer_idx;
+                    let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                        if let Some(layer) = p.timeline.layers.get_mut(li) {
+                            if let Some(gp) = &mut layer.gen_params {
+                                gp.set_param_base(pi, v);
+                            }
+                        }
+                    })));
                 }
             }
             DispatchResult::handled()
@@ -1428,7 +1569,7 @@ pub fn dispatch(
                                     let cmd = ChangeGeneratorParamsCommand::new(
                                         layer_idx, old_params, new_params,
                                     );
-                                    let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                                    let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                                 }
                             }
                         }
@@ -1467,7 +1608,7 @@ pub fn dispatch(
                                 let cmd = ChangeGeneratorParamsCommand::new(
                                     layer_idx, old_params, new_params,
                                 );
-                                let _ = content_tx.try_send(ContentCommand::Record(Box::new(cmd)));
+                                let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                             }
                         }
                     }
@@ -1490,7 +1631,7 @@ pub fn dispatch(
                                 let cmd = ToggleDriverEnabledCommand::new(
                                     target, di, old, !old,
                                 );
-                                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                             } else {
                                 let driver = ParameterDriver {
                                     param_index: *pi as i32,
@@ -1505,7 +1646,7 @@ pub fn dispatch(
                                     is_paused_by_user: false,
                                 };
                                 let cmd = AddDriverCommand::new(target, driver);
-                                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                             }
                         }
                     }
@@ -1558,7 +1699,7 @@ pub fn dispatch(
                                             let cmd = ChangeDriverBeatDivCommand::new(
                                                 target, di, driver.beat_division, new_div,
                                             );
-                                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                                         }
                                     }
                                     DriverConfigAction::Wave(idx) => {
@@ -1566,7 +1707,7 @@ pub fn dispatch(
                                             let cmd = ChangeDriverWaveformCommand::new(
                                                 target, di, driver.waveform, new_wave,
                                             );
-                                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                                         }
                                     }
                                     DriverConfigAction::Dot => {
@@ -1574,7 +1715,7 @@ pub fn dispatch(
                                             let cmd = ChangeDriverBeatDivCommand::new(
                                                 target, di, driver.beat_division, new_div,
                                             );
-                                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                                         }
                                     }
                                     DriverConfigAction::Triplet => {
@@ -1582,14 +1723,14 @@ pub fn dispatch(
                                             let cmd = ChangeDriverBeatDivCommand::new(
                                                 target, di, driver.beat_division, new_div,
                                             );
-                                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                                            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                                         }
                                     }
                                     DriverConfigAction::Reverse => {
                                         let cmd = ToggleDriverReversedCommand::new(
                                             target, di, driver.reversed, !driver.reversed,
                                         );
-                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                                     }
                                 }
                             }
@@ -1619,6 +1760,28 @@ pub fn dispatch(
                             }
                         }
                     }
+                    let param_i = *pi as i32;
+                    let p = *param;
+                    let v = *val;
+                    let li = layer_idx;
+                    let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |proj| {
+                        if let Some(layer) = proj.timeline.layers.get_mut(li) {
+                            if let Some(gp) = &mut layer.gen_params {
+                                if let Some(envs) = &mut gp.envelopes {
+                                    if let Some(env) = envs.iter_mut()
+                                        .find(|e| e.param_index == param_i)
+                                    {
+                                        match p {
+                                            manifold_ui::EnvelopeParam::Attack => env.attack_beats = v,
+                                            manifold_ui::EnvelopeParam::Decay => env.decay_beats = v,
+                                            manifold_ui::EnvelopeParam::Sustain => env.sustain_level = v,
+                                            manifold_ui::EnvelopeParam::Release => env.release_beats = v,
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    })));
                 }
             }
             DispatchResult::handled()
@@ -1639,6 +1802,24 @@ pub fn dispatch(
                             }
                         }
                     }
+                    let param_i = *pi as i32;
+                    let mn = *min;
+                    let mx = *max;
+                    let li = layer_idx;
+                    let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                        if let Some(layer) = p.timeline.layers.get_mut(li) {
+                            if let Some(gp) = &mut layer.gen_params {
+                                if let Some(drivers) = &mut gp.drivers {
+                                    if let Some(driver) = drivers.iter_mut()
+                                        .find(|d| d.param_index == param_i)
+                                    {
+                                        driver.trim_min = mn;
+                                        driver.trim_max = mx;
+                                    }
+                                }
+                            }
+                        }
+                    })));
                 }
             }
             DispatchResult::handled()
@@ -1654,6 +1835,140 @@ pub fn dispatch(
                                     .find(|e| e.param_index == *pi as i32)
                                 {
                                     env.target_normalized = *norm;
+                                }
+                            }
+                        }
+                    }
+                    let param_i = *pi as i32;
+                    let n = *norm;
+                    let li = layer_idx;
+                    let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                        if let Some(layer) = p.timeline.layers.get_mut(li) {
+                            if let Some(gp) = &mut layer.gen_params {
+                                if let Some(envs) = &mut gp.envelopes {
+                                    if let Some(env) = envs.iter_mut()
+                                        .find(|e| e.param_index == param_i)
+                                    {
+                                        env.target_normalized = n;
+                                    }
+                                }
+                            }
+                        }
+                    })));
+                }
+            }
+            DispatchResult::handled()
+        }
+
+        // ── Generator modulation undo: snapshot/commit ──────────────
+        // Mirrors the Effect*Snapshot/Commit pattern above, but for generator params.
+        PanelAction::GenTrimSnapshot(pi) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                    if let Some(gp) = &layer.gen_params {
+                        if let Some(driver) = gp.drivers.as_ref()
+                            .and_then(|ds| ds.iter().find(|d| d.param_index == *pi as i32))
+                        {
+                            *trim_snapshot = Some((driver.trim_min, driver.trim_max));
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::GenTrimCommit(pi) => {
+            if let Some((old_min, old_max)) = trim_snapshot.take() {
+                if let Some(layer_idx) = *active_layer {
+                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                        if let Some(gp) = &layer.gen_params {
+                            if let Some(di) = gp.drivers.as_ref()
+                                .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32))
+                            {
+                                let driver = &gp.drivers.as_ref().unwrap()[di];
+                                let new_min = driver.trim_min;
+                                let new_max = driver.trim_max;
+                                if (old_min - new_min).abs() > f32::EPSILON || (old_max - new_max).abs() > f32::EPSILON {
+                                    let target = DriverTarget::GeneratorParam { layer_index: layer_idx };
+                                    let cmd = ChangeTrimCommand::new(target, di, old_min, old_max, new_min, new_max);
+                                    let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::GenTargetSnapshot(pi) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                    if let Some(gp) = &layer.gen_params {
+                        if let Some(envs) = &gp.envelopes {
+                            if let Some(env) = envs.iter().find(|e| e.param_index == *pi as i32) {
+                                *target_snapshot = Some(env.target_normalized);
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::GenTargetCommit(pi) => {
+            if let Some(old_target) = target_snapshot.take() {
+                if let Some(layer_idx) = *active_layer {
+                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                        if let Some(gp) = &layer.gen_params {
+                            if let Some(envs) = &gp.envelopes {
+                                if let Some(env_idx) = envs.iter().position(|e| e.param_index == *pi as i32) {
+                                    let env = &envs[env_idx];
+                                    if (old_target - env.target_normalized).abs() > f32::EPSILON {
+                                        let cmd = ChangeLayerEnvelopeTargetCommand::new(
+                                            layer_idx, env_idx, old_target, env.target_normalized,
+                                        );
+                                        let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::GenEnvParamSnapshot(pi) => {
+            if let Some(layer_idx) = *active_layer {
+                if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                    if let Some(gp) = &layer.gen_params {
+                        if let Some(envs) = &gp.envelopes {
+                            if let Some(env) = envs.iter().find(|e| e.param_index == *pi as i32) {
+                                *adsr_snapshot = Some((env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats));
+                            }
+                        }
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::GenEnvParamCommit(pi) => {
+            if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take() {
+                if let Some(layer_idx) = *active_layer {
+                    if let Some(layer) = project.timeline.layers.get(layer_idx) {
+                        if let Some(gp) = &layer.gen_params {
+                            if let Some(envs) = &gp.envelopes {
+                                if let Some(env_idx) = envs.iter().position(|e| e.param_index == *pi as i32) {
+                                    let env = &envs[env_idx];
+                                    let changed = (old_a - env.attack_beats).abs() > f32::EPSILON
+                                        || (old_d - env.decay_beats).abs() > f32::EPSILON
+                                        || (old_s - env.sustain_level).abs() > f32::EPSILON
+                                        || (old_r - env.release_beats).abs() > f32::EPSILON;
+                                    if changed {
+                                        let cmd = ChangeLayerEnvelopeADSRCommand::new(
+                                            layer_idx, env_idx,
+                                            old_a, old_d, old_s, old_r,
+                                            env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats,
+                                        );
+                                        let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
+                                    }
                                 }
                             }
                         }
@@ -1687,7 +2002,7 @@ pub fn dispatch(
                     let cmd = manifold_editing::commands::settings::ChangeLayerMidiNoteCommand::new(
                         *layer_idx, old_note, *note,
                     );
-                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                 }
             }
             DispatchResult::structural()
@@ -1697,6 +2012,13 @@ pub fn dispatch(
                 if let Some(layer) = project.timeline.layers.get_mut(*layer_idx) {
                     layer.midi_channel = *channel;
                 }
+                let li = *layer_idx;
+                let ch = *channel;
+                let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                    if let Some(layer) = p.timeline.layers.get_mut(li) {
+                        layer.midi_channel = ch;
+                    }
+                })));
             }
             DispatchResult::structural()
         }
@@ -1706,7 +2028,7 @@ pub fn dispatch(
                 let old = project.settings.resolution_preset;
                 if let Some(new) = ResolutionPreset::from_index(*preset_idx) {
                     let cmd = manifold_editing::commands::settings::ChangeResolutionCommand::new(old, new);
-                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                 }
             }
             DispatchResult::resolution()
@@ -1716,6 +2038,13 @@ pub fn dispatch(
             {
                 project.settings.output_width = *w;
                 project.settings.output_height = *h;
+                // Sync to content thread so the next snapshot doesn't revert to old dims
+                let ww = *w;
+                let hh = *h;
+                let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                    p.settings.output_width = ww;
+                    p.settings.output_height = hh;
+                })));
             }
             DispatchResult::resolution()
         }
@@ -1767,7 +2096,7 @@ pub fn dispatch(
                 let cmd = manifold_editing::commands::effects::AddEffectCommand::new(
                     target, effect, insert_idx,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
             }
             DispatchResult::structural()
         }
@@ -1788,7 +2117,7 @@ pub fn dispatch(
                         let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
                             *layer_idx, old_type, new_type, old_params, old_drivers, old_envelopes,
                         );
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                     }
                 }
             }
@@ -1806,7 +2135,7 @@ pub fn dispatch(
             {
                 let spb = 60.0 / project.settings.bpm;
                 if let Some(cmd) = EditingService::split_clip_at_beat(project, clip_id, beat, spb) {
-                    { let mut cmd = cmd; cmd.execute(project); let _ = content_tx.try_send(ContentCommand::Record(cmd)); }
+                    { let _ = content_tx.try_send(ContentCommand::Execute(cmd)); }
                 }
             }
             DispatchResult::structural()
@@ -1815,7 +2144,7 @@ pub fn dispatch(
             {
                 let commands = EditingService::delete_clips(project, &[clip_id.clone()], None, 0.0);
                 if !commands.is_empty() {
-                    for mut c in commands { c.execute(project); let _ = content_tx.try_send(ContentCommand::Record(c)); }
+                    for c in commands { let _ = content_tx.try_send(ContentCommand::Execute(c)); }
                 }
             }
             selection.selected_clip_ids.remove(clip_id);
@@ -1833,7 +2162,7 @@ pub fn dispatch(
                 let spb = 60.0 / project.settings.bpm.max(1.0);
                 let commands = EditingService::duplicate_clips(project, &[clip_id.clone()], &region, spb);
                 if !commands.is_empty() {
-                    for mut c in commands { c.execute(project); let _ = content_tx.try_send(ContentCommand::Record(c)); }
+                    for c in commands { let _ = content_tx.try_send(ContentCommand::Execute(c)); }
                 }
             }
             DispatchResult::structural()
@@ -1845,7 +2174,7 @@ pub fn dispatch(
                 // TODO: browser paste not yet wired
                 let result = manifold_editing::service::PasteResult { commands: Vec::new(), pasted_clip_ids: Vec::new(), skip_reason: None, skipped_count: 0 };
                 if !result.commands.is_empty() {
-                    for mut c in result.commands { c.execute(project); let _ = content_tx.try_send(ContentCommand::Record(c)); }
+                    for c in result.commands { let _ = content_tx.try_send(ContentCommand::Execute(c)); }
                     selection.selected_clip_ids.clear();
                     for id in result.pasted_clip_ids {
                         selection.selected_clip_ids.insert(id);
@@ -1867,7 +2196,7 @@ pub fn dispatch(
                     idx,
                     None,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
             }
             DispatchResult::structural()
         }
@@ -1882,7 +2211,7 @@ pub fn dispatch(
                     idx,
                     None,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
             }
             DispatchResult::structural()
         }
@@ -1893,7 +2222,7 @@ pub fn dispatch(
                 if project.timeline.layers.len() > 1 && idx < project.timeline.layers.len() {
                     let layer = project.timeline.layers[idx].clone();
                     let cmd = DeleteLayerCommand::new(layer, idx);
-                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Record(boxed)); }
+                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
                 }
             }
             DispatchResult::structural()

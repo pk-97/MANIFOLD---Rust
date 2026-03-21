@@ -28,9 +28,30 @@ impl GpuContext {
 
         log::info!("GPU adapter: {:?}", adapter.get_info().name);
 
-        let (device, queue) = adapter
+        let (device, queue) = Self::create_device_from_adapter(&adapter, "MANIFOLD Device").await;
+
+        Self { instance, adapter, device: Arc::new(device), queue: Arc::new(queue) }
+    }
+
+    /// Request an additional device from the same adapter.
+    /// Used to create a separate device+queue for the content thread so
+    /// heavy GPU compute cannot block UI rendering.
+    pub async fn create_secondary_device(&self, label: &str) -> GpuDevice {
+        let (device, queue) = Self::create_device_from_adapter(&self.adapter, label).await;
+        log::info!("Created secondary GPU device: {}", label);
+        GpuDevice {
+            device: Arc::new(device),
+            queue: Arc::new(queue),
+        }
+    }
+
+    async fn create_device_from_adapter(
+        adapter: &wgpu::Adapter,
+        label: &str,
+    ) -> (wgpu::Device, wgpu::Queue) {
+        adapter
             .request_device(&wgpu::DeviceDescriptor {
-                label: Some("MANIFOLD Device"),
+                label: Some(label),
                 required_features: wgpu::Features::empty(),
                 required_limits: adapter.limits(),
                 memory_hints: wgpu::MemoryHints::Performance,
@@ -38,8 +59,13 @@ impl GpuContext {
                 ..Default::default()
             })
             .await
-            .expect("Failed to create GPU device");
-
-        Self { instance, adapter, device: Arc::new(device), queue: Arc::new(queue) }
+            .expect("Failed to create GPU device")
     }
+}
+
+/// Standalone device+queue pair. Used by the content thread to isolate
+/// heavy GPU compute from the UI thread's rendering.
+pub struct GpuDevice {
+    pub device: Arc<wgpu::Device>,
+    pub queue: Arc<wgpu::Queue>,
 }

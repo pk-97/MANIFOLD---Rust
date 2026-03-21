@@ -21,8 +21,7 @@ pub enum ContentCommand {
 
     // ── Editing (commands cross thread boundary) ───────────────────
     Execute(Box<dyn Command + Send>),
-    ExecuteBatch(Vec<Box<dyn Command + Send>>, String),
-    Record(Box<dyn Command + Send>),
+    ExecuteBatch(Vec<Box<dyn Command>>, String),
     Undo,
     Redo,
     /// Mark editing service as clean after save/load.

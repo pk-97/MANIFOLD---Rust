@@ -3,15 +3,11 @@ use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
 use crate::tree::UITree;
 use super::{PanelAction, DriverConfigAction, EnvelopeParam};
+use super::param_slider_shared::*;
 
-// ── Layout constants (from EffectCardBitmapPanel.cs) ──────────────
+// ── Layout constants unique to EffectCardPanel ──────────────────
 
 const HEADER_HEIGHT: f32 = 27.5;
-const ROW_HEIGHT: f32 = 20.0;
-const ROW_SPACING: f32 = 2.0;
-const PADDING: f32 = 4.0;
-const GAP: f32 = 4.0;
-const FONT_SIZE: u16 = 10;
 
 const DRAG_HANDLE_W: f32 = 18.0;
 const TOGGLE_W: f32 = 30.0;
@@ -24,37 +20,8 @@ const BORDER_W: f32 = 1.0;
 const CORNER_RADIUS: f32 = 4.0;
 const CARD_BOTTOM_MARGIN: f32 = 4.0;
 
-const DE_BUTTON_SIZE: f32 = 20.0;
-const DE_BUTTON_GAP: f32 = 2.0;
-
-const DRIVER_CONFIG_HEIGHT: f32 = 52.0;
-const DRIVER_ROW_HEIGHT: f32 = 22.0;
-const BEAT_DIV_BTN_W: f32 = 27.0;
-const BEAT_DIV_SPACING: f32 = 1.0;
-const WAVE_BTN_W: f32 = 30.0;
-const DRIVER_PAD_H: f32 = 5.0;
-const BEAT_DIV_COUNT: usize = 11;
-const WAVEFORM_COUNT: usize = 5;
-
-const ENV_CONFIG_HEIGHT: f32 = 55.0;
-const ENV_ROW_HEIGHT: f32 = 22.0;
-const ENV_LABEL_W: f32 = 17.0;
-const ENV_PAD_H: f32 = 5.0;
-
-const TRIM_BAR_W: f32 = 4.0;
-const TARGET_BAR_W: f32 = 6.0;
-const OVERLAY_INSET: f32 = 1.0;
-
-const ENV_ADR_MAX: f32 = 8.0;
-const ENV_S_MAX: f32 = 1.0;
-
-// ── Beat division labels ─────────────────────────────────────────
-
-const BEAT_DIV_LABELS: [&str; BEAT_DIV_COUNT] = [
-    "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8", "16", "32", "64",
-];
-
-const WAVEFORM_LABELS: [&str; WAVEFORM_COUNT] = ["Sin", "Tri", "Saw", "Sqr", "Rnd"];
+/// Font size for config buttons in effect card (effect uses 8, not FONT_SIZE=10).
+const CONFIG_BTN_FONT_SIZE: u16 = 8;
 
 // ── Data types ───────────────────────────────────────────────────
 
@@ -121,25 +88,8 @@ pub struct EffectCardState {
     pub has_drv: bool,
     /// Aggregate: any param has active envelope. Used for ENV badge.
     pub has_env: bool,
-    pub driver_expanded: Vec<bool>,
-    pub envelope_expanded: Vec<bool>,
-    pub trim_min: Vec<f32>,
-    pub trim_max: Vec<f32>,
-    pub target_norm: Vec<f32>,
-    pub env_attack: Vec<f32>,
-    pub env_decay: Vec<f32>,
-    pub env_sustain: Vec<f32>,
-    pub env_release: Vec<f32>,
-    /// Per-param driver visual state — beat division button index (0-10), -1 if no driver.
-    pub driver_beat_div_idx: Vec<i32>,
-    /// Per-param driver visual state — waveform index (0-4), -1 if no driver.
-    pub driver_waveform_idx: Vec<i32>,
-    /// Per-param driver visual state — reversed flag.
-    pub driver_reversed: Vec<bool>,
-    /// Per-param driver visual state — dotted modifier active.
-    pub driver_dotted: Vec<bool>,
-    /// Per-param driver visual state — triplet modifier active.
-    pub driver_triplet: Vec<bool>,
+    /// Shared per-param modulation state (driver/envelope expansion, trim, target, ADSR, driver config).
+    pub mod_state: ParamModState,
 }
 
 impl EffectCardState {
@@ -147,51 +97,9 @@ impl EffectCardState {
         Self {
             has_drv: false,
             has_env: false,
-            driver_expanded: vec![false; param_count],
-            envelope_expanded: vec![false; param_count],
-            trim_min: vec![0.0; param_count],
-            trim_max: vec![1.0; param_count],
-            target_norm: vec![0.5; param_count],
-            env_attack: vec![0.1; param_count],
-            env_decay: vec![0.3; param_count],
-            env_sustain: vec![0.7; param_count],
-            env_release: vec![0.5; param_count],
-            driver_beat_div_idx: vec![-1; param_count],
-            driver_waveform_idx: vec![-1; param_count],
-            driver_reversed: vec![false; param_count],
-            driver_dotted: vec![false; param_count],
-            driver_triplet: vec![false; param_count],
+            mod_state: ParamModState::allocate(param_count),
         }
     }
-}
-
-// ── Internal node ID structs ─────────────────────────────────────
-
-struct DriverConfigIds {
-    container_id: i32,
-    beat_div_btn_ids: [i32; BEAT_DIV_COUNT],
-    dot_btn_id: i32,
-    triplet_btn_id: i32,
-    wave_btn_ids: [i32; WAVEFORM_COUNT],
-    reverse_btn_id: i32,
-}
-
-struct EnvelopeConfigIds {
-    container_id: i32,
-    attack_slider: SliderNodeIds,
-    decay_slider: SliderNodeIds,
-    sustain_slider: SliderNodeIds,
-    release_slider: SliderNodeIds,
-}
-
-struct TrimHandleIds {
-    fill_id: i32,
-    min_bar_id: i32,
-    max_bar_id: i32,
-}
-
-struct EnvelopeTargetIds {
-    target_bar_id: i32,
 }
 
 // ── EffectCardPanel ──────────────────────────────────────────────
@@ -241,12 +149,7 @@ pub struct EffectCardPanel {
     target_ids: Vec<Option<EnvelopeTargetIds>>,
 
     // Drag state
-    dragging_param: i32,
-    dragging_env_param: i32,
-    dragging_env_slot: usize,
-    dragging_trim_param: i32,
-    dragging_trim_is_min: bool,
-    dragging_target_param: i32,
+    drag: ParamDragState,
 
     // Param value cache (NaN = needs sync)
     param_cache: Vec<f32>,
@@ -291,12 +194,7 @@ impl EffectCardPanel {
             envelope_config_ids: Vec::new(),
             trim_ids: Vec::new(),
             target_ids: Vec::new(),
-            dragging_param: -1,
-            dragging_env_param: -1,
-            dragging_env_slot: 0,
-            dragging_trim_param: -1,
-            dragging_trim_is_min: false,
-            dragging_target_param: -1,
+            drag: ParamDragState::new(),
             param_cache: Vec::new(),
             first_node: 0,
             node_count: 0,
@@ -321,23 +219,23 @@ impl EffectCardPanel {
         // Sync modulation state from config (Unity: SyncFromDataModel)
         self.state.has_drv = config.has_drv;
         self.state.has_env = config.has_env;
-        for i in 0..n {
-            self.state.driver_expanded[i] = config.driver_active.get(i).copied().unwrap_or(false);
-            self.state.envelope_expanded[i] = config.envelope_active.get(i).copied().unwrap_or(false);
-            self.state.trim_min[i] = config.trim_min.get(i).copied().unwrap_or(0.0);
-            self.state.trim_max[i] = config.trim_max.get(i).copied().unwrap_or(1.0);
-            self.state.target_norm[i] = config.target_norm.get(i).copied().unwrap_or(1.0);
-            self.state.env_attack[i] = config.env_attack.get(i).copied().unwrap_or(0.0);
-            self.state.env_decay[i] = config.env_decay.get(i).copied().unwrap_or(0.0);
-            self.state.env_sustain[i] = config.env_sustain.get(i).copied().unwrap_or(0.0);
-            self.state.env_release[i] = config.env_release.get(i).copied().unwrap_or(0.0);
-            // Driver visual state for button highlighting
-            self.state.driver_beat_div_idx[i] = config.driver_beat_div_idx.get(i).copied().unwrap_or(-1);
-            self.state.driver_waveform_idx[i] = config.driver_waveform_idx.get(i).copied().unwrap_or(-1);
-            self.state.driver_reversed[i] = config.driver_reversed.get(i).copied().unwrap_or(false);
-            self.state.driver_dotted[i] = config.driver_dotted.get(i).copied().unwrap_or(false);
-            self.state.driver_triplet[i] = config.driver_triplet.get(i).copied().unwrap_or(false);
-        }
+        self.state.mod_state.sync_from_config(
+            n,
+            &config.driver_active,
+            &config.envelope_active,
+            &config.trim_min,
+            &config.trim_max,
+            &config.target_norm,
+            &config.env_attack,
+            &config.env_decay,
+            &config.env_sustain,
+            &config.env_release,
+            &config.driver_beat_div_idx,
+            &config.driver_waveform_idx,
+            &config.driver_reversed,
+            &config.driver_dotted,
+            &config.driver_triplet,
+        );
         self.slider_ids = vec![None; n];
         self.driver_btn_ids = vec![-1; n];
         self.envelope_btn_ids = vec![-1; n];
@@ -358,8 +256,7 @@ impl EffectCardPanel {
     pub fn first_node(&self) -> usize { self.first_node }
     pub fn node_count(&self) -> usize { self.node_count }
     pub fn is_dragging(&self) -> bool {
-        self.dragging_param >= 0 || self.dragging_env_param >= 0
-            || self.dragging_trim_param >= 0 || self.dragging_target_param >= 0
+        self.drag.is_dragging()
     }
 
     pub fn set_selected(&mut self, selected: bool) { self.is_selected = selected; }
@@ -372,10 +269,10 @@ impl EffectCardPanel {
         if !self.is_collapsed && !self.param_info.is_empty() {
             for i in 0..self.param_info.len() {
                 h += ROW_HEIGHT + ROW_SPACING;
-                if self.state.driver_expanded.get(i).copied().unwrap_or(false) {
+                if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
                     h += DRIVER_CONFIG_HEIGHT;
                 }
-                if self.state.envelope_expanded.get(i).copied().unwrap_or(false) {
+                if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
                     h += ENV_CONFIG_HEIGHT;
                 }
             }
@@ -600,19 +497,19 @@ impl EffectCardPanel {
             ));
 
             // Trim handles (if driver expanded)
-            if self.state.driver_expanded.get(i).copied().unwrap_or(false) {
+            if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
                 if let Some(ref slider) = self.slider_ids[i] {
-                    self.trim_ids[i] = Some(self.build_trim_handles(
-                        tree, slider.track as i32, slider.track_rect, i,
+                    self.trim_ids[i] = Some(build_trim_handles(
+                        tree, slider.track as i32, slider.track_rect, &self.state.mod_state, i,
                     ));
                 }
             }
 
             // Envelope target (if envelope expanded)
-            if self.state.envelope_expanded.get(i).copied().unwrap_or(false) {
+            if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
                 if let Some(ref slider) = self.slider_ids[i] {
-                    self.target_ids[i] = Some(self.build_envelope_target(
-                        tree, slider.track as i32, slider.track_rect, i,
+                    self.target_ids[i] = Some(build_envelope_target(
+                        tree, slider.track as i32, slider.track_rect, &self.state.mod_state, i,
                     ));
                 }
             }
@@ -622,7 +519,7 @@ impl EffectCardPanel {
             let btn_y = cy + (ROW_HEIGHT - DE_BUTTON_SIZE) * 0.5;
 
             if self.supports_envelopes {
-                let env_active = self.state.envelope_expanded.get(i).copied().unwrap_or(false);
+                let env_active = self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false);
                 self.envelope_btn_ids[i] = tree.add_button(
                     parent, btn_x, btn_y, DE_BUTTON_SIZE, DE_BUTTON_SIZE,
                     de_btn_style(env_active, color::ENVELOPE_ACTIVE_C32),
@@ -630,7 +527,7 @@ impl EffectCardPanel {
                 ) as i32;
             }
 
-            let drv_active = self.state.driver_expanded.get(i).copied().unwrap_or(false);
+            let drv_active = self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false);
             let drv_btn_x = btn_x + if self.supports_envelopes { DE_BUTTON_SIZE + DE_BUTTON_GAP } else { 0.0 };
             self.driver_btn_ids[i] = tree.add_button(
                 parent, drv_btn_x, btn_y, DE_BUTTON_SIZE, DE_BUTTON_SIZE,
@@ -641,217 +538,19 @@ impl EffectCardPanel {
             cy += ROW_HEIGHT + ROW_SPACING;
 
             // Envelope config drawer
-            if self.state.envelope_expanded.get(i).copied().unwrap_or(false) {
-                self.envelope_config_ids[i] = Some(self.build_envelope_config(tree, parent, x + PADDING, cy, slider_w, i));
+            if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
+                self.envelope_config_ids[i] = Some(build_envelope_config(tree, parent, x + PADDING, cy, slider_w, &self.state.mod_state, i));
                 cy += ENV_CONFIG_HEIGHT;
             }
 
             // Driver config drawer
-            if self.state.driver_expanded.get(i).copied().unwrap_or(false) {
-                self.driver_config_ids[i] = Some(self.build_driver_config(tree, parent, x + PADDING, cy, slider_w, i));
+            if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
+                self.driver_config_ids[i] = Some(build_driver_config(tree, parent, x + PADDING, cy, slider_w, &self.state.mod_state, i, CONFIG_BTN_FONT_SIZE));
                 cy += DRIVER_CONFIG_HEIGHT;
             }
         }
     }
 
-    fn build_trim_handles(&self, tree: &mut UITree, track_parent: i32, track_rect: Rect, param_idx: usize) -> TrimHandleIds {
-        let usable = track_rect.width - OVERLAY_INSET * 2.0;
-        let tmin = self.state.trim_min.get(param_idx).copied().unwrap_or(0.0);
-        let tmax = self.state.trim_max.get(param_idx).copied().unwrap_or(1.0);
-
-        let fill_x = track_rect.x + OVERLAY_INSET + tmin * usable;
-        let fill_w = (tmax - tmin) * usable;
-        let fill_id = tree.add_panel(
-            track_parent, fill_x, track_rect.y + OVERLAY_INSET,
-            fill_w, track_rect.height - OVERLAY_INSET * 2.0,
-            UIStyle { bg_color: color::TRIM_FILL_C32, ..UIStyle::default() },
-        ) as i32;
-
-        let min_x = fill_x - TRIM_BAR_W * 0.5;
-        let min_bar_id = tree.add_button(
-            track_parent, min_x, track_rect.y, TRIM_BAR_W, track_rect.height,
-            UIStyle {
-                bg_color: color::DRIVER_ACTIVE_C32,
-                hover_bg_color: color::TRIM_BAR_HOVER_C32,
-                corner_radius: 1.0,
-                ..UIStyle::default()
-            },
-            "",
-        ) as i32;
-
-        let max_x = track_rect.x + OVERLAY_INSET + tmax * usable - TRIM_BAR_W * 0.5;
-        let max_bar_id = tree.add_button(
-            track_parent, max_x, track_rect.y, TRIM_BAR_W, track_rect.height,
-            UIStyle {
-                bg_color: color::DRIVER_ACTIVE_C32,
-                hover_bg_color: color::TRIM_BAR_HOVER_C32,
-                corner_radius: 1.0,
-                ..UIStyle::default()
-            },
-            "",
-        ) as i32;
-
-        TrimHandleIds { fill_id, min_bar_id, max_bar_id }
-    }
-
-    fn build_envelope_target(&self, tree: &mut UITree, track_parent: i32, track_rect: Rect, param_idx: usize) -> EnvelopeTargetIds {
-        let usable = track_rect.width - OVERLAY_INSET * 2.0;
-        let norm = self.state.target_norm.get(param_idx).copied().unwrap_or(0.5);
-        let bar_x = track_rect.x + OVERLAY_INSET + norm * usable - TARGET_BAR_W * 0.5;
-        let bar_h = track_rect.height + 4.0;
-        let bar_y = track_rect.y - 2.0;
-
-        let target_bar_id = tree.add_button(
-            track_parent, bar_x, bar_y, TARGET_BAR_W, bar_h,
-            UIStyle {
-                bg_color: color::ENVELOPE_ACTIVE_C32,
-                hover_bg_color: color::TARGET_BAR_HOVER_C32,
-                corner_radius: 1.0,
-                ..UIStyle::default()
-            },
-            "",
-        ) as i32;
-
-        EnvelopeTargetIds { target_bar_id }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn build_driver_config(&self, tree: &mut UITree, parent: i32, x: f32, y: f32, w: f32, param_idx: usize) -> DriverConfigIds {
-        let container_id = tree.add_panel(
-            parent, x, y, w, DRIVER_CONFIG_HEIGHT,
-            UIStyle { bg_color: color::CONFIG_BG_C32, corner_radius: 2.0, ..UIStyle::default() },
-        ) as i32;
-
-        // Read current driver state for button highlighting
-        let active_div = self.state.driver_beat_div_idx.get(param_idx).copied().unwrap_or(-1);
-        let active_wave = self.state.driver_waveform_idx.get(param_idx).copied().unwrap_or(-1);
-        let is_reversed = self.state.driver_reversed.get(param_idx).copied().unwrap_or(false);
-        let is_dotted = self.state.driver_dotted.get(param_idx).copied().unwrap_or(false);
-        let is_triplet = self.state.driver_triplet.get(param_idx).copied().unwrap_or(false);
-        // Beat div button is active when: index matches AND no dot/triplet modifier
-        let no_mod = !is_dotted && !is_triplet;
-
-        let mut cx = x + DRIVER_PAD_H;
-        let row1_y = y + 4.0;
-
-        // Beat division buttons (row 1)
-        let mut beat_div_btn_ids = [-1i32; BEAT_DIV_COUNT];
-        let avail_w = w - DRIVER_PAD_H * 2.0;
-        let btn_w = (avail_w - BEAT_DIV_SPACING * (BEAT_DIV_COUNT as f32 - 1.0)) / BEAT_DIV_COUNT as f32;
-
-        for j in 0..BEAT_DIV_COUNT {
-            let active = j as i32 == active_div && no_mod;
-            beat_div_btn_ids[j] = tree.add_button(
-                container_id, cx, row1_y, btn_w, DRIVER_ROW_HEIGHT,
-                config_btn_style(active),
-                BEAT_DIV_LABELS[j],
-            ) as i32;
-            cx += btn_w + BEAT_DIV_SPACING;
-        }
-
-        // Row 2: dot, triplet, waveforms, reverse
-        let row2_y = row1_y + DRIVER_ROW_HEIGHT + 4.0;
-        cx = x + DRIVER_PAD_H;
-
-        let dot_btn_id = tree.add_button(
-            container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
-            config_btn_style(is_dotted),
-            ".",
-        ) as i32;
-        cx += WAVE_BTN_W + BEAT_DIV_SPACING;
-
-        let triplet_btn_id = tree.add_button(
-            container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
-            config_btn_style(is_triplet),
-            "T",
-        ) as i32;
-        cx += WAVE_BTN_W + GAP;
-
-        // Waveform buttons
-        let mut wave_btn_ids = [-1i32; WAVEFORM_COUNT];
-        for j in 0..WAVEFORM_COUNT {
-            let active = j as i32 == active_wave;
-            wave_btn_ids[j] = tree.add_button(
-                container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
-                config_btn_style(active),
-                WAVEFORM_LABELS[j],
-            ) as i32;
-            cx += WAVE_BTN_W + BEAT_DIV_SPACING;
-        }
-
-        // Reverse button
-        let reverse_w = 32.0;
-        let reverse_x = x + w - DRIVER_PAD_H - reverse_w;
-        let reverse_btn_id = tree.add_button(
-            container_id, reverse_x, row2_y, reverse_w, DRIVER_ROW_HEIGHT,
-            config_btn_style(is_reversed),
-            "Rev",
-        ) as i32;
-
-        DriverConfigIds {
-            container_id,
-            beat_div_btn_ids,
-            dot_btn_id,
-            triplet_btn_id,
-            wave_btn_ids,
-            reverse_btn_id,
-        }
-    }
-
-    fn build_envelope_config(&self, tree: &mut UITree, parent: i32, x: f32, y: f32, w: f32, param_idx: usize) -> EnvelopeConfigIds {
-        let container_id = tree.add_panel(
-            parent, x, y, w, ENV_CONFIG_HEIGHT,
-            UIStyle { bg_color: color::CONFIG_BG_C32, corner_radius: 2.0, ..UIStyle::default() },
-        ) as i32;
-
-        let half_w = (w - ENV_PAD_H * 2.0 - GAP) * 0.5;
-        let sx = x + ENV_PAD_H;
-        let row1_y = y + 4.0;
-        let row2_y = row1_y + ENV_ROW_HEIGHT + 4.0;
-
-        let attack_val = self.state.env_attack.get(param_idx).copied().unwrap_or(0.1);
-        let decay_val = self.state.env_decay.get(param_idx).copied().unwrap_or(0.3);
-        let sustain_val = self.state.env_sustain.get(param_idx).copied().unwrap_or(0.7);
-        let release_val = self.state.env_release.get(param_idx).copied().unwrap_or(0.5);
-
-        let env_colors = SliderColors::envelope();
-
-        let attack_slider = BitmapSlider::build(
-            tree, container_id,
-            Rect::new(sx, row1_y, half_w, ENV_ROW_HEIGHT),
-            Some("A"), attack_val / ENV_ADR_MAX,
-            &format!("{:.2}", attack_val), &env_colors, FONT_SIZE, ENV_LABEL_W,
-        );
-
-        let decay_slider = BitmapSlider::build(
-            tree, container_id,
-            Rect::new(sx + half_w + GAP, row1_y, half_w, ENV_ROW_HEIGHT),
-            Some("D"), decay_val / ENV_ADR_MAX,
-            &format!("{:.2}", decay_val), &env_colors, FONT_SIZE, ENV_LABEL_W,
-        );
-
-        let sustain_slider = BitmapSlider::build(
-            tree, container_id,
-            Rect::new(sx, row2_y, half_w, ENV_ROW_HEIGHT),
-            Some("S"), sustain_val / ENV_S_MAX,
-            &format!("{:.2}", sustain_val), &env_colors, FONT_SIZE, ENV_LABEL_W,
-        );
-
-        let release_slider = BitmapSlider::build(
-            tree, container_id,
-            Rect::new(sx + half_w + GAP, row2_y, half_w, ENV_ROW_HEIGHT),
-            Some("R"), release_val / ENV_ADR_MAX,
-            &format!("{:.2}", release_val), &env_colors, FONT_SIZE, ENV_LABEL_W,
-        );
-
-        EnvelopeConfigIds {
-            container_id,
-            attack_slider,
-            decay_slider,
-            sustain_slider,
-            release_slider,
-        }
-    }
 
     // ── Sync methods ─────────────────────────────────────────────
 
@@ -933,18 +632,15 @@ impl EffectCardPanel {
         }
 
         // Driver config buttons
-        for (pi, cfg) in self.driver_config_ids.iter().enumerate() {
-            if let Some(ref c) = cfg {
-                for (j, &bid) in c.beat_div_btn_ids.iter().enumerate() {
-                    if id == bid { return vec![PanelAction::EffectDriverConfig(ei, pi, DriverConfigAction::BeatDiv(j))]; }
-                }
-                if id == c.dot_btn_id { return vec![PanelAction::EffectDriverConfig(ei, pi, DriverConfigAction::Dot)]; }
-                if id == c.triplet_btn_id { return vec![PanelAction::EffectDriverConfig(ei, pi, DriverConfigAction::Triplet)]; }
-                for (j, &wid) in c.wave_btn_ids.iter().enumerate() {
-                    if id == wid { return vec![PanelAction::EffectDriverConfig(ei, pi, DriverConfigAction::Wave(j))]; }
-                }
-                if id == c.reverse_btn_id { return vec![PanelAction::EffectDriverConfig(ei, pi, DriverConfigAction::Reverse)]; }
-            }
+        if let Some((pi, result)) = check_driver_config_click(id, &self.driver_config_ids) {
+            let action = match result {
+                DriverClickResult::BeatDiv(j) => DriverConfigAction::BeatDiv(j),
+                DriverClickResult::Dot => DriverConfigAction::Dot,
+                DriverClickResult::Triplet => DriverConfigAction::Triplet,
+                DriverClickResult::Wave(j) => DriverConfigAction::Wave(j),
+                DriverClickResult::Reverse => DriverConfigAction::Reverse,
+            };
+            return vec![PanelAction::EffectDriverConfig(ei, pi, action)];
         }
 
         // Card selection (any click on header bg)
@@ -962,7 +658,7 @@ impl EffectCardPanel {
         for (pi, target) in self.target_ids.iter().enumerate() {
             if let Some(ref t) = target {
                 if node_id as i32 == t.target_bar_id {
-                    self.dragging_target_param = pi as i32;
+                    self.drag.dragging_target_param = pi as i32;
                     return vec![PanelAction::EffectTargetSnapshot(ei, pi)];
                 }
             }
@@ -972,13 +668,13 @@ impl EffectCardPanel {
         for (pi, trim) in self.trim_ids.iter().enumerate() {
             if let Some(ref t) = trim {
                 if node_id as i32 == t.min_bar_id {
-                    self.dragging_trim_param = pi as i32;
-                    self.dragging_trim_is_min = true;
+                    self.drag.dragging_trim_param = pi as i32;
+                    self.drag.dragging_trim_is_min = true;
                     return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
                 }
                 if node_id as i32 == t.max_bar_id {
-                    self.dragging_trim_param = pi as i32;
-                    self.dragging_trim_is_min = false;
+                    self.drag.dragging_trim_param = pi as i32;
+                    self.drag.dragging_trim_is_min = false;
                     return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
                 }
             }
@@ -988,26 +684,26 @@ impl EffectCardPanel {
         for (pi, env_cfg) in self.envelope_config_ids.iter().enumerate() {
             if let Some(ref c) = env_cfg {
                 if node_id == c.attack_slider.track {
-                    self.dragging_env_param = pi as i32;
-                    self.dragging_env_slot = 0;
+                    self.drag.dragging_env_param = pi as i32;
+                    self.drag.dragging_env_slot = 0;
                     let norm = BitmapSlider::x_to_normalized(c.attack_slider.track_rect, pos.x);
                     return vec![PanelAction::EffectEnvParamSnapshot(ei, pi), PanelAction::EffectEnvParamChanged(ei, pi, EnvelopeParam::Attack, norm * ENV_ADR_MAX)];
                 }
                 if node_id == c.decay_slider.track {
-                    self.dragging_env_param = pi as i32;
-                    self.dragging_env_slot = 1;
+                    self.drag.dragging_env_param = pi as i32;
+                    self.drag.dragging_env_slot = 1;
                     let norm = BitmapSlider::x_to_normalized(c.decay_slider.track_rect, pos.x);
                     return vec![PanelAction::EffectEnvParamSnapshot(ei, pi), PanelAction::EffectEnvParamChanged(ei, pi, EnvelopeParam::Decay, norm * ENV_ADR_MAX)];
                 }
                 if node_id == c.sustain_slider.track {
-                    self.dragging_env_param = pi as i32;
-                    self.dragging_env_slot = 2;
+                    self.drag.dragging_env_param = pi as i32;
+                    self.drag.dragging_env_slot = 2;
                     let norm = BitmapSlider::x_to_normalized(c.sustain_slider.track_rect, pos.x);
                     return vec![PanelAction::EffectEnvParamSnapshot(ei, pi), PanelAction::EffectEnvParamChanged(ei, pi, EnvelopeParam::Sustain, norm * ENV_S_MAX)];
                 }
                 if node_id == c.release_slider.track {
-                    self.dragging_env_param = pi as i32;
-                    self.dragging_env_slot = 3;
+                    self.drag.dragging_env_param = pi as i32;
+                    self.drag.dragging_env_slot = 3;
                     let norm = BitmapSlider::x_to_normalized(c.release_slider.track_rect, pos.x);
                     return vec![PanelAction::EffectEnvParamSnapshot(ei, pi), PanelAction::EffectEnvParamChanged(ei, pi, EnvelopeParam::Release, norm * ENV_ADR_MAX)];
                 }
@@ -1030,12 +726,12 @@ impl EffectCardPanel {
                     )
                 } {
                     // If driver is expanded, check proximity to trim handles before falling through to param drag
-                    if self.state.driver_expanded.get(pi).copied().unwrap_or(false) {
+                    if self.state.mod_state.driver_expanded.get(pi).copied().unwrap_or(false) {
                         if let Some(ref trim) = self.trim_ids.get(pi).and_then(|t| t.as_ref()) {
                             let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
                             let base_x = ids.track_rect.x + OVERLAY_INSET;
-                            let tmin = self.state.trim_min.get(pi).copied().unwrap_or(0.0);
-                            let tmax = self.state.trim_max.get(pi).copied().unwrap_or(1.0);
+                            let tmin = self.state.mod_state.trim_min.get(pi).copied().unwrap_or(0.0);
+                            let tmax = self.state.mod_state.trim_max.get(pi).copied().unwrap_or(1.0);
                             let min_center = base_x + tmin * usable;
                             let max_center = base_x + tmax * usable;
                             let hit_zone = 8.0; // px proximity zone for trim handles
@@ -1044,35 +740,35 @@ impl EffectCardPanel {
                             let dist_max = (pos.x - max_center).abs();
 
                             if dist_min < hit_zone && dist_min <= dist_max {
-                                self.dragging_trim_param = pi as i32;
-                                self.dragging_trim_is_min = true;
+                                self.drag.dragging_trim_param = pi as i32;
+                                self.drag.dragging_trim_is_min = true;
                                 let _ = trim;
                                 return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
                             }
                             if dist_max < hit_zone {
-                                self.dragging_trim_param = pi as i32;
-                                self.dragging_trim_is_min = false;
+                                self.drag.dragging_trim_param = pi as i32;
+                                self.drag.dragging_trim_is_min = false;
                                 return vec![PanelAction::EffectTrimSnapshot(ei, pi)];
                             }
                         }
                     }
 
                     // If envelope is expanded, check proximity to target bar before falling through
-                    if self.state.envelope_expanded.get(pi).copied().unwrap_or(false) {
+                    if self.state.mod_state.envelope_expanded.get(pi).copied().unwrap_or(false) {
                         let usable = ids.track_rect.width - OVERLAY_INSET * 2.0;
                         let base_x = ids.track_rect.x + OVERLAY_INSET;
-                        let tgt = self.state.target_norm.get(pi).copied().unwrap_or(1.0);
+                        let tgt = self.state.mod_state.target_norm.get(pi).copied().unwrap_or(1.0);
                         let target_center = base_x + tgt * usable;
                         let hit_zone = 8.0;
 
                         if (pos.x - target_center).abs() < hit_zone {
-                            self.dragging_target_param = pi as i32;
+                            self.drag.dragging_target_param = pi as i32;
                             return vec![PanelAction::EffectTargetSnapshot(ei, pi)];
                         }
                     }
 
                     // No trim/target nearby — normal param slider drag
-                    self.dragging_param = pi as i32;
+                    self.drag.dragging_param = pi as i32;
                     let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                     let info = &self.param_info[pi];
                     let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
@@ -1092,11 +788,11 @@ impl EffectCardPanel {
         let ei = self.effect_index;
 
         // Target bar drag — update state, reposition bar node, dispatch action
-        if self.dragging_target_param >= 0 {
-            let pi = self.dragging_target_param as usize;
+        if self.drag.dragging_target_param >= 0 {
+            let pi = self.drag.dragging_target_param as usize;
             if let Some(ref slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                if let Some(ref mut state) = self.state.target_norm.get_mut(pi) {
+                if let Some(ref mut state) = self.state.mod_state.target_norm.get_mut(pi) {
                     **state = norm;
                 }
 
@@ -1117,19 +813,19 @@ impl EffectCardPanel {
         }
 
         // Trim bar drag — update state, reposition bar nodes, dispatch action
-        if self.dragging_trim_param >= 0 {
-            let pi = self.dragging_trim_param as usize;
+        if self.drag.dragging_trim_param >= 0 {
+            let pi = self.drag.dragging_trim_param as usize;
             if let Some(ref slider) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let norm = BitmapSlider::x_to_normalized(slider.track_rect, pos.x);
-                let tmin = self.state.trim_min.get(pi).copied().unwrap_or(0.0);
-                let tmax = self.state.trim_max.get(pi).copied().unwrap_or(1.0);
-                let (new_min, new_max) = if self.dragging_trim_is_min {
+                let tmin = self.state.mod_state.trim_min.get(pi).copied().unwrap_or(0.0);
+                let tmax = self.state.mod_state.trim_max.get(pi).copied().unwrap_or(1.0);
+                let (new_min, new_max) = if self.drag.dragging_trim_is_min {
                     (norm.min(tmax), tmax)
                 } else {
                     (tmin, norm.max(tmin))
                 };
-                if let Some(v) = self.state.trim_min.get_mut(pi) { *v = new_min; }
-                if let Some(v) = self.state.trim_max.get_mut(pi) { *v = new_max; }
+                if let Some(v) = self.state.mod_state.trim_min.get_mut(pi) { *v = new_min; }
+                if let Some(v) = self.state.mod_state.trim_max.get_mut(pi) { *v = new_max; }
 
                 // Visual update: reposition trim bar nodes in the tree
                 if let Some(ref t) = self.trim_ids.get(pi).and_then(|t| t.as_ref()) {
@@ -1156,10 +852,10 @@ impl EffectCardPanel {
         }
 
         // ADSR drag
-        if self.dragging_env_param >= 0 {
-            let pi = self.dragging_env_param as usize;
+        if self.drag.dragging_env_param >= 0 {
+            let pi = self.drag.dragging_env_param as usize;
             if let Some(ref cfg) = self.envelope_config_ids.get(pi).and_then(|c| c.as_ref()) {
-                let (slider, param, max) = match self.dragging_env_slot {
+                let (slider, param, max) = match self.drag.dragging_env_slot {
                     0 => (&cfg.attack_slider, EnvelopeParam::Attack, ENV_ADR_MAX),
                     1 => (&cfg.decay_slider, EnvelopeParam::Decay, ENV_ADR_MAX),
                     2 => (&cfg.sustain_slider, EnvelopeParam::Sustain, ENV_S_MAX),
@@ -1174,8 +870,8 @@ impl EffectCardPanel {
         }
 
         // Param slider drag
-        if self.dragging_param >= 0 {
-            let pi = self.dragging_param as usize;
+        if self.drag.dragging_param >= 0 {
+            let pi = self.drag.dragging_param as usize;
             if let Some(ref ids) = self.slider_ids.get(pi).and_then(|s| s.as_ref()) {
                 let info = &self.param_info[pi];
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
@@ -1194,24 +890,24 @@ impl EffectCardPanel {
     pub fn handle_drag_end(&mut self, _tree: &mut UITree) -> Vec<PanelAction> {
         let ei = self.effect_index;
 
-        if self.dragging_target_param >= 0 {
-            let pi = self.dragging_target_param as usize;
-            self.dragging_target_param = -1;
+        if self.drag.dragging_target_param >= 0 {
+            let pi = self.drag.dragging_target_param as usize;
+            self.drag.dragging_target_param = -1;
             return vec![PanelAction::EffectTargetCommit(ei, pi)];
         }
-        if self.dragging_trim_param >= 0 {
-            let pi = self.dragging_trim_param as usize;
-            self.dragging_trim_param = -1;
+        if self.drag.dragging_trim_param >= 0 {
+            let pi = self.drag.dragging_trim_param as usize;
+            self.drag.dragging_trim_param = -1;
             return vec![PanelAction::EffectTrimCommit(ei, pi)];
         }
-        if self.dragging_env_param >= 0 {
-            let pi = self.dragging_env_param as usize;
-            self.dragging_env_param = -1;
+        if self.drag.dragging_env_param >= 0 {
+            let pi = self.drag.dragging_env_param as usize;
+            self.drag.dragging_env_param = -1;
             return vec![PanelAction::EffectEnvParamCommit(ei, pi)];
         }
-        if self.dragging_param >= 0 {
-            let pi = self.dragging_param as usize;
-            self.dragging_param = -1;
+        if self.drag.dragging_param >= 0 {
+            let pi = self.drag.dragging_param as usize;
+            self.drag.dragging_param = -1;
             return vec![PanelAction::EffectParamCommit(ei, pi)];
         }
 
@@ -1234,108 +930,6 @@ impl EffectCardPanel {
 
 impl Default for EffectCardPanel {
     fn default() -> Self { Self::new() }
-}
-
-// ── Helpers ──────────────────────────────────────────────────────
-
-fn format_param_value(val: f32, whole_numbers: bool, value_labels: Option<&[String]>) -> String {
-    if let Some(labels) = value_labels {
-        let idx = (val.round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
-        return labels[idx].clone();
-    }
-    if whole_numbers { format!("{}", val.round() as i32) } else { format!("{:.2}", val) }
-}
-
-fn toggle_btn_style(enabled: bool) -> UIStyle {
-    if enabled {
-        UIStyle {
-            bg_color: color::ACCENT_BLUE_C32,
-            hover_bg_color: color::ACCENT_BLUE_HOVER_C32,
-            pressed_bg_color: color::ACCENT_BLUE_PRESS_C32,
-            text_color: color::TEXT_WHITE_C32,
-            font_size: 8,
-            font_weight: FontWeight::Bold,
-            corner_radius: color::BUTTON_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    } else {
-        UIStyle {
-            bg_color: color::BUTTON_INACTIVE_C32,
-            hover_bg_color: color::BUTTON_INACTIVE_HOVER_C32,
-            pressed_bg_color: color::BUTTON_INACTIVE_PRESS_C32,
-            text_color: color::TEXT_DIMMED_C32,
-            font_size: 8,
-            font_weight: FontWeight::Bold,
-            corner_radius: color::BUTTON_RADIUS,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    }
-}
-
-fn de_btn_style(active: bool, active_color: Color32) -> UIStyle {
-    if active {
-        UIStyle {
-            bg_color: active_color,
-            hover_bg_color: Color32::new(
-                active_color.r.saturating_add(20),
-                active_color.g.saturating_add(20),
-                active_color.b.saturating_add(20),
-                active_color.a,
-            ),
-            pressed_bg_color: Color32::new(
-                active_color.r.saturating_sub(10),
-                active_color.g.saturating_sub(10),
-                active_color.b.saturating_sub(10),
-                active_color.a,
-            ),
-            text_color: color::TEXT_WHITE_C32,
-            font_size: 8,
-            corner_radius: 2.0,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    } else {
-        UIStyle {
-            bg_color: color::DRIVER_INACTIVE_C32,
-            hover_bg_color: color::DRIVER_INACTIVE_HOVER_C32,
-            pressed_bg_color: color::DRIVER_INACTIVE_PRESS_C32,
-            text_color: color::TEXT_DIMMED_C32,
-            font_size: 8,
-            corner_radius: 2.0,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    }
-}
-
-/// Style for driver config buttons (beat div, waveform, dot, triplet, reverse).
-/// Unity: active buttons use DriverActiveC32, inactive use ConfigBtnInactiveC32.
-fn config_btn_style(active: bool) -> UIStyle {
-    if active {
-        UIStyle {
-            bg_color: color::DRIVER_ACTIVE_C32,
-            hover_bg_color: color::DRIVER_ACTIVE_HOVER_C32,
-            pressed_bg_color: color::DRIVER_ACTIVE_PRESS_C32,
-            text_color: color::TEXT_WHITE_C32,
-            font_size: 8,
-            corner_radius: 1.0,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    } else {
-        UIStyle {
-            bg_color: color::CONFIG_BTN_INACTIVE_C32,
-            hover_bg_color: color::CONFIG_BTN_HOVER_C32,
-            pressed_bg_color: color::CONFIG_BTN_PRESSED_C32,
-            text_color: color::TEXT_DIMMED_C32,
-            font_size: 8,
-            corner_radius: 1.0,
-            text_align: TextAlign::Center,
-            ..UIStyle::default()
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1459,7 +1053,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = EffectCardPanel::new();
         panel.configure(&test_config());
-        panel.state.driver_expanded[0] = true;
+        panel.state.mod_state.driver_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         assert!(panel.driver_config_ids[0].is_some());
@@ -1471,7 +1065,7 @@ mod tests {
         let mut tree = UITree::new();
         let mut panel = EffectCardPanel::new();
         panel.configure(&test_config());
-        panel.state.envelope_expanded[0] = true;
+        panel.state.mod_state.envelope_expanded[0] = true;
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
         assert!(panel.envelope_config_ids[0].is_some());
