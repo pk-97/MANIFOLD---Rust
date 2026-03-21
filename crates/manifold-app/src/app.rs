@@ -1188,7 +1188,9 @@ impl Application {
 
         // 2b. Auto-scroll check for playback (BEFORE build so rebuild includes new scroll)
         let auto_scroll_changed = crate::ui_bridge::check_auto_scroll(&mut self.ui_root, &self.content_state, &self.local_project);
-        let scroll_changed = auto_scroll_changed || self.needs_scroll_rebuild;
+        let overlay_changed = self.ui_root.overlay_dirty;
+        self.ui_root.overlay_dirty = false;
+        let scroll_changed = auto_scroll_changed || self.needs_scroll_rebuild || overlay_changed;
         self.needs_scroll_rebuild = false;
 
         // 3. Rebuild if needed

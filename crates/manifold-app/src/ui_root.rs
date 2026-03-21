@@ -66,6 +66,10 @@ pub struct UIRoot {
     inspector_drag_start_x: f32,
     inspector_drag_start_width: f32,
 
+    /// Set when overlay state changes (popup open/close, scroll, category change).
+    /// Consumed by app.rs to trigger rebuild_scroll_panels.
+    pub overlay_dirty: bool,
+
     /// Hover actions produced by continuous cursor movement, drained in process_events.
     cursor_hover_actions: Vec<PanelAction>,
 
@@ -111,6 +115,7 @@ impl UIRoot {
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
+            overlay_dirty: false,
             cursor_hover_actions: Vec::new(),
             viewport_events: Vec::new(),
             last_right_click_pos: Vec2::new(0.0, 0.0),
@@ -279,6 +284,7 @@ impl UIRoot {
                 // Escape key
                 if let UIEvent::KeyDown { key: Key::Escape, .. } = event {
                     if let Some(_) = self.browser_popup.handle_escape() {
+                        self.overlay_dirty = true;
                         consumed = true;
                     }
                 }
@@ -300,6 +306,12 @@ impl UIRoot {
                             }
                             BrowserPopupAction::Dismissed => {}
                         }
+                        self.overlay_dirty = true;
+                        consumed = true;
+                    } else if self.browser_popup.contains_node(*node_id) {
+                        // Internal popup click (category chip, background, etc.)
+                        // Consume so it doesn't leak to panels below.
+                        self.overlay_dirty = true;
                         consumed = true;
                     }
                 }
@@ -307,6 +319,7 @@ impl UIRoot {
                 // Scroll events within the popup
                 if let UIEvent::Scroll { delta, .. } = event {
                     self.browser_popup.handle_scroll(delta.y);
+                    self.overlay_dirty = true;
                     consumed = true;
                 }
 
@@ -418,6 +431,7 @@ impl UIRoot {
 
         // Intercept dropdown-triggering actions and open dropdowns here
         // (where we have access to the tree for node bounds).
+        let popup_open_before = self.browser_popup.is_open();
         let mut filtered = Vec::with_capacity(actions.len());
         for action in actions {
             if self.try_open_dropdown(&action, last_click_node) {
@@ -425,6 +439,11 @@ impl UIRoot {
                 continue;
             }
             filtered.push(action);
+        }
+
+        // If popup was just opened, flag for rebuild so nodes appear this frame
+        if !popup_open_before && self.browser_popup.is_open() {
+            self.overlay_dirty = true;
         }
 
         filtered
