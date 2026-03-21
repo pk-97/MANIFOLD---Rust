@@ -281,13 +281,7 @@ impl ContentPipeline {
             );
         }
 
-        // Signal the shared event so the UI device knows this frame is ready.
-        #[cfg(target_os = "macos")]
-        if let Some(ref bridge) = self.shared_bridge {
-            unsafe { bridge.signal_from_encoder(&mut encoder); }
-        }
-
-        // Submit all GPU work (generators + compositor + copies + signal)
+        // Submit all GPU work (generators + compositor + copies)
         gpu.queue.submit(std::iter::once(encoder.finish()));
 
         // Swap: back becomes front
