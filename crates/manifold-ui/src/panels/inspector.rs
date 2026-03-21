@@ -902,7 +902,7 @@ impl InspectorCompositePanel {
                 PressedTarget::LayerChrome => self.layer_chrome.handle_click(node_id),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_click(node_id),
                 PressedTarget::MasterEffect(i) => {
-                    let actions = self.master_effects.get_mut(i)
+                    let mut actions = self.master_effects.get_mut(i)
                         .map(|c| c.handle_click(node_id))
                         .unwrap_or_default();
                     // Header click: modifier-aware selection. Any other click: auto-select.
@@ -910,28 +910,34 @@ impl InspectorCompositePanel {
                         self.on_effect_card_clicked(InspectorTab::Master, i, modifiers);
                     } else if !actions.is_empty() {
                         self.auto_select_effect(&PressedTarget::MasterEffect(i));
+                        let ei = self.master_effects.get(i).map(|c| c.effect_index()).unwrap_or(0);
+                        actions.insert(0, PanelAction::EffectCardClicked(ei));
                     }
                     actions
                 }
                 PressedTarget::LayerEffect(i) => {
-                    let actions = self.layer_effects.get_mut(i)
+                    let mut actions = self.layer_effects.get_mut(i)
                         .map(|c| c.handle_click(node_id))
                         .unwrap_or_default();
                     if actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         self.on_effect_card_clicked(InspectorTab::Layer, i, modifiers);
                     } else if !actions.is_empty() {
                         self.auto_select_effect(&PressedTarget::LayerEffect(i));
+                        let ei = self.layer_effects.get(i).map(|c| c.effect_index()).unwrap_or(0);
+                        actions.insert(0, PanelAction::EffectCardClicked(ei));
                     }
                     actions
                 }
                 PressedTarget::ClipEffect(i) => {
-                    let actions = self.clip_effects.get_mut(i)
+                    let mut actions = self.clip_effects.get_mut(i)
                         .map(|c| c.handle_click(node_id))
                         .unwrap_or_default();
                     if actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         self.on_effect_card_clicked(InspectorTab::Clip, i, modifiers);
                     } else if !actions.is_empty() {
                         self.auto_select_effect(&PressedTarget::ClipEffect(i));
+                        let ei = self.clip_effects.get(i).map(|c| c.effect_index()).unwrap_or(0);
+                        actions.insert(0, PanelAction::EffectCardClicked(ei));
                     }
                     actions
                 }
