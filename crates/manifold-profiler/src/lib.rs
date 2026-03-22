@@ -55,15 +55,29 @@ pub struct FrameRecord {
     pub gpu_pass_count: u32,
     /// Sum of all GPU pass durations (ms).
     pub gpu_total_ms: f64,
+    /// Per-layer state (opacity, mute, solo).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub layer_states: Vec<LayerState>,
+    /// Number of content thread ticks missed (frame drops).
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    pub missed_frames: u64,
+    /// Profiler buffer readback overhead in ms.
+    pub profiler_overhead_ms: f64,
     /// GPU memory estimate for this frame.
     pub memory: MemorySnapshot,
 }
+
+fn is_zero_u64(v: &u64) -> bool { *v == 0 }
 
 /// GPU pass timing from wgpu timestamp queries.
 #[derive(Debug, Clone, Serialize)]
 pub struct GpuPassRecord {
     pub name: String,
     pub ms: f64,
+    /// Absolute begin timestamp in nanoseconds (frame-relative GPU clock).
+    pub begin_ns: f64,
+    /// Absolute end timestamp in nanoseconds (frame-relative GPU clock).
+    pub end_ns: f64,
     /// Output texture width (0 if unknown).
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub width: u32,
@@ -75,15 +89,24 @@ pub struct GpuPassRecord {
     pub is_compute: bool,
 }
 
+/// Named parameter with human-readable name.
+#[derive(Debug, Clone, Serialize)]
+pub struct NamedParam {
+    pub name: String,
+    pub value: f32,
+}
+
 /// Info about an active clip in this frame.
 #[derive(Debug, Clone, Serialize)]
 pub struct ActiveClipInfo {
     pub clip_id: String,
     pub generator_type: String,
     pub layer_index: i32,
-    /// Live modulated generator parameter values.
+    /// Animation progress [0..1] within the clip.
+    pub anim_progress: f32,
+    /// Live modulated generator parameters with names.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub gen_param_values: Vec<f32>,
+    pub gen_params: Vec<NamedParam>,
 }
 
 /// Info about an active effect in this frame.
@@ -92,9 +115,21 @@ pub struct ActiveEffectInfo {
     pub effect_type: String,
     /// "clip:<clip_id>", "layer:<index>", or "master"
     pub scope: String,
-    /// Live modulated parameter values.
+    /// Effect group ID (for wet/dry grouping).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<String>,
+    /// Live modulated parameters with names.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub param_values: Vec<f32>,
+    pub params: Vec<NamedParam>,
+}
+
+/// Per-layer state snapshot for a single frame.
+#[derive(Debug, Clone, Serialize)]
+pub struct LayerState {
+    pub index: i32,
+    pub opacity: f32,
+    pub is_muted: bool,
+    pub is_solo: bool,
 }
 
 fn is_zero_u32(v: &u32) -> bool { *v == 0 }

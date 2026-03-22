@@ -259,7 +259,7 @@ impl ContentThread {
                 let active_layers = self.engine.project()
                     .map_or(0, |p| p.timeline.layers.len());
 
-                // Collect GPU pass timing results with resolution info
+                // Collect GPU pass timing results with resolution + absolute timestamps
                 let gpu_pass_results = self.content_pipeline.last_gpu_pass_results();
                 let gpu_pass_count = gpu_pass_results.len() as u32;
                 let gpu_total_ms: f64 = gpu_pass_results.iter()
@@ -269,31 +269,69 @@ impl ContentThread {
                         .map(|p| manifold_profiler::GpuPassRecord {
                             name: p.label.clone(),
                             ms: p.duration_ms,
+                            begin_ns: p.begin_ns,
+                            end_ns: p.end_ns,
                             width: p.width,
                             height: p.height,
                             is_compute: p.is_compute,
                         })
                         .collect();
 
-                // Collect active clip info with generator types + live params
+                // Helper: build named params from values + registry
+                fn build_effect_params(fx: &manifold_core::effects::EffectInstance) -> Vec<manifold_profiler::NamedParam> {
+                    let def = manifold_core::effect_definition_registry::get(fx.effect_type);
+                    fx.param_values.iter().enumerate().map(|(i, &v)| {
+                        let name = def.param_defs.get(i)
+                            .map_or_else(|| format!("param_{}", i), |pd| pd.name.clone());
+                        manifold_profiler::NamedParam { name, value: v }
+                    }).collect()
+                }
+
+                fn build_gen_params(gen_type: manifold_core::GeneratorType, values: &[f32]) -> Vec<manifold_profiler::NamedParam> {
+                    let def = manifold_core::generator_definition_registry::get(gen_type);
+                    values.iter().enumerate().map(|(i, &v)| {
+                        let name = def.param_defs.get(i)
+                            .map_or_else(|| format!("param_{}", i), |pd| pd.name.clone());
+                        manifold_profiler::NamedParam { name, value: v }
+                    }).collect()
+                }
+
+                // Get anim_progress from generator_renderer (mutable borrow, done first)
+                let anim_map: Vec<(String, f32)> = {
+                    let (renderers, _) = self.engine.split_renderer_project();
+                    let gen_renderer = renderers.iter().find_map(|r| {
+                        r.as_any().downcast_ref::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+                    });
+                    tick_result.ready_clips.iter().map(|clip| {
+                        let progress = gen_renderer
+                            .map_or(0.0, |gr| gr.get_clip_anim_progress(clip.id.as_str()));
+                        (clip.id.to_string(), progress)
+                    }).collect()
+                };
+
+                // Now borrow project immutably for layers, effects, params
                 let layers = self.engine.project()
                     .map(|p| p.timeline.layers.as_slice())
                     .unwrap_or(&[]);
+
                 let active_clip_info: Vec<manifold_profiler::ActiveClipInfo> =
-                    tick_result.ready_clips.iter().map(|clip| {
-                        let gen_params = layers.get(clip.layer_index as usize)
-                            .and_then(|l| l.gen_params.as_ref())
-                            .map(|gp| gp.param_values.clone())
+                    tick_result.ready_clips.iter().enumerate().map(|(i, clip)| {
+                        let gen_param_values = layers.get(clip.layer_index as usize)
+                            .and_then(|l| l.gen_params.as_ref());
+                        let gen_params = gen_param_values
+                            .map(|gp| build_gen_params(clip.generator_type, &gp.param_values))
                             .unwrap_or_default();
+                        let anim_progress = anim_map.get(i).map_or(0.0, |a| a.1);
                         manifold_profiler::ActiveClipInfo {
                             clip_id: clip.id.to_string(),
                             generator_type: clip.generator_type.to_string(),
                             layer_index: clip.layer_index,
-                            gen_param_values: gen_params,
+                            anim_progress,
+                            gen_params,
                         }
                     }).collect();
 
-                // Collect active effect info with live modulated param values
+                // Collect active effect info with named live params + group_id
                 let mut active_effects: Vec<manifold_profiler::ActiveEffectInfo> = Vec::new();
                 for clip in &tick_result.ready_clips {
                     for fx in &clip.effects {
@@ -301,8 +339,23 @@ impl ContentThread {
                             active_effects.push(manifold_profiler::ActiveEffectInfo {
                                 effect_type: fx.effect_type.to_string(),
                                 scope: format!("clip:{}", clip.id),
-                                param_values: fx.param_values.clone(),
+                                group_id: fx.group_id.as_ref().map(|g| g.to_string()),
+                                params: build_effect_params(fx),
                             });
+                        }
+                    }
+                }
+                for layer in layers {
+                    if let Some(layer_fxs) = layer.effects.as_deref() {
+                        for fx in layer_fxs {
+                            if fx.enabled {
+                                active_effects.push(manifold_profiler::ActiveEffectInfo {
+                                    effect_type: fx.effect_type.to_string(),
+                                    scope: format!("layer:{}", layer.index),
+                                    group_id: fx.group_id.as_ref().map(|g| g.to_string()),
+                                    params: build_effect_params(fx),
+                                });
+                            }
                         }
                     }
                 }
@@ -312,11 +365,22 @@ impl ContentThread {
                             active_effects.push(manifold_profiler::ActiveEffectInfo {
                                 effect_type: fx.effect_type.to_string(),
                                 scope: "master".to_string(),
-                                param_values: fx.param_values.clone(),
+                                group_id: fx.group_id.as_ref().map(|g| g.to_string()),
+                                params: build_effect_params(fx),
                             });
                         }
                     }
                 }
+
+                // Layer states (opacity, mute, solo)
+                let layer_states: Vec<manifold_profiler::LayerState> = layers.iter()
+                    .map(|l| manifold_profiler::LayerState {
+                        index: l.index,
+                        opacity: l.opacity,
+                        is_muted: l.is_muted,
+                        is_solo: l.is_solo,
+                    })
+                    .collect();
 
                 // Memory estimate: compositor dimensions × 16 bytes (Rgba16Float) × buffer count
                 let (comp_w, comp_h) = self.content_pipeline.dimensions();
@@ -345,6 +409,9 @@ impl ContentThread {
                     active_layer_count: active_layers,
                     gpu_pass_count,
                     gpu_total_ms,
+                    layer_states,
+                    missed_frames: self.timer.missed_ticks(),
+                    profiler_overhead_ms: self.content_pipeline.profiler_overhead_ms(),
                     memory: manifold_profiler::MemorySnapshot {
                         estimated_texture_bytes: estimated_tex_bytes,
                         render_target_count: rt_count,

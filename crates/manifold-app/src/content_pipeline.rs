@@ -477,4 +477,20 @@ impl ContentPipeline {
     pub fn last_gpu_pass_results(&self) -> &[manifold_renderer::gpu_profiler::GpuPassTiming] {
         &self.last_gpu_pass_results
     }
+
+    /// GPU adapter name from the profiler. Returns "Unknown" if profiler not available.
+    #[cfg(feature = "profiling")]
+    pub fn gpu_adapter_name(&self) -> &str {
+        self.gpu_profiler
+            .as_ref()
+            .map_or("Unknown", |p| p.adapter_name())
+    }
+
+    /// Profiler buffer readback overhead in ms.
+    #[cfg(feature = "profiling")]
+    pub fn profiler_overhead_ms(&self) -> f64 {
+        self.gpu_profiler
+            .as_ref()
+            .map_or(0.0, |p| p.last_readback_overhead_ms())
+    }
 }

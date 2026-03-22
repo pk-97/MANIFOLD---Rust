@@ -13,6 +13,9 @@ pub struct FrameTimer {
     fps_sample_start: Instant,
     fps_frame_count: u64,
     current_fps: f64,
+
+    /// Number of ticks missed this frame (dt exceeded 2× target = frame drop).
+    missed_ticks: u64,
 }
 
 const FPS_SAMPLE_INTERVAL: f64 = 2.0;
@@ -30,6 +33,7 @@ impl FrameTimer {
             fps_sample_start: now,
             fps_frame_count: 0,
             current_fps: 0.0,
+            missed_ticks: 0,
         }
     }
 
@@ -51,8 +55,20 @@ impl FrameTimer {
         self.last_tick_time = now;
         self.last_dt = dt;
         self.fps_frame_count += 1;
+        // Detect missed ticks: if dt exceeds 2× target, we dropped frames
+        let target_secs = self.target_frame_duration.as_secs_f64();
+        self.missed_ticks = if target_secs > 0.0 {
+            ((dt / target_secs).floor() as u64).saturating_sub(1)
+        } else {
+            0
+        };
         self.update_fps_counter(now);
         dt
+    }
+
+    /// Number of ticks missed this frame (0 = on time, 1+ = frame drops).
+    pub fn missed_ticks(&self) -> u64 {
+        self.missed_ticks
     }
 
     /// Seconds since application start.

@@ -287,6 +287,18 @@ impl EffectChain {
             ..*ctx
         };
 
+        // Set profiler scope based on owner context
+        if let Some(profiler) = gpu_profiler {
+            let scope = if chain_ctx.owner_key == 0 {
+                "master:".to_string()
+            } else if chain_ctx.is_clip_level {
+                format!("clip:{}:", chain_ctx.owner_key)
+            } else {
+                format!("layer:{}:", chain_ctx.owner_key - 1)
+            };
+            profiler.set_scope(&scope);
+        }
+
         // Copy input into our source buffer via blit (handles any input format)
         self.internal_blit.as_ref().unwrap().blit(
             device, encoder, input_view, self.source_view(),
@@ -358,6 +370,11 @@ impl EffectChain {
                     device, queue, encoder, group.wet_dry, wet_dry_lerp, gpu_profiler,
                 );
             }
+
+        // Clear profiler scope
+        if let Some(profiler) = gpu_profiler {
+            profiler.clear_scope();
+        }
 
         Some(self.source_view())
     }

@@ -163,6 +163,7 @@ impl BlendResources {
         blend_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
         uniforms: &BlendUniforms,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
 
@@ -190,6 +191,7 @@ impl BlendResources {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("Blend Pass", 0, 0));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Blend Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -202,7 +204,7 @@ impl BlendResources {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -477,6 +479,7 @@ impl LayerCompositor {
                     effective_blend_view,
                     self.main.target_view(),
                     &uniforms,
+                    gpu_profiler,
                 );
                 self.main.swap();
             } else {
@@ -529,6 +532,7 @@ impl LayerCompositor {
                         effective_blend_view,
                         layer_buf.target_view(),
                         &uniforms,
+                        gpu_profiler,
                     );
                     layer_buf.swap();
                 }
@@ -580,6 +584,7 @@ impl LayerCompositor {
                     effective_layer_view,
                     self.main.target_view(),
                     &uniforms,
+                    gpu_profiler,
                 );
                 self.main.swap();
             }
@@ -622,6 +627,7 @@ impl LayerCompositor {
                     processed,
                     self.main.target_view(),
                     &uniforms,
+                    gpu_profiler,
                 );
                 self.main.swap();
             }

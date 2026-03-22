@@ -43,6 +43,10 @@ struct ProfileEntry {
 pub struct GpuPassTiming {
     pub label: String,
     pub duration_ms: f64,
+    /// Absolute begin timestamp in nanoseconds (GPU clock, frame-relative).
+    pub begin_ns: f64,
+    /// Absolute end timestamp in nanoseconds (GPU clock, frame-relative).
+    pub end_ns: f64,
     pub width: u32,
     pub height: u32,
     pub is_compute: bool,
@@ -65,6 +69,13 @@ pub struct GpuProfiler {
     timestamp_period: f32,
     entries: RefCell<Vec<ProfileEntry>>,
     next_query: Cell<u32>,
+    /// GPU adapter name (e.g. "Apple M2 Max").
+    adapter_name: String,
+    /// Duration of the last read_results() call in ms (profiler self-overhead).
+    last_readback_ms: Cell<f64>,
+    /// Label prefix prepended to all subsequent timestamp labels (e.g. "master:" or "clip:abc123:").
+    /// Set by the orchestration layer (effect_chain, compositor) to scope passes.
+    scope_prefix: RefCell<String>,
 }
 
 impl GpuProfiler {
@@ -109,6 +120,8 @@ impl GpuProfiler {
             timestamp_period, MAX_TIMESTAMP_PAIRS
         );
 
+        let adapter_name = adapter.get_info().name.clone();
+
         Some(Self {
             query_set,
             resolve_buffer,
@@ -116,7 +129,31 @@ impl GpuProfiler {
             timestamp_period,
             entries: RefCell::new(Vec::with_capacity(MAX_TIMESTAMP_PAIRS as usize)),
             next_query: Cell::new(0),
+            adapter_name,
+            last_readback_ms: Cell::new(0.0),
+            scope_prefix: RefCell::new(String::new()),
         })
+    }
+
+    /// GPU adapter name (e.g. "Apple M2 Max").
+    pub fn adapter_name(&self) -> &str {
+        &self.adapter_name
+    }
+
+    /// Duration of the last `read_results()` call in ms (profiler self-overhead).
+    pub fn last_readback_overhead_ms(&self) -> f64 {
+        self.last_readback_ms.get()
+    }
+
+    /// Set a label prefix for all subsequent timestamp allocations.
+    /// E.g. "master:" or "clip:abc123:" — prepended to pass labels.
+    pub fn set_scope(&self, prefix: &str) {
+        *self.scope_prefix.borrow_mut() = prefix.to_string();
+    }
+
+    /// Clear the scope prefix.
+    pub fn clear_scope(&self) {
+        self.scope_prefix.borrow_mut().clear();
     }
 
     /// Reset for a new frame. Call before rendering begins.
@@ -164,6 +201,7 @@ impl GpuProfiler {
     }
 
     /// Allocate a query pair and record the entry. Returns the begin index.
+    /// If a scope prefix is set, it's prepended to the label.
     fn allocate_pair(
         &self,
         label: &str,
@@ -176,8 +214,14 @@ impl GpuProfiler {
             return None; // Exhausted query slots
         }
         self.next_query.set(current + 2);
+        let prefix = self.scope_prefix.borrow();
+        let full_label = if prefix.is_empty() {
+            label.to_string()
+        } else {
+            format!("{}{}", *prefix, label)
+        };
         self.entries.borrow_mut().push(ProfileEntry {
-            label: label.to_string(),
+            label: full_label,
             begin_query: current,
             end_query: current + 1,
             width,
@@ -211,9 +255,13 @@ impl GpuProfiler {
 
     /// Map the readback buffer and compute durations.
     /// Call after `device.poll()` ensures GPU work is complete.
+    /// Also measures its own overhead (buffer map + read time).
     pub fn read_results(&self, device: &wgpu::Device) -> Vec<GpuPassTiming> {
+        let readback_start = std::time::Instant::now();
+
         let entries = self.entries.borrow();
         if entries.is_empty() {
+            self.last_readback_ms.set(0.0);
             return Vec::new();
         }
 
@@ -230,10 +278,12 @@ impl GpuProfiler {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 log::warn!("[GpuProfiler] buffer map failed: {:?}", e);
+                self.last_readback_ms.set(readback_start.elapsed().as_secs_f64() * 1000.0);
                 return Vec::new();
             }
             Err(_) => {
                 log::warn!("[GpuProfiler] buffer map channel closed");
+                self.last_readback_ms.set(readback_start.elapsed().as_secs_f64() * 1000.0);
                 return Vec::new();
             }
         }
@@ -244,6 +294,14 @@ impl GpuProfiler {
             bytemuck::cast_slice(&data[..count as usize * std::mem::size_of::<u64>()]);
 
         let ns_per_tick = self.timestamp_period as f64;
+
+        // Use the first timestamp as the frame-relative origin for absolute times
+        let origin_ticks = if !entries.is_empty() {
+            timestamps[entries[0].begin_query as usize]
+        } else {
+            0
+        };
+
         let mut results = Vec::with_capacity(entries.len());
 
         for entry in entries.iter() {
@@ -253,9 +311,15 @@ impl GpuProfiler {
             let duration_ns = delta_ticks as f64 * ns_per_tick;
             let duration_ms = duration_ns / 1_000_000.0;
 
+            // Absolute timestamps relative to frame start
+            let begin_ns = begin_ts.wrapping_sub(origin_ticks) as f64 * ns_per_tick;
+            let end_ns = end_ts.wrapping_sub(origin_ticks) as f64 * ns_per_tick;
+
             results.push(GpuPassTiming {
                 label: entry.label.clone(),
                 duration_ms,
+                begin_ns,
+                end_ns,
                 width: entry.width,
                 height: entry.height,
                 is_compute: entry.is_compute,
@@ -265,6 +329,7 @@ impl GpuProfiler {
         drop(data);
         self.readback_buffer.unmap();
 
+        self.last_readback_ms.set(readback_start.elapsed().as_secs_f64() * 1000.0);
         results
     }
 }

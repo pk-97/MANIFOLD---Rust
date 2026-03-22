@@ -199,6 +199,9 @@ impl GeneratorRenderer {
             let _ = gen_type; // used for type matching if needed
             if let Some(layer_state) = self.layer_generators.get_mut(&layer_index)
                 && let Some(active) = self.active_clips.get_mut(id) {
+                    if let Some(profiler) = gpu_profiler {
+                        profiler.set_scope(&format!("clip:{}:", id));
+                    }
                     let new_progress = layer_state.generator.render(
                         &self.device,
                         queue,
@@ -207,9 +210,17 @@ impl GeneratorRenderer {
                         &ctx,
                         gpu_profiler,
                     );
+                    if let Some(profiler) = gpu_profiler {
+                        profiler.clear_scope();
+                    }
                     active.anim_progress = new_progress;
                 }
         }
+    }
+
+    /// Get the animation progress for a rendered clip (for profiling).
+    pub fn get_clip_anim_progress(&self, clip_id: &str) -> f32 {
+        self.active_clips.get(clip_id).map_or(0.0, |a| a.anim_progress)
     }
 
     /// Get the texture view for a rendered clip (used by compositor).
