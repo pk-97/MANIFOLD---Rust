@@ -4,6 +4,7 @@
 //! and the dropdown overlay. The app layer creates one UIRoot per
 //! workspace window and forwards winit events through it.
 
+use manifold_core::LayerId;
 use manifold_ui::*;
 use manifold_ui::input::{Key, Modifiers, PointerAction, UIEvent};
 use manifold_ui::node::{Vec2, Rect};
@@ -17,7 +18,7 @@ pub enum DropdownContext {
     Resolution,
     #[allow(dead_code)]
     AddEffect(InspectorTab),
-    GenType(usize),
+    GenType(Option<LayerId>),
     ClipContext(String),     // right-click on clip: clip_id
     TrackContext(f32, usize), // right-click on empty track: beat, layer
     LayerContext(usize),     // right-click on layer header: layer_index
@@ -595,12 +596,12 @@ impl UIRoot {
                 });
                 true
             }
-            PanelAction::GenTypeClicked(layer_idx) => {
+            PanelAction::GenTypeClicked(layer_id) => {
                 use manifold_core::types::GeneratorType;
                 let items: Vec<DropdownItem> = GeneratorType::ALL.iter()
                     .map(|g| DropdownItem::new(g.display_name()))
                     .collect();
-                self.open_dropdown_at(DropdownContext::GenType(*layer_idx), items, trigger);
+                self.open_dropdown_at(DropdownContext::GenType(layer_id.clone()), items, trigger);
                 true
             }
             PanelAction::MidiInputClicked(idx) => {
@@ -710,8 +711,8 @@ impl UIRoot {
             DropdownContext::AddEffect(tab) => {
                 Some(PanelAction::AddEffect(tab, index))
             }
-            DropdownContext::GenType(layer_idx) => {
-                Some(PanelAction::SetGenType(layer_idx, index))
+            DropdownContext::GenType(layer_id) => {
+                Some(PanelAction::SetGenType(layer_id, index))
             }
             DropdownContext::ClipContext(clip_id) => {
                 match index {

@@ -587,14 +587,15 @@ pub fn sync_inspector_data(
             let gen_config = layer.gen_params.as_ref()
                 .filter(|gp| gp.generator_type != GeneratorType::None)
                 .map(gen_params_to_config);
-            ui.inspector.configure_gen_params(gen_config.as_ref(), idx);
+            let layer_id = layer.layer_id.clone();
+            ui.inspector.configure_gen_params(gen_config.as_ref(), Some(layer_id));
         } else {
             ui.inspector.configure_layer_effects(&[]);
-            ui.inspector.configure_gen_params(None, 0);
+            ui.inspector.configure_gen_params(None, None);
         }
     } else {
         ui.inspector.configure_layer_effects(&[]);
-        ui.inspector.configure_gen_params(None, 0);
+        ui.inspector.configure_gen_params(None, None);
     }
 
     // Clip effects → inspector

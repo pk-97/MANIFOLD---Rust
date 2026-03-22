@@ -1,3 +1,4 @@
+use manifold_core::LayerId;
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
@@ -84,8 +85,8 @@ pub struct GenParamPanel {
     gen_type_name: String,
     param_info: Vec<GenParamInfo>,
     state: GenParamState,
-    /// The layer index this panel is displaying gen params for.
-    layer_index: usize,
+    /// The layer this panel is displaying gen params for.
+    layer_id: Option<LayerId>,
 
     // Node IDs — gen type row
     gen_type_label_id: i32,
@@ -119,7 +120,7 @@ impl GenParamPanel {
             gen_type_name: String::new(),
             param_info: Vec::new(),
             state: GenParamState::new(0),
-            layer_index: 0,
+            layer_id: None,
             gen_type_label_id: -1,
             gen_type_btn_id: -1,
             slider_ids: Vec::new(),
@@ -389,8 +390,8 @@ impl GenParamPanel {
         }
     }
 
-    pub fn set_layer_index(&mut self, idx: usize) {
-        self.layer_index = idx;
+    pub fn set_layer_id(&mut self, id: Option<LayerId>) {
+        self.layer_id = id;
     }
 
     pub fn sync_gen_type_name(&mut self, tree: &mut UITree, name: &str) {
@@ -406,7 +407,7 @@ impl GenParamPanel {
         let id = node_id as i32;
 
         if id == self.gen_type_btn_id {
-            return vec![PanelAction::GenTypeClicked(self.layer_index)];
+            return vec![PanelAction::GenTypeClicked(self.layer_id.clone())];
         }
 
         // Toggle buttons

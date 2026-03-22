@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use manifold_core::LayerId;
 use crate::color;
 use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
@@ -206,10 +207,10 @@ impl InspectorCompositePanel {
         }
     }
 
-    pub fn configure_gen_params(&mut self, config: Option<&GenParamConfig>, layer_index: usize) {
+    pub fn configure_gen_params(&mut self, config: Option<&GenParamConfig>, layer_id: Option<LayerId>) {
         if let Some(cfg) = config {
             let mut panel = GenParamPanel::new();
-            panel.set_layer_index(layer_index);
+            panel.set_layer_id(layer_id);
             panel.configure(cfg);
             self.gen_params = Some(panel);
         } else {

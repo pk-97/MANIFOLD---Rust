@@ -117,8 +117,11 @@ pub(super) fn dispatch_project(
             })));
             DispatchResult::resolution()
         }
-        PanelAction::SetGenType(layer_idx, gen_type_idx) => {
-            if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+        PanelAction::SetGenType(opt_layer_id, gen_type_idx) => {
+            let resolved_idx = opt_layer_id.as_ref()
+                .and_then(|lid| project.timeline.find_layer_index_by_id(lid));
+            if let Some(layer_idx) = resolved_idx {
+                let layer = &project.timeline.layers[layer_idx];
                 let old_type = layer.gen_params.as_ref()
                     .map(|gp| gp.generator_type)
                     .unwrap_or(GeneratorType::None);
@@ -133,12 +136,9 @@ pub(super) fn dispatch_project(
                             .and_then(|gp| gp.envelopes.clone());
                         let layer_id = layer.layer_id.clone();
                         let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
-                            layer_id, old_type, new_type, old_params, old_drivers, old_envelopes,
+                            layer_id.clone(), old_type, new_type, old_params, old_drivers, old_envelopes,
                         );
                         { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
-                        let layer_id = project.timeline.layers.get(*layer_idx)
-                            .map(|l| l.layer_id.clone())
-                            .unwrap_or_default();
                         ContentCommand::send(content_tx, ContentCommand::GeneratorTypeChanged {
                             layer_id,
                             new_type,

@@ -1,6 +1,7 @@
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::types::{GeneratorType, LayerType};
+use manifold_core::LayerId;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::AddClipCommand;
 
@@ -28,11 +29,11 @@ impl MidiImportService {
     /// undoable composite command.
     ///
     /// `notes` — Parsed MIDI notes (beat-domain).
-    /// `target_layer_index` — Layer to place clips on.
+    /// `target_layer_id` — Layer to place clips on (resolved to index internally).
     /// `start_beat_offset` — Beat position of the drop point (added to all note start beats).
     pub fn import_to_layer(
         notes: &[MidiNote],
-        target_layer_index: usize,
+        target_layer_id: &LayerId,
         start_beat_offset: f32,
         project: &mut Project,
     ) -> MidiImportResult {
@@ -42,10 +43,18 @@ impl MidiImportService {
             return result;
         }
 
-        // Ensure target layer exists
-        while project.timeline.layers.len() <= target_layer_index {
-            project.timeline.add_layer_default();
-        }
+        // Resolve LayerId to positional index
+        let target_layer_index = match project.timeline.find_layer_index_by_id(target_layer_id) {
+            Some(idx) => idx,
+            None => {
+                log::warn!(
+                    "[MidiImportService] Target layer '{}' not found, appending new layer.",
+                    target_layer_id,
+                );
+                project.timeline.add_layer_default();
+                project.timeline.layers.len() - 1
+            }
+        };
 
         // Build trimmed placement list
         let placements = build_trimmed_placements(notes, start_beat_offset);
@@ -121,9 +130,9 @@ impl MidiImportService {
         result.success = true;
 
         log::info!(
-            "[MidiImportService] Imported {} clip(s) onto layer {} from MIDI file.",
+            "[MidiImportService] Imported {} clip(s) onto layer '{}' from MIDI file.",
             result.added_clips,
-            target_layer_index
+            target_layer_id,
         );
 
         result

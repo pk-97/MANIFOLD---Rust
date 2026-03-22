@@ -487,9 +487,13 @@ impl ProjectIOService {
             return ProjectIOAction::default();
         }
 
+        let target_layer_id = project.timeline.layers
+            .get(drop_layer_index as usize)
+            .map(|l| l.layer_id.clone())
+            .unwrap_or_default();
         let result = manifold_playback::midi_import::MidiImportService::import_to_layer(
             &notes,
-            drop_layer_index as usize,
+            &target_layer_id,
             drop_beat,
             project,
         );

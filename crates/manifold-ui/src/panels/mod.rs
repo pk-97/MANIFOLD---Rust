@@ -16,7 +16,7 @@ pub mod perf_hud;
 pub mod waveform_lane;
 pub mod stem_lane;
 
-use manifold_core::ClipId;
+use manifold_core::{ClipId, LayerId};
 use crate::input::{Modifiers, UIEvent};
 use crate::layout::ScreenLayout;
 use crate::tree::UITree;
@@ -167,7 +167,7 @@ pub enum PanelAction {
     EffectReorder(usize, usize),
 
     // Generator params
-    GenTypeClicked(usize),  // layer_index
+    GenTypeClicked(Option<LayerId>),  // layer_id
     GenParamSnapshot(usize),
     GenParamChanged(usize, f32),
     GenParamCommit(usize),
@@ -227,7 +227,7 @@ pub enum PanelAction {
     SetResolution(usize),          // preset index
     SetDisplayResolution(i32, i32), // direct width, height (no undo, matches Unity)
     AddEffect(InspectorTab, usize), // tab, effect_type index
-    SetGenType(usize, usize),      // layer_index, gen_type index
+    SetGenType(Option<LayerId>, usize),  // layer_id, gen_type index
 
     // Layer header right-click
     LayerHeaderRightClicked(usize),                    // layer_index

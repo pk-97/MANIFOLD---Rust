@@ -237,14 +237,18 @@ pub(super) fn dispatch_editing(
                 // Parse MIDI file and import to layer
                 let notes = manifold_playback::midi_parser::MidiFileParser::parse_file(&path_str);
                 if !notes.is_empty() {
+                    let target_layer_id = project.timeline.layers
+                        .get(*layer_idx)
+                        .map(|l| l.layer_id.clone())
+                        .unwrap_or_default();
                     let result = manifold_playback::midi_import::MidiImportService::import_to_layer(
-                        &notes, *layer_idx, 0.0, project,
+                        &notes, &target_layer_id, 0.0, project,
                     );
                     if result.success {
                         if let Some(undo_cmd) = result.undo_command {
                             ContentCommand::send(content_tx, ContentCommand::Execute(undo_cmd));
                         }
-                        log::info!("Imported {} clips from MIDI to layer {}", result.added_clips, layer_idx);
+                        log::info!("Imported {} clips from MIDI to layer '{}'", result.added_clips, target_layer_id);
                     }
                 }
             }
