@@ -1,4 +1,4 @@
-use manifold_core::ClipId;
+use manifold_core::{ClipId, LayerId};
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
@@ -105,6 +105,9 @@ pub struct TimelineViewportPanel {
     scroll_y_px: f32,
     beats_per_bar: u32,
 
+    // Layer IDs (kept in sync with project layers)
+    pub layer_ids: Vec<LayerId>,
+
     // Track layout (kept in sync with mapper via set_tracks)
     tracks: Vec<TrackInfo>,
     track_y_offsets: Vec<f32>,    // cumulative Y offsets from tracks
@@ -186,6 +189,7 @@ impl TimelineViewportPanel {
             scroll_x_beats: 0.0,
             scroll_y_px: 0.0,
             beats_per_bar: 4,
+            layer_ids: Vec::new(),
             tracks: Vec::new(),
             track_y_offsets: Vec::new(),
             total_tracks_height: 0.0,
@@ -221,6 +225,11 @@ impl TimelineViewportPanel {
             drag_mode: ViewportDragMode::None,
             cached_fingerprint: 0,
         }
+    }
+
+    /// Look up a LayerId by visual index.
+    pub fn layer_id_at_index(&self, i: usize) -> Option<&LayerId> {
+        self.layer_ids.get(i)
     }
 
     /// Compute a fingerprint of the current viewport state.

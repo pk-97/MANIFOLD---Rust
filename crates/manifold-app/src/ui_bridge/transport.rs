@@ -20,24 +20,24 @@ pub(super) fn dispatch_transport(
     match action {
         PanelAction::PlayPause => {
             if content_state.is_playing {
-                let _ = content_tx.try_send(ContentCommand::Pause);
+                ContentCommand::send(content_tx, ContentCommand::Pause);
             } else {
                 if let Some(cursor_beat) = selection.insert_cursor_beat {
-                    let _ = content_tx.try_send(ContentCommand::SeekToBeat(cursor_beat));
+                    ContentCommand::send(content_tx, ContentCommand::SeekToBeat(cursor_beat));
                 }
-                let _ = content_tx.try_send(ContentCommand::Play);
+                ContentCommand::send(content_tx, ContentCommand::Play);
             }
             DispatchResult::handled()
         }
         PanelAction::Stop => {
-            let _ = content_tx.try_send(ContentCommand::Stop);
+            ContentCommand::send(content_tx, ContentCommand::Stop);
             if let Some(cursor_beat) = selection.insert_cursor_beat {
-                let _ = content_tx.try_send(ContentCommand::SeekToBeat(cursor_beat));
+                ContentCommand::send(content_tx, ContentCommand::SeekToBeat(cursor_beat));
             }
             DispatchResult::handled()
         }
         PanelAction::Record => {
-            let _ = content_tx.try_send(ContentCommand::SetRecording(!content_state.is_recording));
+            ContentCommand::send(content_tx, ContentCommand::SetRecording(!content_state.is_recording));
             DispatchResult::handled()
         }
         PanelAction::ResetBpm => {
@@ -49,7 +49,7 @@ pub(super) fn dispatch_transport(
                 let old_points = project.tempo_map.clone_points();
                 let bpm = project.settings.bpm;
                 let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(old_points, bpm);
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             }
             DispatchResult::handled()
         }
@@ -58,7 +58,7 @@ pub(super) fn dispatch_transport(
             DispatchResult::handled()
         }
         PanelAction::Seek(beat) => {
-            let _ = content_tx.try_send(ContentCommand::SeekToBeat(*beat));
+            ContentCommand::send(content_tx, ContentCommand::SeekToBeat(*beat));
             DispatchResult::handled()
         }
         PanelAction::OverviewScrub(norm) => {
@@ -99,7 +99,7 @@ pub(super) fn dispatch_transport(
                 let old = project.settings.quantize_mode;
                 let new = old.next();
                 let cmd = ChangeQuantizeModeCommand::new(old, new);
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             }
             DispatchResult::handled()
         }

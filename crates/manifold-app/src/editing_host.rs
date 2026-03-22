@@ -182,7 +182,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         let clip_id = {
             let project = Some(&mut *self.project)?;
             let (cmd, id) = EditingService::create_clip_at_position(project, beat, layer, duration);
-            { let mut cmd = cmd; cmd.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(cmd)); }
+            { let mut cmd = cmd; cmd.execute(project); crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(cmd)); }
             id
         };
         // Enforce non-overlap on the newly created clip
@@ -208,7 +208,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         };
         if !overlap_cmds.is_empty()
             && let Some(project) = Some(&mut *self.project) {
-                for mut c in overlap_cmds { c.execute(project); let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(c)); }
+                for mut c in overlap_cmds { c.execute(project); crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(c)); }
             }
         *self.needs_structural_sync = true;
         Some(clip_id)
@@ -333,7 +333,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     // ── Playback ────────────────────────────────────────────────
 
     fn scrub_to_time(&mut self, time: f32) {
-        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::SeekTo(time));
+        crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(time));
     }
 
     // ── Overlap enforcement ─────────────────────────────────────
@@ -474,10 +474,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         // Use record() not execute() — just push to undo stack.
         if commands.len() == 1 {
             let cmd = commands.into_iter().next().unwrap();
-            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(cmd));
+            crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(cmd));
         } else {
             let composite = CompositeCommand::new(commands, description.to_string());
-            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(Box::new(composite)));
+            crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(Box::new(composite)));
         }
         *self.needs_structural_sync = true;
     }

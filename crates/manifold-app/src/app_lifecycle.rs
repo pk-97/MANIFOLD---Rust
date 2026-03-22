@@ -102,6 +102,7 @@ impl Application {
             // Suppress content thread snapshots until it processes the LoadProject
             // command (which will bump data_version above current).
             self.suppress_snapshot_until = self.content_state.data_version + 1;
+            self.suppress_snapshot_set_at = self.frame_count;
 
             self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
 
@@ -156,7 +157,8 @@ impl Application {
 
             self.send_content_cmd(ContentCommand::SetProject);
             self.selection.clear_selection();
-            self.active_layer_index = Some(0);
+            self.active_layer_id = self.local_project.timeline.layers
+                .first().map(|l| l.layer_id.clone());
             self.needs_rebuild = true;
 
             // Content thread renders at project FPS; UI always runs at display rate.

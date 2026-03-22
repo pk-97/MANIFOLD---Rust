@@ -1,5 +1,6 @@
 //! Layer-related dispatch: mute/solo/click/chevron/blend/drag/add/delete.
 
+use manifold_core::LayerId;
 use manifold_core::project::Project;
 use manifold_core::types::{BlendMode, LayerType, GeneratorType};
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
@@ -18,7 +19,7 @@ pub(super) fn dispatch_layer(
     content_state: &crate::content_state::ContentState,
     _ui: &mut UIRoot,
     selection: &mut SelectionState,
-    active_layer: &mut Option<usize>,
+    active_layer: &mut Option<LayerId>,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
     match action {
@@ -27,9 +28,10 @@ pub(super) fn dispatch_layer(
             if let Some(layer) = project.timeline.layers.get_mut(*idx) {
                 layer.is_muted = !layer.is_muted;
             }
-            let i = *idx;
-            let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
-                if let Some(layer) = p.timeline.layers.get_mut(i) {
+            let id = project.timeline.layers.get(*idx)
+                .map(|l| l.layer_id.clone()).unwrap_or_default();
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id) {
                     layer.is_muted = !layer.is_muted;
                 }
             })));
@@ -39,9 +41,10 @@ pub(super) fn dispatch_layer(
             if let Some(layer) = project.timeline.layers.get_mut(*idx) {
                 layer.is_solo = !layer.is_solo;
             }
-            let i = *idx;
-            let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
-                if let Some(layer) = p.timeline.layers.get_mut(i) {
+            let id = project.timeline.layers.get(*idx)
+                .map(|l| l.layer_id.clone()).unwrap_or_default();
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id) {
                     layer.is_solo = !layer.is_solo;
                 }
             })));
@@ -49,13 +52,12 @@ pub(super) fn dispatch_layer(
         }
         PanelAction::LayerClicked(idx, modifiers) => {
             // From Unity UIState.cs layer selection methods (lines 247-333).
-            *active_layer = Some(*idx);
+            let layer_id = project.timeline.layers.get(*idx)
+                .map(|l| l.layer_id.clone())
+                .unwrap_or_default();
+            *active_layer = Some(layer_id.clone());
 
             {
-                let layer_id = project.timeline.layers.get(*idx)
-                    .map(|l| l.layer_id.clone())
-                    .unwrap_or_default();
-
                 if modifiers.shift {
                     // Shift+Click: range select from primary to target
                     selection.select_layer_range(&layer_id, &project.timeline.layers);
@@ -75,11 +77,16 @@ pub(super) fn dispatch_layer(
             DispatchResult::handled()
         }
         PanelAction::ChevronClicked(idx) => {
-            {
-                if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+            if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+                layer.is_collapsed = !layer.is_collapsed;
+            }
+            let id = project.timeline.layers.get(*idx)
+                .map(|l| l.layer_id.clone()).unwrap_or_default();
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id) {
                     layer.is_collapsed = !layer.is_collapsed;
                 }
-            }
+            })));
             DispatchResult::structural()
         }
         PanelAction::BlendModeClicked(_idx) => {
@@ -92,26 +99,36 @@ pub(super) fn dispatch_layer(
                     let old_mode = layer.default_blend_mode;
                     if let Some(new_mode) = BlendMode::ALL.iter().find(|m| format!("{:?}", m) == *mode_str) {
                         let cmd = ChangeLayerBlendModeCommand::new(*idx, old_mode, *new_mode);
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
                     }
                 }
             }
             DispatchResult::structural()
         }
         PanelAction::ExpandLayer(idx) => {
-            {
-                if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+            if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+                layer.is_collapsed = false;
+            }
+            let id = project.timeline.layers.get(*idx)
+                .map(|l| l.layer_id.clone()).unwrap_or_default();
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id) {
                     layer.is_collapsed = false;
                 }
-            }
+            })));
             DispatchResult::structural()
         }
         PanelAction::CollapseLayer(idx) => {
-            {
-                if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+            if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+                layer.is_collapsed = true;
+            }
+            let id = project.timeline.layers.get(*idx)
+                .map(|l| l.layer_id.clone()).unwrap_or_default();
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id) {
                     layer.is_collapsed = true;
                 }
-            }
+            })));
             DispatchResult::structural()
         }
         PanelAction::FolderClicked(_idx) => {
@@ -122,7 +139,7 @@ pub(super) fn dispatch_layer(
             let beat = content_state.current_beat;
             {
                 let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
-                { let _ = content_tx.try_send(ContentCommand::Execute(cmd)); }
+                { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
             }
             DispatchResult::structural()
         }
@@ -130,7 +147,7 @@ pub(super) fn dispatch_layer(
             let beat = content_state.current_beat;
             {
                 let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
-                { let _ = content_tx.try_send(ContentCommand::Execute(cmd)); }
+                { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
             }
             DispatchResult::structural()
         }
@@ -185,7 +202,7 @@ pub(super) fn dispatch_layer(
                         let cmd = manifold_editing::commands::layer::ReorderLayerCommand::new(
                             old_order, new_order, old_parents, new_parents,
                         );
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
                     }
                 }
             }
@@ -204,7 +221,7 @@ pub(super) fn dispatch_layer(
                     count,
                     None,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             }
             DispatchResult::structural()
         }
@@ -214,12 +231,14 @@ pub(super) fn dispatch_layer(
                     && let Some(layer) = project.timeline.layers.get(*idx) {
                         let layer_clone = layer.clone();
                         let cmd = DeleteLayerCommand::new(layer_clone, *idx);
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
-                        // Fix active_layer if needed
-                        if let Some(al) = active_layer
-                            && *al >= project.timeline.layers.len() {
-                                *active_layer = Some(project.timeline.layers.len().saturating_sub(1));
-                            }
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                        // Fix active_layer if deleted layer was active
+                        if let Some(al) = active_layer.as_ref()
+                            && !project.timeline.layers.iter().any(|l| l.layer_id == *al)
+                        {
+                            *active_layer = project.timeline.layers.last()
+                                .map(|l| l.layer_id.clone());
+                        }
                     }
             }
             DispatchResult::structural()

@@ -21,8 +21,8 @@ where
                 }
             })
         }
-        DriverTarget::GeneratorParam { layer_index } => {
-            let layer = project.timeline.layers.get_mut(*layer_index)?;
+        DriverTarget::GeneratorParam { layer_id } => {
+            let (_, layer) = project.timeline.find_layer_by_id_mut(layer_id)?;
             let gp = layer.gen_params.get_or_insert_with(Default::default);
             let drivers = gp.drivers.get_or_insert_with(Vec::new);
             Some(f(drivers))

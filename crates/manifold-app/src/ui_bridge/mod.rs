@@ -55,6 +55,7 @@ pub fn dispatch(
     adsr_snapshot: &mut Option<(f32, f32, f32, f32)>,
     target_snapshot: &mut Option<f32>,
     user_prefs: &mut UserPrefs,
+    active_inspector_drag: &mut Option<crate::app::ActiveInspectorDrag>,
 ) -> DispatchResult {
     match action {
         // ── Transport ──────────────────────────────────────────────
@@ -173,7 +174,7 @@ pub fn dispatch(
         | PanelAction::GenEnvParamCommit(_)
         | PanelAction::AddEffect(..)
         | PanelAction::PasteEffects => {
-            inspector::dispatch_inspector(action, project, content_tx, content_state, ui, selection, active_layer, drag_snapshot, trim_snapshot, adsr_snapshot, target_snapshot)
+            inspector::dispatch_inspector(action, project, content_tx, content_state, ui, selection, active_layer, drag_snapshot, trim_snapshot, adsr_snapshot, target_snapshot, active_inspector_drag)
         }
 
         // ── Layer operations ──────────────────────────────────────
@@ -343,12 +344,12 @@ pub(crate) fn select_region_to_with_project(
 
 /// Handle undo (called from keyboard shortcut). Sends to content thread.
 pub fn undo(content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>) {
-    let _ = content_tx.try_send(crate::content_command::ContentCommand::Undo);
+    crate::content_command::ContentCommand::send(content_tx, crate::content_command::ContentCommand::Undo);
 }
 
 /// Handle redo (called from keyboard shortcut). Sends to content thread.
 pub fn redo(content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>) {
-    let _ = content_tx.try_send(crate::content_command::ContentCommand::Redo);
+    crate::content_command::ContentCommand::send(content_tx, crate::content_command::ContentCommand::Redo);
 }
 
 // ── Effect tab routing helpers ───────────────────────────────────

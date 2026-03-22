@@ -1,6 +1,7 @@
 //! Project-related dispatch: file operations, export, audio/percussion, resolution,
 //! MIDI note/channel, generator type, waveform/stem actions.
 
+use manifold_core::LayerId;
 use manifold_core::project::Project;
 use manifold_core::types::GeneratorType;
 use manifold_ui::PanelAction;
@@ -18,7 +19,7 @@ pub(super) fn dispatch_project(
     _content_state: &crate::content_state::ContentState,
     ui: &mut UIRoot,
     _selection: &mut SelectionState,
-    _active_layer: &mut Option<usize>,
+    _active_layer: &mut Option<LayerId>,
     user_prefs: &mut UserPrefs,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
@@ -44,7 +45,7 @@ pub(super) fn dispatch_project(
                 dialog_path_memory::remember_directory(
                     DialogContext::PercussionImport, &path_str, user_prefs,
                 );
-                let _ = content_tx.try_send(ContentCommand::PercussionImport(path_str));
+                ContentCommand::send(content_tx, ContentCommand::PercussionImport(path_str));
                 ui.layout.waveform_lane_visible = true;
             }
             DispatchResult::structural()
@@ -78,7 +79,7 @@ pub(super) fn dispatch_project(
                 let cmd = manifold_editing::commands::settings::ChangeLayerMidiNoteCommand::new(
                     *layer_idx, old_note, *note,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             }
             DispatchResult::structural()
         }
@@ -88,7 +89,7 @@ pub(super) fn dispatch_project(
             }
             let li = *layer_idx;
             let ch = *channel;
-            let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
                 if let Some(layer) = p.timeline.layers.get_mut(li) {
                     layer.midi_channel = ch;
                 }
@@ -100,7 +101,7 @@ pub(super) fn dispatch_project(
             let old = project.settings.resolution_preset;
             if let Some(new) = ResolutionPreset::from_index(*preset_idx) {
                 let cmd = manifold_editing::commands::settings::ChangeResolutionCommand::new(old, new);
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             }
             DispatchResult::resolution()
         }
@@ -109,7 +110,7 @@ pub(super) fn dispatch_project(
             project.settings.output_height = *h;
             let ww = *w;
             let hh = *h;
-            let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
                 p.settings.output_width = ww;
                 p.settings.output_height = hh;
             })));
@@ -132,9 +133,12 @@ pub(super) fn dispatch_project(
                         let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
                             *layer_idx, old_type, new_type, old_params, old_drivers, old_envelopes,
                         );
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
-                        let _ = content_tx.try_send(ContentCommand::GeneratorTypeChanged {
-                            layer_index: *layer_idx as i32,
+                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                        let layer_id = project.timeline.layers.get(*layer_idx)
+                            .map(|l| l.layer_id.clone())
+                            .unwrap_or_default();
+                        ContentCommand::send(content_tx, ContentCommand::GeneratorTypeChanged {
+                            layer_id,
                             new_type,
                         });
                     }
@@ -158,15 +162,15 @@ pub(super) fn dispatch_project(
                 dialog_path_memory::remember_directory(
                     DialogContext::PercussionImport, &path_str, user_prefs,
                 );
-                let _ = content_tx.try_send(ContentCommand::PercussionImport(path_str));
+                ContentCommand::send(content_tx, ContentCommand::PercussionImport(path_str));
                 ui.layout.waveform_lane_visible = true;
             }
             DispatchResult::structural()
         }
         PanelAction::RemoveAudioClicked => {
             log::info!("Remove audio clicked");
-            let _ = content_tx.try_send(ContentCommand::ResetAudio);
-            let _ = content_tx.try_send(ContentCommand::StemReset);
+            ContentCommand::send(content_tx, ContentCommand::ResetAudio);
+            ContentCommand::send(content_tx, ContentCommand::StemReset);
             ui.waveform_lane.clear_audio();
             ui.stem_lanes.clear_all_stems();
             ui.layout.waveform_lane_visible = true;
@@ -177,7 +181,7 @@ pub(super) fn dispatch_project(
             // Events arrive in panel-local coords (offset by wf_rect.x in ui_root),
             // so use local_pixel_to_beat which doesn't subtract tracks_rect.x again.
             let beat = ui.viewport.local_pixel_to_beat(*local_x).max(0.0);
-            let _ = content_tx.try_send(ContentCommand::SeekToBeat(beat));
+            ContentCommand::send(content_tx, ContentCommand::SeekToBeat(beat));
             DispatchResult::handled()
         }
         PanelAction::WaveformDragDelta(delta_beats) => {
@@ -191,7 +195,7 @@ pub(super) fn dispatch_project(
             }
             // Sync to content thread so audio playback follows.
             let db = *delta_beats;
-            let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
                 if let Some(state) = p.percussion_import.as_mut() {
                     state.audio_start_beat = (state.audio_start_beat + db).max(0.0);
                 }
@@ -210,7 +214,7 @@ pub(super) fn dispatch_project(
                     );
                     // State already at new_start — send command for undo stack only.
                     let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                    let _ = content_tx.try_send(ContentCommand::Execute(boxed));
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                 }
             }
             DispatchResult::handled()
@@ -219,7 +223,7 @@ pub(super) fn dispatch_project(
             ui.waveform_lane.set_expanded_state(*expanded);
             ui.stem_lanes.set_expanded(*expanded);
             ui.layout.stem_lanes_expanded = *expanded;
-            let _ = content_tx.try_send(ContentCommand::StemSetExpanded(*expanded));
+            ContentCommand::send(content_tx, ContentCommand::StemSetExpanded(*expanded));
 
             if *expanded
                 && let Some(stem_paths) = project.percussion_import
@@ -248,31 +252,31 @@ pub(super) fn dispatch_project(
             DispatchResult::structural()
         }
         PanelAction::ReAnalyzeDrums => {
-            let _ = content_tx.try_send(ContentCommand::ReAnalyzeTriggers("drums".into()));
+            ContentCommand::send(content_tx, ContentCommand::ReAnalyzeTriggers("drums".into()));
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeBass => {
-            let _ = content_tx.try_send(ContentCommand::ReAnalyzeTriggers("bass".into()));
+            ContentCommand::send(content_tx, ContentCommand::ReAnalyzeTriggers("bass".into()));
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeSynth => {
-            let _ = content_tx.try_send(ContentCommand::ReAnalyzeTriggers("synth".into()));
+            ContentCommand::send(content_tx, ContentCommand::ReAnalyzeTriggers("synth".into()));
             DispatchResult::handled()
         }
         PanelAction::ReAnalyzeVocal => {
-            let _ = content_tx.try_send(ContentCommand::ReAnalyzeTriggers("vocal".into()));
+            ContentCommand::send(content_tx, ContentCommand::ReAnalyzeTriggers("vocal".into()));
             DispatchResult::handled()
         }
         PanelAction::ReImportStems => {
-            let _ = content_tx.try_send(ContentCommand::ReImportStems);
+            ContentCommand::send(content_tx, ContentCommand::ReImportStems);
             DispatchResult::handled()
         }
         PanelAction::StemMuteToggled(stem_index) => {
-            let _ = content_tx.try_send(ContentCommand::StemToggleMute(*stem_index));
+            ContentCommand::send(content_tx, ContentCommand::StemToggleMute(*stem_index));
             DispatchResult::handled()
         }
         PanelAction::StemSoloToggled(stem_index) => {
-            let _ = content_tx.try_send(ContentCommand::StemToggleSolo(*stem_index));
+            ContentCommand::send(content_tx, ContentCommand::StemToggleSolo(*stem_index));
             DispatchResult::handled()
         }
 

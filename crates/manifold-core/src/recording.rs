@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::id::ClipId;
+use crate::id::{ClipId, LayerId};
 use crate::types::TempoPointSource;
 use crate::tempo::{TempoMap, TempoPoint};
 use crate::math::BeatQuantizer;
@@ -13,6 +13,8 @@ pub struct RecordedClipProvenance {
     pub video_clip_id: String,
     #[serde(default)]
     pub layer_index: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_id: Option<LayerId>,
     #[serde(default)]
     pub midi_note: i32,
     #[serde(default)]

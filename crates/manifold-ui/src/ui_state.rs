@@ -439,4 +439,81 @@ impl UIState {
         self.is_trimming = false;
         self.trim_clip_id = None;
     }
+
+    // ── Selection Validation ───────────────────────────────────────
+
+    /// Remove clip/layer IDs from selection that no longer exist in the project.
+    /// Called after accepting a new project snapshot with a changed data_version.
+    /// Returns true if any references were pruned.
+    pub fn prune_stale_references(
+        &mut self,
+        valid_clip_ids: &HashSet<ClipId>,
+        valid_layer_ids: &HashSet<LayerId>,
+    ) -> bool {
+        let mut changed = false;
+
+        // Prune clip IDs
+        let before = self.selected_clip_ids.len();
+        self.selected_clip_ids.retain(|id| valid_clip_ids.contains(id));
+        if self.selected_clip_ids.len() != before { changed = true; }
+
+        if let Some(ref id) = self.primary_selected_clip_id
+            && !valid_clip_ids.contains(id)
+        {
+            self.primary_selected_clip_id = None;
+            self.selected_layer_id_for_clip = None;
+            changed = true;
+        }
+
+        if let Some(ref id) = self.hovered_clip_id
+            && !valid_clip_ids.contains(id)
+        {
+            self.hovered_clip_id = None;
+            changed = true;
+        }
+
+        // Prune layer IDs
+        let before = self.selected_layer_ids.len();
+        self.selected_layer_ids.retain(|id| valid_layer_ids.contains(id));
+        if self.selected_layer_ids.len() != before { changed = true; }
+
+        if let Some(ref id) = self.primary_selected_layer_id
+            && !valid_layer_ids.contains(id)
+        {
+            self.primary_selected_layer_id = None;
+            changed = true;
+        }
+
+        if let Some(ref id) = self.selected_layer_id_for_clip
+            && !valid_layer_ids.contains(id)
+        {
+            self.selected_layer_id_for_clip = None;
+            changed = true;
+        }
+
+        if let Some(ref id) = self.insert_cursor_layer_id
+            && !valid_layer_ids.contains(id)
+        {
+            self.insert_cursor_layer_id = None;
+            changed = true;
+        }
+
+        // Prune region layer IDs
+        if self.selection_region.is_active {
+            let before = self.selection_region.selected_layer_ids.len();
+            self.selection_region.selected_layer_ids.retain(|id| valid_layer_ids.contains(id));
+            if self.selection_region.selected_layer_ids.len() != before {
+                changed = true;
+            }
+            if self.selection_region.selected_layer_ids.is_empty() {
+                self.selection_region.clear();
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.selection_version += 1;
+        }
+        changed
+    }
 }

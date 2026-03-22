@@ -267,6 +267,16 @@ impl Timeline {
         self.layers.iter().enumerate().find(|(_, l)| l.layer_id == layer_id)
     }
 
+    /// Find layer index by persistent ID. Convenience wrapper.
+    pub fn find_layer_index_by_id(&self, layer_id: &str) -> Option<usize> {
+        self.find_layer_by_id(layer_id).map(|(i, _)| i)
+    }
+
+    /// Find layer by persistent ID (mutable). Returns (index, &mut Layer).
+    pub fn find_layer_by_id_mut(&mut self, layer_id: &str) -> Option<(usize, &mut Layer)> {
+        self.layers.iter_mut().enumerate().find(|(_, l)| l.layer_id == layer_id)
+    }
+
     /// Move layer from one index to another. Unity Timeline.cs lines 250-266.
     pub fn move_layer(&mut self, from: usize, to: usize) {
         if from >= self.layers.len() || to >= self.layers.len() || from == to {

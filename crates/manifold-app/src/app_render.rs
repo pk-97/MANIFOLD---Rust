@@ -30,6 +30,14 @@ impl Application {
                 if let Some(snapshot) = state.project_snapshot {
                     let drag_active = self.overlay.drag_mode() != manifold_ui::interaction_overlay::DragMode::None;
                     // Suppress snapshots until content thread catches up after a local project load.
+                    // Safety net: timeout after 120 frames (~2s) to prevent indefinite suppression.
+                    const MAX_SUPPRESS_FRAMES: u64 = 120;
+                    let suppress_timed_out = self.suppress_snapshot_until > 0
+                        && self.frame_count.saturating_sub(self.suppress_snapshot_set_at) >= MAX_SUPPRESS_FRAMES;
+                    if suppress_timed_out {
+                        log::warn!("[UI] Snapshot suppression timed out — accepting snapshot");
+                        self.suppress_snapshot_until = 0;
+                    }
                     let suppressed = state.data_version < self.suppress_snapshot_until;
 
                     // Inspector drags (slider/trim/target/ADSR) are safe to accept
@@ -45,6 +53,11 @@ impl Application {
                     if !drag_active && !suppressed {
                         let version_changed = state.data_version != self.content_state.data_version;
                         self.local_project = *snapshot;
+                        // Restore actively-dragged inspector field so snapshot
+                        // doesn't overwrite the value the user is manipulating.
+                        if let Some(ref drag) = self.active_inspector_drag {
+                            drag.apply(&mut self.local_project);
+                        }
                         // Clear suppression once we've accepted a post-load snapshot
                         self.suppress_snapshot_until = 0;
 
@@ -65,6 +78,25 @@ impl Application {
                         // just update param_values — push_state() syncs sliders
                         // every frame without needing a structural rebuild.
                         if version_changed {
+                            // Prune selection references to deleted clips/layers
+                            let valid_clips: std::collections::HashSet<manifold_core::ClipId> =
+                                self.local_project.timeline.layers.iter()
+                                    .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
+                                    .collect();
+                            let valid_layers: std::collections::HashSet<manifold_core::LayerId> =
+                                self.local_project.timeline.layers.iter()
+                                    .map(|l| l.layer_id.clone())
+                                    .collect();
+                            self.selection.prune_stale_references(&valid_clips, &valid_layers);
+
+                            // Validate active_layer_id
+                            if let Some(ref id) = self.active_layer_id
+                                && !valid_layers.contains(id)
+                            {
+                                self.active_layer_id = self.local_project.timeline.layers
+                                    .last().map(|l| l.layer_id.clone());
+                            }
+
                             self.needs_structural_sync = true;
                             self.needs_rebuild = true;
                         }
@@ -353,6 +385,7 @@ impl Application {
                     let project = Self::create_default_project();
                     self.local_project = project.clone();
                     self.suppress_snapshot_until = self.content_state.data_version + 1;
+                    self.suppress_snapshot_set_at = self.frame_count;
                     self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
                     self.send_content_cmd(ContentCommand::SetProject);
                     self.selection.clear_selection();
@@ -399,6 +432,7 @@ impl Application {
                 &mut self.adsr_snapshot,
                 &mut self.target_snapshot,
                 &mut self.user_prefs,
+                &mut self.active_inspector_drag,
             );
             if result.structural_change {
                 needs_structural_sync = true;

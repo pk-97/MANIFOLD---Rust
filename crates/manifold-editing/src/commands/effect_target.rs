@@ -1,4 +1,4 @@
-use manifold_core::ClipId;
+use manifold_core::{ClipId, LayerId};
 use manifold_core::effects::{EffectInstance, EffectGroup};
 use manifold_core::project::Project;
 
@@ -7,7 +7,7 @@ use manifold_core::project::Project;
 #[derive(Debug, Clone)]
 pub enum EffectTarget {
     Clip { clip_id: ClipId },
-    Layer { layer_index: usize },
+    Layer { layer_id: LayerId },
     Master,
 }
 
@@ -32,8 +32,8 @@ where
             // SAFETY: effects and groups are non-overlapping fields of TimelineClip.
             Some(f(unsafe { &mut *effects }, unsafe { &mut *groups }))
         }
-        EffectTarget::Layer { layer_index } => {
-            let layer = project.timeline.layers.get_mut(*layer_index)?;
+        EffectTarget::Layer { layer_id } => {
+            let (_, layer) = project.timeline.find_layer_by_id_mut(layer_id)?;
             let effects = layer.effects_mut() as *mut Vec<EffectInstance>;
             let groups = layer.effect_groups_mut() as *mut Vec<EffectGroup>;
             Some(f(unsafe { &mut *effects }, unsafe { &mut *groups }))
@@ -67,8 +67,8 @@ where
             }
             None
         }
-        EffectTarget::Layer { layer_index } => {
-            let layer = project.timeline.layers.get(*layer_index)?;
+        EffectTarget::Layer { layer_id } => {
+            let (_, layer) = project.timeline.find_layer_by_id(layer_id)?;
             let effects = layer.effects.as_deref().unwrap_or(&[]);
             let groups = layer.effect_groups.as_deref().unwrap_or(&[]);
             Some(f(effects, groups))
@@ -88,6 +88,6 @@ pub enum DriverTarget {
         effect_index: usize,
     },
     GeneratorParam {
-        layer_index: usize,
+        layer_id: LayerId,
     },
 }

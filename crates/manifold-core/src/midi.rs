@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use crate::LayerId;
 use crate::types::ClipDurationMode;
 
 /// A single MIDI note → clip mapping.
@@ -11,6 +12,8 @@ pub struct MidiNoteMapping {
     pub video_clip_ids: Vec<String>,
     #[serde(default)]
     pub target_layer_index: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_layer_id: Option<LayerId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_mode: Option<ClipDurationMode>,
 }

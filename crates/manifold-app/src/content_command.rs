@@ -3,7 +3,7 @@
 //! The UI thread communicates with the content thread via a bounded
 //! crossbeam channel. Each variant represents an action that must
 //! execute on the content thread where PlaybackEngine and EditingService live.
-use manifold_core::ClipId;
+use manifold_core::{ClipId, LayerId};
 use manifold_core::project::Project;
 use manifold_editing::command::Command;
 use manifold_playback::audio_sync::PreloadedAudioData;
@@ -109,7 +109,7 @@ pub enum ContentCommand {
     // ── Generator ──────────────────────────────────────────────────
     /// Notify renderer that a layer's generator type changed.
     /// Port of C# PlaybackController.NotifyGeneratorTypeChanged().
-    GeneratorTypeChanged { layer_index: i32, new_type: manifold_core::GeneratorType },
+    GeneratorTypeChanged { layer_id: LayerId, new_type: manifold_core::GeneratorType },
 
     // ── Lifecycle ─────────────────────────────────────────────────
     /// Pause rendering (content thread stops ticking/rendering but still drains commands).
@@ -134,4 +134,13 @@ pub enum ContentCommand {
 
     // ── Shutdown ──────────────────────────────────────────────────
     Shutdown,
+}
+
+impl ContentCommand {
+    /// Send a command to the content thread. Logs on failure (channel full or disconnected).
+    pub fn send(tx: &crossbeam_channel::Sender<ContentCommand>, cmd: ContentCommand) {
+        if let Err(e) = tx.try_send(cmd) {
+            log::error!("[UI] Content command dropped: {e}");
+        }
+    }
 }

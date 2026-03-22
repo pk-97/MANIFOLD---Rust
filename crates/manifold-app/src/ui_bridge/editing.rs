@@ -79,7 +79,7 @@ pub(super) fn dispatch_editing(
             let snapped = manifold_ui::snap::floor_beat_to_grid(*beat, grid_step);
             {
                 let (cmd, _clip_id) = EditingService::create_clip_at_position(project, snapped, *layer, 4.0);
-                { let _ = content_tx.try_send(ContentCommand::Execute(cmd)); }
+                { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
                 // Enforce non-overlap for the newly created clip
                 if let Some(new_layer) = project.timeline.layers.get(*layer)
                     && let Some(new_clip) = new_layer.clips.last() {
@@ -90,7 +90,7 @@ pub(super) fn dispatch_editing(
                             project, &new_clip_clone, *layer, &ignore, spb,
                         );
                         for cmd in overlap_cmds {
-                            { let _ = content_tx.try_send(ContentCommand::Execute(cmd)); }
+                            { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
                         }
                         // Select the newly created clip
                         let new_lid = project.timeline.layers.get(*layer)
@@ -112,7 +112,7 @@ pub(super) fn dispatch_editing(
             {
                 let spb = 60.0 / project.settings.bpm;
                 if let Some(cmd) = EditingService::split_clip_at_beat(project, clip_id, beat, spb) {
-                    { let _ = content_tx.try_send(ContentCommand::Execute(cmd)); }
+                    { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
                 }
             }
             DispatchResult::structural()
@@ -122,7 +122,7 @@ pub(super) fn dispatch_editing(
             {
                 let commands = EditingService::delete_clips(project, std::slice::from_ref(&clip_id), None, 0.0);
                 if !commands.is_empty() {
-                    for c in commands { let _ = content_tx.try_send(ContentCommand::Execute(c)); }
+                    for c in commands { ContentCommand::send(content_tx, ContentCommand::Execute(c)); }
                 }
             }
             selection.selected_clip_ids.remove(&clip_id);
@@ -141,7 +141,7 @@ pub(super) fn dispatch_editing(
                 let spb = 60.0 / project.settings.bpm.max(1.0);
                 let commands = EditingService::duplicate_clips(project, std::slice::from_ref(&clip_id), &region, spb);
                 if !commands.is_empty() {
-                    for c in commands { let _ = content_tx.try_send(ContentCommand::Execute(c)); }
+                    for c in commands { ContentCommand::send(content_tx, ContentCommand::Execute(c)); }
                 }
             }
             DispatchResult::structural()
@@ -153,7 +153,7 @@ pub(super) fn dispatch_editing(
                 // TODO: browser paste not yet wired
                 let result = manifold_editing::service::PasteResult { commands: Vec::new(), pasted_clip_ids: Vec::new(), skip_reason: None, skipped_count: 0 };
                 if !result.commands.is_empty() {
-                    for c in result.commands { let _ = content_tx.try_send(ContentCommand::Execute(c)); }
+                    for c in result.commands { ContentCommand::send(content_tx, ContentCommand::Execute(c)); }
                     selection.selected_clip_ids.clear();
                     for id in result.pasted_clip_ids {
                         selection.selected_clip_ids.insert(id);
@@ -175,7 +175,7 @@ pub(super) fn dispatch_editing(
                     idx,
                     None,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             }
             DispatchResult::structural()
         }
@@ -190,7 +190,7 @@ pub(super) fn dispatch_editing(
                     idx,
                     None,
                 );
-                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             }
             DispatchResult::structural()
         }
@@ -201,7 +201,7 @@ pub(super) fn dispatch_editing(
                 if project.timeline.layers.len() > 1 && idx < project.timeline.layers.len() {
                     let layer = project.timeline.layers[idx].clone();
                     let cmd = DeleteLayerCommand::new(layer, idx);
-                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); let _ = content_tx.try_send(ContentCommand::Execute(boxed)); }
+                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
                 }
             }
             DispatchResult::structural()
@@ -242,7 +242,7 @@ pub(super) fn dispatch_editing(
                     );
                     if result.success {
                         if let Some(undo_cmd) = result.undo_command {
-                            let _ = content_tx.try_send(ContentCommand::Execute(undo_cmd));
+                            ContentCommand::send(content_tx, ContentCommand::Execute(undo_cmd));
                         }
                         log::info!("Imported {} clips from MIDI to layer {}", result.added_clips, layer_idx);
                     }

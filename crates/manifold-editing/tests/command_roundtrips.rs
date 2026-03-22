@@ -541,7 +541,7 @@ fn effect_on_layer_undo_roundtrip() {
         enabled: true,
         ..make_effect(EffectType::Mirror)
     };
-    let target = EffectTarget::Layer { layer_index: 0 };
+    let target = EffectTarget::Layer { layer_id: project.timeline.layers[0].layer_id.clone() };
     let mut cmd = AddEffectCommand::new(target, effect, 0);
 
     cmd.execute(&mut project);

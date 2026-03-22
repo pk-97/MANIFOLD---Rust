@@ -65,7 +65,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 let project_path = self.current_project_path
                     .as_ref()
                     .map_or_else(String::new, |p| p.display().to_string());
-                let _ = self.content_tx.try_send(
+                ContentCommand::send(self.content_tx,
                     ContentCommand::StartProfiling {
                         project_name,
                         project_path,
@@ -76,7 +76,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 );
             } else {
                 // Stopping — dump session
-                let _ = self.content_tx.try_send(ContentCommand::StopProfiling);
+                ContentCommand::send(self.content_tx, ContentCommand::StopProfiling);
             }
         }
     }
@@ -98,7 +98,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         //   needsRebuild = true; RefreshAllInspectors();
         //   playbackController.RefreshActiveClips(); playbackController.MarkCompositorDirty();
         //   ApplyProjectResolutionFromFooter(); ApplyProjectFpsFromFooter();
-        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::MarkCompositorDirty);
+        ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::MarkCompositorDirty);
 
         // TODO: Re-apply resolution/FPS from project settings after undo/redo.
         // Unity calls ApplyProjectResolutionFromFooter() and ApplyProjectFpsFromFooter()
@@ -120,7 +120,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn mark_compositor_dirty(&mut self) {
-        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::MarkCompositorDirty);
+        ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::MarkCompositorDirty);
     }
 
     fn invalidate_all_layer_bitmaps(&mut self) {
@@ -201,7 +201,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                     let cmd = RemoveEffectCommand::new(target.clone(), fx.clone(), idx);
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                     boxed.execute(self.project);
-                    let _ = self.content_tx.try_send(ContentCommand::Execute(boxed));
+                    ContentCommand::send(self.content_tx, ContentCommand::Execute(boxed));
                 }
         }
 
@@ -234,7 +234,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             );
             let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
             boxed.execute(self.project);
-            let _ = self.content_tx.try_send(ContentCommand::Execute(boxed));
+            ContentCommand::send(self.content_tx, ContentCommand::Execute(boxed));
         }
 
         *self.needs_structural_sync = true;
@@ -256,7 +256,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                     let cmd = RemoveEffectCommand::new(target.clone(), fx.clone(), idx);
                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                     boxed.execute(self.project);
-                    let _ = self.content_tx.try_send(ContentCommand::Execute(boxed));
+                    ContentCommand::send(self.content_tx, ContentCommand::Execute(boxed));
                 }
         }
 
@@ -276,7 +276,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         );
         let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
         boxed.execute(self.project);
-        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(boxed));
+        ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(boxed));
         *self.needs_rebuild = true;
         true
     }
@@ -298,7 +298,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             );
             let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
             boxed.execute(self.project);
-            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(boxed));
+            ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(boxed));
             *self.needs_rebuild = true;
             true
         } else {
@@ -350,14 +350,14 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn play_pause(&mut self, insert_cursor_beat: Option<f32>) {
         if self.content_state.is_playing {
-            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Pause);
+            ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Pause);
         } else {
             // Unity: if paused and insert cursor exists, seek to cursor first (Ableton behavior)
             if let Some(beat) = insert_cursor_beat {
                 let time = beat * (60.0 / self.project.settings.bpm);
-                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::SeekTo(time));
+                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(time));
             }
-            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Play);
+            ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Play);
         }
     }
 
@@ -374,10 +374,10 @@ impl TimelineInputHost for AppInputHost<'_> {
                     }
                 }
                 let end_time = max_beat * (60.0 / self.project.settings.bpm);
-                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::SeekTo(end_time));
+                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(end_time));
             }
         } else {
-            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::SeekTo(time));
+            ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(time));
         }
     }
 
@@ -416,7 +416,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         } else {
             None
         };
-        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::CopyClips {
+        ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::CopyClips {
             clip_ids: clip_ids.to_vec(),
             region,
         });
@@ -429,7 +429,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         } else {
             None
         };
-        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::CopyClips {
+        ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::CopyClips {
             clip_ids: clip_ids.to_vec(),
             region,
         });
@@ -443,7 +443,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         };
         let commands = EditingService::delete_clips(project, clip_ids, del_region.as_ref(), spb);
         if !commands.is_empty() {
-            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, "Delete clips".into()));
+            ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, "Delete clips".into()));
         }
         self.selection.clear_selection();
     }
@@ -451,7 +451,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn paste_clips(&mut self, target_beat: f32, target_layer: i32) {
         // Send paste to content thread and wait for result (pasted clip IDs)
         let (tx, rx) = std::sync::mpsc::channel();
-        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::PasteClips {
+        ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::PasteClips {
             target_beat,
             target_layer,
             result_tx: tx,
@@ -501,7 +501,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 // Execute locally for read-back (need new clip IDs for selection).
                 // Phase 3 will move this to content thread with sync response.
                 for c in commands.iter_mut() { c.execute(project); }
-                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, "Duplicate clips".into()));
+                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, "Duplicate clips".into()));
 
                 // Step 4h: find newly created clips and select them
                 let new_ids: Vec<ClipId> = project.timeline.layers.iter()
@@ -534,7 +534,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             };
             let commands = EditingService::delete_clips(project, clip_ids, region.as_ref(), spb);
             if !commands.is_empty() {
-                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, "Delete clips".into()));
+                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, "Delete clips".into()));
             }
         }
         *self.needs_structural_sync = true;
@@ -546,7 +546,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 && let Some(layer) = project.timeline.layers.get(layer_index) {
                     let layer_clone = layer.clone();
                     let cmd = manifold_editing::commands::layer::DeleteLayerCommand::new(layer_clone, layer_index);
-                    let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(Box::new(cmd)));
+                    ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(Box::new(cmd)));
                 }
         *self.needs_rebuild = true;
     }
@@ -562,7 +562,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 }
             }
             if !commands.is_empty() {
-                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
+                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
         }
     }
@@ -571,7 +571,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if let Some(project) = Some(&mut *self.project) {
             let commands = EditingService::extend_clips_by_grid(project, clip_ids, grid_step);
             if !commands.is_empty() {
-                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
+                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
         }
     }
@@ -580,7 +580,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if let Some(project) = Some(&mut *self.project) {
             let commands = EditingService::shrink_clips_by_grid(project, clip_ids, grid_step);
             if !commands.is_empty() {
-                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
+                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
         }
     }
@@ -590,7 +590,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             let spb = 60.0 / project.settings.bpm;
             let commands = EditingService::nudge_clips(project, clip_ids, beat_delta, spb);
             if !commands.is_empty() {
-                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
+                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
         }
         *self.needs_structural_sync = true;
@@ -627,10 +627,10 @@ impl TimelineInputHost for AppInputHost<'_> {
 
             if !commands.is_empty() {
                 let _label = if new_muted { "Mute clips" } else { "Unmute clips" };
-                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
+                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
         }
-        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::MarkCompositorDirty);
+        ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::MarkCompositorDirty);
         *self.needs_structural_sync = true;
         *self.needs_rebuild = true;
     }
@@ -665,11 +665,11 @@ impl TimelineInputHost for AppInputHost<'_> {
                 layers_to_group, original_order,
             );
 
-            let _ = self.content_tx.try_send(crate::content_command::ContentCommand::Execute(Box::new(cmd)));
+            ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(Box::new(cmd)));
         }
 
         self.selection.clear_selection();
-        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::MarkCompositorDirty);
+        ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::MarkCompositorDirty);
         *self.needs_rebuild = true;
         *self.needs_structural_sync = true;
     }
@@ -717,12 +717,12 @@ impl TimelineInputHost for AppInputHost<'_> {
             }
 
             if !commands.is_empty() {
-                let _ = self.content_tx.try_send(crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
+                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
         }
 
         self.selection.clear_selection();
-        let _ = self.content_tx.try_send(crate::content_command::ContentCommand::MarkCompositorDirty);
+        ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::MarkCompositorDirty);
         *self.needs_rebuild = true;
         *self.needs_structural_sync = true;
     }

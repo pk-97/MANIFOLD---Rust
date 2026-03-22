@@ -48,6 +48,69 @@ pub type SelectionState = UIState;
 // ClipDragMode, ClipDragSnapshot, ClipDragState — REMOVED.
 // All drag state now lives in InteractionOverlay (interaction_overlay.rs).
 
+/// Tracks which inspector field is actively being dragged by the user.
+/// After snapshot acceptance, the dragged value is restored to prevent overwrite.
+#[derive(Debug, Clone)]
+pub(crate) enum ActiveInspectorDrag {
+    MasterOpacity(f32),
+    LayerOpacity { layer_id: LayerId, value: f32 },
+    ClipSlip { clip_id: manifold_core::ClipId, value: f32 },
+    ClipLoop { clip_id: manifold_core::ClipId, value: f32 },
+    EffectParam { layer_id: LayerId, effect_idx: usize, param_idx: usize, value: f32, is_clip: bool, clip_id: Option<manifold_core::ClipId> },
+    GenParam { layer_id: LayerId, param_idx: usize, value: f32 },
+}
+
+impl ActiveInspectorDrag {
+    /// Write the dragged value back into the project after snapshot acceptance.
+    pub(crate) fn apply(&self, project: &mut manifold_core::project::Project) {
+        match self {
+            Self::MasterOpacity(v) => {
+                project.settings.master_opacity = *v;
+            }
+            Self::LayerOpacity { layer_id, value } => {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
+                    layer.opacity = *value;
+                }
+            }
+            Self::ClipSlip { clip_id, value } => {
+                if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
+                    clip.in_point = *value;
+                }
+            }
+            Self::ClipLoop { clip_id, value } => {
+                if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
+                    clip.loop_duration_beats = *value;
+                }
+            }
+            Self::EffectParam { layer_id, effect_idx, param_idx, value, is_clip, clip_id } => {
+                let effects: Option<&mut Vec<manifold_core::effects::EffectInstance>> = if *is_clip {
+                    clip_id.as_ref().and_then(|cid| {
+                        project.timeline.find_clip_by_id_mut(cid)
+                            .map(|c| &mut c.effects)
+                    })
+                } else {
+                    project.timeline.find_layer_by_id_mut(layer_id)
+                        .and_then(|(_, l)| l.effects.as_mut())
+                };
+                if let Some(effects) = effects
+                    && let Some(effect) = effects.get_mut(*effect_idx)
+                    && *param_idx < effect.param_values.len()
+                {
+                    effect.param_values[*param_idx] = *value;
+                }
+            }
+            Self::GenParam { layer_id, param_idx, value } => {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
+                    && let Some(gp) = layer.gen_params.as_mut()
+                    && *param_idx < gp.param_values.len()
+                {
+                    gp.param_values[*param_idx] = *value;
+                }
+            }
+        }
+    }
+}
+
 /// Result from background audio loading thread.
 /// Contains pre-decoded audio for both kira playback and waveform visualization.
 pub(crate) struct PendingAudioLoadResult {
@@ -80,6 +143,8 @@ pub struct Application {
     /// overwriting the locally-loaded new project before the content thread
     /// processes the LoadProject command.
     pub(crate) suppress_snapshot_until: u64,
+    /// Frame count when suppress_snapshot_until was set (for timeout).
+    pub(crate) suppress_snapshot_set_at: u64,
 
     // Selection
     pub(crate) selection: SelectionState,
@@ -93,6 +158,9 @@ pub struct Application {
     pub(crate) adsr_snapshot: Option<(f32, f32, f32, f32)>,
     /// Envelope target drag snapshot for undo.
     pub(crate) target_snapshot: Option<f32>,
+
+    /// Active inspector drag — prevents snapshot from overwriting dragged field.
+    pub(crate) active_inspector_drag: Option<ActiveInspectorDrag>,
 
     // Effect clipboard (Unity: static EffectClipboard singleton, Rust: instance)
     pub(crate) effect_clipboard: manifold_editing::clipboard::EffectClipboard,
@@ -205,12 +273,14 @@ impl Application {
             content_state: ContentState::default(),
             local_project: default_project,
             suppress_snapshot_until: 0,
+            suppress_snapshot_set_at: 0,
             selection: UIState::new(),
             active_layer_id: None,
             slider_snapshot: None,
             trim_snapshot: None,
             adsr_snapshot: None,
             target_snapshot: None,
+            active_inspector_drag: None,
             effect_clipboard: manifold_editing::clipboard::EffectClipboard::new(),
             content_pipeline_output: None,
             #[cfg(target_os = "macos")]
@@ -271,7 +341,7 @@ impl Application {
     /// Send a command to the content thread (no-op if not yet spawned).
     pub(crate) fn send_content_cmd(&self, cmd: ContentCommand) {
         if let Some(ref tx) = self.content_tx {
-            let _ = tx.try_send(cmd);
+            ContentCommand::send(tx, cmd);
         }
     }
 
@@ -1482,6 +1552,7 @@ impl ApplicationHandler for Application {
                             let project = Self::create_default_project();
                             self.local_project = project.clone();
                             self.suppress_snapshot_until = self.content_state.data_version + 1;
+                            self.suppress_snapshot_set_at = self.frame_count;
                             self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
                             self.send_content_cmd(ContentCommand::SetProject);
                             self.selection.clear_selection();
