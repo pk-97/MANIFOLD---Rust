@@ -254,6 +254,7 @@ impl EffectChain {
         groups: &[EffectGroup],
         ctx: &EffectContext,
         wet_dry_lerp: Option<&WetDryLerpPipeline>,
+        mut gpu_profiler: Option<&mut crate::gpu_profiler::GpuProfiler>,
     ) -> Option<&wgpu::TextureView> {
         // Filter to enabled effects with registered processors
         let enabled: Vec<usize> = effects
@@ -339,12 +340,21 @@ impl EffectChain {
             // Unity ref: CompositorStack checks ShouldSkip before Apply + buffer swap.
             if let Some(processor) = registry.get_mut(fx.effect_type)
                 && !processor.should_skip(fx) {
+                    if let Some(ref mut profiler) = gpu_profiler {
+                        profiler.begin_scope(
+                            encoder,
+                            &format!("effect:{}", fx.effect_type),
+                        );
+                    }
                     processor.apply(
                         device, queue, encoder,
                         self.source_view(),
                         self.target_view(),
                         fx, &chain_ctx,
                     );
+                    if let Some(ref mut profiler) = gpu_profiler {
+                        profiler.end_scope(encoder);
+                    }
                     self.swap();
                 }
         }

@@ -259,6 +259,55 @@ impl ContentThread {
                 let active_layers = self.engine.project()
                     .map_or(0, |p| p.timeline.layers.len());
 
+                // Collect GPU pass timing results
+                let gpu_passes: Vec<manifold_profiler::GpuPassRecord> =
+                    self.content_pipeline.last_gpu_pass_results()
+                        .iter()
+                        .map(|p| manifold_profiler::GpuPassRecord {
+                            name: p.label.clone(),
+                            ms: p.duration_ms,
+                        })
+                        .collect();
+
+                // Collect active clip info with generator types
+                let active_clip_info: Vec<manifold_profiler::ActiveClipInfo> =
+                    tick_result.ready_clips.iter().map(|clip| {
+                        manifold_profiler::ActiveClipInfo {
+                            clip_id: clip.id.to_string(),
+                            generator_type: clip.generator_type.to_string(),
+                            layer_index: clip.layer_index,
+                        }
+                    }).collect();
+
+                // Collect active effect info from all clips + master
+                let mut active_effects: Vec<manifold_profiler::ActiveEffectInfo> = Vec::new();
+                for clip in &tick_result.ready_clips {
+                    for fx in &clip.effects {
+                        if fx.enabled {
+                            active_effects.push(manifold_profiler::ActiveEffectInfo {
+                                effect_type: fx.effect_type.to_string(),
+                                scope: format!("clip:{}", clip.id),
+                            });
+                        }
+                    }
+                }
+                if let Some(p) = self.engine.project() {
+                    for fx in &p.settings.master_effects {
+                        if fx.enabled {
+                            active_effects.push(manifold_profiler::ActiveEffectInfo {
+                                effect_type: fx.effect_type.to_string(),
+                                scope: "master".to_string(),
+                            });
+                        }
+                    }
+                }
+
+                // Memory estimate: compositor dimensions × 16 bytes (Rgba16Float) × buffer count
+                let (comp_w, comp_h) = self.content_pipeline.dimensions();
+                let bytes_per_pixel = 8u64; // Rgba16Float
+                let rt_count = tick_result.ready_clips.len() as u32 + 4; // clips + main + ping/pong + tonemap
+                let estimated_tex_bytes = comp_w as u64 * comp_h as u64 * bytes_per_pixel * rt_count as u64;
+
                 profiler.record_frame(manifold_profiler::FrameRecord {
                     index: self.frame_count - 1,
                     beat: current_beat,
@@ -274,8 +323,14 @@ impl ContentThread {
                         gpu_poll_ms: _gpu_poll_ms,
                         cleanup_ms: _cleanup_ms,
                     },
-                    active_clips: tick_result.ready_clips.len(),
-                    active_layers,
+                    gpu_passes,
+                    active_clips: active_clip_info,
+                    active_effects,
+                    active_layer_count: active_layers,
+                    memory: manifold_profiler::MemorySnapshot {
+                        estimated_texture_bytes: estimated_tex_bytes,
+                        render_target_count: rt_count,
+                    },
                 });
             }
 

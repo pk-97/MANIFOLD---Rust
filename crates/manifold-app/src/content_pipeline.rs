@@ -93,6 +93,12 @@ pub struct ContentPipeline {
     /// Captured inside render_content(), read by the profiler.
     #[cfg(feature = "profiling")]
     gpu_poll_ms: f64,
+    /// GPU pass-level profiler (timestamp queries). Created on first use.
+    #[cfg(feature = "profiling")]
+    gpu_profiler: Option<manifold_renderer::gpu_profiler::GpuProfiler>,
+    /// GPU pass timing results from the last frame.
+    #[cfg(feature = "profiling")]
+    last_gpu_pass_results: Vec<manifold_renderer::gpu_profiler::GpuPassTiming>,
 }
 
 impl ContentPipeline {
@@ -115,6 +121,10 @@ impl ContentPipeline {
             shared_generation: 0,
             #[cfg(feature = "profiling")]
             gpu_poll_ms: 0.0,
+            #[cfg(feature = "profiling")]
+            gpu_profiler: None,
+            #[cfg(feature = "profiling")]
+            last_gpu_pass_results: Vec::new(),
         }
     }
 
@@ -179,10 +189,28 @@ impl ContentPipeline {
         let (renderers, project) = engine.split_renderer_project();
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
 
+        // GPU profiler: begin frame and lazily create profiler
+        #[cfg(feature = "profiling")]
+        {
+            if self.gpu_profiler.is_none() {
+                self.gpu_profiler =
+                    manifold_renderer::gpu_profiler::GpuProfiler::new(&gpu.device, &gpu.queue, &gpu.adapter);
+            }
+            if let Some(ref mut profiler) = self.gpu_profiler {
+                profiler.begin_frame();
+            }
+        }
+
         // Render generators via downcast (GPU rendering needs queue + encoder)
         for renderer in renderers.iter_mut() {
             if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
-                gen_renderer.render_all(&gpu.queue, &mut encoder, time, beat, dt as f32, layers);
+                #[cfg(feature = "profiling")]
+                let gpu_prof = self.gpu_profiler.as_mut();
+                #[cfg(not(feature = "profiling"))]
+                let gpu_prof: Option<&mut manifold_renderer::gpu_profiler::GpuProfiler> = None;
+                gen_renderer.render_all(
+                    &gpu.queue, &mut encoder, time, beat, dt as f32, layers, gpu_prof,
+                );
                 break;
             }
         }
@@ -251,7 +279,13 @@ impl ContentPipeline {
         };
 
         // Render compositor (records into encoder, returns view into tonemap output)
-        let _compositor_view = self.compositor.render(&gpu.device, &gpu.queue, &mut encoder, &frame);
+        #[cfg(feature = "profiling")]
+        let gpu_prof = self.gpu_profiler.as_mut();
+        #[cfg(not(feature = "profiling"))]
+        let gpu_prof: Option<&mut manifold_renderer::gpu_profiler::GpuProfiler> = None;
+        let _compositor_view = self.compositor.render(
+            &gpu.device, &gpu.queue, &mut encoder, &frame, gpu_prof,
+        );
 
         let (comp_w, comp_h) = self.compositor.dimensions();
 
@@ -310,6 +344,12 @@ impl ContentPipeline {
             );
         }
 
+        // GPU profiler: resolve timestamp queries before submission
+        #[cfg(feature = "profiling")]
+        if let Some(ref profiler) = self.gpu_profiler {
+            profiler.resolve(&mut encoder);
+        }
+
         // Submit all GPU work (generators + compositor + copy)
         gpu.queue.submit(std::iter::once(encoder.finish()));
 
@@ -324,7 +364,13 @@ impl ContentPipeline {
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
 
         #[cfg(feature = "profiling")]
-        { self.gpu_poll_ms = _poll_start.elapsed().as_secs_f64() * 1000.0; }
+        {
+            self.gpu_poll_ms = _poll_start.elapsed().as_secs_f64() * 1000.0;
+            // Read GPU timestamp results after poll completes
+            self.last_gpu_pass_results = self.gpu_profiler
+                .as_ref()
+                .map_or_else(Vec::new, |p| p.read_results(&gpu.device));
+        }
 
         // Swap + update shared output view (non-macOS fallback path)
         #[cfg(not(target_os = "macos"))]
@@ -423,5 +469,12 @@ impl ContentPipeline {
     #[cfg(feature = "profiling")]
     pub fn last_gpu_poll_ms(&self) -> f64 {
         self.gpu_poll_ms
+    }
+
+    /// Per-pass GPU timing results from the last frame.
+    /// Only available with the `profiling` feature.
+    #[cfg(feature = "profiling")]
+    pub fn last_gpu_pass_results(&self) -> &[manifold_renderer::gpu_profiler::GpuPassTiming] {
+        &self.last_gpu_pass_results
     }
 }

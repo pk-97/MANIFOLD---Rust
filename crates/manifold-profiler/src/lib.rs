@@ -40,8 +40,47 @@ pub struct FrameRecord {
     pub wall_time_ms: f64,
     pub budget_exceeded: bool,
     pub content_thread: ContentTimings,
-    pub active_clips: usize,
-    pub active_layers: usize,
+    /// Per-pass GPU timing from timestamp queries (empty if unavailable).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gpu_passes: Vec<GpuPassRecord>,
+    /// Active clips this frame with generator type info.
+    pub active_clips: Vec<ActiveClipInfo>,
+    /// Active effects this frame with type and parameter info.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub active_effects: Vec<ActiveEffectInfo>,
+    pub active_layer_count: usize,
+    /// GPU memory estimate for this frame.
+    pub memory: MemorySnapshot,
+}
+
+/// GPU pass timing from wgpu timestamp queries.
+#[derive(Debug, Clone, Serialize)]
+pub struct GpuPassRecord {
+    pub name: String,
+    pub ms: f64,
+}
+
+/// Info about an active clip in this frame.
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveClipInfo {
+    pub clip_id: String,
+    pub generator_type: String,
+    pub layer_index: i32,
+}
+
+/// Info about an active effect in this frame.
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveEffectInfo {
+    pub effect_type: String,
+    /// "clip:<clip_id>", "layer:<index>", or "master"
+    pub scope: String,
+}
+
+/// GPU memory snapshot for a frame.
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct MemorySnapshot {
+    pub estimated_texture_bytes: u64,
+    pub render_target_count: u32,
 }
 
 /// CPU timing breakdown for a single content thread tick.
@@ -68,7 +107,21 @@ pub struct SessionSummary {
     pub p99_frame_ms: f64,
     pub max_frame_ms: f64,
     pub phase_aggregates: PhaseAggregates,
+    /// Per-GPU-pass aggregated stats (e.g. "generator:fluid_sim" → mean/p95/max).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gpu_pass_aggregates: Vec<GpuPassAggregate>,
     pub hotspots: Vec<Hotspot>,
+}
+
+/// Aggregated GPU timing for a specific pass label across all frames.
+#[derive(Debug, Clone, Serialize)]
+pub struct GpuPassAggregate {
+    pub name: String,
+    pub mean_ms: f64,
+    pub p95_ms: f64,
+    pub p99_ms: f64,
+    pub max_ms: f64,
+    pub frame_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -204,6 +257,7 @@ impl ProfileSession {
                 p99_frame_ms: 0.0,
                 max_frame_ms: 0.0,
                 phase_aggregates: PhaseAggregates::default(),
+                gpu_pass_aggregates: Vec::new(),
                 hotspots: Vec::new(),
             };
         }
@@ -241,6 +295,9 @@ impl ProfileSession {
         // Hotspot detection: find contiguous bar ranges where >50% of frames exceed budget
         let hotspots = self.detect_hotspots(budget);
 
+        // GPU pass aggregates — group by label, compute stats
+        let gpu_pass_aggregates = self.compute_gpu_pass_aggregates();
+
         SessionSummary {
             frames_over_budget,
             worst_frame,
@@ -249,8 +306,45 @@ impl ProfileSession {
             p99_frame_ms: percentile_value(&wall_times, 0.99),
             max_frame_ms: wall_times.last().copied().unwrap_or(0.0),
             phase_aggregates,
+            gpu_pass_aggregates,
             hotspots,
         }
+    }
+
+    /// Compute per-GPU-pass aggregated statistics across all frames.
+    fn compute_gpu_pass_aggregates(&self) -> Vec<GpuPassAggregate> {
+        // Collect all timings grouped by label
+        let mut by_label: std::collections::HashMap<String, Vec<f64>> =
+            std::collections::HashMap::new();
+        for frame in &self.frames {
+            for pass in &frame.gpu_passes {
+                by_label
+                    .entry(pass.name.clone())
+                    .or_default()
+                    .push(pass.ms);
+            }
+        }
+
+        let mut aggregates: Vec<GpuPassAggregate> = by_label
+            .into_iter()
+            .map(|(name, mut times)| {
+                times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let n = times.len();
+                GpuPassAggregate {
+                    name,
+                    mean_ms: times.iter().sum::<f64>() / n as f64,
+                    p95_ms: percentile_value(&times, 0.95),
+                    p99_ms: percentile_value(&times, 0.99),
+                    max_ms: times.last().copied().unwrap_or(0.0),
+                    frame_count: n as u64,
+                }
+            })
+            .collect();
+
+        // Sort by mean_ms descending (most expensive first)
+        aggregates
+            .sort_by(|a, b| b.mean_ms.partial_cmp(&a.mean_ms).unwrap_or(std::cmp::Ordering::Equal));
+        aggregates
     }
 
     /// Detect timeline regions where performance is consistently bad.

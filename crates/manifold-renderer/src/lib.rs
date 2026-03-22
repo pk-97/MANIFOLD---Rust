@@ -1,4 +1,5 @@
 pub mod gpu;
+pub mod gpu_profiler;
 pub mod render_target;
 pub mod gpu_readback;
 pub mod background_worker;

@@ -40,6 +40,7 @@ pub trait Compositor: Send {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         frame: &CompositorFrame,
+        gpu_profiler: Option<&mut crate::gpu_profiler::GpuProfiler>,
     ) -> &wgpu::TextureView;
 
     /// Resize compositor render targets.
