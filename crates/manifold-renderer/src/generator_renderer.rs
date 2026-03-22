@@ -208,10 +208,6 @@ impl GeneratorRenderer {
 
             // Split borrows: get generator and active clip's RT view separately
             let _ = gen_type; // used for type matching if needed
-            if !self.layer_generators.contains_key(&layer_id) {
-                log::error!("[GenRenderer] clip {} layer_id={} — NO generator found! map has {:?}",
-                    id, layer_id, self.layer_generators.keys().collect::<Vec<_>>());
-            }
             if let Some(layer_state) = self.layer_generators.get_mut(&layer_id)
                 && let Some(active) = self.active_clips.get_mut(id) {
                     if let Some(profiler) = gpu_profiler {

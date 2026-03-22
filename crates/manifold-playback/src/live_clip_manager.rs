@@ -1,4 +1,4 @@
-use manifold_core::ClipId;
+use manifold_core::{ClipId, LayerId};
 use manifold_core::clip::TimelineClip;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
@@ -40,6 +40,7 @@ pub trait LiveClipHost {
 struct PendingLiveLaunch {
     clip: TimelineClip,
     layer_index: i32,
+    layer_id: LayerId,
     target_tick: i32,
     #[allow(dead_code)]
     midi_note: i32,
@@ -74,7 +75,7 @@ pub struct LiveClipManager {
 
     // Pending launches (queued for future ticks)
     pending_by_clip_id: HashMap<ClipId, PendingLiveLaunch>,
-    pending_by_layer: HashMap<i32, ClipId>,
+    pending_by_layer: HashMap<LayerId, ClipId>,
     pending_by_tick: BTreeMap<i32, Vec<ClipId>>,
 
     // Tracking
@@ -267,21 +268,21 @@ impl LiveClipManager {
 
     fn queue_pending(&mut self, clip_id: ClipId, launch: PendingLiveLaunch) {
         let tick = launch.target_tick;
-        let layer = launch.layer_index;
+        let layer_id = launch.layer_id.clone();
 
         // Remove any existing pending for this layer
-        if let Some(old_id) = self.pending_by_layer.remove(&layer) {
+        if let Some(old_id) = self.pending_by_layer.remove(&layer_id) {
             self.remove_pending_by_clip_id(&old_id);
         }
 
         self.pending_by_clip_id.insert(clip_id.clone(), launch);
-        self.pending_by_layer.insert(layer, clip_id.clone());
+        self.pending_by_layer.insert(layer_id, clip_id.clone());
         self.pending_by_tick.entry(tick).or_default().push(clip_id);
     }
 
     fn remove_pending_by_clip_id(&mut self, clip_id: &str) {
         if let Some(launch) = self.pending_by_clip_id.remove(clip_id) {
-            self.pending_by_layer.remove(&launch.layer_index);
+            self.pending_by_layer.remove(&launch.layer_id);
             if let Some(ids) = self.pending_by_tick.get_mut(&launch.target_tick) {
                 ids.retain(|id| id != clip_id);
                 if ids.is_empty() {
@@ -350,7 +351,7 @@ impl LiveClipManager {
 
             for clip_id in clip_ids {
                 if let Some(launch) = self.pending_by_clip_id.remove(&clip_id) {
-                    self.pending_by_layer.remove(&launch.layer_index);
+                    self.pending_by_layer.remove(&launch.layer_id);
                     due_launches.push(launch);
                 }
             }
@@ -388,7 +389,7 @@ impl LiveClipManager {
 
             for clip_id in clip_ids {
                 if let Some(launch) = self.pending_by_clip_id.remove(&clip_id) {
-                    self.pending_by_layer.remove(&launch.layer_index);
+                    self.pending_by_layer.remove(&launch.layer_id);
                     due_launches.push(launch);
                 }
             }
@@ -462,6 +463,11 @@ impl LiveClipManager {
             clip.has_start_absolute_tick = true;
         }
 
+        // Resolve LayerId for stable pending launch tracking
+        let layer_id = project.timeline.layers.get(layer_index as usize)
+            .map(|l| l.layer_id.clone())
+            .unwrap_or_default();
+
         // Queue or activate immediately
         let target_tick = (snap_beat * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
         if event_absolute_tick >= 0 && target_tick > event_absolute_tick {
@@ -469,6 +475,7 @@ impl LiveClipManager {
             let launch = PendingLiveLaunch {
                 clip: clip.clone(),
                 layer_index,
+                layer_id,
                 target_tick,
                 midi_note,
             };
@@ -530,11 +537,17 @@ impl LiveClipManager {
             clip.has_start_absolute_tick = true;
         }
 
+        // Resolve LayerId for stable pending launch tracking
+        let layer_id = project.timeline.layers.get(layer_index as usize)
+            .map(|l| l.layer_id.clone())
+            .unwrap_or_default();
+
         let target_tick = (snap_beat * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
         if event_absolute_tick >= 0 && target_tick > event_absolute_tick {
             let launch = PendingLiveLaunch {
                 clip: clip.clone(),
                 layer_index,
+                layer_id,
                 target_tick,
                 midi_note,
             };
@@ -622,7 +635,10 @@ impl LiveClipManager {
 
         // Check for pending launch cancellation
         if !self.live_slots.contains_key(&layer_index) {
-            if let Some(pending_id) = self.pending_by_layer.get(&layer_index).cloned()
+            let layer_id = project.timeline.layers.get(layer_index as usize)
+                .map(|l| l.layer_id.clone())
+                .unwrap_or_default();
+            if let Some(pending_id) = self.pending_by_layer.get(&layer_id).cloned()
                 && clip_id.is_none_or(|id| id == pending_id) {
                     self.remove_pending_by_clip_id(&pending_id);
                     return;
