@@ -8,7 +8,9 @@
 //! Activated via the backtick (`) key when compiled with the `profiling` feature
 //! on manifold-app. Zero runtime cost when not recording.
 
-use serde::Serialize;
+pub mod compare;
+
+use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -49,6 +51,10 @@ pub struct FrameRecord {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub active_effects: Vec<ActiveEffectInfo>,
     pub active_layer_count: usize,
+    /// Total GPU passes this frame.
+    pub gpu_pass_count: u32,
+    /// Sum of all GPU pass durations (ms).
+    pub gpu_total_ms: f64,
     /// GPU memory estimate for this frame.
     pub memory: MemorySnapshot,
 }
@@ -58,6 +64,15 @@ pub struct FrameRecord {
 pub struct GpuPassRecord {
     pub name: String,
     pub ms: f64,
+    /// Output texture width (0 if unknown).
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub width: u32,
+    /// Output texture height (0 if unknown).
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub height: u32,
+    /// Whether this is a compute pass (vs render).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub is_compute: bool,
 }
 
 /// Info about an active clip in this frame.
@@ -66,6 +81,9 @@ pub struct ActiveClipInfo {
     pub clip_id: String,
     pub generator_type: String,
     pub layer_index: i32,
+    /// Live modulated generator parameter values.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gen_param_values: Vec<f32>,
 }
 
 /// Info about an active effect in this frame.
@@ -74,6 +92,51 @@ pub struct ActiveEffectInfo {
     pub effect_type: String,
     /// "clip:<clip_id>", "layer:<index>", or "master"
     pub scope: String,
+    /// Live modulated parameter values.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub param_values: Vec<f32>,
+}
+
+fn is_zero_u32(v: &u32) -> bool { *v == 0 }
+
+// ─── Timeline Snapshot ─────────────────────────────────────────────
+
+/// Project timeline structure dumped at session start for cross-referencing.
+#[derive(Debug, Clone, Serialize)]
+pub struct TimelineSnapshot {
+    pub bpm: f32,
+    pub time_signature: i32,
+    pub resolution: (u32, u32),
+    pub layers: Vec<LayerSnapshot>,
+    pub master_effects: Vec<EffectSnapshot>,
+}
+
+/// Layer state at session start.
+#[derive(Debug, Clone, Serialize)]
+pub struct LayerSnapshot {
+    pub index: i32,
+    pub generator_type: String,
+    pub blend_mode: String,
+    pub is_muted: bool,
+    pub clips: Vec<ClipSnapshot>,
+    pub effects: Vec<EffectSnapshot>,
+}
+
+/// Clip state at session start.
+#[derive(Debug, Clone, Serialize)]
+pub struct ClipSnapshot {
+    pub id: String,
+    pub start_beat: f32,
+    pub duration_beats: f32,
+    pub generator_type: String,
+    pub effect_count: usize,
+}
+
+/// Effect state at session start.
+#[derive(Debug, Clone, Serialize)]
+pub struct EffectSnapshot {
+    pub effect_type: String,
+    pub enabled: bool,
 }
 
 /// GPU memory snapshot for a frame.
@@ -98,7 +161,7 @@ pub struct ContentTimings {
 // ─── Summary ───────────────────────────────────────────────────────
 
 /// Aggregated statistics computed at dump time.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub frames_over_budget: u64,
     pub worst_frame: Option<WorstFrame>,
@@ -111,10 +174,80 @@ pub struct SessionSummary {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub gpu_pass_aggregates: Vec<GpuPassAggregate>,
     pub hotspots: Vec<Hotspot>,
+
+    // ── Extended analysis ─────────────────────────────────────────
+    /// Frame pacing / jitter analysis.
+    pub jitter: JitterAnalysis,
+    /// Thermal degradation detection (first 10% vs last 10%).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thermal: Option<ThermalAnalysis>,
+    /// First-use spike detection (shader compilation).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub first_use_spikes: Vec<FirstUseSpike>,
+    /// Idle (0 clips) vs active (1+ clips) comparison.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_vs_active: Option<IdleActiveComparison>,
+    /// GPU pass count stats.
+    pub pass_count: PassCountStats,
+    /// Automated actionable recommendations.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub recommendations: Vec<String>,
+}
+
+/// Frame pacing / jitter analysis.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct JitterAnalysis {
+    pub mean_dt_ms: f64,
+    pub stddev_dt_ms: f64,
+    /// Coefficient of variation (stddev / mean). >0.3 = high jitter.
+    pub coefficient_of_variation: f64,
+    /// Frames where dt > 1.5x target frame time.
+    pub frames_with_significant_jitter: u64,
+}
+
+/// Thermal throttling detection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThermalAnalysis {
+    pub first_10pct_mean_ms: f64,
+    pub last_10pct_mean_ms: f64,
+    /// last / first. >1.15 = likely throttled.
+    pub degradation_ratio: f64,
+    pub likely_throttled: bool,
+}
+
+/// Shader compilation spike on first use of a GPU pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FirstUseSpike {
+    pub pass_name: String,
+    pub first_use_frame: u64,
+    pub first_use_ms: f64,
+    /// Mean excluding the first occurrence.
+    pub steady_state_mean_ms: f64,
+    pub spike_ratio: f64,
+}
+
+/// Baseline (idle) vs loaded (active) comparison.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdleActiveComparison {
+    pub idle_mean_ms: f64,
+    pub active_mean_ms: f64,
+    pub overhead_ms: f64,
+    pub idle_frame_count: u64,
+    pub active_frame_count: u64,
+}
+
+/// GPU pass count statistics.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PassCountStats {
+    pub mean_pass_count: f64,
+    pub max_pass_count: u32,
+    pub mean_gpu_total_ms: f64,
+    /// mean_gpu_total / frame_budget * 100.
+    pub gpu_budget_usage_pct: f64,
 }
 
 /// Aggregated GPU timing for a specific pass label across all frames.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuPassAggregate {
     pub name: String,
     pub mean_ms: f64,
@@ -122,9 +255,13 @@ pub struct GpuPassAggregate {
     pub p99_ms: f64,
     pub max_ms: f64,
     pub frame_count: u64,
+    /// Frame index where this pass first appeared.
+    pub first_seen_frame: u64,
+    /// Mean excluding the first occurrence (steady-state performance).
+    pub steady_state_mean_ms: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorstFrame {
     pub index: u64,
     pub ms: f64,
@@ -132,7 +269,7 @@ pub struct WorstFrame {
     pub bar: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PhaseAggregates {
     pub midi_input: PercentileStat,
     pub sync_controllers: PercentileStat,
@@ -142,7 +279,7 @@ pub struct PhaseAggregates {
     pub cleanup: PercentileStat,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PercentileStat {
     pub mean_ms: f64,
     pub p95_ms: f64,
@@ -150,7 +287,7 @@ pub struct PercentileStat {
     pub max_ms: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hotspot {
     pub beat_range: (f32, f32),
     pub bar_range: (u32, u32),
@@ -173,6 +310,7 @@ pub struct ProfileSession {
     start_instant: Instant,
     start_time_str: String,
     recording: bool,
+    timeline_snapshot: Option<TimelineSnapshot>,
 }
 
 impl ProfileSession {
@@ -204,6 +342,7 @@ impl ProfileSession {
             start_instant: Instant::now(),
             start_time_str,
             recording: true,
+            timeline_snapshot: None,
         }
     }
 
@@ -215,6 +354,11 @@ impl ProfileSession {
     /// Number of frames recorded so far.
     pub fn frame_count(&self) -> u64 {
         self.frames.len() as u64
+    }
+
+    /// Set the timeline snapshot (called once at session start).
+    pub fn set_timeline_snapshot(&mut self, snapshot: TimelineSnapshot) {
+        self.timeline_snapshot = Some(snapshot);
     }
 
     /// Record a single frame's data. Only call when is_recording() is true.
@@ -259,6 +403,12 @@ impl ProfileSession {
                 phase_aggregates: PhaseAggregates::default(),
                 gpu_pass_aggregates: Vec::new(),
                 hotspots: Vec::new(),
+                jitter: JitterAnalysis::default(),
+                thermal: None,
+                first_use_spikes: Vec::new(),
+                idle_vs_active: None,
+                pass_count: PassCountStats::default(),
+                recommendations: Vec::new(),
             };
         }
 
@@ -298,45 +448,89 @@ impl ProfileSession {
         // GPU pass aggregates — group by label, compute stats
         let gpu_pass_aggregates = self.compute_gpu_pass_aggregates();
 
+        let mean_frame = wall_times.iter().sum::<f64>() / n as f64;
+
+        // Jitter analysis
+        let jitter = self.compute_jitter(budget);
+
+        // Thermal degradation
+        let thermal = self.compute_thermal();
+
+        // First-use spikes
+        let first_use_spikes = self.detect_first_use_spikes(&gpu_pass_aggregates);
+
+        // Idle vs active comparison
+        let idle_vs_active = self.compute_idle_vs_active();
+
+        // Pass count stats
+        let pass_count = self.compute_pass_count_stats(budget);
+
+        // Automated recommendations
+        let recommendations = self.generate_recommendations(
+            &gpu_pass_aggregates, &jitter, thermal.as_ref(),
+            idle_vs_active.as_ref(), &pass_count, budget,
+        );
+
         SessionSummary {
             frames_over_budget,
             worst_frame,
-            mean_frame_ms: wall_times.iter().sum::<f64>() / n as f64,
+            mean_frame_ms: mean_frame,
             p95_frame_ms: percentile_value(&wall_times, 0.95),
             p99_frame_ms: percentile_value(&wall_times, 0.99),
             max_frame_ms: wall_times.last().copied().unwrap_or(0.0),
             phase_aggregates,
             gpu_pass_aggregates,
             hotspots,
+            jitter,
+            thermal,
+            first_use_spikes,
+            idle_vs_active,
+            pass_count,
+            recommendations,
         }
     }
 
     /// Compute per-GPU-pass aggregated statistics across all frames.
     fn compute_gpu_pass_aggregates(&self) -> Vec<GpuPassAggregate> {
-        // Collect all timings grouped by label
-        let mut by_label: std::collections::HashMap<String, Vec<f64>> =
+        // Collect timings + first-seen frame grouped by label
+        struct PassData {
+            times: Vec<f64>,
+            first_seen_frame: u64,
+        }
+        let mut by_label: std::collections::HashMap<String, PassData> =
             std::collections::HashMap::new();
         for frame in &self.frames {
             for pass in &frame.gpu_passes {
-                by_label
-                    .entry(pass.name.clone())
-                    .or_default()
-                    .push(pass.ms);
+                let entry = by_label.entry(pass.name.clone()).or_insert_with(|| PassData {
+                    times: Vec::new(),
+                    first_seen_frame: frame.index,
+                });
+                entry.times.push(pass.ms);
             }
         }
 
         let mut aggregates: Vec<GpuPassAggregate> = by_label
             .into_iter()
-            .map(|(name, mut times)| {
-                times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                let n = times.len();
+            .map(|(name, mut data)| {
+                data.times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                let n = data.times.len();
+                let steady_state_mean = if n > 1 {
+                    // Exclude first occurrence for steady-state mean
+                    let first_ms = data.times.first().copied().unwrap_or(0.0);
+                    let total: f64 = data.times.iter().sum();
+                    (total - first_ms) / (n - 1) as f64
+                } else {
+                    data.times.first().copied().unwrap_or(0.0)
+                };
                 GpuPassAggregate {
                     name,
-                    mean_ms: times.iter().sum::<f64>() / n as f64,
-                    p95_ms: percentile_value(&times, 0.95),
-                    p99_ms: percentile_value(&times, 0.99),
-                    max_ms: times.last().copied().unwrap_or(0.0),
+                    mean_ms: data.times.iter().sum::<f64>() / n as f64,
+                    p95_ms: percentile_value(&data.times, 0.95),
+                    p99_ms: percentile_value(&data.times, 0.99),
+                    max_ms: data.times.last().copied().unwrap_or(0.0),
                     frame_count: n as u64,
+                    first_seen_frame: data.first_seen_frame,
+                    steady_state_mean_ms: steady_state_mean,
                 }
             })
             .collect();
@@ -413,6 +607,224 @@ impl ProfileSession {
         hotspots
     }
 
+    /// Frame pacing / jitter analysis.
+    fn compute_jitter(&self, budget_ms: f64) -> JitterAnalysis {
+        if self.frames.len() < 2 {
+            return JitterAnalysis::default();
+        }
+        let times: Vec<f64> = self.frames.iter().map(|f| f.wall_time_ms).collect();
+        let n = times.len() as f64;
+        let mean = times.iter().sum::<f64>() / n;
+        let variance = times.iter().map(|t| (t - mean).powi(2)).sum::<f64>() / (n - 1.0);
+        let stddev = variance.sqrt();
+        let cv = if mean > 0.0 { stddev / mean } else { 0.0 };
+        let jitter_threshold = budget_ms * 1.5;
+        let jitter_count = times.iter().filter(|&&t| t > jitter_threshold).count() as u64;
+        JitterAnalysis {
+            mean_dt_ms: mean,
+            stddev_dt_ms: stddev,
+            coefficient_of_variation: cv,
+            frames_with_significant_jitter: jitter_count,
+        }
+    }
+
+    /// Thermal degradation: compare first 10% vs last 10% of session.
+    fn compute_thermal(&self) -> Option<ThermalAnalysis> {
+        if self.frames.len() < 20 {
+            return None;
+        }
+        let n = self.frames.len();
+        let chunk = (n / 10).max(1);
+        let first_mean = self.frames[..chunk].iter()
+            .map(|f| f.wall_time_ms).sum::<f64>() / chunk as f64;
+        let last_mean = self.frames[n - chunk..].iter()
+            .map(|f| f.wall_time_ms).sum::<f64>() / chunk as f64;
+        let ratio = if first_mean > 0.0 { last_mean / first_mean } else { 1.0 };
+        Some(ThermalAnalysis {
+            first_10pct_mean_ms: first_mean,
+            last_10pct_mean_ms: last_mean,
+            degradation_ratio: ratio,
+            likely_throttled: ratio > 1.15,
+        })
+    }
+
+    /// Detect first-use spikes (shader compilation on first occurrence).
+    fn detect_first_use_spikes(&self, aggregates: &[GpuPassAggregate]) -> Vec<FirstUseSpike> {
+        let mut spikes = Vec::new();
+        for agg in aggregates {
+            if agg.frame_count < 2 { continue; }
+            // Find the first occurrence timing
+            let first_ms = self.frames.iter()
+                .find_map(|f| f.gpu_passes.iter()
+                    .find(|p| p.name == agg.name)
+                    .map(|p| p.ms))
+                .unwrap_or(0.0);
+            let ratio = if agg.steady_state_mean_ms > 0.001 {
+                first_ms / agg.steady_state_mean_ms
+            } else {
+                1.0
+            };
+            if ratio > 5.0 {
+                spikes.push(FirstUseSpike {
+                    pass_name: agg.name.clone(),
+                    first_use_frame: agg.first_seen_frame,
+                    first_use_ms: first_ms,
+                    steady_state_mean_ms: agg.steady_state_mean_ms,
+                    spike_ratio: ratio,
+                });
+            }
+        }
+        spikes.sort_by(|a, b| b.spike_ratio.partial_cmp(&a.spike_ratio)
+            .unwrap_or(std::cmp::Ordering::Equal));
+        spikes
+    }
+
+    /// Idle (0 active clips) vs active (1+ clips) comparison.
+    fn compute_idle_vs_active(&self) -> Option<IdleActiveComparison> {
+        let idle: Vec<f64> = self.frames.iter()
+            .filter(|f| f.active_clips.is_empty())
+            .map(|f| f.wall_time_ms)
+            .collect();
+        let active: Vec<f64> = self.frames.iter()
+            .filter(|f| !f.active_clips.is_empty())
+            .map(|f| f.wall_time_ms)
+            .collect();
+        if idle.is_empty() || active.is_empty() {
+            return None;
+        }
+        let idle_mean = idle.iter().sum::<f64>() / idle.len() as f64;
+        let active_mean = active.iter().sum::<f64>() / active.len() as f64;
+        Some(IdleActiveComparison {
+            idle_mean_ms: idle_mean,
+            active_mean_ms: active_mean,
+            overhead_ms: active_mean - idle_mean,
+            idle_frame_count: idle.len() as u64,
+            active_frame_count: active.len() as u64,
+        })
+    }
+
+    /// GPU pass count statistics.
+    fn compute_pass_count_stats(&self, budget_ms: f64) -> PassCountStats {
+        if self.frames.is_empty() {
+            return PassCountStats::default();
+        }
+        let counts: Vec<u32> = self.frames.iter()
+            .map(|f| f.gpu_passes.len() as u32)
+            .collect();
+        let totals: Vec<f64> = self.frames.iter()
+            .map(|f| f.gpu_passes.iter().map(|p| p.ms).sum::<f64>())
+            .collect();
+        let n = counts.len() as f64;
+        let mean_count = counts.iter().map(|&c| c as f64).sum::<f64>() / n;
+        let max_count = counts.iter().copied().max().unwrap_or(0);
+        let mean_total = totals.iter().sum::<f64>() / n;
+        PassCountStats {
+            mean_pass_count: mean_count,
+            max_pass_count: max_count,
+            mean_gpu_total_ms: mean_total,
+            gpu_budget_usage_pct: if budget_ms > 0.0 {
+                mean_total / budget_ms * 100.0
+            } else {
+                0.0
+            },
+        }
+    }
+
+    /// Generate automated actionable recommendations.
+    fn generate_recommendations(
+        &self,
+        gpu_passes: &[GpuPassAggregate],
+        jitter: &JitterAnalysis,
+        thermal: Option<&ThermalAnalysis>,
+        idle_active: Option<&IdleActiveComparison>,
+        pass_count: &PassCountStats,
+        budget_ms: f64,
+    ) -> Vec<String> {
+        let mut recs = Vec::new();
+
+        // Most expensive always-on effects (present in >80% of active frames)
+        let active_frame_count = self.frames.iter()
+            .filter(|f| !f.active_clips.is_empty()).count() as u64;
+        if active_frame_count > 0 {
+            for pass in gpu_passes.iter().take(5) {
+                let usage_pct = pass.frame_count as f64 / active_frame_count as f64 * 100.0;
+                if usage_pct > 80.0 && pass.mean_ms > 0.5 {
+                    recs.push(format!(
+                        "{} is the most expensive always-on pass ({:.2}ms mean, active {:.0}% of frames). \
+                         Consider half-resolution intermediate buffers.",
+                        pass.name, pass.mean_ms, usage_pct
+                    ));
+                }
+            }
+        }
+
+        // High variance passes
+        for pass in gpu_passes {
+            if pass.max_ms > pass.mean_ms * 10.0 && pass.mean_ms > 0.1 {
+                recs.push(format!(
+                    "{} has {:.0}x variance (mean {:.2}ms, max {:.2}ms). \
+                     Investigate spike at frame {}.",
+                    pass.name, pass.max_ms / pass.mean_ms,
+                    pass.mean_ms, pass.max_ms, pass.first_seen_frame
+                ));
+            }
+        }
+
+        // Jitter warning
+        if jitter.coefficient_of_variation > 0.3 {
+            recs.push(format!(
+                "High frame time jitter (CV={:.2}). {} frames exceed 1.5x budget. \
+                 Check for allocation spikes or GC pauses.",
+                jitter.coefficient_of_variation,
+                jitter.frames_with_significant_jitter
+            ));
+        }
+
+        // Thermal
+        if let Some(t) = thermal
+            && t.likely_throttled
+        {
+            recs.push(format!(
+                "Thermal throttling detected: {:.0}% slower by end of session \
+                 (first 10%: {:.1}ms, last 10%: {:.1}ms).",
+                (t.degradation_ratio - 1.0) * 100.0,
+                t.first_10pct_mean_ms, t.last_10pct_mean_ms
+            ));
+        }
+
+        // Pass count overhead
+        if pass_count.mean_pass_count > 20.0 {
+            recs.push(format!(
+                "{:.0} GPU passes per frame on average. Each pass incurs barrier/scheduling \
+                 overhead. Consider combining passes or reducing active effects.",
+                pass_count.mean_pass_count
+            ));
+        }
+
+        // Budget usage
+        if pass_count.gpu_budget_usage_pct > 80.0 {
+            recs.push(format!(
+                "GPU pass time uses {:.0}% of frame budget ({:.2}ms / {:.2}ms). \
+                 Little headroom for additional effects.",
+                pass_count.gpu_budget_usage_pct,
+                pass_count.mean_gpu_total_ms, budget_ms
+            ));
+        }
+
+        // Idle vs active delta
+        if let Some(ia) = idle_active
+            && ia.overhead_ms > budget_ms * 0.8
+        {
+            recs.push(format!(
+                "Rendering overhead is {:.1}ms (idle: {:.1}ms, active: {:.1}ms). \
+                 Active content alone nearly exceeds the {:.1}ms budget.",
+                ia.overhead_ms, ia.idle_mean_ms, ia.active_mean_ms, budget_ms
+            ));
+        }
+
+        recs
+    }
+
     /// Write session.json, frames.jsonl, and summary.json to disk.
     fn write_output(
         &self,
@@ -433,6 +845,14 @@ impl ProfileSession {
             .map_err(|e| format!("Failed to serialize session metadata: {}", e))?;
         std::fs::write(&session_path, session_json)
             .map_err(|e| format!("Failed to write session.json: {}", e))?;
+
+        // timeline.json (if snapshot available)
+        if let Some(ref snapshot) = self.timeline_snapshot {
+            let timeline_json = serde_json::to_string_pretty(snapshot)
+                .map_err(|e| format!("Failed to serialize timeline: {}", e))?;
+            std::fs::write(output_dir.join("timeline.json"), timeline_json)
+                .map_err(|e| format!("Failed to write timeline.json: {}", e))?;
+        }
 
         // summary.json
         let summary_path = output_dir.join("summary.json");

@@ -630,7 +630,7 @@ impl FluidSimulationGenerator {
 
         // Seed particles (Unity: InitParticles fills uniform random positions)
         // Pattern index 255 hits the default branch = uniform random (matching Unity's CPU init)
-        self.dispatch_seed(queue, encoder, device, 255, 42);
+        self.dispatch_seed(queue, encoder, device, 255, 42, None);
     }
 
     /// Unity Resize / density_res change: recreate scatter-resolution resources only.
@@ -707,6 +707,7 @@ impl FluidSimulationGenerator {
         device: &wgpu::Device,
         pattern: u32,
         trigger_count: u32,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let uniforms = SeedUniforms {
             active_count: self.active_count,
@@ -731,9 +732,10 @@ impl FluidSimulationGenerator {
             ],
         });
 
+        let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim Seed", self.active_count, 1));
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("FluidSim Seed Pass"),
-            timestamp_writes: None,
+            timestamp_writes: ts,
         });
         pass.set_pipeline(&self.seed_pipeline);
         pass.set_bind_group(0, &bg, &[]);
@@ -753,6 +755,7 @@ impl FluidSimulationGenerator {
         texel_x: f32,
         texel_y: f32,
         buf_index: usize,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let uniforms = BlurUniforms {
             direction,
@@ -775,6 +778,7 @@ impl FluidSimulationGenerator {
             ],
         });
 
+        let ts = profiler.and_then(|p| p.render_timestamps("FluidSim Blur", self.scatter_width, self.scatter_height));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("FluidSim Blur Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -787,7 +791,7 @@ impl FluidSimulationGenerator {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: ts,
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -809,6 +813,7 @@ impl Generator for FluidSimulationGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         // Read all 20 params
         let slope = param(ctx, SLOPE, -0.01);
@@ -869,7 +874,7 @@ impl Generator for FluidSimulationGenerator {
                 if self.active_snap_mode == 3 {
                     // Mode 3: seed pattern
                     let pattern = (trigger_count as u32) % PATTERN_COUNT;
-                    self.dispatch_seed(queue, encoder, device, pattern, trigger_count as u32);
+                    self.dispatch_seed(queue, encoder, device, pattern, trigger_count as u32, profiler);
                 } else if self.active_snap_mode == 4 {
                     // Mode 4: inject zone (only when color mode is active)
                     if color_mode > 0 {
@@ -967,9 +972,10 @@ impl Generator for FluidSimulationGenerator {
             ],
         });
         {
+            let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim Splat", sw, sh));
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("FluidSim Splat Pass"),
-                timestamp_writes: None,
+                timestamp_writes: ts,
             });
             pass.set_pipeline(&self.splat_pipeline);
             pass.set_bind_group(0, &splat_bg, &[]);
@@ -991,9 +997,10 @@ impl Generator for FluidSimulationGenerator {
             ],
         });
         {
+            let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim Resolve", sw, sh));
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("FluidSim Resolve Pass"),
-                timestamp_writes: None,
+                timestamp_writes: ts,
             });
             pass.set_pipeline(&self.resolve_pipeline);
             pass.set_bind_group(0, &resolve_bg, &[]);
@@ -1033,9 +1040,10 @@ impl Generator for FluidSimulationGenerator {
                 ],
             });
             {
+                let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim SplatColor", sw, sh));
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("FluidSim SplatColor Pass"),
-                    timestamp_writes: None,
+                    timestamp_writes: ts,
                 });
                 pass.set_pipeline(&self.splat_color_pipeline);
                 pass.set_bind_group(0, &splat_color_bg, &[]);
@@ -1056,9 +1064,10 @@ impl Generator for FluidSimulationGenerator {
                 ],
             });
             {
+                let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim ResolveColor", sw, sh));
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("FluidSim ResolveColor Pass"),
-                    timestamp_writes: None,
+                    timestamp_writes: ts,
                 });
                 pass.set_pipeline(&self.resolve_color_pipeline);
                 pass.set_bind_group(0, &resolve_color_bg, &[]);
@@ -1091,19 +1100,19 @@ impl Generator for FluidSimulationGenerator {
         let density_rt = self.density_rt.as_ref().unwrap();
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &density_rt.view, &blur_density_rt.view,
-            &self.blur_pipeline, [0.0, 0.0], 0.0, blur_texel_x, blur_texel_y, 0);
+            &self.blur_pipeline, [0.0, 0.0], 0.0, blur_texel_x, blur_texel_y, 0, profiler);
 
         // Step 2: H blur: blur_density_rt → blur_temp_rt
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &blur_density_rt.view, &blur_temp_rt.view,
-            &self.blur_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, 1);
+            &self.blur_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, 1, profiler);
 
         // Step 3: V blur: blur_temp_rt → blur_density_rt (in-place result)
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &blur_temp_rt.view, &blur_density_rt.view,
-            &self.blur_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, 2);
+            &self.blur_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, 2, profiler);
 
         // Gradient + Rotate: blurredDensity → vector field
         // Unity: densityAreaScale = (trailWidth * trailHeight) / SCATTER_REFERENCE_AREA
@@ -1134,6 +1143,7 @@ impl Generator for FluidSimulationGenerator {
             ],
         });
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("FluidSim GradientRotate", bw, bh));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("FluidSim GradientRotate Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1146,7 +1156,7 @@ impl Generator for FluidSimulationGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -1160,11 +1170,11 @@ impl Generator for FluidSimulationGenerator {
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &vector_field_rt.view, &blur_temp_rt.view,
-            &self.blur_vector_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, 3);
+            &self.blur_vector_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, 3, profiler);
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(device, queue, encoder, &blur_temp_rt.view, &vector_field_rt.view,
-            &self.blur_vector_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, 4);
+            &self.blur_vector_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, 4, profiler);
 
         // ================================================================
         // PHASE 3: Position Integration — simulate shader
@@ -1208,9 +1218,10 @@ impl Generator for FluidSimulationGenerator {
             ],
         });
         {
+            let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim Simulate", active_count, 1));
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("FluidSim Simulate Pass"),
-                timestamp_writes: None,
+                timestamp_writes: ts,
             });
             pass.set_pipeline(&self.simulate_pipeline);
             pass.set_bind_group(0, &sim_bg, &[]);
@@ -1258,6 +1269,7 @@ impl Generator for FluidSimulationGenerator {
             ],
         });
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("FluidSim Display", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("FluidSim Display Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1270,7 +1282,7 @@ impl Generator for FluidSimulationGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

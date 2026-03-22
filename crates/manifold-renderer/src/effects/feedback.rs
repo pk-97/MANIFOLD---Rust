@@ -222,6 +222,7 @@ impl PostProcessEffect for FeedbackFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         self.width = ctx.width;
         self.height = ctx.height;
@@ -262,6 +263,7 @@ impl PostProcessEffect for FeedbackFX {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("Feedback Pass", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Feedback Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -274,7 +276,7 @@ impl PostProcessEffect for FeedbackFX {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -291,6 +293,7 @@ impl PostProcessEffect for FeedbackFX {
             target, &state.buffer.view,
             &[0u8; 16],
             "Feedback State Copy",
+            profiler,
         );
     }
 

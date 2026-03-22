@@ -129,6 +129,7 @@ impl PostProcessEffect for StylizedFeedbackFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         self.width = ctx.width;
         self.height = ctx.height;
@@ -150,12 +151,13 @@ impl PostProcessEffect for StylizedFeedbackFX {
             source, &state.buffer.view, target,
             bytemuck::bytes_of(&uniforms),
             "StylizedFeedback Pass",
+            profiler,
         );
 
         // PostBlit: copy result → state buffer
         // Unity ref: Graphics.CopyTexture(result, stateBuffer)
         let state = self.states.get(&ctx.owner_key).unwrap();
-        self.copy_blit.draw(device, queue, encoder, target, &state.buffer.view, &[0u8; 16], "StylizedFeedback State Copy");
+        self.copy_blit.draw(device, queue, encoder, target, &state.buffer.view, &[0u8; 16], "StylizedFeedback State Copy", profiler);
     }
 
     fn clear_state(&mut self) {

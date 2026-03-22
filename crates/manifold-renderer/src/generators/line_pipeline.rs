@@ -160,9 +160,14 @@ impl LinePipeline {
         target: &wgpu::TextureView,
         vertices: &[LineVertex],
         beat: f32,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
+        profiler_label: &str,
+        width: u32,
+        height: u32,
     ) {
         if vertices.is_empty() {
             // Still clear the target
+            let ts = profiler.and_then(|p| p.render_timestamps(profiler_label, width, height));
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Line Clear Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -175,7 +180,7 @@ impl LinePipeline {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -207,6 +212,7 @@ impl LinePipeline {
 
         let vert_count = (clamped_size / VERTEX_SIZE) as u32;
         {
+            let ts = profiler.and_then(|p| p.render_timestamps(profiler_label, width, height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Line Draw Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -219,7 +225,7 @@ impl LinePipeline {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

@@ -369,6 +369,7 @@ impl Generator for MriVolumeGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         // Scan selection
         let scan_index = if ctx.param_count > SCAN as u32 {
@@ -442,13 +443,14 @@ impl Generator for MriVolumeGenerator {
                 ],
             });
 
+            let ts = profiler.and_then(|p| p.render_timestamps("MRI Slice", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("MRI Slice Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target, resolve_target: None, depth_slice: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
                 })],
-                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                depth_stencil_attachment: None, timestamp_writes: ts, occlusion_query_set: None, multiview_mask: None,
             });
             pass.set_pipeline(&self.slice_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
@@ -481,13 +483,14 @@ impl Generator for MriVolumeGenerator {
                 ],
             });
 
+            let ts = profiler.and_then(|p| p.render_timestamps("MRI Raymarch", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("MRI Raymarch Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target, resolve_target: None, depth_slice: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
                 })],
-                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None, multiview_mask: None,
+                depth_stencil_attachment: None, timestamp_writes: ts, occlusion_query_set: None, multiview_mask: None,
             });
             pass.set_pipeline(&self.raymarch_pipeline);
             pass.set_bind_group(0, &bind_group, &[]);

@@ -46,6 +46,7 @@ impl PostProcessEffect for ChromaticAberrationFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         _ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // ChromaticAberrationFX.cs:13-17 — read all 5 params in Unity order
         let p = &fx.param_values;
@@ -69,6 +70,7 @@ impl PostProcessEffect for ChromaticAberrationFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "ChromaticAberration Pass",
+            profiler,
         );
     }
 }

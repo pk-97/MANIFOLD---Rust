@@ -724,6 +724,7 @@ impl PostProcessEffect for BlobTrackingFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // BlobTrackingFX.cs line 126-127
         let amount = fx.param_values.first().copied().unwrap_or(0.0);
@@ -767,6 +768,7 @@ impl PostProcessEffect for BlobTrackingFX {
             });
 
             {
+                let ts = profiler.and_then(|p| p.render_timestamps("BlobTracking Downsample", ctx.width, ctx.height));
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("BlobTracking Downsample"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -779,7 +781,7 @@ impl PostProcessEffect for BlobTrackingFX {
                         },
                     })],
                     depth_stencil_attachment: None,
-                    timestamp_writes: None,
+                    timestamp_writes: ts,
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
@@ -878,6 +880,7 @@ impl PostProcessEffect for BlobTrackingFX {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("BlobTracking Overlay", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("BlobTracking Overlay"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -890,7 +893,7 @@ impl PostProcessEffect for BlobTrackingFX {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

@@ -48,6 +48,7 @@ impl PostProcessEffect for GlitchFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // GlitchFX.cs:13-18 — read all 5 params in Unity order
         let p = &fx.param_values;
@@ -67,6 +68,7 @@ impl PostProcessEffect for GlitchFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Glitch Pass",
+            profiler,
         );
     }
 }

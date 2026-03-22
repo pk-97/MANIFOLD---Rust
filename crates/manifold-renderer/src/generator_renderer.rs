@@ -148,7 +148,7 @@ impl GeneratorRenderer {
         beat: f32,
         dt: f32,
         layers: &[Layer],
-        mut gpu_profiler: Option<&mut crate::gpu_profiler::GpuProfiler>,
+        gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // Collect clip IDs into pre-allocated scratch to avoid borrow conflict
         self.render_scratch.clear();
@@ -199,22 +199,14 @@ impl GeneratorRenderer {
             let _ = gen_type; // used for type matching if needed
             if let Some(layer_state) = self.layer_generators.get_mut(&layer_index)
                 && let Some(active) = self.active_clips.get_mut(id) {
-                    if let Some(ref mut profiler) = gpu_profiler {
-                        profiler.begin_scope(
-                            encoder,
-                            &format!("generator:{}", gen_type),
-                        );
-                    }
                     let new_progress = layer_state.generator.render(
                         &self.device,
                         queue,
                         encoder,
                         &active.render_target.view,
                         &ctx,
+                        gpu_profiler,
                     );
-                    if let Some(ref mut profiler) = gpu_profiler {
-                        profiler.end_scope(encoder);
-                    }
                     active.anim_progress = new_progress;
                 }
         }

@@ -48,6 +48,7 @@ impl PostProcessEffect for StrobeFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let p = &fx.param_values;
         // Map rate index through NoteRates lookup table (Unity: StrobeFX.cs lines 24-26)
@@ -65,6 +66,7 @@ impl PostProcessEffect for StrobeFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Strobe Pass",
+            profiler,
         );
     }
 }

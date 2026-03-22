@@ -60,6 +60,7 @@ impl Generator for OscilloscopeXYGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         // Unity defaults from LineGeneratorBase virtual properties
         let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.002 };
@@ -163,7 +164,7 @@ impl Generator for OscilloscopeXYGenerator {
             0.5, // dot_scale: Unity OscilloscopeXYGenerator.GetDotScale() returns 0.5
         );
 
-        self.line_pipeline.draw(device, queue, encoder, target, verts, ctx.beat);
+        self.line_pipeline.draw(device, queue, encoder, target, verts, ctx.beat, profiler, "OscilloscopeXY", ctx.width, ctx.height);
         self.helper.anim_progress
     }
 

@@ -42,6 +42,7 @@ impl PostProcessEffect for InvertColorsFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         _ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let intensity = fx.param_values.first().copied().unwrap_or(1.0);
         let uniforms = InvertUniforms {
@@ -54,6 +55,7 @@ impl PostProcessEffect for InvertColorsFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "InvertColors Pass",
+            profiler,
         );
     }
 }

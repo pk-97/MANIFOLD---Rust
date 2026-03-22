@@ -172,6 +172,7 @@ impl Generator for FlowfieldGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         let iw = (ctx.width / 2).max(1);
         let ih = (ctx.height / 2).max(1);
@@ -232,6 +233,7 @@ impl Generator for FlowfieldGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("Flowfield Sim", iw, ih));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Flowfield Sim Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -244,7 +246,7 @@ impl Generator for FlowfieldGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

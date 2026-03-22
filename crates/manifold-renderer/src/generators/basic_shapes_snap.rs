@@ -110,6 +110,7 @@ impl Generator for BasicShapesSnapGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.015 };
         let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
@@ -135,6 +136,7 @@ impl Generator for BasicShapesSnapGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("BasicShapesSnap", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("BasicShapesSnap Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -147,7 +149,7 @@ impl Generator for BasicShapesSnapGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

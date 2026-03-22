@@ -543,6 +543,7 @@ impl MyceliumGenerator {
         target: &wgpu::TextureView,
         decay: f32,
         sub_decay: f32,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let uniforms = DiffuseUniforms {
             decay,
@@ -572,6 +573,7 @@ impl MyceliumGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("Mycelium Diffuse", self.trail_width, self.trail_height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Mycelium Diffuse Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -584,7 +586,7 @@ impl MyceliumGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -617,6 +619,7 @@ impl Generator for MyceliumGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         let sens_dist = if ctx.param_count > SENS_DIST as u32 { ctx.params[SENS_DIST] } else { 0.02 };
         let sens_angle = if ctx.param_count > SENS_ANGLE as u32 { ctx.params[SENS_ANGLE] } else { 0.8 };
@@ -691,9 +694,10 @@ impl Generator for MyceliumGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.compute_timestamps("Mycelium Agent Update", tw, th));
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Mycelium Agent Update Pass"),
-                timestamp_writes: None,
+                timestamp_writes: ts,
             });
             pass.set_pipeline(&self.agent_update_pipeline);
             pass.set_bind_group(0, &agent_bg, &[]);
@@ -734,9 +738,10 @@ impl Generator for MyceliumGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.compute_timestamps("Mycelium Resolve", tw, th));
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Mycelium Resolve Pass"),
-                timestamp_writes: None,
+                timestamp_writes: ts,
             });
             pass.set_pipeline(&self.resolve_pipeline);
             pass.set_bind_group(0, &resolve_bg, &[]);
@@ -748,15 +753,15 @@ impl Generator for MyceliumGenerator {
         // Pass 0: B→A with decay + evaporation
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
-        self.run_diffuse_pass(device, queue, encoder, &trail_b.view, &trail_a.view, decay, 0.003);
+        self.run_diffuse_pass(device, queue, encoder, &trail_b.view, &trail_a.view, decay, 0.003, profiler);
         // Pass 1: A→B pure blur
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
-        self.run_diffuse_pass(device, queue, encoder, &trail_a.view, &trail_b.view, 1.0, 0.0);
+        self.run_diffuse_pass(device, queue, encoder, &trail_a.view, &trail_b.view, 1.0, 0.0, profiler);
         // Pass 2: B→A pure blur
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
-        self.run_diffuse_pass(device, queue, encoder, &trail_b.view, &trail_a.view, 1.0, 0.0);
+        self.run_diffuse_pass(device, queue, encoder, &trail_b.view, &trail_a.view, 1.0, 0.0, profiler);
 
         // ── Pass 4: Display (fragment) ──
         // trail_a has final diffused result
@@ -790,6 +795,7 @@ impl Generator for MyceliumGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("Mycelium Display", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Mycelium Display Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -802,7 +808,7 @@ impl Generator for MyceliumGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

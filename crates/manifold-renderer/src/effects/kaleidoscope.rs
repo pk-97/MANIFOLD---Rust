@@ -44,6 +44,7 @@ impl PostProcessEffect for KaleidoscopeFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         _ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let p = &fx.param_values;
         let uniforms = KaleidoscopeUniforms {
@@ -58,6 +59,7 @@ impl PostProcessEffect for KaleidoscopeFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Kaleidoscope Pass",
+            profiler,
         );
     }
 }

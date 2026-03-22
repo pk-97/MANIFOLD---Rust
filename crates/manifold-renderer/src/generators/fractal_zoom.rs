@@ -109,6 +109,7 @@ impl Generator for FractalZoomGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 1.0 };
         let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
@@ -134,6 +135,7 @@ impl Generator for FractalZoomGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("FractalZoom", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("FractalZoom Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -146,7 +148,7 @@ impl Generator for FractalZoomGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

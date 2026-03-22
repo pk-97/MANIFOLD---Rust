@@ -427,6 +427,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         self.ensure_resources(device, ctx.width, ctx.height);
 
@@ -493,9 +494,10 @@ impl Generator for ComputeStrangeAttractorGenerator {
             });
 
             {
+                let ts = profiler.and_then(|p| p.compute_timestamps("Attractor SeedKernel", active_count, 1));
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("Attractor SeedKernel"),
-                    timestamp_writes: None,
+                    timestamp_writes: ts,
                 });
                 pass.set_pipeline(&self.seed_pipeline);
                 pass.set_bind_group(0, &seed_bg, &[]);
@@ -534,9 +536,10 @@ impl Generator for ComputeStrangeAttractorGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.compute_timestamps("Attractor CSMain", active_count, 1));
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Attractor CSMain"),
-                timestamp_writes: None,
+                timestamp_writes: ts,
             });
             pass.set_pipeline(&self.sim_pipeline);
             pass.set_bind_group(0, &sim_bg, &[]);
@@ -567,9 +570,10 @@ impl Generator for ComputeStrangeAttractorGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.compute_timestamps("Attractor SplatKernel", sw, sh));
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Attractor SplatKernel"),
-                timestamp_writes: None,
+                timestamp_writes: ts,
             });
             pass.set_pipeline(&self.splat_pipeline);
             pass.set_bind_group(0, &splat_bg, &[]);
@@ -593,9 +597,10 @@ impl Generator for ComputeStrangeAttractorGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.compute_timestamps("Attractor ResolveKernel", sw, sh));
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Attractor ResolveKernel"),
-                timestamp_writes: None,
+                timestamp_writes: ts,
             });
             pass.set_pipeline(&self.resolve_pipeline);
             pass.set_bind_group(0, &resolve_bg, &[]);
@@ -627,6 +632,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("Attractor Display", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Attractor Display"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -639,7 +645,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

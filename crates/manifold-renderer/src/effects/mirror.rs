@@ -43,6 +43,7 @@ impl PostProcessEffect for MirrorFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         _ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // MirrorFX.cs:13-14 — GetParam(0)=Amount, Mathf.Round(GetParam(1))=Mode
         let p = &fx.param_values;
@@ -59,6 +60,7 @@ impl PostProcessEffect for MirrorFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Mirror Pass",
+            profiler,
         );
     }
 }

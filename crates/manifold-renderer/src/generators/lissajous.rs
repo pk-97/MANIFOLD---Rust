@@ -60,6 +60,7 @@ impl Generator for LissajousGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         let freq_x_rate = if ctx.param_count > FREQ_X as u32 { ctx.params[FREQ_X] } else { 0.13 };
         let freq_y_rate = if ctx.param_count > FREQ_Y as u32 { ctx.params[FREQ_Y] } else { 0.09 };
@@ -134,7 +135,7 @@ impl Generator for LissajousGenerator {
             0.5, // dot_scale: Unity LissajousGenerator.GetDotScale() returns 0.5
         );
 
-        self.line_pipeline.draw(device, queue, encoder, target, verts, ctx.beat);
+        self.line_pipeline.draw(device, queue, encoder, target, verts, ctx.beat, profiler, "Lissajous", ctx.width, ctx.height);
         self.helper.anim_progress
     }
 

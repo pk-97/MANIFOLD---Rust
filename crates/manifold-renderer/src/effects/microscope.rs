@@ -243,6 +243,7 @@ impl MicroscopeFX {
         edge_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
         label: &str,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
 
@@ -274,6 +275,7 @@ impl MicroscopeFX {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps(label, 0, 0));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -286,7 +288,7 @@ impl MicroscopeFX {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -338,6 +340,7 @@ impl PostProcessEffect for MicroscopeFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // MicroscopeFX.cs lines 57-71 — read params
         let amount = fx.param_values.first().copied().unwrap_or(0.0);
@@ -412,6 +415,7 @@ impl PostProcessEffect for MicroscopeFX {
                 source, &self.dummy_view, &self.dummy_view,
                 blur_a_view,
                 "Microscope HBlur",
+                profiler,
             );
 
             // Pass 1: V blur — blur_a → blur_b
@@ -423,6 +427,7 @@ impl PostProcessEffect for MicroscopeFX {
                 blur_a_view, &self.dummy_view, &self.dummy_view,
                 blur_b_view,
                 "Microscope VBlur",
+                profiler,
             );
         }
 
@@ -435,6 +440,7 @@ impl PostProcessEffect for MicroscopeFX {
                 source, &self.dummy_view, &self.dummy_view,
                 edge_view,
                 "Microscope Edge",
+                profiler,
             );
         }
 
@@ -457,6 +463,7 @@ impl PostProcessEffect for MicroscopeFX {
             source, blur_view, edge_view,
             target,
             "Microscope Composite",
+            profiler,
         );
     }
 

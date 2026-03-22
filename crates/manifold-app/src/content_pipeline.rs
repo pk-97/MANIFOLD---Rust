@@ -205,9 +205,9 @@ impl ContentPipeline {
         for renderer in renderers.iter_mut() {
             if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
                 #[cfg(feature = "profiling")]
-                let gpu_prof = self.gpu_profiler.as_mut();
+                let gpu_prof = self.gpu_profiler.as_ref();
                 #[cfg(not(feature = "profiling"))]
-                let gpu_prof: Option<&mut manifold_renderer::gpu_profiler::GpuProfiler> = None;
+                let gpu_prof: Option<&manifold_renderer::gpu_profiler::GpuProfiler> = None;
                 gen_renderer.render_all(
                     &gpu.queue, &mut encoder, time, beat, dt as f32, layers, gpu_prof,
                 );
@@ -280,9 +280,9 @@ impl ContentPipeline {
 
         // Render compositor (records into encoder, returns view into tonemap output)
         #[cfg(feature = "profiling")]
-        let gpu_prof = self.gpu_profiler.as_mut();
+        let gpu_prof = self.gpu_profiler.as_ref();
         #[cfg(not(feature = "profiling"))]
-        let gpu_prof: Option<&mut manifold_renderer::gpu_profiler::GpuProfiler> = None;
+        let gpu_prof: Option<&manifold_renderer::gpu_profiler::GpuProfiler> = None;
         let _compositor_view = self.compositor.render(
             &gpu.device, &gpu.queue, &mut encoder, &frame, gpu_prof,
         );

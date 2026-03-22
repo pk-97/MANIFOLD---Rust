@@ -22,6 +22,7 @@ pub trait Generator: Send {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32;
 
     /// Recreate resolution-dependent resources.

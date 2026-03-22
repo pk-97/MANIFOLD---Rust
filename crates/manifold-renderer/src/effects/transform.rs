@@ -90,6 +90,7 @@ impl PostProcessEffect for TransformFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // TransformFX.cs:18 — clip-level Transform is handled as uniforms in BlitClip.
         // Use identity uniforms so source passes through to target unchanged.
@@ -123,6 +124,7 @@ impl PostProcessEffect for TransformFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Transform Pass",
+            profiler,
         );
     }
 }

@@ -70,6 +70,7 @@ pub trait PostProcessEffect: Send {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     );
 
     /// Clear all temporal state (called on seek to prevent stale trails/feedback).

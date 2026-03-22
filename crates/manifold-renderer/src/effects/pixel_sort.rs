@@ -440,6 +440,7 @@ impl PostProcessEffect for PixelSortFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // ComputeSortEffect.cs lines 107-109 — store current output dimensions
         self.output_width  = ctx.width;
@@ -522,9 +523,10 @@ impl PostProcessEffect for PixelSortFX {
                 ],
             });
 
+            let ts = profiler.and_then(|p| p.compute_timestamps("PixelSort KeyExtract", ctx.width, ctx.height));
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("PixelSort KeyExtract"),
-                timestamp_writes: None,
+                timestamp_writes: ts,
             });
             pass.set_pipeline(&self.key_pipeline);
             pass.set_bind_group(0, &key_bg, &[]);
@@ -575,9 +577,11 @@ impl PostProcessEffect for PixelSortFX {
                         ],
                     });
 
+                    let ts_label = format!("BitonicSort l={level} s={step}");
+                    let ts = profiler.and_then(|p| p.compute_timestamps(&ts_label, ctx.width, ctx.height));
                     let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some(&format!("BitonicSort l={level} s={step}")),
-                        timestamp_writes: None,
+                        label: Some(&ts_label),
+                        timestamp_writes: ts,
                     });
                     pass.set_pipeline(&self.bitonic_pipeline);
                     pass.set_bind_group(0, &bitonic_bg, &[]);
@@ -629,6 +633,7 @@ impl PostProcessEffect for PixelSortFX {
                 ],
             });
 
+            let ts = profiler.and_then(|p| p.render_timestamps("PixelSortVisualize", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("PixelSortVisualize"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -641,7 +646,7 @@ impl PostProcessEffect for PixelSortFX {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

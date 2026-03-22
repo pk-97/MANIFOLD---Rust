@@ -259,27 +259,41 @@ impl ContentThread {
                 let active_layers = self.engine.project()
                     .map_or(0, |p| p.timeline.layers.len());
 
-                // Collect GPU pass timing results
+                // Collect GPU pass timing results with resolution info
+                let gpu_pass_results = self.content_pipeline.last_gpu_pass_results();
+                let gpu_pass_count = gpu_pass_results.len() as u32;
+                let gpu_total_ms: f64 = gpu_pass_results.iter()
+                    .map(|p| p.duration_ms).sum();
                 let gpu_passes: Vec<manifold_profiler::GpuPassRecord> =
-                    self.content_pipeline.last_gpu_pass_results()
-                        .iter()
+                    gpu_pass_results.iter()
                         .map(|p| manifold_profiler::GpuPassRecord {
                             name: p.label.clone(),
                             ms: p.duration_ms,
+                            width: p.width,
+                            height: p.height,
+                            is_compute: p.is_compute,
                         })
                         .collect();
 
-                // Collect active clip info with generator types
+                // Collect active clip info with generator types + live params
+                let layers = self.engine.project()
+                    .map(|p| p.timeline.layers.as_slice())
+                    .unwrap_or(&[]);
                 let active_clip_info: Vec<manifold_profiler::ActiveClipInfo> =
                     tick_result.ready_clips.iter().map(|clip| {
+                        let gen_params = layers.get(clip.layer_index as usize)
+                            .and_then(|l| l.gen_params.as_ref())
+                            .map(|gp| gp.param_values.clone())
+                            .unwrap_or_default();
                         manifold_profiler::ActiveClipInfo {
                             clip_id: clip.id.to_string(),
                             generator_type: clip.generator_type.to_string(),
                             layer_index: clip.layer_index,
+                            gen_param_values: gen_params,
                         }
                     }).collect();
 
-                // Collect active effect info from all clips + master
+                // Collect active effect info with live modulated param values
                 let mut active_effects: Vec<manifold_profiler::ActiveEffectInfo> = Vec::new();
                 for clip in &tick_result.ready_clips {
                     for fx in &clip.effects {
@@ -287,6 +301,7 @@ impl ContentThread {
                             active_effects.push(manifold_profiler::ActiveEffectInfo {
                                 effect_type: fx.effect_type.to_string(),
                                 scope: format!("clip:{}", clip.id),
+                                param_values: fx.param_values.clone(),
                             });
                         }
                     }
@@ -297,6 +312,7 @@ impl ContentThread {
                             active_effects.push(manifold_profiler::ActiveEffectInfo {
                                 effect_type: fx.effect_type.to_string(),
                                 scope: "master".to_string(),
+                                param_values: fx.param_values.clone(),
                             });
                         }
                     }
@@ -327,6 +343,8 @@ impl ContentThread {
                     active_clips: active_clip_info,
                     active_effects,
                     active_layer_count: active_layers,
+                    gpu_pass_count,
+                    gpu_total_ms,
                     memory: manifold_profiler::MemorySnapshot {
                         estimated_texture_bytes: estimated_tex_bytes,
                         render_target_count: rt_count,
@@ -1057,9 +1075,57 @@ impl ContentThread {
                 project_name, project_path, resolution, target_fps, gpu_name,
             } => {
                 log::info!("[ContentThread] profiling session started");
-                self.profiler = Some(manifold_profiler::ProfileSession::new(
+                let mut session = manifold_profiler::ProfileSession::new(
                     project_name, project_path, resolution, target_fps, gpu_name,
-                ));
+                );
+
+                // Build timeline snapshot from current project state
+                if let Some(p) = self.engine.project() {
+                    let layers = p.timeline.layers.iter().map(|layer| {
+                        let clips = layer.clips.iter()
+                            .map(|c| manifold_profiler::ClipSnapshot {
+                                id: c.id.to_string(),
+                                start_beat: c.start_beat,
+                                duration_beats: c.duration_beats,
+                                generator_type: c.generator_type.to_string(),
+                                effect_count: c.effects.len(),
+                            })
+                            .collect();
+                        let effects = layer.effects.as_deref().unwrap_or(&[]).iter()
+                            .map(|fx| manifold_profiler::EffectSnapshot {
+                                effect_type: fx.effect_type.to_string(),
+                                enabled: fx.enabled,
+                            })
+                            .collect();
+                        manifold_profiler::LayerSnapshot {
+                            index: layer.index,
+                            generator_type: layer.gen_params.as_ref()
+                                .map_or("None".to_string(), |gp| gp.generator_type.to_string()),
+                            blend_mode: format!("{:?}", layer.default_blend_mode),
+                            is_muted: layer.is_muted,
+                            clips,
+                            effects,
+                        }
+                    }).collect();
+                    let master_effects = p.settings.master_effects.iter()
+                        .map(|fx| manifold_profiler::EffectSnapshot {
+                            effect_type: fx.effect_type.to_string(),
+                            enabled: fx.enabled,
+                        })
+                        .collect();
+                    session.set_timeline_snapshot(manifold_profiler::TimelineSnapshot {
+                        bpm: p.settings.bpm,
+                        time_signature: p.settings.time_signature_numerator,
+                        resolution: (
+                            p.settings.output_width as u32,
+                            p.settings.output_height as u32,
+                        ),
+                        layers,
+                        master_effects,
+                    });
+                }
+
+                self.profiler = Some(session);
             }
             #[cfg(feature = "profiling")]
             ContentCommand::StopProfiling => {

@@ -121,6 +121,7 @@ impl Generator for NumberStationGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         let mode = if ctx.param_count > MODE as u32 { ctx.params[MODE].round() } else { 0.0 };
         let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 1.0 };
@@ -158,6 +159,7 @@ impl Generator for NumberStationGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("NumberStation", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("NumberStation Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -170,7 +172,7 @@ impl Generator for NumberStationGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

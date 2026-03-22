@@ -262,6 +262,7 @@ impl Generator for ParametricSurfaceGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         let shape = Self::resolve_shape(ctx);
         let morph = if ctx.param_count > MORPH as u32 { ctx.params[MORPH] } else { 0.0 };
@@ -297,9 +298,10 @@ impl Generator for ParametricSurfaceGenerator {
             });
 
             {
+                let ts = profiler.and_then(|p| p.compute_timestamps("ParametricSurface Bake", VOL_SIZE, VOL_SIZE));
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("ParametricSurface Bake Pass"),
-                    timestamp_writes: None,
+                    timestamp_writes: ts,
                 });
                 pass.set_pipeline(&self.compute_pipeline);
                 pass.set_bind_group(0, &compute_bg, &[]);
@@ -340,6 +342,7 @@ impl Generator for ParametricSurfaceGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("ParametricSurface Raymarch", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ParametricSurface Raymarch Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -352,7 +355,7 @@ impl Generator for ParametricSurfaceGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

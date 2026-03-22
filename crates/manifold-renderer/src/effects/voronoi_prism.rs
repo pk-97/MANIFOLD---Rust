@@ -49,6 +49,7 @@ impl PostProcessEffect for VoronoiPrismFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let p = &fx.param_values;
         let uniforms = VoronoiPrismUniforms {
@@ -67,6 +68,7 @@ impl PostProcessEffect for VoronoiPrismFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "VoronoiPrism Pass",
+            profiler,
         );
     }
 }

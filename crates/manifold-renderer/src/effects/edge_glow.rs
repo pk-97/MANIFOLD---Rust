@@ -50,6 +50,7 @@ impl PostProcessEffect for EdgeGlowFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // EdgeGlowFX.cs:22-27 — SetUniforms: GetParam(0..3), Mathf.Round for mode
         // EdgeGlowEffect.shader:133 — texel size comes from source texture dimensions
@@ -69,6 +70,7 @@ impl PostProcessEffect for EdgeGlowFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "EdgeGlow Pass",
+            profiler,
         );
     }
 }

@@ -111,6 +111,7 @@ impl PostProcessEffect for HalationFX {
         target: &wgpu::TextureView,  // ctx.Host.GetTargetBuffer() in Unity
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // ShouldSkip handles the amount <= 0 check at the chain level now.
         let amount = fx.param_values.first().copied().unwrap_or(0.0);
@@ -162,6 +163,7 @@ impl PostProcessEffect for HalationFX {
                 ..base
             }),
             "Halation ThresholdTintBlur",
+            profiler,
         );
 
         // HalationFX.cs lines 85-86: material.SetTexture("_HaloTex", bufs[0]); Blit(bufs[0], bufs[1], material, 1)
@@ -186,6 +188,7 @@ impl PostProcessEffect for HalationFX {
                 ..base
             }),
             "Halation BlurWide",
+            profiler,
         );
 
         // HalationFX.cs lines 89-93: Blit(buffer, target, material, 2) with _HaloTex = bufs[1]
@@ -204,6 +207,7 @@ impl PostProcessEffect for HalationFX {
                 ..base
             }),
             "Halation Composite",
+            profiler,
         );
     }
 

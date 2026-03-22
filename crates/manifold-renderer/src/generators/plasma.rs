@@ -117,6 +117,7 @@ impl Generator for PlasmaGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         if ctx.param_count == 0 {
             return ctx.anim_progress;
@@ -157,6 +158,7 @@ impl Generator for PlasmaGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("Plasma", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Plasma Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -169,7 +171,7 @@ impl Generator for PlasmaGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

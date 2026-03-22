@@ -57,6 +57,7 @@ impl PostProcessEffect for InfraredFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let p = &fx.param_values;
         let width = ctx.width as f32;
@@ -81,6 +82,7 @@ impl PostProcessEffect for InfraredFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Infrared Pass",
+            profiler,
         );
     }
 }

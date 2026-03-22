@@ -44,6 +44,7 @@ impl PostProcessEffect for DitherFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let p = &fx.param_values;
         let uniforms = DitherUniforms {
@@ -58,6 +59,7 @@ impl PostProcessEffect for DitherFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Dither Pass",
+            profiler,
         );
     }
 }

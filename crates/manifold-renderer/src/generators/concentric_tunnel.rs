@@ -124,6 +124,7 @@ impl Generator for ConcentricTunnelGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         if ctx.param_count == 0 {
             return ctx.anim_progress;
@@ -184,6 +185,7 @@ impl Generator for ConcentricTunnelGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("ConcentricTunnel", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ConcentricTunnel Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -196,7 +198,7 @@ impl Generator for ConcentricTunnelGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

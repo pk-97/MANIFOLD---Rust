@@ -112,6 +112,7 @@ impl PostProcessEffect for BloomFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // ShouldSkip handles the amount <= 0 check at the chain level now.
         let amount = fx.param_values.first().copied().unwrap_or(0.187);
@@ -133,6 +134,7 @@ impl PostProcessEffect for BloomFX {
                     _pad0: 0.0, _pad1: 0.0,
                 }),
                 "Bloom Skip",
+                profiler,
             );
             return;
         }
@@ -166,6 +168,7 @@ impl PostProcessEffect for BloomFX {
                 ..base_uniforms
             }),
             "Bloom Prefilter",
+            profiler,
         );
 
         // Downsample chain
@@ -182,6 +185,7 @@ impl PostProcessEffect for BloomFX {
                     ..base_uniforms
                 }),
                 "Bloom Down",
+                profiler,
             );
         }
 
@@ -209,6 +213,7 @@ impl PostProcessEffect for BloomFX {
                     ..base_uniforms
                 }),
                 "Bloom Up",
+                profiler,
             );
         }
 
@@ -227,6 +232,7 @@ impl PostProcessEffect for BloomFX {
                 ..base_uniforms
             }),
             "Bloom Composite",
+            profiler,
         );
     }
 

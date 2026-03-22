@@ -153,6 +153,7 @@ impl Generator for WireframeZooGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         let rot_xy = if ctx.param_count > ROT_XY as u32 { ctx.params[ROT_XY] } else { 0.5 };
         let rot_zw = if ctx.param_count > ROT_ZW as u32 { ctx.params[ROT_ZW] } else { 0.3 };
@@ -226,7 +227,7 @@ impl Generator for WireframeZooGenerator {
             1.0, // dot_scale: default
         );
 
-        self.line_pipeline.draw(device, queue, encoder, target, verts, ctx.beat);
+        self.line_pipeline.draw(device, queue, encoder, target, verts, ctx.beat, profiler, "WireframeZoo", ctx.width, ctx.height);
         self.helper.anim_progress
     }
 

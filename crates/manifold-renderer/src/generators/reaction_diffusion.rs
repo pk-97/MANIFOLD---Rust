@@ -254,6 +254,7 @@ impl Generator for ReactionDiffusionGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         // Internal resolution: full res (1.0)
         let w = ctx.width;
@@ -307,6 +308,7 @@ impl Generator for ReactionDiffusionGenerator {
             });
 
             {
+                let ts = profiler.and_then(|p| p.render_timestamps("RD Sim", w, h));
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("RD Sim Pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -319,7 +321,7 @@ impl Generator for ReactionDiffusionGenerator {
                         },
                     })],
                     depth_stencil_attachment: None,
-                    timestamp_writes: None,
+                    timestamp_writes: ts,
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
@@ -358,6 +360,7 @@ impl Generator for ReactionDiffusionGenerator {
         });
 
         {
+            let ts = profiler.and_then(|p| p.render_timestamps("RD Display", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("RD Display Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -370,7 +373,7 @@ impl Generator for ReactionDiffusionGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: ts,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

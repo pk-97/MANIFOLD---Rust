@@ -92,6 +92,7 @@ impl PostProcessEffect for CrtFX {
         target: &wgpu::TextureView,  // ctx.Host.GetTargetBuffer() in Unity
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // ShouldSkip handles the amount <= 0 check at the chain level now.
         let amount = fx.param_values.first().copied().unwrap_or(1.0);
@@ -134,6 +135,7 @@ impl PostProcessEffect for CrtFX {
                 _pad: 0.0,
             }),
             "CRT Prefilter",
+            profiler,
         );
 
         // ── Pass 1: Downsample — halfRes → quarterRes ─────────────────────────
@@ -162,6 +164,7 @@ impl PostProcessEffect for CrtFX {
                 _pad: 0.0,
             }),
             "CRT Downsample",
+            profiler,
         );
 
         // ── Pass 2: CRT Composite — source + quarterRes(glow) → target ────────
@@ -187,6 +190,7 @@ impl PostProcessEffect for CrtFX {
                 _pad: 0.0,
             }),
             "CRT Composite",
+            profiler,
         );
     }
 
