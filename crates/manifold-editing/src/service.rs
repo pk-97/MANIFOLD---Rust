@@ -545,22 +545,26 @@ impl EditingService {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
 
         if region.is_active {
-            // Region mode: trim clips to region, place copies after region end
+            // Region mode: find ALL clips overlapping the region (Unity FillClipsInRegion),
+            // trim to region boundaries, place copies after region end.
+            // The offset is the full region duration, preserving gaps (Ableton behavior).
             let offset = region.duration_beats();
+            let start_layer = region.start_layer_index.min(region.end_layer_index).max(0) as usize;
+            let end_layer = (region.start_layer_index.max(region.end_layer_index) as usize)
+                .min(project.timeline.layers.len().saturating_sub(1));
 
-            for layer in &project.timeline.layers {
+            for li in start_layer..=end_layer {
+                let layer = &project.timeline.layers[li];
                 for clip in &layer.clips {
-                    if !clip_ids.contains(&clip.id) {
-                        continue;
-                    }
-                    // Only include clips that overlap the region
-                    if clip.start_beat >= region.end_beat || clip.end_beat() <= region.start_beat {
+                    // Overlap test: clip intersects region (Unity lines 182-183)
+                    if clip.end_beat() <= region.start_beat
+                        || clip.start_beat >= region.end_beat
+                    {
                         continue;
                     }
                     let trimmed = Self::trim_clip_to_region(clip, region, spb);
                     let mut new_clip = trimmed;
                     new_clip.start_beat += offset;
-                    // clone_with_new_id was already called by trim_clip_to_region
                     commands.push(Box::new(AddClipCommand::new(new_clip, clip.layer_index)));
                 }
             }

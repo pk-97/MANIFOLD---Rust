@@ -471,39 +471,34 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn duplicate_clips(&mut self, clip_ids: &[ClipId]) {
-        // Unity EditingService.DuplicateSelectedClips (line 767-778):
-        // After duplicate, select the new clips and update region.
+        // Unity EditingService.DuplicateSelectedClips (lines 678-781):
+        // Region mode: use the ACTUAL UI region (preserves gaps/spacing).
+        // Individual mode: offset by the clips' own span.
+        // After region duplicate, shift the region forward (Ableton-style).
         if let Some(project) = Some(&mut *self.project) {
-            let mut region = manifold_core::selection::SelectionRegion::default();
-            let mut min_beat = f32::MAX;
-            let mut max_beat = f32::MIN;
-            for layer in &project.timeline.layers {
-                for clip in &layer.clips {
-                    if clip_ids.contains(&clip.id) {
-                        min_beat = min_beat.min(clip.start_beat);
-                        max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
-                    }
-                }
-            }
-            if max_beat > min_beat {
-                region.is_active = true;
-                region.start_beat = min_beat;
-                region.end_beat = max_beat;
-            }
+            let region = self.selection.get_region().clone();
+            let used_region_mode = region.is_active;
+
             // Snapshot existing IDs to find new ones after execute
             let before_ids: std::collections::HashSet<ClipId> = project.timeline.layers.iter()
                 .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
                 .collect();
 
             let spb = 60.0 / project.settings.bpm.max(1.0);
-            let mut commands = EditingService::duplicate_clips(project, clip_ids, &region, spb);
+            let mut commands = EditingService::duplicate_clips(
+                project, clip_ids, &region, spb,
+            );
             if !commands.is_empty() {
                 // Execute locally for read-back (need new clip IDs for selection).
-                // Phase 3 will move this to content thread with sync response.
                 for c in commands.iter_mut() { c.execute(project); }
-                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, "Duplicate clips".into()));
+                ContentCommand::send(
+                    self.content_tx,
+                    crate::content_command::ContentCommand::ExecuteBatch(
+                        commands, "Duplicate clips".into(),
+                    ),
+                );
 
-                // Step 4h: find newly created clips and select them
+                // Find newly created clips and select them
                 let new_ids: Vec<ClipId> = project.timeline.layers.iter()
                     .flat_map(|l| l.clips.iter()
                         .filter(|c| !before_ids.contains(&c.id))
@@ -516,8 +511,23 @@ impl TimelineInputHost for AppInputHost<'_> {
                 }
                 self.selection.primary_selected_clip_id = new_ids.first().cloned();
                 self.selection.selection_version += 1;
-                crate::ui_bridge::update_region_from_clip_selection_inline(
-                    self.selection, project);
+
+                if used_region_mode && !new_ids.is_empty() {
+                    // Shift region forward by region duration (Ableton-style).
+                    // Unity lines 743-758.
+                    let duration = region.duration_beats();
+                    self.selection.set_region(
+                        region.end_beat,
+                        region.end_beat + duration,
+                        region.start_layer_index,
+                        region.end_layer_index,
+                        &project.timeline.layers,
+                    );
+                } else {
+                    crate::ui_bridge::update_region_from_clip_selection_inline(
+                        self.selection, project,
+                    );
+                }
             }
         }
         *self.needs_structural_sync = true;
