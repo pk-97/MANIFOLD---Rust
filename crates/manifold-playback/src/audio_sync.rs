@@ -186,6 +186,15 @@ impl ImportedAudioSyncController {
             return;
         }
 
+        // Sync start_beat from the project's authoritative audio_start_beat.
+        // MutateProject (waveform drag) can change the project value without
+        // calling set_start_beat(), so we always read the latest here.
+        if let Some(project) = engine.project()
+            && let Some(perc) = &project.percussion_import
+        {
+            self.start_beat = perc.audio_start_beat;
+        }
+
         let clip_length = self.clip_duration_seconds;
 
         // Keep beat anchor aligned with any transport/tempo timing changes.

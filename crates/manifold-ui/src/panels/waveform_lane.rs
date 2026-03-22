@@ -501,15 +501,17 @@ impl Panel for WaveformLanePanel {
             UIEvent::DragBegin { node_id, .. } => {
                 let id = *node_id as i32;
                 // Start waveform drag only on the overlay.
+                // Drag takes priority over scrub — stop scrubbing.
                 if id == self.overlay_id && self.has_audio {
                     self.is_dragging = true;
+                    self.is_scrubbing = false;
                     self.accumulated_beats = 0.0;
                     self.total_snapped_delta = 0.0;
                 }
             }
             UIEvent::Drag { delta, pos, .. } => {
-                // Handle scrub drag
-                if self.is_scrubbing {
+                // Handle scrub drag (only when not in waveform-offset drag)
+                if self.is_scrubbing && !self.is_dragging {
                     actions.push(PanelAction::WaveformScrub(pos.x, pos.y));
                 }
 
