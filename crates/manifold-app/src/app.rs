@@ -223,6 +223,11 @@ pub struct Application {
     // Waveform data stays on UI thread; preloaded audio data is forwarded to content thread.
     pub(crate) pending_audio_load: Option<std::sync::mpsc::Receiver<PendingAudioLoadResult>>,
 
+    /// Tracks the audio path that has been loaded (or is being loaded) so we
+    /// can detect when the content thread sets a *new* audio_path after a fresh
+    /// percussion import and trigger background audio loading + waveform decode.
+    pub(crate) loaded_audio_path: Option<String>,
+
     // Keyboard/zoom handler — port of Unity InputHandler.cs
     // Owns inspector_has_focus (panel focus for context-sensitive routing).
     pub(crate) input_handler: crate::input_handler::InputHandler,
@@ -322,6 +327,7 @@ impl Application {
             user_prefs: UserPrefs::load(),
             text_input: crate::text_input::TextInputState::new(),
             pending_audio_load: None,
+            loaded_audio_path: None,
             input_handler: crate::input_handler::InputHandler::new(),
             overlay: manifold_ui::interaction_overlay::InteractionOverlay::new(
                 manifold_ui::color::CLIP_VERTICAL_PAD,

@@ -91,6 +91,7 @@ impl Application {
             self.ui_root.waveform_lane.clear_audio();
             self.ui_root.layout.waveform_lane_visible = false;
             self.pending_audio_load = None;
+            self.loaded_audio_path = None;
 
             // Apply saved layout before initializing
             self.ui_root.apply_project_layout(&project.settings);
@@ -130,29 +131,8 @@ impl Application {
                     }
 
             if let Some((audio_path, start_beat)) = audio_path_for_load {
-                let (tx, rx) = std::sync::mpsc::channel();
-                self.pending_audio_load = Some(rx);
-
-                std::thread::Builder::new()
-                    .name("audio-load".into())
-                    .spawn(move || {
-                        let t_audio = std::time::Instant::now();
-                        let preloaded = match manifold_playback::audio_sync::preload_audio(&audio_path, start_beat) {
-                            Ok(p) => p,
-                            Err(e) => {
-                                log::warn!("[ProjectIO] Background audio load failed: {}", e);
-                                return;
-                            }
-                        };
-                        log::info!("[Audio] decode (background): {:.1}ms", t_audio.elapsed().as_secs_f64() * 1000.0);
-
-                        // Extract waveform PCM from kira's already-decoded frames (no second decode).
-                        // Unity does the same: decode once, then AudioClip.GetData() for waveform.
-                        let waveform = Some(DecodedAudio::from_static_sound_data(&preloaded.sound_data));
-
-                        let _ = tx.send(PendingAudioLoadResult { preloaded, waveform });
-                    })
-                    .expect("Failed to spawn audio load thread");
+                self.loaded_audio_path = Some(audio_path.clone());
+                self.spawn_background_audio_load(audio_path, start_beat);
             }
 
             self.send_content_cmd(ContentCommand::SetProject);
@@ -224,6 +204,38 @@ impl Application {
                 self.pending_audio_load = None;
             }
         }
+    }
+
+    /// Spawn a background thread that decodes audio via kira (for playback) and
+    /// extracts PCM samples (for waveform). Results are picked up by
+    /// `poll_pending_audio_load()` each frame.
+    pub(crate) fn spawn_background_audio_load(&mut self, audio_path: String, start_beat: f32) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.pending_audio_load = Some(rx);
+
+        std::thread::Builder::new()
+            .name("audio-load".into())
+            .spawn(move || {
+                let t_audio = std::time::Instant::now();
+                let preloaded =
+                    match manifold_playback::audio_sync::preload_audio(&audio_path, start_beat) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            log::warn!("[Audio] Background audio load failed: {}", e);
+                            return;
+                        }
+                    };
+                log::info!(
+                    "[Audio] decode (background): {:.1}ms",
+                    t_audio.elapsed().as_secs_f64() * 1000.0
+                );
+
+                let waveform =
+                    Some(DecodedAudio::from_static_sound_data(&preloaded.sound_data));
+
+                let _ = tx.send(PendingAudioLoadResult { preloaded, waveform });
+            })
+            .expect("Failed to spawn audio load thread");
     }
 
     /// Open a decorated HDR output window (default size = project resolution).

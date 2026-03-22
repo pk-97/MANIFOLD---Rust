@@ -23,6 +23,8 @@ impl Application {
         // Content rendering now runs on dedicated thread — no cadence check needed here.
 
         // 1. Drain state from content thread
+        // Deferred audio load request — collected inside the rx borrow, executed after.
+        let mut deferred_audio_load: Option<(String, f32)> = None;
         if let Some(ref rx) = self.state_rx {
             // Drain all pending states, keep the latest
             while let Ok(state) = rx.try_recv() {
@@ -61,16 +63,30 @@ impl Application {
                         // Clear suppression once we've accepted a post-load snapshot
                         self.suppress_snapshot_until = 0;
 
-                        // Sync waveform lane visibility from project state.
-                        // Content thread may have imported/removed audio (PercussionImport,
-                        // ResetAudio) — keep layout.waveform_lane_visible in sync.
-                        let has_audio_path = self.local_project.percussion_import
+                        // Sync waveform lane visibility and detect new audio path
+                        // from content thread (fresh percussion import or audio-only
+                        // import). Actual loading is deferred to after the rx borrow.
+                        let current_audio_path = self.local_project.percussion_import
                             .as_ref()
-                            .and_then(|p| p.audio_path.as_ref())
-                            .is_some_and(|s| !s.is_empty());
-                        if has_audio_path && !self.ui_root.layout.waveform_lane_visible {
-                            self.ui_root.layout.waveform_lane_visible = true;
-                            self.needs_rebuild = true;
+                            .and_then(|p| p.audio_path.clone())
+                            .filter(|s| !s.is_empty());
+                        if let Some(ref path) = current_audio_path {
+                            if !self.ui_root.layout.waveform_lane_visible {
+                                self.ui_root.layout.waveform_lane_visible = true;
+                                self.needs_rebuild = true;
+                            }
+                            let already_loaded = self.loaded_audio_path.as_ref()
+                                .is_some_and(|lp| lp == path);
+                            if !already_loaded && self.pending_audio_load.is_none() {
+                                let start_beat = self.local_project.percussion_import
+                                    .as_ref()
+                                    .map_or(0.0, |p| p.audio_start_beat);
+                                deferred_audio_load = Some((path.clone(), start_beat));
+                            }
+                        } else if self.loaded_audio_path.is_some() {
+                            // Audio path was removed (undo, reset) — clear tracking
+                            // so a future re-import will trigger loading again.
+                            self.loaded_audio_path = None;
                         }
 
                         // Only trigger structural sync when data_version changed
@@ -107,6 +123,16 @@ impl Application {
                     ..state
                 };
             }
+        }
+
+        // 1a. Trigger deferred audio load (new audio_path from content thread).
+        if let Some((path, start_beat)) = deferred_audio_load {
+            self.loaded_audio_path = Some(path.clone());
+            self.spawn_background_audio_load(path, start_beat);
+            log::info!(
+                "[Audio] Detected new audio path from content thread, \
+                starting background load"
+            );
         }
 
         // 1b. Poll for completed background audio load (waveform stays on UI thread)
