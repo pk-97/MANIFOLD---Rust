@@ -524,6 +524,61 @@ impl InspectorCompositePanel {
         indices
     }
 
+    /// Remap selection indices after a single-effect reorder (from → to).
+    /// Matches the index shift logic in ReorderEffectCommand.
+    pub fn remap_selection_after_reorder(&mut self, tab: InspectorTab, from: usize, to: usize) {
+        let insert_at = if to > from { to - 1 } else { to };
+        let set = self.selection_set_mut(tab);
+        let old: Vec<usize> = set.iter().copied().collect();
+        set.clear();
+        for idx in old {
+            let new_idx = if idx == from {
+                insert_at
+            } else if from < to {
+                // Moved forward: indices in (from, to) shift down by 1
+                if idx > from && idx < to { idx - 1 } else { idx }
+            } else {
+                // Moved backward: indices in [to, from) shift up by 1
+                if idx >= to && idx < from { idx + 1 } else { idx }
+            };
+            set.insert(new_idx);
+        }
+    }
+
+    /// Remap selection indices after a group reorder.
+    /// `sources` are the original sorted indices, `target` is the insertion point.
+    pub fn remap_selection_after_group_reorder(
+        &mut self, tab: InspectorTab, sources: &[usize], target: usize,
+    ) {
+        let set = self.selection_set_mut(tab);
+        let old: Vec<usize> = set.iter().copied().collect();
+        set.clear();
+
+        // Build the same index mapping the dispatch uses:
+        // remove sources (sorted, reverse), then insert at adjusted target.
+        let mut sorted_sources = sources.to_vec();
+        sorted_sources.sort_unstable();
+        let removed_before = sorted_sources.iter().filter(|&&i| i < target).count();
+        let insert_at = target.saturating_sub(removed_before);
+
+        for idx in old {
+            if let Some(pos) = sorted_sources.iter().position(|&s| s == idx) {
+                // This was a moved effect — it's now at insert_at + offset
+                set.insert(insert_at + pos);
+            } else {
+                // Not moved — compute its new index after removals and insertions
+                let removed_before_idx = sorted_sources.iter().filter(|&&s| s < idx).count();
+                let adjusted = idx - removed_before_idx;
+                let inserted_before = if adjusted >= insert_at {
+                    sorted_sources.len()
+                } else {
+                    0
+                };
+                set.insert(adjusted + inserted_before);
+            }
+        }
+    }
+
     /// How many effects are selected in the active tab.
     pub fn selected_effect_count(&self) -> usize {
         let (set, _) = self.selection_for_tab(self.last_effect_tab);
