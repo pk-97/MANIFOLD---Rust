@@ -474,6 +474,7 @@ impl Application {
         // Unity avoids this because rebuilds only happen on structural changes and
         // SyncValues() dirty-checks against the data model without rebuilding.
         let inspector_dragging = self.ui_root.inspector.is_dragging();
+        let layer_dragging = self.ui_root.layer_headers.is_dragging();
         if self.needs_rebuild || needs_structural_sync {
             if inspector_dragging {
                 // Defer — keep needs_rebuild set so it fires after drag ends
@@ -481,6 +482,9 @@ impl Application {
                 if scroll_changed {
                     self.ui_root.rebuild_scroll_panels();
                 }
+            } else if layer_dragging {
+                // Defer — rebuilding scroll panels while a layer drag is active would
+                // destroy the node IDs that handle_drag / handle_drag_end depend on.
             } else {
                 self.needs_rebuild = false;
                 self.ui_root.build();
@@ -488,7 +492,7 @@ impl Application {
                 // structural changes recreate cards with is_selected=false.
                 self.ui_root.inspector.apply_selection_visuals(&mut self.ui_root.tree);
             }
-        } else if scroll_changed {
+        } else if scroll_changed && !layer_dragging {
             self.ui_root.rebuild_scroll_panels();
         }
 

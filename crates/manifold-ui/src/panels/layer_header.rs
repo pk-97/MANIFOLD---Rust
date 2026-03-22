@@ -414,6 +414,9 @@ pub struct LayerHeaderPanel {
     drag_target: i32,
     insert_indicator_id: i32,
     add_layer_btn: i32,
+    // Saved during PointerDown on drag handle so DragBegin can find the
+    // correct layer even after a tree rebuild has invalidated node IDs.
+    pending_drag_layer: i32,
 
     // Cached state for dirty-checking
     cached_mute: Vec<bool>,
@@ -444,6 +447,7 @@ impl LayerHeaderPanel {
             drag_target: -1,
             insert_indicator_id: -1,
             add_layer_btn: -1,
+            pending_drag_layer: -1,
             cached_mute: Vec::new(),
             cached_solo: Vec::new(),
             cached_selected: Vec::new(),
@@ -581,18 +585,36 @@ impl LayerHeaderPanel {
     /// Returns PanelAction if the drag starts on a drag handle.
     pub fn handle_drag_begin(&mut self, tree: &mut UITree, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
+        // Try exact node_id match first (works when no rebuild happened since PointerDown).
+        let mut matched_index: Option<usize> = None;
         for (i, row) in self.rows.iter().enumerate() {
             if id == row.drag_handle {
-                self.drag_source = i as i32;
-                self.drag_target = i as i32;
-                if row.bg >= 0 {
-                    tree.set_style(row.bg as u32, UIStyle {
-                        bg_color: DRAG_SOURCE_DIM,
-                        ..UIStyle::default()
-                    });
-                }
-                return vec![PanelAction::LayerDragStarted(i)];
+                matched_index = Some(i);
+                break;
             }
+        }
+        // Fallback: if a tree rebuild invalidated node IDs between PointerDown and
+        // DragBegin, use the layer index saved during PointerDown.
+        if matched_index.is_none() && self.pending_drag_layer >= 0 {
+            let idx = self.pending_drag_layer as usize;
+            if idx < self.rows.len() {
+                matched_index = Some(idx);
+            }
+        }
+        self.pending_drag_layer = -1;
+
+        if let Some(i) = matched_index {
+            self.drag_source = i as i32;
+            self.drag_target = i as i32;
+            if let Some(row) = self.rows.get(i)
+                && row.bg >= 0
+            {
+                tree.set_style(row.bg as u32, UIStyle {
+                    bg_color: DRAG_SOURCE_DIM,
+                    ..UIStyle::default()
+                });
+            }
+            return vec![PanelAction::LayerDragStarted(i)];
         }
         self.drag_source = -1;
         Vec::new()
@@ -1101,15 +1123,22 @@ impl Panel for LayerHeaderPanel {
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
         match event {
-            UIEvent::Click { node_id, modifiers, .. } => self.handle_click(*node_id, *modifiers),
+            UIEvent::Click { node_id, modifiers, .. } => {
+                self.pending_drag_layer = -1;
+                self.handle_click(*node_id, *modifiers)
+            }
             UIEvent::DoubleClick { node_id, .. } => self.handle_double_click(*node_id),
             UIEvent::RightClick { pos, .. } => self.handle_right_click(*pos),
-            // PointerDown on drag handle → immediate select
+            // PointerDown on drag handle → save index for DragBegin fallback.
+            // Do NOT return LayerClicked here: that triggers a structural rebuild
+            // which invalidates node IDs before DragBegin fires, breaking drag.
+            // Selection happens on Click (release) instead — acceptable for drag handles.
             UIEvent::PointerDown { node_id, .. } => {
                 let id = *node_id as i32;
                 for (i, row) in self.rows.iter().enumerate() {
                     if id == row.drag_handle {
-                        return vec![PanelAction::LayerClicked(i, crate::input::Modifiers::NONE)];
+                        self.pending_drag_layer = i as i32;
+                        return Vec::new();
                     }
                 }
                 Vec::new()
