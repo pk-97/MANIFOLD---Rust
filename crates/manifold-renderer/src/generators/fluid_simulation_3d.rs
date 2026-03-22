@@ -124,24 +124,23 @@ fn compute_camera_vectors_euler(rot_x: f32, rot_y: f32, rot_z: f32, cam_dist: f3
     let ay = rot_y * PI;  // yaw
     let az = rot_z * PI;  // roll
 
-    // Camera position on sphere: start at [0, 0, cam_dist], apply Y then X rotation
+    // Derive all vectors from rotation matrix R = Ry(ay) * Rx(ax).
+    // This avoids the cross-product singularity at the poles entirely.
+    let (sin_x, cos_x) = (ax.sin(), ax.cos());
+    let (sin_y, cos_y) = (ay.sin(), ay.cos());
+
+    // Camera position on sphere (R applied to [0, 0, cam_dist])
     let cam_pos = [
-        ay.sin() * ax.cos() * cam_dist,
-        -ax.sin() * cam_dist,
-        ay.cos() * ax.cos() * cam_dist,
+        sin_y * cos_x * cam_dist,
+        -sin_x * cam_dist,
+        cos_y * cos_x * cam_dist,
     ];
 
     let cam_fwd = normalize3([-cam_pos[0], -cam_pos[1], -cam_pos[2]]);
 
-    // Derive right/up before roll
-    let world_up: [f32; 3] = if cam_fwd[1].abs() > 0.999 {
-        [0.0, 0.0, 1.0]
-    } else {
-        [0.0, 1.0, 0.0]
-    };
-
-    let right_raw = normalize3(cross3(world_up, cam_fwd));
-    let up_raw    = cross3(cam_fwd, right_raw);
+    // Right and up directly from rotation matrix columns — no cross product needed
+    let right_raw = [cos_y, 0.0, -sin_y];
+    let up_raw = [sin_y * sin_x, cos_x, cos_y * sin_x];
 
     // Apply Z roll to right/up vectors
     let cos_z = az.cos();
@@ -177,13 +176,7 @@ fn normalize3(v: [f32; 3]) -> [f32; 3] {
     [v[0]/len, v[1]/len, v[2]/len]
 }
 
-fn cross3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [
-        a[1]*b[2] - a[2]*b[1],
-        a[2]*b[0] - a[0]*b[2],
-        a[0]*b[1] - a[1]*b[0],
-    ]
-}
+
 
 // ── Uniform structs ──
 // All must be 16-byte aligned (pad to vec4 boundaries).
@@ -374,6 +367,7 @@ pub struct FluidSimulation3DGenerator {
     display_uniform_buf:            wgpu::Buffer,
 
     sampler_3d:  wgpu::Sampler,
+    blur_sampler_3d: wgpu::Sampler,  // Repeat mode for toroidal blur
     sampler_display: wgpu::Sampler,  // for display fragment (linear clamp)
 
     // State
@@ -434,6 +428,15 @@ impl FluidSimulation3DGenerator {
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        let blur_sampler_3d = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("FluidSim3D Blur Sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
             ..Default::default()
         });
 
@@ -508,24 +511,26 @@ impl FluidSimulation3DGenerator {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/fluid_blur_3d.wgsl").into()),
         });
 
-        // Blur scalar BGL: uniforms, density in (textureLoad, no filtering needed), density out (storage Rgba16Float)
+        // Blur scalar BGL: uniforms, density in (filterable for bilinear tap pairing), sampler (repeat), density out (storage)
         let blur_scalar_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("FluidSim3D BlurScalar BGL"),
             entries: &[
                 bgl_uniform(0, wgpu::ShaderStages::COMPUTE),
-                bgl_texture_3d_unfilterable(1, wgpu::ShaderStages::COMPUTE),
-                bgl_storage_texture_3d(2, wgpu::ShaderStages::COMPUTE, DENSITY_3D_FORMAT),
+                bgl_texture_3d(1, wgpu::ShaderStages::COMPUTE),
+                bgl_sampler(2, wgpu::ShaderStages::COMPUTE),
+                bgl_storage_texture_3d(3, wgpu::ShaderStages::COMPUTE, DENSITY_3D_FORMAT),
             ],
         });
         let blur_scalar_pipeline = create_compute_pipeline(device, &blur_3d_shader, &blur_scalar_bgl, "blur_scalar", "FluidSim3D BlurScalar");
 
-        // Blur vector BGL: uniforms, vector in (filterable Rgba16Float), vector out (storage Rgba16Float)
+        // Blur vector BGL: uniforms, vector in (filterable), sampler (repeat), vector out (storage)
         let blur_vector_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("FluidSim3D BlurVector BGL"),
             entries: &[
                 bgl_uniform(0, wgpu::ShaderStages::COMPUTE),
                 bgl_texture_3d(1, wgpu::ShaderStages::COMPUTE),
-                bgl_storage_texture_3d(2, wgpu::ShaderStages::COMPUTE, VECTOR_3D_FORMAT),
+                bgl_sampler(2, wgpu::ShaderStages::COMPUTE),
+                bgl_storage_texture_3d(3, wgpu::ShaderStages::COMPUTE, VECTOR_3D_FORMAT),
             ],
         });
         let blur_vector_pipeline = create_compute_pipeline(device, &blur_3d_shader, &blur_vector_bgl, "blur_vector", "FluidSim3D BlurVector");
@@ -652,6 +657,7 @@ impl FluidSimulation3DGenerator {
             resolve_display_uniform_buf,
             display_uniform_buf,
             sampler_3d,
+            blur_sampler_3d,
             sampler_display,
             active_count:        0,
             vol_res:             0,
@@ -794,7 +800,8 @@ impl FluidSimulation3DGenerator {
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: self.blur_3d_uniform_bufs[buf_index].as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(src_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(dst_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.blur_sampler_3d) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(dst_view) },
             ],
         });
 
@@ -834,7 +841,8 @@ impl FluidSimulation3DGenerator {
             entries: &[
                 wgpu::BindGroupEntry { binding: 0, resource: self.blur_3d_uniform_bufs[buf_index].as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(src_view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(dst_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.blur_sampler_3d) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(dst_view) },
             ],
         });
 

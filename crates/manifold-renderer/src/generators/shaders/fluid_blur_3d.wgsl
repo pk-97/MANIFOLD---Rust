@@ -1,9 +1,11 @@
 // Separable 3D Gaussian blur for volumetric fields.
 // Two entry points:
-//   blur_scalar: blur R32Float density volume (X, Y, or Z pass)
+//   blur_scalar: blur Rgba16Float density volume (X, Y, or Z pass)
 //   blur_vector: blur Rgba16Float vector volume (X, Y, or Z pass)
 // Ping-pongs between source and dest textures per axis.
-// Toroidal wrap via modulo.
+// Uses bilinear tap pairing via textureSampleLevel — pairs adjacent integer
+// offsets (j, j+1) into a single weighted-midpoint fetch, halving sample count.
+// Repeat-mode sampler handles toroidal wrap.
 
 struct BlurUniforms {
     vol_res: u32,
@@ -12,11 +14,12 @@ struct BlurUniforms {
     _pad: u32,
 };
 
-// ── Scalar blur (Rgba16Float density — matches Unity RHalf precision, filterable on Metal) ──
+// ── Scalar blur (Rgba16Float density) ──
 
 @group(0) @binding(0) var<uniform> params: BlurUniforms;
 @group(0) @binding(1) var src_scalar: texture_3d<f32>;
-@group(0) @binding(2) var dst_scalar: texture_storage_3d<rgba16float, write>;
+@group(0) @binding(2) var s_scalar: sampler;
+@group(0) @binding(3) var dst_scalar: texture_storage_3d<rgba16float, write>;
 
 @compute @workgroup_size(4, 4, 4)
 fn blur_scalar(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -26,37 +29,59 @@ fn blur_scalar(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     let sigma = max(params.radius / 2.5, 0.5);
-    let two_sigma_sq = 2.0 * sigma * sigma;
+    let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
     let radius_int = i32(params.radius);
+    let texel = 1.0 / f32(vr);
 
-    var result = 0.0;
-    var total_weight = 0.0;
+    // UV center for this voxel (half-texel offset for texel center)
+    let uv = (vec3<f32>(id) + 0.5) * texel;
 
-    for (var j: i32 = -radius_int; j <= radius_int; j = j + 1) {
-        let w = exp(-f32(j * j) / two_sigma_sq);
+    // Axis direction vector
+    var axis_dir = vec3<f32>(0.0);
+    if params.axis == 0u { axis_dir.x = texel; }
+    else if params.axis == 1u { axis_dir.y = texel; }
+    else { axis_dir.z = texel; }
 
-        var sample_coord = vec3<i32>(i32(id.x), i32(id.y), i32(id.z));
-        if params.axis == 0u {
-            sample_coord.x = (sample_coord.x + j + i32(vr)) % i32(vr);
-        } else if params.axis == 1u {
-            sample_coord.y = (sample_coord.y + j + i32(vr)) % i32(vr);
+    // Center tap
+    var result = textureSampleLevel(src_scalar, s_scalar, uv, 0.0).r;
+    var total_weight = 1.0;
+
+    // Bilinear tap pairing: pair (j, j+1) into a single weighted-midpoint fetch
+    var j: i32 = 1;
+    loop {
+        if j > radius_int { break; }
+
+        let fj = f32(j);
+        let w_a = exp(-(fj * fj) * inv_two_sigma_sq);
+
+        if j + 1 <= radius_int {
+            let fj1 = f32(j + 1);
+            let w_b = exp(-(fj1 * fj1) * inv_two_sigma_sq);
+            let w_ab = w_a + w_b;
+            let offset = fj + w_b / w_ab;
+
+            result += textureSampleLevel(src_scalar, s_scalar, uv + axis_dir * offset, 0.0).r * w_ab;
+            result += textureSampleLevel(src_scalar, s_scalar, uv - axis_dir * offset, 0.0).r * w_ab;
+            total_weight += w_ab * 2.0;
         } else {
-            sample_coord.z = (sample_coord.z + j + i32(vr)) % i32(vr);
+            // Unpaired last tap (odd radius)
+            result += textureSampleLevel(src_scalar, s_scalar, uv + axis_dir * fj, 0.0).r * w_a;
+            result += textureSampleLevel(src_scalar, s_scalar, uv - axis_dir * fj, 0.0).r * w_a;
+            total_weight += w_a * 2.0;
         }
 
-        let val = textureLoad(src_scalar, sample_coord, 0).r;
-        result += val * w;
-        total_weight += w;
+        j += 2;
     }
 
-    textureStore(dst_scalar, vec3<i32>(i32(id.x), i32(id.y), i32(id.z)), vec4<f32>(result / total_weight, 0.0, 0.0, 1.0));
+    textureStore(dst_scalar, vec3<i32>(id), vec4<f32>(result / total_weight, 0.0, 0.0, 1.0));
 }
 
 // ── Vector blur (Rgba16Float force field) ──
 
 @group(0) @binding(0) var<uniform> vec_params: BlurUniforms;
 @group(0) @binding(1) var src_vector: texture_3d<f32>;
-@group(0) @binding(2) var dst_vector: texture_storage_3d<rgba16float, write>;
+@group(0) @binding(2) var s_vector: sampler;
+@group(0) @binding(3) var dst_vector: texture_storage_3d<rgba16float, write>;
 
 @compute @workgroup_size(4, 4, 4)
 fn blur_vector(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -66,28 +91,45 @@ fn blur_vector(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     let sigma = max(vec_params.radius / 2.5, 0.5);
-    let two_sigma_sq = 2.0 * sigma * sigma;
+    let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
     let radius_int = i32(vec_params.radius);
+    let texel = 1.0 / f32(vr);
 
-    var result = vec4<f32>(0.0);
-    var total_weight = 0.0;
+    let uv = (vec3<f32>(id) + 0.5) * texel;
 
-    for (var j: i32 = -radius_int; j <= radius_int; j = j + 1) {
-        let w = exp(-f32(j * j) / two_sigma_sq);
+    var axis_dir = vec3<f32>(0.0);
+    if vec_params.axis == 0u { axis_dir.x = texel; }
+    else if vec_params.axis == 1u { axis_dir.y = texel; }
+    else { axis_dir.z = texel; }
 
-        var sample_coord = vec3<i32>(i32(id.x), i32(id.y), i32(id.z));
-        if vec_params.axis == 0u {
-            sample_coord.x = (sample_coord.x + j + i32(vr)) % i32(vr);
-        } else if vec_params.axis == 1u {
-            sample_coord.y = (sample_coord.y + j + i32(vr)) % i32(vr);
+    // Center tap
+    var result = textureSampleLevel(src_vector, s_vector, uv, 0.0);
+    var total_weight = 1.0;
+
+    var j: i32 = 1;
+    loop {
+        if j > radius_int { break; }
+
+        let fj = f32(j);
+        let w_a = exp(-(fj * fj) * inv_two_sigma_sq);
+
+        if j + 1 <= radius_int {
+            let fj1 = f32(j + 1);
+            let w_b = exp(-(fj1 * fj1) * inv_two_sigma_sq);
+            let w_ab = w_a + w_b;
+            let offset = fj + w_b / w_ab;
+
+            result += textureSampleLevel(src_vector, s_vector, uv + axis_dir * offset, 0.0) * w_ab;
+            result += textureSampleLevel(src_vector, s_vector, uv - axis_dir * offset, 0.0) * w_ab;
+            total_weight += w_ab * 2.0;
         } else {
-            sample_coord.z = (sample_coord.z + j + i32(vr)) % i32(vr);
+            result += textureSampleLevel(src_vector, s_vector, uv + axis_dir * fj, 0.0) * w_a;
+            result += textureSampleLevel(src_vector, s_vector, uv - axis_dir * fj, 0.0) * w_a;
+            total_weight += w_a * 2.0;
         }
 
-        let val = textureLoad(src_vector, sample_coord, 0);
-        result += val * w;
-        total_weight += w;
+        j += 2;
     }
 
-    textureStore(dst_vector, vec3<i32>(i32(id.x), i32(id.y), i32(id.z)), result / total_weight);
+    textureStore(dst_vector, vec3<i32>(id), result / total_weight);
 }
