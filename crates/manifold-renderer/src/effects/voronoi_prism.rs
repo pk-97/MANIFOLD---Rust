@@ -68,6 +68,7 @@ impl PostProcessEffect for VoronoiPrismFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "VoronoiPrism Pass",
+            ctx.width, ctx.height,
             profiler,
         );
     }

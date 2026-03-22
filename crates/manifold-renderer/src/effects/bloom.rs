@@ -134,6 +134,7 @@ impl PostProcessEffect for BloomFX {
                     _pad0: 0.0, _pad1: 0.0,
                 }),
                 "Bloom Skip",
+                ctx.width, ctx.height,
                 profiler,
             );
             return;
@@ -168,6 +169,7 @@ impl PostProcessEffect for BloomFX {
                 ..base_uniforms
             }),
             "Bloom Prefilter",
+            state.mips_a[0].width, state.mips_a[0].height,
             profiler,
         );
 
@@ -185,6 +187,7 @@ impl PostProcessEffect for BloomFX {
                     ..base_uniforms
                 }),
                 "Bloom Down",
+                state.mips_a[i].width, state.mips_a[i].height,
                 profiler,
             );
         }
@@ -213,6 +216,7 @@ impl PostProcessEffect for BloomFX {
                     ..base_uniforms
                 }),
                 "Bloom Up",
+                state.mips_b[i].width, state.mips_b[i].height,
                 profiler,
             );
         }
@@ -232,6 +236,7 @@ impl PostProcessEffect for BloomFX {
                 ..base_uniforms
             }),
             "Bloom Composite",
+            ctx.width, ctx.height,
             profiler,
         );
     }

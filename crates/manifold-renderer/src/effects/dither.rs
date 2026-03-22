@@ -59,6 +59,7 @@ impl PostProcessEffect for DitherFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Dither Pass",
+            ctx.width, ctx.height,
             profiler,
         );
     }

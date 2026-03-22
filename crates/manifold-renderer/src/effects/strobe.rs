@@ -66,6 +66,7 @@ impl PostProcessEffect for StrobeFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Strobe Pass",
+            ctx.width, ctx.height,
             profiler,
         );
     }

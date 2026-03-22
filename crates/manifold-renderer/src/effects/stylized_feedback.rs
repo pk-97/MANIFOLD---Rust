@@ -151,13 +151,14 @@ impl PostProcessEffect for StylizedFeedbackFX {
             source, &state.buffer.view, target,
             bytemuck::bytes_of(&uniforms),
             "StylizedFeedback Pass",
+            ctx.width, ctx.height,
             profiler,
         );
 
         // PostBlit: copy result → state buffer
         // Unity ref: Graphics.CopyTexture(result, stateBuffer)
         let state = self.states.get(&ctx.owner_key).unwrap();
-        self.copy_blit.draw(device, queue, encoder, target, &state.buffer.view, &[0u8; 16], "StylizedFeedback State Copy", profiler);
+        self.copy_blit.draw(device, queue, encoder, target, &state.buffer.view, &[0u8; 16], "StylizedFeedback State Copy", ctx.width, ctx.height, profiler);
     }
 
     fn clear_state(&mut self) {

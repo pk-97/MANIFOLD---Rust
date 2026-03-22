@@ -163,6 +163,7 @@ impl PostProcessEffect for HalationFX {
                 ..base
             }),
             "Halation ThresholdTintBlur",
+            state.buf_a.width, state.buf_a.height,
             profiler,
         );
 
@@ -188,6 +189,7 @@ impl PostProcessEffect for HalationFX {
                 ..base
             }),
             "Halation BlurWide",
+            buf_b_w, buf_b_h,
             profiler,
         );
 
@@ -207,6 +209,7 @@ impl PostProcessEffect for HalationFX {
                 ..base
             }),
             "Halation Composite",
+            ctx.width, ctx.height,
             profiler,
         );
     }

@@ -128,6 +128,8 @@ impl SimpleBlitHelper {
         target_view: &wgpu::TextureView,
         uniform_bytes: &[u8],
         label: &str,
+        width: u32,
+        height: u32,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         queue.write_buffer(&self.uniform_buffer, 0, uniform_bytes);
@@ -152,7 +154,7 @@ impl SimpleBlitHelper {
         });
 
         {
-            let ts = profiler.and_then(|p| p.render_timestamps(label, 0, 0));
+            let ts = profiler.and_then(|p| p.render_timestamps(label, width, height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

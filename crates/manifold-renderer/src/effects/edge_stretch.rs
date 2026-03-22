@@ -43,7 +43,7 @@ impl PostProcessEffect for EdgeStretchFX {
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         fx: &EffectInstance,
-        _ctx: &EffectContext,
+        ctx: &EffectContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let p = &fx.param_values;
@@ -60,6 +60,7 @@ impl PostProcessEffect for EdgeStretchFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "EdgeStretch Pass",
+            ctx.width, ctx.height,
             profiler,
         );
     }

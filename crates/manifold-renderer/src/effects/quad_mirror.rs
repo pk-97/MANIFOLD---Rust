@@ -41,7 +41,7 @@ impl PostProcessEffect for QuadMirrorFX {
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         fx: &EffectInstance,
-        _ctx: &EffectContext,
+        ctx: &EffectContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // QuadMirrorFX.cs:13 — fx.GetParam(0), registry default 1.0
@@ -56,6 +56,7 @@ impl PostProcessEffect for QuadMirrorFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "QuadMirror Pass",
+            ctx.width, ctx.height,
             profiler,
         );
     }

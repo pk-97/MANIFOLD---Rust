@@ -124,6 +124,7 @@ impl PostProcessEffect for TransformFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Transform Pass",
+            ctx.width, ctx.height,
             profiler,
         );
     }

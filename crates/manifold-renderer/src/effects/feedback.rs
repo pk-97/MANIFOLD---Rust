@@ -293,6 +293,7 @@ impl PostProcessEffect for FeedbackFX {
             target, &state.buffer.view,
             &[0u8; 16],
             "Feedback State Copy",
+            ctx.width, ctx.height,
             profiler,
         );
     }

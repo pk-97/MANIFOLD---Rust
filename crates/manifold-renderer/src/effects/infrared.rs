@@ -82,6 +82,7 @@ impl PostProcessEffect for InfraredFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Infrared Pass",
+            ctx.width, ctx.height,
             profiler,
         );
     }

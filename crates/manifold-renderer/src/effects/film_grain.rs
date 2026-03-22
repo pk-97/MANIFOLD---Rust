@@ -67,6 +67,7 @@ impl PostProcessEffect for FilmGrainFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "FilmGrain Pass",
+            ctx.width, ctx.height,
             profiler,
         );
     }

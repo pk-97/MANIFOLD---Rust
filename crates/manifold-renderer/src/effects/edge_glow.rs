@@ -70,6 +70,7 @@ impl PostProcessEffect for EdgeGlowFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "EdgeGlow Pass",
+            ctx.width, ctx.height,
             profiler,
         );
     }

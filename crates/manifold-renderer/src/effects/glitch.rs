@@ -68,6 +68,7 @@ impl PostProcessEffect for GlitchFX {
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Glitch Pass",
+            ctx.width, ctx.height,
             profiler,
         );
     }

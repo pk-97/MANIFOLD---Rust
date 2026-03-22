@@ -135,6 +135,7 @@ impl PostProcessEffect for CrtFX {
                 _pad: 0.0,
             }),
             "CRT Prefilter",
+            state.half_res.width, state.half_res.height,
             profiler,
         );
 
@@ -164,6 +165,7 @@ impl PostProcessEffect for CrtFX {
                 _pad: 0.0,
             }),
             "CRT Downsample",
+            state.quarter_res.width, state.quarter_res.height,
             profiler,
         );
 
@@ -190,6 +192,7 @@ impl PostProcessEffect for CrtFX {
                 _pad: 0.0,
             }),
             "CRT Composite",
+            ctx.width, ctx.height,
             profiler,
         );
     }
