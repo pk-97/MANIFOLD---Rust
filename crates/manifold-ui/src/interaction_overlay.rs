@@ -41,9 +41,13 @@ fn select_region_to(
 
     // Determine anchor — Unity priority: insert cursor > region > primary clip > fallback
     let anchor: Option<(f32, usize)> = if ui_state.has_insert_cursor() {
+        // Resolve insert cursor layer_id back to an index for region computation
+        let anchor_idx = ui_state.insert_cursor_layer_id.as_ref()
+            .and_then(|id| (0..layer_count).find(|&i| host.layer_id_at_index(i).as_ref() == Some(id)))
+            .unwrap_or(0);
         Some((
             ui_state.insert_cursor_beat.unwrap_or(0.0),
-            ui_state.insert_cursor_layer_index.unwrap_or(0),
+            anchor_idx,
         ))
     } else if ui_state.has_region() {
         let r = ui_state.get_region();
@@ -64,7 +68,8 @@ fn select_region_to(
         }
         None => {
             // No anchor — set insert cursor at target (Unity line 247-248)
-            ui_state.set_insert_cursor(target_beat, target_layer);
+            let layer_id = host.layer_id_at_index(target_layer).unwrap_or_default();
+            ui_state.set_insert_cursor(target_beat, layer_id);
         }
     }
 }
@@ -223,7 +228,8 @@ impl InteractionOverlay {
                 && let Some(layer) = layer_index {
                     let beat = viewport.floor_to_grid(viewport.pixel_to_beat(pos.x));
                     if let Some(clip_id) = host.create_clip_at_position(beat, layer, viewport.grid_step()) {
-                        ui_state.select_clip(clip_id.clone(), layer);
+                        let lid = host.layer_id_at_index(layer).unwrap_or_default();
+                        ui_state.select_clip(clip_id.clone(), lid);
                         host.on_clip_selected(&clip_id);
                     }
                     return;
@@ -239,7 +245,8 @@ impl InteractionOverlay {
                     select_region_to(snapped, layer, ui_state, host);
                 } else {
                     // Unity line 184: bare click → set insert cursor
-                    ui_state.set_insert_cursor(snapped, layer);
+                    let lid = host.layer_id_at_index(layer).unwrap_or_default();
+                    ui_state.set_insert_cursor(snapped, lid);
                 }
 
                 // Unity line 187: always inspect layer on empty click
@@ -258,7 +265,8 @@ impl InteractionOverlay {
         // Unity lines 198-204: right-click → context menu
         if is_right_button {
             if !ui_state.is_selected(&hit.clip_id) {
-                ui_state.select_clip(hit.clip_id.clone(), hit.layer_index);
+                let lid = host.layer_id_at_index(hit.layer_index).unwrap_or_default();
+                ui_state.select_clip(hit.clip_id.clone(), lid);
             }
             host.on_clip_right_click(&hit.clip_id, pos);
             return;
@@ -273,11 +281,13 @@ impl InteractionOverlay {
             }
         } else if ctrl {
             // Unity lines 208-212: Ctrl → toggle multi-select + auto-compute region
-            ui_state.toggle_clip_selection(hit.clip_id.clone(), hit.layer_index);
+            let lid = host.layer_id_at_index(hit.layer_index).unwrap_or_default();
+            ui_state.toggle_clip_selection(hit.clip_id.clone(), lid);
             self.update_region_from_clip_selection(ui_state, host);
         } else {
             // Unity line 214: bare click → select single
-            ui_state.select_clip(hit.clip_id.clone(), hit.layer_index);
+            let lid = host.layer_id_at_index(hit.layer_index).unwrap_or_default();
+            ui_state.select_clip(hit.clip_id.clone(), lid);
         }
 
         // Unity line 216: always notify host
@@ -294,7 +304,8 @@ impl InteractionOverlay {
     ) {
         // Unity lines 222-223: track cursor position for paste target
         ui_state.cursor_beat = viewport.pixel_to_beat(pos.x);
-        ui_state.cursor_layer_index = viewport.layer_at_y(pos.y);
+        ui_state.cursor_layer_id = viewport.layer_at_y(pos.y)
+            .and_then(|idx| host.layer_id_at_index(idx));
 
         // Unity lines 225-245: hover detection
         let hit = self.hit_test_at(pos, viewport);
@@ -384,11 +395,13 @@ impl InteractionOverlay {
 
         let beat = viewport.pixel_to_beat(press_pos.x);
 
+        let hit_layer_id = host.layer_id_at_index(hit.layer_index).unwrap_or_default();
+
         match hit.region {
             // Unity lines 299-309: trim left
             HitRegion::TrimLeft => {
                 if !ui_state.is_selected(&hit.clip_id) {
-                    ui_state.select_clip(hit.clip_id.clone(), hit.layer_index);
+                    ui_state.select_clip(hit.clip_id.clone(), hit_layer_id.clone());
                     host.on_clip_selected(&hit.clip_id);
                 }
                 self.drag_mode = DragMode::TrimLeft;
@@ -402,7 +415,7 @@ impl InteractionOverlay {
             // Unity lines 311-320: trim right
             HitRegion::TrimRight => {
                 if !ui_state.is_selected(&hit.clip_id) {
-                    ui_state.select_clip(hit.clip_id.clone(), hit.layer_index);
+                    ui_state.select_clip(hit.clip_id.clone(), hit_layer_id);
                     host.on_clip_selected(&hit.clip_id);
                 }
                 self.drag_mode = DragMode::TrimRight;
@@ -737,7 +750,7 @@ impl InteractionOverlay {
 
         // Unity lines 598-648: region-partial move
         if ui_state.has_region() {
-            let region = *ui_state.get_region();
+            let region = ui_state.get_region().clone();
             if let Some(clip) = host.find_clip_by_id(clip_id) {
                 let hit_in_region = clip.end_beat > region.start_beat
                     && clip.start_beat < region.end_beat
@@ -778,7 +791,8 @@ impl InteractionOverlay {
                         && let Some(ac) = host.find_clip_by_id(&anchor) {
                             self.drag_anchor_clip_id = Some(anchor.clone());
                             self.drag_start_layer_index = ac.layer_index;
-                            ui_state.begin_drag(&anchor, ac.start_beat, ac.layer_index, mouse_beat);
+                            let ac_lid = ac.layer_id.clone();
+                            ui_state.begin_drag(&anchor, ac.start_beat, ac_lid, mouse_beat);
                             self.capture_drag_selection_from_ids(&split_result.interior_clip_ids, host);
                             return;
                         }
@@ -789,13 +803,15 @@ impl InteractionOverlay {
 
         // Unity lines 650-659: normal move
         if !ui_state.is_selected(clip_id) {
-            ui_state.select_clip(ClipId::new(clip_id), layer_index);
+            let lid = host.layer_id_at_index(layer_index).unwrap_or_default();
+            ui_state.select_clip(ClipId::new(clip_id), lid);
             host.on_clip_selected(clip_id);
         }
         self.drag_anchor_clip_id = Some(ClipId::new(clip_id));
         self.drag_start_layer_index = layer_index;
         if let Some(clip) = host.find_clip_by_id(clip_id) {
-            ui_state.begin_drag(&ClipId::new(clip_id), clip.start_beat, clip.layer_index, mouse_beat);
+            let clip_lid = clip.layer_id.clone();
+            ui_state.begin_drag(&ClipId::new(clip_id), clip.start_beat, clip_lid, mouse_beat);
         }
         self.capture_drag_selection(ui_state, host);
     }

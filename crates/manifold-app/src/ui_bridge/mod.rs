@@ -11,6 +11,7 @@ mod layer;
 mod project;
 mod state_sync;
 
+use manifold_core::LayerId;
 use manifold_core::effects::EffectInstance;
 use manifold_core::project::Project;
 use manifold_editing::commands::effect_target::EffectTarget;
@@ -48,7 +49,7 @@ pub fn dispatch(
     content_state: &crate::content_state::ContentState,
     ui: &mut UIRoot,
     selection: &mut SelectionState,
-    active_layer: &mut Option<usize>,
+    active_layer: &mut Option<LayerId>,
     drag_snapshot: &mut Option<f32>,
     trim_snapshot: &mut Option<(f32, f32)>,
     adsr_snapshot: &mut Option<(f32, f32, f32, f32)>,
@@ -305,9 +306,12 @@ pub(crate) fn select_region_to_with_project(
     if layer_count == 0 { return; }
 
     let anchor: Option<(f32, usize)> = if selection.has_insert_cursor() {
+        let anchor_idx = selection.insert_cursor_layer_id.as_ref()
+            .and_then(|id| project.timeline.find_layer_index_by_id(id))
+            .unwrap_or(0);
         Some((
             selection.insert_cursor_beat.unwrap_or(0.0),
-            selection.insert_cursor_layer_index.unwrap_or(0),
+            anchor_idx,
         ))
     } else if selection.has_region() {
         let r = selection.get_region();
@@ -330,7 +334,9 @@ pub(crate) fn select_region_to_with_project(
             selection.set_region(min_beat, max_beat, min_layer, max_layer);
         }
         None => {
-            selection.set_insert_cursor(target_beat, target_layer);
+            let lid = project.timeline.layers.get(target_layer)
+                .map(|l| l.layer_id.clone()).unwrap_or_default();
+            selection.set_insert_cursor(target_beat, lid);
         }
     }
 }
@@ -347,16 +353,25 @@ pub fn redo(content_tx: &crossbeam_channel::Sender<crate::content_command::Conte
 
 // ── Effect tab routing helpers ───────────────────────────────────
 
+/// Resolve the active layer index from an active LayerId.
+pub(crate) fn resolve_active_layer_index(
+    active_layer: &Option<LayerId>,
+    project: &Project,
+) -> Option<usize> {
+    active_layer.as_ref().and_then(|id| project.timeline.find_layer_index_by_id(id))
+}
+
 /// Build an EffectTarget for the given tab.
-pub(crate) fn resolve_effect_target(tab: InspectorTab, active_layer: Option<usize>) -> EffectTarget {
+pub(crate) fn resolve_effect_target(tab: InspectorTab, active_layer: &Option<LayerId>, project: &Project) -> EffectTarget {
     match tab {
         InspectorTab::Master => EffectTarget::Master,
-        InspectorTab::Layer => EffectTarget::Layer {
-            layer_index: active_layer.unwrap_or(0),
-        },
-        InspectorTab::Clip => EffectTarget::Layer {
-            layer_index: active_layer.unwrap_or(0),
-        },
+        InspectorTab::Layer | InspectorTab::Clip => {
+            let layer_id = active_layer.clone()
+                .unwrap_or_else(|| project.timeline.layers.first()
+                    .map(|l| l.layer_id.clone())
+                    .unwrap_or_default());
+            EffectTarget::Layer { layer_id }
+        }
     }
 }
 
@@ -364,7 +379,7 @@ pub(crate) fn resolve_effect_target(tab: InspectorTab, active_layer: Option<usiz
 pub(crate) fn resolve_effects_read<'a>(
     tab: InspectorTab,
     project: &'a Project,
-    active_layer: Option<usize>,
+    active_layer: &Option<LayerId>,
     selection: &SelectionState,
 ) -> (Option<&'a [EffectInstance]>, EffectTarget) {
     match tab {
@@ -373,14 +388,14 @@ pub(crate) fn resolve_effects_read<'a>(
             EffectTarget::Master,
         ),
         InspectorTab::Layer => {
-            let target = EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) };
-            let effects = active_layer
+            let target = resolve_effect_target(tab, active_layer, project);
+            let effects = resolve_active_layer_index(active_layer, project)
                 .and_then(|idx| project.timeline.layers.get(idx))
                 .and_then(|l| l.effects.as_deref());
             (effects, target)
         }
         InspectorTab::Clip => {
-            let target = EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) };
+            let target = resolve_effect_target(tab, active_layer, project);
             let effects = selection.primary_selected_clip_id.as_ref().and_then(|cid| {
                 project.timeline.layers.iter()
                     .flat_map(|l| l.clips.iter())
@@ -396,7 +411,7 @@ pub(crate) fn resolve_effects_read<'a>(
 pub(crate) fn resolve_effects_ref<'a>(
     tab: InspectorTab,
     project: &'a Project,
-    active_layer: Option<usize>,
+    active_layer: &Option<LayerId>,
     selection: &SelectionState,
 ) -> Option<&'a [EffectInstance]> {
     resolve_effects_read(tab, project, active_layer, selection).0
@@ -406,7 +421,7 @@ pub(crate) fn resolve_effects_ref<'a>(
 pub(crate) fn resolve_effects_mut<'a>(
     tab: InspectorTab,
     project: &'a mut Project,
-    active_layer: Option<usize>,
+    active_layer: &Option<LayerId>,
     selection: &SelectionState,
 ) -> (Option<&'a mut Vec<EffectInstance>>, EffectTarget) {
     match tab {
@@ -415,14 +430,22 @@ pub(crate) fn resolve_effects_mut<'a>(
             (Some(effects), EffectTarget::Master)
         }
         InspectorTab::Layer => {
-            let target = EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) };
-            let effects = active_layer
+            let layer_id = active_layer.clone()
+                .unwrap_or_else(|| project.timeline.layers.first()
+                    .map(|l| l.layer_id.clone())
+                    .unwrap_or_default());
+            let target = EffectTarget::Layer { layer_id };
+            let effects = resolve_active_layer_index(active_layer, project)
                 .and_then(move |idx| project.timeline.layers.get_mut(idx))
                 .map(|l| l.effects_mut());
             (effects, target)
         }
         InspectorTab::Clip => {
-            let target = EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) };
+            let layer_id = active_layer.clone()
+                .unwrap_or_else(|| project.timeline.layers.first()
+                    .map(|l| l.layer_id.clone())
+                    .unwrap_or_default());
+            let target = EffectTarget::Layer { layer_id };
             let clip_id = selection.primary_selected_clip_id.clone();
             let effects = clip_id.and_then(|cid| {
                 project.timeline.find_clip_by_id_mut(&cid)

@@ -235,8 +235,8 @@ pub fn push_state(
     // Layer highlighting via UIState.is_layer_active (unified check across 4 paths):
     // explicit layer selection, clip selection, insert cursor, region.
     {
-        let active_flags: Vec<bool> = project.timeline.layers.iter().enumerate()
-            .map(|(i, l)| selection.is_layer_active(i, &l.layer_id))
+        let active_flags: Vec<bool> = project.timeline.layers.iter()
+            .map(|l| selection.is_layer_active(&l.layer_id))
             .collect();
         ui.layer_headers.set_active_layers(&active_flags);
     }
@@ -475,6 +475,8 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
             }
         }).collect();
         ui.viewport.set_tracks(tracks);
+        ui.viewport.layer_ids = project.timeline.layers.iter()
+            .map(|l| l.layer_id.clone()).collect();
 
         // (CoordinateMapper Y-layout already rebuilt above, before layer headers)
 

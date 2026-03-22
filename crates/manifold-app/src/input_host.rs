@@ -26,7 +26,7 @@ pub struct AppInputHost<'a> {
     pub content_state: &'a crate::content_state::ContentState,
     pub ui_root: &'a mut UIRoot,
     pub selection: &'a mut UIState,
-    pub active_layer: &'a mut Option<usize>,
+    pub active_layer: &'a mut Option<LayerId>,
     pub needs_rebuild: &'a mut bool,
     pub needs_structural_sync: &'a mut bool,
     pub needs_scroll_rebuild: &'a mut bool,
@@ -159,7 +159,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         if !self.ui_root.inspector.has_effect_selection() { return false; }
         let tab = self.ui_root.inspector.last_effect_tab();
         let indices = self.ui_root.inspector.get_selected_effect_indices();
-        let effects = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection);
+        let effects = resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
         if let Some(effects) = effects {
             let selected: Vec<_> = indices.iter()
                 .filter_map(|&i| effects.get(i).cloned())
@@ -178,10 +178,10 @@ impl TimelineInputHost for AppInputHost<'_> {
         if !self.ui_root.inspector.has_effect_selection() { return false; }
         let tab = self.ui_root.inspector.last_effect_tab();
         let indices = self.ui_root.inspector.get_selected_effect_indices();
-        let target = resolve_effect_target(tab, *self.active_layer, self.selection);
+        let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
 
         // Copy first
-        let effects = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection);
+        let effects = resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
         if let Some(effects) = effects {
             let selected: Vec<_> = indices.iter()
                 .filter_map(|&i| effects.get(i).cloned())
@@ -195,7 +195,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         // Remove in reverse index order (Unity lines 242-246)
         for &idx in indices.iter().rev() {
-            let effects_slice = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection);
+            let effects_slice = resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
             if let Some(effects) = effects_slice
                 && let Some(fx) = effects.get(idx) {
                     let cmd = RemoveEffectCommand::new(target.clone(), fx.clone(), idx);
@@ -214,11 +214,11 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn handle_effect_paste(&mut self) -> bool {
         if !self.effect_clipboard.has_content() { return false; }
         let tab = self.ui_root.inspector.last_effect_tab();
-        let target = resolve_effect_target(tab, *self.active_layer, self.selection);
+        let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
 
         // Insert after last selected card, or append to end (Unity lines 257-263)
         let indices = self.ui_root.inspector.get_selected_effect_indices();
-        let effects_len = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection)
+        let effects_len = resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection)
             .map(|e| e.len())
             .unwrap_or(0);
         let insert_at = if let Some(&last) = indices.last() {
@@ -246,11 +246,11 @@ impl TimelineInputHost for AppInputHost<'_> {
         if !self.ui_root.inspector.has_effect_selection() { return false; }
         let tab = self.ui_root.inspector.last_effect_tab();
         let indices = self.ui_root.inspector.get_selected_effect_indices();
-        let target = resolve_effect_target(tab, *self.active_layer, self.selection);
+        let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
 
         // Remove in reverse index order (Unity lines 274-289)
         for &idx in indices.iter().rev() {
-            let effects_slice = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection);
+            let effects_slice = resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
             if let Some(effects) = effects_slice
                 && let Some(fx) = effects.get(idx) {
                     let cmd = RemoveEffectCommand::new(target.clone(), fx.clone(), idx);
@@ -270,7 +270,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let tab = self.ui_root.inspector.last_effect_tab();
         let indices = self.ui_root.inspector.get_selected_effect_indices();
         if indices.len() < 2 { return false; }
-        let target = resolve_effect_target(tab, *self.active_layer, self.selection);
+        let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
         let cmd = manifold_editing::commands::effect_groups::GroupEffectsCommand::new(
             target, indices, "Group".to_string(),
         );
@@ -286,9 +286,9 @@ impl TimelineInputHost for AppInputHost<'_> {
         let indices = self.ui_root.inspector.get_selected_effect_indices();
         if indices.is_empty() { return false; }
         let primary_idx = indices[0];
-        let target = resolve_effect_target(tab, *self.active_layer, self.selection);
+        let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
         // Get the group_id of the primary selected effect
-        let effects = resolve_effects_ref(tab, self.project, *self.active_layer, self.selection);
+        let effects = resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
         let group_id = effects
             .and_then(|e| e.get(primary_idx))
             .and_then(|fx| fx.group_id.clone());
@@ -412,7 +412,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn copy_clips(&mut self, clip_ids: &[ClipId]) {
         // Send copy to content thread (EditingService owns the clipboard)
         let region = if self.selection.has_region() {
-            Some(*self.selection.get_region())
+            Some(self.selection.get_region().clone())
         } else {
             None
         };
@@ -425,7 +425,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn cut_clips(&mut self, clip_ids: &[ClipId], has_region: bool) {
         // Copy first (via content thread), then delete locally + record commands
         let region = if has_region {
-            Some(*self.selection.get_region())
+            Some(self.selection.get_region().clone())
         } else {
             None
         };
@@ -437,7 +437,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let project = &mut *self.project;
         let spb = 60.0 / project.settings.bpm.max(1.0);
         let del_region = if has_region {
-            Some(*self.selection.get_region())
+            Some(self.selection.get_region().clone())
         } else {
             None
         };
@@ -528,7 +528,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             let spb = 60.0 / project.settings.bpm;
             // Step 4i: pass actual region from UIState when active
             let region = if has_region {
-                Some(*self.selection.get_region())
+                Some(self.selection.get_region().clone())
             } else {
                 None
             };
@@ -850,8 +850,12 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Step 4f: read cursor position from UIState (not viewport scroll)
         let current_beat = self.selection.insert_cursor_beat
             .unwrap_or(self.content_state.current_beat);
-        let current_layer = self.selection.insert_cursor_layer_index
-            .or(*self.active_layer)
+        let active_idx = self.active_layer.as_ref()
+            .and_then(|id| self.project.timeline.find_layer_index_by_id(id));
+        let insert_cursor_idx = self.selection.insert_cursor_layer_id.as_ref()
+            .and_then(|id| self.project.timeline.find_layer_index_by_id(id));
+        let current_layer = insert_cursor_idx
+            .or(active_idx)
             .unwrap_or(0);
 
         let result = cursor_nav::navigate_cursor(
@@ -859,8 +863,12 @@ impl TimelineInputHost for AppInputHost<'_> {
         );
         match result {
             cursor_nav::NavResult::SetCursor { beat, layer } => {
-                self.selection.set_insert_cursor(beat, layer);
-                *self.active_layer = Some(layer);
+                let lid = self.project.timeline.layers.get(layer)
+                    .map(|l| l.layer_id.clone()).unwrap_or_default();
+                self.selection.set_insert_cursor(beat, lid);
+                *self.active_layer = self.project.timeline.layers
+                    .get(layer)
+                    .map(|l| l.layer_id.clone());
             }
             cursor_nav::NavResult::SelectClip(clip_id) => {
                 // Find the clip's layer for proper selection
@@ -869,8 +877,12 @@ impl TimelineInputHost for AppInputHost<'_> {
                         .find_map(|(i, l)| l.clips.iter()
                             .any(|c| c.id == clip_id).then_some(i)))
                     .unwrap_or(0);
-                self.selection.select_clip(clip_id, li);
-                *self.active_layer = Some(li);
+                let lid = self.project.timeline.layers.get(li)
+                    .map(|l| l.layer_id.clone()).unwrap_or_default();
+                self.selection.select_clip(clip_id, lid);
+                *self.active_layer = self.project.timeline.layers
+                    .get(li)
+                    .map(|l| l.layer_id.clone());
             }
             cursor_nav::NavResult::NoChange => {}
         }
@@ -910,7 +922,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn insert_cursor_layer_index(&self) -> Option<usize> {
-        self.selection.insert_cursor_layer_index
+        self.selection.insert_cursor_layer_id.as_ref()
+            .and_then(|id| self.project.timeline.find_layer_index_by_id(id))
     }
 
     fn clear_selection(&mut self) {
@@ -979,13 +992,14 @@ use manifold_core::project::Project;
 fn resolve_effects_ref<'a>(
     tab: InspectorTab,
     project: &'a Project,
-    active_layer: Option<usize>,
+    active_layer: &Option<LayerId>,
     selection: &UIState,
 ) -> Option<&'a [EffectInstance]> {
     match tab {
         InspectorTab::Master => Some(&project.settings.master_effects),
         InspectorTab::Layer => {
-            active_layer
+            active_layer.as_ref()
+                .and_then(|id| project.timeline.find_layer_index_by_id(id))
                 .and_then(|idx| project.timeline.layers.get(idx))
                 .and_then(|l| l.effects.as_deref())
         }
@@ -1002,17 +1016,21 @@ fn resolve_effects_ref<'a>(
 
 fn resolve_effect_target(
     tab: InspectorTab,
-    active_layer: Option<usize>,
+    active_layer: &Option<LayerId>,
     selection: &UIState,
 ) -> EffectTarget {
     match tab {
         InspectorTab::Master => EffectTarget::Master,
-        InspectorTab::Layer => EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) },
+        InspectorTab::Layer => {
+            let layer_id = active_layer.clone().unwrap_or_default();
+            EffectTarget::Layer { layer_id }
+        }
         InspectorTab::Clip => {
             if let Some(clip_id) = selection.primary_selected_clip_id.as_ref() {
                 EffectTarget::Clip { clip_id: clip_id.clone() }
             } else {
-                EffectTarget::Layer { layer_index: active_layer.unwrap_or(0) }
+                let layer_id = active_layer.clone().unwrap_or_default();
+                EffectTarget::Layer { layer_id }
             }
         }
     }

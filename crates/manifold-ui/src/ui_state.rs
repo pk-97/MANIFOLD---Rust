@@ -19,8 +19,8 @@ pub struct UIState {
     /// Most recently selected clip ID (for footer info, property display).
     pub primary_selected_clip_id: Option<ClipId>,
 
-    /// Layer index of the primary selected clip (-1 maps to None).
-    pub selected_layer_index: Option<usize>,
+    /// LayerId of the layer the primary selected clip is on.
+    pub selected_layer_id_for_clip: Option<LayerId>,
 
     // ── Layer Selection (mutually exclusive with clip selection) ──
     pub selected_layer_ids: HashSet<LayerId>,
@@ -33,11 +33,11 @@ pub struct UIState {
 
     // ── Cursor Position (updated on mouse move, used for paste target) ──
     pub cursor_beat: f32,
-    pub cursor_layer_index: Option<usize>,
+    pub cursor_layer_id: Option<LayerId>,
 
     // ── Insert Cursor (set on click, persists until next click or region drag) ──
     pub insert_cursor_beat: Option<f32>,
-    pub insert_cursor_layer_index: Option<usize>,
+    pub insert_cursor_layer_id: Option<LayerId>,
 
     // ── Hover ──
     pub hovered_clip_id: Option<ClipId>,
@@ -46,7 +46,7 @@ pub struct UIState {
     pub is_dragging: bool,
     pub drag_clip_id: Option<ClipId>,
     pub drag_start_beat: f32,
-    pub drag_start_layer: usize,
+    pub drag_start_layer_id: Option<LayerId>,
     pub drag_offset_beats: f32, // offset from clip StartBeat to mouse beat
 
     // ── Trim state (originals preserved for undo) ──
@@ -76,19 +76,19 @@ impl UIState {
             selected_clip_ids: HashSet::new(),
             selection_version: 0,
             primary_selected_clip_id: None,
-            selected_layer_index: None,
+            selected_layer_id_for_clip: None,
             selected_layer_ids: HashSet::new(),
             primary_selected_layer_id: None,
             selection_region: SelectionRegion::default(),
             cursor_beat: 0.0,
-            cursor_layer_index: None,
+            cursor_layer_id: None,
             insert_cursor_beat: None,
-            insert_cursor_layer_index: None,
+            insert_cursor_layer_id: None,
             hovered_clip_id: None,
             is_dragging: false,
             drag_clip_id: None,
             drag_start_beat: 0.0,
-            drag_start_layer: 0,
+            drag_start_layer_id: None,
             drag_offset_beats: 0.0,
             is_trimming: false,
             trim_from_left: false,
@@ -105,33 +105,33 @@ impl UIState {
 
     /// Select a single clip (clears previous selection and region). Called on normal click.
     /// Unity UIState.cs SelectClip (lines 167-178).
-    pub fn select_clip(&mut self, clip_id: ClipId, layer_index: usize) {
+    pub fn select_clip(&mut self, clip_id: ClipId, layer_id: LayerId) {
         self.selection_region = SelectionRegion::default();
         self.insert_cursor_beat = None;
-        self.insert_cursor_layer_index = None;
+        self.insert_cursor_layer_id = None;
         self.clear_layer_selection();
         self.selected_clip_ids.clear();
         self.selected_clip_ids.insert(clip_id.clone());
         self.primary_selected_clip_id = Some(clip_id);
-        self.selected_layer_index = Some(layer_index);
+        self.selected_layer_id_for_clip = Some(layer_id);
         self.selection_version += 1;
     }
 
     /// Toggle a clip in/out of the selection set. Called on Ctrl+Click.
     /// Unity UIState.cs ToggleClipSelection (lines 183-208).
-    pub fn toggle_clip_selection(&mut self, clip_id: ClipId, layer_index: usize) {
+    pub fn toggle_clip_selection(&mut self, clip_id: ClipId, layer_id: LayerId) {
         self.clear_layer_selection();
         if self.selected_clip_ids.contains(&clip_id) {
             self.selected_clip_ids.remove(&clip_id);
             if self.primary_selected_clip_id.as_ref() == Some(&clip_id) {
                 // Pick a new primary or None
                 self.primary_selected_clip_id = self.selected_clip_ids.iter().next().cloned();
-                self.selected_layer_index = None;
+                self.selected_layer_id_for_clip = None;
             }
         } else {
             self.selected_clip_ids.insert(clip_id.clone());
             self.primary_selected_clip_id = Some(clip_id);
-            self.selected_layer_index = Some(layer_index);
+            self.selected_layer_id_for_clip = Some(layer_id);
         }
         self.selection_version += 1;
     }
@@ -141,12 +141,12 @@ impl UIState {
     pub fn clear_selection(&mut self) {
         self.selected_clip_ids.clear();
         self.primary_selected_clip_id = None;
-        self.selected_layer_index = None;
+        self.selected_layer_id_for_clip = None;
         self.selected_layer_ids.clear();
         self.primary_selected_layer_id = None;
         self.selection_region = SelectionRegion::default();
         self.insert_cursor_beat = None;
-        self.insert_cursor_layer_index = None;
+        self.insert_cursor_layer_id = None;
         self.selection_version += 1;
     }
 
@@ -177,11 +177,11 @@ impl UIState {
     pub fn set_region(&mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32) {
         self.selected_clip_ids.clear();
         self.primary_selected_clip_id = None;
-        self.selected_layer_index = None;
+        self.selected_layer_id_for_clip = None;
         self.selected_layer_ids.clear();
         self.primary_selected_layer_id = None;
         self.insert_cursor_beat = None;
-        self.insert_cursor_layer_index = None;
+        self.insert_cursor_layer_id = None;
         self.selection_region.set(start_beat, end_beat, start_layer, end_layer);
         self.selection_version += 1;
     }
@@ -189,10 +189,12 @@ impl UIState {
     /// Set region from clip selection bounds. Unlike set_region(), this PRESERVES
     /// individual clip IDs so per-clip highlight and inspector still work.
     /// Unity UIState.cs SetRegionFromClipBounds (lines 74-92).
-    pub fn set_region_from_clip_bounds(&mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32) {
+    pub fn set_region_from_clip_bounds(
+        &mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32,
+    ) {
         self.clear_layer_selection();
         self.insert_cursor_beat = None;
-        self.insert_cursor_layer_index = None;
+        self.insert_cursor_layer_id = None;
         let s_layer = start_layer.min(end_layer);
         let e_layer = start_layer.max(end_layer);
         let s_beat = start_beat.min(end_beat);
@@ -225,13 +227,13 @@ impl UIState {
 
     /// Set insert cursor. Clears EVERYTHING (clips, layers, region) per Ableton behavior.
     /// Unity UIState.cs SetInsertCursor (lines 111-122).
-    pub fn set_insert_cursor(&mut self, beat: f32, layer_index: usize) {
+    pub fn set_insert_cursor(&mut self, beat: f32, layer_id: LayerId) {
         self.insert_cursor_beat = Some(beat);
-        self.insert_cursor_layer_index = Some(layer_index);
+        self.insert_cursor_layer_id = Some(layer_id);
         self.selection_region = SelectionRegion::default(); // cursor replaces region
         self.selected_clip_ids.clear(); // deselect clips (Ableton behavior)
         self.primary_selected_clip_id = None;
-        self.selected_layer_index = None;
+        self.selected_layer_id_for_clip = None;
         self.selected_layer_ids.clear(); // deselect layer headers (Ableton behavior)
         self.primary_selected_layer_id = None;
         self.selection_version += 1;
@@ -241,25 +243,25 @@ impl UIState {
     /// Unity UIState.cs SetInsertCursorBeat (lines 125-130).
     pub fn set_insert_cursor_beat(&mut self, beat: f32) {
         self.insert_cursor_beat = Some(beat);
-        if self.insert_cursor_layer_index.is_none() {
-            self.insert_cursor_layer_index = Some(0);
+        if self.insert_cursor_layer_id.is_none() {
+            self.insert_cursor_layer_id = Some(LayerId::default());
         }
     }
 
     /// Clear insert cursor if active.
     /// Unity UIState.cs ClearInsertCursor (lines 132-138).
     pub fn clear_insert_cursor(&mut self) {
-        if self.insert_cursor_layer_index.is_none() {
+        if self.insert_cursor_layer_id.is_none() {
             return;
         }
         self.insert_cursor_beat = None;
-        self.insert_cursor_layer_index = None;
+        self.insert_cursor_layer_id = None;
         self.selection_version += 1;
     }
 
     /// Whether an insert cursor is placed.
     pub fn has_insert_cursor(&self) -> bool {
-        self.insert_cursor_layer_index.is_some()
+        self.insert_cursor_layer_id.is_some()
     }
 
     // ── Layer Selection ─────────────────────────────────────────────
@@ -270,9 +272,9 @@ impl UIState {
         self.selection_region = SelectionRegion::default();
         self.selected_clip_ids.clear();
         self.primary_selected_clip_id = None;
-        self.selected_layer_index = None;
+        self.selected_layer_id_for_clip = None;
         self.insert_cursor_beat = None;
-        self.insert_cursor_layer_index = None;
+        self.insert_cursor_layer_id = None;
         self.selected_layer_ids.clear();
         self.selected_layer_ids.insert(layer_id.clone());
         self.primary_selected_layer_id = Some(layer_id);
@@ -284,9 +286,9 @@ impl UIState {
     pub fn toggle_layer_selection(&mut self, layer_id: LayerId) {
         self.selected_clip_ids.clear();
         self.primary_selected_clip_id = None;
-        self.selected_layer_index = None;
+        self.selected_layer_id_for_clip = None;
         self.insert_cursor_beat = None;
-        self.insert_cursor_layer_index = None;
+        self.insert_cursor_layer_id = None;
 
         if self.selected_layer_ids.contains(&layer_id) {
             self.selected_layer_ids.remove(&layer_id);
@@ -302,12 +304,14 @@ impl UIState {
 
     /// Select a range of layers from primary to target (Shift+Click).
     /// Unity UIState.cs SelectLayerRange (lines 297-333).
-    pub fn select_layer_range(&mut self, target_layer_id: &str, layers: &[manifold_core::layer::Layer]) {
+    pub fn select_layer_range(
+        &mut self, target_layer_id: &str, layers: &[manifold_core::layer::Layer],
+    ) {
         self.selected_clip_ids.clear();
         self.primary_selected_clip_id = None;
-        self.selected_layer_index = None;
+        self.selected_layer_id_for_clip = None;
         self.insert_cursor_beat = None;
-        self.insert_cursor_layer_index = None;
+        self.insert_cursor_layer_id = None;
 
         let primary = match &self.primary_selected_layer_id {
             Some(id) => id.clone(),
@@ -353,27 +357,24 @@ impl UIState {
     /// Covers all interaction paths: explicit layer selection, clip selection,
     /// insert cursor placement, and region selection.
     /// Unity UIState.cs IsLayerActive (lines 353-366).
-    pub fn is_layer_active(&self, layer_index: usize, layer_id: &str) -> bool {
+    pub fn is_layer_active(&self, layer_id: &LayerId) -> bool {
         // 1. Explicit layer header selection
         if self.selected_layer_ids.contains(layer_id) {
             return true;
         }
         // 2. Clip selected on this layer
-        if self.selected_layer_index == Some(layer_index) {
+        if self.selected_layer_id_for_clip.as_ref() == Some(layer_id) {
             return true;
         }
         // 3. Insert cursor on this layer
-        if self.insert_cursor_layer_index == Some(layer_index) {
+        if self.insert_cursor_layer_id.as_ref() == Some(layer_id) {
             return true;
         }
         // 4. Region selection spans this layer
-        if self.selection_region.is_active {
-            let li = layer_index as i32;
-            if li >= self.selection_region.start_layer_index
-                && li <= self.selection_region.end_layer_index
-            {
-                return true;
-            }
+        if self.selection_region.is_active
+            && self.selection_region.contains_layer_id(layer_id)
+        {
+            return true;
         }
         false
     }
@@ -387,11 +388,13 @@ impl UIState {
 
     /// Begin a clip move drag.
     /// Unity UIState.cs BeginDrag (lines 374-381).
-    pub fn begin_drag(&mut self, clip_id: &ClipId, start_beat: f32, layer_index: usize, mouse_beat: f32) {
+    pub fn begin_drag(
+        &mut self, clip_id: &ClipId, start_beat: f32, layer_id: LayerId, mouse_beat: f32,
+    ) {
         self.is_dragging = true;
         self.drag_clip_id = Some(clip_id.clone());
         self.drag_start_beat = start_beat;
-        self.drag_start_layer = layer_index;
+        self.drag_start_layer_id = Some(layer_id);
         self.drag_offset_beats = mouse_beat - start_beat;
     }
 
@@ -406,7 +409,9 @@ impl UIState {
 
     /// Begin a left-edge trim.
     /// Unity UIState.cs BeginTrimLeft (lines 389-397).
-    pub fn begin_trim_left(&mut self, clip_id: &ClipId, start_beat: f32, duration_beats: f32, in_point: f32) {
+    pub fn begin_trim_left(
+        &mut self, clip_id: &ClipId, start_beat: f32, duration_beats: f32, in_point: f32,
+    ) {
         self.is_trimming = true;
         self.trim_from_left = true;
         self.trim_clip_id = Some(clip_id.clone());
@@ -417,7 +422,9 @@ impl UIState {
 
     /// Begin a right-edge trim.
     /// Unity UIState.cs BeginTrimRight (lines 399-407).
-    pub fn begin_trim_right(&mut self, clip_id: &ClipId, start_beat: f32, duration_beats: f32, in_point: f32) {
+    pub fn begin_trim_right(
+        &mut self, clip_id: &ClipId, start_beat: f32, duration_beats: f32, in_point: f32,
+    ) {
         self.is_trimming = true;
         self.trim_from_left = false;
         self.trim_clip_id = Some(clip_id.clone());

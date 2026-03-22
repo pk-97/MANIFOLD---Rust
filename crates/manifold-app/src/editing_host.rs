@@ -6,7 +6,7 @@
 //! The wrapper struct `AppEditingHost` borrows individual Application fields
 //! to avoid borrowing the entire Application — this lets the overlay
 //! simultaneously borrow ui_root and selection from Application.
-use manifold_core::ClipId;
+use manifold_core::{ClipId, LayerId};
 use std::collections::HashSet;
 
 use manifold_core::clip::TimelineClip;
@@ -33,7 +33,7 @@ pub struct AppEditingHost<'a> {
     pub content_tx: &'a crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     pub content_state: &'a crate::content_state::ContentState,
     pub cursor_manager: &'a mut CursorManager,
-    pub active_layer: &'a mut Option<usize>,
+    pub active_layer: &'a mut Option<LayerId>,
     pub needs_rebuild: &'a mut bool,
     pub needs_structural_sync: &'a mut bool,
     pub needs_scroll_rebuild: &'a mut bool,
@@ -57,7 +57,7 @@ impl<'a> AppEditingHost<'a> {
         content_tx: &'a crossbeam_channel::Sender<crate::content_command::ContentCommand>,
         content_state: &'a crate::content_state::ContentState,
         cursor_manager: &'a mut CursorManager,
-        active_layer: &'a mut Option<usize>,
+        active_layer: &'a mut Option<LayerId>,
         needs_rebuild: &'a mut bool,
         needs_structural_sync: &'a mut bool,
         needs_scroll_rebuild: &'a mut bool,
@@ -86,6 +86,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         Some(&*self.project)
             .map(|p| p.timeline.layers.len())
             .unwrap_or(0)
+    }
+
+    fn layer_id_at_index(&self, index: usize) -> Option<manifold_core::LayerId> {
+        self.project.timeline.layers.get(index).map(|l| l.layer_id.clone())
     }
 
     fn layer_is_generator(&self, index: usize) -> bool {
@@ -132,6 +136,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                         duration_beats: clip.duration_beats,
                         end_beat: clip.start_beat + clip.duration_beats,
                         layer_index: li,
+                        layer_id: layer.layer_id.clone(),
                         in_point: clip.in_point,
                         is_generator: layer.layer_type == manifold_core::types::LayerType::Generator,
                         is_locked: clip.is_locked,
@@ -265,9 +270,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     fn on_clip_selected(&mut self, clip_id: &str) {
         // Find clip's layer and set active_layer
         if let Some(project) = Some(&*self.project) {
-            for (li, layer) in project.timeline.layers.iter().enumerate() {
+            for layer in &project.timeline.layers {
                 if layer.clips.iter().any(|c| c.id == clip_id) {
-                    *self.active_layer = Some(li);
+                    *self.active_layer = Some(layer.layer_id.clone());
                     break;
                 }
             }
@@ -284,7 +289,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     }
 
     fn inspect_layer(&mut self, layer_index: usize) {
-        *self.active_layer = Some(layer_index);
+        *self.active_layer = self.project.timeline.layers
+            .get(layer_index)
+            .map(|l| l.layer_id.clone());
         *self.needs_structural_sync = true;
     }
 

@@ -211,6 +211,7 @@ fn duplicate_region_shifts_forward() {
         start_layer_index: 0,
         end_layer_index: 0,
         is_active: true,
+        ..Default::default()
     };
 
     let cmds = EditingService::duplicate_clips(&project, &[id1.clone()], &region, 0.5);
@@ -436,6 +437,7 @@ fn get_clips_in_region() {
         start_layer_index: 0,
         end_layer_index: 1,
         is_active: true,
+        ..Default::default()
     };
 
     let results = EditingService::get_clips_in_region(&project, &region);
@@ -455,6 +457,7 @@ fn trim_clip_to_region_fully_inside() {
     let region = SelectionRegion {
         start_beat: 0.0, end_beat: 8.0,
         start_layer_index: 0, end_layer_index: 0, is_active: true,
+        ..Default::default()
     };
     let clip = &project.timeline.layers[0].clips[0];
     let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
@@ -472,6 +475,7 @@ fn trim_clip_to_region_straddles_start() {
     let region = SelectionRegion {
         start_beat: 2.0, end_beat: 10.0,
         start_layer_index: 0, end_layer_index: 0, is_active: true,
+        ..Default::default()
     };
     let clip = &project.timeline.layers[0].clips[0];
     let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
@@ -491,6 +495,7 @@ fn trim_clip_to_region_straddles_end() {
     let region = SelectionRegion {
         start_beat: 0.0, end_beat: 8.0,
         start_layer_index: 0, end_layer_index: 0, is_active: true,
+        ..Default::default()
     };
     let clip = &project.timeline.layers[0].clips[0];
     let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
@@ -508,6 +513,7 @@ fn trim_clip_to_region_straddles_both() {
     let region = SelectionRegion {
         start_beat: 4.0, end_beat: 12.0,
         start_layer_index: 0, end_layer_index: 0, is_active: true,
+        ..Default::default()
     };
     let clip = &project.timeline.layers[0].clips[0];
     let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
@@ -528,6 +534,7 @@ fn copy_clips_region_mode_trims() {
     let region = SelectionRegion {
         start_beat: 2.0, end_beat: 6.0,
         start_layer_index: 0, end_layer_index: 0, is_active: true,
+        ..Default::default()
     };
 
     let mut service = EditingService::new();
@@ -562,6 +569,7 @@ fn duplicate_clips_region_mode_trims() {
     let region = SelectionRegion {
         start_beat: 2.0, end_beat: 6.0,
         start_layer_index: 0, end_layer_index: 0, is_active: true,
+        ..Default::default()
     };
 
     let cmds = EditingService::duplicate_clips(&project, &[id1], &region, 0.5);

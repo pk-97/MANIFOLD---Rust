@@ -1,5 +1,5 @@
 //! Editing-related dispatch: clip interaction, context menus, drag actions.
-use manifold_core::ClipId;
+use manifold_core::{ClipId, LayerId};
 use manifold_core::project::Project;
 use manifold_core::types::{LayerType, GeneratorType};
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
@@ -19,7 +19,7 @@ pub(super) fn dispatch_editing(
     content_state: &crate::content_state::ContentState,
     ui: &mut UIRoot,
     selection: &mut SelectionState,
-    active_layer: &mut Option<usize>,
+    active_layer: &mut Option<LayerId>,
     user_prefs: &mut UserPrefs,
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
@@ -27,13 +27,13 @@ pub(super) fn dispatch_editing(
         // ── Viewport clip interaction ─────────────────────────────
         PanelAction::ClipClicked(clip_id, modifiers) => {
             let clip_id = ClipId::new(clip_id.as_str());
-            // Find the clip's layer index and end beat for UIState
-            let (layer_idx, clip_end_beat) = Some(&*project)
+            // Find the clip's layer index, layer ID, and end beat for UIState
+            let (layer_idx, layer_id, clip_end_beat) = Some(&*project)
                 .and_then(|p| p.timeline.layers.iter().enumerate()
                     .find_map(|(i, l)| l.clips.iter()
                         .find(|c| c.id == clip_id)
-                        .map(|c| (i, c.start_beat + c.duration_beats))))
-                .unwrap_or((0, 0.0));
+                        .map(|c| (i, l.layer_id.clone(), c.start_beat + c.duration_beats))))
+                .unwrap_or((0, manifold_core::LayerId::default(), 0.0));
 
             if modifiers.shift {
                 // Shift+Click: extend region from anchor to clip end.
@@ -42,14 +42,14 @@ pub(super) fn dispatch_editing(
             } else if modifiers.command || modifiers.ctrl {
                 // Cmd/Ctrl+Click: toggle clip in/out of selection, then update region bounds.
                 // From Unity InteractionOverlay.OnPointerClick (line 208-211).
-                selection.toggle_clip_selection(clip_id.clone(), layer_idx);
+                selection.toggle_clip_selection(clip_id.clone(), layer_id);
                 // Update region to encompass all selected clips (Fix #3)
                 super::update_region_from_clip_selection_inline(selection, &*project);
             } else {
                 // Plain click: select single clip (clears region, layers, insert cursor)
-                selection.select_clip(clip_id.clone(), layer_idx);
+                selection.select_clip(clip_id.clone(), layer_id);
             }
-            *active_layer = Some(layer_idx);
+            *active_layer = project.timeline.layers.get(layer_idx).map(|l| l.layer_id.clone());
             DispatchResult::structural()
         }
         PanelAction::ClipDoubleClicked(_clip_id) => {
@@ -65,9 +65,11 @@ pub(super) fn dispatch_editing(
             } else {
                 // Plain click: set insert cursor (clears everything, Ableton behavior).
                 // From Unity InteractionOverlay.OnPointerClick (line 183).
-                selection.set_insert_cursor(*beat, *layer);
+                let lid = project.timeline.layers.get(*layer)
+                    .map(|l| l.layer_id.clone()).unwrap_or_default();
+                selection.set_insert_cursor(*beat, lid);
             }
-            *active_layer = Some(*layer);
+            *active_layer = project.timeline.layers.get(*layer).map(|l| l.layer_id.clone());
             DispatchResult::structural()
         }
         PanelAction::TrackDoubleClicked(beat, layer) => {
@@ -91,10 +93,12 @@ pub(super) fn dispatch_editing(
                             { let _ = content_tx.try_send(ContentCommand::Execute(cmd)); }
                         }
                         // Select the newly created clip
-                        selection.select_clip(new_clip_clone.id, *layer);
+                        let new_lid = project.timeline.layers.get(*layer)
+                            .map(|l| l.layer_id.clone()).unwrap_or_default();
+                        selection.select_clip(new_clip_clone.id, new_lid);
                     }
             }
-            *active_layer = Some(*layer);
+            *active_layer = project.timeline.layers.get(*layer).map(|l| l.layer_id.clone());
             DispatchResult::structural()
         }
         PanelAction::ViewportHoverChanged(_clip_id) => {

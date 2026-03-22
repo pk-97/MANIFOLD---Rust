@@ -6,6 +6,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
+use manifold_core::LayerId;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::layer::Layer;
@@ -82,7 +83,7 @@ pub struct Application {
 
     // Selection
     pub(crate) selection: SelectionState,
-    pub(crate) active_layer_index: Option<usize>,
+    pub(crate) active_layer_id: Option<LayerId>,
     /// Slider drag snapshot for undo (opacity, slip, etc.). Stores the old value
     /// on snapshot, committed on release. NOT related to clip drag state.
     pub(crate) slider_snapshot: Option<f32>,
@@ -205,7 +206,7 @@ impl Application {
             local_project: default_project,
             suppress_snapshot_until: 0,
             selection: UIState::new(),
-            active_layer_index: None,
+            active_layer_id: None,
             slider_snapshot: None,
             trim_snapshot: None,
             adsr_snapshot: None,
@@ -346,8 +347,12 @@ impl Application {
         use manifold_ui::cursor_nav::{navigate_cursor, NavResult, NavLayerInfo, NavClipInfo};
 
         let current_beat = self.selection.insert_cursor_beat.unwrap_or(self.content_state.current_beat);
-        let current_layer = self.selection.insert_cursor_layer_index
-            .or(self.active_layer_index)
+        let active_idx = self.active_layer_id.as_ref()
+            .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+        let insert_cursor_idx = self.selection.insert_cursor_layer_id.as_ref()
+            .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+        let current_layer = insert_cursor_idx
+            .or(active_idx)
             .unwrap_or(0);
         let grid_interval = self.ui_root.viewport.grid_step();
 
@@ -383,13 +388,19 @@ impl Application {
                     .and_then(|p| p.timeline.layers.iter().enumerate()
                         .find_map(|(i, l)| l.clips.iter().any(|c| c.id == clip_id).then_some(i)))
                     .unwrap_or(0);
-                self.selection.select_clip(clip_id, li);
-                self.active_layer_index = Some(li);
+                let lid = self.local_project.timeline.layers.get(li)
+                    .map(|l| l.layer_id.clone()).unwrap_or_default();
+                self.selection.select_clip(clip_id, lid);
+                self.active_layer_id = self.local_project.timeline.layers
+                    .get(li).map(|l| l.layer_id.clone());
                 self.needs_rebuild = true;
             }
             NavResult::SetCursor { beat, layer } => {
-                self.selection.set_insert_cursor(beat, layer);
-                self.active_layer_index = Some(layer);
+                let lid = self.local_project.timeline.layers.get(layer)
+                    .map(|l| l.layer_id.clone()).unwrap_or_default();
+                self.selection.set_insert_cursor(beat, lid);
+                self.active_layer_id = self.local_project.timeline.layers
+                    .get(layer).map(|l| l.layer_id.clone());
                 self.needs_rebuild = true;
             }
             NavResult::NoChange => {}
@@ -484,9 +495,9 @@ impl Application {
                                 .map(|fx| (fx.effect_type, fx.get_base_param(param_idx)))
                         }
                         manifold_ui::InspectorTab::Layer => {
-                            self.active_layer_index
-                                .and_then(|li| self.local_project.timeline.layers.get(li))
-                                .and_then(|l| l.effects.as_ref())
+                            self.active_layer_id.as_ref()
+                                .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
+                                .and_then(|(_, l)| l.effects.as_ref())
                                 .and_then(|e| e.get(effect_idx))
                                 .map(|fx| (fx.effect_type, fx.get_base_param(param_idx)))
                         }
@@ -507,16 +518,16 @@ impl Application {
                         if (old_val - new_val).abs() > f32::EPSILON {
                             let target = match tab {
                                 manifold_ui::InspectorTab::Master => manifold_editing::commands::effect_target::EffectTarget::Master,
-                                manifold_ui::InspectorTab::Layer => manifold_editing::commands::effect_target::EffectTarget::Layer {
-                                    layer_index: self.active_layer_index.unwrap_or(0),
+                                manifold_ui::InspectorTab::Layer => {
+                                    let layer_id = self.active_layer_id.clone().unwrap_or_default();
+                                    manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id }
                                 },
                                 manifold_ui::InspectorTab::Clip => {
                                     if let Some(cid) = self.selection.primary_selected_clip_id.clone() {
                                         manifold_editing::commands::effect_target::EffectTarget::Clip { clip_id: cid }
                                     } else {
-                                        manifold_editing::commands::effect_target::EffectTarget::Layer {
-                                            layer_index: self.active_layer_index.unwrap_or(0),
-                                        }
+                                        let layer_id = self.active_layer_id.clone().unwrap_or_default();
+                                        manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id }
                                     }
                                 }
                             };
@@ -535,7 +546,8 @@ impl Application {
             }
             TextInputField::GenParam(param_idx) => {
                 if let Ok(parsed) = text.parse::<f32>()
-                    && let Some(layer_idx) = self.active_layer_index
+                    && let Some(layer_idx) = self.active_layer_id.as_ref()
+                        .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
                         && let Some(layer) = self.local_project.timeline.layers.get(layer_idx) {
                             let gen_type = layer.generator_type();
                             // Clamp to param range from generator registry
@@ -579,9 +591,9 @@ impl Application {
                                 .map(|g| (g.id.clone(), g.name.clone()))
                         }
                         manifold_ui::InspectorTab::Layer => {
-                            self.active_layer_index
-                                .and_then(|li| self.local_project.timeline.layers.get(li))
-                                .and_then(|l| l.effect_groups.as_ref())
+                            self.active_layer_id.as_ref()
+                                .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
+                                .and_then(|(_, l)| l.effect_groups.as_ref())
                                 .and_then(|g| g.get(group_idx))
                                 .map(|g| (g.id.clone(), g.name.clone()))
                         }
@@ -597,16 +609,16 @@ impl Application {
                         && old_name != new_name {
                             let target = match tab {
                                 manifold_ui::InspectorTab::Master => manifold_editing::commands::effect_target::EffectTarget::Master,
-                                manifold_ui::InspectorTab::Layer => manifold_editing::commands::effect_target::EffectTarget::Layer {
-                                    layer_index: self.active_layer_index.unwrap_or(0),
+                                manifold_ui::InspectorTab::Layer => {
+                                    let layer_id = self.active_layer_id.clone().unwrap_or_default();
+                                    manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id }
                                 },
                                 manifold_ui::InspectorTab::Clip => {
                                     if let Some(cid) = self.selection.primary_selected_clip_id.clone() {
                                         manifold_editing::commands::effect_target::EffectTarget::Clip { clip_id: cid }
                                     } else {
-                                        manifold_editing::commands::effect_target::EffectTarget::Layer {
-                                            layer_index: self.active_layer_index.unwrap_or(0),
-                                        }
+                                        let layer_id = self.active_layer_id.clone().unwrap_or_default();
+                                        manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id }
                                     }
                                 }
                             };
@@ -1029,8 +1041,10 @@ impl ApplicationHandler for Application {
         self.ui_root.resize(logical_w, logical_h);
 
         // Push initial project data (layers, tracks) and rebuild
-        crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.local_project, self.active_layer_index);
-        crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, self.active_layer_index, &self.selection);
+        let active_idx = self.active_layer_id.as_ref()
+            .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+        crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.local_project, active_idx);
+        crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
 
         self.initialized = true;
 
@@ -1136,7 +1150,7 @@ impl ApplicationHandler for Application {
                                 content_tx,
                                 &self.content_state,
                                 &mut self.cursor_manager,
-                                &mut self.active_layer_index,
+                                &mut self.active_layer_id,
                                 &mut self.needs_rebuild,
                                 &mut self.needs_structural_sync,
                                 &mut self.needs_scroll_rebuild,
@@ -1430,7 +1444,7 @@ impl ApplicationHandler for Application {
                             content_state: &self.content_state,
                             ui_root: &mut self.ui_root,
                             selection: &mut self.selection,
-                            active_layer: &mut self.active_layer_index,
+                            active_layer: &mut self.active_layer_id,
                             needs_rebuild: &mut self.needs_rebuild,
                             needs_structural_sync: &mut self.needs_structural_sync,
                             needs_scroll_rebuild: &mut self.needs_scroll_rebuild,
@@ -1471,7 +1485,8 @@ impl ApplicationHandler for Application {
                             self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
                             self.send_content_cmd(ContentCommand::SetProject);
                             self.selection.clear_selection();
-                            self.active_layer_index = Some(0);
+                            self.active_layer_id = self.local_project.timeline.layers
+                                .first().map(|l| l.layer_id.clone());
                             self.needs_rebuild = true;
                             log::info!("New project created");
                             consumed = true;
@@ -1577,7 +1592,9 @@ impl ApplicationHandler for Application {
                     // Video/MIDI files → route through ProjectIOService.
                     // Drop at playhead beat on active layer (Unity ProcessDroppedFiles).
                     let drop_beat = self.content_state.current_beat;
-                    let drop_layer = self.active_layer_index.unwrap_or(0) as i32;
+                    let drop_layer = self.active_layer_id.as_ref()
+                        .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
+                        .unwrap_or(0) as i32;
                     let spb = manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(
                         Some(&self.local_project).map(|p| p.settings.bpm).unwrap_or(120.0),
                     );

@@ -146,7 +146,7 @@ impl Application {
                     content_tx,
                     &self.content_state,
                     &mut self.cursor_manager,
-                    &mut self.active_layer_index,
+                    &mut self.active_layer_id,
                     &mut self.needs_rebuild,
                     &mut self.needs_structural_sync,
                     &mut self.needs_scroll_rebuild,
@@ -213,7 +213,7 @@ impl Application {
         let mut needs_structural_sync = self.needs_structural_sync;
         self.needs_structural_sync = false;
         let mut needs_resolution_resize = false;
-        let prev_active_layer = self.active_layer_index;
+        let prev_active_layer = self.active_layer_id.clone();
         let prev_sel_version = self.selection.selection_version;
         for action in &actions {
             // Intercept actions that need Application-level access
@@ -228,24 +228,24 @@ impl Application {
                     let tab = self.ui_root.inspector.last_effect_tab();
                     let target = match tab {
                         manifold_ui::InspectorTab::Master => manifold_editing::commands::effect_target::EffectTarget::Master,
-                        manifold_ui::InspectorTab::Layer => manifold_editing::commands::effect_target::EffectTarget::Layer {
-                            layer_index: self.active_layer_index.unwrap_or(0),
+                        manifold_ui::InspectorTab::Layer => {
+                            let layer_id = self.active_layer_id.clone().unwrap_or_default();
+                            manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id }
                         },
                         manifold_ui::InspectorTab::Clip => {
                             if let Some(cid) = self.selection.primary_selected_clip_id.clone() {
                                 manifold_editing::commands::effect_target::EffectTarget::Clip { clip_id: cid }
                             } else {
-                                manifold_editing::commands::effect_target::EffectTarget::Layer {
-                                    layer_index: self.active_layer_index.unwrap_or(0),
-                                }
+                                let layer_id = self.active_layer_id.clone().unwrap_or_default();
+                                manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id }
                             }
                         }
                     };
                     let effects_len = match tab {
                         manifold_ui::InspectorTab::Master => self.local_project.settings.master_effects.len(),
-                        manifold_ui::InspectorTab::Layer => self.active_layer_index
-                            .and_then(|li| self.local_project.timeline.layers.get(li))
-                            .and_then(|l| l.effects.as_ref())
+                        manifold_ui::InspectorTab::Layer => self.active_layer_id.as_ref()
+                            .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
+                            .and_then(|(_, l)| l.effects.as_ref())
                             .map(|e| e.len()).unwrap_or(0),
                         manifold_ui::InspectorTab::Clip => self.selection.primary_selected_clip_id.as_ref()
                             .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
@@ -356,7 +356,7 @@ impl Application {
                     self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
                     self.send_content_cmd(ContentCommand::SetProject);
                     self.selection.clear_selection();
-                    self.active_layer_index = Some(0);
+                    self.active_layer_id = self.local_project.timeline.layers.first().map(|l| l.layer_id.clone());
                     self.current_project_path = None;
                     needs_structural_sync = true;
                     continue;
@@ -393,7 +393,7 @@ impl Application {
                 &self.content_state,
                 &mut self.ui_root,
                 &mut self.selection,
-                &mut self.active_layer_index,
+                &mut self.active_layer_id,
                 &mut self.slider_snapshot,
                 &mut self.trim_snapshot,
                 &mut self.adsr_snapshot,
@@ -421,15 +421,18 @@ impl Application {
 
         // Selection version change → sync inspector so it shows the newly selected clip
         if self.selection.selection_version != prev_sel_version && !needs_structural_sync {
-            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, self.active_layer_index, &self.selection);
+            let active_idx = self.active_layer_id.as_ref().and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
             needs_structural_sync = true;
         }
 
         if needs_structural_sync {
-            crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.local_project, self.active_layer_index);
-            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, self.active_layer_index, &self.selection);
-        } else if self.active_layer_index != prev_active_layer {
-            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, self.active_layer_index, &self.selection);
+            let active_idx = self.active_layer_id.as_ref().and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+            crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.local_project, active_idx);
+            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
+        } else if self.active_layer_id != prev_active_layer {
+            let active_idx = self.active_layer_id.as_ref().and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+            crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
             needs_structural_sync = true; // Inspector content changed — needs rebuild
         }
         // 2a. Per-frame drag polling with auto-scroll.
@@ -443,7 +446,7 @@ impl Application {
                     content_tx,
                     &self.content_state,
                     &mut self.cursor_manager,
-                    &mut self.active_layer_index,
+                    &mut self.active_layer_id,
                     &mut self.needs_rebuild,
                     &mut self.needs_structural_sync,
                     &mut self.needs_scroll_rebuild,
@@ -497,11 +500,12 @@ impl Application {
         }
 
         // 4. Push engine state to UI panels (AFTER build so new nodes get state)
+        let active_idx = self.active_layer_id.as_ref().and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
         crate::ui_bridge::push_state(
             &mut self.ui_root,
             &self.local_project,
             &self.content_state,
-            self.active_layer_index,
+            active_idx,
             &self.selection,
             self.content_state.editing_is_dirty,
             self.current_project_path.as_deref(),
@@ -597,7 +601,8 @@ impl Application {
             let sel_region = self.ui_root.viewport.selection_region_ref().cloned();
             let has_region = sel_region.is_some();
             let insert_cursor_beat = self.ui_root.viewport.insert_cursor_beat();
-            let insert_layer = self.selection.insert_cursor_layer_index;
+            let insert_layer = self.selection.insert_cursor_layer_id.as_ref()
+                .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
             let has_insert = self.selection.has_insert_cursor();
             let ppb = self.ui_root.viewport.pixels_per_beat();
             let sel_ver = self.selection.selection_version;

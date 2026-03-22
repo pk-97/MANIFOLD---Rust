@@ -833,6 +833,7 @@ impl LiveClipManager {
             clip_id: saved_clip_id,
             video_clip_id: saved_video_id,
             layer_index: saved_layer.max(0),
+            layer_id: None,
             midi_note: resolved_midi_note,
             start_time_seconds: BeatQuantizer::quantize_time_seconds(start.start_time_seconds),
             end_time_seconds: BeatQuantizer::quantize_time_seconds(end_time),

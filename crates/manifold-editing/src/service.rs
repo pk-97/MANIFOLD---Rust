@@ -1041,6 +1041,9 @@ impl EditingService {
                 start_layer_index: region.start_layer_index,
                 end_layer_index: region.end_layer_index,
                 is_active: true,
+                start_layer_id: region.start_layer_id.clone(),
+                end_layer_id: region.end_layer_id.clone(),
+                selected_layer_ids: region.selected_layer_ids.clone(),
             })
         } else {
             None

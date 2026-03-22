@@ -12,7 +12,7 @@
 //! on manifold-editing.
 
 use std::collections::HashSet;
-use manifold_core::ClipId;
+use manifold_core::{ClipId, LayerId};
 use manifold_core::selection::SelectionRegion;
 use crate::node::Vec2;
 
@@ -43,6 +43,7 @@ pub struct ClipRef {
     pub duration_beats: f32,
     pub end_beat: f32,
     pub layer_index: usize,
+    pub layer_id: LayerId,
     pub in_point: f32,
     pub is_generator: bool,
     pub is_locked: bool,
@@ -59,6 +60,9 @@ pub trait TimelineEditingHost {
 
     /// Number of layers in the active timeline.
     fn layer_count(&self) -> usize;
+
+    /// Get the LayerId at a positional index (for resolving indices to stable IDs).
+    fn layer_id_at_index(&self, index: usize) -> Option<LayerId>;
 
     /// Whether a layer is a generator layer (for cross-layer type compatibility).
     fn layer_is_generator(&self, index: usize) -> bool;
