@@ -213,9 +213,6 @@ pub struct SessionSummary {
     // ── Extended analysis ─────────────────────────────────────────
     /// Frame pacing / jitter analysis.
     pub jitter: JitterAnalysis,
-    /// Thermal degradation detection (first 10% vs last 10%).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thermal: Option<ThermalAnalysis>,
     /// First-use spike detection (shader compilation).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub first_use_spikes: Vec<FirstUseSpike>,
@@ -238,16 +235,6 @@ pub struct JitterAnalysis {
     pub coefficient_of_variation: f64,
     /// Frames where dt > 1.5x target frame time.
     pub frames_with_significant_jitter: u64,
-}
-
-/// Thermal throttling detection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ThermalAnalysis {
-    pub first_10pct_mean_ms: f64,
-    pub last_10pct_mean_ms: f64,
-    /// last / first. >1.15 = likely throttled.
-    pub degradation_ratio: f64,
-    pub likely_throttled: bool,
 }
 
 /// Shader compilation spike on first use of a GPU pass.
@@ -439,7 +426,6 @@ impl ProfileSession {
                 gpu_pass_aggregates: Vec::new(),
                 hotspots: Vec::new(),
                 jitter: JitterAnalysis::default(),
-                thermal: None,
                 first_use_spikes: Vec::new(),
                 idle_vs_active: None,
                 pass_count: PassCountStats::default(),
@@ -488,9 +474,6 @@ impl ProfileSession {
         // Jitter analysis
         let jitter = self.compute_jitter(budget);
 
-        // Thermal degradation
-        let thermal = self.compute_thermal();
-
         // First-use spikes
         let first_use_spikes = self.detect_first_use_spikes(&gpu_pass_aggregates);
 
@@ -502,7 +485,7 @@ impl ProfileSession {
 
         // Automated recommendations
         let recommendations = self.generate_recommendations(
-            &gpu_pass_aggregates, &jitter, thermal.as_ref(),
+            &gpu_pass_aggregates, &jitter,
             idle_vs_active.as_ref(), &pass_count, budget,
         );
 
@@ -517,7 +500,6 @@ impl ProfileSession {
             gpu_pass_aggregates,
             hotspots,
             jitter,
-            thermal,
             first_use_spikes,
             idle_vs_active,
             pass_count,
@@ -663,25 +645,6 @@ impl ProfileSession {
         }
     }
 
-    /// Thermal degradation: compare first 10% vs last 10% of session.
-    fn compute_thermal(&self) -> Option<ThermalAnalysis> {
-        if self.frames.len() < 20 {
-            return None;
-        }
-        let n = self.frames.len();
-        let chunk = (n / 10).max(1);
-        let first_mean = self.frames[..chunk].iter()
-            .map(|f| f.wall_time_ms).sum::<f64>() / chunk as f64;
-        let last_mean = self.frames[n - chunk..].iter()
-            .map(|f| f.wall_time_ms).sum::<f64>() / chunk as f64;
-        let ratio = if first_mean > 0.0 { last_mean / first_mean } else { 1.0 };
-        Some(ThermalAnalysis {
-            first_10pct_mean_ms: first_mean,
-            last_10pct_mean_ms: last_mean,
-            degradation_ratio: ratio,
-            likely_throttled: ratio > 1.15,
-        })
-    }
 
     /// Detect first-use spikes (shader compilation on first occurrence).
     fn detect_first_use_spikes(&self, aggregates: &[GpuPassAggregate]) -> Vec<FirstUseSpike> {
@@ -770,7 +733,6 @@ impl ProfileSession {
         &self,
         gpu_passes: &[GpuPassAggregate],
         jitter: &JitterAnalysis,
-        thermal: Option<&ThermalAnalysis>,
         idle_active: Option<&IdleActiveComparison>,
         pass_count: &PassCountStats,
         budget_ms: f64,
@@ -812,18 +774,6 @@ impl ProfileSession {
                  Check for allocation spikes or GC pauses.",
                 jitter.coefficient_of_variation,
                 jitter.frames_with_significant_jitter
-            ));
-        }
-
-        // Thermal
-        if let Some(t) = thermal
-            && t.likely_throttled
-        {
-            recs.push(format!(
-                "Thermal throttling detected: {:.0}% slower by end of session \
-                 (first 10%: {:.1}ms, last 10%: {:.1}ms).",
-                (t.degradation_ratio - 1.0) * 100.0,
-                t.first_10pct_mean_ms, t.last_10pct_mean_ms
             ));
         }
 
