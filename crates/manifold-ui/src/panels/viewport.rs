@@ -4,6 +4,7 @@ use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
+use crate::snap;
 use crate::tree::UITree;
 use super::{Panel, PanelAction};
 
@@ -167,6 +168,9 @@ pub struct TimelineViewportPanel {
 
     // Drag interaction state
     drag_mode: ViewportDragMode,
+    /// True when Alt was held at drag start — bypasses grid snapping for
+    /// sample-accurate scrubbing. Unity: `RulerScrubHandler.ShouldUseFreeScrub()`.
+    scrub_free: bool,
 
     // Dirty-checking fingerprint to skip unnecessary rebuilds.
     // From Unity LayerBitmapRenderer dirty-checking (lines 99-186).
@@ -223,6 +227,7 @@ impl TimelineViewportPanel {
             first_node: 0,
             node_count: 0,
             drag_mode: ViewportDragMode::None,
+            scrub_free: false,
             cached_fingerprint: 0,
         }
     }
@@ -564,6 +569,28 @@ impl TimelineViewportPanel {
     /// Used by waveform/stem scrub where events are already offset to local coords.
     pub fn local_pixel_to_beat(&self, local_px: f32) -> f32 {
         local_px / self.mapper.pixels_per_beat() + self.scroll_x_beats
+    }
+
+    /// Snap a beat to the grid for ruler scrubbing, unless free-scrub is active.
+    ///
+    /// Unity `RulerScrubHandler.ScrubToPosition()`:
+    /// - Default: snap to nearest grid line via `SnapBeatToGrid(beat, beatsPerBar)`
+    /// - Alt/Option held: free scrub (no snap) for sample-accurate positioning
+    /// - At max zoom level: auto-disable snapping (can place between grid lines)
+    fn scrub_snap_beat(&self, beat: f32, free: bool) -> f32 {
+        if free {
+            return beat.max(0.0);
+        }
+        // At max zoom, disable snapping (Unity: ShouldUseFreeScrub, lines 64-66)
+        let max_zoom = *color::ZOOM_LEVELS.last().unwrap();
+        if self.mapper.pixels_per_beat() >= max_zoom - 0.001 {
+            return beat.max(0.0);
+        }
+        let grid = snap::grid_interval_for_zoom(
+            self.mapper.pixels_per_beat(),
+            self.beats_per_bar as f32,
+        );
+        snap::snap_beat_to_grid(beat, grid).max(0.0)
     }
 
     /// Convert beat duration to pixel width.
@@ -931,28 +958,34 @@ impl Panel for TimelineViewportPanel {
         // handles ruler events (seek/scrub) which are viewport-specific.
         match event {
             // ── Click: ruler or overview strip ────────────────────
-            UIEvent::Click { pos, .. } => {
+            UIEvent::Click { pos, modifiers, .. } => {
                 if self.overview_rect.contains(*pos) {
                     let norm = ((pos.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
                     return vec![PanelAction::OverviewScrub(norm)];
                 }
                 if self.ruler_rect.contains(*pos) {
-                    let beat = self.pixel_to_beat(pos.x).max(0.0);
+                    let raw = self.pixel_to_beat(pos.x);
+                    let beat = self.scrub_snap_beat(raw, modifiers.alt);
                     return vec![PanelAction::Seek(beat)];
                 }
                 Vec::new()
             }
 
             // ── DragBegin: ruler or overview scrub ───────────────
-            UIEvent::DragBegin { origin, .. } => {
+            UIEvent::DragBegin { origin, modifiers, .. } => {
                 if self.overview_rect.contains(*origin) {
                     self.drag_mode = ViewportDragMode::OverviewScrub;
+                    self.scrub_free = false;
                     let norm = ((origin.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
                     return vec![PanelAction::OverviewScrub(norm)];
                 }
                 if self.ruler_rect.contains(*origin) {
                     self.drag_mode = ViewportDragMode::RulerScrub;
-                    let beat = self.pixel_to_beat(origin.x).max(0.0);
+                    // Latch Alt state at drag start — Unity checks per-frame but
+                    // Drag events don't carry modifiers, so we capture once.
+                    self.scrub_free = modifiers.alt;
+                    let raw = self.pixel_to_beat(origin.x);
+                    let beat = self.scrub_snap_beat(raw, self.scrub_free);
                     return vec![PanelAction::Seek(beat)];
                 }
                 Vec::new()
@@ -965,7 +998,8 @@ impl Panel for TimelineViewportPanel {
                     return vec![PanelAction::OverviewScrub(norm)];
                 }
                 if self.drag_mode == ViewportDragMode::RulerScrub {
-                    let beat = self.pixel_to_beat(pos.x).max(0.0);
+                    let raw = self.pixel_to_beat(pos.x);
+                    let beat = self.scrub_snap_beat(raw, self.scrub_free);
                     return vec![PanelAction::Seek(beat)];
                 }
                 Vec::new()
@@ -975,6 +1009,7 @@ impl Panel for TimelineViewportPanel {
             UIEvent::DragEnd { .. } => {
                 if self.drag_mode != ViewportDragMode::None {
                     self.drag_mode = ViewportDragMode::None;
+                    self.scrub_free = false;
                 }
                 Vec::new()
             }
