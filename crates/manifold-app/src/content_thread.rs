@@ -1114,16 +1114,12 @@ impl ContentThread {
             // ── Generator ─────────────────────────────────────────
             ContentCommand::GeneratorTypeChanged { layer_id, new_type } => {
                 // Port of C# PlaybackController.NotifyGeneratorTypeChanged().
-                let layer_index = self.engine.project()
-                    .and_then(|p| p.timeline.find_layer_index_by_id(&layer_id))
-                    .map(|i| i as i32)
-                    .unwrap_or(-1);
                 let (renderers, _) = self.engine.split_renderer_project();
                 for renderer in renderers.iter_mut() {
                     if let Some(gen_renderer) = renderer.as_any_mut()
                         .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
                     {
-                        gen_renderer.update_active_types_for_layer(layer_index, new_type);
+                        gen_renderer.update_active_types_for_layer(&layer_id, new_type);
                         break;
                     }
                 }

@@ -1,7 +1,7 @@
 use std::any::Any;
 use ahash::AHashMap;
 use std::sync::Arc;
-use manifold_core::GeneratorType;
+use manifold_core::{GeneratorType, LayerId};
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_playback::renderer::ClipRenderer;
@@ -14,7 +14,8 @@ use crate::generators::registry::GeneratorRegistry;
 struct ActiveClip {
     render_target: RenderTarget,
     generator_type: GeneratorType,
-    layer_index: i32,
+    layer_id: LayerId,
+    layer_index: i32, // positional cache for param lookup in render_all
     anim_progress: f32,
 }
 
@@ -36,7 +37,7 @@ pub struct GeneratorRenderer {
     format: wgpu::TextureFormat,
     registry: GeneratorRegistry,
     active_clips: AHashMap<String, ActiveClip>,
-    layer_generators: AHashMap<i32, LayerGeneratorState>,
+    layer_generators: AHashMap<LayerId, LayerGeneratorState>,
     available_rts: Vec<RenderTarget>,
     /// Pre-allocated scratch buffer for render iteration (avoids per-frame alloc).
     render_scratch: Vec<String>,
@@ -74,12 +75,13 @@ impl GeneratorRenderer {
         }
     }
 
-    /// Internal: acquire a clip with generator type and layer index.
+    /// Internal: acquire a clip with generator type and layer identity.
     /// Port of C# GeneratorRenderer.Acquire().
     fn acquire_clip(
         &mut self,
         clip_id: &str,
         gen_type: GeneratorType,
+        layer_id: LayerId,
         layer_index: i32,
     ) -> bool {
         if self.active_clips.contains_key(clip_id) {
@@ -89,13 +91,13 @@ impl GeneratorRenderer {
         // Ensure layer has a generator of the right type
         let needs_create = self
             .layer_generators
-            .get(&layer_index)
+            .get(&layer_id)
             .is_none_or(|ls| ls.generator_type != gen_type);
 
         if needs_create {
             if let Some(generator) = self.registry.create(&self.device, gen_type) {
                 self.layer_generators.insert(
-                    layer_index,
+                    layer_id.clone(),
                     LayerGeneratorState {
                         generator,
                         generator_type: gen_type,
@@ -107,7 +109,7 @@ impl GeneratorRenderer {
             }
         }
 
-        if let Some(ls) = self.layer_generators.get_mut(&layer_index) {
+        if let Some(ls) = self.layer_generators.get_mut(&layer_id) {
             ls.trigger_count += 1;
         }
 
@@ -129,6 +131,7 @@ impl GeneratorRenderer {
             ActiveClip {
                 render_target: rt,
                 generator_type: gen_type,
+                layer_id,
                 layer_index,
                 anim_progress: 0.0,
             },
@@ -150,6 +153,14 @@ impl GeneratorRenderer {
         layers: &[Layer],
         gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
+        // Refresh positional cache on active clips — layer_index may have changed
+        // after reorder, but layer_id stays stable so generator state follows.
+        for active in self.active_clips.values_mut() {
+            if let Some(pos) = layers.iter().position(|l| l.layer_id == active.layer_id) {
+                active.layer_index = pos as i32;
+            }
+        }
+
         // Collect clip IDs into pre-allocated scratch to avoid borrow conflict
         self.render_scratch.clear();
         self.render_scratch
@@ -158,12 +169,12 @@ impl GeneratorRenderer {
         for clip_id in 0..self.render_scratch.len() {
             let id = &self.render_scratch[clip_id];
 
-            let (layer_index, gen_type, anim_progress) = {
+            let (layer_id, layer_index, gen_type, anim_progress) = {
                 let active = match self.active_clips.get(id) {
                     Some(a) => a,
                     None => continue,
                 };
-                (active.layer_index, active.generator_type, active.anim_progress)
+                (active.layer_id.clone(), active.layer_index, active.generator_type, active.anim_progress)
             };
 
             // Build GeneratorContext from layer params (zero allocation)
@@ -179,7 +190,7 @@ impl GeneratorRenderer {
 
             let trigger_count = self
                 .layer_generators
-                .get(&layer_index)
+                .get(&layer_id)
                 .map_or(0, |ls| ls.trigger_count);
 
             let ctx = GeneratorContext {
@@ -197,7 +208,7 @@ impl GeneratorRenderer {
 
             // Split borrows: get generator and active clip's RT view separately
             let _ = gen_type; // used for type matching if needed
-            if let Some(layer_state) = self.layer_generators.get_mut(&layer_index)
+            if let Some(layer_state) = self.layer_generators.get_mut(&layer_id)
                 && let Some(active) = self.active_clips.get_mut(id) {
                     if let Some(profiler) = gpu_profiler {
                         profiler.set_scope(&format!("clip:{}:", id));
@@ -245,10 +256,10 @@ impl GeneratorRenderer {
 
     /// Update active clip types for a layer after generator type change.
     /// Port of C# GeneratorRenderer.UpdateActiveTypesForLayer().
-    pub fn update_active_types_for_layer(&mut self, layer_index: i32, new_type: GeneratorType) {
+    pub fn update_active_types_for_layer(&mut self, layer_id: &LayerId, new_type: GeneratorType) {
         // Update clip type tracking
         for active in self.active_clips.values_mut() {
-            if active.layer_index == layer_index {
+            if active.layer_id == *layer_id {
                 active.generator_type = new_type;
             }
         }
@@ -256,17 +267,17 @@ impl GeneratorRenderer {
         // If the type changed, force the generator swap now.
         let needs_swap = self
             .layer_generators
-            .get(&layer_index)
+            .get(layer_id)
             .is_some_and(|ls| ls.generator_type != new_type);
 
         if needs_swap {
             let old_trigger_count = self
                 .layer_generators
-                .get(&layer_index)
+                .get(layer_id)
                 .map_or(0, |ls| ls.trigger_count);
             if let Some(generator) = self.registry.create(&self.device, new_type) {
                 self.layer_generators.insert(
-                    layer_index,
+                    layer_id.clone(),
                     LayerGeneratorState {
                         generator,
                         generator_type: new_type,
@@ -293,8 +304,11 @@ impl ClipRenderer for GeneratorRenderer {
         clip.is_generator()
     }
 
-    fn start_clip(&mut self, clip: &TimelineClip, _current_time: f32) -> bool {
-        self.acquire_clip(&clip.id, clip.generator_type, clip.layer_index)
+    fn start_clip(&mut self, clip: &TimelineClip, _current_time: f32, layers: &[Layer]) -> bool {
+        let layer_id = layers.get(clip.layer_index as usize)
+            .map(|l| l.layer_id.clone())
+            .unwrap_or_default();
+        self.acquire_clip(&clip.id, clip.generator_type, layer_id, clip.layer_index)
     }
 
     fn stop_clip(&mut self, clip_id: &str) {

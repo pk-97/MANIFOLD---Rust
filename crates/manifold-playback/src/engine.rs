@@ -685,7 +685,8 @@ impl PlaybackEngine {
         // Find renderer
         let renderer_idx = self.renderers.iter().position(|r| r.can_handle(clip));
         if let Some(idx) = renderer_idx {
-            let success = self.renderers[idx].start_clip(clip, self.current_time);
+            let layers = self.project.as_ref().map_or(&[] as &[_], |p| &p.timeline.layers);
+            let success = self.renderers[idx].start_clip(clip, self.current_time, layers);
             if success {
                 self.active_clip_renderers.insert(clip.id.clone(), idx);
                 self.active_clip_ids.insert(clip.id.clone());
