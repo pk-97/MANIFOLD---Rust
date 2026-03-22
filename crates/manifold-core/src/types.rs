@@ -624,6 +624,7 @@ impl<'de> Deserialize<'de> for ResolutionPreset {
                 _ => ResolutionPreset::FHD1080p,
             },
             serde_json::Value::String(s) => match s.as_str() {
+                // Rust-style names
                 "HD720p" => ResolutionPreset::HD720p,
                 "FHD1080p" => ResolutionPreset::FHD1080p,
                 "QHD1440p" => ResolutionPreset::QHD1440p,
@@ -632,6 +633,15 @@ impl<'de> Deserialize<'de> for ResolutionPreset {
                 "Portrait720" => ResolutionPreset::Portrait720,
                 "Portrait1080" => ResolutionPreset::Portrait1080,
                 "Portrait1440" => ResolutionPreset::Portrait1440,
+                // Unity C# enum names
+                "HD_720p" => ResolutionPreset::HD720p,
+                "FHD_1080p" => ResolutionPreset::FHD1080p,
+                "QHD_1440p" => ResolutionPreset::QHD1440p,
+                "UHD_4K" => ResolutionPreset::UHD4K,
+                "Square_1080" => ResolutionPreset::Square1080,
+                "Portrait_720" => ResolutionPreset::Portrait720,
+                "Portrait_1080" => ResolutionPreset::Portrait1080,
+                "Portrait_1440" => ResolutionPreset::Portrait1440,
                 _ => ResolutionPreset::FHD1080p,
             },
             _ => ResolutionPreset::FHD1080p,
