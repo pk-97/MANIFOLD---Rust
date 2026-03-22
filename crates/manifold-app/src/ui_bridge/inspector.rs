@@ -936,8 +936,18 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = *active_layer
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = &mut layer.gen_params {
-                        let cur = gp.get_param_base(*param_idx);
-                        gp.set_param_base(*param_idx, if cur > 0.5 { 0.0 } else { 1.0 });
+                        let old_val = gp.get_param_base(*param_idx);
+                        let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
+                        let base = gp.base_param_values.as_ref()
+                            .unwrap_or(&gp.param_values);
+                        let old_params = base.clone();
+                        gp.set_param_base(*param_idx, new_val);
+                        let new_params = gp.base_param_values.as_ref()
+                            .unwrap_or(&gp.param_values).clone();
+                        let cmd = ChangeGeneratorParamsCommand::new(
+                            layer_idx, old_params, new_params,
+                        );
+                        let _ = content_tx.try_send(ContentCommand::Execute(Box::new(cmd)));
                     }
             DispatchResult::handled()
         }
