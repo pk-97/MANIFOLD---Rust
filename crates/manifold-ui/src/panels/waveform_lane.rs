@@ -1,20 +1,17 @@
 //! Imported audio waveform lane panel.
 //!
-//! Mechanical translation of `Assets/Scripts/UI/Timeline/ImportedAudioWaveformLane.cs`
-//! adapted to the Rust bitmap UI architecture.
+//! Hybrid bitmap + UITree node architecture (matching Unity's pattern):
+//! - **Bitmap** (pixel buffer): waveform spectral bars, playhead, lane background
+//! - **UITree nodes**: transparent scrub/drag overlay, buttons with text labels
 //!
-//! In Unity this creates RawImage tiles via WaveformRenderer and positions them
-//! with RectTransforms. In Rust we paint the waveform directly into a pixel buffer
-//! using `waveform_painter`.
-//!
-//! Also ports the scrub handler (`ImportedAudioWaveformScrubHandler.cs`) and
-//! drag handler (`ImportedAudioWaveformDragHandler.cs`) as inline state.
+//! Unity: `ImportedAudioWaveformLane` + `ImportedAudioWaveformScrubHandler`
+//!        + `ImportedAudioWaveformDragHandler`.
 
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
-use crate::node::Color32;
+use crate::node::{Color32, Rect, UIStyle, TextAlign, FontWeight};
 use crate::tree::UITree;
 use crate::waveform_painter;
 use crate::waveform_renderer::WaveformRenderer;
@@ -58,27 +55,17 @@ pub struct WaveformLanePanel {
     // ── Scrub handler state (ImportedAudioWaveformScrubHandler.cs) ──
     is_scrubbing: bool,
 
-    // ── Button hover tracking ──
-    hovered_button: Option<WaveformButton>,
+    // ── UITree node IDs (interactive overlay + buttons) ──
+    overlay_id: i32,
+    remove_btn_id: i32,
+    expand_btn_id: i32,
+    reanalyze_ids: [i32; 5],
 
     // ── Cached values for dirty checking ──
     cached_waveform_x: f32,
     cached_waveform_width: f32,
     cached_playhead_x: f32,
     cached_scroll_offset: f32,
-}
-
-/// Button regions in the waveform lane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WaveformButton {
-    Import,
-    Remove,
-    Expand,
-    ReAnalyzeDrums,
-    ReAnalyzeBass,
-    ReAnalyzeSynth,
-    ReAnalyzeVocal,
-    ReImportStems,
 }
 
 /// Playhead color: PlayheadRed @ 0.85 alpha.
@@ -90,30 +77,45 @@ const PLAYHEAD_COLOR: Color32 = Color32::new(217, 64, 56, 217);
 const SNAP_STEP_BEATS: f32 = 1.0;
 
 // ── Button layout constants (from Unity BuildUI) ──
-const REMOVE_BTN_W: i32 = 20;
-const REMOVE_BTN_H: i32 = 16;
-const REMOVE_BTN_MARGIN_RIGHT: i32 = 4;
-const REMOVE_BTN_MARGIN_TOP: i32 = 2;
+const REMOVE_BTN_W: f32 = 20.0;
+const REMOVE_BTN_H: f32 = 16.0;
+const REMOVE_BTN_MARGIN_RIGHT: f32 = 4.0;
+const REMOVE_BTN_MARGIN_TOP: f32 = 2.0;
 
-const EXPAND_BTN_W: i32 = 20;
-const EXPAND_BTN_H: i32 = 16;
-const EXPAND_BTN_MARGIN_RIGHT: i32 = 28; // Unity: anchoredPosition.x = -28
-const EXPAND_BTN_MARGIN_TOP: i32 = 2;
+const EXPAND_BTN_W: f32 = 20.0;
+const EXPAND_BTN_H: f32 = 16.0;
+const EXPAND_BTN_MARGIN_RIGHT: f32 = 28.0;
+const EXPAND_BTN_MARGIN_TOP: f32 = 2.0;
 
-const REANALYZE_BTN_H: i32 = 16;
-const REANALYZE_BTN_MARGIN_LEFT: i32 = 4;
-const REANALYZE_BTN_MARGIN_TOP: i32 = 2;
-const REANALYZE_BTN_SPACING: i32 = 3;
+const REANALYZE_BTN_H: f32 = 16.0;
+const REANALYZE_BTN_MARGIN_LEFT: f32 = 4.0;
+const REANALYZE_BTN_MARGIN_TOP: f32 = 2.0;
+const REANALYZE_BTN_SPACING: f32 = 3.0;
 
 /// Re-analyze button definitions: (label, width).
 /// Unity: CreateReAnalyzeButton calls (lines 272-276).
-const REANALYZE_BUTTONS: [(&str, i32); 5] = [
-    ("DRUMS", 48),
-    ("BASS", 40),
-    ("SYNTH", 46),
-    ("VOCAL", 48),
-    ("STEMS", 48),
+const REANALYZE_BUTTONS: [(&str, f32); 5] = [
+    ("DRUMS", 48.0),
+    ("BASS", 40.0),
+    ("SYNTH", 46.0),
+    ("VOCAL", 48.0),
+    ("STEMS", 48.0),
 ];
+
+/// Button style for re-analyze buttons (matches Unity WaveformButtonNormal/Highlighted/Pressed).
+fn reanalyze_btn_style() -> UIStyle {
+    UIStyle {
+        bg_color: color::WAVEFORM_BTN_NORMAL,
+        hover_bg_color: color::WAVEFORM_BTN_HIGHLIGHTED,
+        pressed_bg_color: color::WAVEFORM_BTN_PRESSED,
+        text_color: Color32::new(173, 173, 179, 255), // Unity: DropdownInactiveText
+        font_size: color::FONT_SMALL,
+        font_weight: FontWeight::Regular,
+        corner_radius: color::BUTTON_RADIUS,
+        text_align: TextAlign::Center,
+        ..UIStyle::default()
+    }
+}
 
 impl Default for WaveformLanePanel {
     fn default() -> Self {
@@ -143,7 +145,10 @@ impl WaveformLanePanel {
             total_snapped_delta: 0.0,
             drag_start_beat: None,
             is_scrubbing: false,
-            hovered_button: None,
+            overlay_id: -1,
+            remove_btn_id: -1,
+            expand_btn_id: -1,
+            reanalyze_ids: [-1; 5],
             cached_waveform_x: f32::NAN,
             cached_waveform_width: -1.0,
             cached_playhead_x: f32::NAN,
@@ -206,6 +211,115 @@ impl WaveformLanePanel {
         self.stems_available
     }
 
+    /// Build UITree nodes for interactive elements (overlay + buttons).
+    /// Called from UIRoot after viewport.build() so wf_rect is available.
+    pub fn build_nodes(&mut self, tree: &mut UITree, screen_rect: Rect) {
+        // Transparent scrub/drag overlay covering entire waveform area.
+        // This is the hit-test target that makes the input system generate events.
+        // Unity: DragOverlay (transparent Image, raycastTarget=true).
+        self.overlay_id = tree.add_button(
+            -1,
+            screen_rect.x,
+            screen_rect.y,
+            screen_rect.width,
+            screen_rect.height,
+            UIStyle { bg_color: Color32::TRANSPARENT, ..UIStyle::default() },
+            "",
+        ) as i32;
+
+        // Remove button (top-right). Unity: anchoredPosition(-4, -2), 20×16.
+        let remove_x = screen_rect.x + screen_rect.width - REMOVE_BTN_MARGIN_RIGHT - REMOVE_BTN_W;
+        let remove_y = screen_rect.y + REMOVE_BTN_MARGIN_TOP;
+        self.remove_btn_id = tree.add_button(
+            -1,
+            remove_x,
+            remove_y,
+            REMOVE_BTN_W,
+            REMOVE_BTN_H,
+            UIStyle {
+                bg_color: color::WAVEFORM_BTN_NORMAL,
+                hover_bg_color: color::WAVEFORM_REMOVE_HIGHLIGHTED,
+                pressed_bg_color: color::WAVEFORM_REMOVE_PRESSED,
+                text_color: Color32::new(209, 209, 214, 255),
+                font_size: color::FONT_SMALL,
+                corner_radius: color::BUTTON_RADIUS,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+            "X",
+        ) as i32;
+
+        // Expand stems button (next to remove). Unity: anchoredPosition(-28, -2).
+        let expand_x = screen_rect.x + screen_rect.width
+            - EXPAND_BTN_MARGIN_RIGHT - EXPAND_BTN_W;
+        let expand_y = screen_rect.y + EXPAND_BTN_MARGIN_TOP;
+        self.expand_btn_id = tree.add_button(
+            -1,
+            expand_x,
+            expand_y,
+            EXPAND_BTN_W,
+            EXPAND_BTN_H,
+            UIStyle {
+                bg_color: color::WAVEFORM_BTN_NORMAL,
+                hover_bg_color: color::WAVEFORM_EXPAND_HIGHLIGHTED,
+                pressed_bg_color: color::WAVEFORM_EXPAND_PRESSED,
+                text_color: Color32::new(191, 191, 191, 255),
+                font_size: color::FONT_SMALL,
+                corner_radius: color::BUTTON_RADIUS,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+            "\u{25B6}", // ▶ right-pointing triangle (collapsed)
+        ) as i32;
+
+        // Re-analyze buttons (top-left). Unity: HorizontalLayoutGroup, spacing=3.
+        let style = reanalyze_btn_style();
+        let mut btn_x = screen_rect.x + REANALYZE_BTN_MARGIN_LEFT;
+        for (i, &(label, width)) in REANALYZE_BUTTONS.iter().enumerate() {
+            self.reanalyze_ids[i] = tree.add_button(
+                -1,
+                btn_x,
+                screen_rect.y + REANALYZE_BTN_MARGIN_TOP,
+                width,
+                REANALYZE_BTN_H,
+                style,
+                label,
+            ) as i32;
+            btn_x += width + REANALYZE_BTN_SPACING;
+        }
+
+        // Set initial visibility based on current state.
+        self.apply_button_visibility(tree);
+    }
+
+    /// Update UITree node visibility and text each frame.
+    pub fn update_nodes(&mut self, tree: &mut UITree) {
+        self.apply_button_visibility(tree);
+
+        // Update expand chevron direction.
+        if self.expand_btn_id >= 0 {
+            let chevron = if self.stems_expanded { "\u{25BC}" } else { "\u{25B6}" };
+            tree.set_text(self.expand_btn_id as u32, chevron);
+        }
+    }
+
+    fn apply_button_visibility(&self, tree: &mut UITree) {
+        if self.remove_btn_id >= 0 {
+            tree.set_visible(self.remove_btn_id as u32, self.has_audio);
+        }
+        if self.expand_btn_id >= 0 {
+            tree.set_visible(
+                self.expand_btn_id as u32,
+                self.has_audio && self.stems_available,
+            );
+        }
+        for &id in &self.reanalyze_ids {
+            if id >= 0 {
+                tree.set_visible(id as u32, self.has_audio);
+            }
+        }
+    }
+
     /// Update overlay state each frame.
     ///
     /// Unity: `UpdateOverlay(...)` (lines 375-442).
@@ -252,7 +366,7 @@ impl WaveformLanePanel {
         }
     }
 
-    /// Repaint the pixel buffer.
+    /// Repaint the pixel buffer (waveform visual + playhead only, no buttons).
     pub fn repaint(&mut self, viewport_width: usize) {
         let lane_height = color::WAVEFORM_LANE_HEIGHT as usize;
 
@@ -274,8 +388,6 @@ impl WaveformLanePanel {
         let buf_h = self.buffer_height;
 
         if !self.has_audio || !self.renderer.is_ready() {
-            // Empty state — just the background (text "Click to import audio" is
-            // drawn by the text system in update())
             self.dirty = false;
             return;
         }
@@ -325,213 +437,65 @@ impl WaveformLanePanel {
             );
         }
 
-        // Draw overlay buttons when audio is loaded
-        self.draw_buttons(buf_w, buf_h);
+        // Buttons are UITree nodes — not drawn in the bitmap.
 
         self.dirty = false;
-    }
-
-    /// Draw overlay buttons (remove, expand, reanalyze).
-    fn draw_buttons(&mut self, buf_w: usize, buf_h: usize) {
-        if !self.has_audio {
-            return;
-        }
-
-        // Remove button (top-right, Unity lines 179-215)
-        let remove_x = buf_w as i32 - REMOVE_BTN_MARGIN_RIGHT - REMOVE_BTN_W;
-        let remove_y = REMOVE_BTN_MARGIN_TOP;
-        let is_remove_hovered = self.hovered_button == Some(WaveformButton::Remove);
-        waveform_painter::draw_waveform_button(
-            &mut self.pixel_buffer,
-            buf_w,
-            buf_h,
-            remove_x,
-            remove_y,
-            REMOVE_BTN_W,
-            REMOVE_BTN_H,
-            color::WAVEFORM_BTN_NORMAL,
-            is_remove_hovered,
-            false,
-            color::WAVEFORM_REMOVE_HIGHLIGHTED,
-            color::WAVEFORM_REMOVE_PRESSED,
-        );
-
-        // Expand stems button (next to remove, Unity lines 218-254)
-        if self.stems_available {
-            let expand_x = buf_w as i32 - EXPAND_BTN_MARGIN_RIGHT - EXPAND_BTN_W;
-            let expand_y = EXPAND_BTN_MARGIN_TOP;
-            let is_expand_hovered = self.hovered_button == Some(WaveformButton::Expand);
-            waveform_painter::draw_waveform_button(
-                &mut self.pixel_buffer,
-                buf_w,
-                buf_h,
-                expand_x,
-                expand_y,
-                EXPAND_BTN_W,
-                EXPAND_BTN_H,
-                color::WAVEFORM_BTN_NORMAL,
-                is_expand_hovered,
-                false,
-                color::WAVEFORM_EXPAND_HIGHLIGHTED,
-                color::WAVEFORM_EXPAND_PRESSED,
-            );
-        }
-
-        // Re-analyze buttons (top-left, Unity lines 257-278)
-        let mut btn_x = REANALYZE_BTN_MARGIN_LEFT;
-        for (i, &(_label, width)) in REANALYZE_BUTTONS.iter().enumerate() {
-            let btn_type = match i {
-                0 => WaveformButton::ReAnalyzeDrums,
-                1 => WaveformButton::ReAnalyzeBass,
-                2 => WaveformButton::ReAnalyzeSynth,
-                3 => WaveformButton::ReAnalyzeVocal,
-                4 => WaveformButton::ReImportStems,
-                _ => continue,
-            };
-            let is_hovered = self.hovered_button == Some(btn_type);
-            waveform_painter::draw_waveform_button(
-                &mut self.pixel_buffer,
-                buf_w,
-                buf_h,
-                btn_x,
-                REANALYZE_BTN_MARGIN_TOP,
-                width,
-                REANALYZE_BTN_H,
-                color::WAVEFORM_BTN_NORMAL,
-                is_hovered,
-                false,
-                color::WAVEFORM_BTN_HIGHLIGHTED,
-                color::WAVEFORM_BTN_PRESSED,
-            );
-            btn_x += width + REANALYZE_BTN_SPACING;
-        }
-    }
-
-    /// Hit-test a screen position against buttons.
-    fn hit_test_button(&self, local_x: f32, local_y: f32) -> Option<WaveformButton> {
-        if !self.has_audio {
-            // When no audio, the whole lane is the import button
-            return Some(WaveformButton::Import);
-        }
-
-        let buf_w = self.buffer_width as f32;
-
-        // Remove button
-        let remove_x = buf_w - REMOVE_BTN_MARGIN_RIGHT as f32 - REMOVE_BTN_W as f32;
-        let remove_y = REMOVE_BTN_MARGIN_TOP as f32;
-        if local_x >= remove_x
-            && local_x < remove_x + REMOVE_BTN_W as f32
-            && local_y >= remove_y
-            && local_y < remove_y + REMOVE_BTN_H as f32
-        {
-            return Some(WaveformButton::Remove);
-        }
-
-        // Expand button
-        if self.stems_available {
-            let expand_x = buf_w - EXPAND_BTN_MARGIN_RIGHT as f32 - EXPAND_BTN_W as f32;
-            let expand_y = EXPAND_BTN_MARGIN_TOP as f32;
-            if local_x >= expand_x
-                && local_x < expand_x + EXPAND_BTN_W as f32
-                && local_y >= expand_y
-                && local_y < expand_y + EXPAND_BTN_H as f32
-            {
-                return Some(WaveformButton::Expand);
-            }
-        }
-
-        // Reanalyze buttons
-        let mut btn_x = REANALYZE_BTN_MARGIN_LEFT as f32;
-        for (i, &(_label, width)) in REANALYZE_BUTTONS.iter().enumerate() {
-            if local_x >= btn_x
-                && local_x < btn_x + width as f32
-                && local_y >= REANALYZE_BTN_MARGIN_TOP as f32
-                && local_y < (REANALYZE_BTN_MARGIN_TOP + REANALYZE_BTN_H) as f32
-            {
-                return match i {
-                    0 => Some(WaveformButton::ReAnalyzeDrums),
-                    1 => Some(WaveformButton::ReAnalyzeBass),
-                    2 => Some(WaveformButton::ReAnalyzeSynth),
-                    3 => Some(WaveformButton::ReAnalyzeVocal),
-                    4 => Some(WaveformButton::ReImportStems),
-                    _ => None,
-                };
-            }
-            btn_x += width as f32 + REANALYZE_BTN_SPACING as f32;
-        }
-
-        None
-    }
-
-    /// Convert a button hit to a PanelAction.
-    fn button_to_action(button: WaveformButton, stems_expanded: bool) -> Option<PanelAction> {
-        match button {
-            WaveformButton::Import => Some(PanelAction::ImportAudioClicked),
-            WaveformButton::Remove => Some(PanelAction::RemoveAudioClicked),
-            WaveformButton::Expand => {
-                Some(PanelAction::ExpandStemsToggled(!stems_expanded))
-            }
-            WaveformButton::ReAnalyzeDrums => Some(PanelAction::ReAnalyzeDrums),
-            WaveformButton::ReAnalyzeBass => Some(PanelAction::ReAnalyzeBass),
-            WaveformButton::ReAnalyzeSynth => Some(PanelAction::ReAnalyzeSynth),
-            WaveformButton::ReAnalyzeVocal => Some(PanelAction::ReAnalyzeVocal),
-            WaveformButton::ReImportStems => Some(PanelAction::ReImportStems),
-        }
     }
 }
 
 impl Panel for WaveformLanePanel {
     fn build(&mut self, _tree: &mut UITree, _layout: &ScreenLayout) {
-        // Pixel buffer allocation happens in repaint() based on viewport width.
-        // No UITree nodes needed — waveform is fully bitmap-rendered.
+        // Node creation happens in build_nodes() called from UIRoot,
+        // after viewport.build() provides the screen rect.
         self.dirty = true;
     }
 
     fn update(&mut self, _tree: &mut UITree) {
-        // State updates are pushed via update_overlay().
-        // Repaint is triggered by the app layer when dirty.
+        // State updates are pushed via update_overlay() and update_nodes().
     }
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
         let mut actions = Vec::new();
 
         match event {
-            UIEvent::Click { pos, .. } => {
-                // Check for button clicks
-                if let Some(button) = self.hit_test_button(pos.x, pos.y) {
-                    if let Some(action) =
-                        Self::button_to_action(button, self.stems_expanded)
-                    {
-                        actions.push(action);
-                    }
-                } else if self.has_audio {
-                    // Click without drag → scrub
+            UIEvent::Click { node_id, pos, .. } => {
+                let id = *node_id as i32;
+
+                // Button clicks (matched by node ID).
+                if id == self.remove_btn_id {
+                    actions.push(PanelAction::RemoveAudioClicked);
+                } else if id == self.expand_btn_id {
+                    actions.push(PanelAction::ExpandStemsToggled(!self.stems_expanded));
+                } else if id == self.reanalyze_ids[0] {
+                    actions.push(PanelAction::ReAnalyzeDrums);
+                } else if id == self.reanalyze_ids[1] {
+                    actions.push(PanelAction::ReAnalyzeBass);
+                } else if id == self.reanalyze_ids[2] {
+                    actions.push(PanelAction::ReAnalyzeSynth);
+                } else if id == self.reanalyze_ids[3] {
+                    actions.push(PanelAction::ReAnalyzeVocal);
+                } else if id == self.reanalyze_ids[4] {
+                    actions.push(PanelAction::ReImportStems);
+                } else if !self.has_audio {
+                    // No audio: entire lane is import target.
+                    actions.push(PanelAction::ImportAudioClicked);
+                } else {
+                    // Click on overlay (waveform area) → scrub.
                     actions.push(PanelAction::WaveformScrub(pos.x, pos.y));
                 }
             }
-            UIEvent::PointerDown { pos, .. } => {
-                if self.has_audio && self.hit_test_button(pos.x, pos.y).is_none() {
-                    // Start scrub (ImportedAudioWaveformScrubHandler.OnPointerDown)
+            UIEvent::PointerDown { node_id, pos, .. } => {
+                let id = *node_id as i32;
+                // Start scrub only on the overlay (not on buttons).
+                if id == self.overlay_id && self.has_audio {
                     self.is_scrubbing = true;
                     actions.push(PanelAction::WaveformScrub(pos.x, pos.y));
                 }
             }
-            UIEvent::HoverEnter { pos, .. } => {
-                let new_hover = self.hit_test_button(pos.x, pos.y);
-                if new_hover != self.hovered_button {
-                    self.hovered_button = new_hover;
-                    self.dirty = true;
-                }
-            }
-            UIEvent::HoverExit { .. } => {
-                if self.hovered_button.is_some() {
-                    self.hovered_button = None;
-                    self.dirty = true;
-                }
-            }
-            UIEvent::DragBegin { pos, .. } => {
-                // Start waveform drag (ImportedAudioWaveformDragHandler.OnBeginDrag)
-                if self.has_audio && self.hit_test_button(pos.x, pos.y).is_none() {
+            UIEvent::DragBegin { node_id, .. } => {
+                let id = *node_id as i32;
+                // Start waveform drag only on the overlay.
+                if id == self.overlay_id && self.has_audio {
                     self.is_dragging = true;
                     self.accumulated_beats = 0.0;
                     self.total_snapped_delta = 0.0;
@@ -549,7 +513,6 @@ impl Panel for WaveformLanePanel {
                     self.accumulated_beats += delta_beats;
 
                     // Snap: emit in whole-beat increments
-                    // Unity: `float snapped = (int)(accumulatedBeats / SnapStepBeats) * SnapStepBeats;`
                     let snapped = (self.accumulated_beats / SNAP_STEP_BEATS) as i32 as f32
                         * SNAP_STEP_BEATS;
                     if snapped.abs() >= SNAP_STEP_BEATS {
@@ -585,6 +548,14 @@ impl WaveformLanePanel {
         self.is_scrubbing || self.is_dragging
     }
 
+    /// Returns true if the given node_id belongs to this panel.
+    pub fn owns_node(&self, node_id: i32) -> bool {
+        node_id == self.overlay_id
+            || node_id == self.remove_btn_id
+            || node_id == self.expand_btn_id
+            || self.reanalyze_ids.contains(&node_id)
+    }
+
     /// Capture the pre-drag audio start beat for undo (first call only).
     pub fn set_drag_start_beat(&mut self, beat: f32) {
         if self.drag_start_beat.is_none() {
@@ -595,24 +566,6 @@ impl WaveformLanePanel {
     /// Take and clear the pre-drag start beat (called on drag end).
     pub fn take_drag_start_beat(&mut self) -> Option<f32> {
         self.drag_start_beat.take()
-    }
-
-    /// Update button hover state from continuous cursor tracking.
-    /// Called by UIRoot on every PointerAction::Move when cursor is in the lane.
-    pub fn update_hover(&mut self, local_x: f32, local_y: f32) {
-        let new_hover = self.hit_test_button(local_x, local_y);
-        if new_hover != self.hovered_button {
-            self.hovered_button = new_hover;
-            self.dirty = true;
-        }
-    }
-
-    /// Clear hover state when cursor leaves the lane.
-    pub fn clear_hover(&mut self) {
-        if self.hovered_button.is_some() {
-            self.hovered_button = None;
-            self.dirty = true;
-        }
     }
 
     /// Current pixels per beat from cached mapper state.

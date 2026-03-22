@@ -116,9 +116,17 @@ impl Application {
                 self.ui_root.stem_lanes.set_solo_state(i, self.content_state.stem_soloed[i]);
             }
             // 1g. Sync stem availability — drives Expand button visibility on waveform lane.
-            // Port of Unity: WorkspaceController sets SetStemsAvailable after stem resolution.
-            let any_stem_available = self.content_state.stem_available.iter().any(|&a| a);
+            // Port of Unity: WorkspaceController sets SetStemsAvailable when stem PATHS exist.
+            // Check project state (file paths resolved), not content_state.stem_available
+            // (which tracks loaded audio — only true AFTER expansion).
+            let any_stem_available = self.local_project.percussion_import
+                .as_ref()
+                .and_then(|p| p.stem_paths.as_ref())
+                .is_some_and(|paths| !paths.is_empty());
             self.ui_root.waveform_lane.set_stems_available(any_stem_available);
+
+            // 1h. Push visibility/text state to UITree nodes (buttons, labels).
+            self.ui_root.update_waveform_stem_nodes();
         }
 
         // 2. Process UI events and dispatch actions

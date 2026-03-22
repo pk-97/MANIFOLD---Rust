@@ -1,19 +1,18 @@
 //! Stem waveform lanes — 4 per-stem lanes (Drums, Bass, Other, Vocals)
 //! managed as a collapsible group.
 //!
-//! Mechanical translation of:
-//! - `Assets/Scripts/UI/Timeline/StemWaveformLane.cs` (312 lines)
-//! - `Assets/Scripts/UI/Timeline/StemLaneGroup.cs` (145 lines)
+//! Hybrid bitmap + UITree node architecture:
+//! - **Bitmap**: stem waveform bars, playhead, lane backgrounds
+//! - **UITree nodes**: transparent scrub overlays, mute/solo buttons, stem name labels
 //!
-//! In Unity these are positioned via RectTransforms. In Rust we paint
-//! all 4 lanes into a single pixel buffer.
+//! Unity: `StemWaveformLane` + `StemLaneGroup`.
 
 use crate::bitmap_painter::fill_rect;
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
-use crate::node::Color32;
+use crate::node::{Color32, Rect, UIStyle, TextAlign, FontWeight};
 use crate::tree::UITree;
 use crate::waveform_painter;
 use crate::waveform_renderer::WaveformRenderer;
@@ -26,7 +25,7 @@ pub const STEM_COUNT: usize = 4;
 /// Stem names (Unity: StemAudioController.StemNames).
 pub const STEM_NAMES: [&str; STEM_COUNT] = ["Drums", "Bass", "Other", "Vocals"];
 
-/// Per-stem background colors (Unity: StemLaneGroup.StemBackgroundColors, UIConstants.cs lines 247-250).
+/// Per-stem background colors (Unity: StemLaneGroup.StemBackgroundColors).
 const STEM_BG_COLORS: [Color32; STEM_COUNT] = [
     color::STEM_LANE_BG_DRUMS,
     color::STEM_LANE_BG_BASS,
@@ -38,17 +37,37 @@ const STEM_BG_COLORS: [Color32; STEM_COUNT] = [
 const PLAYHEAD_COLOR: Color32 = Color32::new(217, 64, 56, 217);
 
 // ── Mute/Solo button layout ──
-const MUTE_SOLO_BTN_W: i32 = 20;
-const MUTE_SOLO_BTN_H: i32 = 16;
-const HEADER_X: i32 = 4;
-const BUTTON_SPACING: i32 = 2;
+const MUTE_SOLO_BTN_W: f32 = 20.0;
+const MUTE_SOLO_BTN_H: f32 = 16.0;
+const HEADER_X: f32 = 4.0;
+const BUTTON_SPACING: f32 = 2.0;
+
+/// UITree node IDs for a single stem lane.
+#[derive(Clone, Copy)]
+struct StemLaneNodeIds {
+    overlay_id: i32,
+    name_label_id: i32,
+    mute_btn_id: i32,
+    solo_btn_id: i32,
+}
+
+impl Default for StemLaneNodeIds {
+    fn default() -> Self {
+        Self {
+            overlay_id: -1,
+            name_label_id: -1,
+            mute_btn_id: -1,
+            solo_btn_id: -1,
+        }
+    }
+}
 
 /// State for a single stem lane.
 ///
 /// Unity: `StemWaveformLane` (312 lines).
 struct StemLane {
     renderer: WaveformRenderer,
-    #[allow(dead_code)] // used when stem lane events reference the index
+    #[allow(dead_code)]
     stem_index: usize,
     is_muted: bool,
     is_soloed: bool,
@@ -84,13 +103,8 @@ pub struct StemLaneGroupPanel {
     scroll_offset_x: f32,
     bpm: f32,
 
-    // ── Hover tracking (used for button highlight feedback) ──
-    #[allow(dead_code)]
-    hovered_stem: Option<usize>,
-    #[allow(dead_code)]
-    hovered_mute: bool,
-    #[allow(dead_code)]
-    hovered_solo: bool,
+    // ── UITree node IDs ──
+    lane_nodes: [StemLaneNodeIds; STEM_COUNT],
 }
 
 impl Default for StemLaneGroupPanel {
@@ -117,9 +131,7 @@ impl StemLaneGroupPanel {
             playhead_beat: 0.0,
             scroll_offset_x: 0.0,
             bpm: 120.0,
-            hovered_stem: None,
-            hovered_mute: false,
-            hovered_solo: false,
+            lane_nodes: [StemLaneNodeIds::default(); STEM_COUNT],
         }
     }
 
@@ -202,6 +214,120 @@ impl StemLaneGroupPanel {
         }
     }
 
+    /// Build UITree nodes for interactive elements (overlays + buttons + labels).
+    /// Called from UIRoot after viewport.build() so screen_rect is available.
+    pub fn build_nodes(&mut self, tree: &mut UITree, screen_rect: Rect) {
+        let lane_h = color::STEM_LANE_HEIGHT;
+
+        #[allow(clippy::needless_range_loop)] // index used for lane_nodes[] and positioning
+        for i in 0..STEM_COUNT {
+            let lane_y = screen_rect.y + i as f32 * lane_h;
+
+            // Transparent scrub overlay covering entire stem lane.
+            self.lane_nodes[i].overlay_id = tree.add_button(
+                -1,
+                screen_rect.x,
+                lane_y,
+                screen_rect.width,
+                lane_h,
+                UIStyle { bg_color: Color32::TRANSPARENT, ..UIStyle::default() },
+                "",
+            ) as i32;
+
+            // Stem name label (top-left header area).
+            // Unity: fontSize=9, MiddleLeft, color=(0.65, 0.65, 0.65).
+            self.lane_nodes[i].name_label_id = tree.add_label(
+                -1,
+                screen_rect.x + HEADER_X,
+                lane_y + 2.0,
+                52.0,
+                lane_h / 2.0 - 2.0,
+                STEM_NAMES[i],
+                UIStyle {
+                    text_color: Color32::new(166, 166, 166, 255),
+                    font_size: color::FONT_SMALL,
+                    font_weight: FontWeight::Regular,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                },
+            ) as i32;
+
+            // Mute button ("M") — bottom half of header area.
+            let btn_y = lane_y + lane_h / 2.0 + 1.0;
+            self.lane_nodes[i].mute_btn_id = tree.add_button(
+                -1,
+                screen_rect.x + HEADER_X,
+                btn_y,
+                MUTE_SOLO_BTN_W,
+                MUTE_SOLO_BTN_H,
+                mute_btn_style(false),
+                "M",
+            ) as i32;
+
+            // Solo button ("S") — next to mute.
+            self.lane_nodes[i].solo_btn_id = tree.add_button(
+                -1,
+                screen_rect.x + HEADER_X + MUTE_SOLO_BTN_W + BUTTON_SPACING,
+                btn_y,
+                MUTE_SOLO_BTN_W,
+                MUTE_SOLO_BTN_H,
+                solo_btn_style(false),
+                "S",
+            ) as i32;
+        }
+
+        // Initially hidden (shown when expanded).
+        self.apply_node_visibility(tree);
+    }
+
+    /// Update UITree node visibility and mute/solo colors each frame.
+    pub fn update_nodes(&mut self, tree: &mut UITree) {
+        self.apply_node_visibility(tree);
+
+        // Update mute/solo button colors based on state.
+        for (i, lane) in self.lanes.iter().enumerate() {
+            let ids = &self.lane_nodes[i];
+            if ids.mute_btn_id >= 0 {
+                tree.set_style(ids.mute_btn_id as u32, mute_btn_style(lane.is_muted));
+            }
+            if ids.solo_btn_id >= 0 {
+                tree.set_style(ids.solo_btn_id as u32, solo_btn_style(lane.is_soloed));
+            }
+        }
+    }
+
+    fn apply_node_visibility(&self, tree: &mut UITree) {
+        for ids in &self.lane_nodes {
+            let vis = self.expanded;
+            if ids.overlay_id >= 0 {
+                tree.set_visible(ids.overlay_id as u32, vis);
+            }
+            if ids.name_label_id >= 0 {
+                tree.set_visible(ids.name_label_id as u32, vis);
+            }
+            if ids.mute_btn_id >= 0 {
+                tree.set_visible(ids.mute_btn_id as u32, vis);
+            }
+            if ids.solo_btn_id >= 0 {
+                tree.set_visible(ids.solo_btn_id as u32, vis);
+            }
+        }
+    }
+
+    /// Returns true if the given node_id belongs to this panel.
+    pub fn owns_node(&self, node_id: i32) -> bool {
+        for ids in &self.lane_nodes {
+            if node_id == ids.overlay_id
+                || node_id == ids.name_label_id
+                || node_id == ids.mute_btn_id
+                || node_id == ids.solo_btn_id
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Update overlay state each frame.
     ///
     /// Unity: `UpdateOverlay(...)` (lines 119-137).
@@ -231,7 +357,7 @@ impl StemLaneGroupPanel {
         }
     }
 
-    /// Repaint the pixel buffer for all 4 stem lanes.
+    /// Repaint the pixel buffer (waveform visuals + playhead, no buttons).
     pub fn repaint(&mut self, viewport_width: usize, mapper: &CoordinateMapper) {
         if !self.expanded {
             self.buffer_width = 0;
@@ -258,7 +384,7 @@ impl StemLaneGroupPanel {
         for (i, lane) in self.lanes.iter().enumerate() {
             let y_offset = (i * lane_h) as i32;
 
-            // Lane background (Unity: StemWaveformLane.BuildUI laneBg.color = backgroundColor)
+            // Lane background
             fill_rect(
                 &mut self.pixel_buffer,
                 buf_w,
@@ -272,16 +398,9 @@ impl StemLaneGroupPanel {
 
             // Draw waveform if this stem has audio
             if lane.renderer.is_ready() && lane.renderer.clip_duration_seconds() > 0.0 {
-                // Stem duration in beats
-                // Unity: StemWaveformLane.UpdateOverlay computes stemDurationBeats
-                // using PlaybackController.TimelineBeatToTime/TimelineTimeToBeat.
-                // We approximate using the same beat-per-second ratio as the master.
                 let waveform_x =
                     mapper.beat_to_pixel_absolute(self.waveform_start_beat.max(0.0));
 
-                // For stems, we need to compute beat duration from seconds.
-                // The stem's actual audio duration determines its beat span.
-                // Use a simple duration estimate: same proportional width as master
                 let stem_width = mapper.beat_duration_to_width(
                     self.waveform_duration_beats_for_stem(i),
                 );
@@ -328,38 +447,13 @@ impl StemLaneGroupPanel {
                 );
             }
 
-            // Draw mute/solo buttons (Unity: StemWaveformLane header overlay)
-            let btn_y = y_offset + (lane_h as i32 / 2) + 1; // bottom half
-            waveform_painter::draw_mute_solo_button(
-                &mut self.pixel_buffer,
-                buf_w,
-                buf_h,
-                HEADER_X,
-                btn_y,
-                MUTE_SOLO_BTN_W,
-                MUTE_SOLO_BTN_H,
-                lane.is_muted,
-                true, // is_mute
-            );
-            waveform_painter::draw_mute_solo_button(
-                &mut self.pixel_buffer,
-                buf_w,
-                buf_h,
-                HEADER_X + MUTE_SOLO_BTN_W + BUTTON_SPACING,
-                btn_y,
-                MUTE_SOLO_BTN_W,
-                MUTE_SOLO_BTN_H,
-                lane.is_soloed,
-                false, // is_solo
-            );
+            // Mute/Solo buttons are UITree nodes — not drawn in the bitmap.
         }
 
         self.dirty = false;
     }
 
     /// Compute beat duration for a stem from its audio length.
-    /// Unity: StemWaveformLane.UpdateOverlay uses PlaybackController.TimelineBeatToTime/
-    /// TimelineTimeToBeat. We convert seconds to beats using BPM.
     fn waveform_duration_beats_for_stem(&self, index: usize) -> f32 {
         if index >= STEM_COUNT {
             return 0.0;
@@ -368,35 +462,7 @@ impl StemLaneGroupPanel {
         if dur_sec <= 0.0 || self.bpm <= 0.0 {
             return 0.0;
         }
-        // seconds_to_beats: dur_sec * (bpm / 60)
         dur_sec * (self.bpm / 60.0)
-    }
-
-    /// Hit-test a position against mute/solo buttons.
-    fn hit_test_button(&self, local_x: f32, local_y: f32) -> Option<(usize, bool)> {
-        let lane_h = color::STEM_LANE_HEIGHT;
-        let stem_index = (local_y / lane_h) as usize;
-        if stem_index >= STEM_COUNT {
-            return None;
-        }
-
-        let lane_local_y = local_y - stem_index as f32 * lane_h;
-        let btn_y = lane_h / 2.0 + 1.0;
-
-        if lane_local_y >= btn_y && lane_local_y < btn_y + MUTE_SOLO_BTN_H as f32 {
-            // Mute button
-            if local_x >= HEADER_X as f32
-                && local_x < (HEADER_X + MUTE_SOLO_BTN_W) as f32
-            {
-                return Some((stem_index, true)); // is_mute
-            }
-            // Solo button
-            let solo_x = (HEADER_X + MUTE_SOLO_BTN_W + BUTTON_SPACING) as f32;
-            if local_x >= solo_x && local_x < solo_x + MUTE_SOLO_BTN_W as f32 {
-                return Some((stem_index, false)); // is_solo
-            }
-        }
-        None
     }
 }
 
@@ -406,7 +472,7 @@ impl Panel for StemLaneGroupPanel {
     }
 
     fn update(&mut self, _tree: &mut UITree) {
-        // State updates pushed via update_overlay().
+        // State updates pushed via update_overlay() and update_nodes().
     }
 
     fn handle_event(&mut self, event: &UIEvent, _tree: &UITree) -> Vec<PanelAction> {
@@ -416,29 +482,71 @@ impl Panel for StemLaneGroupPanel {
         }
 
         match event {
-            UIEvent::Click { pos, .. } => {
-                if let Some((stem_index, is_mute)) = self.hit_test_button(pos.x, pos.y) {
-                    if is_mute {
-                        actions.push(PanelAction::StemMuteToggled(stem_index));
-                    } else {
-                        actions.push(PanelAction::StemSoloToggled(stem_index));
+            UIEvent::Click { node_id, pos, .. } => {
+                let id = *node_id as i32;
+                // Check mute/solo buttons by node ID.
+                for (i, ids) in self.lane_nodes.iter().enumerate() {
+                    if id == ids.mute_btn_id {
+                        actions.push(PanelAction::StemMuteToggled(i));
+                        return actions;
                     }
-                } else {
-                    // Scrub (same as master lane)
-                    actions.push(PanelAction::WaveformScrub(pos.x, pos.y));
+                    if id == ids.solo_btn_id {
+                        actions.push(PanelAction::StemSoloToggled(i));
+                        return actions;
+                    }
                 }
+                // Click on overlay → scrub.
+                actions.push(PanelAction::WaveformScrub(pos.x, pos.y));
             }
-            UIEvent::PointerDown { pos, .. } => {
-                if self.hit_test_button(pos.x, pos.y).is_none() {
-                    actions.push(PanelAction::WaveformScrub(pos.x, pos.y));
+            UIEvent::PointerDown { node_id, pos, .. } => {
+                let id = *node_id as i32;
+                // Scrub only on overlay nodes (not on buttons).
+                for ids in &self.lane_nodes {
+                    if id == ids.overlay_id {
+                        actions.push(PanelAction::WaveformScrub(pos.x, pos.y));
+                        return actions;
+                    }
                 }
             }
             UIEvent::Drag { pos, .. } => {
+                // Continuous scrub while dragging.
                 actions.push(PanelAction::WaveformScrub(pos.x, pos.y));
             }
             _ => {}
         }
 
         actions
+    }
+}
+
+/// Button style for mute toggle.
+fn mute_btn_style(active: bool) -> UIStyle {
+    let bg = if active { color::MUTE_BTN_ACTIVE } else { color::MUTE_SOLO_BTN_INACTIVE };
+    UIStyle {
+        bg_color: bg,
+        hover_bg_color: bg, // manual color control, no hover transition
+        pressed_bg_color: bg,
+        text_color: Color32::new(255, 255, 255, 255),
+        font_size: color::FONT_SMALL,
+        font_weight: FontWeight::Bold,
+        corner_radius: color::BUTTON_RADIUS,
+        text_align: TextAlign::Center,
+        ..UIStyle::default()
+    }
+}
+
+/// Button style for solo toggle.
+fn solo_btn_style(active: bool) -> UIStyle {
+    let bg = if active { color::SOLO_BTN_ACTIVE } else { color::MUTE_SOLO_BTN_INACTIVE };
+    UIStyle {
+        bg_color: bg,
+        hover_bg_color: bg,
+        pressed_bg_color: bg,
+        text_color: Color32::new(255, 255, 255, 255),
+        font_size: color::FONT_SMALL,
+        font_weight: FontWeight::Bold,
+        corner_radius: color::BUTTON_RADIUS,
+        text_align: TextAlign::Center,
+        ..UIStyle::default()
     }
 }

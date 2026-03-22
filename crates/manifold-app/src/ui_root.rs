@@ -202,6 +202,20 @@ impl UIRoot {
     fn build_scroll_panels(&mut self) {
         self.layer_headers.build(&mut self.tree, &self.layout);
         self.viewport.build(&mut self.tree, &self.layout);
+
+        // Waveform & stem lane UITree nodes — must be after viewport.build()
+        // so waveform_lane_rect()/stem_lanes_rect() have valid rects.
+        {
+            let wf_rect = self.viewport.waveform_lane_rect();
+            if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
+                self.waveform_lane.build_nodes(&mut self.tree, wf_rect);
+            }
+            let sl_rect = self.viewport.stem_lanes_rect();
+            if sl_rect.width > 0.0 && sl_rect.height > 0.0 {
+                self.stem_lanes.build_nodes(&mut self.tree, sl_rect);
+            }
+        }
+
         self.perf_hud.build(&mut self.tree, &self.layout);
 
         self.dropdown.set_screen_size(self.screen_width, self.screen_height);
@@ -239,18 +253,7 @@ impl UIRoot {
         if action == PointerAction::Move {
             let mut hover_actions = self.viewport.update_hover_at(pos);
             self.cursor_hover_actions.append(&mut hover_actions);
-
-            // Update waveform button hover state on cursor move.
-            // Bitmap panels have no UITree nodes so HoverEnter/HoverExit won't fire
-            // for individual buttons — track hover directly on every pointer move.
-            if !self.waveform_lane.is_interacting() {
-                let wf_rect = self.viewport.waveform_lane_rect();
-                if wf_rect.width > 0.0 && wf_rect.height > 0.0 && wf_rect.contains(pos) {
-                    self.waveform_lane.update_hover(pos.x - wf_rect.x, pos.y - wf_rect.y);
-                } else {
-                    self.waveform_lane.clear_hover();
-                }
-            }
+            // Waveform/stem button hover is handled by UITree node hover_bg_color.
         }
     }
 
@@ -384,7 +387,8 @@ impl UIRoot {
             actions.append(&mut panel_actions);
 
             // Waveform lane & stem lanes: route events with local coordinate conversion.
-            // Bitmap-rendered panels have no UITree nodes — hit-test against rects.
+            // These panels use UITree nodes for buttons/overlays (providing valid hit_ids)
+            // but still route by rect containment to handle local coordinate conversion.
             {
                 let wf_rect = self.viewport.waveform_lane_rect();
                 let sl_rect = if self.stem_lanes.is_expanded() {
@@ -844,5 +848,13 @@ impl UIRoot {
         self.inspector.update(&mut self.tree);
         self.viewport.update(&mut self.tree);
         self.perf_hud.update(&mut self.tree);
+    }
+
+    /// Push waveform/stem lane node visibility and style to UITree.
+    /// Called from app_render after syncing mute/solo/stems_available state.
+    /// Separate from update() because app_render must sync state first.
+    pub fn update_waveform_stem_nodes(&mut self) {
+        self.waveform_lane.update_nodes(&mut self.tree);
+        self.stem_lanes.update_nodes(&mut self.tree);
     }
 }
