@@ -49,10 +49,13 @@ impl GpuContext {
         adapter: &wgpu::Adapter,
         label: &str,
     ) -> (wgpu::Device, wgpu::Queue) {
-        // Request TIMESTAMP_QUERY if the adapter supports it (for GPU profiling).
+        // Request timestamp query features if the adapter supports them (for GPU profiling).
         let mut features = wgpu::Features::empty();
         if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             features |= wgpu::Features::TIMESTAMP_QUERY;
+        }
+        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS) {
+            features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         }
 
         adapter

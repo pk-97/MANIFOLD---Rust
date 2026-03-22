@@ -57,8 +57,10 @@ impl GpuProfiler {
     /// Create a new GPU profiler. Returns None if the adapter doesn't support
     /// timestamp queries.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, adapter: &wgpu::Adapter) -> Option<Self> {
-        if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
-            log::warn!("[GpuProfiler] adapter does not support TIMESTAMP_QUERY");
+        if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY)
+            || !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
+        {
+            log::warn!("[GpuProfiler] adapter missing TIMESTAMP_QUERY or TIMESTAMP_QUERY_INSIDE_ENCODERS");
             return None;
         }
 
