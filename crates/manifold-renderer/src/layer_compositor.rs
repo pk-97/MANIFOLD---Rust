@@ -39,13 +39,25 @@ struct BlendUniforms {
     invert_colors: f32,
 }
 
+/// Maximum blend passes per frame (layers + multi-clip sub-passes + master effects).
+const MAX_BLEND_PASSES: u32 = 64;
+
 /// Shared GPU resources for blend operations. Extracted from the compositor
 /// so they can be borrowed independently from ping-pong buffers.
+///
+/// Uses a ring buffer with dynamic uniform offsets so each blend pass within
+/// a frame reads its own uniforms. Without this, `queue.write_buffer` batches
+/// all writes before GPU execution, causing every pass to read the LAST
+/// written value — breaking per-layer blend modes.
 struct BlendResources {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     uniform_buffer: wgpu::Buffer,
+    /// Alignment-padded stride per slot (>= minUniformBufferOffsetAlignment).
+    slot_stride: u32,
+    /// Next slot index for the current frame.
+    next_slot: u32,
 }
 
 impl BlendResources {
@@ -67,8 +79,10 @@ impl BlendResources {
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<BlendUniforms>() as u64,
+                        ),
                     },
                     count: None,
                 },
@@ -143,19 +157,30 @@ impl BlendResources {
             ..Default::default()
         });
 
+        let min_align = device.limits().min_uniform_buffer_offset_alignment;
+        let raw = std::mem::size_of::<BlendUniforms>() as u32;
+        let slot_stride = raw.div_ceil(min_align) * min_align;
+
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Blend Uniforms"),
-            size: std::mem::size_of::<BlendUniforms>() as u64,
+            label: Some("Blend Uniforms Ring"),
+            size: (slot_stride * MAX_BLEND_PASSES) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        Self { pipeline, bind_group_layout, sampler, uniform_buffer }
+        Self { pipeline, bind_group_layout, sampler, uniform_buffer, slot_stride, next_slot: 0 }
+    }
+
+    /// Reset the ring buffer slot counter at the start of each frame.
+    fn reset_slots(&mut self) {
+        self.next_slot = 0;
     }
 
     /// Execute a blend pass: reads source + blend textures, writes to target.
+    /// Each call writes to a unique slot in the ring buffer so multiple blend
+    /// passes within a single frame each read their own uniforms.
     fn blend_pass(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
@@ -165,7 +190,10 @@ impl BlendResources {
         uniforms: &BlendUniforms,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(uniforms));
+        let slot = self.next_slot;
+        self.next_slot += 1;
+        let offset = (slot * self.slot_stride) as u64;
+        queue.write_buffer(&self.uniform_buffer, offset, bytemuck::bytes_of(uniforms));
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Blend BG"),
@@ -173,7 +201,11 @@ impl BlendResources {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.uniform_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.uniform_buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(self.slot_stride as u64),
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -209,7 +241,7 @@ impl BlendResources {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(0, &bind_group, &[offset as u32]);
             pass.draw(0..3, 0..1);
         }
     }
@@ -402,6 +434,9 @@ impl LayerCompositor {
         let width = self.main.width();
         let height = self.main.height();
         let aspect = width as f32 / height as f32;
+
+        // Reset blend uniform ring buffer for this frame
+        self.blend.reset_slots();
 
         // Clear main to opaque black
         self.main.clear_source(encoder, true);
