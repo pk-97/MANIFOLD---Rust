@@ -39,8 +39,8 @@ struct BlendUniforms {
     invert_colors: f32,
 }
 
-/// Maximum blend passes per frame (layers + multi-clip sub-passes + master effects).
-const MAX_BLEND_PASSES: u32 = 64;
+/// Initial capacity for the blend uniform ring buffer (grows dynamically).
+const INITIAL_BLEND_SLOTS: u32 = 32;
 
 /// Shared GPU resources for blend operations. Extracted from the compositor
 /// so they can be borrowed independently from ping-pong buffers.
@@ -49,6 +49,9 @@ const MAX_BLEND_PASSES: u32 = 64;
 /// a frame reads its own uniforms. Without this, `queue.write_buffer` batches
 /// all writes before GPU execution, causing every pass to read the LAST
 /// written value — breaking per-layer blend modes.
+///
+/// The buffer grows dynamically when a frame needs more slots than currently
+/// allocated, so there is no hard limit on project complexity.
 struct BlendResources {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -56,8 +59,12 @@ struct BlendResources {
     uniform_buffer: wgpu::Buffer,
     /// Alignment-padded stride per slot (>= minUniformBufferOffsetAlignment).
     slot_stride: u32,
+    /// Number of slots currently allocated in the buffer.
+    capacity: u32,
     /// Next slot index for the current frame.
     next_slot: u32,
+    /// High-water mark from the previous frame (used to grow the buffer).
+    prev_frame_slots: u32,
 }
 
 impl BlendResources {
@@ -161,19 +168,36 @@ impl BlendResources {
         let raw = std::mem::size_of::<BlendUniforms>() as u32;
         let slot_stride = raw.div_ceil(min_align) * min_align;
 
+        let capacity = INITIAL_BLEND_SLOTS;
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Blend Uniforms Ring"),
-            size: (slot_stride * MAX_BLEND_PASSES) as u64,
+            size: (slot_stride * capacity) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        Self { pipeline, bind_group_layout, sampler, uniform_buffer, slot_stride, next_slot: 0 }
+        Self {
+            pipeline, bind_group_layout, sampler, uniform_buffer,
+            slot_stride, capacity, next_slot: 0, prev_frame_slots: 0,
+        }
     }
 
-    /// Reset the ring buffer slot counter at the start of each frame.
-    fn reset_slots(&mut self) {
+    /// Reset the ring buffer for a new frame. Grows the buffer if the
+    /// previous frame needed more slots than currently allocated.
+    fn reset_slots(&mut self, device: &wgpu::Device) {
+        self.prev_frame_slots = self.next_slot;
         self.next_slot = 0;
+
+        if self.prev_frame_slots > self.capacity {
+            // Double capacity to amortize growth (minimum: what we actually needed)
+            self.capacity = (self.capacity * 2).max(self.prev_frame_slots);
+            self.uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Blend Uniforms Ring"),
+                size: (self.slot_stride * self.capacity) as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
     }
 
     /// Execute a blend pass: reads source + blend textures, writes to target.
@@ -192,6 +216,18 @@ impl BlendResources {
     ) {
         let slot = self.next_slot;
         self.next_slot += 1;
+
+        // Grow buffer mid-frame if capacity exceeded
+        if slot >= self.capacity {
+            self.capacity = (self.capacity * 2).max(slot + 1);
+            self.uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Blend Uniforms Ring"),
+                size: (self.slot_stride * self.capacity) as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+
         let offset = (slot * self.slot_stride) as u64;
         queue.write_buffer(&self.uniform_buffer, offset, bytemuck::bytes_of(uniforms));
 
@@ -436,7 +472,7 @@ impl LayerCompositor {
         let aspect = width as f32 / height as f32;
 
         // Reset blend uniform ring buffer for this frame
-        self.blend.reset_slots();
+        self.blend.reset_slots(device);
 
         // Clear main to opaque black
         self.main.clear_source(encoder, true);
