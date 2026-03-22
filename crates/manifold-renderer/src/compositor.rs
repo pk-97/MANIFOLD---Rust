@@ -1,11 +1,13 @@
 use crate::layer_compositor::CompositeClipDescriptor;
 use crate::tonemap::TonemapSettings;
+use manifold_core::LayerId;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::BlendMode;
 
 /// Per-layer metadata passed to the compositor.
 pub struct CompositeLayerDescriptor<'a> {
     pub layer_index: i32,
+    pub layer_id: LayerId,
     pub blend_mode: BlendMode,
     pub opacity: f32,
     pub is_muted: bool,

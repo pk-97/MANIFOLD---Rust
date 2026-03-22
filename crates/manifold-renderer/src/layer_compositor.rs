@@ -287,6 +287,13 @@ fn clip_id_owner_key(clip_id: &str) -> i64 {
     hasher.finish() as i64
 }
 
+fn layer_id_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
+    let mut hasher = DefaultHasher::new();
+    layer_id.hash(&mut hasher);
+    // Ensure non-zero and distinct from clip keys by setting high bit
+    (hasher.finish() | (1 << 63)) as i64
+}
+
 /// Check if an effect slice has any enabled effects with non-zero amount.
 /// Unity ref: CompositorStack.cs lines 965-974 — checks enabled && GetParam(0) > 0.
 fn has_enabled_effects(effects: &[EffectInstance]) -> bool {
@@ -546,7 +553,7 @@ impl LayerCompositor {
                             dt: frame.dt,
                             width,
                             height,
-                            owner_key: (layer_idx as i64) + 1,
+                            owner_key: layer_desc.map_or(0, |ld| layer_id_owner_key(&ld.layer_id)),
                             is_clip_level: false, edge_stretch_width: 0.5625,
                             frame_count: frame.frame_count as i64,
                         };

@@ -250,6 +250,7 @@ impl ContentPipeline {
         let layer_descs: Vec<CompositeLayerDescriptor> = layers.iter().map(|layer| {
             CompositeLayerDescriptor {
                 layer_index: layer.index,
+                layer_id: layer.layer_id.clone(),
                 blend_mode: layer.default_blend_mode,
                 opacity: layer.opacity,
                 is_muted: layer.is_muted,
