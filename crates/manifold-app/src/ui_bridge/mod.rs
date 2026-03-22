@@ -154,6 +154,7 @@ pub fn dispatch(
         | PanelAction::BrowserSearchClicked
         | PanelAction::RemoveEffect(_)
         | PanelAction::EffectReorder(..)
+        | PanelAction::EffectReorderGroup(..)
         | PanelAction::GenTypeClicked(_)
         | PanelAction::GenParamSnapshot(_)
         | PanelAction::GenParamChanged(..)

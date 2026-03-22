@@ -426,6 +426,8 @@ pub struct LayerHeaderPanel {
     // Active layer (pushed from app layer each frame)
     active_layer: Option<usize>,
     cached_active_layer: Option<usize>,
+    // Pending multi-select active flags (applied in update())
+    pending_active_layers: Option<Vec<bool>>,
 
     // Screen-space origin of the layer controls panel
     panel_origin: Vec2,
@@ -453,6 +455,7 @@ impl LayerHeaderPanel {
             cached_selected: Vec::new(),
             active_layer: None,
             cached_active_layer: None,
+            pending_active_layers: None,
             panel_origin: Vec2::ZERO,
             panel_width: 0.0,
             scroll_y_px: 0.0,
@@ -486,6 +489,8 @@ impl LayerHeaderPanel {
     pub fn set_active_layers(&mut self, active_layers: &[bool]) {
         // Find the first active layer as the primary
         self.active_layer = active_layers.iter().position(|&a| a);
+        // Store full multi-select state for visual update in update()
+        self.pending_active_layers = Some(active_layers.to_vec());
     }
 
     // ── Accessors ───────────────────────────────────────────────────
@@ -1104,7 +1109,16 @@ impl Panel for LayerHeaderPanel {
     }
 
     fn update(&mut self, tree: &mut UITree) {
-        // Dirty-check active layer and update selection highlighting
+        // Multi-select: apply pending active layer flags
+        if let Some(flags) = self.pending_active_layers.take() {
+            for (i, &active) in flags.iter().enumerate() {
+                self.set_selection(tree, i, active);
+            }
+            self.cached_active_layer = self.active_layer;
+            return;
+        }
+
+        // Single active layer fallback (dirty-check)
         if self.active_layer != self.cached_active_layer {
             let old = self.cached_active_layer;
             let new = self.active_layer;

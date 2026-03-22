@@ -1273,13 +1273,14 @@ impl ApplicationHandler for Application {
 
                                     // Track which panel has focus for context-sensitive shortcuts.
                                     // Matches Unity's InputHandler.inspectorHasFocus.
+                                    // Any click outside inspector clears focus and effect selection
+                                    // — layer headers, timeline tracks, transport bar, etc.
                                     let inspector_rect = self.ui_root.layout.inspector();
-                                    let timeline_rect = self.ui_root.layout.timeline_tracks();
-                                    if inspector_rect.contains(self.cursor_pos) {
-                                        self.input_handler.inspector_has_focus = true;
-                                    } else if timeline_rect.contains(self.cursor_pos) {
-                                        self.input_handler.inspector_has_focus = false;
+                                    let in_inspector = inspector_rect.contains(self.cursor_pos);
+                                    if !in_inspector && self.input_handler.inspector_has_focus {
+                                        self.ui_root.inspector.clear_effect_selection();
                                     }
+                                    self.input_handler.inspector_has_focus = in_inspector;
 
                                     // If a dropdown is open and the click lands outside it,
                                     // dismiss the dropdown and consume the event so that the

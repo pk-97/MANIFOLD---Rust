@@ -17,7 +17,7 @@ pub(super) fn dispatch_layer(
     project: &mut Project,
     content_tx: &crossbeam_channel::Sender<crate::content_command::ContentCommand>,
     content_state: &crate::content_state::ContentState,
-    _ui: &mut UIRoot,
+    ui: &mut UIRoot,
     selection: &mut SelectionState,
     active_layer: &mut Option<LayerId>,
 ) -> DispatchResult {
@@ -25,27 +25,55 @@ pub(super) fn dispatch_layer(
     match action {
         // ── Layer operations ───────────────────────────────────────
         PanelAction::ToggleMute(idx) => {
-            if let Some(layer) = project.timeline.layers.get_mut(*idx) {
-                layer.is_muted = !layer.is_muted;
-            }
-            let id = project.timeline.layers.get(*idx)
+            // If the clicked layer is part of a multi-selection, apply to all selected layers
+            let clicked_id = project.timeline.layers.get(*idx)
                 .map(|l| l.layer_id.clone()).unwrap_or_default();
+            let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
+                && selection.is_layer_selected(&clicked_id)
+            {
+                selection.selected_layer_ids.iter().cloned().collect()
+            } else {
+                vec![clicked_id]
+            };
+            // Determine new mute state from clicked layer (toggle)
+            let new_muted = project.timeline.layers.get(*idx)
+                .map(|l| !l.is_muted).unwrap_or(true);
+            for id in &target_ids {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
+                    layer.is_muted = new_muted;
+                }
+            }
             ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
-                if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id) {
-                    layer.is_muted = !layer.is_muted;
+                for id in &target_ids {
+                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(id) {
+                        layer.is_muted = new_muted;
+                    }
                 }
             })));
             DispatchResult::handled()
         }
         PanelAction::ToggleSolo(idx) => {
-            if let Some(layer) = project.timeline.layers.get_mut(*idx) {
-                layer.is_solo = !layer.is_solo;
-            }
-            let id = project.timeline.layers.get(*idx)
+            let clicked_id = project.timeline.layers.get(*idx)
                 .map(|l| l.layer_id.clone()).unwrap_or_default();
+            let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
+                && selection.is_layer_selected(&clicked_id)
+            {
+                selection.selected_layer_ids.iter().cloned().collect()
+            } else {
+                vec![clicked_id]
+            };
+            let new_solo = project.timeline.layers.get(*idx)
+                .map(|l| !l.is_solo).unwrap_or(true);
+            for id in &target_ids {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
+                    layer.is_solo = new_solo;
+                }
+            }
             ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
-                if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id) {
-                    layer.is_solo = !layer.is_solo;
+                for id in &target_ids {
+                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(id) {
+                        layer.is_solo = new_solo;
+                    }
                 }
             })));
             DispatchResult::handled()
@@ -56,6 +84,9 @@ pub(super) fn dispatch_layer(
                 .map(|l| l.layer_id.clone())
                 .unwrap_or_default();
             *active_layer = Some(layer_id.clone());
+
+            // Clear effect selection when switching focus to layer headers
+            ui.inspector.clear_effect_selection();
 
             {
                 if modifiers.shift {
@@ -77,14 +108,27 @@ pub(super) fn dispatch_layer(
             DispatchResult::handled()
         }
         PanelAction::ChevronClicked(idx) => {
-            if let Some(layer) = project.timeline.layers.get_mut(*idx) {
-                layer.is_collapsed = !layer.is_collapsed;
-            }
-            let id = project.timeline.layers.get(*idx)
+            let clicked_id = project.timeline.layers.get(*idx)
                 .map(|l| l.layer_id.clone()).unwrap_or_default();
+            let target_ids: Vec<LayerId> = if selection.selected_layer_ids.len() > 1
+                && selection.is_layer_selected(&clicked_id)
+            {
+                selection.selected_layer_ids.iter().cloned().collect()
+            } else {
+                vec![clicked_id]
+            };
+            let new_collapsed = project.timeline.layers.get(*idx)
+                .map(|l| !l.is_collapsed).unwrap_or(true);
+            for id in &target_ids {
+                if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(id) {
+                    layer.is_collapsed = new_collapsed;
+                }
+            }
             ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
-                if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&id) {
-                    layer.is_collapsed = !layer.is_collapsed;
+                for id in &target_ids {
+                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(id) {
+                        layer.is_collapsed = new_collapsed;
+                    }
                 }
             })));
             DispatchResult::structural()
@@ -165,46 +209,80 @@ pub(super) fn dispatch_layer(
         }
         PanelAction::LayerDragEnded(from, to) => {
             // From Unity LayerHeaderPanel.HandleDragEnd + ReorderLayerCommand.
-            // Atomically reorder layers and update parent_layer_id when moving into/out of groups.
+            // Supports multi-select: if dragged layer is part of a selection,
+            // all selected layers move as a group.
             if from != to {
-                {
-                    let old_order = project.timeline.layers.clone();
-                    let mut new_order = old_order.clone();
+                let dragged_id = project.timeline.layers.get(*from)
+                    .map(|l| l.layer_id.clone()).unwrap_or_default();
+                let is_multi = selection.selected_layer_ids.len() > 1
+                    && selection.is_layer_selected(&dragged_id);
 
-                    if *from < new_order.len() && *to <= new_order.len() {
-                        let layer = new_order.remove(*from);
-                        let insert_at = if *to > *from { to.saturating_sub(1) } else { *to };
-                        let insert_at = insert_at.min(new_order.len());
+                let old_order = project.timeline.layers.clone();
+                let mut new_order = old_order.clone();
 
-                        // Determine parent group for the target position
-                        let target_parent = if insert_at < new_order.len() {
-                            new_order[insert_at].parent_layer_id.clone()
-                        } else if !new_order.is_empty() {
-                            new_order.last().and_then(|l| l.parent_layer_id.clone())
-                        } else {
-                            None
-                        };
+                if is_multi {
+                    // Multi-select: move all selected layers as a group
+                    let selected_ids: Vec<LayerId> = selection.selected_layer_ids.iter().cloned().collect();
+                    // Remove selected layers (preserving their relative order)
+                    let mut moving: Vec<_> = new_order.iter()
+                        .filter(|l| selected_ids.contains(&l.layer_id))
+                        .cloned()
+                        .collect();
+                    new_order.retain(|l| !selected_ids.contains(&l.layer_id));
 
-                        new_order.insert(insert_at, layer);
+                    // Find insertion point: where the target index maps to after removals
+                    let target_insert = (*to).min(new_order.len());
 
-                        // Build parent ID maps for undo
-                        let mut old_parents = std::collections::HashMap::new();
-                        let mut new_parents = std::collections::HashMap::new();
-                        for l in old_order.iter() {
-                            old_parents.insert(l.layer_id.clone(), l.parent_layer_id.clone());
-                        }
-                        // Update moved layer's parent
-                        for l in &new_order {
-                            new_parents.insert(l.layer_id.clone(), l.parent_layer_id.clone());
-                        }
-                        let moved_id = new_order[insert_at].layer_id.clone();
-                        new_parents.insert(moved_id, target_parent);
+                    // Determine parent group at insertion point
+                    let target_parent = if target_insert < new_order.len() {
+                        new_order[target_insert].parent_layer_id.clone()
+                    } else {
+                        new_order.last().and_then(|l| l.parent_layer_id.clone())
+                    };
 
-                        let cmd = manifold_editing::commands::layer::ReorderLayerCommand::new(
-                            old_order, new_order, old_parents, new_parents,
-                        );
-                        { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+                    // Update parent for all moved layers
+                    for layer in &mut moving {
+                        layer.parent_layer_id = target_parent.clone();
                     }
+
+                    // Insert the group at target
+                    for (offset, layer) in moving.into_iter().enumerate() {
+                        let pos = (target_insert + offset).min(new_order.len());
+                        new_order.insert(pos, layer);
+                    }
+                } else if *from < new_order.len() && *to <= new_order.len() {
+                    // Single layer move
+                    let layer = new_order.remove(*from);
+                    let insert_at = if *to > *from { to.saturating_sub(1) } else { *to };
+                    let insert_at = insert_at.min(new_order.len());
+
+                    let target_parent = if insert_at < new_order.len() {
+                        new_order[insert_at].parent_layer_id.clone()
+                    } else {
+                        new_order.last().and_then(|l| l.parent_layer_id.clone())
+                    };
+
+                    new_order.insert(insert_at, layer);
+                    new_order[insert_at].parent_layer_id = target_parent;
+                }
+
+                // Build parent ID maps for undo
+                let mut old_parents = std::collections::HashMap::new();
+                let mut new_parents = std::collections::HashMap::new();
+                for l in &old_order {
+                    old_parents.insert(l.layer_id.clone(), l.parent_layer_id.clone());
+                }
+                for l in &new_order {
+                    new_parents.insert(l.layer_id.clone(), l.parent_layer_id.clone());
+                }
+
+                if old_order.iter().map(|l| &l.layer_id).collect::<Vec<_>>()
+                    != new_order.iter().map(|l| &l.layer_id).collect::<Vec<_>>()
+                {
+                    let cmd = manifold_editing::commands::layer::ReorderLayerCommand::new(
+                        old_order, new_order, old_parents, new_parents,
+                    );
+                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
                 }
             }
             DispatchResult::structural()

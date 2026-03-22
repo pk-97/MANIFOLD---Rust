@@ -492,6 +492,22 @@ impl InspectorCompositePanel {
         }
     }
 
+    /// Select all effects in the active tab.
+    /// Returns true if any effects were selected.
+    pub fn select_all_effects(&mut self) -> bool {
+        let tab = self.last_effect_tab;
+        let count = self.cards_for_tab(tab).len();
+        if count == 0 { return false; }
+
+        let set = self.selection_set_mut(tab);
+        set.clear();
+        for i in 0..count {
+            set.insert(i);
+        }
+        self.set_last_clicked_for_tab(tab, 0);
+        true
+    }
+
     /// Whether any effects are selected (for keyboard shortcut routing).
     pub fn has_effect_selection(&self) -> bool {
         !self.selected_master_indices.is_empty()
@@ -688,10 +704,23 @@ impl InspectorCompositePanel {
             self.card_drag_label = name;
             self.last_effect_tab = tab;
 
-            // Dim source card border (Unity: SetDragDimmed(true))
-            let cards = self.cards_for_tab_mut(tab);
-            if let Some(card) = cards.get(card_idx) {
-                card.set_drag_dimmed(tree, true);
+            // Dim source card(s) border (Unity: SetDragDimmed(true))
+            // If dragged card is part of a multi-selection, dim all selected
+            let sel = self.selection_set_mut(tab);
+            let is_multi = sel.len() > 1 && sel.contains(&card_idx);
+            if is_multi {
+                let sel_indices: Vec<usize> = sel.iter().copied().collect();
+                let cards = self.cards_for_tab(tab);
+                for &idx in &sel_indices {
+                    if let Some(card) = cards.get(idx) {
+                        card.set_drag_dimmed(tree, true);
+                    }
+                }
+            } else {
+                let cards = self.cards_for_tab(tab);
+                if let Some(card) = cards.get(card_idx) {
+                    card.set_drag_dimmed(tree, true);
+                }
             }
 
             // Create ghost + indicator nodes
@@ -783,6 +812,7 @@ impl InspectorCompositePanel {
     }
 
     /// End card drag — restore dimming, hide ghost/indicator, return reorder action.
+    /// Supports multi-select: if dragged card is part of a selection, moves all selected.
     pub fn end_card_drag(&mut self, tree: &mut UITree) -> Vec<PanelAction> {
         if !self.card_drag_active { return Vec::new(); }
 
@@ -791,13 +821,25 @@ impl InspectorCompositePanel {
         let from = self.card_drag_effect_index;
         let to_card = self.card_drag_target_index;
 
+        // Check if dragged card is part of a multi-selection
+        let selection_set = self.selection_set_mut(tab);
+        let is_multi = selection_set.len() > 1 && selection_set.contains(&src);
+
         // Restore source card border + compute target effect index
-        // (scope borrow of cards before mutating self fields)
         let to_fx = {
-            let cards = self.cards_for_tab(tab);
-            if let Some(card) = cards.get(src) {
+            // Restore dimming on all selected cards (or just source)
+            if is_multi {
+                let sel: Vec<usize> = self.selection_set_mut(tab).iter().copied().collect();
+                let cards = self.cards_for_tab(tab);
+                for &idx in &sel {
+                    if let Some(card) = cards.get(idx) {
+                        card.set_drag_dimmed(tree, false);
+                    }
+                }
+            } else if let Some(card) = self.cards_for_tab(tab).get(src) {
                 card.set_drag_dimmed(tree, false);
             }
+            let cards = self.cards_for_tab(tab);
             if to_card < cards.len() {
                 cards[to_card].effect_index()
             } else if !cards.is_empty() {
@@ -819,8 +861,22 @@ impl InspectorCompositePanel {
         self.card_drag_ghost_id = -1;
         self.card_drag_indicator_id = -1;
 
-        // Only emit action if position actually changed
-        if to_fx != from && to_fx != from + 1 {
+        if is_multi {
+            // Multi-select: move all selected effects as a group
+            let mut selected_indices: Vec<usize> = self.selection_set_mut(tab)
+                .iter().copied().collect();
+            selected_indices.sort_unstable();
+            // Convert card indices to effect indices
+            let cards = self.cards_for_tab(tab);
+            let effect_indices: Vec<usize> = selected_indices.iter()
+                .filter_map(|&i| cards.get(i).map(|c| c.effect_index()))
+                .collect();
+            if !effect_indices.is_empty() {
+                vec![PanelAction::EffectReorderGroup(effect_indices, to_fx)]
+            } else {
+                Vec::new()
+            }
+        } else if to_fx != from && to_fx != from + 1 {
             vec![PanelAction::EffectReorder(from, to_fx)]
         } else {
             Vec::new()
@@ -872,6 +928,16 @@ impl InspectorCompositePanel {
 
     // ── Internal event routing ───────────────────────────────────
 
+    /// Check if an effect target is already part of the current selection.
+    fn is_effect_target_selected(&self, target: &PressedTarget) -> bool {
+        match *target {
+            PressedTarget::MasterEffect(i) => self.selected_master_indices.contains(&i),
+            PressedTarget::LayerEffect(i) => self.selected_layer_indices.contains(&i),
+            PressedTarget::ClipEffect(i) => self.selected_clip_indices.contains(&i),
+            _ => false,
+        }
+    }
+
     /// Auto-select an effect card on any interaction (click, pointer down).
     /// Unity: any card interaction implicitly selects it (single-select, no modifiers).
     fn auto_select_effect(&mut self, target: &PressedTarget) {
@@ -906,12 +972,15 @@ impl InspectorCompositePanel {
                     let mut actions = self.master_effects.get_mut(i)
                         .map(|c| c.handle_click(node_id))
                         .unwrap_or_default();
-                    // Header click: modifier-aware selection. Everything else: auto-select.
+
                     if actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         self.on_effect_card_clicked(InspectorTab::Master, i, modifiers);
-                    } else {
+                    } else if !self.selected_master_indices.contains(&i) {
+                        // Only auto-select if not already in multi-selection
                         self.auto_select_effect(&PressedTarget::MasterEffect(i));
-                        let ei = self.master_effects.get(i).map(|c| c.effect_index()).unwrap_or(0);
+                    }
+                    let ei = self.master_effects.get(i).map(|c| c.effect_index()).unwrap_or(0);
+                    if !actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         actions.insert(0, PanelAction::EffectCardClicked(ei));
                     }
                     actions
@@ -920,11 +989,14 @@ impl InspectorCompositePanel {
                     let mut actions = self.layer_effects.get_mut(i)
                         .map(|c| c.handle_click(node_id))
                         .unwrap_or_default();
+
                     if actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         self.on_effect_card_clicked(InspectorTab::Layer, i, modifiers);
-                    } else {
+                    } else if !self.selected_layer_indices.contains(&i) {
                         self.auto_select_effect(&PressedTarget::LayerEffect(i));
-                        let ei = self.layer_effects.get(i).map(|c| c.effect_index()).unwrap_or(0);
+                    }
+                    let ei = self.layer_effects.get(i).map(|c| c.effect_index()).unwrap_or(0);
+                    if !actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         actions.insert(0, PanelAction::EffectCardClicked(ei));
                     }
                     actions
@@ -933,11 +1005,14 @@ impl InspectorCompositePanel {
                     let mut actions = self.clip_effects.get_mut(i)
                         .map(|c| c.handle_click(node_id))
                         .unwrap_or_default();
+
                     if actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         self.on_effect_card_clicked(InspectorTab::Clip, i, modifiers);
-                    } else {
+                    } else if !self.selected_clip_indices.contains(&i) {
                         self.auto_select_effect(&PressedTarget::ClipEffect(i));
-                        let ei = self.clip_effects.get(i).map(|c| c.effect_index()).unwrap_or(0);
+                    }
+                    let ei = self.clip_effects.get(i).map(|c| c.effect_index()).unwrap_or(0);
+                    if !actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         actions.insert(0, PanelAction::EffectCardClicked(ei));
                     }
                     actions
@@ -954,14 +1029,21 @@ impl InspectorCompositePanel {
         }
     }
 
-    fn route_pointer_down(&mut self, node_id: u32, pos: Vec2) -> Vec<PanelAction> {
+    fn route_pointer_down(&mut self, node_id: u32, pos: Vec2, modifiers: Modifiers) -> Vec<PanelAction> {
         let target = self.find_target_for_node(node_id);
         self.pressed_target = target;
         // Record which tab this interaction targets (survives drag_end)
         if let Some(ref t) = target {
             self.update_last_effect_tab(t);
-            // Auto-select on any pointer-down interaction (slider drag, trim, etc.)
-            self.auto_select_effect(t);
+            // Auto-select on pointer-down ONLY when:
+            // 1. No selection modifiers are held (shift/ctrl defer to Click handler)
+            // 2. The target is not already selected (preserve multi-selection for
+            //    functional buttons like chevron/toggle on selected effects)
+            if !modifiers.shift && !modifiers.ctrl && !modifiers.command
+                && !self.is_effect_target_selected(t)
+            {
+                self.auto_select_effect(t);
+            }
         }
 
         if let Some(target) = target {
@@ -1240,9 +1322,9 @@ impl Panel for InspectorCompositePanel {
                 if !self.viewport_rect.contains(*pos) { return Vec::new(); }
                 self.route_click(*node_id, *modifiers)
             }
-            UIEvent::PointerDown { node_id, pos } => {
+            UIEvent::PointerDown { node_id, pos, modifiers } => {
                 if !self.viewport_rect.contains(*pos) { return Vec::new(); }
-                self.route_pointer_down(*node_id, *pos)
+                self.route_pointer_down(*node_id, *pos, *modifiers)
             }
             UIEvent::DragBegin { node_id, pos, .. } => {
                 if !self.viewport_rect.contains(*pos) { return Vec::new(); }
@@ -1410,7 +1492,7 @@ mod tests {
         // Simulate scrollbar pointer down
         let sb_id = panel.scrollbar_thumb_id as u32;
         let pos = Vec2::new(280.0, 100.0);
-        panel.route_pointer_down(sb_id, pos);
+        panel.route_pointer_down(sb_id, pos, crate::input::Modifiers::NONE);
 
         assert!(panel.is_dragging());
         assert!(panel.dragging_scrollbar);

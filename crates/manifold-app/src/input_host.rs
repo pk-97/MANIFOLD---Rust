@@ -114,6 +114,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         //   InvalidateAllLayerBitmaps();
         //   ResetAllInspectors();
         //   masterInspector?.Show();
+        self.ui_root.inspector.clear_effect_selection();
         *self.needs_rebuild = true;
         *self.needs_structural_sync = true;
         *self.needs_scroll_rebuild = true;
@@ -154,6 +155,16 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     // ── Effect keyboard shortcuts (Unity EffectSelectionManager) ──
+
+    fn handle_effect_select_all(&mut self) -> bool {
+        let selected = self.ui_root.inspector.select_all_effects();
+        if selected {
+            self.ui_root.inspector.apply_selection_visuals(
+                &mut self.ui_root.tree,
+            );
+        }
+        selected
+    }
 
     fn handle_effect_copy(&mut self) -> bool {
         if !self.ui_root.inspector.has_effect_selection() { return false; }
@@ -248,16 +259,25 @@ impl TimelineInputHost for AppInputHost<'_> {
         let indices = self.ui_root.inspector.get_selected_effect_indices();
         let target = resolve_effect_target(tab, &*self.active_layer, self.selection);
 
-        // Remove in reverse index order (Unity lines 274-289)
+        // Collect commands in reverse index order (Unity lines 274-289)
+        let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
         for &idx in indices.iter().rev() {
             let effects_slice = resolve_effects_ref(tab, self.project, &*self.active_layer, self.selection);
             if let Some(effects) = effects_slice
                 && let Some(fx) = effects.get(idx) {
-                    let cmd = RemoveEffectCommand::new(target.clone(), fx.clone(), idx);
-                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
-                    boxed.execute(self.project);
-                    ContentCommand::send(self.content_tx, ContentCommand::Execute(boxed));
+                    commands.push(Box::new(RemoveEffectCommand::new(
+                        target.clone(), fx.clone(), idx,
+                    )));
                 }
+        }
+
+        if !commands.is_empty() {
+            ContentCommand::send(
+                self.content_tx,
+                crate::content_command::ContentCommand::ExecuteBatch(
+                    commands, "Delete effects".into(),
+                ),
+            );
         }
 
         self.ui_root.inspector.clear_effect_selection();

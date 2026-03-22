@@ -89,7 +89,7 @@ pub enum UIEvent {
     DoubleClick { node_id: u32, pos: Vec2, modifiers: Modifiers },
     RightClick { node_id: u32, pos: Vec2, modifiers: Modifiers },
     Scroll { pos: Vec2, delta: Vec2, modifiers: Modifiers },
-    PointerDown { node_id: u32, pos: Vec2 },
+    PointerDown { node_id: u32, pos: Vec2, modifiers: Modifiers },
     PointerUp { node_id: u32, pos: Vec2 },
     HoverEnter { node_id: u32, pos: Vec2 },
     HoverExit { node_id: u32 },
@@ -113,8 +113,8 @@ impl UIEvent {
                 Self::RightClick { node_id: *node_id, pos: off(*pos), modifiers: *modifiers },
             Self::Scroll { pos, delta, modifiers } =>
                 Self::Scroll { pos: off(*pos), delta: *delta, modifiers: *modifiers },
-            Self::PointerDown { node_id, pos } =>
-                Self::PointerDown { node_id: *node_id, pos: off(*pos) },
+            Self::PointerDown { node_id, pos, modifiers } =>
+                Self::PointerDown { node_id: *node_id, pos: off(*pos), modifiers: *modifiers },
             Self::PointerUp { node_id, pos } =>
                 Self::PointerUp { node_id: *node_id, pos: off(*pos) },
             Self::HoverEnter { node_id, pos } =>
@@ -269,6 +269,7 @@ impl UIInputSystem {
                     self.pending_events.push(UIEvent::PointerDown {
                         node_id: uid,
                         pos: screen_pos,
+                        modifiers: self.modifiers,
                     });
                 } else {
                     self.focused_id = -1;

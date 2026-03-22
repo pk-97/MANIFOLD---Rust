@@ -142,8 +142,11 @@ impl InputHandler {
             return false; // handled by legacy block
         }
 
-        // ── Select all: Cmd+A (Unity line 289) ──
+        // ── Select all: Cmd+A (context-sensitive: effects vs clips) (Unity line 289) ──
         if matches!(logical_key, Key::Character(c) if c.as_str() == "a") && m.is_command_only() {
+            if self.inspector_has_focus && host.handle_effect_select_all() {
+                return true;
+            }
             host.select_all_clips();
             return true;
         }

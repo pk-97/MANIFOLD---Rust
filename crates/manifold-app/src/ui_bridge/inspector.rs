@@ -312,22 +312,99 @@ pub(super) fn dispatch_inspector(
         // ── Effect operations ──────────────────────────────────────
         PanelAction::EffectToggle(fx_idx) => {
             let tab = ui.inspector.last_effect_tab();
-            let (effects_ref, target) = resolve_effects_read(tab, project, active_layer, selection);
-            if let Some(effects) = effects_ref
-                && let Some(fx) = effects.get(*fx_idx) {
-                    let old = fx.enabled;
-                    let cmd = ToggleEffectCommand::new(target, *fx_idx, old, !old);
-                    { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+            let selected = ui.inspector.get_selected_effect_indices();
+            // If clicked effect is part of multi-selection, apply to all selected
+            let indices: Vec<usize> = if selected.len() > 1 && selected.contains(fx_idx) {
+                selected
+            } else {
+                vec![*fx_idx]
+            };
+            // Read current state to determine target + build commands
+            let target = super::resolve_effect_target(tab, active_layer, project);
+            let new_enabled = {
+                let (effects_ref, _) = resolve_effects_read(tab, project, active_layer, selection);
+                effects_ref.and_then(|e| e.get(*fx_idx)).map(|fx| !fx.enabled).unwrap_or(true)
+            };
+            let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
+            {
+                let (effects_ref, _) = resolve_effects_read(tab, project, active_layer, selection);
+                if let Some(effects) = effects_ref {
+                    for &idx in &indices {
+                        if let Some(fx) = effects.get(idx)
+                            && fx.enabled != new_enabled
+                        {
+                            commands.push(Box::new(ToggleEffectCommand::new(
+                                target.clone(), idx, fx.enabled, new_enabled,
+                            )));
+                        }
+                    }
                 }
+            }
+            // Apply locally for immediate visual feedback
+            {
+                let (effects_mut, _) = resolve_effects_mut(tab, project, active_layer, selection);
+                if let Some(effects) = effects_mut {
+                    for &idx in &indices {
+                        if let Some(fx) = effects.get_mut(idx) {
+                            fx.enabled = new_enabled;
+                        }
+                    }
+                }
+            }
+            if !commands.is_empty() {
+                ContentCommand::send(
+                    content_tx,
+                    ContentCommand::ExecuteBatch(commands, "Toggle effects".into()),
+                );
+            }
             DispatchResult::handled()
         }
         PanelAction::EffectCollapseToggle(fx_idx) => {
             let tab = ui.inspector.last_effect_tab();
-            let (effects_mut, _target) = resolve_effects_mut(tab, project, active_layer, selection);
-            if let Some(effects) = effects_mut
-                && let Some(fx) = effects.get_mut(*fx_idx) {
-                    fx.collapsed = !fx.collapsed;
+            let selected = ui.inspector.get_selected_effect_indices();
+            // If clicked effect is part of multi-selection, apply to all selected
+            let indices: Vec<usize> = if selected.len() > 1 && selected.contains(fx_idx) {
+                selected
+            } else {
+                vec![*fx_idx]
+            };
+            let new_collapsed;
+            {
+                let (effects_mut, _target) = resolve_effects_mut(tab, project, active_layer, selection);
+                if let Some(effects) = effects_mut {
+                    new_collapsed = effects.get(*fx_idx).map(|fx| !fx.collapsed).unwrap_or(true);
+                    for &idx in &indices {
+                        if let Some(fx) = effects.get_mut(idx) {
+                            fx.collapsed = new_collapsed;
+                        }
+                    }
+                } else {
+                    new_collapsed = true;
                 }
+            }
+            // Send to content thread so snapshot sync doesn't overwrite
+            let target = super::resolve_effect_target(tab, active_layer, project);
+            let indices_owned = indices;
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                let effects = match &target {
+                    EffectTarget::Master => Some(&mut p.settings.master_effects),
+                    EffectTarget::Layer { layer_id } => {
+                        p.timeline.find_layer_by_id_mut(layer_id)
+                            .map(|(_, l)| l.effects_mut())
+                    }
+                    EffectTarget::Clip { clip_id, .. } => {
+                        p.timeline.find_clip_by_id_mut(clip_id)
+                            .map(|c| &mut c.effects)
+                    }
+                };
+                if let Some(effects) = effects {
+                    for &idx in &indices_owned {
+                        if let Some(fx) = effects.get_mut(idx) {
+                            fx.collapsed = new_collapsed;
+                        }
+                    }
+                }
+            })));
             DispatchResult::structural()
         }
         PanelAction::EffectCardClicked(_) => {
@@ -943,6 +1020,70 @@ pub(super) fn dispatch_inspector(
             let target = super::resolve_effect_target(tab, active_layer, project);
             let cmd = ReorderEffectCommand::new(target, *from_idx, *to_idx);
             { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+            DispatchResult::structural()
+        }
+        PanelAction::EffectReorderGroup(source_indices, target_idx) => {
+            // Multi-select reorder: move a group of effects to the target position.
+            // Operates on the effects vec directly, wraps in MutateProject for content thread.
+            let tab = ui.inspector.last_effect_tab();
+            let (effects_mut, _target) = resolve_effects_mut(tab, project, active_layer, selection);
+            if let Some(effects) = effects_mut {
+                // Remove selected effects in reverse order (preserving relative order)
+                let mut moving: Vec<(usize, EffectInstance)> = Vec::new();
+                let mut sorted_sources = source_indices.clone();
+                sorted_sources.sort_unstable();
+                for &idx in sorted_sources.iter().rev() {
+                    if idx < effects.len() {
+                        moving.push((idx, effects.remove(idx)));
+                    }
+                }
+                moving.reverse(); // Restore original relative order
+
+                // Compute adjusted insertion point (account for removed items before target)
+                let removed_before = sorted_sources.iter().filter(|&&i| i < *target_idx).count();
+                let insert_at = target_idx.saturating_sub(removed_before).min(effects.len());
+
+                // Insert the group at the target position
+                for (offset, (_, fx)) in moving.into_iter().enumerate() {
+                    let pos = (insert_at + offset).min(effects.len());
+                    effects.insert(pos, fx);
+                }
+            }
+
+            // Send to content thread
+            let target = super::resolve_effect_target(tab, active_layer, project);
+            let sources = source_indices.clone();
+            let target_pos = *target_idx;
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                let effects = match &target {
+                    EffectTarget::Master => Some(&mut p.settings.master_effects),
+                    EffectTarget::Layer { layer_id } => {
+                        p.timeline.find_layer_by_id_mut(layer_id)
+                            .map(|(_, l)| l.effects_mut())
+                    }
+                    EffectTarget::Clip { clip_id, .. } => {
+                        p.timeline.find_clip_by_id_mut(clip_id)
+                            .map(|c| &mut c.effects)
+                    }
+                };
+                if let Some(effects) = effects {
+                    let mut sorted = sources.clone();
+                    sorted.sort_unstable();
+                    let mut moving: Vec<EffectInstance> = Vec::new();
+                    for &idx in sorted.iter().rev() {
+                        if idx < effects.len() {
+                            moving.push(effects.remove(idx));
+                        }
+                    }
+                    moving.reverse();
+                    let removed_before = sorted.iter().filter(|&&i| i < target_pos).count();
+                    let insert_at = target_pos.saturating_sub(removed_before).min(effects.len());
+                    for (offset, fx) in moving.into_iter().enumerate() {
+                        let pos = (insert_at + offset).min(effects.len());
+                        effects.insert(pos, fx);
+                    }
+                }
+            })));
             DispatchResult::structural()
         }
 

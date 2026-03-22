@@ -73,6 +73,9 @@ pub trait TimelineInputHost {
     /// Ungroup selected effects. Returns true if handled.
     fn handle_effect_ungroup(&mut self) -> bool;
 
+    /// Select all effects in the active inspector tab. Returns true if handled.
+    fn handle_effect_select_all(&mut self) -> bool;
+
     /// Clear effect selection in the inspector.
     fn clear_effect_selection(&mut self);
 

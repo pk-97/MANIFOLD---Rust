@@ -165,6 +165,8 @@ pub enum PanelAction {
     /// Reorder effect card: move from_index to to_index.
     /// Unity: EffectsListBitmapPanel.onCardReorder.
     EffectReorder(usize, usize),
+    /// Reorder multiple effect cards as a group: (sorted source indices, target index).
+    EffectReorderGroup(Vec<usize>, usize),
 
     // Generator params
     GenTypeClicked(Option<LayerId>),  // layer_id
