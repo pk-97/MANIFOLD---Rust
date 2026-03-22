@@ -1,3 +1,4 @@
+use manifold_core::EffectId;
 use crate::color;
 use crate::node::*;
 use crate::slider::{BitmapSlider, SliderColors, SliderNodeIds};
@@ -44,6 +45,7 @@ pub struct EffectParamInfo {
 #[derive(Debug, Clone)]
 pub struct EffectCardConfig {
     pub effect_index: usize,
+    pub effect_id: EffectId,
     pub name: String,
     pub enabled: bool,
     pub collapsed: bool,
@@ -107,6 +109,7 @@ impl EffectCardState {
 pub struct EffectCardPanel {
     // Identity
     effect_index: usize,
+    effect_id: EffectId,
 
     // Configuration
     effect_name: String,
@@ -166,6 +169,7 @@ impl EffectCardPanel {
     pub fn new() -> Self {
         Self {
             effect_index: 0,
+            effect_id: EffectId::default(),
             effect_name: String::new(),
             enabled: true,
             is_collapsed: false,
@@ -208,6 +212,7 @@ impl EffectCardPanel {
     /// EffectInstance + envelopes + drivers in the app layer).
     pub fn configure(&mut self, config: &EffectCardConfig) {
         self.effect_index = config.effect_index;
+        self.effect_id = config.effect_id.clone();
         self.effect_name = config.name.clone();
         self.enabled = config.enabled;
         self.is_collapsed = config.collapsed;
@@ -251,6 +256,7 @@ impl EffectCardPanel {
     }
 
     pub fn effect_index(&self) -> usize { self.effect_index }
+    pub fn effect_id(&self) -> &EffectId { &self.effect_id }
     pub fn effect_name(&self) -> &str { &self.effect_name }
     pub fn card_y(&self) -> f32 { self.card_y }
     pub fn first_node(&self) -> usize { self.first_node }
@@ -956,6 +962,7 @@ mod tests {
         let n = 2;
         EffectCardConfig {
             effect_index: 0,
+            effect_id: EffectId::new("test-effect-0"),
             name: "Blur".into(),
             enabled: true,
             collapsed: false,

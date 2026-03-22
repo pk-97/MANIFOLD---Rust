@@ -869,19 +869,7 @@ fn commands_work_on_loaded_project() {
 }
 
 fn make_effect(effect_type: EffectType) -> EffectInstance {
-    EffectInstance {
-        effect_type,
-        enabled: true,
-        collapsed: false,
-        param_values: Vec::new(),
-        base_param_values: None,
-        drivers: None,
-        group_id: None,
-        legacy_param0: None,
-        legacy_param1: None,
-        legacy_param2: None,
-        legacy_param3: None,
-    }
+    EffectInstance::new(effect_type)
 }
 
 fn make_driver() -> ParameterDriver {

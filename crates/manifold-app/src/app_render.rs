@@ -1039,15 +1039,14 @@ impl Application {
                     }
 
                 // Pass 4b: Effect card drag ghost/indicator overlay.
-                if let Some(start) = self.ui_root.inspector.card_drag_first_node() {
-                    if let Some(ui) = &mut self.ui_renderer {
+                if let Some(start) = self.ui_root.inspector.card_drag_first_node()
+                    && let Some(ui) = &mut self.ui_renderer {
                         ui.render_overlay(&self.ui_root.tree, start);
                         ui.render(
                             &gpu.device, &gpu.queue, &mut encoder, &surface_view,
                             logical_w, logical_h, scale, TextMode::Overlay,
                         );
                     }
-                }
 
                 // Pass 5: Text input overlay — renders on top of everything.
                 // Uses immediate-mode draw_rect + draw_text (no UITree nodes needed).

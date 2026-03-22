@@ -1020,8 +1020,7 @@ pub(super) fn dispatch_inspector(
             let target = super::resolve_effect_target(tab, active_layer, project);
             let cmd = ReorderEffectCommand::new(target, *from_idx, *to_idx);
             { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
-            // Remap selection indices to follow moved effects
-            ui.inspector.remap_selection_after_reorder(tab, *from_idx, *to_idx);
+            // Selection follows automatically (ID-based, no remapping needed)
             DispatchResult::structural()
         }
         PanelAction::EffectReorderGroup(source_indices, target_idx) => {
@@ -1086,8 +1085,7 @@ pub(super) fn dispatch_inspector(
                     }
                 }
             })));
-            // Remap selection indices to follow moved effects
-            ui.inspector.remap_selection_after_group_reorder(tab, source_indices, *target_idx);
+            // Selection follows automatically (ID-based, no remapping needed)
             DispatchResult::structural()
         }
 
@@ -1519,6 +1517,7 @@ pub(super) fn dispatch_inspector(
                 legacy_param1: None,
                 legacy_param2: None,
                 legacy_param3: None,
+                ..EffectInstance::new(effect_type)
             };
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let target = match tab {

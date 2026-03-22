@@ -28,4 +28,4 @@ pub use color::Color;
 pub use math::{BeatQuantizer, MathUtils, short_id};
 pub use selection::{SelectionRegion, SelectionRegionTarget};
 pub use effects::{EffectContainer, ParamSource};
-pub use id::{ClipId, LayerId, EffectGroupId};
+pub use id::{ClipId, LayerId, EffectGroupId, EffectId};

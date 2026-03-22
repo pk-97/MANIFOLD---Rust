@@ -688,6 +688,7 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -
 
         EffectCardConfig {
             effect_index: i,
+            effect_id: fx.id.clone(),
             name: fx.effect_type.display_name().to_string(),
             enabled: fx.enabled,
             collapsed: fx.collapsed,

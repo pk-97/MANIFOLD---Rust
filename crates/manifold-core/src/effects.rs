@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::id::EffectGroupId;
+use crate::id::{EffectGroupId, EffectId};
 use crate::types::{BeatDivision, DriverWaveform, EffectType};
 
 // ─── Param Definition ───
@@ -83,6 +83,10 @@ pub trait ParamSource {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EffectInstance {
+    /// Unique identifier for this effect instance.
+    /// Auto-generated on creation and deserialization (backfills old projects).
+    #[serde(default = "generate_effect_id")]
+    pub id: EffectId,
     pub effect_type: EffectType,
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -113,6 +117,7 @@ impl EffectInstance {
     /// Unity EffectInstance.cs lines 79-83.
     pub fn new(effect_type: EffectType) -> Self {
         Self {
+            id: generate_effect_id(),
             effect_type,
             enabled: true,
             collapsed: false,
@@ -666,6 +671,7 @@ impl ParamEnvelope {
 
 fn default_true() -> bool { true }
 fn default_one() -> f32 { 1.0 }
+fn generate_effect_id() -> EffectId { EffectId::new(crate::math::short_id()) }
 #[allow(dead_code)]
 fn default_quarter() -> f32 { 0.25 }
 fn default_group_name() -> String { "Group".to_string() }

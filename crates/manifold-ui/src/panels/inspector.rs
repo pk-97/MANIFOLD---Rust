@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use manifold_core::EffectId;
 use manifold_core::LayerId;
 use crate::color;
 use crate::input::{Modifiers, UIEvent};
@@ -109,12 +110,12 @@ pub struct InspectorCompositePanel {
     bg_panel_id: i32,
 
     // ── Effect selection state (Unity EffectSelectionManager — per tab) ──
-    selected_master_indices: HashSet<usize>,
-    selected_layer_indices: HashSet<usize>,
-    selected_clip_indices: HashSet<usize>,
-    last_clicked_master: i32,
-    last_clicked_layer: i32,
-    last_clicked_clip: i32,
+    selected_master_ids: HashSet<EffectId>,
+    selected_layer_ids: HashSet<EffectId>,
+    selected_clip_ids: HashSet<EffectId>,
+    last_clicked_master: Option<EffectId>,
+    last_clicked_layer: Option<EffectId>,
+    last_clicked_clip: Option<EffectId>,
 
     // ── Effect card drag-reorder state (Unity EffectsListBitmapPanel) ──
     card_drag_active: bool,
@@ -153,12 +154,12 @@ impl InspectorCompositePanel {
             pressed_target: None,
             last_effect_tab: InspectorTab::Layer,
             bg_panel_id: -1,
-            selected_master_indices: HashSet::new(),
-            selected_layer_indices: HashSet::new(),
-            selected_clip_indices: HashSet::new(),
-            last_clicked_master: -1,
-            last_clicked_layer: -1,
-            last_clicked_clip: -1,
+            selected_master_ids: HashSet::new(),
+            selected_layer_ids: HashSet::new(),
+            selected_clip_ids: HashSet::new(),
+            last_clicked_master: None,
+            last_clicked_layer: None,
+            last_clicked_clip: None,
             card_drag_active: false,
             card_drag_tab: InspectorTab::Master,
             card_drag_source_index: 0,
@@ -364,35 +365,35 @@ impl InspectorCompositePanel {
     // ── Effect selection (Unity EffectSelectionManager) ─────────
 
     /// Get the selection set and cards vec for a given tab.
-    fn selection_for_tab(&self, tab: InspectorTab) -> (&HashSet<usize>, &[EffectCardPanel]) {
+    fn selection_for_tab(&self, tab: InspectorTab) -> (&HashSet<EffectId>, &[EffectCardPanel]) {
         match tab {
-            InspectorTab::Master => (&self.selected_master_indices, &self.master_effects),
-            InspectorTab::Layer => (&self.selected_layer_indices, &self.layer_effects),
-            InspectorTab::Clip => (&self.selected_clip_indices, &self.clip_effects),
+            InspectorTab::Master => (&self.selected_master_ids, &self.master_effects),
+            InspectorTab::Layer => (&self.selected_layer_ids, &self.layer_effects),
+            InspectorTab::Clip => (&self.selected_clip_ids, &self.clip_effects),
         }
     }
 
-    fn last_clicked_for_tab(&self, tab: InspectorTab) -> i32 {
+    fn last_clicked_for_tab(&self, tab: InspectorTab) -> Option<&EffectId> {
         match tab {
-            InspectorTab::Master => self.last_clicked_master,
-            InspectorTab::Layer => self.last_clicked_layer,
-            InspectorTab::Clip => self.last_clicked_clip,
+            InspectorTab::Master => self.last_clicked_master.as_ref(),
+            InspectorTab::Layer => self.last_clicked_layer.as_ref(),
+            InspectorTab::Clip => self.last_clicked_clip.as_ref(),
         }
     }
 
-    fn set_last_clicked_for_tab(&mut self, tab: InspectorTab, idx: i32) {
+    fn set_last_clicked_for_tab(&mut self, tab: InspectorTab, id: Option<EffectId>) {
         match tab {
-            InspectorTab::Master => self.last_clicked_master = idx,
-            InspectorTab::Layer => self.last_clicked_layer = idx,
-            InspectorTab::Clip => self.last_clicked_clip = idx,
+            InspectorTab::Master => self.last_clicked_master = id,
+            InspectorTab::Layer => self.last_clicked_layer = id,
+            InspectorTab::Clip => self.last_clicked_clip = id,
         }
     }
 
-    fn selection_set_mut(&mut self, tab: InspectorTab) -> &mut HashSet<usize> {
+    fn selection_set_mut(&mut self, tab: InspectorTab) -> &mut HashSet<EffectId> {
         match tab {
-            InspectorTab::Master => &mut self.selected_master_indices,
-            InspectorTab::Layer => &mut self.selected_layer_indices,
-            InspectorTab::Clip => &mut self.selected_clip_indices,
+            InspectorTab::Master => &mut self.selected_master_ids,
+            InspectorTab::Layer => &mut self.selected_layer_ids,
+            InspectorTab::Clip => &mut self.selected_clip_ids,
         }
     }
 
@@ -417,11 +418,12 @@ impl InspectorCompositePanel {
     fn select_effect(&mut self, tab: InspectorTab, card_index: usize) {
         let cards = self.cards_for_tab(tab);
         if card_index >= cards.len() { return; }
+        let id = cards[card_index].effect_id().clone();
 
         let set = self.selection_set_mut(tab);
         set.clear();
-        set.insert(card_index);
-        self.set_last_clicked_for_tab(tab, card_index as i32);
+        set.insert(id.clone());
+        self.set_last_clicked_for_tab(tab, Some(id));
     }
 
     /// Unity EffectSelectionManager.ToggleCardSelection (lines 103-118)
@@ -430,14 +432,15 @@ impl InspectorCompositePanel {
     fn toggle_effect_selection(&mut self, tab: InspectorTab, card_index: usize) {
         let cards = self.cards_for_tab(tab);
         if card_index >= cards.len() { return; }
+        let id = cards[card_index].effect_id().clone();
 
         let set = self.selection_set_mut(tab);
-        if set.contains(&card_index) {
-            set.remove(&card_index);
+        if set.contains(&id) {
+            set.remove(&id);
         } else {
-            set.insert(card_index);
+            set.insert(id.clone());
         }
-        self.set_last_clicked_for_tab(tab, card_index as i32);
+        self.set_last_clicked_for_tab(tab, Some(id));
     }
 
     /// Unity EffectSelectionManager.RangeSelectCards (lines 121-139)
@@ -447,16 +450,23 @@ impl InspectorCompositePanel {
         let cards = self.cards_for_tab(tab);
         if card_index >= cards.len() { return; }
 
-        let anchor = self.last_clicked_for_tab(tab);
-        let anchor = if anchor >= 0 { anchor as usize } else { 0 };
+        // Find anchor card index from the last-clicked EffectId
+        let anchor = self.last_clicked_for_tab(tab)
+            .and_then(|id| cards.iter().position(|c| c.effect_id() == id))
+            .unwrap_or(0);
 
         let lo = anchor.min(card_index);
         let hi = anchor.max(card_index);
 
+        // Collect IDs before mutably borrowing self
+        let ids: Vec<EffectId> = (lo..=hi)
+            .filter_map(|i| cards.get(i).map(|c| c.effect_id().clone()))
+            .collect();
+
         let set = self.selection_set_mut(tab);
         set.clear();
-        for i in lo..=hi {
-            set.insert(i);
+        for id in ids {
+            set.insert(id);
         }
         // Keep lastClickedIndex as anchor — do not update (Unity line 138)
     }
@@ -466,7 +476,7 @@ impl InspectorCompositePanel {
     pub fn clear_effect_selection(&mut self) {
         for tab in [InspectorTab::Master, InspectorTab::Layer, InspectorTab::Clip] {
             self.selection_set_mut(tab).clear();
-            self.set_last_clicked_for_tab(tab, -1);
+            self.set_last_clicked_for_tab(tab, None);
         }
         // Reset is_selected on all cards (visuals deferred to rebuild)
         for card in self.master_effects.iter_mut()
@@ -483,10 +493,10 @@ impl InspectorCompositePanel {
     pub fn apply_selection_visuals(&mut self, tree: &mut UITree) {
         for tab in [InspectorTab::Master, InspectorTab::Layer, InspectorTab::Clip] {
             let (set, _) = self.selection_for_tab(tab);
-            let set_clone: Vec<usize> = set.iter().copied().collect();
+            let set_clone: HashSet<EffectId> = set.clone();
             let cards = self.cards_for_tab_mut(tab);
-            for (i, card) in cards.iter_mut().enumerate() {
-                let selected = set_clone.contains(&i);
+            for card in cards.iter_mut() {
+                let selected = set_clone.contains(card.effect_id());
                 card.update_selection_visual(tree, selected);
             }
         }
@@ -496,87 +506,38 @@ impl InspectorCompositePanel {
     /// Returns true if any effects were selected.
     pub fn select_all_effects(&mut self) -> bool {
         let tab = self.last_effect_tab;
-        let count = self.cards_for_tab(tab).len();
-        if count == 0 { return false; }
+        let cards = self.cards_for_tab(tab);
+        if cards.is_empty() { return false; }
+        let ids: Vec<EffectId> = cards.iter().map(|c| c.effect_id().clone()).collect();
+        let first_id = ids[0].clone();
 
         let set = self.selection_set_mut(tab);
         set.clear();
-        for i in 0..count {
-            set.insert(i);
+        for id in ids {
+            set.insert(id);
         }
-        self.set_last_clicked_for_tab(tab, 0);
+        self.set_last_clicked_for_tab(tab, Some(first_id));
         true
     }
 
     /// Whether any effects are selected (for keyboard shortcut routing).
     pub fn has_effect_selection(&self) -> bool {
-        !self.selected_master_indices.is_empty()
-            || !self.selected_layer_indices.is_empty()
-            || !self.selected_clip_indices.is_empty()
+        !self.selected_master_ids.is_empty()
+            || !self.selected_layer_ids.is_empty()
+            || !self.selected_clip_ids.is_empty()
     }
 
     /// Get all selected effect indices for the active tab.
-    /// Returns sorted ascending (Unity: GetSelectedIndices).
+    /// Converts selected EffectIds back to card indices (sorted ascending).
+    /// Commands (delete, reorder) still operate on indices.
     pub fn get_selected_effect_indices(&self) -> Vec<usize> {
-        let (set, _) = self.selection_for_tab(self.last_effect_tab);
-        let mut indices: Vec<usize> = set.iter().copied().collect();
+        let (set, cards) = self.selection_for_tab(self.last_effect_tab);
+        let mut indices: Vec<usize> = cards.iter().enumerate()
+            .filter(|(_, card)| set.contains(card.effect_id()))
+            .map(|(i, _)| i)
+            .collect();
         indices.sort_unstable();
         indices
-    }
-
-    /// Remap selection indices after a single-effect reorder (from → to).
-    /// Matches the index shift logic in ReorderEffectCommand.
-    pub fn remap_selection_after_reorder(&mut self, tab: InspectorTab, from: usize, to: usize) {
-        let insert_at = if to > from { to - 1 } else { to };
-        let set = self.selection_set_mut(tab);
-        let old: Vec<usize> = set.iter().copied().collect();
-        set.clear();
-        for idx in old {
-            let new_idx = if idx == from {
-                insert_at
-            } else if from < to {
-                // Moved forward: indices in (from, to) shift down by 1
-                if idx > from && idx < to { idx - 1 } else { idx }
-            } else {
-                // Moved backward: indices in [to, from) shift up by 1
-                if idx >= to && idx < from { idx + 1 } else { idx }
-            };
-            set.insert(new_idx);
-        }
-    }
-
-    /// Remap selection indices after a group reorder.
-    /// `sources` are the original sorted indices, `target` is the insertion point.
-    pub fn remap_selection_after_group_reorder(
-        &mut self, tab: InspectorTab, sources: &[usize], target: usize,
-    ) {
-        let set = self.selection_set_mut(tab);
-        let old: Vec<usize> = set.iter().copied().collect();
-        set.clear();
-
-        // Build the same index mapping the dispatch uses:
-        // remove sources (sorted, reverse), then insert at adjusted target.
-        let mut sorted_sources = sources.to_vec();
-        sorted_sources.sort_unstable();
-        let removed_before = sorted_sources.iter().filter(|&&i| i < target).count();
-        let insert_at = target.saturating_sub(removed_before);
-
-        for idx in old {
-            if let Some(pos) = sorted_sources.iter().position(|&s| s == idx) {
-                // This was a moved effect — it's now at insert_at + offset
-                set.insert(insert_at + pos);
-            } else {
-                // Not moved — compute its new index after removals and insertions
-                let removed_before_idx = sorted_sources.iter().filter(|&&s| s < idx).count();
-                let adjusted = idx - removed_before_idx;
-                let inserted_before = if adjusted >= insert_at {
-                    sorted_sources.len()
-                } else {
-                    0
-                };
-                set.insert(adjusted + inserted_before);
-            }
-        }
     }
 
     /// How many effects are selected in the active tab.
@@ -771,13 +732,16 @@ impl InspectorCompositePanel {
 
             // Dim source card(s) border (Unity: SetDragDimmed(true))
             // If dragged card is part of a multi-selection, dim all selected
+            let dragged_id = self.cards_for_tab(tab).get(card_idx)
+                .map(|c| c.effect_id().clone());
             let sel = self.selection_set_mut(tab);
-            let is_multi = sel.len() > 1 && sel.contains(&card_idx);
+            let is_multi = dragged_id.as_ref()
+                .is_some_and(|id| sel.len() > 1 && sel.contains(id));
             if is_multi {
-                let sel_indices: Vec<usize> = sel.iter().copied().collect();
+                let sel_ids: HashSet<EffectId> = sel.clone();
                 let cards = self.cards_for_tab(tab);
-                for &idx in &sel_indices {
-                    if let Some(card) = cards.get(idx) {
+                for card in cards {
+                    if sel_ids.contains(card.effect_id()) {
                         card.set_drag_dimmed(tree, true);
                     }
                 }
@@ -887,17 +851,20 @@ impl InspectorCompositePanel {
         let to_card = self.card_drag_target_index;
 
         // Check if dragged card is part of a multi-selection
-        let selection_set = self.selection_set_mut(tab);
-        let is_multi = selection_set.len() > 1 && selection_set.contains(&src);
+        let dragged_id = self.cards_for_tab(tab).get(src)
+            .map(|c| c.effect_id().clone());
+        let sel = self.selection_set_mut(tab);
+        let is_multi = dragged_id.as_ref()
+            .is_some_and(|id| sel.len() > 1 && sel.contains(id));
 
         // Restore source card border + compute target effect index
         let to_fx = {
             // Restore dimming on all selected cards (or just source)
             if is_multi {
-                let sel: Vec<usize> = self.selection_set_mut(tab).iter().copied().collect();
+                let sel_ids: HashSet<EffectId> = self.selection_set_mut(tab).clone();
                 let cards = self.cards_for_tab(tab);
-                for &idx in &sel {
-                    if let Some(card) = cards.get(idx) {
+                for card in cards {
+                    if sel_ids.contains(card.effect_id()) {
                         card.set_drag_dimmed(tree, false);
                     }
                 }
@@ -928,14 +895,14 @@ impl InspectorCompositePanel {
 
         if is_multi {
             // Multi-select: move all selected effects as a group
-            let mut selected_indices: Vec<usize> = self.selection_set_mut(tab)
-                .iter().copied().collect();
-            selected_indices.sort_unstable();
-            // Convert card indices to effect indices
+            let sel_ids = self.selection_set_mut(tab).clone();
             let cards = self.cards_for_tab(tab);
-            let effect_indices: Vec<usize> = selected_indices.iter()
-                .filter_map(|&i| cards.get(i).map(|c| c.effect_index()))
+            // Convert selected IDs to sorted effect indices
+            let mut effect_indices: Vec<usize> = cards.iter()
+                .filter(|c| sel_ids.contains(c.effect_id()))
+                .map(|c| c.effect_index())
                 .collect();
+            effect_indices.sort_unstable();
             if !effect_indices.is_empty() {
                 vec![PanelAction::EffectReorderGroup(effect_indices, to_fx)]
             } else {
@@ -996,9 +963,18 @@ impl InspectorCompositePanel {
     /// Check if an effect target is already part of the current selection.
     fn is_effect_target_selected(&self, target: &PressedTarget) -> bool {
         match *target {
-            PressedTarget::MasterEffect(i) => self.selected_master_indices.contains(&i),
-            PressedTarget::LayerEffect(i) => self.selected_layer_indices.contains(&i),
-            PressedTarget::ClipEffect(i) => self.selected_clip_indices.contains(&i),
+            PressedTarget::MasterEffect(i) => {
+                self.master_effects.get(i)
+                    .is_some_and(|c| self.selected_master_ids.contains(c.effect_id()))
+            }
+            PressedTarget::LayerEffect(i) => {
+                self.layer_effects.get(i)
+                    .is_some_and(|c| self.selected_layer_ids.contains(c.effect_id()))
+            }
+            PressedTarget::ClipEffect(i) => {
+                self.clip_effects.get(i)
+                    .is_some_and(|c| self.selected_clip_ids.contains(c.effect_id()))
+            }
             _ => false,
         }
     }
@@ -1040,7 +1016,7 @@ impl InspectorCompositePanel {
 
                     if actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         self.on_effect_card_clicked(InspectorTab::Master, i, modifiers);
-                    } else if !self.selected_master_indices.contains(&i) {
+                    } else if !self.is_effect_target_selected(&PressedTarget::MasterEffect(i)) {
                         // Only auto-select if not already in multi-selection
                         self.auto_select_effect(&PressedTarget::MasterEffect(i));
                     }
@@ -1057,7 +1033,7 @@ impl InspectorCompositePanel {
 
                     if actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         self.on_effect_card_clicked(InspectorTab::Layer, i, modifiers);
-                    } else if !self.selected_layer_indices.contains(&i) {
+                    } else if !self.is_effect_target_selected(&PressedTarget::LayerEffect(i)) {
                         self.auto_select_effect(&PressedTarget::LayerEffect(i));
                     }
                     let ei = self.layer_effects.get(i).map(|c| c.effect_index()).unwrap_or(0);
@@ -1073,7 +1049,7 @@ impl InspectorCompositePanel {
 
                     if actions.iter().any(|a| matches!(a, PanelAction::EffectCardClicked(_))) {
                         self.on_effect_card_clicked(InspectorTab::Clip, i, modifiers);
-                    } else if !self.selected_clip_indices.contains(&i) {
+                    } else if !self.is_effect_target_selected(&PressedTarget::ClipEffect(i)) {
                         self.auto_select_effect(&PressedTarget::ClipEffect(i));
                     }
                     let ei = self.clip_effects.get(i).map(|c| c.effect_index()).unwrap_or(0);
