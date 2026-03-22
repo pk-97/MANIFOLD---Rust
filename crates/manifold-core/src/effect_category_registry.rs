@@ -75,7 +75,6 @@ fn build_effect_categories() -> HashMap<EffectType, &'static str> {
     m.insert(EffectType::Glitch, FILMIC);
     m.insert(EffectType::FilmGrain, FILMIC);
     m.insert(EffectType::Halation, FILMIC);
-    m.insert(EffectType::Microscope, FILMIC);
     // Surveillance
     m.insert(EffectType::Corruption, SURVEILLANCE);
     m.insert(EffectType::Infrared, SURVEILLANCE);

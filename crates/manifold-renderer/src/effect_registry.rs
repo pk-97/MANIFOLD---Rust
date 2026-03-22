@@ -21,7 +21,6 @@ use crate::effects::edge_glow::EdgeGlowFX;
 use crate::effects::transform::TransformFX;
 use crate::effects::infrared::InfraredFX;
 use crate::effects::voronoi_prism::VoronoiPrismFX;
-use crate::effects::microscope::MicroscopeFX;
 use crate::effects::pixel_sort::PixelSortFX;
 use crate::effects::blob_tracking::BlobTrackingFX;
 use crate::effects::wireframe_depth::WireframeDepthFX;
@@ -55,7 +54,6 @@ impl EffectRegistry {
         processors.insert(EffectType::Transform, Box::new(TransformFX::new(device)));
         processors.insert(EffectType::Infrared, Box::new(InfraredFX::new(device)));
         processors.insert(EffectType::VoronoiPrism, Box::new(VoronoiPrismFX::new(device)));
-        processors.insert(EffectType::Microscope, Box::new(MicroscopeFX::new(device)));
         processors.insert(EffectType::PixelSort, Box::new(PixelSortFX::new(device)));
         // BlobTrackingFX needs queue for font atlas upload
         processors.insert(EffectType::BlobTracking, Box::new(BlobTrackingFX::new(device, queue)));

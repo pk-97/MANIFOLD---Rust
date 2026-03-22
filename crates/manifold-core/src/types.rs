@@ -192,7 +192,7 @@ impl EffectType {
         EffectType::QuadMirror, EffectType::StylizedFeedback, EffectType::BlobTracking,
         EffectType::EdgeGlow,
         EffectType::WireframeDepth,
-        EffectType::Microscope, EffectType::Infrared,
+        EffectType::Infrared,
     ];
 
     pub fn from_index(i: usize) -> Option<Self> {

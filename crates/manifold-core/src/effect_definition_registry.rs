@@ -569,27 +569,6 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
         osc_prefix: Some("halation"),
     });
 
-    // Microscope
-    m.insert(EffectType::Microscope, EffectDef {
-        display_name: "Microscope",
-        param_count: 11,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Zoom", 1.0, 10.0, 1.0, "Zoom"),
-            pd_osc("Focus", 0.0, 1.0, 0.5, "Focus"),
-            pd_osc("DOF", 0.0, 1.0, 0.0, "DOF"),
-            pd_osc("Aberration", 0.0, 1.0, 0.0, "Aberration"),
-            pd_whole_labels("Illumination", 0.0, 3.0, 0.0,
-                &["Bright", "Dark", "Phase", "Fluor"],
-                "Illumination"),
-            pd_osc("Structure", 0.0, 1.0, 0.0, "Structure"),
-            pd_osc("Distortion", 0.0, 1.0, 0.0, "Distortion"),
-            pd_osc("Drift", 0.0, 1.0, 0.0, "Drift"),
-            pd_osc("Noise", 0.0, 1.0, 0.0, "Noise"),
-            pd_osc("Dust", 0.0, 1.0, 0.0, "Dust"),
-        ],
-        osc_prefix: Some("microscope"),
-    });
 
     // Corruption
     m.insert(EffectType::Corruption, EffectDef {
