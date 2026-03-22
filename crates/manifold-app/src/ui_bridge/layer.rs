@@ -96,9 +96,10 @@ pub(super) fn dispatch_layer(
         PanelAction::SetBlendMode(idx, mode_str) => {
             {
                 if let Some(layer) = project.timeline.layers.get(*idx) {
+                    let layer_id = layer.layer_id.clone();
                     let old_mode = layer.default_blend_mode;
                     if let Some(new_mode) = BlendMode::ALL.iter().find(|m| format!("{:?}", m) == *mode_str) {
-                        let cmd = ChangeLayerBlendModeCommand::new(*idx, old_mode, *new_mode);
+                        let cmd = ChangeLayerBlendModeCommand::new(layer_id, old_mode, *new_mode);
                         { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
                     }
                 }
@@ -230,7 +231,7 @@ pub(super) fn dispatch_layer(
                 if project.timeline.layers.len() > 1
                     && let Some(layer) = project.timeline.layers.get(*idx) {
                         let layer_clone = layer.clone();
-                        let cmd = DeleteLayerCommand::new(layer_clone, *idx);
+                        let cmd = DeleteLayerCommand::new(layer_clone);
                         { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
                         // Fix active_layer if deleted layer was active
                         if let Some(al) = active_layer.as_ref()

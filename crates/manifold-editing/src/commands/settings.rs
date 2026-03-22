@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::LayerId;
 use manifold_core::project::Project;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::tempo::TempoPoint;
@@ -214,26 +215,26 @@ impl Command for ChangeFrameRateCommand {
 /// Change a layer's MIDI note assignment.
 #[derive(Debug)]
 pub struct ChangeLayerMidiNoteCommand {
-    layer_index: usize,
+    layer_id: LayerId,
     old_note: i32,
     new_note: i32,
 }
 
 impl ChangeLayerMidiNoteCommand {
-    pub fn new(layer_index: usize, old_note: i32, new_note: i32) -> Self {
-        Self { layer_index, old_note, new_note }
+    pub fn new(layer_id: LayerId, old_note: i32, new_note: i32) -> Self {
+        Self { layer_id, old_note, new_note }
     }
 }
 
 impl Command for ChangeLayerMidiNoteCommand {
     fn execute(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.midi_note = self.new_note;
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.midi_note = self.old_note;
         }
     }
@@ -244,26 +245,26 @@ impl Command for ChangeLayerMidiNoteCommand {
 /// Change a layer's blend mode.
 #[derive(Debug)]
 pub struct ChangeLayerBlendModeCommand {
-    layer_index: usize,
+    layer_id: LayerId,
     old_mode: BlendMode,
     new_mode: BlendMode,
 }
 
 impl ChangeLayerBlendModeCommand {
-    pub fn new(layer_index: usize, old_mode: BlendMode, new_mode: BlendMode) -> Self {
-        Self { layer_index, old_mode, new_mode }
+    pub fn new(layer_id: LayerId, old_mode: BlendMode, new_mode: BlendMode) -> Self {
+        Self { layer_id, old_mode, new_mode }
     }
 }
 
 impl Command for ChangeLayerBlendModeCommand {
     fn execute(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.default_blend_mode = self.new_mode;
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.default_blend_mode = self.old_mode;
         }
     }
@@ -274,26 +275,26 @@ impl Command for ChangeLayerBlendModeCommand {
 /// Change a layer's opacity.
 #[derive(Debug)]
 pub struct ChangeLayerOpacityCommand {
-    layer_index: usize,
+    layer_id: LayerId,
     old_opacity: f32,
     new_opacity: f32,
 }
 
 impl ChangeLayerOpacityCommand {
-    pub fn new(layer_index: usize, old_opacity: f32, new_opacity: f32) -> Self {
-        Self { layer_index, old_opacity, new_opacity }
+    pub fn new(layer_id: LayerId, old_opacity: f32, new_opacity: f32) -> Self {
+        Self { layer_id, old_opacity, new_opacity }
     }
 }
 
 impl Command for ChangeLayerOpacityCommand {
     fn execute(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.opacity = self.new_opacity;
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.opacity = self.old_opacity;
         }
     }
@@ -304,14 +305,14 @@ impl Command for ChangeLayerOpacityCommand {
 /// Change generator param values for a layer.
 #[derive(Debug)]
 pub struct ChangeGeneratorParamsCommand {
-    layer_index: usize,
+    layer_id: LayerId,
     old_params: Vec<f32>,
     new_params: Vec<f32>,
 }
 
 impl ChangeGeneratorParamsCommand {
-    pub fn new(layer_index: usize, old_params: Vec<f32>, new_params: Vec<f32>) -> Self {
-        Self { layer_index, old_params, new_params }
+    pub fn new(layer_id: LayerId, old_params: Vec<f32>, new_params: Vec<f32>) -> Self {
+        Self { layer_id, old_params, new_params }
     }
 
     fn apply_params(layer: &mut manifold_core::layer::Layer, params: &[f32]) {
@@ -323,13 +324,13 @@ impl ChangeGeneratorParamsCommand {
 
 impl Command for ChangeGeneratorParamsCommand {
     fn execute(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             Self::apply_params(layer, &self.new_params);
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             Self::apply_params(layer, &self.old_params);
         }
     }
@@ -340,7 +341,7 @@ impl Command for ChangeGeneratorParamsCommand {
 /// Change generator type for a layer (snapshots and restores params/drivers/envelopes).
 #[derive(Debug)]
 pub struct ChangeGeneratorTypeCommand {
-    layer_index: usize,
+    layer_id: LayerId,
     old_type: GeneratorType,
     new_type: GeneratorType,
     old_params: Vec<f32>,
@@ -350,26 +351,26 @@ pub struct ChangeGeneratorTypeCommand {
 
 impl ChangeGeneratorTypeCommand {
     pub fn new(
-        layer_index: usize,
+        layer_id: LayerId,
         old_type: GeneratorType,
         new_type: GeneratorType,
         old_params: Vec<f32>,
         old_drivers: Option<Vec<ParameterDriver>>,
         old_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
     ) -> Self {
-        Self { layer_index, old_type, new_type, old_params, old_drivers, old_envelopes }
+        Self { layer_id, old_type, new_type, old_params, old_drivers, old_envelopes }
     }
 }
 
 impl Command for ChangeGeneratorTypeCommand {
     fn execute(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.change_generator_type(self.new_type);
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.restore_generator_state(
                 self.old_type,
                 self.old_params.clone(),

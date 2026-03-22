@@ -60,25 +60,29 @@ impl Command for AddLayerCommand {
 #[derive(Debug)]
 pub struct DeleteLayerCommand {
     layer: Option<Layer>,
-    layer_index: usize,
+    layer_id: LayerId,
+    /// Remembered during execute so undo re-inserts at the same position.
+    deleted_at_index: usize,
 }
 
 impl DeleteLayerCommand {
-    pub fn new(layer: Layer, layer_index: usize) -> Self {
-        Self { layer: Some(layer), layer_index }
+    pub fn new(layer: Layer) -> Self {
+        let layer_id = layer.layer_id.clone();
+        Self { layer: Some(layer), layer_id, deleted_at_index: 0 }
     }
 }
 
 impl Command for DeleteLayerCommand {
     fn execute(&mut self, project: &mut Project) {
-        if self.layer_index < project.timeline.layers.len() {
-            self.layer = project.timeline.remove_layer(self.layer_index);
+        if let Some(idx) = project.timeline.find_layer_index_by_id(&self.layer_id) {
+            self.deleted_at_index = idx;
+            self.layer = project.timeline.remove_layer(idx);
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
         if let Some(layer) = self.layer.take() {
-            let idx = self.layer_index.min(project.timeline.layers.len());
+            let idx = self.deleted_at_index.min(project.timeline.layers.len());
             project.timeline.insert_layer(idx, layer.clone());
             self.layer = Some(layer);
         }
@@ -202,26 +206,26 @@ impl Command for GroupLayersCommand {
 /// Rename a layer (undoable).
 #[derive(Debug)]
 pub struct RenameLayerCommand {
-    layer_index: usize,
+    layer_id: LayerId,
     old_name: String,
     new_name: String,
 }
 
 impl RenameLayerCommand {
-    pub fn new(layer_index: usize, old_name: String, new_name: String) -> Self {
-        Self { layer_index, old_name, new_name }
+    pub fn new(layer_id: LayerId, old_name: String, new_name: String) -> Self {
+        Self { layer_id, old_name, new_name }
     }
 }
 
 impl Command for RenameLayerCommand {
     fn execute(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.name = self.new_name.clone();
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.name = self.old_name.clone();
         }
     }

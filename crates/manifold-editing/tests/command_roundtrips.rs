@@ -209,7 +209,7 @@ fn delete_layer_undo_roundtrip() {
     let initial_count = project.timeline.layers.len();
     let layer = project.timeline.layers[0].clone();
 
-    let mut cmd = DeleteLayerCommand::new(layer, 0);
+    let mut cmd = DeleteLayerCommand::new(layer);
 
     cmd.execute(&mut project);
     assert_eq!(project.timeline.layers.len(), initial_count - 1);
@@ -289,7 +289,8 @@ fn change_frame_rate_undo_roundtrip() {
 fn change_layer_midi_note_undo_roundtrip() {
     let mut project = make_test_project();
 
-    let mut cmd = ChangeLayerMidiNoteCommand::new(0, -1, 60);
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let mut cmd = ChangeLayerMidiNoteCommand::new(layer_id, -1, 60);
 
     cmd.execute(&mut project);
     assert_eq!(project.timeline.layers[0].midi_note, 60);
@@ -302,7 +303,8 @@ fn change_layer_midi_note_undo_roundtrip() {
 fn change_layer_blend_mode_undo_roundtrip() {
     let mut project = make_test_project();
 
-    let mut cmd = ChangeLayerBlendModeCommand::new(0, BlendMode::Normal, BlendMode::Additive);
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let mut cmd = ChangeLayerBlendModeCommand::new(layer_id, BlendMode::Normal, BlendMode::Additive);
 
     cmd.execute(&mut project);
     assert_eq!(project.timeline.layers[0].default_blend_mode, BlendMode::Additive);
@@ -315,7 +317,8 @@ fn change_layer_blend_mode_undo_roundtrip() {
 fn change_layer_opacity_undo_roundtrip() {
     let mut project = make_test_project();
 
-    let mut cmd = ChangeLayerOpacityCommand::new(0, 1.0, 0.5);
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let mut cmd = ChangeLayerOpacityCommand::new(layer_id, 1.0, 0.5);
 
     cmd.execute(&mut project);
     assert!((project.timeline.layers[0].opacity - 0.5).abs() < 0.001);
@@ -337,8 +340,9 @@ fn change_generator_type_undo_roundtrip() {
     let old_drivers = project.timeline.layers[1].snapshot_gen_drivers();
     let old_envelopes = project.timeline.layers[1].snapshot_gen_envelopes();
 
+    let layer_id = project.timeline.layers[1].layer_id.clone();
     let mut cmd = ChangeGeneratorTypeCommand::new(
-        1, GeneratorType::Plasma, GeneratorType::Tesseract,
+        layer_id, GeneratorType::Plasma, GeneratorType::Tesseract,
         old_params, old_drivers, old_envelopes,
     );
 
@@ -828,7 +832,8 @@ fn add_layer_envelope_undo_roundtrip() {
         ..make_envelope()
     };
 
-    let mut cmd = AddLayerEnvelopeCommand::new(0, envelope);
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let mut cmd = AddLayerEnvelopeCommand::new(layer_id, envelope);
 
     cmd.execute(&mut project);
     assert_eq!(project.timeline.layers[0].envelopes.as_ref().unwrap().len(), 1);

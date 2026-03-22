@@ -687,6 +687,10 @@ impl PlaybackEngine {
         if let Some(idx) = renderer_idx {
             let layers = self.project.as_ref().map_or(&[] as &[_], |p| &p.timeline.layers);
             let success = self.renderers[idx].start_clip(clip, self.current_time, layers);
+            if !success {
+                log::warn!("[Engine] start_clip FAILED: clip={} layer={} gen={:?}",
+                    clip.id, clip.layer_index, clip.generator_type);
+            }
             if success {
                 self.active_clip_renderers.insert(clip.id.clone(), idx);
                 self.active_clip_ids.insert(clip.id.clone());

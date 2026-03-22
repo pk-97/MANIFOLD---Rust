@@ -130,9 +130,10 @@ pub(super) fn dispatch_inspector(
             if let Some(old_val) = drag_snapshot.take()
                 && let Some(idx) = layer_idx
                     && let Some(layer) = project.timeline.layers.get(idx) {
+                        let layer_id = layer.layer_id.clone();
                         let new_val = layer.opacity;
                         if (old_val - new_val).abs() > f32::EPSILON {
-                            let cmd = ChangeLayerOpacityCommand::new(idx, old_val, new_val);
+                            let cmd = ChangeLayerOpacityCommand::new(layer_id, old_val, new_val);
                             ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
@@ -147,10 +148,11 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(idx) {
+                    let layer_id = layer.layer_id.clone();
                     let old = layer.opacity;
                     if (old - 1.0).abs() > f32::EPSILON {
                         layer.opacity = 1.0;
-                        let cmd = ChangeLayerOpacityCommand::new(idx, old, 1.0);
+                        let cmd = ChangeLayerOpacityCommand::new(layer_id, old, 1.0);
                         ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                     }
                 }
@@ -794,11 +796,12 @@ pub(super) fn dispatch_inspector(
                         InspectorTab::Layer => {
                             if let Some(idx) = layer_idx
                                 && let Some(layer) = project.timeline.layers.get(idx) {
+                                    let layer_id = layer.layer_id.clone();
                                     let envs = layer.envelopes.as_deref().unwrap_or(&[]);
                                     if let Some((env_idx, env)) = envs.iter().enumerate()
                                         .find(|(_, e)| e.target_effect_type == et && e.param_index == *pi as i32)
                                         && (old_target - env.target_normalized).abs() > f32::EPSILON {
-                                            let cmd = ChangeLayerEnvelopeTargetCommand::new(idx, env_idx, old_target, env.target_normalized);
+                                            let cmd = ChangeLayerEnvelopeTargetCommand::new(layer_id, env_idx, old_target, env.target_normalized);
                                             ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                                         }
                                 }
@@ -874,6 +877,7 @@ pub(super) fn dispatch_inspector(
                         InspectorTab::Layer => {
                             if let Some(idx) = layer_idx
                                 && let Some(layer) = project.timeline.layers.get(idx) {
+                                    let layer_id = layer.layer_id.clone();
                                     let envs = layer.envelopes.as_deref().unwrap_or(&[]);
                                     if let Some((env_idx, env)) = envs.iter().enumerate()
                                         .find(|(_, e)| e.target_effect_type == et && e.param_index == *pi as i32)
@@ -882,7 +886,7 @@ pub(super) fn dispatch_inspector(
                                         if (old_a - na).abs() > f32::EPSILON || (old_d - nd).abs() > f32::EPSILON
                                             || (old_s - ns).abs() > f32::EPSILON || (old_r - nr).abs() > f32::EPSILON
                                         {
-                                            let cmd = ChangeLayerEnvelopeADSRCommand::new(idx, env_idx, old_a, old_d, old_s, old_r, na, nd, ns, nr);
+                                            let cmd = ChangeLayerEnvelopeADSRCommand::new(layer_id, env_idx, old_a, old_d, old_s, old_r, na, nd, ns, nr);
                                             ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                                         }
                                     }
@@ -991,6 +995,7 @@ pub(super) fn dispatch_inspector(
                         && let Some(gp) = &layer.gen_params {
                             let new_val = gp.get_param_base(*param_idx);
                             if (old_val - new_val).abs() > f32::EPSILON {
+                                let layer_id = layer.layer_id.clone();
                                 let base = gp.base_param_values.as_ref()
                                     .unwrap_or(&gp.param_values);
                                 let mut old_params = base.clone();
@@ -999,7 +1004,7 @@ pub(super) fn dispatch_inspector(
                                 }
                                 let new_params = base.clone();
                                 let cmd = ChangeGeneratorParamsCommand::new(
-                                    layer_idx, old_params, new_params,
+                                    layer_id, old_params, new_params,
                                 );
                                 ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                             }
@@ -1012,6 +1017,7 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = &mut layer.gen_params {
+                        let layer_id = layer.layer_id.clone();
                         let old_val = gp.get_param_base(*param_idx);
                         let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
                         let base = gp.base_param_values.as_ref()
@@ -1021,7 +1027,7 @@ pub(super) fn dispatch_inspector(
                         let new_params = gp.base_param_values.as_ref()
                             .unwrap_or(&gp.param_values).clone();
                         let cmd = ChangeGeneratorParamsCommand::new(
-                            layer_idx, old_params, new_params,
+                            layer_id, old_params, new_params,
                         );
                         ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                     }
@@ -1032,6 +1038,7 @@ pub(super) fn dispatch_inspector(
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
                     && let Some(gp) = &mut layer.gen_params {
+                        let layer_id = layer.layer_id.clone();
                         let old = gp.get_param_base(*param_idx);
                         if (old - *default_val).abs() > f32::EPSILON {
                             let base = gp.base_param_values.as_ref()
@@ -1041,7 +1048,7 @@ pub(super) fn dispatch_inspector(
                             let new_params = gp.base_param_values.as_ref()
                                 .unwrap_or(&gp.param_values).clone();
                             let cmd = ChangeGeneratorParamsCommand::new(
-                                layer_idx, old_params, new_params,
+                                layer_id, old_params, new_params,
                             );
                             ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                         }
@@ -1300,8 +1307,9 @@ pub(super) fn dispatch_inspector(
                                 && let Some(env_idx) = envs.iter().position(|e| e.param_index == *pi as i32) {
                                     let env = &envs[env_idx];
                                     if (old_target - env.target_normalized).abs() > f32::EPSILON {
+                                        let layer_id = layer.layer_id.clone();
                                         let cmd = ChangeLayerEnvelopeTargetCommand::new(
-                                            layer_idx, env_idx, old_target, env.target_normalized,
+                                            layer_id, env_idx, old_target, env.target_normalized,
                                         );
                                         ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                                     }
@@ -1334,8 +1342,9 @@ pub(super) fn dispatch_inspector(
                                         || (old_s - env.sustain_level).abs() > f32::EPSILON
                                         || (old_r - env.release_beats).abs() > f32::EPSILON;
                                     if changed {
+                                        let layer_id = layer.layer_id.clone();
                                         let cmd = ChangeLayerEnvelopeADSRCommand::new(
-                                            layer_idx, env_idx,
+                                            layer_id, env_idx,
                                             old_a, old_d, old_s, old_r,
                                             env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats,
                                         );

@@ -75,9 +75,10 @@ pub(super) fn dispatch_project(
         // ── Dropdown results (context-routed from UIRoot) ────────────
         PanelAction::SetMidiNote(layer_idx, note) => {
             if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+                let layer_id = layer.layer_id.clone();
                 let old_note = layer.midi_note;
                 let cmd = manifold_editing::commands::settings::ChangeLayerMidiNoteCommand::new(
-                    *layer_idx, old_note, *note,
+                    layer_id, old_note, *note,
                 );
                 { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             }
@@ -130,8 +131,9 @@ pub(super) fn dispatch_project(
                             .and_then(|gp| gp.drivers.clone());
                         let old_envelopes = layer.gen_params.as_ref()
                             .and_then(|gp| gp.envelopes.clone());
+                        let layer_id = layer.layer_id.clone();
                         let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
-                            *layer_idx, old_type, new_type, old_params, old_drivers, old_envelopes,
+                            layer_id, old_type, new_type, old_params, old_drivers, old_envelopes,
                         );
                         { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
                         let layer_id = project.timeline.layers.get(*layer_idx)

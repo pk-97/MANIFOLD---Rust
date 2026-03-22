@@ -545,7 +545,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             && project.timeline.layers.len() > 1
                 && let Some(layer) = project.timeline.layers.get(layer_index) {
                     let layer_clone = layer.clone();
-                    let cmd = manifold_editing::commands::layer::DeleteLayerCommand::new(layer_clone, layer_index);
+                    let cmd = manifold_editing::commands::layer::DeleteLayerCommand::new(layer_clone);
                     ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(Box::new(cmd)));
                 }
         *self.needs_rebuild = true;
@@ -710,7 +710,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 if idx < project.timeline.layers.len() {
                     let layer_clone = project.timeline.layers[idx].clone();
                     let cmd = manifold_editing::commands::layer::DeleteLayerCommand::new(
-                        layer_clone, idx,
+                        layer_clone,
                     );
                     commands.push(Box::new(cmd));
                 }

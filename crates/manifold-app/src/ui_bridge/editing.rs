@@ -200,7 +200,7 @@ pub(super) fn dispatch_editing(
                 let idx = *layer_idx;
                 if project.timeline.layers.len() > 1 && idx < project.timeline.layers.len() {
                     let layer = project.timeline.layers[idx].clone();
-                    let cmd = DeleteLayerCommand::new(layer, idx);
+                    let cmd = DeleteLayerCommand::new(layer);
                     { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
                 }
             }

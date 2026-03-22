@@ -513,11 +513,12 @@ impl Application {
             }
             TextInputField::LayerName(idx) => {
                 if let Some(layer) = self.local_project.timeline.layers.get(idx) {
+                    let layer_id = layer.layer_id.clone();
                     let old_name = layer.name.clone();
                     let new_name = text.to_string();
                     if old_name != new_name {
                         let cmd = manifold_editing::commands::layer::RenameLayerCommand::new(
-                            idx, old_name, new_name,
+                            layer_id, old_name, new_name,
                         );
                         let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                         boxed.execute(&mut self.local_project);
@@ -638,8 +639,9 @@ impl Application {
                                     if param_idx < old_params.len() {
                                         old_params[param_idx] = old_val;
                                     }
+                                    let lid = layer.layer_id.clone();
                                     let cmd = manifold_editing::commands::settings::ChangeGeneratorParamsCommand::new(
-                                        layer_idx, old_params, new_params,
+                                        lid, old_params, new_params,
                                     );
                                     let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
                                     boxed.execute(&mut self.local_project);
