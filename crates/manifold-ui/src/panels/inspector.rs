@@ -596,6 +596,16 @@ impl InspectorCompositePanel {
         self.card_drag_active
     }
 
+    /// First node ID of the drag ghost/indicator overlay (for render pass).
+    /// Returns None if no drag is active.
+    pub fn card_drag_first_node(&self) -> Option<usize> {
+        if self.card_drag_active && self.card_drag_ghost_id >= 0 {
+            Some(self.card_drag_ghost_id as usize)
+        } else {
+            None
+        }
+    }
+
     /// Route drag events to the pressed sub-panel.
     /// Called from UIRoot::process_events (not through Panel::handle_event)
     /// because it needs &mut UITree for slider visual feedback.
