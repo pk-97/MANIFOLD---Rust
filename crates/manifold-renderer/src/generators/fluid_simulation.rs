@@ -41,7 +41,9 @@ const INJECT_FORCE: usize = 19;
 const MAX_PARTICLES: u32 = 8_000_000; // Unity: ParticleCount => 8000000
 const PATTERN_COUNT: u32 = 7;
 const SNAP_DECAY_RATE: f32 = 12.0; // ~200ms to near-zero
-const PRE_SHRINK: u32 = 2;
+/// Blur/vector field resolution divider. 4 = quarter scatter res.
+/// Higher = coarser blur = broader fluid flow patterns, less fine turbulence.
+const PRE_SHRINK: u32 = 4;
 const INJECT_FRAMES_PER_ZONE: i32 = 120; // ~2 sec at 60fps
 const SCATTER_REFERENCE_AREA: f32 = 1920.0 * 1080.0; // reference for intensity normalization
 
@@ -680,7 +682,7 @@ impl FluidSimulationGenerator {
         // Density RT: full scatter resolution
         let density_rt = RenderTarget::new(device, sw, sh, DENSITY_FORMAT, "FluidSim Density");
 
-        // Blur + vector field RTs: half scatter resolution (Unity: PRE_SHRINK=2)
+        // Blur + vector field RTs: quarter scatter resolution (PRE_SHRINK=4)
         let bw = (sw / PRE_SHRINK).max(1);
         let bh = (sh / PRE_SHRINK).max(1);
         let blur_density_rt = RenderTarget::new(device, bw, bh, DENSITY_FORMAT, "FluidSim Blur Density");

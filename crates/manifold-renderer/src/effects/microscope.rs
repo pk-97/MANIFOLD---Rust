@@ -219,11 +219,15 @@ impl MicroscopeFX {
             return;
         }
         let format = wgpu::TextureFormat::Rgba16Float;
-        // MicroscopeFX.cs lines 44-50: create at full resolution and clear
-        let blur_a = RenderTarget::new(device, self.width, self.height, format,
+        // Blur intermediates at quarter-res — blur is low-frequency, bilinear
+        // upscale in the composite shader preserves visual quality.
+        let blur_w = (self.width / 4).max(1);
+        let blur_h = (self.height / 4).max(1);
+        let blur_a = RenderTarget::new(device, blur_w, blur_h, format,
             &format!("MicroscopeBlurA_{owner_key}"));
-        let blur_b = RenderTarget::new(device, self.width, self.height, format,
+        let blur_b = RenderTarget::new(device, blur_w, blur_h, format,
             &format!("MicroscopeBlurB_{owner_key}"));
+        // Edge detection stays at full res (high-frequency detail matters)
         let edge_rt = RenderTarget::new(device, self.width, self.height, format,
             &format!("MicroscopeEdge_{owner_key}"));
         // RenderTextureUtil.Clear() is handled by clear_render_target below;
@@ -371,11 +375,13 @@ impl PostProcessEffect for MicroscopeFX {
         let noise       = fx.param_values.get(9).copied().unwrap_or(0.0);
         let dust        = fx.param_values.get(10).copied().unwrap_or(0.0);
 
-        // MicroscopeFX.cs lines 85-86 — _TexelSize
-        let texel_x = 1.0 / ctx.width as f32;
-        let texel_y = 1.0 / ctx.height as f32;
-        let texel_z = ctx.width as f32;
-        let texel_w = ctx.height as f32;
+        // Texel sizes for blur passes use blur RT dimensions (quarter-res)
+        let blur_w = (ctx.width / 4).max(1);
+        let blur_h = (ctx.height / 4).max(1);
+        let texel_x = 1.0 / blur_w as f32;
+        let texel_y = 1.0 / blur_h as f32;
+        let texel_z = blur_w as f32;
+        let texel_w = blur_h as f32;
 
         // Base uniforms shared across all passes
         let base = MicroscopeUniforms {
@@ -479,10 +485,12 @@ impl PostProcessEffect for MicroscopeFX {
         self.width = width;
         self.height = height;
         let format = wgpu::TextureFormat::Rgba16Float;
+        let blur_w = (width / 4).max(1);
+        let blur_h = (height / 4).max(1);
         for (key, state) in &mut self.states {
-            state.blur_a = RenderTarget::new(device, width, height, format,
+            state.blur_a = RenderTarget::new(device, blur_w, blur_h, format,
                 &format!("MicroscopeBlurA_{key}"));
-            state.blur_b = RenderTarget::new(device, width, height, format,
+            state.blur_b = RenderTarget::new(device, blur_w, blur_h, format,
                 &format!("MicroscopeBlurB_{key}"));
             state.edge_rt = RenderTarget::new(device, width, height, format,
                 &format!("MicroscopeEdge_{key}"));
