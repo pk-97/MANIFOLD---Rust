@@ -150,7 +150,7 @@ impl SelectionRegion {
 /// Narrow interface for setting/clearing the selection region.
 /// Port of Unity ISelectionRegionTarget (SelectionRegion.cs lines 22-26).
 pub trait SelectionRegionTarget {
-    fn set_region(&mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32);
+    fn set_region(&mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32, layers: &[crate::layer::Layer]);
     fn clear_region(&mut self);
 
     /// Set region with stable LayerIds. Default impl falls back to index-based set_region.
@@ -162,8 +162,8 @@ pub trait SelectionRegionTarget {
         end_layer: i32,
         _start_layer_id: LayerId,
         _end_layer_id: LayerId,
-        _layers: &[crate::layer::Layer],
+        layers: &[crate::layer::Layer],
     ) {
-        self.set_region(start_beat, end_beat, start_layer, end_layer);
+        self.set_region(start_beat, end_beat, start_layer, end_layer, layers);
     }
 }

@@ -262,7 +262,7 @@ fn update_region_from_clip_selection(selection: &mut SelectionState, project: &P
         }
 
         if found {
-            selection.set_region_from_clip_bounds(min_beat, max_beat, min_layer, max_layer);
+            selection.set_region_from_clip_bounds(min_beat, max_beat, min_layer, max_layer, &project.timeline.layers);
         }
     }
 }
@@ -292,7 +292,7 @@ pub fn update_region_from_clip_selection_inline(selection: &mut SelectionState, 
     }
 
     if found {
-        selection.set_region_from_clip_bounds(min_beat, max_beat, min_layer, max_layer);
+        selection.set_region_from_clip_bounds(min_beat, max_beat, min_layer, max_layer, &project.timeline.layers);
     }
 }
 
@@ -332,7 +332,7 @@ pub(crate) fn select_region_to_with_project(
             let max_beat = anchor_beat.max(target_beat);
             let min_layer = anchor_layer.min(target_layer).min(layer_count - 1) as i32;
             let max_layer = anchor_layer.max(target_layer).min(layer_count - 1) as i32;
-            selection.set_region(min_beat, max_beat, min_layer, max_layer);
+            selection.set_region(min_beat, max_beat, min_layer, max_layer, &project.timeline.layers);
         }
         None => {
             let lid = project.timeline.layers.get(target_layer)

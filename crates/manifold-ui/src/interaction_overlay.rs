@@ -64,7 +64,7 @@ fn select_region_to(
             let max_beat = anchor_beat.max(target_beat);
             let min_layer = anchor_layer.min(target_layer).min(layer_count - 1) as i32;
             let max_layer = anchor_layer.max(target_layer).min(layer_count - 1) as i32;
-            ui_state.set_region(min_beat, max_beat, min_layer, max_layer);
+            ui_state.set_region(min_beat, max_beat, min_layer, max_layer, host.layers());
         }
         None => {
             // No anchor — set insert cursor at target (Unity line 247-248)
@@ -465,7 +465,7 @@ impl InteractionOverlay {
                 self.handle_trim_right_drag(beat, host, ui_state, viewport);
             }
             DragMode::RegionSelect => {
-                self.update_region_drag(pos, ui_state, viewport);
+                self.update_region_drag(pos, ui_state, viewport, host);
             }
             DragMode::None => {}
         }
@@ -973,6 +973,7 @@ impl InteractionOverlay {
         pos: Vec2,
         ui_state: &mut UIState,
         viewport: &TimelineViewportPanel,
+        host: &dyn TimelineEditingHost,
     ) {
         let beat = viewport.pixel_to_beat(pos.x);
         let layer = viewport.layer_at_y(pos.y).unwrap_or(self.region_drag_start_layer);
@@ -987,7 +988,7 @@ impl InteractionOverlay {
         let snapped_max = viewport.snap_to_grid(max_beat);
 
         // Unity line 835: update region live — bumps SelectionVersion
-        ui_state.set_region(snapped_min, snapped_max, min_layer as i32, max_layer as i32);
+        ui_state.set_region(snapped_min, snapped_max, min_layer as i32, max_layer as i32, host.layers());
     }
 
     // ────────────────────────────────────────────────────────────
@@ -1021,7 +1022,7 @@ impl InteractionOverlay {
         }
 
         if min_beat < max_beat {
-            ui_state.set_region_from_clip_bounds(min_beat, max_beat, min_layer as i32, max_layer as i32);
+            ui_state.set_region_from_clip_bounds(min_beat, max_beat, min_layer as i32, max_layer as i32, host.layers());
         }
     }
 

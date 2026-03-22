@@ -61,6 +61,9 @@ pub trait TimelineEditingHost {
     /// Number of layers in the active timeline.
     fn layer_count(&self) -> usize;
 
+    /// Read-only access to the layer array (for populating region selection LayerIds).
+    fn layers(&self) -> &[manifold_core::layer::Layer];
+
     /// Get the LayerId at a positional index (for resolving indices to stable IDs).
     fn layer_id_at_index(&self, index: usize) -> Option<LayerId>;
 

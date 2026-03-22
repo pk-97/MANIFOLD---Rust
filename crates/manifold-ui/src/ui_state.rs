@@ -174,7 +174,10 @@ impl UIState {
 
     /// Set a region selection (clears individual clip and layer selection).
     /// Unity UIState.cs SetRegion (lines 50-68).
-    pub fn set_region(&mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32) {
+    pub fn set_region(
+        &mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32,
+        layers: &[manifold_core::layer::Layer],
+    ) {
         self.selected_clip_ids.clear();
         self.primary_selected_clip_id = None;
         self.selected_layer_id_for_clip = None;
@@ -183,6 +186,16 @@ impl UIState {
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_id = None;
         self.selection_region.set(start_beat, end_beat, start_layer, end_layer);
+        // Populate LayerId-based fields from the layer array
+        let min = start_layer.min(end_layer) as usize;
+        let max = start_layer.max(end_layer) as usize;
+        self.selection_region.selected_layer_ids.clear();
+        let upper = max.min(layers.len().saturating_sub(1));
+        for layer in &layers[min..=upper] {
+            self.selection_region.selected_layer_ids.insert(layer.layer_id.clone());
+        }
+        self.selection_region.start_layer_id = layers.get(min).map(|l| l.layer_id.clone());
+        self.selection_region.end_layer_id = layers.get(max).map(|l| l.layer_id.clone());
         self.selection_version += 1;
     }
 
@@ -191,6 +204,7 @@ impl UIState {
     /// Unity UIState.cs SetRegionFromClipBounds (lines 74-92).
     pub fn set_region_from_clip_bounds(
         &mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32,
+        layers: &[manifold_core::layer::Layer],
     ) {
         self.clear_layer_selection();
         self.insert_cursor_beat = None;
@@ -200,6 +214,16 @@ impl UIState {
         let s_beat = start_beat.min(end_beat);
         let e_beat = start_beat.max(end_beat);
         self.selection_region.set(s_beat, e_beat, s_layer, e_layer);
+        // Populate LayerId-based fields from the layer array
+        let min = s_layer as usize;
+        let max = e_layer as usize;
+        self.selection_region.selected_layer_ids.clear();
+        let upper = max.min(layers.len().saturating_sub(1));
+        for layer in &layers[min..=upper] {
+            self.selection_region.selected_layer_ids.insert(layer.layer_id.clone());
+        }
+        self.selection_region.start_layer_id = layers.get(min).map(|l| l.layer_id.clone());
+        self.selection_region.end_layer_id = layers.get(max).map(|l| l.layer_id.clone());
         self.selection_version += 1;
     }
 
@@ -243,9 +267,6 @@ impl UIState {
     /// Unity UIState.cs SetInsertCursorBeat (lines 125-130).
     pub fn set_insert_cursor_beat(&mut self, beat: f32) {
         self.insert_cursor_beat = Some(beat);
-        if self.insert_cursor_layer_id.is_none() {
-            self.insert_cursor_layer_id = Some(LayerId::default());
-        }
     }
 
     /// Clear insert cursor if active.

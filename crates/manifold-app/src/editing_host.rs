@@ -88,6 +88,10 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             .unwrap_or(0)
     }
 
+    fn layers(&self) -> &[manifold_core::layer::Layer] {
+        &self.project.timeline.layers
+    }
+
     fn layer_id_at_index(&self, index: usize) -> Option<manifold_core::LayerId> {
         self.project.timeline.layers.get(index).map(|l| l.layer_id.clone())
     }
