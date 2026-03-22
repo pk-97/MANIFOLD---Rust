@@ -360,7 +360,7 @@ impl LayerCompositor {
         effects: &[EffectInstance],
         groups: &[EffectGroup],
         ctx: &EffectContext,
-        gpu_profiler: Option<&mut crate::gpu_profiler::GpuProfiler>,
+        gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> Option<&'a wgpu::TextureView> {
         effect_chain.apply_chain(
             device, queue, encoder,
@@ -387,7 +387,7 @@ impl LayerCompositor {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         frame: &CompositorFrame,
-        mut gpu_profiler: Option<&mut crate::gpu_profiler::GpuProfiler>,
+        gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let clips = frame.clips;
         let width = self.main.width();
@@ -453,7 +453,7 @@ impl LayerCompositor {
                         &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
                         device, queue, encoder,
                         clip.texture_view, clip.effects, clip.effect_groups, &ctx,
-                        gpu_profiler.as_deref_mut(),
+                        gpu_profiler,
                     )
                 } else {
                     None
@@ -505,7 +505,7 @@ impl LayerCompositor {
                             &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
                             device, queue, encoder,
                             clip.texture_view, clip.effects, clip.effect_groups, &ctx,
-                            gpu_profiler.as_deref_mut(),
+                            gpu_profiler,
                         )
                     } else {
                         None
@@ -551,7 +551,7 @@ impl LayerCompositor {
                             &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
                             device, queue, encoder,
                             layer_buf.source_view(), ld.effects, ld.effect_groups, &ctx,
-                            gpu_profiler.as_deref_mut(),
+                            gpu_profiler,
                         )
                     } else {
                         None
@@ -636,25 +636,20 @@ impl Compositor for LayerCompositor {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         frame: &CompositorFrame,
-        mut gpu_profiler: Option<&mut crate::gpu_profiler::GpuProfiler>,
+        gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> &wgpu::TextureView {
         if frame.clips.is_empty() {
             self.main.clear_source(encoder, true);
         } else {
-            self.composite(device, queue, encoder, frame, gpu_profiler.as_deref_mut());
+            self.composite(device, queue, encoder, frame, gpu_profiler);
         }
 
-        if let Some(ref mut profiler) = gpu_profiler {
-            profiler.begin_scope(encoder, "compositor:tonemap");
-        }
         self.tonemap.apply(
             device, queue, encoder,
             self.main.source_view(),
             &frame.tonemap,
+            gpu_profiler,
         );
-        if let Some(ref mut profiler) = gpu_profiler {
-            profiler.end_scope(encoder);
-        }
         &self.tonemap.output.view
     }
 

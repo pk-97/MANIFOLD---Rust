@@ -595,6 +595,7 @@ impl WireframeDepthFX {
         encoder: &mut wgpu::CommandEncoder,
         owner_key: i64,
         wire_scale: f32,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> &mut OwnerState {
         // WireframeDepthFX.cs line 141-142
         let wire_w = (self.width as f32 * wire_scale).round() as u32;
@@ -724,7 +725,7 @@ impl WireframeDepthFX {
         };
 
         // WireframeDepthFX.cs line 231 — InitializeMeshCoord
-        self.initialize_mesh_coord_new(device, encoder, &mut state);
+        self.initialize_mesh_coord_new(device, encoder, &mut state, profiler);
 
         self.owner_states.insert(owner_key, state);
         self.owner_states.get_mut(&owner_key).unwrap()
@@ -737,6 +738,7 @@ impl WireframeDepthFX {
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         state: &mut OwnerState,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // WireframeDepthFX.cs line 242: if meshCoordTex == null return
         // (always valid here since we just created it)
@@ -772,7 +774,7 @@ impl WireframeDepthFX {
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
         );
-        self.run_pass(encoder, &self.pipelines[PASS_INIT_MESH_COORD], &bg, &state.mesh_coord_tex.view, aw, ah);
+        self.run_pass(encoder, &self.pipelines[PASS_INIT_MESH_COORD], &bg, &state.mesh_coord_tex.view, aw, ah, profiler);
 
         // WireframeDepthFX.cs line 250-256: blit meshCoordTex → surfaceCacheTex via PASS_SURFACE_CACHE_UPDATE
         // material.SetTexture(PrevSurfaceCacheTexId, Texture2D.blackTexture) → dummy
@@ -792,7 +794,7 @@ impl WireframeDepthFX {
             &self.dummy_view,            // prev_surface_cache_tex → dummy (black)
             &self.dummy_view,            // subject_mask_tex
         );
-        self.run_pass(encoder, &self.pipelines[PASS_SURFACE_CACHE_UPDATE], &bg2, &state.surface_cache_tex.view, aw, ah);
+        self.run_pass(encoder, &self.pipelines[PASS_SURFACE_CACHE_UPDATE], &bg2, &state.surface_cache_tex.view, aw, ah, profiler);
     }
 
     // Helper: encode a single render pass (blit-style, no vertex buffer).
@@ -802,9 +804,11 @@ impl WireframeDepthFX {
         pipeline: &wgpu::RenderPipeline,
         bind_group: &wgpu::BindGroup,
         target: &wgpu::TextureView,
-        _w: u32,
-        _h: u32,
+        w: u32,
+        h: u32,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
+        let ts = profiler.and_then(|p| p.render_timestamps("WireframeDepth Pass", w, h));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -817,7 +821,7 @@ impl WireframeDepthFX {
                 depth_slice: None,
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: ts,
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -827,7 +831,7 @@ impl WireframeDepthFX {
     }
 
     // Helper: run a pass writing to a temporary RenderTarget.
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::too_many_arguments)]
     fn run_pass_to_rt(
         &self,
         device: &wgpu::Device,
@@ -849,13 +853,14 @@ impl WireframeDepthFX {
         target: &wgpu::TextureView,
         w: u32,
         h: u32,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let bg = self.make_bind_group(device, ubo,
             main_view, prev_analysis_view, prev_depth_view, depth_view,
             history_view, flow_view, mesh_coord_view, prev_mesh_coord_view,
             semantic_view, surface_cache_view, prev_surface_cache_view, subject_mask_view,
         );
-        self.run_pass(encoder, &self.pipelines[pass_idx], &bg, target, w, h);
+        self.run_pass(encoder, &self.pipelines[pass_idx], &bg, target, w, h, profiler);
     }
 
     // Build a bind group from 1 UBO + 12 texture views + 1 sampler.
@@ -1303,6 +1308,7 @@ impl WireframeDepthFX {
         state: &mut OwnerState,
         _temporal_smooth: f32,
         ubo: &wgpu::Buffer,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let aw = state.analysis_width;
         let ah = state.analysis_height;
@@ -1326,7 +1332,7 @@ impl WireframeDepthFX {
             &self.dummy_view,                    // prev_surface_cache_tex
             &self.dummy_view,                    // subject_mask_tex
         );
-        self.run_pass(encoder, &self.pipelines[PASS_HEURISTIC_DEPTH], &bg, &depth_next.view, aw, ah);
+        self.run_pass(encoder, &self.pipelines[PASS_HEURISTIC_DEPTH], &bg, &depth_next.view, aw, ah, profiler);
 
         // Graphics.Blit(depthNext, state.depthTex) — copy
         encoder.copy_texture_to_texture(
@@ -1355,6 +1361,7 @@ impl WireframeDepthFX {
         state: &mut OwnerState,
         _temporal_smooth: f32,
         ubo: &wgpu::Buffer,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> bool {
         // dnnBackendAvailable checked by caller (ensure_dnn_backend_available)
         if state.dnn_depth_dirty {
@@ -1385,7 +1392,7 @@ impl WireframeDepthFX {
             &self.dummy_view,               // prev_surface_cache_tex
             &self.dummy_view,               // subject_mask_tex
         );
-        self.run_pass(encoder, &self.pipelines[PASS_DNN_DEPTH_POST], &bg, &depth_next.view, aw, ah);
+        self.run_pass(encoder, &self.pipelines[PASS_DNN_DEPTH_POST], &bg, &depth_next.view, aw, ah, profiler);
 
         // Graphics.Blit(depthNext, state.depthTex)
         encoder.copy_texture_to_texture(
@@ -1421,6 +1428,7 @@ impl WireframeDepthFX {
         face_warp_enabled: bool,
         frame_count: i64,
         ubo: &wgpu::Buffer,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // WireframeDepthFX.cs line 738-740
         // (null checks — all fields valid if we reached here)
@@ -1463,14 +1471,14 @@ impl WireframeDepthFX {
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             );
-            self.run_pass(encoder, &self.pipelines[PASS_INIT_MESH_COORD], &bg, &state.mesh_coord_tex.view, aw, ah);
+            self.run_pass(encoder, &self.pipelines[PASS_INIT_MESH_COORD], &bg, &state.mesh_coord_tex.view, aw, ah, profiler);
             // PASS_SURFACE_CACHE_UPDATE from fresh mesh coord
             let bg2 = self.make_bind_group(device, &temp_ubo,
                 &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             );
-            self.run_pass(encoder, &self.pipelines[PASS_SURFACE_CACHE_UPDATE], &bg2, &state.surface_cache_tex.view, aw, ah);
+            self.run_pass(encoder, &self.pipelines[PASS_SURFACE_CACHE_UPDATE], &bg2, &state.surface_cache_tex.view, aw, ah, profiler);
 
             state.dnn_has_subject_mask = false;
             if !state.dnn_subject_history_buffer.is_empty() {
@@ -1533,7 +1541,7 @@ impl WireframeDepthFX {
                 &self.dummy_view,                  // prev_surface_cache_tex
                 &self.dummy_view,                  // subject_mask_tex
             );
-            self.run_pass(encoder, &self.pipelines[PASS_FLOW_ESTIMATE], &bg, &state.flow_tex.view, aw, ah);
+            self.run_pass(encoder, &self.pipelines[PASS_FLOW_ESTIMATE], &bg, &state.flow_tex.view, aw, ah, profiler);
             &state.flow_tex.view
         };
 
@@ -1546,7 +1554,7 @@ impl WireframeDepthFX {
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
         );
-        self.run_pass(encoder, &self.pipelines[PASS_FLOW_HYGIENE], &bg_hygiene, &flow_filtered.view, aw, ah);
+        self.run_pass(encoder, &self.pipelines[PASS_FLOW_HYGIENE], &bg_hygiene, &flow_filtered.view, aw, ah, profiler);
         let flow_stable_view = &flow_filtered.view;
 
         // WireframeDepthFX.cs line 808-826: semantic mask
@@ -1566,7 +1574,7 @@ impl WireframeDepthFX {
             &self.dummy_view,                  // prev_surface_cache_tex
             &self.dummy_view,                  // subject_mask_tex
         );
-        self.run_pass(encoder, &self.pipelines[PASS_SEMANTIC_MASK], &bg_sem, &state.semantic_tex.view, aw, ah);
+        self.run_pass(encoder, &self.pipelines[PASS_SEMANTIC_MASK], &bg_sem, &state.semantic_tex.view, aw, ah, profiler);
 
         // WireframeDepthFX.cs line 811-826: temp coord RTs
         let coord_next       = RenderTarget::new(device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD CoordNext");
@@ -1591,7 +1599,7 @@ impl WireframeDepthFX {
             &self.dummy_view,                  // prev_surface_cache_tex
             &self.dummy_view,                  // subject_mask_tex
         );
-        self.run_pass(encoder, &self.pipelines[PASS_FLOW_ADVECT_COORD], &bg_advect, &coord_next.view, aw, ah);
+        self.run_pass(encoder, &self.pipelines[PASS_FLOW_ADVECT_COORD], &bg_advect, &coord_next.view, aw, ah, profiler);
 
         // WireframeDepthFX.cs line 837-841: PASS_MESH_CELL_AFFINE
         // coordNext → coordAffine
@@ -1602,7 +1610,7 @@ impl WireframeDepthFX {
             &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view,
         );
-        self.run_pass(encoder, &self.pipelines[PASS_MESH_CELL_AFFINE], &bg_affine, &coord_affine.view, aw, ah);
+        self.run_pass(encoder, &self.pipelines[PASS_MESH_CELL_AFFINE], &bg_affine, &coord_affine.view, aw, ah, profiler);
 
         // WireframeDepthFX.cs line 843-862: optional face warp pass
         let pre_regularize_view: &wgpu::TextureView;
@@ -1625,7 +1633,7 @@ impl WireframeDepthFX {
                 edge_follow_mask_view,     // semantic_tex slot → DNN subject mask or GPU heuristic
                 &self.dummy_view, &self.dummy_view, &self.dummy_view,
             );
-            self.run_pass(encoder, &self.pipelines[PASS_MESH_FACE_WARP], &bg_face, &coord_face.view, aw, ah);
+            self.run_pass(encoder, &self.pipelines[PASS_MESH_FACE_WARP], &bg_face, &coord_face.view, aw, ah, profiler);
             coord_face_opt = Some(coord_face);
             pre_regularize_view = &coord_face_opt.as_ref().unwrap().view;
         } else {
@@ -1644,7 +1652,7 @@ impl WireframeDepthFX {
             &state.mesh_coord_tex.view,    // prev_mesh_coord_tex
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
         );
-        self.run_pass(encoder, &self.pipelines[PASS_MESH_REGULARIZE], &bg_reg, &coord_regularized.view, aw, ah);
+        self.run_pass(encoder, &self.pipelines[PASS_MESH_REGULARIZE], &bg_reg, &coord_regularized.view, aw, ah, profiler);
 
         // WireframeDepthFX.cs line 871: Graphics.Blit(coordRegularized, state.meshCoordTex)
         encoder.copy_texture_to_texture(
@@ -1673,7 +1681,7 @@ impl WireframeDepthFX {
             &state.surface_cache_tex.view,     // prev_surface_cache_tex
             &self.dummy_view,
         );
-        self.run_pass(encoder, &self.pipelines[PASS_SURFACE_CACHE_UPDATE], &bg_surf, &surface_next.view, aw, ah);
+        self.run_pass(encoder, &self.pipelines[PASS_SURFACE_CACHE_UPDATE], &bg_surf, &surface_next.view, aw, ah, profiler);
 
         // WireframeDepthFX.cs line 879: Graphics.Blit(surfaceNext, state.surfaceCacheTex)
         encoder.copy_texture_to_texture(
@@ -1740,6 +1748,7 @@ impl PostProcessEffect for WireframeDepthFX {
         target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // WireframeDepthFX.cs line 281-282
         let amount = fx.param_values.first().copied().unwrap_or(0.0);
@@ -1758,7 +1767,7 @@ impl PostProcessEffect for WireframeDepthFX {
         // GetOrCreateOwner needs encoder; owner_states borrow released before later use.
         // We store the owner_key to look up the state again after this call.
         let owner_key = ctx.owner_key;
-        self.get_or_create_owner(device, encoder, owner_key, wire_scale);
+        self.get_or_create_owner(device, encoder, owner_key, wire_scale, profiler);
 
         // Read remaining params — new 12-param layout
         let density         = fx.param_values.get(1).copied().unwrap_or(96.0);
@@ -1983,7 +1992,7 @@ impl PostProcessEffect for WireframeDepthFX {
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             );
-            self.run_pass(encoder, &self.pipelines[PASS_ANALYSIS], &bg, &analysis_rt.view, aw, ah);
+            self.run_pass(encoder, &self.pipelines[PASS_ANALYSIS], &bg, &analysis_rt.view, aw, ah, profiler);
         }
 
         // WireframeDepthFX.cs line 388-394 — request native readback
@@ -2007,7 +2016,7 @@ impl PostProcessEffect for WireframeDepthFX {
         // Temporarily remove state to avoid borrow conflict (self.method + self.owner_states)
         let dnn_used = if depth_mode == DepthSourceMode::Dnn && dnn_available {
             let mut state = self.owner_states.remove(&owner_key).unwrap();
-            let result = self.try_estimate_depth_dnn(device, encoder, queue, &mut state, temporal_smooth, &ubo_analysis);
+            let result = self.try_estimate_depth_dnn(device, encoder, queue, &mut state, temporal_smooth, &ubo_analysis, profiler);
             self.owner_states.insert(owner_key, state);
             result
         } else {
@@ -2020,7 +2029,7 @@ impl PostProcessEffect for WireframeDepthFX {
                 self.warned_missing_dnn = true;
             }
             let mut state = self.owner_states.remove(&owner_key).unwrap();
-            self.estimate_depth_heuristic(device, encoder, &analysis_rt.view, &mut state, temporal_smooth, &ubo_analysis);
+            self.estimate_depth_heuristic(device, encoder, &analysis_rt.view, &mut state, temporal_smooth, &ubo_analysis, profiler);
             self.owner_states.insert(owner_key, state);
         }
 
@@ -2032,6 +2041,7 @@ impl PostProcessEffect for WireframeDepthFX {
                 &analysis_rt.view, &mut state,
                 temporal_smooth, mesh_rate, native_flow_enabled, face_warp_enabled,
                 ctx.frame_count, &ubo_analysis,
+                profiler,
             );
             self.owner_states.insert(owner_key, state);
         }
@@ -2089,7 +2099,7 @@ impl PostProcessEffect for WireframeDepthFX {
                 &self.dummy_view,                // prev_surface_cache_tex
                 subject_mask_view,               // subject_mask_tex
             );
-            self.run_pass(encoder, &self.pipelines[PASS_WIREFRAME_MASK], &bg, &line_mask.view, ww, wh);
+            self.run_pass(encoder, &self.pipelines[PASS_WIREFRAME_MASK], &bg, &line_mask.view, ww, wh, profiler);
         }
 
         // --- Update history pass (Pass 3) + copy → lineHistoryTex ---
@@ -2105,7 +2115,7 @@ impl PostProcessEffect for WireframeDepthFX {
                 &state.surface_cache_tex.view,   // surface_cache_tex (for stability)
                 &self.dummy_view, &self.dummy_view,
             );
-            self.run_pass(encoder, &self.pipelines[PASS_UPDATE_HISTORY], &bg, &history_next.view, ww, wh);
+            self.run_pass(encoder, &self.pipelines[PASS_UPDATE_HISTORY], &bg, &history_next.view, ww, wh, profiler);
         }
         // WireframeDepthFX.cs line 342: Graphics.Blit(historyNext, state.lineHistoryTex)
         {
@@ -2136,7 +2146,7 @@ impl PostProcessEffect for WireframeDepthFX {
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view,
             );
-            self.run_pass(encoder, &self.pipelines[PASS_COMPOSITE], &bg, target, self.width, self.height);
+            self.run_pass(encoder, &self.pipelines[PASS_COMPOSITE], &bg, target, self.width, self.height, profiler);
         }
     }
 

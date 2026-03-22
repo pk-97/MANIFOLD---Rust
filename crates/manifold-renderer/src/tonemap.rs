@@ -167,6 +167,7 @@ impl TonemapPipeline {
         encoder: &mut wgpu::CommandEncoder,
         hdr_source: &wgpu::TextureView,
         settings: &TonemapSettings,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // Realtime HDR preview uses display-linear EDR pass (2).
         // Pass 1 remains reserved for explicit PQ workflows (e.g. export).
@@ -199,6 +200,9 @@ impl TonemapPipeline {
             ],
         });
 
+        let ts = profiler.and_then(|p| {
+            p.render_timestamps("Tonemap", self.output.width, self.output.height)
+        });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Tonemap Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -211,7 +215,7 @@ impl TonemapPipeline {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: ts,
             occlusion_query_set: None,
             multiview_mask: None,
         });

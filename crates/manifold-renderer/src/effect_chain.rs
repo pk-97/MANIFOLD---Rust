@@ -254,7 +254,7 @@ impl EffectChain {
         groups: &[EffectGroup],
         ctx: &EffectContext,
         wet_dry_lerp: Option<&WetDryLerpPipeline>,
-        mut gpu_profiler: Option<&mut crate::gpu_profiler::GpuProfiler>,
+        gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> Option<&wgpu::TextureView> {
         // Filter to enabled effects with registered processors
         let enabled: Vec<usize> = effects
@@ -304,7 +304,7 @@ impl EffectChain {
                 if let Some(prev_gid) = current_group_id
                     && let Some(group) = groups.iter().find(|g| g.id == prev_gid) {
                         self.apply_wet_dry_lerp(
-                            device, queue, encoder, group.wet_dry, wet_dry_lerp,
+                            device, queue, encoder, group.wet_dry, wet_dry_lerp, gpu_profiler,
                         );
                     }
 
@@ -340,21 +340,13 @@ impl EffectChain {
             // Unity ref: CompositorStack checks ShouldSkip before Apply + buffer swap.
             if let Some(processor) = registry.get_mut(fx.effect_type)
                 && !processor.should_skip(fx) {
-                    if let Some(ref mut profiler) = gpu_profiler {
-                        profiler.begin_scope(
-                            encoder,
-                            &format!("effect:{}", fx.effect_type),
-                        );
-                    }
                     processor.apply(
                         device, queue, encoder,
                         self.source_view(),
                         self.target_view(),
                         fx, &chain_ctx,
+                        gpu_profiler,
                     );
-                    if let Some(ref mut profiler) = gpu_profiler {
-                        profiler.end_scope(encoder);
-                    }
                     self.swap();
                 }
         }
@@ -363,7 +355,7 @@ impl EffectChain {
         if let Some(prev_gid) = current_group_id
             && let Some(group) = groups.iter().find(|g| g.id == prev_gid) {
                 self.apply_wet_dry_lerp(
-                    device, queue, encoder, group.wet_dry, wet_dry_lerp,
+                    device, queue, encoder, group.wet_dry, wet_dry_lerp, gpu_profiler,
                 );
             }
 
@@ -378,6 +370,7 @@ impl EffectChain {
         encoder: &mut wgpu::CommandEncoder,
         wet_dry: f32,
         lerp_pipeline: Option<&WetDryLerpPipeline>,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         if wet_dry >= 1.0 {
             return;
@@ -398,6 +391,7 @@ impl EffectChain {
             self.source_view(),
             self.target_view(),
             wet_dry,
+            profiler,
         );
         self.swap();
     }

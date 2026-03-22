@@ -135,6 +135,7 @@ impl WetDryLerpPipeline {
         wet_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
         wet_dry: f32,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let uniforms = WetDryUniforms {
             wet_dry,
@@ -165,6 +166,7 @@ impl WetDryLerpPipeline {
             ],
         });
 
+        let ts = profiler.and_then(|p| p.render_timestamps("WetDry Lerp", 0, 0));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("WetDry Lerp Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -177,7 +179,7 @@ impl WetDryLerpPipeline {
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: ts,
             occlusion_query_set: None,
             multiview_mask: None,
         });

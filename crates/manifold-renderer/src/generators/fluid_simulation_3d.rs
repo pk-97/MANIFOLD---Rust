@@ -778,6 +778,7 @@ impl FluidSimulation3DGenerator {
         dst_view:  &wgpu::TextureView,
         axis:      u32,
         buf_index: usize,
+        profiler:  Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let uniforms = Blur3DUniforms {
             vol_res: self.vol_res,
@@ -799,7 +800,8 @@ impl FluidSimulation3DGenerator {
 
         // Blur shader uses @workgroup_size(4,4,4); dispatch (res+3)/4 per axis
         let wg = self.vol_res.div_ceil(4);
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D BlurScalar"), timestamp_writes: None });
+        let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D BlurScalar", self.vol_res, self.vol_res));
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D BlurScalar"), timestamp_writes: ts });
         pass.set_pipeline(&self.blur_scalar_pipeline);
         pass.set_bind_group(0, &bg, &[]);
         pass.dispatch_workgroups(wg, wg, wg);
@@ -816,6 +818,7 @@ impl FluidSimulation3DGenerator {
         dst_view:  &wgpu::TextureView,
         axis:      u32,
         buf_index: usize,
+        profiler:  Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let uniforms = Blur3DUniforms {
             vol_res: self.vol_res,
@@ -837,7 +840,8 @@ impl FluidSimulation3DGenerator {
 
         // Blur shader uses @workgroup_size(4,4,4); dispatch (res+3)/4 per axis
         let wg = self.vol_res.div_ceil(4);
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D BlurVector"), timestamp_writes: None });
+        let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D BlurVector", self.vol_res, self.vol_res));
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D BlurVector"), timestamp_writes: ts });
         pass.set_pipeline(&self.blur_vector_pipeline);
         pass.set_bind_group(0, &bg, &[]);
         pass.dispatch_workgroups(wg, wg, wg);
@@ -856,6 +860,7 @@ impl Generator for FluidSimulation3DGenerator {
         encoder: &mut wgpu::CommandEncoder,
         target:  &wgpu::TextureView,
         ctx:     &GeneratorContext,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         // ── Read params (matching Unity Render) ──
         let flow           = param(ctx, FLOW,          -0.01);
@@ -943,6 +948,7 @@ impl Generator for FluidSimulation3DGenerator {
                         ctr_scale,
                         flatten,
                         cam_fwd_sim,
+                        profiler,
                     );
                 } else if self.active_snap_mode == 4 {
                     // Color injection trigger (only if color mode active)
@@ -1078,7 +1084,8 @@ impl Generator for FluidSimulation3DGenerator {
                         wgpu::BindGroupEntry { binding: 2, resource: self.splat_3d_uniform_buf.as_entire_binding() },
                     ],
                 });
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Splat3D"), timestamp_writes: None });
+                let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D Splat3D", vol_res, vol_res));
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Splat3D"), timestamp_writes: ts });
                 pass.set_pipeline(&self.splat_3d_pipeline);
                 pass.set_bind_group(0, &bg, &[]);
                 pass.dispatch_workgroups(active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1);
@@ -1107,7 +1114,8 @@ impl Generator for FluidSimulation3DGenerator {
                     ],
                 });
                 let wg = vol_res.div_ceil(BAKE_GROUP_SIZE);
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Resolve3D"), timestamp_writes: None });
+                let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D Resolve3D", vol_res, vol_res));
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Resolve3D"), timestamp_writes: ts });
                 pass.set_pipeline(&self.resolve_3d_pipeline);
                 pass.set_bind_group(0, &bg, &[]);
                 pass.dispatch_workgroups(wg, wg, wg);
@@ -1120,19 +1128,19 @@ impl Generator for FluidSimulation3DGenerator {
                 let density_vol  = self.density_volume.as_ref().unwrap();
                 let density_temp = self.density_blur_temp.as_ref().unwrap();
                 // X: density_volume -> density_blur_temp
-                self.dispatch_blur_scalar(device, queue, encoder, scaled_radius, &density_vol.view, &density_temp.view, 0, 0);
+                self.dispatch_blur_scalar(device, queue, encoder, scaled_radius, &density_vol.view, &density_temp.view, 0, 0, profiler);
             }
             {
                 let density_vol  = self.density_volume.as_ref().unwrap();
                 let density_temp = self.density_blur_temp.as_ref().unwrap();
                 // Y: density_blur_temp -> density_volume
-                self.dispatch_blur_scalar(device, queue, encoder, scaled_radius, &density_temp.view, &density_vol.view, 1, 1);
+                self.dispatch_blur_scalar(device, queue, encoder, scaled_radius, &density_temp.view, &density_vol.view, 1, 1, profiler);
             }
             if vol_res >= 8 {
                 let density_vol  = self.density_volume.as_ref().unwrap();
                 let density_temp = self.density_blur_temp.as_ref().unwrap();
                 // Z: density_volume -> density_blur_temp (result in blur_temp)
-                self.dispatch_blur_scalar(device, queue, encoder, scaled_radius, &density_vol.view, &density_temp.view, 2, 2);
+                self.dispatch_blur_scalar(device, queue, encoder, scaled_radius, &density_vol.view, &density_temp.view, 2, 2, profiler);
                 // After Z blur, blurred density is in density_blur_temp (Unity BlurScalar3D returns temp)
             }
             // else: no Z blur, result is in density_volume (copied to temp in Unity via Graphics.CopyTexture)
@@ -1174,7 +1182,8 @@ impl Generator for FluidSimulation3DGenerator {
                     ],
                 });
                 let wg = vol_res.div_ceil(BAKE_GROUP_SIZE);
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D GradientCurl3D"), timestamp_writes: None });
+                let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D GradientCurl3D", vol_res, vol_res));
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D GradientCurl3D"), timestamp_writes: ts });
                 pass.set_pipeline(&self.gradient_curl_3d_pipeline);
                 pass.set_bind_group(0, &bg, &[]);
                 pass.dispatch_workgroups(wg, wg, wg);
@@ -1186,19 +1195,19 @@ impl Generator for FluidSimulation3DGenerator {
                 let vector_vol  = self.vector_volume.as_ref().unwrap();
                 let vector_temp = self.vector_blur_temp.as_ref().unwrap();
                 // X: vector_volume -> vector_blur_temp
-                self.dispatch_blur_vector(device, queue, encoder, scaled_radius, &vector_vol.view, &vector_temp.view, 0, 3);
+                self.dispatch_blur_vector(device, queue, encoder, scaled_radius, &vector_vol.view, &vector_temp.view, 0, 3, profiler);
             }
             {
                 let vector_vol  = self.vector_volume.as_ref().unwrap();
                 let vector_temp = self.vector_blur_temp.as_ref().unwrap();
                 // Y: vector_blur_temp -> vector_volume
-                self.dispatch_blur_vector(device, queue, encoder, scaled_radius, &vector_temp.view, &vector_vol.view, 1, 4);
+                self.dispatch_blur_vector(device, queue, encoder, scaled_radius, &vector_temp.view, &vector_vol.view, 1, 4, profiler);
             }
             if vol_res >= 8 {
                 let vector_vol  = self.vector_volume.as_ref().unwrap();
                 let vector_temp = self.vector_blur_temp.as_ref().unwrap();
                 // Z: vector_volume -> vector_blur_temp (result in blur_temp)
-                self.dispatch_blur_vector(device, queue, encoder, scaled_radius, &vector_vol.view, &vector_temp.view, 2, 5);
+                self.dispatch_blur_vector(device, queue, encoder, scaled_radius, &vector_vol.view, &vector_temp.view, 2, 5, profiler);
             }
         }
 
@@ -1260,7 +1269,8 @@ impl Generator for FluidSimulation3DGenerator {
                     wgpu::BindGroupEntry { binding: 4, resource: self.sim_3d_uniform_buf.as_entire_binding() },
                 ],
             });
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Simulate3D"), timestamp_writes: None });
+            let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D Simulate3D", active_count, 1));
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Simulate3D"), timestamp_writes: ts });
             pass.set_pipeline(&self.simulate_3d_pipeline);
             pass.set_bind_group(0, &bg, &[]);
             pass.dispatch_workgroups(active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1);
@@ -1305,7 +1315,8 @@ impl Generator for FluidSimulation3DGenerator {
                     wgpu::BindGroupEntry { binding: 2, resource: self.projected_uniform_buf.as_entire_binding() },
                 ],
             });
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D SplatProjected"), timestamp_writes: None });
+            let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D SplatProjected", dw, dh));
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D SplatProjected"), timestamp_writes: ts });
             pass.set_pipeline(&self.splat_projected_pipeline);
             pass.set_bind_group(0, &bg, &[]);
             pass.dispatch_workgroups(active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1);
@@ -1334,7 +1345,8 @@ impl Generator for FluidSimulation3DGenerator {
                     wgpu::BindGroupEntry { binding: 2, resource: self.resolve_display_uniform_buf.as_entire_binding() },
                 ],
             });
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D ResolveDisplay"), timestamp_writes: None });
+            let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D ResolveDisplay", dw, dh));
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D ResolveDisplay"), timestamp_writes: ts });
             pass.set_pipeline(&self.resolve_display_pipeline);
             pass.set_bind_group(0, &bg, &[]);
             // Unity: resolveGroupsX = CeilToInt(w/16f), resolveGroupsY = CeilToInt(h/16f)
@@ -1379,6 +1391,7 @@ impl Generator for FluidSimulation3DGenerator {
                 ],
             });
 
+            let ts = profiler.and_then(|p| p.render_timestamps("FluidSim3D Display", ctx.width, ctx.height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("FluidSim3D Display Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1391,7 +1404,7 @@ impl Generator for FluidSimulation3DGenerator {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes:         None,
+                timestamp_writes:         ts,
                 occlusion_query_set:      None,
                 multiview_mask:           None,
             });
@@ -1429,6 +1442,7 @@ impl FluidSimulation3DGenerator {
         ctr_scale:      f32,
         flatten:        f32,
         cam_fwd:        [f32; 3],
+        profiler:       Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         if self.particle_buffer.is_none() { return; }
 
@@ -1457,7 +1471,8 @@ impl FluidSimulation3DGenerator {
             ],
         });
 
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D SeedPattern"), timestamp_writes: None });
+        let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D SeedPattern", self.active_count, 1));
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D SeedPattern"), timestamp_writes: ts });
         pass.set_pipeline(&self.seed_pattern_pipeline);
         pass.set_bind_group(0, &bg, &[]);
         pass.dispatch_workgroups(self.active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1);
