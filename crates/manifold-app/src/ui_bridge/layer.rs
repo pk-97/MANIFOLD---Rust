@@ -24,19 +24,27 @@ pub(super) fn dispatch_layer(
     match action {
         // ── Layer operations ───────────────────────────────────────
         PanelAction::ToggleMute(idx) => {
-            {
-                if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+            if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+                layer.is_muted = !layer.is_muted;
+            }
+            let i = *idx;
+            let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                if let Some(layer) = p.timeline.layers.get_mut(i) {
                     layer.is_muted = !layer.is_muted;
                 }
-            }
+            })));
             DispatchResult::handled()
         }
         PanelAction::ToggleSolo(idx) => {
-            {
-                if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+            if let Some(layer) = project.timeline.layers.get_mut(*idx) {
+                layer.is_solo = !layer.is_solo;
+            }
+            let i = *idx;
+            let _ = content_tx.try_send(ContentCommand::MutateProject(Box::new(move |p| {
+                if let Some(layer) = p.timeline.layers.get_mut(i) {
                     layer.is_solo = !layer.is_solo;
                 }
-            }
+            })));
             DispatchResult::handled()
         }
         PanelAction::LayerClicked(idx, modifiers) => {
@@ -134,10 +142,7 @@ pub(super) fn dispatch_layer(
             // Intercepted by UIRoot::try_open_dropdown (opens dropdown at button).
             DispatchResult::handled()
         }
-        PanelAction::LayerDragStarted(_idx) => {
-            DispatchResult::handled()
-        }
-        PanelAction::LayerDragMoved(_from, _to) => {
+        PanelAction::LayerDragStarted(_) | PanelAction::LayerDragMoved(..) => {
             DispatchResult::handled()
         }
         PanelAction::LayerDragEnded(from, to) => {

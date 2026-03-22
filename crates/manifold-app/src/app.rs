@@ -431,10 +431,18 @@ impl Application {
                 }
             }
             TextInputField::LayerName(idx) => {
-                if let Some(project) = Some(&mut self.local_project)
-                    && let Some(layer) = project.timeline.layers.get_mut(idx) {
-                        layer.name = text.to_string();
+                if let Some(layer) = self.local_project.timeline.layers.get(idx) {
+                    let old_name = layer.name.clone();
+                    let new_name = text.to_string();
+                    if old_name != new_name {
+                        let cmd = manifold_editing::commands::layer::RenameLayerCommand::new(
+                            idx, old_name, new_name,
+                        );
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                        boxed.execute(&mut self.local_project);
+                        self.send_content_cmd(ContentCommand::Execute(boxed));
                     }
+                }
                 self.needs_rebuild = true;
             }
             TextInputField::ClipBpm => {
@@ -1503,16 +1511,23 @@ impl ApplicationHandler for Application {
 
             // ── Cursor left window → cancel in-progress drags ────────
             WindowEvent::CursorLeft { .. } => {
-                if is_primary && self.mouse_pressed {
-                    log::debug!("Cursor left window — synthesizing PointerUp to cancel drag");
-                    self.ui_root.pointer_event(
-                        self.cursor_pos,
-                        PointerAction::Up,
-                        self.time_since_start,
-                    );
-                    self.mouse_pressed = false;
-                    if self.ui_root.inspector_resize_dragging {
-                        self.ui_root.end_inspector_resize();
+                if is_primary {
+                    if self.mouse_pressed {
+                        log::debug!("Cursor left window — synthesizing PointerUp to cancel drag");
+                        self.ui_root.pointer_event(
+                            self.cursor_pos,
+                            PointerAction::Up,
+                            self.time_since_start,
+                        );
+                        self.mouse_pressed = false;
+                        if self.ui_root.inspector_resize_dragging {
+                            self.ui_root.end_inspector_resize();
+                        }
+                    }
+                    // Clear clip hover so bitmap doesn't stay painted in hover state
+                    if self.selection.hovered_clip_id.is_some() {
+                        self.selection.hovered_clip_id = None;
+                        self.needs_scroll_rebuild = true;
                     }
                 }
             }
@@ -1535,6 +1550,11 @@ impl ApplicationHandler for Application {
                     self.mouse_pressed = false;
                     if self.ui_root.inspector_resize_dragging {
                         self.ui_root.end_inspector_resize();
+                    }
+                    // Clear clip hover so bitmap doesn't stay painted in hover state
+                    if self.selection.hovered_clip_id.is_some() {
+                        self.selection.hovered_clip_id = None;
+                        self.needs_scroll_rebuild = true;
                     }
                 }
             }

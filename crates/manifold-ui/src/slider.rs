@@ -118,19 +118,17 @@ impl BitmapSlider {
 
         // ── Value text (fixed width, right) ──
         let value_x = rect.x + rect.width - VALUE_WIDTH;
-        ids.value_text = tree.add_button(
+        ids.value_text = tree.add_label(
             parent_id,
             value_x, y, VALUE_WIDTH, h,
+            value_text,
             UIStyle {
                 bg_color: Color32::TRANSPARENT,
-                hover_bg_color: color::HOVER_OVERLAY,
-                pressed_bg_color: color::PRESS_OVERLAY,
                 text_color: colors.text,
                 font_size,
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-            value_text,
         );
 
         // ── Track (flexible width, between label and value) ──

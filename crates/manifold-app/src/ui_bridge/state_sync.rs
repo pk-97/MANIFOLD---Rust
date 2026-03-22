@@ -159,8 +159,12 @@ pub fn push_state(
         } else {
             ui.transport.set_export_label(tree, "");
         }
-        ui.transport.set_export_active(tree, false); // No active export in Rust port yet
+        let export_active = project.timeline.export_in_beat > 0.0
+            || project.timeline.export_out_beat > 0.0;
+        ui.transport.set_export_active(tree, export_active);
         ui.transport.set_hdr_active(tree, project.settings.export_hdr);
+        let perc_active = project.percussion_import.is_some();
+        ui.transport.set_perc_active(tree, perc_active);
 
         // Export range markers on viewport
         ui.viewport.set_export_range(project.timeline.export_in_beat, project.timeline.export_out_beat);

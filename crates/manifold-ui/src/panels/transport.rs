@@ -272,6 +272,7 @@ pub struct TransportPanel {
     save_text: String,
     export_active: bool,
     hdr_active: bool,
+    perc_active: bool,
 }
 
 impl TransportPanel {
@@ -312,6 +313,7 @@ impl TransportPanel {
             save_text: "SAVE".into(),
             export_active: false,
             hdr_active: false,
+            perc_active: false,
         }
     }
 
@@ -435,7 +437,7 @@ impl TransportPanel {
         self.bpm_reset_active = active;
         if self.bpm_reset_id >= 0 {
             let id = self.bpm_reset_id as u32;
-            let c = if active { color::BPM_RESET_ACTIVE } else { color::BUTTON_PRESSED };
+            let c = if active { color::BPM_RESET_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
             tree.set_style(id, button_style(c));
             if active { tree.clear_flag(id, UIFlags::DISABLED); }
             else { tree.set_flag(id, UIFlags::DISABLED); }
@@ -446,7 +448,7 @@ impl TransportPanel {
         self.bpm_clear_active = active;
         if self.bpm_clear_id >= 0 {
             let id = self.bpm_clear_id as u32;
-            let c = if active { color::BPM_CLEAR_ACTIVE } else { color::BUTTON_PRESSED };
+            let c = if active { color::BPM_CLEAR_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
             tree.set_style(id, button_style(c));
             if active { tree.clear_flag(id, UIFlags::DISABLED); }
             else { tree.set_flag(id, UIFlags::DISABLED); }
@@ -481,6 +483,14 @@ impl TransportPanel {
         if self.hdr_button_id >= 0 {
             let c = if active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
             tree.set_style(self.hdr_button_id as u32, button_style(c));
+        }
+    }
+
+    pub fn set_perc_active(&mut self, tree: &mut UITree, active: bool) {
+        self.perc_active = active;
+        if self.perc_button_id >= 0 {
+            let c = if active { color::SYNC_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
+            tree.set_style(self.perc_button_id as u32, button_style(c));
         }
     }
 
@@ -615,7 +625,7 @@ impl TransportPanel {
             &bpm_text,
         ) as i32;
 
-        let reset_c = if self.bpm_reset_active { color::BPM_RESET_ACTIVE } else { color::BUTTON_PRESSED };
+        let reset_c = if self.bpm_reset_active { color::BPM_RESET_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
         self.bpm_reset_id = tree.add_button(
             bg, self.layout.bpm_reset.x, self.layout.bpm_reset.y,
             self.layout.bpm_reset.width, self.layout.bpm_reset.height,
@@ -623,7 +633,7 @@ impl TransportPanel {
         ) as i32;
         if !self.bpm_reset_active { tree.set_flag(self.bpm_reset_id as u32, UIFlags::DISABLED); }
 
-        let clear_c = if self.bpm_clear_active { color::BPM_CLEAR_ACTIVE } else { color::BUTTON_PRESSED };
+        let clear_c = if self.bpm_clear_active { color::BPM_CLEAR_ACTIVE } else { color::BUTTON_INACTIVE_C32 };
         self.bpm_clear_id = tree.add_button(
             bg, self.layout.bpm_clear.x, self.layout.bpm_clear.y,
             self.layout.bpm_clear.width, self.layout.bpm_clear.height,

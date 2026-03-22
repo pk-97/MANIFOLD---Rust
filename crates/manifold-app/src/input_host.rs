@@ -802,6 +802,15 @@ impl TimelineInputHost for AppInputHost<'_> {
         self.ui_root.dropdown.is_open()
     }
 
+    fn is_browser_popup_open(&self) -> bool {
+        self.ui_root.browser_popup.is_open()
+    }
+
+    fn dismiss_browser_popup(&mut self) {
+        self.ui_root.browser_popup.close();
+        self.ui_root.overlay_dirty = true;
+    }
+
     fn grid_step(&self) -> f32 {
         self.ui_root.viewport.grid_step()
     }

@@ -199,6 +199,36 @@ impl Command for GroupLayersCommand {
     fn description(&self) -> &str { "Group Layers" }
 }
 
+/// Rename a layer (undoable).
+#[derive(Debug)]
+pub struct RenameLayerCommand {
+    layer_index: usize,
+    old_name: String,
+    new_name: String,
+}
+
+impl RenameLayerCommand {
+    pub fn new(layer_index: usize, old_name: String, new_name: String) -> Self {
+        Self { layer_index, old_name, new_name }
+    }
+}
+
+impl Command for RenameLayerCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+            layer.name = self.new_name.clone();
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index) {
+            layer.name = self.old_name.clone();
+        }
+    }
+
+    fn description(&self) -> &str { "Rename Layer" }
+}
+
 /// Ungroup a group layer, dissolving it.
 #[derive(Debug)]
 pub struct UngroupLayersCommand {

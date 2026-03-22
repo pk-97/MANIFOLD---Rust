@@ -87,12 +87,6 @@ pub fn dispatch(
         | PanelAction::ClipDoubleClicked(_)
         | PanelAction::TrackClicked(..)
         | PanelAction::TrackDoubleClicked(..)
-        | PanelAction::ClipDragStarted(..)
-        | PanelAction::ClipDragMoved(..)
-        | PanelAction::ClipDragEnded
-        | PanelAction::RegionDragStarted(..)
-        | PanelAction::RegionDragMoved(..)
-        | PanelAction::RegionDragEnded
         | PanelAction::ViewportHoverChanged(_)
         | PanelAction::ContextSplitAtPlayhead(_)
         | PanelAction::ContextDeleteClip(_)

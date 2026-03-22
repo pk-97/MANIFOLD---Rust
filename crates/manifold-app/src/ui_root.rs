@@ -90,6 +90,12 @@ pub struct UIRoot {
     /// Node ID for the video/timeline split handle (color feedback on hover/drag).
     /// From Unity PanelResizeHandle.cs — idle/hover/drag color states.
     split_handle_id: i32,
+
+    /// True when a DragBegin originated in the tracks area. While active,
+    /// all Drag/DragEnd events are stashed for the InteractionOverlay
+    /// regardless of cursor position — prevents trim/move events from being
+    /// lost when the cursor moves outside the tracks rect.
+    overlay_drag_active: bool,
 }
 
 impl UIRoot {
@@ -125,6 +131,7 @@ impl UIRoot {
             viewport_events: Vec::new(),
             last_right_click_pos: Vec2::new(0.0, 0.0),
             split_handle_id: -1,
+            overlay_drag_active: false,
         }
     }
 
@@ -457,6 +464,13 @@ impl UIRoot {
             // Stash events in the tracks area for overlay processing.
             // The overlay needs &mut TimelineEditingHost which UIRoot can't provide.
             if self.is_event_in_tracks_area(event) {
+                // Track drag state so Drag/DragEnd are stashed even outside tracks rect.
+                if matches!(event, UIEvent::DragBegin { .. }) {
+                    self.overlay_drag_active = true;
+                }
+                if matches!(event, UIEvent::DragEnd { .. }) {
+                    self.overlay_drag_active = false;
+                }
                 self.viewport_events.push(event.clone());
             }
         }
@@ -818,6 +832,9 @@ impl UIRoot {
     }
 
     /// Check if a UI event's position falls within the tracks area.
+    /// When an overlay drag is active (DragBegin originated in tracks), Drag and
+    /// DragEnd events are always stashed regardless of cursor position — this
+    /// prevents trim/move events from being lost when the cursor exits the rect.
     fn is_event_in_tracks_area(&self, event: &manifold_ui::input::UIEvent) -> bool {
         use manifold_ui::input::UIEvent;
         let pos = match event {
@@ -825,6 +842,9 @@ impl UIRoot {
             UIEvent::DoubleClick { pos, .. } => *pos,
             UIEvent::RightClick { pos, .. } => *pos,
             UIEvent::DragBegin { origin, .. } => *origin,
+            UIEvent::Drag { .. } | UIEvent::DragEnd { .. } if self.overlay_drag_active => {
+                return true;
+            }
             UIEvent::Drag { pos, .. } => *pos,
             UIEvent::DragEnd { pos, .. } => *pos,
             UIEvent::HoverEnter { pos, .. } => *pos,

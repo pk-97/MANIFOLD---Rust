@@ -124,10 +124,11 @@ fn field_style() -> UIStyle {
 fn bg_style(selected: bool) -> UIStyle {
     let bg = if selected { BG_SELECTED } else { BG_COLOR };
     let hover = lighten(bg, if selected { 10 } else { 12 });
+    let pressed = darken(bg, 8);
     UIStyle {
         bg_color: bg,
         hover_bg_color: hover,
-        pressed_bg_color: hover,
+        pressed_bg_color: pressed,
         corner_radius: color::BUTTON_RADIUS,
         ..UIStyle::default()
     }

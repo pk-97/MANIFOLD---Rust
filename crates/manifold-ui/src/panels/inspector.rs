@@ -1195,6 +1195,12 @@ impl Panel for InspectorCompositePanel {
             -1, sb_x, rect.y, SCROLLBAR_W, rect.height,
             UIStyle {
                 bg_color: SCROLLBAR_TRACK_COLOR,
+                hover_bg_color: Color32::new(
+                    SCROLLBAR_TRACK_COLOR.r.saturating_add(10),
+                    SCROLLBAR_TRACK_COLOR.g.saturating_add(10),
+                    SCROLLBAR_TRACK_COLOR.b.saturating_add(10),
+                    SCROLLBAR_TRACK_COLOR.a,
+                ),
                 ..UIStyle::default()
             },
             "",
@@ -1205,6 +1211,12 @@ impl Panel for InspectorCompositePanel {
             UIStyle {
                 bg_color: SCROLLBAR_THUMB_COLOR,
                 hover_bg_color: SCROLLBAR_THUMB_HOVER,
+                pressed_bg_color: Color32::new(
+                    SCROLLBAR_THUMB_HOVER.r.saturating_sub(15),
+                    SCROLLBAR_THUMB_HOVER.g.saturating_sub(15),
+                    SCROLLBAR_THUMB_HOVER.b.saturating_sub(15),
+                    SCROLLBAR_THUMB_HOVER.a,
+                ),
                 corner_radius: 2.0,
                 ..UIStyle::default()
             },

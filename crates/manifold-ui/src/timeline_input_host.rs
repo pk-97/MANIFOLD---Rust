@@ -181,6 +181,12 @@ pub trait TimelineInputHost {
     /// Whether a context menu is currently open.
     fn has_context_menu(&self) -> bool;
 
+    /// Whether the effect/generator browser popup is currently open.
+    fn is_browser_popup_open(&self) -> bool;
+
+    /// Dismiss the browser popup.
+    fn dismiss_browser_popup(&mut self);
+
     /// Get the current grid step in beats (from viewport zoom level).
     fn grid_step(&self) -> f32;
 

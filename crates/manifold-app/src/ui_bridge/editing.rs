@@ -97,15 +97,6 @@ pub(super) fn dispatch_editing(
             *active_layer = Some(*layer);
             DispatchResult::structural()
         }
-        // ── Drag actions — handled by InteractionOverlay (not dispatch) ──
-        // These PanelActions are no longer emitted; the overlay handles all
-        // drag interaction directly through the TimelineEditingHost trait.
-        PanelAction::ClipDragStarted(..) => DispatchResult::handled(),
-        PanelAction::ClipDragMoved(..) => DispatchResult::handled(),
-        PanelAction::ClipDragEnded => DispatchResult::handled(),
-        PanelAction::RegionDragStarted(..) => DispatchResult::handled(),
-        PanelAction::RegionDragMoved(..) => DispatchResult::handled(),
-        PanelAction::RegionDragEnded => DispatchResult::handled(),
         PanelAction::ViewportHoverChanged(_clip_id) => {
             // Hover state is already tracked on viewport panel
             DispatchResult::handled()

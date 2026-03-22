@@ -80,9 +80,14 @@ impl InputHandler {
             return true;
         }
 
-        // ── Escape — 4-level priority chain (Unity lines 224-232) ──
+        // ── Escape — 5-level priority chain (Unity lines 224-232) ──
         if matches!(logical_key, Key::Named(NamedKey::Escape)) {
-            // Level 1: dismiss context menu
+            // Level 0: browser popup (highest z-order modal)
+            if host.is_browser_popup_open() {
+                host.dismiss_browser_popup();
+                return true;
+            }
+            // Level 1: dismiss context menu / dropdown
             if host.has_context_menu() {
                 host.dismiss_context_menu();
                 return true;

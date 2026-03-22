@@ -454,6 +454,12 @@ impl UIRenderer {
             bg_color = style.hover_bg_color;
         }
 
+        // DISABLED: dim background and text to signal non-interactive state.
+        let disabled = node.flags.contains(UIFlags::DISABLED);
+        if disabled {
+            bg_color = Color32::new(bg_color.r, bg_color.g, bg_color.b, bg_color.a / 3);
+        }
+
         // Background
         if bg_color.a > 0 {
             let color = bg_color.to_f32();
@@ -521,12 +527,17 @@ impl UIRenderer {
 
                 let clip_bounds = self.clip_stack.last().map(|c| [c.x, c.y, c.x_max(), c.y_max()]);
 
+                let text_color = if disabled {
+                    [style.text_color.r, style.text_color.g, style.text_color.b, style.text_color.a / 3]
+                } else {
+                    [style.text_color.r, style.text_color.g, style.text_color.b, style.text_color.a]
+                };
                 self.text_commands.push(TextCommand {
                     x: text_x,
                     y: text_y,
                     text: text.clone(),
                     font_size: style.font_size as f32,
-                    color: [style.text_color.r, style.text_color.g, style.text_color.b, style.text_color.a],
+                    color: text_color,
                     clip_bounds,
                 });
             }

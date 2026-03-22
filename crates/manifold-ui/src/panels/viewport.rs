@@ -134,6 +134,7 @@ pub struct TimelineViewportPanel {
 
     // Node IDs — fixed elements
     bg_panel_id: i32,
+    overview_btn_id: i32,
     ruler_bg_id: i32,
     playhead_ruler_id: i32,
     // playhead_track_id: removed — rendered as overlay quad in app.rs
@@ -203,6 +204,7 @@ impl TimelineViewportPanel {
             ruler_rect: Rect::ZERO,
             tracks_rect: Rect::ZERO,
             bg_panel_id: -1,
+            overview_btn_id: -1,
             ruler_bg_id: -1,
             playhead_ruler_id: -1,
             insert_cursor_ruler_id: -1,
@@ -857,10 +859,13 @@ impl Panel for TimelineViewportPanel {
         // viewport indicator, playhead, and export range markers.
         self.overview_rect = Rect::new(body.x, body.y, tracks_w, color::OVERVIEW_STRIP_HEIGHT);
         let overview_rect = self.overview_rect;
-        tree.add_panel(
+        // Interactive button so hit_test returns valid ID for click/drag scrubbing.
+        // Clip miniatures (non-interactive panels) are added on top but fall through
+        // to this button on hit_test. Same pattern as the tracks area overlay.
+        self.overview_btn_id = tree.add_button(
             -1, overview_rect.x, overview_rect.y, overview_rect.width, overview_rect.height,
-            UIStyle { bg_color: color::OVERVIEW_BG, ..UIStyle::default() },
-        );
+            UIStyle { bg_color: color::OVERVIEW_BG, ..UIStyle::default() }, "",
+        ) as i32;
 
         // Overview clip miniatures (from Unity OverviewStripPanel.BuildPanel lines 218-238)
         self.build_overview_clips(tree, overview_rect);
