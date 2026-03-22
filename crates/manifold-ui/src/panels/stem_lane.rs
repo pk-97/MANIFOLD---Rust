@@ -104,6 +104,7 @@ pub struct StemLaneGroupPanel {
     bpm: f32,
 
     // ── UITree node IDs ──
+    first_node: usize,
     lane_nodes: [StemLaneNodeIds; STEM_COUNT],
 }
 
@@ -131,6 +132,7 @@ impl StemLaneGroupPanel {
             playhead_beat: 0.0,
             scroll_offset_x: 0.0,
             bpm: 120.0,
+            first_node: usize::MAX,
             lane_nodes: [StemLaneNodeIds::default(); STEM_COUNT],
         }
     }
@@ -214,9 +216,15 @@ impl StemLaneGroupPanel {
         }
     }
 
+    /// First node index in the tree (for overlay rendering).
+    pub fn first_node(&self) -> usize {
+        self.first_node
+    }
+
     /// Build UITree nodes for interactive elements (overlays + buttons + labels).
     /// Called from UIRoot after viewport.build() so screen_rect is available.
     pub fn build_nodes(&mut self, tree: &mut UITree, screen_rect: Rect) {
+        self.first_node = tree.count();
         let lane_h = color::STEM_LANE_HEIGHT;
 
         #[allow(clippy::needless_range_loop)] // index used for lane_nodes[] and positioning

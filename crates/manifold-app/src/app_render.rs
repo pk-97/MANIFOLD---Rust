@@ -894,21 +894,29 @@ impl Application {
                 let logical_h = (surface_h as f64 / scale) as u32;
 
                 // Pass 1: UITree rects + text (track backgrounds, ruler, chrome panels).
-                // Skip overlay nodes — perf HUD renders after bitmaps (Pass 3b),
-                // popups render in Pass 4. Perf HUD comes first in tree order, so
-                // skipping from its first_node also skips popup nodes (correct).
+                // Skip overlay nodes that render after bitmap textures: waveform/stem
+                // lane buttons (Pass 2b), perf HUD (Pass 3b), popups (Pass 4).
                 // Uses TextMode::Main so base UI text goes to the main TextRenderer's
                 // own vertex buffer, isolated from the overlay TextRenderer.
                 if let Some(ui) = &mut self.ui_renderer {
-                    let skip_from = if self.ui_root.perf_hud.is_visible() {
-                        Some(self.ui_root.perf_hud.first_node())
-                    } else if self.ui_root.dropdown.is_open() {
-                        Some(self.ui_root.dropdown.first_node())
-                    } else if self.ui_root.browser_popup.is_open() {
-                        Some(self.ui_root.browser_popup.first_node())
-                    } else {
-                        None
-                    };
+                    // Earliest overlay node — skip everything from here onwards in Pass 1.
+                    let wf_first = self.ui_root.waveform_lane.first_node();
+                    let sl_first = self.ui_root.stem_lanes.first_node();
+                    let mut skip_from: Option<usize> = None;
+                    if wf_first != usize::MAX {
+                        skip_from = Some(wf_first);
+                    } else if sl_first != usize::MAX {
+                        skip_from = Some(sl_first);
+                    }
+                    if skip_from.is_none() {
+                        if self.ui_root.perf_hud.is_visible() {
+                            skip_from = Some(self.ui_root.perf_hud.first_node());
+                        } else if self.ui_root.dropdown.is_open() {
+                            skip_from = Some(self.ui_root.dropdown.first_node());
+                        } else if self.ui_root.browser_popup.is_open() {
+                            skip_from = Some(self.ui_root.browser_popup.first_node());
+                        }
+                    }
                     ui.render_tree(&self.ui_root.tree, skip_from);
                     ui.render(
                         &gpu.device, &gpu.queue, &mut encoder, &surface_view,
@@ -938,6 +946,36 @@ impl Application {
                         bitmap_gpu.render_layers(
                             &gpu.device, &gpu.queue, &mut encoder, &surface_view,
                             logical_w, logical_h, &rects,
+                        );
+                    }
+                }
+
+                // Pass 2b: Waveform/stem lane buttons — render ON TOP of bitmap textures.
+                // These nodes were skipped in Pass 1 so the bitmap wouldn't cover them.
+                {
+                    let wf_first = self.ui_root.waveform_lane.first_node();
+                    let sl_first = self.ui_root.stem_lanes.first_node();
+                    let overlay_end = self.ui_root.perf_hud.first_node();
+
+                    let overlay_start = if wf_first != usize::MAX {
+                        Some(wf_first)
+                    } else if sl_first != usize::MAX {
+                        Some(sl_first)
+                    } else {
+                        None
+                    };
+
+                    if let (Some(start), Some(ui)) =
+                        (overlay_start, self.ui_renderer.as_mut())
+                    {
+                        ui.render_overlay_range(
+                            &self.ui_root.tree,
+                            start,
+                            overlay_end,
+                        );
+                        ui.render(
+                            &gpu.device, &gpu.queue, &mut encoder, &surface_view,
+                            logical_w, logical_h, scale, TextMode::Overlay,
                         );
                     }
                 }

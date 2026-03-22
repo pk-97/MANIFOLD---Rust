@@ -61,6 +61,7 @@ pub struct WaveformLanePanel {
     is_scrubbing: bool,
 
     // ── UITree node IDs (interactive overlay + buttons) ──
+    first_node: usize,
     overlay_id: i32,
     remove_btn_id: i32,
     expand_btn_id: i32,
@@ -151,6 +152,7 @@ impl WaveformLanePanel {
             drag_start_beat: None,
             waveform_drag_clip_snapshots: Vec::new(),
             is_scrubbing: false,
+            first_node: usize::MAX,
             overlay_id: -1,
             remove_btn_id: -1,
             expand_btn_id: -1,
@@ -217,9 +219,17 @@ impl WaveformLanePanel {
         self.stems_available
     }
 
+    /// First node index in the tree (for overlay rendering — skip in Pass 1,
+    /// render after bitmap textures so buttons are visible on top).
+    pub fn first_node(&self) -> usize {
+        self.first_node
+    }
+
     /// Build UITree nodes for interactive elements (overlay + buttons).
     /// Called from UIRoot after viewport.build() so wf_rect is available.
     pub fn build_nodes(&mut self, tree: &mut UITree, screen_rect: Rect) {
+        self.first_node = tree.count();
+
         // Transparent scrub/drag overlay covering entire waveform area.
         // This is the hit-test target that makes the input system generate events.
         // Unity: DragOverlay (transparent Image, raycastTarget=true).
