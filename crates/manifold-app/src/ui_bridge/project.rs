@@ -187,39 +187,125 @@ pub(super) fn dispatch_project(
             DispatchResult::handled()
         }
         PanelAction::WaveformDragDelta(delta_beats) => {
-            // Capture pre-drag state for undo (first delta only).
-            if let Some(state) = project.percussion_import.as_ref() {
-                ui.waveform_lane.set_drag_start_beat(state.audio_start_beat);
+            // Unity EditingService.OnWaveformDragDeltaBeats (lines 1355-1405):
+            // On first delta, capture audio start + snapshot ALL clips.
+            // Per delta, clamp so nothing goes below beat 0, then move
+            // audio AND all clips by the clamped delta.
+            if !ui.waveform_lane.has_drag_start_beat() {
+                if let Some(state) = project.percussion_import.as_ref() {
+                    ui.waveform_lane.set_drag_start_beat(state.audio_start_beat);
+                }
+                // Snapshot all clips (Unity lines 1366-1377)
+                ui.waveform_lane.waveform_drag_clip_snapshots.clear();
+                for layer in &project.timeline.layers {
+                    for clip in &layer.clips {
+                        ui.waveform_lane.waveform_drag_clip_snapshots.push((
+                            clip.id.clone(),
+                            clip.start_beat,
+                            clip.layer_index,
+                        ));
+                    }
+                }
             }
-            // Mutate local project copy (live preview).
+
+            // Clamp delta so nothing goes below beat 0 (Unity lines 1380-1388)
+            let mut min_current = project.percussion_import
+                .as_ref()
+                .map_or(f32::MAX, |s| s.audio_start_beat);
+            for layer in &project.timeline.layers {
+                for clip in &layer.clips {
+                    if clip.start_beat < min_current {
+                        min_current = clip.start_beat;
+                    }
+                }
+            }
+            let clamped = delta_beats.max(-min_current);
+
+            // Move audio (Unity lines 1391-1393)
             if let Some(state) = project.percussion_import.as_mut() {
-                state.audio_start_beat = (state.audio_start_beat + *delta_beats).max(0.0);
+                state.audio_start_beat = (state.audio_start_beat + clamped).max(0.0);
             }
-            // Sync to content thread so audio playback follows.
-            let db = *delta_beats;
+
+            // Move ALL clips (Unity lines 1395-1400)
+            for layer in &mut project.timeline.layers {
+                for clip in &mut layer.clips {
+                    clip.start_beat = (clip.start_beat + clamped).max(0.0);
+                }
+                layer.mark_clips_unsorted();
+            }
+
+            // Sync to content thread
+            let db = clamped;
             ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
                 if let Some(state) = p.percussion_import.as_mut() {
                     state.audio_start_beat = (state.audio_start_beat + db).max(0.0);
                 }
+                for layer in &mut p.timeline.layers {
+                    for clip in &mut layer.clips {
+                        clip.start_beat = (clip.start_beat + db).max(0.0);
+                    }
+                    layer.mark_clips_unsorted();
+                }
             })));
-            DispatchResult::handled()
+            DispatchResult::structural()
         }
         PanelAction::WaveformDragEnd(_total_delta) => {
-            // Record undo command for the complete drag operation.
-            if let Some(old_start) = ui.waveform_lane.take_drag_start_beat() {
-                let new_start = project.percussion_import
+            // Unity EditingService.OnWaveformDragEnd (lines 1407-1464):
+            // Build CompositeCommand with SetAudioStartBeatCommand + MoveClipCommand
+            // per changed clip, for a single undoable unit.
+            if let Some(old_audio_start) = ui.waveform_lane.take_drag_start_beat() {
+                let new_audio_start = project.percussion_import
                     .as_ref()
                     .map_or(0.0, |s| s.audio_start_beat);
-                if (new_start - old_start).abs() > 0.0001 {
-                    let cmd = manifold_editing::commands::settings::SetAudioStartBeatCommand::new(
-                        old_start, new_start,
+
+                let mut commands: Vec<Box<dyn manifold_editing::command::Command>> =
+                    Vec::new();
+
+                // Audio command
+                if (new_audio_start - old_audio_start).abs() > 0.0001 {
+                    commands.push(Box::new(
+                        manifold_editing::commands::settings::SetAudioStartBeatCommand::new(
+                            old_audio_start, new_audio_start,
+                        ),
+                    ));
+                }
+
+                // Clip move commands (Unity lines 1440-1454)
+                let snapshots =
+                    std::mem::take(&mut ui.waveform_lane.waveform_drag_clip_snapshots);
+                for (clip_id, old_beat, layer_idx) in &snapshots {
+                    let new_beat = project.timeline.find_clip_by_id(clip_id)
+                        .map(|c| c.start_beat);
+                    if let Some(new_beat) = new_beat
+                        && (new_beat - old_beat).abs() > 0.0001
+                    {
+                        commands.push(Box::new(
+                            manifold_editing::commands::clip::MoveClipCommand::new(
+                                clip_id.clone(),
+                                *old_beat,
+                                new_beat,
+                                *layer_idx,
+                                *layer_idx,
+                            ),
+                        ));
+                    }
+                }
+
+                if !commands.is_empty() {
+                    // State already applied — send for undo stack only
+                    let composite = manifold_editing::command::CompositeCommand::new(
+                        commands,
+                        "Drag audio + clips".into(),
                     );
-                    // State already at new_start — send command for undo stack only.
-                    let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                    let boxed: Box<dyn manifold_editing::command::Command + Send> =
+                        Box::new(composite);
                     ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
                 }
+            } else {
+                // No drag_start_beat means drag was a no-op, just clear snapshots
+                ui.waveform_lane.waveform_drag_clip_snapshots.clear();
             }
-            DispatchResult::handled()
+            DispatchResult::structural()
         }
         PanelAction::ExpandStemsToggled(expanded) => {
             ui.waveform_lane.set_expanded_state(*expanded);

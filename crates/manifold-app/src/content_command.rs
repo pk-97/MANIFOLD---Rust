@@ -102,6 +102,15 @@ pub enum ContentCommand {
     /// Re-import stems from current audio file (re-runs Demucs).
     /// Port of Unity: percussionImportController.OnReImportStems().
     ReImportStems,
+    /// Calibrate percussion downbeat at the current playhead beat.
+    /// Port of Unity: percussionImportController.CalibrateImportedPercussionDownbeatAtPlayhead().
+    PercussionCalibrateDownbeat { playhead_beat: f32, beats_per_bar: i32 },
+    /// Nudge percussion alignment by delta_beats.
+    /// Port of Unity: percussionImportController.NudgeImportedPercussionAlignment(delta).
+    PercussionNudgeAlignment(f32),
+    /// Reset percussion alignment to beat 0.
+    /// Port of Unity: percussionImportController.ResetImportedPercussionAlignment().
+    PercussionResetAlignment,
 
     // ── Compositor ────────────────────────────────────────────────
     MarkCompositorDirty,

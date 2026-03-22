@@ -7,6 +7,8 @@
 //! Unity: `ImportedAudioWaveformLane` + `ImportedAudioWaveformScrubHandler`
 //!        + `ImportedAudioWaveformDragHandler`.
 
+use manifold_core::ClipId;
+
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
@@ -51,6 +53,9 @@ pub struct WaveformLanePanel {
     total_snapped_delta: f32,
     /// Pre-drag audio_start_beat — captured on first DragDelta for undo.
     drag_start_beat: Option<f32>,
+    /// Snapshot of ALL clips before drag: (clip_id, original start_beat, layer_index).
+    /// Unity: `waveformDragClipSnapshots` (EditingService.cs line 1367).
+    pub waveform_drag_clip_snapshots: Vec<(ClipId, f32, i32)>,
 
     // ── Scrub handler state (ImportedAudioWaveformScrubHandler.cs) ──
     is_scrubbing: bool,
@@ -144,6 +149,7 @@ impl WaveformLanePanel {
             accumulated_beats: 0.0,
             total_snapped_delta: 0.0,
             drag_start_beat: None,
+            waveform_drag_clip_snapshots: Vec::new(),
             is_scrubbing: false,
             overlay_id: -1,
             remove_btn_id: -1,
@@ -554,6 +560,11 @@ impl WaveformLanePanel {
             || node_id == self.remove_btn_id
             || node_id == self.expand_btn_id
             || self.reanalyze_ids.contains(&node_id)
+    }
+
+    /// Whether drag_start_beat has been captured (first delta already happened).
+    pub fn has_drag_start_beat(&self) -> bool {
+        self.drag_start_beat.is_some()
     }
 
     /// Capture the pre-drag audio start beat for undo (first call only).

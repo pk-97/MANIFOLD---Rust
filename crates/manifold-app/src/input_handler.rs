@@ -345,6 +345,38 @@ impl InputHandler {
             return true;
         }
 
+        // ── Percussion shortcuts: Cmd+Shift+… (Unity InputHandler lines 262-286) ──
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "i" || c.as_str() == "I")
+            && m.is_command_shift()
+        {
+            host.import_percussion_map();
+            return true;
+        }
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "m" || c.as_str() == "M")
+            && m.is_command_shift()
+        {
+            host.calibrate_percussion_downbeat();
+            return true;
+        }
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "[")
+            && m.is_command_shift()
+        {
+            host.nudge_percussion_alignment(-0.25);
+            return true;
+        }
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "]")
+            && m.is_command_shift()
+        {
+            host.nudge_percussion_alignment(0.25);
+            return true;
+        }
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "r" || c.as_str() == "R")
+            && m.is_command_shift()
+        {
+            host.reset_percussion_alignment();
+            return true;
+        }
+
         // ── Export markers: Alt variants first (Unity lines 461-481) ──
         if matches!(logical_key, Key::Character(c) if c.as_str() == "i") && m.is_alt_only() {
             host.clear_export_in();

@@ -1105,6 +1105,31 @@ impl ContentThread {
                     self.percussion_orchestrator.on_re_import_stems(p);
                 }
             }
+            ContentCommand::PercussionCalibrateDownbeat { playhead_beat, beats_per_bar } => {
+                if let Some(p) = self.engine.project_mut() {
+                    self.percussion_orchestrator
+                        .calibrate_imported_percussion_downbeat_at_playhead(
+                            p, &mut self.editing_service,
+                            playhead_beat, beats_per_bar, true,
+                        );
+                }
+            }
+            ContentCommand::PercussionNudgeAlignment(delta_beats) => {
+                if let Some(p) = self.engine.project_mut() {
+                    self.percussion_orchestrator
+                        .nudge_imported_percussion_alignment(
+                            delta_beats, p, &mut self.editing_service, true,
+                        );
+                }
+            }
+            ContentCommand::PercussionResetAlignment => {
+                if let Some(p) = self.engine.project_mut() {
+                    self.percussion_orchestrator
+                        .reset_imported_percussion_alignment(
+                            p, &mut self.editing_service, true,
+                        );
+                }
+            }
 
             // ── Compositor ─────────────────────────────────────────
             ContentCommand::MarkCompositorDirty => {

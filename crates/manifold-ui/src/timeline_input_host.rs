@@ -221,4 +221,18 @@ pub trait TimelineInputHost {
     /// Zoom to fit all clips in the viewport.
     /// Port of Unity InputHandler.ZoomToFit (lines 906-957).
     fn zoom_to_fit(&mut self);
+
+    // ── Percussion alignment (Unity InputHandler lines 262-286) ──
+
+    /// Import a percussion map file. Opens file dialog.
+    fn import_percussion_map(&mut self);
+
+    /// Calibrate percussion downbeat at current playhead.
+    fn calibrate_percussion_downbeat(&mut self);
+
+    /// Nudge percussion alignment by delta_beats.
+    fn nudge_percussion_alignment(&mut self, delta_beats: f32);
+
+    /// Reset percussion alignment to beat 0.
+    fn reset_percussion_alignment(&mut self);
 }
