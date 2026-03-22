@@ -5,3 +5,4 @@
 .codex/scratch/
 .codex/*.local.md
 assets/mri-data/
+profiling_sessions/
