@@ -993,6 +993,8 @@ impl ApplicationHandler for Application {
                 osc_sender: manifold_playback::osc_sender::OscPositionSender::new(),
                 tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
                 link_beat_offset: f64::NAN,
+                #[cfg(feature = "profiling")]
+                profiler: None,
             };
 
             let handle = std::thread::Builder::new()

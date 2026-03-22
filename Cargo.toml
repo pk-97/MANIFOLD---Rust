@@ -8,6 +8,7 @@ members = [
     "crates/manifold-io",
     "crates/manifold-renderer",
     "crates/manifold-native",
+    "crates/manifold-profiler",
     "crates/manifold-app",
 ]
 

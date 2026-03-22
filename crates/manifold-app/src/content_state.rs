@@ -60,6 +60,12 @@ pub struct ContentState {
     pub percussion_progress: f32,
     pub percussion_show_progress: bool,
 
+    // ── Profiling ────────────────────────────────────────────────
+    /// Whether a profiling session is currently recording.
+    pub profiling_active: bool,
+    /// Number of frames recorded in the current session.
+    pub profiling_frame_count: u64,
+
     // ── Project snapshot ──────────────────────────────────────────
     /// Sent when data_version changes so the UI thread can update
     /// its local_project for reads. None when version hasn't changed.
@@ -102,6 +108,8 @@ impl Default for ContentState {
             percussion_status_message: String::new(),
             percussion_progress: 0.0,
             percussion_show_progress: false,
+            profiling_active: false,
+            profiling_frame_count: 0,
             project_snapshot: None,
         }
     }

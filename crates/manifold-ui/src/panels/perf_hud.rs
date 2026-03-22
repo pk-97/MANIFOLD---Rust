@@ -39,6 +39,10 @@ pub struct PerfMetrics {
     pub clock_source: String,
     pub is_playing: bool,
     pub data_version: u64,
+    /// Whether a profiling session is actively recording.
+    pub profiling_active: bool,
+    /// Number of frames captured in the current profiling session.
+    pub profiling_frame_count: u64,
 }
 
 /// Rolling ring buffer for frame time history.
@@ -85,6 +89,7 @@ pub struct PerfHudPanel {
     time_id: i32,
     bpm_id: i32,
     clock_id: i32,
+    profiling_id: i32,
     // Node IDs for graph bars (stored for per-frame color/size updates)
     ui_graph_bar_ids: Vec<i32>,
     render_graph_bar_ids: Vec<i32>,
@@ -122,6 +127,7 @@ impl PerfHudPanel {
             time_id: -1,
             bpm_id: -1,
             clock_id: -1,
+            profiling_id: -1,
             ui_graph_bar_ids: Vec::new(),
             render_graph_bar_ids: Vec::new(),
             ui_graph_y: 0.0,
@@ -186,6 +192,28 @@ impl PerfHudPanel {
         }
         if self.clock_id >= 0 {
             tree.set_text(self.clock_id as u32, &m.clock_source);
+        }
+        if self.profiling_id >= 0 {
+            if m.profiling_active {
+                tree.set_text(
+                    self.profiling_id as u32,
+                    &format!("REC {}", m.profiling_frame_count),
+                );
+                tree.set_style(self.profiling_id as u32, UIStyle {
+                    text_color: color::STATUS_BAD,
+                    font_size: VALUE_FONT,
+                    text_align: TextAlign::Right,
+                    ..UIStyle::default()
+                });
+            } else {
+                tree.set_text(self.profiling_id as u32, "—");
+                tree.set_style(self.profiling_id as u32, UIStyle {
+                    text_color: color::TEXT_NORMAL,
+                    font_size: VALUE_FONT,
+                    text_align: TextAlign::Right,
+                    ..UIStyle::default()
+                });
+            }
         }
 
         // Update graph bars — resize height + recolor per sample value
@@ -358,8 +386,12 @@ impl Panel for PerfHudPanel {
         self.time_id = id; cy = ny;
         let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "BPM");
         self.bpm_id = id; cy = ny;
-        let (id, _ny) = Self::add_row(tree, lx, cy, inner_w, "Clock");
-        self.clock_id = id;
+        let (id, ny) = Self::add_row(tree, lx, cy, inner_w, "Clock");
+        self.clock_id = id; cy = ny;
+
+        // ── Profiling status ─────────────────────────────────────
+        let (id, _ny) = Self::add_row(tree, lx, cy, inner_w, "Profiling");
+        self.profiling_id = id;
 
         self.node_count = tree.count() - self.first_node;
     }

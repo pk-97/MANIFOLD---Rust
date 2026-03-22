@@ -47,6 +47,38 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn toggle_performance_hud(&mut self) {
         self.ui_root.perf_hud.toggle();
         *self.needs_rebuild = true;
+
+        // When profiling feature is enabled, toggling the perf HUD also
+        // starts/stops a profiling session on the content thread.
+        #[cfg(feature = "profiling")]
+        {
+            if self.ui_root.perf_hud.is_visible() {
+                // Starting — send project info for session metadata
+                let (project_name, resolution, target_fps) = (
+                    self.project.project_name.clone(),
+                    (
+                        self.project.settings.output_width as u32,
+                        self.project.settings.output_height as u32,
+                    ),
+                    self.project.settings.frame_rate,
+                );
+                let project_path = self.current_project_path
+                    .as_ref()
+                    .map_or_else(String::new, |p| p.display().to_string());
+                let _ = self.content_tx.try_send(
+                    ContentCommand::StartProfiling {
+                        project_name,
+                        project_path,
+                        resolution,
+                        target_fps,
+                        gpu_name: String::from("Metal GPU"),
+                    },
+                );
+            } else {
+                // Stopping — dump session
+                let _ = self.content_tx.try_send(ContentCommand::StopProfiling);
+            }
+        }
     }
 
     fn is_monitor_output_active(&self) -> bool {

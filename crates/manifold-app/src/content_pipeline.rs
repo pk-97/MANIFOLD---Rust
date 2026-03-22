@@ -89,6 +89,10 @@ pub struct ContentPipeline {
     /// Last seen bridge generation — used to detect resize and re-import.
     #[cfg(target_os = "macos")]
     shared_generation: u64,
+    /// Duration of the last GPU poll (wait for completion) in milliseconds.
+    /// Captured inside render_content(), read by the profiler.
+    #[cfg(feature = "profiling")]
+    gpu_poll_ms: f64,
 }
 
 impl ContentPipeline {
@@ -109,6 +113,8 @@ impl ContentPipeline {
             shared_bridge: None,
             #[cfg(target_os = "macos")]
             shared_generation: 0,
+            #[cfg(feature = "profiling")]
+            gpu_poll_ms: 0.0,
         }
     }
 
@@ -312,7 +318,13 @@ impl ContentPipeline {
         // Makes frame timing consistent: GPU-bound frames run at steady reduced FPS
         // instead of 60-60-60-stall judder. Only blocks the content device — UI is
         // on its own device/queue and is completely unaffected.
+        #[cfg(feature = "profiling")]
+        let _poll_start = std::time::Instant::now();
+
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+
+        #[cfg(feature = "profiling")]
+        { self.gpu_poll_ms = _poll_start.elapsed().as_secs_f64() * 1000.0; }
 
         // Swap + update shared output view (non-macOS fallback path)
         #[cfg(not(target_os = "macos"))]
@@ -404,5 +416,12 @@ impl ContentPipeline {
     #[allow(dead_code)]
     pub fn pre_tonemap_output(&self) -> &wgpu::TextureView {
         self.compositor.pre_tonemap_output()
+    }
+
+    /// Duration of the last GPU poll (wait for completion) in milliseconds.
+    /// Only available with the `profiling` feature.
+    #[cfg(feature = "profiling")]
+    pub fn last_gpu_poll_ms(&self) -> f64 {
+        self.gpu_poll_ms
     }
 }

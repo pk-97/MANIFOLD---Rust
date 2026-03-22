@@ -24,6 +24,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 crossbeam-channel = "0.5"
 parking_lot = { workspace = true }
+manifold-profiler = { path = "../manifold-profiler", optional = true }
 
 # IOSurface bridge for cross-device GPU texture sharing (macOS)
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -35,5 +36,8 @@ core-foundation = "0.10"
 wgpu-hal = "28"
 wgpu-types = "28"
 
+[features]
+profiling = ["dep:manifold-profiler"]
+
 [lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("cargo-clippy"))'] }
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("cargo-clippy", "profiling"))'] }

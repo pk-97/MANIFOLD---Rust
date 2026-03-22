@@ -1977,6 +1977,7 @@ dependencies = [
  "manifold-editing",
  "manifold-io",
  "manifold-playback",
+ "manifold-profiler",
  "manifold-renderer",
  "manifold-ui",
  "metal",
@@ -2049,6 +2050,14 @@ dependencies = [
  "serde",
  "serde_json",
  "symphonia",
+]
+
+[[package]]
+name = "manifold-profiler"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
