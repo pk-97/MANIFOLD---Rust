@@ -950,7 +950,7 @@ impl Generator for FluidSimulation3DGenerator {
                     // Seed pattern: dispatch SeedPatternKernel
                     self.dispatch_seed_pattern(
                         queue, encoder, device,
-                        (snap_mode as u32) % PATTERN_COUNT,
+                        ctx.trigger_count % PATTERN_COUNT,
                         ctx.trigger_count,
                         container_type,
                         ctr_scale,
