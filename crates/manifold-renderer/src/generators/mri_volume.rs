@@ -1,7 +1,7 @@
 use manifold_core::GeneratorType;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
-use super::mri_volume_loader::{MriVolumeData, MriVolumeGpu};
+use super::mri_volume_loader::{ScanInfo, discover_scans, load_tiff_slice};
 use std::path::PathBuf;
 
 // Parameter indices matching generator_definition_registry.rs
@@ -12,32 +12,27 @@ const WINDOW_WIDTH: usize = 3;
 const SCALE: usize = 4;
 const INVERT: usize = 5;
 const SHARPEN: usize = 6;
-const CINE_SPEED: usize = 7;
-const SCAN: usize = 8;
+const SCAN: usize = 7;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
-    if ctx.param_count > idx as u32 { ctx.params[idx] } else { default }
+    if ctx.param_count > idx as u32 {
+        ctx.params[idx]
+    } else {
+        default
+    }
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SliceUniforms {
-    slice_axis: f32,
-    slice_pos: f32,
-    window_center: f32,
-    window_width: f32,
     aspect_ratio: f32,
     uv_scale: f32,
     invert: f32,
-    spacing_x: f32,
-    spacing_y: f32,
-    spacing_z: f32,
-    dim_x: f32,
-    dim_y: f32,
-    dim_z: f32,
     sharpen: f32,
-    _pad0: f32,
-    _pad1: f32,
+    window_center: f32,
+    window_width: f32,
+    tex_width: f32,
+    tex_height: f32,
 }
 
 pub struct MriVolumeGenerator {
@@ -46,48 +41,56 @@ pub struct MriVolumeGenerator {
     slice_bgl: wgpu::BindGroupLayout,
     slice_uniform_buf: wgpu::Buffer,
     sampler: wgpu::Sampler,
-    // Volume state
-    volume_gpu: Option<MriVolumeGpu>,
-    volume_cpu: Option<MriVolumeData>,
-    current_gpu_frame: u32,
-    // Scan library
-    scan_paths: Vec<PathBuf>,
+    // Current slice texture (R8Unorm 2D)
+    slice_texture: Option<wgpu::Texture>,
+    slice_view: Option<wgpu::TextureView>,
+    current_tex_dims: (u32, u32),
+    // State tracking
     current_scan_index: i32,
+    current_axis: i32,
+    current_slice_index: i32,
+    // Scan library
+    scans: Vec<ScanInfo>,
 }
 
 impl MriVolumeGenerator {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let slice_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("MRI Slice BGL"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+        let slice_bgl =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("MRI Slice BGL"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D3,
-                        multisampled: false,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float {
+                                filterable: true,
+                            },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(
+                            wgpu::SamplerBindingType::Filtering,
+                        ),
+                        count: None,
+                    },
+                ],
+            });
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MRI Slice Shader"),
@@ -95,11 +98,12 @@ impl MriVolumeGenerator {
                 include_str!("shaders/mri_slice.wgsl").into(),
             ),
         });
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("MRI Slice Pipeline Layout"),
-            bind_group_layouts: &[&slice_bgl],
-            immediate_size: 0,
-        });
+        let layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("MRI Slice Pipeline Layout"),
+                bind_group_layouts: &[&slice_bgl],
+                immediate_size: 0,
+            });
         let slice_pipeline =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("MRI Slice Pipeline"),
@@ -138,31 +142,54 @@ impl MriVolumeGenerator {
         });
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("MRI Volume Sampler"),
+            label: Some("MRI Slice Sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
 
-        let scan_paths = Self::discover_volumes();
-        let scan_count = scan_paths.len();
-        if scan_count > 0 {
-            log::info!("MRI Volume: found {} scans in volumes/", scan_count);
-            for (i, p) in scan_paths.iter().enumerate() {
+        let scans = discover_scans(&PathBuf::from("assets/mri-data/volumes"));
+        if scans.is_empty() {
+            log::warn!("MRI Volume: no scan directories found");
+        } else {
+            log::info!("MRI Volume: found {} scan(s)", scans.len());
+            for (i, s) in scans.iter().enumerate() {
+                let axes: Vec<&str> = [
+                    s.axes[0].as_ref().map(|a| {
+                        log::info!(
+                            "  Scan {} ({}): axial={} slices",
+                            i, s.name, a.slice_count
+                        );
+                        "axial"
+                    }),
+                    s.axes[1].as_ref().map(|a| {
+                        log::info!(
+                            "  Scan {} ({}): sagittal={} slices",
+                            i, s.name, a.slice_count
+                        );
+                        "sagittal"
+                    }),
+                    s.axes[2].as_ref().map(|a| {
+                        log::info!(
+                            "  Scan {} ({}): coronal={} slices",
+                            i, s.name, a.slice_count
+                        );
+                        "coronal"
+                    }),
+                ]
+                .into_iter()
+                .flatten()
+                .collect();
                 log::info!(
-                    "  Scan {}: {}",
+                    "  Scan {}: {} [{}]",
                     i,
-                    p.file_stem().unwrap_or_default().to_string_lossy()
+                    s.name,
+                    axes.join(", ")
                 );
             }
-        } else {
-            log::warn!(
-                "MRI Volume: no .mrivol files found in assets/mri-data/volumes/"
-            );
         }
 
         Self {
@@ -170,136 +197,119 @@ impl MriVolumeGenerator {
             slice_bgl,
             slice_uniform_buf,
             sampler,
-            volume_gpu: None,
-            volume_cpu: None,
-            current_gpu_frame: 0,
-            scan_paths,
+            slice_texture: None,
+            slice_view: None,
+            current_tex_dims: (0, 0),
             current_scan_index: -1,
+            current_axis: -1,
+            current_slice_index: -1,
+            scans,
         }
     }
 
-    fn discover_volumes() -> Vec<PathBuf> {
-        let volumes_dir = PathBuf::from("assets/mri-data/volumes");
-        if !volumes_dir.is_dir() {
-            return Vec::new();
-        }
-        let mut paths: Vec<PathBuf> = std::fs::read_dir(&volumes_dir)
-            .into_iter()
-            .flatten()
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|ext| ext == "mrivol"))
-            .collect();
-        paths.sort();
-        paths
-    }
-
-    fn load_scan(
+    /// Ensure the 2D texture exists and matches the given dimensions.
+    fn ensure_texture(
         &mut self,
-        index: usize,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
     ) {
-        if index >= self.scan_paths.len() {
+        if self.current_tex_dims == (width, height) && self.slice_texture.is_some()
+        {
             return;
         }
-        let path = &self.scan_paths[index];
-        match MriVolumeData::load(path) {
-            Ok(vol_data) => {
-                let auto_window = vol_data.compute_auto_window();
-                let gpu = MriVolumeGpu::from_volume_data(
-                    device,
-                    queue,
-                    &vol_data,
-                    0,
-                    auto_window,
-                );
-                log::info!(
-                    "MRI scan {}/{}: {}x{}x{}, {} frames ({}) \
-                     auto-window=[{:.3}, {:.3}]",
-                    index + 1,
-                    self.scan_paths.len(),
-                    gpu.dim[0],
-                    gpu.dim[1],
-                    gpu.dim[2],
-                    vol_data.header.frames,
-                    path.file_stem().unwrap_or_default().to_string_lossy(),
-                    auto_window[0],
-                    auto_window[1],
-                );
-                self.volume_gpu = Some(gpu);
-                self.volume_cpu = Some(vol_data);
-                self.current_gpu_frame = 0;
-                self.current_scan_index = index as i32;
-            }
-            Err(e) => {
-                log::error!("Failed to load MRI scan: {}", e);
-            }
-        }
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("MRI Slice 2D"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.slice_texture = Some(texture);
+        self.slice_view = Some(view);
+        self.current_tex_dims = (width, height);
     }
 
-    fn upload_frame(&mut self, queue: &wgpu::Queue, frame_index: u32) {
-        let Some(vol_cpu) = &self.volume_cpu else { return };
-        let Some(vol_gpu) = &self.volume_gpu else { return };
-
-        if frame_index == self.current_gpu_frame {
+    /// Upload R8Unorm data to the current texture.
+    fn upload_slice(
+        &self,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        data: &[u8],
+    ) {
+        let Some(texture) = &self.slice_texture else {
             return;
-        }
+        };
 
-        let h = &vol_cpu.header;
-        let frame_voxels = h.frame_voxels();
-        let frame_offset = frame_index as usize * frame_voxels;
-        let frame_data =
-            &vol_cpu.voxels_f32[frame_offset..frame_offset + frame_voxels];
+        // R8Unorm: 1 byte per texel. Pad rows to 256-byte alignment.
+        let unpadded_bpr = width;
+        let padded_bpr = (unpadded_bpr + 255) & !255;
 
-        let dx = h.dim_x as usize;
-        let dy = h.dim_y as usize;
-        let dz = h.dim_z as usize;
-        let texel_bytes: u32 = 8;
-        let unpadded_bytes_per_row = h.dim_x * texel_bytes;
-        let padded_bytes_per_row = (unpadded_bytes_per_row + 255) & !255;
-        let pad_bytes =
-            (padded_bytes_per_row - unpadded_bytes_per_row) as usize;
-        let total_size = padded_bytes_per_row as usize * dy * dz;
-        let mut rgba16_data: Vec<u8> = Vec::with_capacity(total_size);
-
-        for z in 0..dz {
-            for y in 0..dy {
-                for x in 0..dx {
-                    let src_idx = x * (dy * dz) + y * dz + z;
-                    let val = frame_data[src_idx];
-                    let h16 = half::f16::from_f32(val);
-                    let bytes = h16.to_le_bytes();
-                    rgba16_data.extend_from_slice(&bytes);
-                    rgba16_data.extend_from_slice(&bytes);
-                    rgba16_data.extend_from_slice(&bytes);
-                    rgba16_data.extend_from_slice(&bytes);
-                }
-                rgba16_data.extend(std::iter::repeat_n(0u8, pad_bytes));
+        if padded_bpr == unpadded_bpr {
+            // No padding needed — upload directly
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bpr),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        } else {
+            // Pad each row
+            let mut padded =
+                Vec::with_capacity(padded_bpr as usize * height as usize);
+            for y in 0..height as usize {
+                let row_start = y * width as usize;
+                let row_end = row_start + width as usize;
+                padded.extend_from_slice(&data[row_start..row_end]);
+                padded.extend(std::iter::repeat_n(
+                    0u8,
+                    (padded_bpr - unpadded_bpr) as usize,
+                ));
             }
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &padded,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded_bpr),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
         }
-
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &vol_gpu.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &rgba16_data,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded_bytes_per_row),
-                rows_per_image: Some(h.dim_y),
-            },
-            wgpu::Extent3d {
-                width: h.dim_x,
-                height: h.dim_y,
-                depth_or_array_layers: h.dim_z,
-            },
-        );
-
-        self.current_gpu_frame = frame_index;
     }
 
     fn render_black(
@@ -340,67 +350,71 @@ impl Generator for MriVolumeGenerator {
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
-        // Scan selection
-        let scan_index = if ctx.param_count > SCAN as u32 {
-            (ctx.params[SCAN].round() as i32)
-                .clamp(0, self.scan_paths.len().saturating_sub(1) as i32)
-        } else {
-            0
-        };
-        if scan_index != self.current_scan_index && !self.scan_paths.is_empty()
-        {
-            self.load_scan(scan_index as usize, device, queue);
-        }
-
-        if self.volume_gpu.is_none() {
+        if self.scans.is_empty() {
             Self::render_black(encoder, target);
             return ctx.anim_progress;
         }
 
-        // Cine frame selection
-        let total_frames =
-            self.volume_cpu.as_ref().map_or(1, |v| v.header.frames);
-        if total_frames > 1 {
-            let cine_speed = param(ctx, CINE_SPEED, 1.0);
-            let frame_f = ctx.time * cine_speed * total_frames as f32;
-            let frame_index =
-                ((frame_f.floor() as i32).rem_euclid(total_frames as i32))
-                    as u32;
-            self.upload_frame(queue, frame_index);
+        // Scan selection
+        let scan_index = (param(ctx, SCAN, 0.0).round() as i32)
+            .clamp(0, self.scans.len() as i32 - 1);
+        let axis = (param(ctx, SLICE_AXIS, 0.0).round() as i32).clamp(0, 2);
+
+        let scan = &self.scans[scan_index as usize];
+        let Some(axis_slices) = &scan.axes[axis as usize] else {
+            Self::render_black(encoder, target);
+            return ctx.anim_progress;
+        };
+
+        let slice_pos = param(ctx, SLICE_POS, 0.5);
+        let max_idx = axis_slices.slice_count as i32 - 1;
+        let slice_index =
+            (slice_pos * max_idx as f32).round() as i32;
+        let slice_index = slice_index.clamp(0, max_idx);
+
+        // Check if we need to load a new slice
+        let need_load = slice_index != self.current_slice_index
+            || scan_index != self.current_scan_index
+            || axis != self.current_axis;
+
+        if need_load {
+            let path = &axis_slices.paths[slice_index as usize];
+            match load_tiff_slice(path) {
+                Ok((w, h, data)) => {
+                    self.ensure_texture(device, w, h);
+                    self.upload_slice(queue, w, h, &data);
+                    self.current_scan_index = scan_index;
+                    self.current_axis = axis;
+                    self.current_slice_index = slice_index;
+                }
+                Err(e) => {
+                    log::error!("MRI: {e}");
+                    Self::render_black(encoder, target);
+                    return ctx.anim_progress;
+                }
+            }
         }
 
-        let vol = self.volume_gpu.as_ref().unwrap();
+        let Some(view) = &self.slice_view else {
+            Self::render_black(encoder, target);
+            return ctx.anim_progress;
+        };
 
-        // Auto-windowed params
-        let auto_low = vol.auto_window[0];
-        let auto_high = vol.auto_window[1];
-        let auto_span = (auto_high - auto_low).max(0.001);
-        let raw_center = param(ctx, WINDOW_CENTER, 0.5);
-        let raw_width = param(ctx, WINDOW_WIDTH, 0.8);
-        let window_center = auto_low + auto_span * raw_center;
-        let window_width = auto_span * raw_width;
-        let invert =
-            if param(ctx, INVERT, 0.0) > 0.5 { 1.0 } else { 0.0 };
+        // Uniforms
         let scale = param(ctx, SCALE, 1.0);
         let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
+        let invert =
+            if param(ctx, INVERT, 0.0) > 0.5 { 1.0 } else { 0.0 };
 
         let uniforms = SliceUniforms {
-            slice_axis: param(ctx, SLICE_AXIS, 0.0).round(),
-            slice_pos: param(ctx, SLICE_POS, 0.5),
-            window_center,
-            window_width,
             aspect_ratio: ctx.aspect,
             uv_scale,
             invert,
-            spacing_x: vol.spacing[0],
-            spacing_y: vol.spacing[1],
-            spacing_z: vol.spacing[2],
-            dim_x: vol.dim[0] as f32,
-            dim_y: vol.dim[1] as f32,
-            dim_z: vol.dim[2] as f32,
             sharpen: param(ctx, SHARPEN, 1.0),
-            _pad0: 0.0,
-            _pad1: 0.0,
+            window_center: param(ctx, WINDOW_CENTER, 0.5),
+            window_width: param(ctx, WINDOW_WIDTH, 0.8),
+            tex_width: self.current_tex_dims.0 as f32,
+            tex_height: self.current_tex_dims.1 as f32,
         };
         queue.write_buffer(
             &self.slice_uniform_buf,
@@ -421,9 +435,7 @@ impl Generator for MriVolumeGenerator {
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
-                        resource: wgpu::BindingResource::TextureView(
-                            &vol.view,
-                        ),
+                        resource: wgpu::BindingResource::TextureView(view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
@@ -463,5 +475,11 @@ impl Generator for MriVolumeGenerator {
         ctx.anim_progress
     }
 
-    fn resize(&mut self, _device: &wgpu::Device, _width: u32, _height: u32) {}
+    fn resize(
+        &mut self,
+        _device: &wgpu::Device,
+        _width: u32,
+        _height: u32,
+    ) {
+    }
 }
