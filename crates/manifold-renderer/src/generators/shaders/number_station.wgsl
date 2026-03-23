@@ -28,8 +28,8 @@ struct VertexOutput {
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     var out: VertexOutput;
-    let x = f32(i32(vi) / 2) * 4.0 - 1.0;
-    let y = f32(i32(vi) % 2) * 4.0 - 1.0;
+    let x = f32(vi / 2u) * 4.0 - 1.0;
+    let y = f32(vi % 2u) * 4.0 - 1.0;
     out.position = vec4<f32>(x, y, 0.0, 1.0);
     out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
     return out;
@@ -170,7 +170,7 @@ fn render_digit(p: vec2<f32>, digit: i32) -> f32 {
     var intensity: f32 = 0.0;
 
     for (var s: i32 = 0; s < 7; s = s + 1) {
-        if ((segs & (1 << s)) != 0) {
+        if ((segs & (1 << u32(s))) != 0) {
             let d = render_segment(p, s);
             let aa = 0.02;
             intensity = max(intensity, 1.0 - smoothstep(-aa, aa, d));
