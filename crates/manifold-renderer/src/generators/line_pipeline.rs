@@ -109,15 +109,18 @@ impl LinePipeline {
                 targets: &[Some(wgpu::ColorTargetState {
                     format: target_format,
                     blend: Some(wgpu::BlendState {
+                        // Max blend: overlapping round caps take the brighter
+                        // value instead of accumulating, preventing visible
+                        // bright dots at shared vertices.
                         color: wgpu::BlendComponent {
-                            src_factor: wgpu::BlendFactor::SrcAlpha,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Max,
                         },
                         alpha: wgpu::BlendComponent {
                             src_factor: wgpu::BlendFactor::One,
-                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                            operation: wgpu::BlendOperation::Add,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Max,
                         },
                     }),
                     write_mask: wgpu::ColorWrites::ALL,
