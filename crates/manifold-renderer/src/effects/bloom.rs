@@ -6,6 +6,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::render_target::RenderTarget;
+use super::HDR_BUFFER_DIVISOR;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
 
 // BloomFX.cs lines 19-25 — constants
@@ -79,8 +80,8 @@ impl BloomFX {
         let mut count = 0;
 
         // BloomFX.cs lines 51-52
-        let mut pw = (self.width / 2).max(1);
-        let mut ph = (self.height / 2).max(1);
+        let mut pw = (self.width / HDR_BUFFER_DIVISOR).max(1);
+        let mut ph = (self.height / HDR_BUFFER_DIVISOR).max(1);
 
         // BloomFX.cs lines 54-64
         for i in 0..MAX_LEVELS {
@@ -250,8 +251,8 @@ impl PostProcessEffect for BloomFX {
         self.height = height;
         let format = wgpu::TextureFormat::Rgba16Float;
         for state in self.states.values_mut() {
-            let mut pw = (width / 2).max(1);
-            let mut ph = (height / 2).max(1);
+            let mut pw = (width / HDR_BUFFER_DIVISOR).max(1);
+            let mut ph = (height / HDR_BUFFER_DIVISOR).max(1);
             let mut count = 0;
             for i in 0..state.mips_a.len() {
                 if pw < MIN_SIZE || ph < MIN_SIZE { break; }

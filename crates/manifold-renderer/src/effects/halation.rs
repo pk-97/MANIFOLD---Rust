@@ -1,6 +1,6 @@
 // Halation effect — separable Gaussian blur with threshold extraction.
 // Improvement over Unity's 13-tap 2D cross kernel: separable 17-tap Gaussian
-// produces smooth, gap-free glow at half-resolution (D-32).
+// produces smooth, gap-free glow at reduced resolution (D-32).
 //
 // 4 passes (vs Unity's 3): ThresholdTint → BlurH → BlurV → Composite.
 // Effective coverage: 17×17 = 289 unique positions vs Unity's 13-point cross.
@@ -10,6 +10,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::render_target::RenderTarget;
+use super::HDR_BUFFER_DIVISOR;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
 
 #[repr(C)]
@@ -29,7 +30,7 @@ struct HalationUniforms {
     _pad: f32,
 }
 
-/// Per-owner intermediate buffers (half-res, ping-pong for separable blur).
+/// Per-owner intermediate buffers (reduced-res, ping-pong for separable blur).
 struct HalationState {
     buf_a: RenderTarget, // ThresholdTint output / V blur output
     buf_b: RenderTarget, // H blur output
@@ -65,10 +66,10 @@ impl HalationFX {
             return;
         }
         let format = wgpu::TextureFormat::Rgba16Float;
-        let hw = (self.width / 2).max(1);
-        let hh = (self.height / 2).max(1);
-        let buf_a = RenderTarget::new(device, hw, hh, format, &format!("HalationA_{owner_key}"));
-        let buf_b = RenderTarget::new(device, hw, hh, format, &format!("HalationB_{owner_key}"));
+        let qw = (self.width / HDR_BUFFER_DIVISOR).max(1);
+        let qh = (self.height / HDR_BUFFER_DIVISOR).max(1);
+        let buf_a = RenderTarget::new(device, qw, qh, format, &format!("HalationA_{owner_key}"));
+        let buf_b = RenderTarget::new(device, qw, qh, format, &format!("HalationB_{owner_key}"));
         self.states.insert(owner_key, HalationState { buf_a, buf_b });
     }
 
@@ -143,10 +144,10 @@ impl PostProcessEffect for HalationFX {
             _pad: 0.0,
         };
 
-        let half_w = state.buf_a.width;
-        let half_h = state.buf_a.height;
+        let qw = state.buf_a.width;
+        let qh = state.buf_a.height;
 
-        // Pass 0: ThresholdTint — source (full-res) → buf_a (half-res)
+        // Pass 0: ThresholdTint — source (full-res) → buf_a (quarter-res)
         self.helper.draw(
             device, queue, encoder,
             source,
@@ -159,11 +160,11 @@ impl PostProcessEffect for HalationFX {
                 ..base
             }),
             "Halation ThresholdTint",
-            half_w, half_h,
+            qw, qh,
             profiler,
         );
 
-        // Pass 1: Horizontal Gaussian blur — buf_a → buf_b (half-res)
+        // Pass 1: Horizontal Gaussian blur — buf_a → buf_b (quarter-res)
         self.helper.draw(
             device, queue, encoder,
             &state.buf_a.view,
@@ -171,16 +172,16 @@ impl PostProcessEffect for HalationFX {
             &state.buf_b.view,
             bytemuck::bytes_of(&HalationUniforms {
                 mode: 1,
-                main_texel_size_x: 1.0 / half_w as f32,
-                main_texel_size_y: 1.0 / half_h as f32,
+                main_texel_size_x: 1.0 / qw as f32,
+                main_texel_size_y: 1.0 / qh as f32,
                 ..base
             }),
             "Halation BlurH",
-            half_w, half_h,
+            qw, qh,
             profiler,
         );
 
-        // Pass 2: Vertical Gaussian blur — buf_b → buf_a (half-res)
+        // Pass 2: Vertical Gaussian blur — buf_b → buf_a (quarter-res)
         self.helper.draw(
             device, queue, encoder,
             &state.buf_b.view,
@@ -188,16 +189,16 @@ impl PostProcessEffect for HalationFX {
             &state.buf_a.view,
             bytemuck::bytes_of(&HalationUniforms {
                 mode: 2,
-                main_texel_size_x: 1.0 / half_w as f32,
-                main_texel_size_y: 1.0 / half_h as f32,
+                main_texel_size_x: 1.0 / qw as f32,
+                main_texel_size_y: 1.0 / qh as f32,
                 ..base
             }),
             "Halation BlurV",
-            half_w, half_h,
+            qw, qh,
             profiler,
         );
 
-        // Pass 3: Composite — source (full-res) + buf_a (half-res) → target
+        // Pass 3: Composite — source (full-res) + buf_a (quarter-res) → target
         self.helper.draw(
             device, queue, encoder,
             source,
@@ -207,8 +208,8 @@ impl PostProcessEffect for HalationFX {
                 mode: 3,
                 main_texel_size_x: 1.0 / ctx.width as f32,
                 main_texel_size_y: 1.0 / ctx.height as f32,
-                halo_texel_size_x: 1.0 / half_w as f32,
-                halo_texel_size_y: 1.0 / half_h as f32,
+                halo_texel_size_x: 1.0 / qw as f32,
+                halo_texel_size_y: 1.0 / qh as f32,
                 ..base
             }),
             "Halation Composite",
@@ -225,11 +226,11 @@ impl PostProcessEffect for HalationFX {
         self.width = width;
         self.height = height;
         let format = wgpu::TextureFormat::Rgba16Float;
-        let hw = (width / 2).max(1);
-        let hh = (height / 2).max(1);
+        let qw = (width / HDR_BUFFER_DIVISOR).max(1);
+        let qh = (height / HDR_BUFFER_DIVISOR).max(1);
         for (key, state) in &mut self.states {
-            state.buf_a = RenderTarget::new(device, hw, hh, format, &format!("HalationA_{key}"));
-            state.buf_b = RenderTarget::new(device, hw, hh, format, &format!("HalationB_{key}"));
+            state.buf_a = RenderTarget::new(device, qw, qh, format, &format!("HalationA_{key}"));
+            state.buf_b = RenderTarget::new(device, qw, qh, format, &format!("HalationB_{key}"));
         }
     }
 
