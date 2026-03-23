@@ -141,7 +141,7 @@ impl PostProcessEffect for BloomFX {
         }
 
         // BloomFX.cs lines 77-80
-        let bloom_t = amount.max(0.0);
+        let bloom_t = amount.clamp(0.0, 1.0);
         let used_levels = BLOOM_LEVELS.min(state.count);
         let t_smooth = bloom_t * bloom_t * (3.0 - 2.0 * bloom_t);
         let radius_scale = RADIUS_AT_ZERO + (RADIUS_AT_ONE - RADIUS_AT_ZERO) * t_smooth;
