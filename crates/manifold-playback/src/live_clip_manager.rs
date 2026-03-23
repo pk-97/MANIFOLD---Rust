@@ -3,7 +3,8 @@ use manifold_core::clip::TimelineClip;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
 use manifold_core::recording::RecordedClipProvenance;
-use manifold_core::types::{GeneratorType, QuantizeMode, TempoPointSource};
+use manifold_core::types::{QuantizeMode, TempoPointSource};
+use manifold_core::GeneratorTypeId;
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::AddClipCommand;
 
@@ -506,7 +507,7 @@ impl LiveClipManager {
         &mut self,
         project: &mut Project,
         host: &dyn LiveClipHost,
-        generator_type: GeneratorType,
+        generator_type: GeneratorTypeId,
         layer_index: i32,
         duration_seconds: f32,
         beat_stamp: Option<f32>,

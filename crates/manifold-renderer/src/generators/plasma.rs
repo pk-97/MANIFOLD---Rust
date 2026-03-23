@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 
@@ -106,8 +106,8 @@ impl PlasmaGenerator {
 }
 
 impl Generator for PlasmaGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::Plasma
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::PLASMA
     }
 
     fn render(

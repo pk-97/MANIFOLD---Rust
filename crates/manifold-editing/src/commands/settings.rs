@@ -3,7 +3,8 @@ use manifold_core::LayerId;
 use manifold_core::project::Project;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::tempo::TempoPoint;
-use manifold_core::types::{BlendMode, GeneratorType, QuantizeMode, TempoPointSource};
+use manifold_core::types::{BlendMode, QuantizeMode, TempoPointSource};
+use manifold_core::GeneratorTypeId;
 use manifold_core::effects::ParameterDriver;
 
 /// Change project BPM with full tempo map support.
@@ -342,8 +343,8 @@ impl Command for ChangeGeneratorParamsCommand {
 #[derive(Debug)]
 pub struct ChangeGeneratorTypeCommand {
     layer_id: LayerId,
-    old_type: GeneratorType,
-    new_type: GeneratorType,
+    old_type: GeneratorTypeId,
+    new_type: GeneratorTypeId,
     old_params: Vec<f32>,
     old_drivers: Option<Vec<ParameterDriver>>,
     old_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
@@ -352,8 +353,8 @@ pub struct ChangeGeneratorTypeCommand {
 impl ChangeGeneratorTypeCommand {
     pub fn new(
         layer_id: LayerId,
-        old_type: GeneratorType,
-        new_type: GeneratorType,
+        old_type: GeneratorTypeId,
+        new_type: GeneratorTypeId,
         old_params: Vec<f32>,
         old_drivers: Option<Vec<ParameterDriver>>,
         old_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
@@ -365,14 +366,14 @@ impl ChangeGeneratorTypeCommand {
 impl Command for ChangeGeneratorTypeCommand {
     fn execute(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
-            layer.change_generator_type(self.new_type);
+            layer.change_generator_type(self.new_type.clone());
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
         if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
             layer.restore_generator_state(
-                self.old_type,
+                self.old_type.clone(),
                 self.old_params.clone(),
                 self.old_drivers.clone(),
                 self.old_envelopes.clone(),

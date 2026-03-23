@@ -246,7 +246,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
                 // Read envelope data by index (avoids borrow conflict with effects)
                 let (enabled, target_effect_type, param_index, attack, decay, sustain, release, target_norm) = {
                     let env = &clip.envelopes.as_ref().unwrap()[ei];
-                    (env.enabled, env.target_effect_type, env.param_index, env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats, env.target_normalized)
+                    (env.enabled, env.target_effect_type.clone(), env.param_index, env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats, env.target_normalized)
                 };
 
                 if !enabled {
@@ -271,7 +271,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
 
                 // Find the target effect on this clip
                 let target_fx = clip.effects.iter_mut().find(|f| {
-                    f.effect_type() == target_effect_type && f.enabled
+                    f.effect_type() == &target_effect_type && f.enabled
                 });
                 let fx = match target_fx {
                     Some(f) => f,
@@ -314,7 +314,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
             for ei in 0..layer_env_count {
                 let (enabled, target_effect_type, param_index, attack, decay, sustain, release, target_norm) = {
                     let env = &layer.envelopes.as_ref().unwrap()[ei];
-                    (env.enabled, env.target_effect_type, env.param_index, env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats, env.target_normalized)
+                    (env.enabled, env.target_effect_type.clone(), env.param_index, env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats, env.target_normalized)
                 };
 
                 if !enabled {
@@ -343,7 +343,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
                 };
 
                 let target_fx = layer_effects.iter_mut().find(|f| {
-                    f.effect_type() == target_effect_type && f.enabled
+                    f.effect_type() == &target_effect_type && f.enabled
                 });
                 let fx = match target_fx {
                     Some(f) => f,

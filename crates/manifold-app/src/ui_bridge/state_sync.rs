@@ -2,7 +2,8 @@
 //! sync_inspector_data, check_auto_scroll.
 use manifold_core::effects::{EffectInstance, ParamEnvelope};
 use manifold_core::project::Project;
-use manifold_core::types::{GeneratorType, LayerType, BeatDivision};
+use manifold_core::types::{LayerType, BeatDivision};
+use manifold_core::GeneratorTypeId;
 use manifold_ui::node::Color32;
 use manifold_ui::color;
 use manifold_ui::panels::layer_header::LayerInfo;
@@ -296,7 +297,7 @@ pub fn push_state(
                 .find(|c| c.id == *clip_id);
             if let Some(clip) = clip {
                 let is_video = !clip.video_clip_id.is_empty();
-                let is_gen = clip.generator_type != GeneratorType::None;
+                let is_gen = clip.generator_type != GeneratorTypeId::NONE;
                 let chrome = ui.inspector.clip_chrome_mut();
                 let mode_changed = chrome.set_mode(true, is_video, is_gen, clip.is_looping);
                 if is_video {
@@ -317,8 +318,8 @@ pub fn push_state(
                     chrome.set_slip_range(clip_dur_s.max(1.0));
                     chrome.set_loop_range(clip.duration_beats.max(1.0));
                 } else if is_gen {
-                    chrome.sync_name(tree, clip.generator_type.display_name());
-                    chrome.sync_gen_type(tree, clip.generator_type.display_name());
+                    chrome.sync_name(tree, manifold_core::generator_type_registry::display_name(&clip.generator_type));
+                    chrome.sync_gen_type(tree, manifold_core::generator_type_registry::display_name(&clip.generator_type));
                 }
                 if mode_changed {
                     // Rebuild needed — mark as structural
@@ -336,7 +337,7 @@ pub fn push_state(
         // Master effects
         for (i, effect) in project.settings.master_effects.iter().enumerate() {
             if let Some(card) = ui.inspector.master_effect_mut(i) {
-                card.sync_effect_name(tree, effect.effect_type().display_name());
+                card.sync_effect_name(tree, manifold_core::effect_type_registry::display_name(effect.effect_type()));
                 card.sync_enabled(tree, effect.enabled);
                 card.sync_values(tree, &effect.param_values);
             }
@@ -348,7 +349,7 @@ pub fn push_state(
                 && let Some(effects) = &layer.effects {
                     for (i, effect) in effects.iter().enumerate() {
                         if let Some(card) = ui.inspector.layer_effect_mut(i) {
-                            card.sync_effect_name(tree, effect.effect_type().display_name());
+                            card.sync_effect_name(tree, manifold_core::effect_type_registry::display_name(effect.effect_type()));
                             card.sync_enabled(tree, effect.enabled);
                             card.sync_values(tree, &effect.param_values);
                         }
@@ -363,7 +364,7 @@ pub fn push_state(
             if let Some(clip) = clip {
                 for (i, effect) in clip.effects.iter().enumerate() {
                     if let Some(card) = ui.inspector.clip_effect_mut(i) {
-                        card.sync_effect_name(tree, effect.effect_type().display_name());
+                        card.sync_effect_name(tree, manifold_core::effect_type_registry::display_name(effect.effect_type()));
                         card.sync_enabled(tree, effect.enabled);
                         card.sync_values(tree, &effect.param_values);
                     }
@@ -376,7 +377,7 @@ pub fn push_state(
             && let Some(layer) = project.timeline.layers.get(idx)
                 && let Some(gp_state) = layer.gen_params()
                     && let Some(gp) = ui.inspector.gen_params_mut() {
-                        gp.sync_gen_type_name(tree, gp_state.generator_type().display_name());
+                        gp.sync_gen_type_name(tree, manifold_core::generator_type_registry::display_name(gp_state.generator_type()));
                         gp.sync_values(tree, &gp_state.param_values);
                     }
     }
@@ -499,7 +500,7 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
                 let is_gen = layer.layer_type == LayerType::Generator;
                 let name = if is_gen {
                     layer.gen_params()
-                        .map(|gp| gp.generator_type().display_name().to_string())
+                        .map(|gp| manifold_core::generator_type_registry::display_name(gp.generator_type()).to_string())
                         .unwrap_or_else(|| "Gen".to_string())
                 } else if !clip.video_clip_id.is_empty() {
                     clip.video_clip_id.clone()
@@ -545,7 +546,7 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
         for clip in &layer.clips {
             let name = if is_gen {
                 layer.gen_params()
-                    .map(|gp| gp.generator_type().display_name().to_string())
+                    .map(|gp| manifold_core::generator_type_registry::display_name(gp.generator_type()).to_string())
                     .unwrap_or_else(|| "Gen".to_string())
             } else if !clip.video_clip_id.is_empty() {
                 clip.video_clip_id.clone()
@@ -597,7 +598,7 @@ pub fn sync_inspector_data(
 
             // Generator params
             let gen_config = layer.gen_params()
-                .filter(|gp| gp.generator_type() != GeneratorType::None)
+                .filter(|gp| *gp.generator_type() != GeneratorTypeId::NONE)
                 .map(gen_params_to_config);
             let layer_id = layer.layer_id.clone();
             ui.inspector.configure_gen_params(gen_config.as_ref(), Some(layer_id));
@@ -684,7 +685,7 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -
         let mut env_sustain = vec![0.0f32; n];
         let mut env_release = vec![0.0f32; n];
         for env in envelopes {
-            if env.target_effect_type == fx.effect_type() && env.enabled {
+            if env.target_effect_type == *fx.effect_type() && env.enabled {
                 let pi = env.param_index as usize;
                 if pi < n {
                     has_env = true;
@@ -701,7 +702,7 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -
         EffectCardConfig {
             effect_index: i,
             effect_id: fx.id.clone(),
-            name: fx.effect_type().display_name().to_string(),
+            name: manifold_core::effect_type_registry::display_name(fx.effect_type()).to_string(),
             enabled: fx.enabled,
             collapsed: fx.collapsed,
             supports_envelopes: true,
@@ -811,7 +812,7 @@ fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState) -> G
     }
 
     GenParamConfig {
-        gen_type_name: gp.generator_type().display_name().to_string(),
+        gen_type_name: manifold_core::generator_type_registry::display_name(gp.generator_type()).to_string(),
         params,
         driver_active,
         envelope_active,

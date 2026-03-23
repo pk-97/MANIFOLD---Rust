@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::types::GeneratorType;
+use crate::generator_type_id::GeneratorTypeId;
 use crate::effects::{ParameterDriver, ParamEnvelope};
 
 /// Per-layer generator parameter state.
@@ -8,7 +8,7 @@ use crate::effects::{ParameterDriver, ParamEnvelope};
 #[serde(rename_all = "camelCase")]
 pub struct GeneratorParamState {
     #[serde(default)]
-    generator_type: GeneratorType,
+    generator_type: GeneratorTypeId,
     #[serde(default)]
     pub param_values: Vec<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -26,7 +26,7 @@ pub struct GeneratorParamState {
 impl GeneratorParamState {
     /// Create a new GeneratorParamState with the given type, fully initialized
     /// from the generator definition registry.
-    pub fn new(gen_type: GeneratorType) -> Self {
+    pub fn new(gen_type: GeneratorTypeId) -> Self {
         let mut state = Self::default();
         state.change_type(gen_type);
         state
@@ -34,8 +34,8 @@ impl GeneratorParamState {
 
     /// The generator type for this param state.
     #[inline]
-    pub fn generator_type(&self) -> GeneratorType {
-        self.generator_type
+    pub fn generator_type(&self) -> &GeneratorTypeId {
+        &self.generator_type
     }
 
     pub fn ensure_base_values(&mut self) {
@@ -56,13 +56,14 @@ impl GeneratorParamState {
     /// Unity GeneratorParamState.cs lines 51-61.
     pub fn set_param(&mut self, index: usize, value: f32) {
         use crate::generator_definition_registry;
-        if let Some(def) = generator_definition_registry::try_get(self.generator_type) {
+        if let Some(def) = generator_definition_registry::try_get(&self.generator_type) {
             if self.param_values.len() != def.param_count {
-                self.init_defaults_for_type(self.generator_type);
+                let gt = self.generator_type.clone();
+                self.init_defaults_for_type(gt);
             }
             if index < self.param_values.len() {
                 self.param_values[index] = generator_definition_registry::clamp_param(
-                    self.generator_type, index, value
+                    &self.generator_type, index, value
                 );
             }
         }
@@ -82,14 +83,15 @@ impl GeneratorParamState {
     /// Unity GeneratorParamState.cs lines 75-88.
     pub fn set_param_base(&mut self, index: usize, value: f32) {
         use crate::generator_definition_registry;
-        if let Some(def) = generator_definition_registry::try_get(self.generator_type) {
+        if let Some(def) = generator_definition_registry::try_get(&self.generator_type) {
             if self.param_values.len() != def.param_count {
-                self.init_defaults_for_type(self.generator_type);
+                let gt = self.generator_type.clone();
+                self.init_defaults_for_type(gt);
             }
             self.ensure_base_values();
             if index < self.param_values.len() {
                 let clamped = generator_definition_registry::clamp_param(
-                    self.generator_type, index, value
+                    &self.generator_type, index, value
                 );
                 if let Some(base) = &mut self.base_param_values
                     && index < base.len() {
@@ -168,11 +170,11 @@ impl GeneratorParamState {
     }
 
     /// Change generator type. Unity GeneratorParamState.cs ChangeType.
-    pub fn change_type(&mut self, new_type: GeneratorType) {
-        if new_type == GeneratorType::None {
+    pub fn change_type(&mut self, new_type: GeneratorTypeId) {
+        if new_type == GeneratorTypeId::NONE {
             return;
         }
-        self.generator_type = new_type;
+        self.generator_type = new_type.clone();
         self.init_defaults_for_type(new_type);
         if let Some(drivers) = &mut self.drivers {
             drivers.clear();
@@ -185,9 +187,9 @@ impl GeneratorParamState {
     /// Initialize both base and effective arrays from registry defaults.
     /// Unity GeneratorParamState.cs InitDefaults(GeneratorType genType) lines 143-155.
     /// Takes a type parameter and sets self.generator_type = genType.
-    pub fn init_defaults_for_type(&mut self, gen_type: GeneratorType) {
+    pub fn init_defaults_for_type(&mut self, gen_type: GeneratorTypeId) {
         use crate::generator_definition_registry;
-        if let Some(def) = generator_definition_registry::try_get(gen_type) {
+        if let Some(def) = generator_definition_registry::try_get(&gen_type) {
             self.generator_type = gen_type;
             self.param_values = def.param_defs.iter().map(|pd| pd.default_value).collect();
             self.base_param_values = Some(self.param_values.clone());
@@ -196,7 +198,7 @@ impl GeneratorParamState {
 
     /// Legacy init_defaults (no parameter). Uses current generator_type.
     pub fn init_defaults(&mut self) {
-        let gt = self.generator_type;
+        let gt = self.generator_type.clone();
         self.init_defaults_for_type(gt);
     }
 
@@ -232,7 +234,7 @@ impl GeneratorParamState {
     /// Unity GeneratorParamState.cs Restore lines 168-183.
     pub fn restore(
         &mut self,
-        gen_type: GeneratorType,
+        gen_type: GeneratorTypeId,
         params: Vec<f32>,
         drivers: Option<Vec<ParameterDriver>>,
         envelopes: Option<Vec<ParamEnvelope>>,

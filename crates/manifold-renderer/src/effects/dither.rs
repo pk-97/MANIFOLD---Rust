@@ -1,4 +1,4 @@
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use super::simple_blit_helper::SimpleBlitHelper;
@@ -31,8 +31,8 @@ impl DitherFX {
 }
 
 impl PostProcessEffect for DitherFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::Dither
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::DITHER
     }
 
     fn apply(

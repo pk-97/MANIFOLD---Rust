@@ -197,7 +197,7 @@ impl ProjectSettings {
     }
 
     /// Find master effect by type. Unity ProjectSettings.cs lines 230-239.
-    pub fn find_master_effect(&self, effect_type: crate::types::EffectType) -> Option<&crate::effects::EffectInstance> {
+    pub fn find_master_effect(&self, effect_type: &crate::effect_type_id::EffectTypeId) -> Option<&crate::effects::EffectInstance> {
         self.master_effects.iter().find(|e| e.effect_type() == effect_type)
     }
 
@@ -245,7 +245,7 @@ impl crate::effects::EffectContainer for ProjectSettings {
     fn has_modular_effects(&self) -> bool {
         !self.master_effects.is_empty()
     }
-    fn find_effect(&self, effect_type: crate::types::EffectType) -> Option<&crate::effects::EffectInstance> {
+    fn find_effect(&self, effect_type: &crate::effect_type_id::EffectTypeId) -> Option<&crate::effects::EffectInstance> {
         self.master_effects.iter().find(|e| e.effect_type() == effect_type)
     }
     fn find_effect_group(&self, group_id: &str) -> Option<&crate::effects::EffectGroup> {

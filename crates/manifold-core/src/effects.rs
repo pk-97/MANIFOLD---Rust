@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::id::{EffectGroupId, EffectId};
-use crate::types::{BeatDivision, DriverWaveform, EffectType};
+use crate::types::{BeatDivision, DriverWaveform};
+use crate::effect_type_id::EffectTypeId;
 
 // ─── Param Definition ───
 
@@ -53,7 +54,7 @@ pub trait EffectContainer {
     fn effect_groups(&self) -> &[EffectGroup];
     fn effect_groups_mut(&mut self) -> &mut Vec<EffectGroup>;
     fn has_modular_effects(&self) -> bool;
-    fn find_effect(&self, effect_type: EffectType) -> Option<&EffectInstance>;
+    fn find_effect(&self, effect_type: &EffectTypeId) -> Option<&EffectInstance>;
     fn find_effect_group(&self, group_id: &str) -> Option<&EffectGroup>;
     fn envelopes(&self) -> &[ParamEnvelope];
     fn envelopes_mut(&mut self) -> &mut Vec<ParamEnvelope>;
@@ -87,7 +88,7 @@ pub struct EffectInstance {
     /// Auto-generated on creation and deserialization (backfills old projects).
     #[serde(default = "generate_effect_id")]
     pub id: EffectId,
-    effect_type: EffectType,
+    effect_type: EffectTypeId,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -115,7 +116,7 @@ pub struct EffectInstance {
 impl EffectInstance {
     /// Create a new EffectInstance with the given type.
     /// Unity EffectInstance.cs lines 79-83.
-    pub fn new(effect_type: EffectType) -> Self {
+    pub fn new(effect_type: EffectTypeId) -> Self {
         Self {
             id: generate_effect_id(),
             effect_type,
@@ -134,8 +135,8 @@ impl EffectInstance {
 
     /// Read-only access to the effect type.
     #[inline]
-    pub fn effect_type(&self) -> EffectType {
-        self.effect_type
+    pub fn effect_type(&self) -> &EffectTypeId {
+        &self.effect_type
     }
 
     /// Has any drivers? Unity EffectInstance.cs line 28.
@@ -245,14 +246,13 @@ impl EffectInstance {
     /// Includes migration for layout changes (e.g., WireframeDepth 14→12 params).
     pub fn align_to_definition(&mut self) {
         use crate::effect_definition_registry;
-        use crate::EffectType;
 
         // Migration: WireframeDepth 14-param (old) → 12-param (new).
         // Old: Amount(0) Density(1) Width(2) ZScale(3) Smooth(4) Persist(5) Depth(6)
         //      Subject(7) Blend(8) WireRes(9) MeshRate(10) CVFlow(11) Lock(12) Face(13)
         // New: Amount(0) Density(1) Width(2) ZScale(3) Smooth(4) Subject(5) Blend(6)
         //      WireRes(7) MeshRate(8) Flow(9) Lock(10) EdgeFollow(11)
-        if self.effect_type == EffectType::WireframeDepth && self.param_values.len() == 14 {
+        if self.effect_type == EffectTypeId::WIREFRAME_DEPTH && self.param_values.len() == 14 {
             let old = &self.param_values;
             let migrated = vec![
                 old[0],  // Amount → Amount
@@ -281,7 +281,7 @@ impl EffectInstance {
                 }
         }
 
-        if let Some(def) = effect_definition_registry::try_get(self.effect_type) {
+        if let Some(def) = effect_definition_registry::try_get(&self.effect_type) {
             let target = def.param_count;
             if self.param_values.len() == target {
                 return;
@@ -321,7 +321,7 @@ impl EffectInstance {
 impl ParamSource for EffectInstance {
     fn display_name(&self) -> &str {
         use crate::effect_definition_registry;
-        match effect_definition_registry::try_get(self.effect_type) {
+        match effect_definition_registry::try_get(&self.effect_type) {
             Some(def) => def.display_name,
             None => "?",
         }
@@ -333,7 +333,7 @@ impl ParamSource for EffectInstance {
 
     fn get_param_def(&self, index: usize) -> ParamDef {
         use crate::effect_definition_registry;
-        match effect_definition_registry::try_get(self.effect_type) {
+        match effect_definition_registry::try_get(&self.effect_type) {
             Some(def) if index < def.param_count => def.param_defs[index].clone(),
             _ => ParamDef::default(),
         }
@@ -569,7 +569,7 @@ pub mod beat_division_helper {
 #[serde(rename_all = "camelCase")]
 pub struct ParamEnvelope {
     #[serde(default)]
-    pub target_effect_type: EffectType,
+    pub target_effect_type: EffectTypeId,
     /// Unity V2 serializes this as "targetParamIndex" via [JsonProperty].
     #[serde(default, rename = "targetParamIndex")]
     pub param_index: i32,
@@ -594,7 +594,7 @@ impl ParamEnvelope {
     /// Gen param envelope constructor. Unity ParamEnvelope.cs lines 42-45.
     pub fn new_for_gen(param_index: i32) -> Self {
         Self {
-            target_effect_type: EffectType::Transform,
+            target_effect_type: EffectTypeId::TRANSFORM,
             param_index,
             enabled: true,
             attack_beats: 0.0,
@@ -607,7 +607,7 @@ impl ParamEnvelope {
     }
 
     /// Effect envelope constructor. Unity ParamEnvelope.cs lines 48-52.
-    pub fn new_for_effect(effect_type: EffectType, param_index: i32) -> Self {
+    pub fn new_for_effect(effect_type: EffectTypeId, param_index: i32) -> Self {
         Self {
             target_effect_type: effect_type,
             param_index,

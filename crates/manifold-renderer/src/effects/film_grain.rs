@@ -1,4 +1,4 @@
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use super::simple_blit_helper::SimpleBlitHelper;
@@ -35,8 +35,8 @@ impl FilmGrainFX {
 }
 
 impl PostProcessEffect for FilmGrainFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::FilmGrain
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::FILM_GRAIN
     }
 
     fn apply(

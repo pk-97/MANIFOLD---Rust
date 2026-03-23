@@ -2,6 +2,7 @@ use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::layer::Layer;
 use manifold_core::types::*;
+use manifold_core::GeneratorTypeId;
 use manifold_playback::live_clip_manager::*;
 use manifold_editing::command::Command;
 
@@ -115,7 +116,7 @@ fn trigger_live_generator_clip() {
 
     let clip = mgr.trigger_live_generator_clip(
         &mut project, &host,
-        GeneratorType::Plasma, 0, 4.0,
+        GeneratorTypeId::PLASMA, 0, 4.0,
         None, -1, 0.0, -1,
     );
 

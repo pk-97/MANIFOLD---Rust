@@ -172,59 +172,61 @@ fn color_track_background_deep_level() {
 
 // ── Generator param counts (from GeneratorDefinitionRegistry.cs) ──
 
-use manifold_core::types::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use manifold_core::generator_definition_registry;
 
 #[test]
-fn generator_param_count_plasma() { assert_eq!(generator_definition_registry::get(GeneratorType::Plasma).param_count, 6); }
+fn generator_param_count_plasma() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::PLASMA).param_count, 6); }
 #[test]
-fn generator_param_count_basic_shapes() { assert_eq!(generator_definition_registry::get(GeneratorType::BasicShapesSnap).param_count, 3); }
+fn generator_param_count_basic_shapes() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::BASIC_SHAPES_SNAP).param_count, 3); }
 #[test]
-fn generator_param_count_concentric_tunnel() { assert_eq!(generator_definition_registry::get(GeneratorType::ConcentricTunnel).param_count, 6); }
+fn generator_param_count_concentric_tunnel() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::CONCENTRIC_TUNNEL).param_count, 6); }
 #[test]
-fn generator_param_count_fractal_zoom() { assert_eq!(generator_definition_registry::get(GeneratorType::FractalZoom).param_count, 2); }
+fn generator_param_count_fractal_zoom() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FRACTAL_ZOOM).param_count, 2); }
 #[test]
-fn generator_param_count_number_station() { assert_eq!(generator_definition_registry::get(GeneratorType::NumberStation).param_count, 8); }
+fn generator_param_count_number_station() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::NUMBER_STATION).param_count, 8); }
 #[test]
-fn generator_param_count_tesseract() { assert_eq!(generator_definition_registry::get(GeneratorType::Tesseract).param_count, 11); }
+fn generator_param_count_tesseract() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::TESSERACT).param_count, 11); }
 #[test]
-fn generator_param_count_duocylinder() { assert_eq!(generator_definition_registry::get(GeneratorType::Duocylinder).param_count, 11); }
+fn generator_param_count_duocylinder() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::DUOCYLINDER).param_count, 11); }
 #[test]
-fn generator_param_count_lissajous() { assert_eq!(generator_definition_registry::get(GeneratorType::Lissajous).param_count, 11); }
+fn generator_param_count_lissajous() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::LISSAJOUS).param_count, 11); }
 #[test]
-fn generator_param_count_wireframe_zoo() { assert_eq!(generator_definition_registry::get(GeneratorType::WireframeZoo).param_count, 8); }
+fn generator_param_count_wireframe_zoo() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::WIREFRAME_ZOO).param_count, 8); }
 #[test]
-fn generator_param_count_oscilloscope_xy() { assert_eq!(generator_definition_registry::get(GeneratorType::OscilloscopeXY).param_count, 9); }
+fn generator_param_count_oscilloscope_xy() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::OSCILLOSCOPE_XY).param_count, 9); }
 #[test]
-fn generator_param_count_reaction_diffusion() { assert_eq!(generator_definition_registry::get(GeneratorType::ReactionDiffusion).param_count, 4); }
+fn generator_param_count_reaction_diffusion() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::REACTION_DIFFUSION).param_count, 4); }
 #[test]
-fn generator_param_count_flowfield() { assert_eq!(generator_definition_registry::get(GeneratorType::Flowfield).param_count, 6); }
+fn generator_param_count_flowfield() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FLOWFIELD).param_count, 6); }
 #[test]
-fn generator_param_count_parametric_surface() { assert_eq!(generator_definition_registry::get(GeneratorType::ParametricSurface).param_count, 5); }
+fn generator_param_count_parametric_surface() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::PARAMETRIC_SURFACE).param_count, 5); }
 #[test]
-fn generator_param_count_strange_attractor() { assert_eq!(generator_definition_registry::get(GeneratorType::StrangeAttractor).param_count, 8); }
+fn generator_param_count_strange_attractor() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::STRANGE_ATTRACTOR).param_count, 8); }
 #[test]
-fn generator_param_count_mycelium() { assert_eq!(generator_definition_registry::get(GeneratorType::Mycelium).param_count, 12); }
+fn generator_param_count_mycelium() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::MYCELIUM).param_count, 12); }
 #[test]
-fn generator_param_count_compute_attractor() { assert_eq!(generator_definition_registry::get(GeneratorType::ComputeStrangeAttractor).param_count, 11); }
+fn generator_param_count_compute_attractor() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR).param_count, 11); }
 #[test]
-fn generator_param_count_fluid_sim() { assert_eq!(generator_definition_registry::get(GeneratorType::FluidSimulation).param_count, 20); }
+fn generator_param_count_fluid_sim() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION).param_count, 20); }
 #[test]
-fn generator_param_count_fluid_sim_3d() { assert_eq!(generator_definition_registry::get(GeneratorType::FluidSimulation3D).param_count, 28); }
+fn generator_param_count_fluid_sim_3d() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION_3D).param_count, 28); }
 
 #[test]
 fn generator_all_types_have_params() {
     // Every generator type (except None) must have at least 1 param defined
-    for gen_type in GeneratorType::ALL {
-        assert!(generator_definition_registry::get(*gen_type).param_count > 0, "{:?} has no param definitions", gen_type);
+    use manifold_core::generator_type_registry;
+    for reg in generator_type_registry::all() {
+        assert!(generator_definition_registry::get(&reg.id).param_count > 0, "{:?} has no param definitions", reg.id);
     }
 }
 
 #[test]
 fn generator_max_param_count() {
     // FluidSimulation3D has the most params (28)
-    let max = GeneratorType::ALL.iter()
-        .map(|g| generator_definition_registry::get(*g).param_count)
+    use manifold_core::generator_type_registry;
+    let max = generator_type_registry::all().iter()
+        .map(|reg| generator_definition_registry::get(&reg.id).param_count)
         .max()
         .unwrap_or(0);
     assert_eq!(max, 28);

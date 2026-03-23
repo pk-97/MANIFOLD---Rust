@@ -8,7 +8,7 @@ use serde::ser::Serializer;
 use crate::percussion::ImportedPercussionClipPlacement;
 use crate::project::Project;
 use crate::tempo::TempoMapConverter;
-use crate::types::GeneratorType;
+use crate::generator_type_id::GeneratorTypeId;
 
 // ─── PercussionTriggerType ───
 
@@ -453,7 +453,7 @@ pub struct PercussionClipBinding {
     pub trigger_type: PercussionTriggerType,
     pub layer_index: i32,
     pub video_clip_id: Option<String>,
-    pub generator_type: GeneratorType,
+    pub generator_type: GeneratorTypeId,
     pub duration_beats: f32,
     pub minimum_confidence: f32,
 }
@@ -463,7 +463,7 @@ impl PercussionClipBinding {
         trigger_type: PercussionTriggerType,
         layer_index: i32,
         video_clip_id: Option<String>,
-        generator_type: GeneratorType,
+        generator_type: GeneratorTypeId,
         duration_beats: f32,
         minimum_confidence: f32,
     ) -> Self {
@@ -478,7 +478,7 @@ impl PercussionClipBinding {
     }
 
     pub fn uses_generator(&self) -> bool {
-        self.generator_type != GeneratorType::None
+        self.generator_type != GeneratorTypeId::NONE
     }
 
     /// Port of Unity PercussionClipBinding.WithVideoClipId().
@@ -487,14 +487,14 @@ impl PercussionClipBinding {
             trigger_type: self.trigger_type,
             layer_index: self.layer_index,
             video_clip_id: Some(resolved_video_clip_id.to_string()),
-            generator_type: self.generator_type,
+            generator_type: self.generator_type.clone(),
             duration_beats: self.duration_beats,
             minimum_confidence: self.minimum_confidence,
         }
     }
 
     /// Port of Unity PercussionClipBinding.AsGeneratorBinding().
-    pub fn as_generator_binding(&self, resolved_generator_type: GeneratorType) -> Self {
+    pub fn as_generator_binding(&self, resolved_generator_type: GeneratorTypeId) -> Self {
         Self {
             trigger_type: self.trigger_type,
             layer_index: self.layer_index,
@@ -545,7 +545,7 @@ pub struct PercussionClipPlacement {
     pub trigger_type: PercussionTriggerType,
     pub layer_index: i32,
     pub video_clip_id: Option<String>,
-    pub generator_type: GeneratorType,
+    pub generator_type: GeneratorTypeId,
     pub start_beat: f32,
     pub duration_beats: f32,
     pub confidence: f32,
@@ -558,7 +558,7 @@ impl PercussionClipPlacement {
         trigger_type: PercussionTriggerType,
         layer_index: i32,
         video_clip_id: Option<String>,
-        generator_type: GeneratorType,
+        generator_type: GeneratorTypeId,
         start_beat: f32,
         duration_beats: f32,
         confidence: f32,
@@ -577,7 +577,7 @@ impl PercussionClipPlacement {
     }
 
     pub fn is_generator(&self) -> bool {
-        self.generator_type != GeneratorType::None
+        self.generator_type != GeneratorTypeId::NONE
     }
 }
 
@@ -818,7 +818,7 @@ mod tests {
             PercussionTriggerType::Kick,
             0,
             None,
-            GeneratorType::None,
+            GeneratorTypeId::NONE,
             2.0,
             0.5,
             0.9,
@@ -828,7 +828,7 @@ mod tests {
             PercussionTriggerType::Snare,
             1,
             None,
-            GeneratorType::None,
+            GeneratorTypeId::NONE,
             1.0,
             0.75,
             0.8,
@@ -845,7 +845,7 @@ mod tests {
             PercussionTriggerType::Kick,
             0,
             None,
-            GeneratorType::None,
+            GeneratorTypeId::NONE,
             0.5,
             0.0,
         );

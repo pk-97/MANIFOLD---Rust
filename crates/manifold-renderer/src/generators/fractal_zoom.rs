@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 
@@ -98,8 +98,8 @@ impl FractalZoomGenerator {
 }
 
 impl Generator for FractalZoomGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::FractalZoom
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::FRACTAL_ZOOM
     }
 
     fn render(

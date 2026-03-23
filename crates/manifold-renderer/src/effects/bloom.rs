@@ -2,7 +2,7 @@
 // Same logic, same variables, same constants, same edge cases.
 
 use ahash::AHashMap;
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::render_target::RenderTarget;
@@ -99,8 +99,8 @@ impl BloomFX {
 }
 
 impl PostProcessEffect for BloomFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::Bloom
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::BLOOM
     }
 
     fn apply(

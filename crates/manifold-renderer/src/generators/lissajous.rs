@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::generators::generator_math::PROJ_SCALE;
@@ -49,8 +49,8 @@ impl LissajousGenerator {
 }
 
 impl Generator for LissajousGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::Lissajous
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::LISSAJOUS
     }
 
     fn render(

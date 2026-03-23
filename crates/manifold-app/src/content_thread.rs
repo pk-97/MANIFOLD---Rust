@@ -287,7 +287,7 @@ impl ContentThread {
                     }).collect()
                 }
 
-                fn build_gen_params(gen_type: manifold_core::GeneratorType, values: &[f32]) -> Vec<manifold_profiler::NamedParam> {
+                fn build_gen_params(gen_type: manifold_core::GeneratorTypeId, values: &[f32]) -> Vec<manifold_profiler::NamedParam> {
                     let def = manifold_core::generator_definition_registry::get(gen_type);
                     values.iter().enumerate().map(|(i, &v)| {
                         let name = def.param_defs.get(i)

@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::blit::BlitPipeline;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
@@ -455,8 +455,8 @@ fn halvorsen(p: [f32; 3], chaos: f32) -> [f32; 3] {
 }
 
 impl Generator for StrangeAttractorGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::StrangeAttractor
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::STRANGE_ATTRACTOR
     }
 
     fn render(

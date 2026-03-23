@@ -9,7 +9,7 @@
 //   Simulate3D (compute) -> ProjectedScatter (2 compute) -> Display (fragment)
 
 use std::f32::consts::PI;
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::render_target::RenderTarget;
@@ -867,8 +867,8 @@ impl FluidSimulation3DGenerator {
 }
 
 impl Generator for FluidSimulation3DGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::FluidSimulation3D
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::FLUID_SIMULATION_3D
     }
 
     fn render(

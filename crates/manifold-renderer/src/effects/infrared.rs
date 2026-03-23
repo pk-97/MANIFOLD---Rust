@@ -1,4 +1,4 @@
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use super::simple_blit_helper::SimpleBlitHelper;
@@ -40,8 +40,8 @@ impl InfraredFX {
 }
 
 impl PostProcessEffect for InfraredFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::Infrared
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::INFRARED
     }
 
     fn should_skip(&self, fx: &EffectInstance) -> bool {

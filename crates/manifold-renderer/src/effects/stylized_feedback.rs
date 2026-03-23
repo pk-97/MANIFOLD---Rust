@@ -2,7 +2,7 @@
 // Same logic, same variables, same constants, same edge cases.
 
 use ahash::AHashMap;
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::render_target::RenderTarget;
@@ -114,8 +114,8 @@ impl StylizedFeedbackFX {
 }
 
 impl PostProcessEffect for StylizedFeedbackFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::StylizedFeedback
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::STYLIZED_FEEDBACK
     }
 
     // ShouldSkip: default (param[0] <= 0) — matches Unity SimpleBlitEffect.ShouldSkip.

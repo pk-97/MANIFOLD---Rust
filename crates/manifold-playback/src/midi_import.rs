@@ -1,6 +1,7 @@
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
-use manifold_core::types::{GeneratorType, LayerType};
+use manifold_core::types::LayerType;
+use manifold_core::GeneratorTypeId;
 use manifold_core::LayerId;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::AddClipCommand;
@@ -73,9 +74,9 @@ impl MidiImportService {
                 "[MidiImportService] Target video layer has no source clips. \
                  Falling back to BasicShapesSnap generator clips."
             );
-            (true, GeneratorType::BasicShapesSnap)
+            (true, GeneratorTypeId::BASIC_SHAPES_SNAP)
         } else {
-            (is_generator, gen_type)
+            (is_generator, gen_type.clone())
         };
 
         // Snapshot source_clip_ids to avoid borrow issues during iteration
@@ -93,7 +94,7 @@ impl MidiImportService {
         for note in &placements {
             let clip: TimelineClip = if use_generator {
                 TimelineClip::new_generator(
-                    resolved_gen_type,
+                    resolved_gen_type.clone(),
                     target_layer_lid.clone(),
                     note.start_beat,
                     note.duration_beats,

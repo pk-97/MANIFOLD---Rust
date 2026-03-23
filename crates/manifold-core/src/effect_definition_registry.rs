@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use crate::types::EffectType;
+use crate::effect_type_id::EffectTypeId;
 use crate::effects::{ParamDef, EffectInstance};
 
 // ─── Effect Definition ───
@@ -17,7 +17,7 @@ pub struct EffectDef {
 
 // ─── Static Registry ───
 
-static DEFINITIONS: LazyLock<HashMap<EffectType, EffectDef>> = LazyLock::new(build_definitions);
+static DEFINITIONS: LazyLock<HashMap<EffectTypeId, EffectDef>> = LazyLock::new(build_definitions);
 
 // ─── ParamDef Helpers ───
 
@@ -100,21 +100,21 @@ fn pd_toggle(name: &str, min: f32, max: f32, default: f32, osc_suffix: &str) -> 
 
 /// Get the definition for an effect type. Panics if not found.
 /// Matches Unity's `EffectDefinitionRegistry.Get(EffectType)`.
-pub fn get(effect_type: EffectType) -> &'static EffectDef {
-    DEFINITIONS.get(&effect_type).expect("EffectDefinitionRegistry: unknown EffectType")
+pub fn get(effect_type: &EffectTypeId) -> &'static EffectDef {
+    DEFINITIONS.get(effect_type).expect("EffectDefinitionRegistry: unknown EffectTypeId")
 }
 
 /// Try to get the definition for an effect type.
 /// Matches Unity's `EffectDefinitionRegistry.TryGet(EffectType, out EffectDef)`.
-pub fn try_get(effect_type: EffectType) -> Option<&'static EffectDef> {
-    DEFINITIONS.get(&effect_type)
+pub fn try_get(effect_type: &EffectTypeId) -> Option<&'static EffectDef> {
+    DEFINITIONS.get(effect_type)
 }
 
 /// Create a new EffectInstance with default parameter values from the registry.
 /// Matches Unity's `EffectDefinitionRegistry.CreateDefault(EffectType)`.
-pub fn create_default(effect_type: EffectType) -> EffectInstance {
+pub fn create_default(effect_type: &EffectTypeId) -> EffectInstance {
     let def = get(effect_type);
-    let mut inst = EffectInstance::new(effect_type);
+    let mut inst = EffectInstance::new(effect_type.clone());
     for (i, pd) in def.param_defs.iter().enumerate() {
         inst.set_base_param(i, pd.default_value);
     }
@@ -124,7 +124,7 @@ pub fn create_default(effect_type: EffectType) -> EffectInstance {
 /// Format a parameter value for display.
 /// Named labels take priority, then wholeNumbers round, then F2.
 /// Matches Unity's `EffectDefinitionRegistry.FormatValue(EffectType, int, float)`.
-pub fn format_value(effect_type: EffectType, param_index: usize, value: f32) -> String {
+pub fn format_value(effect_type: &EffectTypeId, param_index: usize, value: f32) -> String {
     let def = match try_get(effect_type) {
         Some(d) if param_index < d.param_count => d,
         _ => return format!("{:.2}", value),
@@ -143,7 +143,7 @@ pub fn format_value(effect_type: EffectType, param_index: usize, value: f32) -> 
 /// Get the OSC address for a master effect parameter.
 /// Returns None if no address is defined.
 /// Matches Unity's `EffectDefinitionRegistry.GetOscAddress(EffectType, int)`.
-pub fn get_osc_address(effect_type: EffectType, param_index: usize) -> Option<String> {
+pub fn get_osc_address(effect_type: &EffectTypeId, param_index: usize) -> Option<String> {
     let def = try_get(effect_type)?;
     let prefix = def.osc_prefix?;
     if param_index >= def.param_count {
@@ -159,7 +159,7 @@ pub fn get_osc_address(effect_type: EffectType, param_index: usize) -> Option<St
 /// Get the OSC address for a layer effect parameter scoped to a specific layer.
 /// Format: /layer/{layerId}/effectName or /layer/{layerId}/effectName/paramName
 /// Matches Unity's `EffectDefinitionRegistry.GetOscAddressForLayer(EffectType, string, int)`.
-pub fn get_osc_address_for_layer(effect_type: EffectType, layer_id: &str, param_index: usize) -> Option<String> {
+pub fn get_osc_address_for_layer(effect_type: &EffectTypeId, layer_id: &str, param_index: usize) -> Option<String> {
     if layer_id.is_empty() {
         return None;
     }
@@ -177,32 +177,32 @@ pub fn get_osc_address_for_layer(effect_type: EffectType, layer_id: &str, param_
 
 /// Get default parameter values for an effect type.
 /// Matches Unity's EffectDefinitionRegistry usage for creating new instances.
-pub fn get_defaults(effect_type: EffectType) -> Vec<f32> {
+pub fn get_defaults(effect_type: &EffectTypeId) -> Vec<f32> {
     let def = get(effect_type);
     def.param_defs.iter().map(|p| p.default_value).collect()
 }
 
 /// Get all registered effect types (unordered).
 /// Matches Unity's `EffectDefinitionRegistry.GetAllEffectTypes(List<EffectType>)`.
-pub fn get_all_effect_types() -> Vec<EffectType> {
-    DEFINITIONS.keys().copied().collect()
+pub fn get_all_effect_types() -> Vec<EffectTypeId> {
+    DEFINITIONS.keys().cloned().collect()
 }
 
-/// Get all registered effect types sorted by numeric value.
+/// Get all registered effect types sorted by display name.
 /// Matches Unity's `EffectDefinitionRegistry.GetAllEffectTypesSorted()`.
-pub fn get_all_effect_types_sorted() -> Vec<EffectType> {
-    let mut list: Vec<EffectType> = DEFINITIONS.keys().copied().collect();
-    list.sort_by_key(|t| *t as i32);
+pub fn get_all_effect_types_sorted() -> Vec<EffectTypeId> {
+    let mut list: Vec<EffectTypeId> = DEFINITIONS.keys().cloned().collect();
+    list.sort_by_key(|t| t.as_str().to_string());
     list
 }
 
 // ─── Build Definitions ───
 
-fn build_definitions() -> HashMap<EffectType, EffectDef> {
+fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
     let mut m = HashMap::new();
 
     // Transform
-    m.insert(EffectType::Transform, EffectDef {
+    m.insert(EffectTypeId::TRANSFORM, EffectDef {
         display_name: "Transform",
         param_count: 4,
         param_defs: vec![
@@ -215,7 +215,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // InvertColors
-    m.insert(EffectType::InvertColors, EffectDef {
+    m.insert(EffectTypeId::INVERT_COLORS, EffectDef {
         display_name: "Invert Colors",
         param_count: 1,
         param_defs: vec![
@@ -225,7 +225,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // Feedback
-    m.insert(EffectType::Feedback, EffectDef {
+    m.insert(EffectTypeId::FEEDBACK, EffectDef {
         display_name: "Feedback",
         param_count: 1,
         param_defs: vec![
@@ -235,7 +235,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // PixelSort
-    m.insert(EffectType::PixelSort, EffectDef {
+    m.insert(EffectTypeId::PIXEL_SORT, EffectDef {
         display_name: "Pixel Sort",
         param_count: 1,
         param_defs: vec![
@@ -245,7 +245,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // Bloom
-    m.insert(EffectType::Bloom, EffectDef {
+    m.insert(EffectTypeId::BLOOM, EffectDef {
         display_name: "Bloom",
         param_count: 1,
         param_defs: vec![
@@ -255,7 +255,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // InfiniteZoom
-    m.insert(EffectType::InfiniteZoom, EffectDef {
+    m.insert(EffectTypeId::INFINITE_ZOOM, EffectDef {
         display_name: "Infinite Zoom",
         param_count: 2,
         param_defs: vec![
@@ -266,7 +266,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // Kaleidoscope
-    m.insert(EffectType::Kaleidoscope, EffectDef {
+    m.insert(EffectTypeId::KALEIDOSCOPE, EffectDef {
         display_name: "Kaleidoscope",
         param_count: 2,
         param_defs: vec![
@@ -277,7 +277,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // EdgeStretch
-    m.insert(EffectType::EdgeStretch, EffectDef {
+    m.insert(EffectTypeId::EDGE_STRETCH, EffectDef {
         display_name: "Edge Stretch",
         param_count: 3,
         param_defs: vec![
@@ -289,7 +289,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // VoronoiPrism
-    m.insert(EffectType::VoronoiPrism, EffectDef {
+    m.insert(EffectTypeId::VORONOI_PRISM, EffectDef {
         display_name: "Voronoi Prism",
         param_count: 2,
         param_defs: vec![
@@ -300,7 +300,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // QuadMirror
-    m.insert(EffectType::QuadMirror, EffectDef {
+    m.insert(EffectTypeId::QUAD_MIRROR, EffectDef {
         display_name: "Quad Mirror",
         param_count: 1,
         param_defs: vec![
@@ -310,7 +310,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // Dither
-    m.insert(EffectType::Dither, EffectDef {
+    m.insert(EffectTypeId::DITHER, EffectDef {
         display_name: "Dither",
         param_count: 2,
         param_defs: vec![
@@ -323,7 +323,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // Strobe
-    m.insert(EffectType::Strobe, EffectDef {
+    m.insert(EffectTypeId::STROBE, EffectDef {
         display_name: "Strobe",
         param_count: 3,
         param_defs: vec![
@@ -339,7 +339,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // StylizedFeedback
-    m.insert(EffectType::StylizedFeedback, EffectDef {
+    m.insert(EffectTypeId::STYLIZED_FEEDBACK, EffectDef {
         display_name: "Stylized Feedback",
         param_count: 4,
         param_defs: vec![
@@ -354,7 +354,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // Mirror
-    m.insert(EffectType::Mirror, EffectDef {
+    m.insert(EffectTypeId::MIRROR, EffectDef {
         display_name: "Mirror",
         param_count: 2,
         param_defs: vec![
@@ -367,7 +367,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // BlobTracking
-    m.insert(EffectType::BlobTracking, EffectDef {
+    m.insert(EffectTypeId::BLOB_TRACKING, EffectDef {
         display_name: "Blob Tracking",
         param_count: 5,
         param_defs: vec![
@@ -381,7 +381,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // CRT
-    m.insert(EffectType::CRT, EffectDef {
+    m.insert(EffectTypeId::CRT, EffectDef {
         display_name: "CRT",
         param_count: 5,
         param_defs: vec![
@@ -395,7 +395,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // FluidDistortion
-    m.insert(EffectType::FluidDistortion, EffectDef {
+    m.insert(EffectTypeId::FLUID_DISTORTION, EffectDef {
         display_name: "Fluid Distortion",
         param_count: 4,
         param_defs: vec![
@@ -408,7 +408,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // EdgeGlow
-    m.insert(EffectType::EdgeGlow, EffectDef {
+    m.insert(EffectTypeId::EDGE_GLOW, EffectDef {
         display_name: "Edge Glow",
         param_count: 4,
         param_defs: vec![
@@ -423,7 +423,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // Datamosh
-    m.insert(EffectType::Datamosh, EffectDef {
+    m.insert(EffectTypeId::DATAMOSH, EffectDef {
         display_name: "Datamosh",
         param_count: 3,
         param_defs: vec![
@@ -435,7 +435,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // SlitScan
-    m.insert(EffectType::SlitScan, EffectDef {
+    m.insert(EffectTypeId::SLIT_SCAN, EffectDef {
         display_name: "Slit Scan",
         param_count: 3,
         param_defs: vec![
@@ -449,7 +449,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // ColorGrade
-    m.insert(EffectType::ColorGrade, EffectDef {
+    m.insert(EffectTypeId::COLOR_GRADE, EffectDef {
         display_name: "Color Grade",
         param_count: 9,
         param_defs: vec![
@@ -468,7 +468,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
 
     // WireframeDepth — intentional divergence from Unity (D-22):
     // 12 params, removed Persist/Depth/Face, added EdgeFollow, renamed CVFlow→Flow.
-    m.insert(EffectType::WireframeDepth, EffectDef {
+    m.insert(EffectTypeId::WIREFRAME_DEPTH, EffectDef {
         display_name: "Wireframe Depth",
         param_count: 12,
         param_defs: vec![
@@ -497,7 +497,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // ChromaticAberration
-    m.insert(EffectType::ChromaticAberration, EffectDef {
+    m.insert(EffectTypeId::CHROMATIC_ABERRATION, EffectDef {
         display_name: "Chromatic Aberration",
         param_count: 5,
         param_defs: vec![
@@ -513,7 +513,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // GradientMap
-    m.insert(EffectType::GradientMap, EffectDef {
+    m.insert(EffectTypeId::GRADIENT_MAP, EffectDef {
         display_name: "Gradient Map",
         param_count: 7,
         param_defs: vec![
@@ -529,7 +529,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // Glitch
-    m.insert(EffectType::Glitch, EffectDef {
+    m.insert(EffectTypeId::GLITCH, EffectDef {
         display_name: "Glitch",
         param_count: 5,
         param_defs: vec![
@@ -543,7 +543,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // FilmGrain
-    m.insert(EffectType::FilmGrain, EffectDef {
+    m.insert(EffectTypeId::FILM_GRAIN, EffectDef {
         display_name: "Film Grain",
         param_count: 4,
         param_defs: vec![
@@ -556,7 +556,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // Halation
-    m.insert(EffectType::Halation, EffectDef {
+    m.insert(EffectTypeId::HALATION, EffectDef {
         display_name: "Halation",
         param_count: 5,
         param_defs: vec![
@@ -571,7 +571,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
 
 
     // Corruption
-    m.insert(EffectType::Corruption, EffectDef {
+    m.insert(EffectTypeId::CORRUPTION, EffectDef {
         display_name: "Corruption",
         param_count: 6,
         param_defs: vec![
@@ -586,7 +586,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // Infrared
-    m.insert(EffectType::Infrared, EffectDef {
+    m.insert(EffectTypeId::INFRARED, EffectDef {
         display_name: "Infrared",
         param_count: 6,
         param_defs: vec![
@@ -603,7 +603,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // Surveillance
-    m.insert(EffectType::Surveillance, EffectDef {
+    m.insert(EffectTypeId::SURVEILLANCE, EffectDef {
         display_name: "Surveillance",
         param_count: 7,
         param_defs: vec![
@@ -621,7 +621,7 @@ fn build_definitions() -> HashMap<EffectType, EffectDef> {
     });
 
     // Redaction
-    m.insert(EffectType::Redaction, EffectDef {
+    m.insert(EffectTypeId::REDACTION, EffectDef {
         display_name: "Redaction",
         param_count: 7,
         param_defs: vec![
@@ -648,17 +648,17 @@ mod tests {
     #[test]
     fn test_all_effects_registered() {
         // Every variant in EffectType::ALL should have a registry entry
-        for &et in EffectType::ALL {
-            assert!(try_get(et).is_some(), "Missing registry entry for {:?}", et);
+        for et in get_all_effect_types() {
+            assert!(try_get(&et).is_some(), "Missing registry entry for {:?}", et);
         }
         // Transform is also in ALL implicitly (it's the default)
-        assert!(try_get(EffectType::Transform).is_some());
+        assert!(try_get(&EffectTypeId::TRANSFORM).is_some());
     }
 
     #[test]
     fn test_param_counts_match() {
-        for &et in EffectType::ALL {
-            let def = get(et);
+        for et in get_all_effect_types() {
+            let def = get(&et);
             assert_eq!(
                 def.param_count,
                 def.param_defs.len(),
@@ -666,14 +666,14 @@ mod tests {
                 et, def.param_count, def.param_defs.len()
             );
         }
-        let def = get(EffectType::Transform);
+        let def = get(&EffectTypeId::TRANSFORM);
         assert_eq!(def.param_count, def.param_defs.len());
     }
 
     #[test]
     fn test_create_default_bloom() {
-        let inst = create_default(EffectType::Bloom);
-        assert_eq!(inst.effect_type(), EffectType::Bloom);
+        let inst = create_default(&EffectTypeId::BLOOM);
+        assert_eq!(*inst.effect_type(), EffectTypeId::BLOOM);
         assert!(inst.enabled);
         assert_eq!(inst.param_values.len(), 1);
         assert!((inst.param_values[0] - 0.187).abs() < 1e-6);
@@ -682,48 +682,48 @@ mod tests {
     #[test]
     fn test_format_value_labels() {
         // Dither Algo at 2.0 should be "Lines"
-        let s = format_value(EffectType::Dither, 1, 2.0);
+        let s = format_value(&EffectTypeId::DITHER, 1, 2.0);
         assert_eq!(s, "Lines");
     }
 
     #[test]
     fn test_format_value_whole() {
         // Kaleidoscope Segs at 6.7 should round to "7"
-        let s = format_value(EffectType::Kaleidoscope, 1, 6.7);
+        let s = format_value(&EffectTypeId::KALEIDOSCOPE, 1, 6.7);
         assert_eq!(s, "7");
     }
 
     #[test]
     fn test_format_value_continuous() {
-        let s = format_value(EffectType::Bloom, 0, 0.5);
+        let s = format_value(&EffectTypeId::BLOOM, 0, 0.5);
         assert_eq!(s, "0.50");
     }
 
     #[test]
     fn test_osc_address_master() {
-        let addr = get_osc_address(EffectType::Bloom, 0);
+        let addr = get_osc_address(&EffectTypeId::BLOOM, 0);
         assert_eq!(addr, Some("/master/bloom".to_string()));
     }
 
     #[test]
     fn test_osc_address_master_param() {
-        let addr = get_osc_address(EffectType::InfiniteZoom, 1);
+        let addr = get_osc_address(&EffectTypeId::INFINITE_ZOOM, 1);
         assert_eq!(addr, Some("/master/infiniteZoomSharpness".to_string()));
     }
 
     #[test]
     fn test_osc_address_no_suffix() {
         // Transform param 0 has no osc_suffix on the param (index 0 uses prefix only)
-        let addr = get_osc_address(EffectType::Transform, 0);
+        let addr = get_osc_address(&EffectTypeId::TRANSFORM, 0);
         assert_eq!(addr, Some("/master/transform".to_string()));
         // Transform params 1,2,3 have no osc_suffix → None
-        let addr = get_osc_address(EffectType::Transform, 1);
+        let addr = get_osc_address(&EffectTypeId::TRANSFORM, 1);
         assert_eq!(addr, None);
     }
 
     #[test]
     fn test_osc_address_layer() {
-        let addr = get_osc_address_for_layer(EffectType::Bloom, "layer_1", 0);
+        let addr = get_osc_address_for_layer(&EffectTypeId::BLOOM, "layer_1", 0);
         assert_eq!(addr, Some("/layer/layer_1/bloom".to_string()));
     }
 
@@ -731,7 +731,7 @@ mod tests {
     fn test_sorted_types() {
         let sorted = get_all_effect_types_sorted();
         for i in 1..sorted.len() {
-            assert!((sorted[i - 1] as i32) < (sorted[i] as i32));
+            assert!(sorted[i - 1].as_str() <= sorted[i].as_str());
         }
     }
 }

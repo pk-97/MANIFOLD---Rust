@@ -12,7 +12,7 @@
 //   3. Visualization  (render)  — fragment shader scatter
 
 use ahash::AHashMap;
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 
@@ -421,9 +421,9 @@ impl PixelSortFX {
 }
 
 impl PostProcessEffect for PixelSortFX {
-    fn effect_type(&self) -> EffectType {
+    fn effect_type(&self) -> &EffectTypeId {
         // ComputePixelSortFX.cs line 16
-        EffectType::PixelSort
+        &EffectTypeId::PIXEL_SORT
     }
 
     // ComputeSortEffect.cs line 66 — ShouldSkip: param0 <= 0

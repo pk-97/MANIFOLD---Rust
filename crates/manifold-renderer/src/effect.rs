@@ -1,4 +1,4 @@
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 
 /// Per-frame context for effects.
@@ -28,7 +28,7 @@ pub struct EffectContext {
 /// Unity ref: EffectContext.cs FindChainParam()
 pub fn find_chain_param(
     chain: &[EffectInstance],
-    effect_type: EffectType,
+    effect_type: &EffectTypeId,
     param_index: usize,
     default: f32,
 ) -> f32 {
@@ -45,10 +45,10 @@ pub fn should_skip_default(fx: &EffectInstance) -> bool {
 }
 
 /// GPU-aware post-process effect processor.
-/// One singleton per EffectType in the registry. Per-owner state (if any)
+/// One singleton per EffectTypeId in the registry. Per-owner state (if any)
 /// lives inside each processor, keyed by `EffectContext::owner_key`.
 pub trait PostProcessEffect: Send {
-    fn effect_type(&self) -> EffectType;
+    fn effect_type(&self) -> &EffectTypeId;
 
     /// Returns true when the effect should be skipped entirely (no GPU work,
     /// no buffer swap). The chain checks this BEFORE calling apply().

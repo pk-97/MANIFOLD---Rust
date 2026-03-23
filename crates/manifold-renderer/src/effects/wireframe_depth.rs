@@ -9,7 +9,7 @@
 // Graphics.Blit → render pass with bind group per call.
 
 use ahash::AHashMap;
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use wgpu::util::DeviceExt;
 use crate::background_worker::BackgroundWorker;
@@ -1736,8 +1736,8 @@ impl WireframeDepthFX {
 }
 
 impl PostProcessEffect for WireframeDepthFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::WireframeDepth
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::WIREFRAME_DEPTH
     }
 
     // WireframeDepthFX.cs line 279-361 — Apply

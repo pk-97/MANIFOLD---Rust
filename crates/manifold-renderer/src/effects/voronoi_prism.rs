@@ -1,4 +1,4 @@
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use super::simple_blit_helper::SimpleBlitHelper;
@@ -36,8 +36,8 @@ impl VoronoiPrismFX {
 }
 
 impl PostProcessEffect for VoronoiPrismFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::VoronoiPrism
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::VORONOI_PRISM
     }
 
     fn apply(

@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::generators::generator_math::{rotate_4d, project_4d};
@@ -71,8 +71,8 @@ impl DuocylinderGenerator {
 }
 
 impl Generator for DuocylinderGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::Duocylinder
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::DUOCYLINDER
     }
 
     fn render(

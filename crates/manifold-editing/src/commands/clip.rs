@@ -2,7 +2,8 @@ use crate::command::Command;
 use manifold_core::{ClipId, LayerId};
 use manifold_core::project::Project;
 use manifold_core::clip::TimelineClip;
-use manifold_core::types::{GeneratorType, LayerType};
+use manifold_core::types::LayerType;
+use manifold_core::GeneratorTypeId;
 
 /// Move a clip to a new beat position and/or layer.
 /// Matches Unity MoveClipCommand: cross-layer transfer removes from source and adds to target,
@@ -16,20 +17,20 @@ pub struct MoveClipCommand {
     new_layer_id: LayerId,
     /// Captured at construction time from the clip's current generator_type.
     /// Port of C# MoveClipCommand line 32: captures in constructor.
-    old_generator_type: GeneratorType,
+    old_generator_type: GeneratorTypeId,
 }
 
 impl MoveClipCommand {
     /// Create a MoveClipCommand. `old_generator_type` captures the clip's generator type
     /// at the time the command is created (matching Unity constructor behavior).
-    pub fn new_with_gen_type(clip_id: ClipId, old_start_beat: f32, new_start_beat: f32, old_layer_id: LayerId, new_layer_id: LayerId, old_generator_type: GeneratorType) -> Self {
+    pub fn new_with_gen_type(clip_id: ClipId, old_start_beat: f32, new_start_beat: f32, old_layer_id: LayerId, new_layer_id: LayerId, old_generator_type: GeneratorTypeId) -> Self {
         Self { clip_id, old_start_beat, new_start_beat, old_layer_id, new_layer_id, old_generator_type }
     }
 
     /// Convenience constructor that defaults generator type to None.
     /// For callers that know the clip isn't a generator or will look it up themselves.
     pub fn new(clip_id: ClipId, old_start_beat: f32, new_start_beat: f32, old_layer_id: LayerId, new_layer_id: LayerId) -> Self {
-        Self { clip_id, old_start_beat, new_start_beat, old_layer_id, new_layer_id, old_generator_type: GeneratorType::None }
+        Self { clip_id, old_start_beat, new_start_beat, old_layer_id, new_layer_id, old_generator_type: GeneratorTypeId::NONE }
     }
 }
 
@@ -54,7 +55,7 @@ impl Command for MoveClipCommand {
                 if let Some(dst_idx) = dst
                     && let Some(target) = project.timeline.layers.get(dst_idx)
                     && target.layer_type == LayerType::Generator {
-                        c.generator_type = target.generator_type();
+                        c.generator_type = target.generator_type().clone();
                     }
             }
 
@@ -116,7 +117,7 @@ impl Command for MoveClipCommand {
 
         // Restore generator type and start beat.
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
-            clip.generator_type = self.old_generator_type;
+            clip.generator_type = self.old_generator_type.clone();
             clip.start_beat = self.old_start_beat;
         }
 

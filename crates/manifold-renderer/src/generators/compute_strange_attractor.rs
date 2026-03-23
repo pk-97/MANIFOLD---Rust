@@ -10,7 +10,7 @@
 // MAX_PARTICLES = 2_000_000 matching Unity.
 // Active count: clamp(param * 1_000_000, 100_000, MAX_PARTICLES).
 
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::render_target::RenderTarget;
@@ -416,8 +416,8 @@ impl ComputeStrangeAttractorGenerator {
 }
 
 impl Generator for ComputeStrangeAttractorGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::ComputeStrangeAttractor
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR
     }
 
     fn render(

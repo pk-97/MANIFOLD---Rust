@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use manifold_core::midi::MidiNoteMapping;
 use manifold_core::project::Project;
 use manifold_core::tempo::TempoMapConverter;
-use manifold_core::types::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use manifold_core::video::VideoClip;
 
 use crate::live_clip_manager::{LiveClipHost, LiveClipManager};
@@ -327,10 +327,10 @@ impl ClipLauncher {
             .timeline
             .layers
             .get(layer_index as usize)
-            .map(|l| l.generator_type())
-            .unwrap_or(GeneratorType::None);
+            .map(|l| l.generator_type().clone())
+            .unwrap_or(GeneratorTypeId::NONE);
 
-        if generator_type != GeneratorType::None {
+        if generator_type != GeneratorTypeId::NONE {
             let bpm = project.settings.bpm;
             let spb = TempoMapConverter::seconds_per_beat_from_bpm(bpm);
             let generator_duration = spb * 4.0; // 1 bar at 4/4 default feel
@@ -338,7 +338,7 @@ impl ClipLauncher {
             let gen_clip = live_clip_manager.trigger_live_generator_clip(
                 project,
                 host,
-                generator_type,
+                generator_type.clone(),
                 layer_index,
                 generator_duration,
                 beat_stamp,

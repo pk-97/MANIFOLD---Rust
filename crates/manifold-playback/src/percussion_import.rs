@@ -15,7 +15,8 @@ use manifold_core::percussion_settings::PercussionPipelineSettings;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
-use manifold_core::types::{GeneratorType, LayerType, TempoPointSource};
+use manifold_core::types::{LayerType, TempoPointSource};
+use manifold_core::GeneratorTypeId;
 
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::{AddClipCommand, DeleteClipCommand};
@@ -162,10 +163,10 @@ impl PercussionImportService {
                         None => continue,
                     };
                     let layer_gen = target_layer.generator_type();
-                    if layer_gen != GeneratorType::None {
-                        layer_gen
+                    if *layer_gen != GeneratorTypeId::NONE {
+                        layer_gen.clone()
                     } else {
-                        placement.generator_type
+                        placement.generator_type.clone()
                     }
                 };
 
@@ -359,7 +360,7 @@ impl PercussionImportService {
             self.resolve_generator_layer_index(
                 project,
                 placement.layer_index,
-                placement.generator_type,
+                placement.generator_type.clone(),
                 placement.trigger_type,
             )
         } else {
@@ -371,10 +372,10 @@ impl PercussionImportService {
         &self,
         project: &mut Project,
         preferred_index: i32,
-        generator_type: GeneratorType,
+        generator_type: GeneratorTypeId,
         trigger_type: PercussionTriggerType,
     ) -> i32 {
-        if generator_type == GeneratorType::None {
+        if generator_type == GeneratorTypeId::NONE {
             return -1;
         }
 
@@ -382,7 +383,7 @@ impl PercussionImportService {
         if preferred_index >= 0 && (preferred_index as usize) < project.timeline.layers.len() {
             let preferred = &project.timeline.layers[preferred_index as usize];
             if preferred.layer_type == LayerType::Generator
-                && preferred.generator_type() == generator_type
+                && *preferred.generator_type() == generator_type
             {
                 return preferred_index;
             }
@@ -391,7 +392,7 @@ impl PercussionImportService {
         // Scan for exact generator type match.
         for i in 0..project.timeline.layers.len() {
             let layer = &project.timeline.layers[i];
-            if layer.layer_type == LayerType::Generator && layer.generator_type() == generator_type
+            if layer.layer_type == LayerType::Generator && *layer.generator_type() == generator_type
             {
                 return i as i32;
             }
@@ -440,7 +441,7 @@ impl PercussionImportService {
         let idx = project.timeline.add_layer(
             &format!("Layer {}", project.timeline.layers.len()),
             LayerType::Video,
-            GeneratorType::None,
+            GeneratorTypeId::NONE,
         );
         idx as i32
     }
@@ -483,9 +484,9 @@ impl PercussionImportService {
                 layout_map.insert(binding.trigger_type, idx as i32);
             } else {
                 let idx = if binding.uses_generator() {
-                    project.timeline.add_layer(&layer_name, LayerType::Generator, binding.generator_type)
+                    project.timeline.add_layer(&layer_name, LayerType::Generator, binding.generator_type.clone())
                 } else {
-                    project.timeline.add_layer(&layer_name, LayerType::Video, GeneratorType::None)
+                    project.timeline.add_layer(&layer_name, LayerType::Video, GeneratorTypeId::NONE)
                 };
                 layout_map.insert(binding.trigger_type, idx as i32);
             }

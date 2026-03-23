@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use super::mri_volume_loader::{ScanInfo, discover_scans, load_tiff_slice};
@@ -337,8 +337,8 @@ impl MriVolumeGenerator {
 }
 
 impl Generator for MriVolumeGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::MriVolume
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::MRI_VOLUME
     }
 
     fn render(

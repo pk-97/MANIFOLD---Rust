@@ -164,11 +164,11 @@ impl Timeline {
         &mut self,
         name: &str,
         layer_type: crate::types::LayerType,
-        generator_type: crate::types::GeneratorType,
+        generator_type: crate::generator_type_id::GeneratorTypeId,
     ) -> usize {
         let idx = self.layers.len();
         let mut layer = Layer::new(name.to_string(), layer_type, idx as i32);
-        if generator_type != crate::types::GeneratorType::None {
+        if generator_type != crate::generator_type_id::GeneratorTypeId::NONE {
             layer.change_generator_type(generator_type);
         }
         self.layers.push(layer);

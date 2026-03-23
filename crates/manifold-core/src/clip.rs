@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::id::{ClipId, LayerId};
-use crate::types::GeneratorType;
+use crate::generator_type_id::GeneratorTypeId;
+use crate::effect_type_id::EffectTypeId;
 use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope};
 
 /// A single clip on the timeline. Beat-primary timing.
@@ -36,7 +37,7 @@ pub struct TimelineClip {
 
     // ── Generator type ──
     #[serde(default)]
-    pub generator_type: GeneratorType,
+    pub generator_type: GeneratorTypeId,
 
     // ── Transform ──
     #[serde(default)]
@@ -87,7 +88,7 @@ impl TimelineClip {
     }
 
     pub fn is_generator(&self) -> bool {
-        self.generator_type != GeneratorType::None
+        self.generator_type != GeneratorTypeId::NONE
     }
 
     pub fn is_active_at_beat(&self, beat: f32) -> bool {
@@ -195,7 +196,7 @@ impl TimelineClip {
 
     /// Create a new generator clip.
     pub fn new_generator(
-        gen_type: GeneratorType,
+        gen_type: GeneratorTypeId,
         layer_id: LayerId,
         start_beat: f32,
         duration_beats: f32,
@@ -236,7 +237,7 @@ impl TimelineClip {
     }
 
     /// Find effect by type. Unity TimelineClip.cs line 230.
-    pub fn find_effect(&self, effect_type: crate::types::EffectType) -> Option<&crate::effects::EffectInstance> {
+    pub fn find_effect(&self, effect_type: &EffectTypeId) -> Option<&EffectInstance> {
         self.effects.iter().find(|e| e.effect_type() == effect_type)
     }
 
@@ -247,31 +248,31 @@ impl TimelineClip {
 }
 
 impl crate::effects::EffectContainer for TimelineClip {
-    fn effects(&self) -> &[crate::effects::EffectInstance] {
+    fn effects(&self) -> &[EffectInstance] {
         &self.effects
     }
-    fn effects_mut(&mut self) -> &mut Vec<crate::effects::EffectInstance> {
+    fn effects_mut(&mut self) -> &mut Vec<EffectInstance> {
         &mut self.effects
     }
-    fn effect_groups(&self) -> &[crate::effects::EffectGroup] {
+    fn effect_groups(&self) -> &[EffectGroup] {
         self.effect_groups.as_deref().unwrap_or(&[])
     }
-    fn effect_groups_mut(&mut self) -> &mut Vec<crate::effects::EffectGroup> {
+    fn effect_groups_mut(&mut self) -> &mut Vec<EffectGroup> {
         self.effect_groups_mut()
     }
     fn has_modular_effects(&self) -> bool {
         !self.effects.is_empty()
     }
-    fn find_effect(&self, effect_type: crate::types::EffectType) -> Option<&crate::effects::EffectInstance> {
+    fn find_effect(&self, effect_type: &EffectTypeId) -> Option<&EffectInstance> {
         self.effects.iter().find(|e| e.effect_type() == effect_type)
     }
-    fn find_effect_group(&self, group_id: &str) -> Option<&crate::effects::EffectGroup> {
+    fn find_effect_group(&self, group_id: &str) -> Option<&EffectGroup> {
         self.effect_groups.as_ref()?.iter().find(|g| g.id == group_id)
     }
-    fn envelopes(&self) -> &[crate::effects::ParamEnvelope] {
+    fn envelopes(&self) -> &[ParamEnvelope] {
         self.envelopes.as_deref().unwrap_or(&[])
     }
-    fn envelopes_mut(&mut self) -> &mut Vec<crate::effects::ParamEnvelope> {
+    fn envelopes_mut(&mut self) -> &mut Vec<ParamEnvelope> {
         TimelineClip::envelopes_mut(self)
     }
     fn has_envelopes(&self) -> bool {
@@ -292,7 +293,7 @@ impl Default for TimelineClip {
             is_locked: false,
             is_muted: false,
             invert_colors: false,
-            generator_type: GeneratorType::None,
+            generator_type: GeneratorTypeId::NONE,
             translate_x: 0.0,
             translate_y: 0.0,
             scale: 1.0,
@@ -414,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_new_generator_clamps_duration() {
-        let clip = TimelineClip::new_generator(GeneratorType::None, LayerId::default(), 0.0, -2.0);
+        let clip = TimelineClip::new_generator(GeneratorTypeId::NONE, LayerId::default(), 0.0, -2.0);
         assert_eq!(clip.duration_beats, 0.0);
     }
 }

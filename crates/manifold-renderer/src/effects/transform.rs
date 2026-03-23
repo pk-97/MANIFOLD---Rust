@@ -13,7 +13,7 @@
 // This produces source→target unchanged (scale=1, translate=0, rot=0 is identity in the shader)
 // so the buffer swap in effect_chain correctly advances with unmodified content.
 
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use super::simple_blit_helper::SimpleBlitHelper;
@@ -62,8 +62,8 @@ impl TransformFX {
 }
 
 impl PostProcessEffect for TransformFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::Transform
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::TRANSFORM
     }
 
     /// TransformFX.cs:15-25 — skip if all params are at identity.

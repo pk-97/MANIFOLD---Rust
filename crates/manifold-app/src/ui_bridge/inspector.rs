@@ -540,7 +540,7 @@ pub(super) fn dispatch_inspector(
             let tab = ui.inspector.last_effect_tab();
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
+                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type().clone())
             };
             if let Some(et) = effect_type {
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -645,9 +645,9 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
+                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type().clone())
             };
-            if let Some(et) = effect_type {
+            if let Some(ref et) = effect_type {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx|
                         project.timeline.layers.get_mut(idx).map(|l| l.envelopes_mut())
@@ -662,7 +662,7 @@ pub(super) fn dispatch_inspector(
                 };
                 if let Some(envs) = envs
                     && let Some(env) = envs.iter_mut().find(|e|
-                        e.target_effect_type == et && e.param_index == *pi as i32
+                        e.target_effect_type == *et && e.param_index == *pi as i32
                     ) {
                         match param {
                             manifold_ui::EnvelopeParam::Attack => env.attack_beats = *val,
@@ -747,9 +747,9 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
+                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type().clone())
             };
-            if let Some(et) = effect_type {
+            if let Some(ref et) = effect_type {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => layer_idx.and_then(|idx|
                         project.timeline.layers.get_mut(idx).map(|l| l.envelopes_mut())
@@ -764,7 +764,7 @@ pub(super) fn dispatch_inspector(
                 };
                 if let Some(envs) = envs
                     && let Some(env) = envs.iter_mut().find(|e|
-                        e.target_effect_type == et && e.param_index == *pi as i32
+                        e.target_effect_type == *et && e.param_index == *pi as i32
                     ) {
                         env.target_normalized = *norm;
                     }
@@ -836,7 +836,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
+                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type().clone())
             };
             if let Some(et) = effect_type {
                 let envs: Option<&[ParamEnvelope]> = match tab {
@@ -867,7 +867,7 @@ pub(super) fn dispatch_inspector(
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
                 let effect_type = {
                     let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
+                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type().clone())
                 };
                 if let Some(et) = effect_type {
                     match tab {
@@ -912,7 +912,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
+                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type().clone())
             };
             if let Some(et) = effect_type {
                 let envs: Option<&[ParamEnvelope]> = match tab {
@@ -948,7 +948,7 @@ pub(super) fn dispatch_inspector(
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
                 let effect_type = {
                     let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
+                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type().clone())
                 };
                 if let Some(et) = effect_type {
                     match tab {
@@ -1477,12 +1477,14 @@ pub(super) fn dispatch_inspector(
         }
 
         PanelAction::AddEffect(tab, effect_type_idx) => {
-            use manifold_core::types::EffectType;
+            use manifold_core::effect_type_registry;
             use manifold_core::effects::EffectInstance;
-            let Some(effect_type) = EffectType::from_discriminant(*effect_type_idx as i32) else {
+            let available = effect_type_registry::available_effects();
+            let Some(reg) = available.get(*effect_type_idx) else {
                 return DispatchResult::handled();
             };
-            let defaults = manifold_core::effect_definition_registry::get_defaults(effect_type);
+            let effect_type = reg.id.clone();
+            let defaults = manifold_core::effect_definition_registry::get_defaults(&effect_type);
             let mut effect = EffectInstance::new(effect_type);
             effect.param_values = defaults;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);

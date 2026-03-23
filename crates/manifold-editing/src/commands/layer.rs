@@ -2,7 +2,8 @@ use crate::command::Command;
 use manifold_core::LayerId;
 use manifold_core::project::Project;
 use manifold_core::layer::Layer;
-use manifold_core::types::{LayerType, GeneratorType};
+use manifold_core::types::LayerType;
+use manifold_core::GeneratorTypeId;
 use std::collections::HashMap;
 
 /// Add a new layer to the timeline.
@@ -11,7 +12,7 @@ pub struct AddLayerCommand {
     layer: Option<Layer>,
     name: String,
     layer_type: LayerType,
-    gen_type: GeneratorType,
+    gen_type: GeneratorTypeId,
     insert_index: usize,
     parent_group_id: Option<LayerId>,
 }
@@ -20,7 +21,7 @@ impl AddLayerCommand {
     pub fn new(
         name: String,
         layer_type: LayerType,
-        gen_type: GeneratorType,
+        gen_type: GeneratorTypeId,
         insert_index: usize,
         parent_group_id: Option<LayerId>,
     ) -> Self {
@@ -34,7 +35,7 @@ impl Command for AddLayerCommand {
             existing
         } else {
             let mut new_layer = if self.layer_type == LayerType::Generator {
-                Layer::new_generator(self.name.clone(), self.gen_type, 0)
+                Layer::new_generator(self.name.clone(), self.gen_type.clone(), 0)
             } else {
                 Layer::new(self.name.clone(), self.layer_type, 0)
             };

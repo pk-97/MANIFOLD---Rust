@@ -1,4 +1,4 @@
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use super::simple_blit_helper::SimpleBlitHelper;
@@ -29,8 +29,8 @@ impl InvertColorsFX {
 }
 
 impl PostProcessEffect for InvertColorsFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::InvertColors
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::INVERT_COLORS
     }
 
     fn apply(

@@ -1,4 +1,4 @@
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use super::simple_blit_helper::SimpleBlitHelper;
@@ -30,8 +30,8 @@ impl MirrorFX {
 }
 
 impl PostProcessEffect for MirrorFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::Mirror
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::MIRROR
     }
 
     fn apply(

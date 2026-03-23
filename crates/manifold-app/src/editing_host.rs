@@ -260,8 +260,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 clip.layer_id = project.timeline.layers[target_layer].layer_id.clone();
 
                 // Gen→gen with different type: adopt target layer's generator type
-                if target_is_gen && clip.generator_type != project.timeline.layers[target_layer].generator_type() {
-                    clip.generator_type = project.timeline.layers[target_layer].generator_type();
+                if target_is_gen && clip.generator_type != *project.timeline.layers[target_layer].generator_type() {
+                    clip.generator_type = project.timeline.layers[target_layer].generator_type().clone();
                 }
 
                 project.timeline.layers[target_layer].clips.push(clip);

@@ -1,4 +1,4 @@
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use crate::effect::{EffectContext, find_chain_param};
 use crate::effect_registry::EffectRegistry;
@@ -282,7 +282,7 @@ impl EffectChain {
         // Unity ref: EffectContext.FindChainParam() — VoronoiPrism reads EdgeStretch width.
         let chain_ctx = EffectContext {
             edge_stretch_width: find_chain_param(
-                effects, EffectType::EdgeStretch, 1, 0.5625,
+                effects, &EffectTypeId::EDGE_STRETCH, 1, 0.5625,
             ),
             ..*ctx
         };

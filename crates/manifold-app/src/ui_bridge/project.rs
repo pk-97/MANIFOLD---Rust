@@ -3,7 +3,7 @@
 
 use manifold_core::LayerId;
 use manifold_core::project::Project;
-use manifold_core::types::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use manifold_ui::PanelAction;
 
 use crate::app::SelectionState;
@@ -119,12 +119,14 @@ pub(super) fn dispatch_project(
             let resolved_idx = opt_layer_id.as_ref()
                 .and_then(|lid| project.timeline.find_layer_index_by_id(lid));
             if let Some(layer_idx) = resolved_idx {
+                let available = manifold_core::generator_type_registry::available_generators();
                 let layer = &project.timeline.layers[layer_idx];
                 let old_type = layer.gen_params()
-                    .map(|gp| gp.generator_type())
-                    .unwrap_or(GeneratorType::None);
-                if let Some(new_type) = GeneratorType::from_index(*gen_type_idx)
-                    && new_type != old_type {
+                    .map(|gp| gp.generator_type().clone())
+                    .unwrap_or(GeneratorTypeId::NONE);
+                if let Some(reg) = available.get(*gen_type_idx) {
+                    let new_type = reg.id.clone();
+                    if new_type != old_type {
                         let old_params = layer.gen_params()
                             .map(|gp| gp.param_values.clone())
                             .unwrap_or_default();
@@ -134,7 +136,7 @@ pub(super) fn dispatch_project(
                             .and_then(|gp| gp.envelopes.clone());
                         let layer_id = layer.layer_id.clone();
                         let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(
-                            layer_id.clone(), old_type, new_type, old_params, old_drivers, old_envelopes,
+                            layer_id.clone(), old_type, new_type.clone(), old_params, old_drivers, old_envelopes,
                         );
                         { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
                         ContentCommand::send(content_tx, ContentCommand::GeneratorTypeChanged {
@@ -142,6 +144,7 @@ pub(super) fn dispatch_project(
                             new_type,
                         });
                     }
+                }
             }
             DispatchResult::structural()
         }

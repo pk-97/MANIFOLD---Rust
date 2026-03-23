@@ -570,15 +570,16 @@ impl UIRoot {
                 true
             }
             PanelAction::AddEffectClicked(tab) => {
-                use manifold_core::types::EffectType;
-                use manifold_core::effect_category_registry;
+                use manifold_core::effect_type_registry;
                 use manifold_ui::panels::browser_popup::*;
 
-                let mut items: Vec<(String, i32, String)> = EffectType::ALL.iter()
-                    .map(|&et| (
-                        et.display_name().to_string(),
-                        et as i32,
-                        effect_category_registry::get_category(et).to_string(),
+                let available = effect_type_registry::available_effects();
+                let mut items: Vec<(String, i32, String)> = available.iter()
+                    .enumerate()
+                    .map(|(i, reg)| (
+                        reg.display_name.to_string(),
+                        i as i32,
+                        reg.category.to_string(),
                     ))
                     .collect();
                 items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
@@ -586,9 +587,8 @@ impl UIRoot {
                 let keys: Vec<i32> = items.iter().map(|i| i.1).collect();
                 let categories: Vec<String> = items.iter().map(|i| i.2.clone()).collect();
 
-                // Unique category names (excluding Generators)
-                let cat_names: Vec<String> = effect_category_registry::ALL_CATEGORIES.iter()
-                    .filter(|&&c| c != effect_category_registry::GENERATORS)
+                // Unique category names
+                let cat_names: Vec<String> = effect_type_registry::ALL_CATEGORIES.iter()
                     .map(|&c| c.to_string())
                     .collect();
 
@@ -607,12 +607,13 @@ impl UIRoot {
                 true
             }
             PanelAction::GenTypeClicked(layer_id) => {
-                use manifold_core::types::GeneratorType;
+                use manifold_core::generator_type_registry;
                 use manifold_ui::panels::browser_popup::*;
 
-                let mut items: Vec<(String, i32)> = GeneratorType::ALL.iter()
+                let available = generator_type_registry::available_generators();
+                let mut items: Vec<(String, i32)> = available.iter()
                     .enumerate()
-                    .map(|(i, &gt)| (gt.display_name().to_string(), i as i32))
+                    .map(|(i, reg)| (reg.display_name.to_string(), i as i32))
                     .collect();
                 items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
                 let names: Vec<String> = items.iter().map(|i| i.0.clone()).collect();

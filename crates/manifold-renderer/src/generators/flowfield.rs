@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::blit::BlitPipeline;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
@@ -161,8 +161,8 @@ impl FlowfieldGenerator {
 }
 
 impl Generator for FlowfieldGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::Flowfield
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::FLOWFIELD
     }
 
     fn render(

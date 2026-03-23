@@ -2,7 +2,7 @@ use manifold_core::{ClipId, LayerId};
 use crate::command::Command;
 use manifold_core::project::Project;
 use manifold_core::effects::ParamEnvelope;
-use manifold_core::types::EffectType;
+use manifold_core::EffectTypeId;
 
 /// Add a param envelope to a clip.
 #[derive(Debug)]
@@ -131,9 +131,9 @@ impl Command for ChangeEnvelopeADSRCommand {
 pub struct ChangeEnvelopeRoutingCommand {
     clip_id: ClipId,
     env_index: usize,
-    old_effect_type: EffectType,
+    old_effect_type: EffectTypeId,
     old_param_index: i32,
-    new_effect_type: EffectType,
+    new_effect_type: EffectTypeId,
     new_param_index: i32,
 }
 
@@ -141,9 +141,9 @@ impl ChangeEnvelopeRoutingCommand {
     pub fn new(
         clip_id: ClipId,
         env_index: usize,
-        old_effect_type: EffectType,
+        old_effect_type: EffectTypeId,
         old_param_index: i32,
-        new_effect_type: EffectType,
+        new_effect_type: EffectTypeId,
         new_param_index: i32,
     ) -> Self {
         Self { clip_id, env_index, old_effect_type, old_param_index, new_effect_type, new_param_index }
@@ -155,7 +155,7 @@ impl Command for ChangeEnvelopeRoutingCommand {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             let envs = clip.envelopes_mut();
             if let Some(env) = envs.get_mut(self.env_index) {
-                env.target_effect_type = self.new_effect_type;
+                env.target_effect_type = self.new_effect_type.clone();
                 env.param_index = self.new_param_index;
             }
         }
@@ -165,7 +165,7 @@ impl Command for ChangeEnvelopeRoutingCommand {
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             let envs = clip.envelopes_mut();
             if let Some(env) = envs.get_mut(self.env_index) {
-                env.target_effect_type = self.old_effect_type;
+                env.target_effect_type = self.old_effect_type.clone();
                 env.param_index = self.old_param_index;
             }
         }

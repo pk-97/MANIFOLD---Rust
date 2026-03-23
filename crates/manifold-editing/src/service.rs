@@ -363,8 +363,8 @@ impl EditingService {
             new_clip.layer_id = layer.layer_id.clone();
 
             // Gen->gen with different type: adopt target layer's generator type
-            if clip_is_gen && layer_is_gen && new_clip.generator_type != layer.generator_type() {
-                new_clip.generator_type = layer.generator_type();
+            if clip_is_gen && layer_is_gen && new_clip.generator_type != *layer.generator_type() {
+                new_clip.generator_type = layer.generator_type().clone();
             }
 
             // Enforce non-overlap for the new clip
@@ -525,7 +525,7 @@ impl EditingService {
         let layer_id = layer.map(|l| l.layer_id.clone()).unwrap_or_default();
 
         let clip = if is_generator {
-            let gen_type = layer.map_or(manifold_core::types::GeneratorType::None, |l| l.generator_type());
+            let gen_type = layer.map_or(manifold_core::GeneratorTypeId::NONE, |l| l.generator_type().clone());
             TimelineClip::new_generator(gen_type, layer_id.clone(), beat, duration_beats)
         } else {
             TimelineClip {

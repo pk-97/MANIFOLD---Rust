@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::generators::generator_math::{PROJ_SCALE, hash_beat};
@@ -49,8 +49,8 @@ impl OscilloscopeXYGenerator {
 }
 
 impl Generator for OscilloscopeXYGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::OscilloscopeXY
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::OSCILLOSCOPE_XY
     }
 
     fn render(

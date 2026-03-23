@@ -1,7 +1,7 @@
 use std::any::Any;
 use ahash::AHashMap;
 use std::sync::Arc;
-use manifold_core::{GeneratorType, LayerId};
+use manifold_core::{GeneratorTypeId, LayerId};
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_playback::renderer::ClipRenderer;
@@ -13,7 +13,7 @@ use crate::generators::registry::GeneratorRegistry;
 /// Per-clip active state.
 struct ActiveClip {
     render_target: RenderTarget,
-    generator_type: GeneratorType,
+    generator_type: GeneratorTypeId,
     layer_id: LayerId,
     layer_index: i32, // positional cache for param lookup in render_all
     anim_progress: f32,
@@ -23,7 +23,7 @@ struct ActiveClip {
 /// temporal state (particle positions, attractors, etc.).
 struct LayerGeneratorState {
     generator: Box<dyn Generator>,
-    generator_type: GeneratorType,
+    generator_type: GeneratorTypeId,
     trigger_count: u32,
 }
 
@@ -80,7 +80,7 @@ impl GeneratorRenderer {
     fn acquire_clip(
         &mut self,
         clip_id: &str,
-        gen_type: GeneratorType,
+        gen_type: GeneratorTypeId,
         layer_id: LayerId,
         layer_index: i32,
     ) -> bool {
@@ -95,12 +95,12 @@ impl GeneratorRenderer {
             .is_none_or(|ls| ls.generator_type != gen_type);
 
         if needs_create {
-            if let Some(generator) = self.registry.create(&self.device, gen_type) {
+            if let Some(generator) = self.registry.create(&self.device, &gen_type) {
                 self.layer_generators.insert(
                     layer_id.clone(),
                     LayerGeneratorState {
                         generator,
-                        generator_type: gen_type,
+                        generator_type: gen_type.clone(),
                         trigger_count: 0,
                     },
                 );
@@ -130,7 +130,7 @@ impl GeneratorRenderer {
             clip_id.to_string(),
             ActiveClip {
                 render_target: rt,
-                generator_type: gen_type,
+                generator_type: gen_type.clone(),
                 layer_id,
                 layer_index,
                 anim_progress: 0.0,
@@ -174,7 +174,7 @@ impl GeneratorRenderer {
                     Some(a) => a,
                     None => continue,
                 };
-                (active.layer_id.clone(), active.layer_index, active.generator_type, active.anim_progress)
+                (active.layer_id.clone(), active.layer_index, active.generator_type.clone(), active.anim_progress)
             };
 
             // Build GeneratorContext from layer params (zero allocation)
@@ -256,11 +256,11 @@ impl GeneratorRenderer {
 
     /// Update active clip types for a layer after generator type change.
     /// Port of C# GeneratorRenderer.UpdateActiveTypesForLayer().
-    pub fn update_active_types_for_layer(&mut self, layer_id: &LayerId, new_type: GeneratorType) {
+    pub fn update_active_types_for_layer(&mut self, layer_id: &LayerId, new_type: GeneratorTypeId) {
         // Update clip type tracking
         for active in self.active_clips.values_mut() {
             if active.layer_id == *layer_id {
-                active.generator_type = new_type;
+                active.generator_type = new_type.clone();
             }
         }
 
@@ -275,12 +275,12 @@ impl GeneratorRenderer {
                 .layer_generators
                 .get(layer_id)
                 .map_or(0, |ls| ls.trigger_count);
-            if let Some(generator) = self.registry.create(&self.device, new_type) {
+            if let Some(generator) = self.registry.create(&self.device, &new_type) {
                 self.layer_generators.insert(
                     layer_id.clone(),
                     LayerGeneratorState {
                         generator,
-                        generator_type: new_type,
+                        generator_type: new_type.clone(),
                         trigger_count: old_trigger_count,
                     },
                 );
@@ -308,7 +308,7 @@ impl ClipRenderer for GeneratorRenderer {
         let layer_id = clip.layer_id.clone();
         let layer_index = layers.iter().position(|l| l.layer_id == layer_id)
             .map_or(0, |i| i as i32);
-        self.acquire_clip(&clip.id, clip.generator_type, layer_id, layer_index)
+        self.acquire_clip(&clip.id, clip.generator_type.clone(), layer_id, layer_index)
     }
 
     fn stop_clip(&mut self, clip_id: &str) {

@@ -2,7 +2,8 @@
 
 use manifold_core::LayerId;
 use manifold_core::project::Project;
-use manifold_core::types::{BlendMode, LayerType, GeneratorType};
+use manifold_core::types::{BlendMode, LayerType};
+use manifold_core::GeneratorTypeId;
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::commands::settings::ChangeLayerBlendModeCommand;
 use manifold_editing::service::EditingService;
@@ -296,7 +297,7 @@ pub(super) fn dispatch_layer(
                 let cmd = AddLayerCommand::new(
                     name,
                     LayerType::Video,
-                    GeneratorType::None,
+                    GeneratorTypeId::NONE,
                     count,
                     None,
                 );

@@ -1,4 +1,4 @@
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use super::simple_blit_helper::SimpleBlitHelper;
@@ -37,8 +37,8 @@ impl EdgeGlowFX {
 }
 
 impl PostProcessEffect for EdgeGlowFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::EdgeGlow
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::EDGE_GLOW
     }
 
     fn apply(

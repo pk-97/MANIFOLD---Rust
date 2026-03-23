@@ -1,7 +1,7 @@
 // Mechanical port of Unity ColorGradeFX.cs.
 // 9 parameters, single pass, K-matrix HSV, colorize pipeline.
 
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use super::simple_blit_helper::SimpleBlitHelper;
@@ -46,8 +46,8 @@ impl ColorGradeFX {
 }
 
 impl PostProcessEffect for ColorGradeFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::ColorGrade
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::COLOR_GRADE
     }
 
     // ColorGradeFX.cs:13-26 — ShouldSkip: skip when amount <= 0 OR all params at identity.

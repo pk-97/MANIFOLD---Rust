@@ -1,4 +1,4 @@
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use super::simple_blit_helper::SimpleBlitHelper;
@@ -33,8 +33,8 @@ impl ChromaticAberrationFX {
 }
 
 impl PostProcessEffect for ChromaticAberrationFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::ChromaticAberration
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::CHROMATIC_ABERRATION
     }
 
     fn apply(

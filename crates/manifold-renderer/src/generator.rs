@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator_context::GeneratorContext;
 
 /// GPU-aware generator processor. Each instance owns its wgpu pipeline(s)
@@ -11,7 +11,7 @@ use crate::generator_context::GeneratorContext;
 /// - Drop cleans up GPU resources automatically
 pub trait Generator: Send {
     /// Which generator type this handles.
-    fn generator_type(&self) -> GeneratorType;
+    fn generator_type(&self) -> &GeneratorTypeId;
 
     /// Render one frame into the target texture view.
     /// Returns updated anim_progress for this clip.

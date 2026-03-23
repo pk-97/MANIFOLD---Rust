@@ -8,7 +8,8 @@ use crate::percussion_analysis::{
 };
 use crate::project::Project;
 use crate::settings::ProjectSettings;
-use crate::types::{GeneratorType, QuantizeMode};
+use crate::types::QuantizeMode;
+use crate::generator_type_id::GeneratorTypeId;
 
 // ─── StemMode ───
 
@@ -76,7 +77,7 @@ impl Default for DemucsSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KickSettings {
-    pub generator: GeneratorType,
+    pub generator: GeneratorTypeId,
     pub layer_index: i32,
     pub clip_duration_beats: f32,
     pub min_confidence: f32,
@@ -87,7 +88,7 @@ pub struct KickSettings {
 impl Default for KickSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorType::WireframeZoo,
+            generator: GeneratorTypeId::WIREFRAME_ZOO,
             layer_index: 0,
             clip_duration_beats: 0.5,
             min_confidence: 0.0,
@@ -99,7 +100,7 @@ impl Default for KickSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnareSettings {
-    pub generator: GeneratorType,
+    pub generator: GeneratorTypeId,
     pub layer_index: i32,
     pub clip_duration_beats: f32,
     pub min_confidence: f32,
@@ -113,7 +114,7 @@ pub struct SnareSettings {
 impl Default for SnareSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorType::BasicShapesSnap,
+            generator: GeneratorTypeId::BASIC_SHAPES_SNAP,
             layer_index: 1,
             clip_duration_beats: 0.75,
             min_confidence: 0.0,
@@ -128,7 +129,7 @@ impl Default for SnareSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PercSettings {
-    pub generator: GeneratorType,
+    pub generator: GeneratorTypeId,
     pub layer_index: i32,
     pub clip_duration_beats: f32,
     pub min_confidence: f32,
@@ -139,7 +140,7 @@ pub struct PercSettings {
 impl Default for PercSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorType::Flowfield,
+            generator: GeneratorTypeId::FLOWFIELD,
             layer_index: 3,
             clip_duration_beats: 0.50,
             min_confidence: 0.0,
@@ -151,7 +152,7 @@ impl Default for PercSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HatSettings {
-    pub generator: GeneratorType,
+    pub generator: GeneratorTypeId,
     pub layer_index: i32,
     pub clip_duration_beats: f32,
     pub min_confidence: f32,
@@ -162,7 +163,7 @@ pub struct HatSettings {
 impl Default for HatSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorType::OscilloscopeXY,
+            generator: GeneratorTypeId::OSCILLOSCOPE_XY,
             layer_index: 4,
             clip_duration_beats: 0.50,
             min_confidence: 0.0,
@@ -174,7 +175,7 @@ impl Default for HatSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BassSettings {
-    pub generator: GeneratorType,
+    pub generator: GeneratorTypeId,
     pub layer_index: i32,
     pub min_confidence: f32,
     pub duration_threshold_sec: f32,
@@ -183,7 +184,7 @@ pub struct BassSettings {
 impl Default for BassSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorType::ParametricSurface,
+            generator: GeneratorTypeId::PARAMETRIC_SURFACE,
             layer_index: 8,
             min_confidence: 0.0,
             duration_threshold_sec: 1.7144,
@@ -193,7 +194,7 @@ impl Default for BassSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BassSustainedSettings {
-    pub generator: GeneratorType,
+    pub generator: GeneratorTypeId,
     pub layer_index: i32,
     pub min_confidence: f32,
 }
@@ -201,7 +202,7 @@ pub struct BassSustainedSettings {
 impl Default for BassSustainedSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorType::ParametricSurface,
+            generator: GeneratorTypeId::PARAMETRIC_SURFACE,
             layer_index: 9,
             min_confidence: 0.0,
         }
@@ -210,7 +211,7 @@ impl Default for BassSustainedSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SynthSettings {
-    pub generator: GeneratorType,
+    pub generator: GeneratorTypeId,
     pub layer_index: i32,
     pub min_confidence: f32,
 }
@@ -218,7 +219,7 @@ pub struct SynthSettings {
 impl Default for SynthSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorType::Plasma,
+            generator: GeneratorTypeId::PLASMA,
             layer_index: 6,
             min_confidence: 0.0,
         }
@@ -227,7 +228,7 @@ impl Default for SynthSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VocalSettings {
-    pub generator: GeneratorType,
+    pub generator: GeneratorTypeId,
     pub layer_index: i32,
     pub clip_duration_beats: f32,
     pub min_confidence: f32,
@@ -242,7 +243,7 @@ pub struct VocalSettings {
 impl Default for VocalSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorType::Lissajous,
+            generator: GeneratorTypeId::LISSAJOUS,
             layer_index: 5,
             clip_duration_beats: 0.50,
             min_confidence: 0.0,
@@ -258,7 +259,7 @@ impl Default for VocalSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PadSettings {
-    pub generator: GeneratorType,
+    pub generator: GeneratorTypeId,
     pub layer_index: i32,
     pub min_confidence: f32,
 }
@@ -266,7 +267,7 @@ pub struct PadSettings {
 impl Default for PadSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorType::Duocylinder,
+            generator: GeneratorTypeId::DUOCYLINDER,
             layer_index: 7,
             min_confidence: 0.0,
         }
@@ -417,7 +418,7 @@ impl PercussionPipelineSettings {
             PercussionTriggerType::Kick,
             self.kick.layer_index,
             None,
-            self.kick.generator,
+            self.kick.generator.clone(),
             self.kick.clip_duration_beats,
             self.kick.min_confidence,
         ));
@@ -426,7 +427,7 @@ impl PercussionPipelineSettings {
             PercussionTriggerType::Snare,
             self.snare.layer_index,
             None,
-            self.snare.generator,
+            self.snare.generator.clone(),
             self.snare.clip_duration_beats,
             self.snare.min_confidence,
         ));
@@ -435,7 +436,7 @@ impl PercussionPipelineSettings {
             PercussionTriggerType::Perc,
             self.perc.layer_index,
             None,
-            self.perc.generator,
+            self.perc.generator.clone(),
             self.perc.clip_duration_beats,
             self.perc.min_confidence,
         ));
@@ -444,7 +445,7 @@ impl PercussionPipelineSettings {
             PercussionTriggerType::Hat,
             self.hat.layer_index,
             None,
-            self.hat.generator,
+            self.hat.generator.clone(),
             self.hat.clip_duration_beats,
             self.hat.min_confidence,
         ));
@@ -453,7 +454,7 @@ impl PercussionPipelineSettings {
             PercussionTriggerType::Vocal,
             self.vocal.layer_index,
             None,
-            self.vocal.generator,
+            self.vocal.generator.clone(),
             self.vocal.clip_duration_beats,
             self.vocal.min_confidence,
         ));
@@ -462,7 +463,7 @@ impl PercussionPipelineSettings {
             PercussionTriggerType::Synth,
             self.synth.layer_index,
             None,
-            self.synth.generator,
+            self.synth.generator.clone(),
             0.0,
             self.synth.min_confidence,
         ));
@@ -471,7 +472,7 @@ impl PercussionPipelineSettings {
             PercussionTriggerType::Pad,
             self.pad.layer_index,
             None,
-            self.pad.generator,
+            self.pad.generator.clone(),
             0.0,
             self.pad.min_confidence,
         ));
@@ -480,7 +481,7 @@ impl PercussionPipelineSettings {
             PercussionTriggerType::Bass,
             self.bass.layer_index,
             None,
-            self.bass.generator,
+            self.bass.generator.clone(),
             0.0,
             self.bass.min_confidence,
         ));
@@ -489,7 +490,7 @@ impl PercussionPipelineSettings {
             PercussionTriggerType::BassSustained,
             self.bass_sustained.layer_index,
             None,
-            self.bass_sustained.generator,
+            self.bass_sustained.generator.clone(),
             0.0,
             self.bass_sustained.min_confidence,
         ));
@@ -651,35 +652,35 @@ impl PercussionImportOptionsFactory {
 
         // Kick — punchy geometric wireframes, top of stack.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Kick, 0, None, GeneratorType::WireframeZoo, 0.5, 0.0,
+            PercussionTriggerType::Kick, 0, None, GeneratorTypeId::WIREFRAME_ZOO, 0.5, 0.0,
         ));
         // Snare — snapping shapes.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Snare, 1, None, GeneratorType::BasicShapesSnap, 0.75, 0.0,
+            PercussionTriggerType::Snare, 1, None, GeneratorTypeId::BASIC_SHAPES_SNAP, 0.75, 0.0,
         ));
         // Perc — groove accents.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Perc, 3, None, GeneratorType::Flowfield, 0.50, 0.0,
+            PercussionTriggerType::Perc, 3, None, GeneratorTypeId::FLOWFIELD, 0.50, 0.0,
         ));
         // Hat — high-frequency shimmer.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Hat, 4, None, GeneratorType::OscilloscopeXY, 0.50, 0.0,
+            PercussionTriggerType::Hat, 4, None, GeneratorTypeId::OSCILLOSCOPE_XY, 0.50, 0.0,
         ));
         // Vocal — organic Lissajous curves.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Vocal, 5, None, GeneratorType::Lissajous, 0.50, 0.0,
+            PercussionTriggerType::Vocal, 5, None, GeneratorTypeId::LISSAJOUS, 0.50, 0.0,
         ));
         // Synth — bright plasma (duration from Basic Pitch).
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Synth, 6, None, GeneratorType::Plasma, 0.0, 0.0,
+            PercussionTriggerType::Synth, 6, None, GeneratorTypeId::PLASMA, 0.0, 0.0,
         ));
         // Pad — slow ambient Duocylinder (duration from Basic Pitch).
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Pad, 7, None, GeneratorType::Duocylinder, 0.0, 0.0,
+            PercussionTriggerType::Pad, 7, None, GeneratorTypeId::DUOCYLINDER, 0.0, 0.0,
         ));
         // Bass — heavy parametric surfaces (duration from Basic Pitch).
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Bass, 8, None, GeneratorType::ParametricSurface, 0.0, 0.0,
+            PercussionTriggerType::Bass, 8, None, GeneratorTypeId::PARAMETRIC_SURFACE, 0.0, 0.0,
         ));
 
         options

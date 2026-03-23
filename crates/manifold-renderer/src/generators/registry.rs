@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use super::basic_shapes_snap::BasicShapesSnapGenerator;
 use super::compute_strange_attractor::ComputeStrangeAttractorGenerator;
@@ -20,7 +20,7 @@ use super::tesseract::TesseractGenerator;
 use super::mri_volume::MriVolumeGenerator;
 use super::wireframe_zoo::WireframeZooGenerator;
 
-/// Factory that maps GeneratorType to concrete Generator instances.
+/// Factory that maps GeneratorTypeId to concrete Generator instances.
 /// Pipeline compilation happens at creation time (expensive — do at startup or first use).
 pub struct GeneratorRegistry {
     target_format: wgpu::TextureFormat,
@@ -32,31 +32,49 @@ impl GeneratorRegistry {
     }
 
     /// Create a new generator instance for the given type.
-    pub fn create(&self, device: &wgpu::Device, gen_type: GeneratorType) -> Option<Box<dyn Generator>> {
-        match gen_type {
-            GeneratorType::Plasma => Some(Box::new(PlasmaGenerator::new(device, self.target_format))),
-            GeneratorType::FractalZoom => Some(Box::new(FractalZoomGenerator::new(device, self.target_format))),
-            GeneratorType::BasicShapesSnap => Some(Box::new(BasicShapesSnapGenerator::new(device, self.target_format))),
-            GeneratorType::ConcentricTunnel => Some(Box::new(ConcentricTunnelGenerator::new(device, self.target_format))),
-            GeneratorType::NumberStation => Some(Box::new(NumberStationGenerator::new(device, self.target_format))),
-            GeneratorType::Tesseract => Some(Box::new(TesseractGenerator::new(device, self.target_format))),
-            GeneratorType::Duocylinder => Some(Box::new(DuocylinderGenerator::new(device, self.target_format))),
-            GeneratorType::Lissajous => Some(Box::new(LissajousGenerator::new(device, self.target_format))),
-            GeneratorType::WireframeZoo => Some(Box::new(WireframeZooGenerator::new(device, self.target_format))),
-            GeneratorType::OscilloscopeXY => Some(Box::new(OscilloscopeXYGenerator::new(device, self.target_format))),
-            GeneratorType::ReactionDiffusion => Some(Box::new(ReactionDiffusionGenerator::new(device, self.target_format))),
-            GeneratorType::Flowfield => Some(Box::new(FlowfieldGenerator::new(device, self.target_format))),
-            GeneratorType::StrangeAttractor => Some(Box::new(StrangeAttractorGenerator::new(device, self.target_format))),
-            GeneratorType::ParametricSurface => Some(Box::new(ParametricSurfaceGenerator::new(device, self.target_format))),
-            GeneratorType::Mycelium => Some(Box::new(MyceliumGenerator::new(device, self.target_format))),
-            GeneratorType::ComputeStrangeAttractor => Some(Box::new(ComputeStrangeAttractorGenerator::new(device, self.target_format))),
-            GeneratorType::FluidSimulation => Some(Box::new(FluidSimulationGenerator::new(device, self.target_format))),
-            GeneratorType::FluidSimulation3D => Some(Box::new(FluidSimulation3DGenerator::new(device, self.target_format))),
-            GeneratorType::MriVolume => Some(Box::new(MriVolumeGenerator::new(device, self.target_format))),
-            _ => {
-                log::warn!("Generator type {:?} not yet implemented", gen_type);
-                None
-            }
+    pub fn create(&self, device: &wgpu::Device, gen_type: &GeneratorTypeId) -> Option<Box<dyn Generator>> {
+        let fmt = self.target_format;
+        if *gen_type == GeneratorTypeId::PLASMA {
+            Some(Box::new(PlasmaGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::FRACTAL_ZOOM {
+            Some(Box::new(FractalZoomGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::BASIC_SHAPES_SNAP {
+            Some(Box::new(BasicShapesSnapGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::CONCENTRIC_TUNNEL {
+            Some(Box::new(ConcentricTunnelGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::NUMBER_STATION {
+            Some(Box::new(NumberStationGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::TESSERACT {
+            Some(Box::new(TesseractGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::DUOCYLINDER {
+            Some(Box::new(DuocylinderGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::LISSAJOUS {
+            Some(Box::new(LissajousGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::WIREFRAME_ZOO {
+            Some(Box::new(WireframeZooGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::OSCILLOSCOPE_XY {
+            Some(Box::new(OscilloscopeXYGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::REACTION_DIFFUSION {
+            Some(Box::new(ReactionDiffusionGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::FLOWFIELD {
+            Some(Box::new(FlowfieldGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::STRANGE_ATTRACTOR {
+            Some(Box::new(StrangeAttractorGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::PARAMETRIC_SURFACE {
+            Some(Box::new(ParametricSurfaceGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::MYCELIUM {
+            Some(Box::new(MyceliumGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR {
+            Some(Box::new(ComputeStrangeAttractorGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::FLUID_SIMULATION {
+            Some(Box::new(FluidSimulationGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::FLUID_SIMULATION_3D {
+            Some(Box::new(FluidSimulation3DGenerator::new(device, fmt)))
+        } else if *gen_type == GeneratorTypeId::MRI_VOLUME {
+            Some(Box::new(MriVolumeGenerator::new(device, fmt)))
+        } else {
+            log::warn!("Generator type {:?} not yet implemented", gen_type);
+            None
         }
     }
 }

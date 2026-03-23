@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 
@@ -251,8 +251,8 @@ impl ParametricSurfaceGenerator {
 }
 
 impl Generator for ParametricSurfaceGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::ParametricSurface
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::PARAMETRIC_SURFACE
     }
 
     fn render(

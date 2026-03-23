@@ -118,7 +118,7 @@ pub enum ContentCommand {
     // ── Generator ──────────────────────────────────────────────────
     /// Notify renderer that a layer's generator type changed.
     /// Port of C# PlaybackController.NotifyGeneratorTypeChanged().
-    GeneratorTypeChanged { layer_id: LayerId, new_type: manifold_core::GeneratorType },
+    GeneratorTypeChanged { layer_id: LayerId, new_type: manifold_core::GeneratorTypeId },
 
     // ── Lifecycle ─────────────────────────────────────────────────
     /// Pause rendering (content thread stops ticking/rendering but still drains commands).

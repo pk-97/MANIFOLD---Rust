@@ -55,9 +55,9 @@ impl Project {
     /// Remove effects with unrecognized types (e.g. removed Unity effects).
     /// Called before on_after_deserialize so they never enter the runtime.
     pub fn strip_unknown_effects(&mut self) {
-        use crate::EffectType;
+        use crate::effect_type_id::EffectTypeId;
         let strip = |effects: &mut Vec<crate::effects::EffectInstance>| {
-            effects.retain(|fx| fx.effect_type() != EffectType::Unknown);
+            effects.retain(|fx| *fx.effect_type() != EffectTypeId::UNKNOWN);
         };
         // Master effects
         strip(&mut self.settings.master_effects);

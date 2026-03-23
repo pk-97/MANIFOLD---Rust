@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use super::stateful_base::StatefulState;
@@ -243,8 +243,8 @@ impl ReactionDiffusionGenerator {
 }
 
 impl Generator for ReactionDiffusionGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::ReactionDiffusion
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::REACTION_DIFFUSION
     }
 
     fn render(

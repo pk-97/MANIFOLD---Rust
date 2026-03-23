@@ -6,7 +6,7 @@
 // Unity's OnReadbackComplete callback maps to try_read() polled at apply() start.
 
 use ahash::AHashMap;
-use manifold_core::EffectType;
+use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
@@ -708,8 +708,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 "#;
 
 impl PostProcessEffect for BlobTrackingFX {
-    fn effect_type(&self) -> EffectType {
-        EffectType::BlobTracking
+    fn effect_type(&self) -> &EffectTypeId {
+        &EffectTypeId::BLOB_TRACKING
     }
 
     // BlobTrackingFX.cs line 127: if (amount <= 0f || material == null) return;

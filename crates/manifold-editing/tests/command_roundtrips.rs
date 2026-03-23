@@ -13,6 +13,7 @@ use manifold_core::project::Project;
 use manifold_core::layer::Layer;
 use manifold_core::LayerId;
 use manifold_core::types::*;
+use manifold_core::{EffectTypeId, GeneratorTypeId};
 use manifold_core::effects::*;
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
@@ -192,7 +193,7 @@ fn add_layer_undo_roundtrip() {
     let initial_count = project.timeline.layers.len();
 
     let mut cmd = AddLayerCommand::new(
-        "New Layer".into(), LayerType::Video, GeneratorType::None, 0, None,
+        "New Layer".into(), LayerType::Video, GeneratorTypeId::NONE, 0, None,
     );
 
     cmd.execute(&mut project);
@@ -331,7 +332,7 @@ fn change_generator_type_undo_roundtrip() {
     let mut project = make_test_project();
     // Layer 1 is a generator layer
     let gp = project.timeline.layers[1].gen_params_or_init();
-    gp.restore(GeneratorType::Plasma, vec![0.5, 0.8, 1.0], None, None);
+    gp.restore(GeneratorTypeId::PLASMA, vec![0.5, 0.8, 1.0], None, None);
 
     let old_params = project.timeline.layers[1].snapshot_gen_params();
     let old_drivers = project.timeline.layers[1].snapshot_gen_drivers();
@@ -339,18 +340,18 @@ fn change_generator_type_undo_roundtrip() {
 
     let layer_id = project.timeline.layers[1].layer_id.clone();
     let mut cmd = ChangeGeneratorTypeCommand::new(
-        layer_id, GeneratorType::Plasma, GeneratorType::Tesseract,
+        layer_id, GeneratorTypeId::PLASMA, GeneratorTypeId::TESSERACT,
         old_params, old_drivers, old_envelopes,
     );
 
     cmd.execute(&mut project);
-    assert_eq!(project.timeline.layers[1].generator_type(), GeneratorType::Tesseract);
+    assert_eq!(*project.timeline.layers[1].generator_type(), GeneratorTypeId::TESSERACT);
     // After type change, params are filled with Tesseract's definition defaults (11 params)
     assert_eq!(project.timeline.layers[1].snapshot_gen_params().len(),
-               manifold_core::generator_definition_registry::get(GeneratorType::Tesseract).param_count);
+               manifold_core::generator_definition_registry::get(&GeneratorTypeId::TESSERACT).param_count);
 
     cmd.undo(&mut project);
-    assert_eq!(project.timeline.layers[1].generator_type(), GeneratorType::Plasma);
+    assert_eq!(*project.timeline.layers[1].generator_type(), GeneratorTypeId::PLASMA);
     assert_eq!(project.timeline.layers[1].snapshot_gen_params().len(), 3);
 }
 
@@ -414,7 +415,7 @@ fn add_effect_undo_roundtrip() {
     let mut project = make_test_project();
     let target = EffectTarget::Master;
 
-    let mut effect = EffectInstance::new(EffectType::Bloom);
+    let mut effect = EffectInstance::new(EffectTypeId::BLOOM);
     effect.param_values = vec![0.5];
 
     let mut cmd = AddEffectCommand::new(target, effect, 0);
@@ -430,7 +431,7 @@ fn add_effect_undo_roundtrip() {
 fn remove_effect_undo_roundtrip() {
     let mut project = make_test_project();
     {
-        let mut fx = EffectInstance::new(EffectType::Bloom);
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.param_values = vec![0.5];
         project.settings.master_effects.push(fx);
     }
@@ -449,7 +450,7 @@ fn remove_effect_undo_roundtrip() {
 #[test]
 fn toggle_effect_undo_roundtrip() {
     let mut project = make_test_project();
-    project.settings.master_effects.push(EffectInstance::new(EffectType::Bloom));
+    project.settings.master_effects.push(EffectInstance::new(EffectTypeId::BLOOM));
 
     let target = EffectTarget::Master;
     let mut cmd = ToggleEffectCommand::new(target, 0, true, false);
@@ -465,7 +466,7 @@ fn toggle_effect_undo_roundtrip() {
 fn change_effect_param_undo_roundtrip() {
     let mut project = make_test_project();
     {
-        let mut fx = EffectInstance::new(EffectType::Bloom);
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.param_values = vec![0.5, 0.3];
         fx.base_param_values = Some(vec![0.5, 0.3]);
         project.settings.master_effects.push(fx);
@@ -484,8 +485,8 @@ fn change_effect_param_undo_roundtrip() {
 #[test]
 fn reorder_effect_undo_roundtrip() {
     let mut project = make_test_project();
-    project.settings.master_effects.push(make_effect(EffectType::Bloom));
-    project.settings.master_effects.push(make_effect(EffectType::Feedback));
+    project.settings.master_effects.push(make_effect(&EffectTypeId::BLOOM));
+    project.settings.master_effects.push(make_effect(&EffectTypeId::FEEDBACK));
 
     let target = EffectTarget::Master;
     // to_index uses pre-removal indexing: to=2 means "insert after the last element"
@@ -493,12 +494,12 @@ fn reorder_effect_undo_roundtrip() {
     let mut cmd = ReorderEffectCommand::new(target, 0, 2);
 
     cmd.execute(&mut project);
-    assert_eq!(project.settings.master_effects[0].effect_type(), EffectType::Feedback);
-    assert_eq!(project.settings.master_effects[1].effect_type(), EffectType::Bloom);
+    assert_eq!(*project.settings.master_effects[0].effect_type(), EffectTypeId::FEEDBACK);
+    assert_eq!(*project.settings.master_effects[1].effect_type(), EffectTypeId::BLOOM);
 
     cmd.undo(&mut project);
-    assert_eq!(project.settings.master_effects[0].effect_type(), EffectType::Bloom);
-    assert_eq!(project.settings.master_effects[1].effect_type(), EffectType::Feedback);
+    assert_eq!(*project.settings.master_effects[0].effect_type(), EffectTypeId::BLOOM);
+    assert_eq!(*project.settings.master_effects[1].effect_type(), EffectTypeId::FEEDBACK);
 }
 
 #[test]
@@ -506,7 +507,7 @@ fn effect_on_clip_undo_roundtrip() {
     let mut project = make_test_project();
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
 
-    let effect = EffectInstance::new(EffectType::Kaleidoscope);
+    let effect = EffectInstance::new(EffectTypeId::KALEIDOSCOPE);
     let target = EffectTarget::Clip { clip_id: clip_id.clone() };
     let mut cmd = AddEffectCommand::new(target, effect, 0);
 
@@ -523,7 +524,7 @@ fn effect_on_clip_undo_roundtrip() {
 fn effect_on_layer_undo_roundtrip() {
     let mut project = make_test_project();
 
-    let effect = EffectInstance::new(EffectType::Mirror);
+    let effect = EffectInstance::new(EffectTypeId::MIRROR);
     let target = EffectTarget::Layer { layer_id: project.timeline.layers[0].layer_id.clone() };
     let mut cmd = AddEffectCommand::new(target, effect, 0);
 
@@ -539,8 +540,8 @@ fn effect_on_layer_undo_roundtrip() {
 #[test]
 fn group_effects_undo_roundtrip() {
     let mut project = make_test_project();
-    project.settings.master_effects.push(make_effect(EffectType::Bloom));
-    project.settings.master_effects.push(make_effect(EffectType::Feedback));
+    project.settings.master_effects.push(make_effect(&EffectTypeId::BLOOM));
+    project.settings.master_effects.push(make_effect(&EffectTypeId::FEEDBACK));
 
     let target = EffectTarget::Master;
     let mut cmd = GroupEffectsCommand::new(target, vec![0, 1], "My Group".into());
@@ -562,7 +563,7 @@ fn ungroup_effects_undo_roundtrip() {
     let group = EffectGroup::new("Test".into());
     let gid = group.id.clone();
     {
-        let mut fx = EffectInstance::new(EffectType::Bloom);
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.group_id = Some(gid.clone());
         project.settings.master_effects.push(fx);
     }
@@ -636,7 +637,7 @@ fn change_group_wet_dry_undo_roundtrip() {
 #[test]
 fn add_driver_effect_undo_roundtrip() {
     let mut project = make_test_project();
-    project.settings.master_effects.push(make_effect(EffectType::Bloom));
+    project.settings.master_effects.push(make_effect(&EffectTypeId::BLOOM));
 
     let target = DriverTarget::Effect {
         effect_target: EffectTarget::Master,
@@ -668,7 +669,7 @@ fn add_driver_effect_undo_roundtrip() {
 fn toggle_driver_enabled_undo_roundtrip() {
     let mut project = make_test_project();
     {
-        let mut fx = EffectInstance::new(EffectType::Bloom);
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.drivers = Some(vec![ParameterDriver {
             param_index: 0, enabled: true,
             ..make_driver()
@@ -693,7 +694,7 @@ fn toggle_driver_enabled_undo_roundtrip() {
 fn change_driver_waveform_undo_roundtrip() {
     let mut project = make_test_project();
     {
-        let mut fx = EffectInstance::new(EffectType::Bloom);
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.drivers = Some(vec![ParameterDriver {
             param_index: 0, waveform: DriverWaveform::Sine,
             ..make_driver()
@@ -718,7 +719,7 @@ fn change_driver_waveform_undo_roundtrip() {
 fn change_trim_undo_roundtrip() {
     let mut project = make_test_project();
     {
-        let mut fx = EffectInstance::new(EffectType::Bloom);
+        let mut fx = EffectInstance::new(EffectTypeId::BLOOM);
         fx.drivers = Some(vec![ParameterDriver {
             param_index: 0, trim_min: 0.0, trim_max: 1.0,
             ..make_driver()
@@ -751,7 +752,7 @@ fn add_param_envelope_undo_roundtrip() {
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
 
     let envelope = ParamEnvelope {
-        target_effect_type: EffectType::Bloom,
+        target_effect_type: EffectTypeId::BLOOM,
         param_index: 0,
         enabled: true,
         attack_beats: 0.25,
@@ -809,7 +810,7 @@ fn add_layer_envelope_undo_roundtrip() {
     let mut project = make_test_project();
 
     let envelope = ParamEnvelope {
-        target_effect_type: EffectType::Transform,
+        target_effect_type: EffectTypeId::TRANSFORM,
         param_index: 0,
         enabled: true,
         ..make_envelope()
@@ -851,8 +852,8 @@ fn commands_work_on_loaded_project() {
     assert!((project.timeline.find_clip_by_id(&clip_id).unwrap().start_beat - original_beat).abs() < 0.001);
 }
 
-fn make_effect(effect_type: EffectType) -> EffectInstance {
-    EffectInstance::new(effect_type)
+fn make_effect(effect_type: &EffectTypeId) -> EffectInstance {
+    EffectInstance::new(effect_type.clone())
 }
 
 fn make_driver() -> ParameterDriver {
@@ -872,7 +873,7 @@ fn make_driver() -> ParameterDriver {
 
 fn make_envelope() -> ParamEnvelope {
     ParamEnvelope {
-        target_effect_type: EffectType::Transform,
+        target_effect_type: EffectTypeId::TRANSFORM,
         param_index: 0,
         enabled: true,
         attack_beats: 0.25,
@@ -956,9 +957,9 @@ fn clear_percussion_undo_roundtrip() {
 fn reorder_effect_group_undo_roundtrip() {
     let mut project = make_test_project();
     // Add 3 master effects
-    let fx_a = EffectInstance::new(EffectType::Bloom);
-    let fx_b = EffectInstance::new(EffectType::CRT);
-    let fx_c = EffectInstance::new(EffectType::Glitch);
+    let fx_a = EffectInstance::new(EffectTypeId::BLOOM);
+    let fx_b = EffectInstance::new(EffectTypeId::CRT);
+    let fx_c = EffectInstance::new(EffectTypeId::GLITCH);
     project.settings.master_effects = vec![fx_a.clone(), fx_b.clone(), fx_c.clone()];
 
     let old_effects = project.settings.master_effects.clone();
@@ -971,14 +972,14 @@ fn reorder_effect_group_undo_roundtrip() {
         new_effects,
     );
     cmd.execute(&mut project);
-    assert_eq!(project.settings.master_effects[0].effect_type(), EffectType::CRT);
-    assert_eq!(project.settings.master_effects[1].effect_type(), EffectType::Glitch);
-    assert_eq!(project.settings.master_effects[2].effect_type(), EffectType::Bloom);
+    assert_eq!(*project.settings.master_effects[0].effect_type(), EffectTypeId::CRT);
+    assert_eq!(*project.settings.master_effects[1].effect_type(), EffectTypeId::GLITCH);
+    assert_eq!(*project.settings.master_effects[2].effect_type(), EffectTypeId::BLOOM);
 
     cmd.undo(&mut project);
-    assert_eq!(project.settings.master_effects[0].effect_type(), EffectType::Bloom);
-    assert_eq!(project.settings.master_effects[1].effect_type(), EffectType::CRT);
-    assert_eq!(project.settings.master_effects[2].effect_type(), EffectType::Glitch);
+    assert_eq!(*project.settings.master_effects[0].effect_type(), EffectTypeId::BLOOM);
+    assert_eq!(*project.settings.master_effects[1].effect_type(), EffectTypeId::CRT);
+    assert_eq!(*project.settings.master_effects[2].effect_type(), EffectTypeId::GLITCH);
 }
 
 // ─── Project load → cache verification ───
@@ -1026,11 +1027,11 @@ fn project_load_verifies_caches() {
 fn project_load_strips_unknown_effects() {
     let mut project = make_test_project();
     // Add a valid and an unknown effect to master
-    project.settings.master_effects.push(EffectInstance::new(EffectType::Bloom));
-    project.settings.master_effects.push(EffectInstance::new(EffectType::Unknown));
+    project.settings.master_effects.push(EffectInstance::new(EffectTypeId::BLOOM));
+    project.settings.master_effects.push(EffectInstance::new(EffectTypeId::UNKNOWN));
     assert_eq!(project.settings.master_effects.len(), 2);
 
     project.strip_unknown_effects();
     assert_eq!(project.settings.master_effects.len(), 1);
-    assert_eq!(project.settings.master_effects[0].effect_type(), EffectType::Bloom);
+    assert_eq!(*project.settings.master_effects[0].effect_type(), EffectTypeId::BLOOM);
 }

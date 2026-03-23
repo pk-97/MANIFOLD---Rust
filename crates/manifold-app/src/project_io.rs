@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
-use manifold_core::types::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use manifold_core::video::VideoClip;
 use manifold_editing::command::{Command, CompositeCommand};
 use manifold_editing::commands::clip::AddClipCommand;
@@ -91,7 +91,7 @@ impl ProjectIOService {
         new_project.timeline.add_layer(
             "Layer 0",
             manifold_core::types::LayerType::Video,
-            GeneratorType::None,
+            GeneratorTypeId::NONE,
         );
         log::info!("[ProjectIO] Created new project");
 
@@ -410,7 +410,7 @@ impl ProjectIOService {
                 project.timeline.add_layer(
                     &name,
                     manifold_core::types::LayerType::Video,
-                    GeneratorType::None,
+                    GeneratorTypeId::NONE,
                 );
             }
 
@@ -431,7 +431,7 @@ impl ProjectIOService {
                 start_beat: placement_beat,
                 duration_beats,
                 in_point: 0.0,
-                generator_type: GeneratorType::None,
+                generator_type: GeneratorTypeId::NONE,
                 ..TimelineClip::default()
             };
 

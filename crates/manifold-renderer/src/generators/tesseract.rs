@@ -1,4 +1,4 @@
-use manifold_core::GeneratorType;
+use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::generators::generator_math::{rotate_4d, project_4d};
@@ -63,8 +63,8 @@ impl TesseractGenerator {
 }
 
 impl Generator for TesseractGenerator {
-    fn generator_type(&self) -> GeneratorType {
-        GeneratorType::Tesseract
+    fn generator_type(&self) -> &GeneratorTypeId {
+        &GeneratorTypeId::TESSERACT
     }
 
     fn render(

@@ -1,7 +1,8 @@
 //! Editing-related dispatch: clip interaction, context menus, drag actions.
 use manifold_core::{ClipId, LayerId};
 use manifold_core::project::Project;
-use manifold_core::types::{LayerType, GeneratorType};
+use manifold_core::types::LayerType;
+use manifold_core::GeneratorTypeId;
 use manifold_editing::commands::layer::{AddLayerCommand, DeleteLayerCommand};
 use manifold_editing::service::EditingService;
 use manifold_ui::PanelAction;
@@ -171,7 +172,7 @@ pub(super) fn dispatch_editing(
                 let cmd = AddLayerCommand::new(
                     name,
                     LayerType::Video,
-                    GeneratorType::None,
+                    GeneratorTypeId::NONE,
                     idx,
                     None,
                 );
@@ -186,7 +187,7 @@ pub(super) fn dispatch_editing(
                 let cmd = AddLayerCommand::new(
                     name,
                     LayerType::Generator,
-                    GeneratorType::Plasma,
+                    GeneratorTypeId::PLASMA,
                     idx,
                     None,
                 );

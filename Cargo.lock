@@ -2079,6 +2079,7 @@ dependencies = [
  "manifold-native",
  "manifold-playback",
  "manifold-ui",
+ "naga",
  "serde_json",
  "tiff",
  "wgpu",
