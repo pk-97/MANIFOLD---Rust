@@ -78,9 +78,9 @@ impl BloomFX {
         let mut mips_b = Vec::new();
         let mut count = 0;
 
-        // BloomFX.cs lines 51-52
-        let mut pw = (self.width / 2).max(1);
-        let mut ph = (self.height / 2).max(1);
+        // Full-resolution mip chain start (Unity used half-res; we use full for sharper output)
+        let mut pw = self.width;
+        let mut ph = self.height;
 
         // BloomFX.cs lines 54-64
         for i in 0..MAX_LEVELS {
@@ -250,8 +250,8 @@ impl PostProcessEffect for BloomFX {
         self.height = height;
         let format = wgpu::TextureFormat::Rgba16Float;
         for state in self.states.values_mut() {
-            let mut pw = (width / 2).max(1);
-            let mut ph = (height / 2).max(1);
+            let mut pw = width;
+            let mut ph = height;
             let mut count = 0;
             for i in 0..state.mips_a.len() {
                 if pw < MIN_SIZE || ph < MIN_SIZE { break; }

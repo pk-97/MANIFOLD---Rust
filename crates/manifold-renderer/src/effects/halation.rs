@@ -26,7 +26,7 @@ struct HalationUniforms {
     _pad: f32,
 }
 
-// HalationFX.cs lines 17-18 — per-owner intermediate buffers (half-res)
+// HalationFX.cs lines 17-18 — per-owner intermediate buffers (full-res; Unity used half-res)
 struct HalationState {
     buf_a: RenderTarget, // bufs[0]: ThresholdTintBlur output
     buf_b: RenderTarget, // bufs[1]: BlurWide output
@@ -64,11 +64,9 @@ impl HalationFX {
             return;
         }
         let format = wgpu::TextureFormat::Rgba16Float;
-        // HalationFX.cs lines 54-55: half-resolution for blur performance
-        let hw = (self.width / 2).max(1);
-        let hh = (self.height / 2).max(1);
-        let buf_a = RenderTarget::new(device, hw, hh, format, &format!("HalationA_{owner_key}"));
-        let buf_b = RenderTarget::new(device, hw, hh, format, &format!("HalationB_{owner_key}"));
+        // Full-resolution blur buffers (Unity used half-res; we use full for sharper output)
+        let buf_a = RenderTarget::new(device, self.width, self.height, format, &format!("HalationA_{owner_key}"));
+        let buf_b = RenderTarget::new(device, self.width, self.height, format, &format!("HalationB_{owner_key}"));
         self.states.insert(owner_key, HalationState { buf_a, buf_b });
     }
 
@@ -227,11 +225,9 @@ impl PostProcessEffect for HalationFX {
         self.width = width;
         self.height = height;
         let format = wgpu::TextureFormat::Rgba16Float;
-        let hw = (width / 2).max(1);
-        let hh = (height / 2).max(1);
         for (key, state) in &mut self.states {
-            state.buf_a = RenderTarget::new(device, hw, hh, format, &format!("HalationA_{key}"));
-            state.buf_b = RenderTarget::new(device, hw, hh, format, &format!("HalationB_{key}"));
+            state.buf_a = RenderTarget::new(device, width, height, format, &format!("HalationA_{key}"));
+            state.buf_b = RenderTarget::new(device, width, height, format, &format!("HalationB_{key}"));
         }
     }
 

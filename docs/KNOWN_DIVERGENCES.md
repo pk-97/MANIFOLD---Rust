@@ -221,6 +221,13 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Why:** String-keyed IDs eliminate enum discriminant gaps when effects are added/removed, reduce the number of locations to update (8 → 3), enable future plugin/custom effect extensibility, and produce human-readable project files. The integer-to-string deserialization path ensures all existing projects load correctly.
 - **Files affected:** `manifold-core/src/effect_type_id.rs`, `manifold-core/src/generator_type_id.rs`, `manifold-core/src/effect_type_registry.rs`, `manifold-core/src/generator_type_registry.rs`, all crates
 
+### [D-32] Halation/Bloom: full-resolution intermediate buffers
+- **Unity does:** Halation blur passes use half-resolution buffers (`width/2 × height/2`). Bloom mip chain starts at half-resolution.
+- **Rust does:** Both use full-resolution intermediate buffers for sharper glow output.
+- **Why:** Half-res produced visible blocky glow artifacts, especially on high-DPI displays. Full-res costs more GPU but produces crisp results matching the visual quality standard of the project.
+- **Approved by:** Peter / 2026-03-23
+- **Files affected:** `manifold-renderer/src/effects/halation.rs`, `manifold-renderer/src/effects/bloom.rs`
+
 ---
 
 ## Add new divergences above this line.
