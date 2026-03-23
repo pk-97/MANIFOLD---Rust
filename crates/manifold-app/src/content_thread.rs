@@ -1309,10 +1309,20 @@ impl ContentThread {
             return;
         }
 
-        // Build final config with resolved range
+        // Build final config with resolved range + audio info from content thread
         let mut export_config = config;
         export_config.start_beat = start_beat;
         export_config.end_beat = end_beat;
+
+        // Wire audio from the content thread's audio sync controller
+        if let Some(ref audio_sync) = self.audio_sync
+            && audio_sync.is_ready()
+            && let Some(path) = audio_sync.audio_path()
+        {
+            export_config.audio_path = Some(path.to_string());
+            export_config.audio_start_beat = audio_sync.start_beat();
+            export_config.audio_encoder_delay = audio_sync.encoder_delay_seconds();
+        }
 
         // Calculate timing
         let mut tempo_map = project.tempo_map.clone();

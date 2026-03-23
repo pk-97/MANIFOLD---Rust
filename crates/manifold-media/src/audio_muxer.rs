@@ -2,7 +2,7 @@
 //!
 //! After the Metal encoder writes a video-only MP4, this module uses FFmpeg
 //! to mux an audio track with correct timing offset. Video is stream-copied
-//! (no re-encode), audio is encoded to AAC 192kbps.
+//! (no re-encode), audio is encoded to AAC 256kbps.
 //!
 //! Matches Unity VideoExporter.PostMuxAudio().
 
@@ -45,7 +45,7 @@ pub struct AudioMuxer;
 impl AudioMuxer {
     /// Post-mux audio into a video file.
     ///
-    /// Stream-copies the video track (no re-encode) and encodes audio to AAC 192kbps.
+    /// Stream-copies the video track (no re-encode) and encodes audio to AAC 256kbps.
     /// Uses `-itsoffset` for audio timing alignment.
     ///
     /// Matches Unity VideoExporter.PostMuxAudio() command construction.
@@ -76,7 +76,7 @@ impl AudioMuxer {
 
         // Build FFmpeg command matching Unity's PostMuxAudio():
         //   ffmpeg -y -i VIDEO -itsoffset OFFSET -i AUDIO
-        //     -c:v copy -c:a aac -b:a 192k
+        //     -c:v copy -c:a aac -b:a 256k
         //     -map 0:v -map 1:a -shortest -movflags +faststart OUTPUT
         let mut cmd = Command::new(ffmpeg_path);
         cmd.arg("-y") // Overwrite output
@@ -96,7 +96,7 @@ impl AudioMuxer {
             .arg("-c:a")
             .arg("aac")
             .arg("-b:a")
-            .arg("192k")
+            .arg("256k")
             .arg("-map")
             .arg("0:v")
             .arg("-map")
