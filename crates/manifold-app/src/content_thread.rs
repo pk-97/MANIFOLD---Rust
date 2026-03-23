@@ -279,18 +279,18 @@ impl ContentThread {
 
                 // Helper: build named params from values + registry
                 fn build_effect_params(fx: &manifold_core::effects::EffectInstance) -> Vec<manifold_profiler::NamedParam> {
-                    let def = manifold_core::effect_definition_registry::get(fx.effect_type());
+                    let def = manifold_core::effect_definition_registry::try_get(fx.effect_type());
                     fx.param_values.iter().enumerate().map(|(i, &v)| {
-                        let name = def.param_defs.get(i)
+                        let name = def.and_then(|d| d.param_defs.get(i))
                             .map_or_else(|| format!("param_{}", i), |pd| pd.name.clone());
                         manifold_profiler::NamedParam { name, value: v }
                     }).collect()
                 }
 
                 fn build_gen_params(gen_type: &manifold_core::GeneratorTypeId, values: &[f32]) -> Vec<manifold_profiler::NamedParam> {
-                    let def = manifold_core::generator_definition_registry::get(gen_type);
+                    let def = manifold_core::generator_definition_registry::try_get(gen_type);
                     values.iter().enumerate().map(|(i, &v)| {
-                        let name = def.param_defs.get(i)
+                        let name = def.and_then(|d| d.param_defs.get(i))
                             .map_or_else(|| format!("param_{}", i), |pd| pd.name.clone());
                         manifold_profiler::NamedParam { name, value: v }
                     }).collect()

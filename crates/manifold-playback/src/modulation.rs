@@ -90,7 +90,10 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: f32) -> bool {
         if layer.layer_type == LayerType::Generator
             && let Some(gp) = layer.gen_params_mut() {
                 let gen_type = gp.generator_type();
-                let gen_def = generator_definition_registry::get(gen_type);
+                let gen_def = match generator_definition_registry::try_get(gen_type) {
+                    Some(d) => d,
+                    None => continue,
+                };
                 let gen_defs = &gen_def.param_defs;
 
                 if let Some(drivers) = &gp.drivers {
@@ -151,7 +154,10 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: f32) -> bool {
         _ => return false,
     };
 
-    let effect_def = effect_definition_registry::get(fx.effect_type());
+    let effect_def = match effect_definition_registry::try_get(fx.effect_type()) {
+        Some(d) => d,
+        None => return false,
+    };
     let effect_defs = &effect_def.param_defs;
     let mut any_driven = false;
 
@@ -278,7 +284,10 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
                     None => continue,
                 };
 
-                let effect_def = effect_definition_registry::get(fx.effect_type());
+                let effect_def = match effect_definition_registry::try_get(fx.effect_type()) {
+                    Some(d) => d,
+                    None => continue,
+                };
                 let idx = param_index as usize;
                 if idx >= effect_def.param_defs.len() || idx >= fx.param_values.len() {
                     continue;
@@ -350,7 +359,10 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
                     None => continue,
                 };
 
-                let effect_def = effect_definition_registry::get(fx.effect_type());
+                let effect_def = match effect_definition_registry::try_get(fx.effect_type()) {
+                    Some(d) => d,
+                    None => continue,
+                };
                 let idx = param_index as usize;
                 if idx >= effect_def.param_defs.len() || idx >= fx.param_values.len() {
                     continue;
@@ -416,7 +428,10 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: f32) ->
         }
 
         let gen_type = gp.generator_type();
-        let gen_def = generator_definition_registry::get(gen_type);
+        let gen_def = match generator_definition_registry::try_get(gen_type) {
+            Some(d) => d,
+            None => continue,
+        };
         let gen_defs = &gen_def.param_defs;
 
         // Index-based iteration to avoid cloning (Phase 9C fix).

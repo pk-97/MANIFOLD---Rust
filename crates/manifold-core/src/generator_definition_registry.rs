@@ -26,7 +26,8 @@ static MAX_PARAM_COUNT: LazyLock<usize> = LazyLock::new(|| {
 // ─── Public API ───
 
 pub fn get(gen_type: &GeneratorTypeId) -> &'static GeneratorDef {
-    DEFINITIONS.get(gen_type).expect("Unknown GeneratorType")
+    DEFINITIONS.get(gen_type)
+        .unwrap_or_else(|| panic!("GeneratorDefinitionRegistry: unknown GeneratorTypeId '{}'", gen_type))
 }
 
 pub fn try_get(gen_type: &GeneratorTypeId) -> Option<&'static GeneratorDef> {

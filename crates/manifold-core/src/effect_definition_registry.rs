@@ -101,7 +101,8 @@ fn pd_toggle(name: &str, min: f32, max: f32, default: f32, osc_suffix: &str) -> 
 /// Get the definition for an effect type. Panics if not found.
 /// Matches Unity's `EffectDefinitionRegistry.Get(EffectType)`.
 pub fn get(effect_type: &EffectTypeId) -> &'static EffectDef {
-    DEFINITIONS.get(effect_type).expect("EffectDefinitionRegistry: unknown EffectTypeId")
+    DEFINITIONS.get(effect_type)
+        .unwrap_or_else(|| panic!("EffectDefinitionRegistry: unknown EffectTypeId '{}'", effect_type))
 }
 
 /// Try to get the definition for an effect type.

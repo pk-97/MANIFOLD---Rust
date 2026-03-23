@@ -634,8 +634,8 @@ pub fn sync_inspector_data(
 /// Build EffectCardConfig from EffectInstance + envelopes.
 /// Unity: EffectCardState.SyncFromDataModel — populates all data-derived visual state.
 fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -> Vec<EffectCardConfig> {
-    effects.iter().enumerate().map(|(i, fx)| {
-        let reg_def = manifold_core::effect_definition_registry::get(fx.effect_type());
+    effects.iter().enumerate().filter_map(|(i, fx)| {
+        let reg_def = manifold_core::effect_definition_registry::try_get(fx.effect_type())?;
         let n = reg_def.param_count;
         let params: Vec<EffectParamInfo> = reg_def.param_defs.iter().map(|pd| {
             EffectParamInfo {
@@ -699,7 +699,7 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -
             }
         }
 
-        EffectCardConfig {
+        Some(EffectCardConfig {
             effect_index: i,
             effect_id: fx.id.clone(),
             name: manifold_core::effect_type_registry::display_name(fx.effect_type()).to_string(),
@@ -723,7 +723,7 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -
             driver_reversed,
             driver_dotted,
             driver_triplet,
-        }
+        })
     }).collect()
 }
 
@@ -747,7 +747,19 @@ fn beat_div_to_button_index(div: BeatDivision) -> i32 {
 
 /// Convert a `GeneratorParamState` into `GenParamConfig` for the UI.
 fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState) -> GenParamConfig {
-    let reg_def = manifold_core::generator_definition_registry::get(gp.generator_type());
+    let reg_def = match manifold_core::generator_definition_registry::try_get(gp.generator_type()) {
+        Some(d) => d,
+        None => {
+            return GenParamConfig {
+                gen_type_name: gp.generator_type().to_string(),
+                params: vec![], driver_active: vec![], envelope_active: vec![],
+                trim_min: vec![], trim_max: vec![], target_norm: vec![],
+                env_attack: vec![], env_decay: vec![], env_sustain: vec![], env_release: vec![],
+                driver_beat_div_idx: vec![], driver_waveform_idx: vec![],
+                driver_reversed: vec![], driver_dotted: vec![], driver_triplet: vec![],
+            };
+        }
+    };
     let n = reg_def.param_defs.len();
     let params: Vec<GenParamInfo> = reg_def.param_defs.iter().map(|pd| {
         GenParamInfo {
