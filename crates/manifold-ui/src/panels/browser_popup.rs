@@ -5,6 +5,7 @@
 //! and optional paste button. Completely separate from DropdownPanel —
 //! different layout, interaction, and rendering model.
 
+use manifold_core::LayerId;
 use crate::color;
 use crate::node::Color32;
 use crate::node::*;
@@ -75,6 +76,8 @@ pub enum BrowserPopupAction {
 pub struct BrowserPopupRequest {
     pub mode: BrowserPopupMode,
     pub tab: InspectorTab,
+    /// For Generator mode: the layer whose generator type is being changed.
+    pub layer_id: Option<LayerId>,
     pub item_names: Vec<String>,
     pub item_keys: Vec<i32>,
     pub item_categories: Vec<String>,
@@ -89,6 +92,7 @@ pub struct BrowserPopupPanel {
     is_open: bool,
     mode: BrowserPopupMode,
     tab: InspectorTab,
+    layer_id: Option<LayerId>,
 
     // Source data
     item_names: Vec<String>,
@@ -139,6 +143,7 @@ impl BrowserPopupPanel {
             is_open: false,
             mode: BrowserPopupMode::Effect,
             tab: InspectorTab::Master,
+            layer_id: None,
             item_names: Vec::new(),
             item_keys: Vec::new(),
             item_categories: Vec::new(),
@@ -168,7 +173,9 @@ impl BrowserPopupPanel {
 
     pub fn is_open(&self) -> bool { self.is_open }
     pub fn first_node(&self) -> usize { self.first_node }
+    pub fn mode(&self) -> BrowserPopupMode { self.mode }
     pub fn tab(&self) -> InspectorTab { self.tab }
+    pub fn layer_id(&self) -> &Option<LayerId> { &self.layer_id }
 
     pub fn set_screen_size(&mut self, w: f32, h: f32) {
         self.screen_w = w;
@@ -179,6 +186,7 @@ impl BrowserPopupPanel {
         self.is_open = true;
         self.mode = req.mode;
         self.tab = req.tab;
+        self.layer_id = req.layer_id;
         self.item_names = req.item_names;
         self.item_keys = req.item_keys;
         self.item_categories = req.item_categories;
@@ -193,6 +201,7 @@ impl BrowserPopupPanel {
 
     pub fn close(&mut self) {
         self.is_open = false;
+        self.layer_id = None;
         self.item_names.clear();
         self.item_keys.clear();
         self.item_categories.clear();

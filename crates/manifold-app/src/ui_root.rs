@@ -4,7 +4,6 @@
 //! and the dropdown overlay. The app layer creates one UIRoot per
 //! workspace window and forwards winit events through it.
 
-use manifold_core::LayerId;
 use manifold_ui::*;
 use manifold_ui::input::{Key, Modifiers, PointerAction, UIEvent};
 use manifold_ui::node::{Vec2, Rect};
@@ -18,7 +17,6 @@ pub enum DropdownContext {
     Resolution,
     #[allow(dead_code)]
     AddEffect(InspectorTab),
-    GenType(Option<LayerId>),
     ClipContext(String),     // right-click on clip: clip_id
     TrackContext(f32, usize), // right-click on empty track: beat, layer
     LayerContext(usize),     // right-click on layer header: layer_index
@@ -306,7 +304,7 @@ impl UIRoot {
 
             // Browser popup gets first crack (higher z-order than dropdown).
             if self.browser_popup.is_open() {
-                use manifold_ui::panels::browser_popup::BrowserPopupAction;
+                use manifold_ui::panels::browser_popup::{BrowserPopupAction, BrowserPopupMode};
                 let mut consumed = false;
 
                 // Escape key
@@ -325,8 +323,16 @@ impl UIRoot {
                     } else if let Some(bp_action) = self.browser_popup.handle_click(*node_id) {
                         match bp_action {
                             BrowserPopupAction::Selected(key) => {
-                                let tab = self.browser_popup.tab();
-                                actions.push(PanelAction::AddEffect(tab, key as usize));
+                                match self.browser_popup.mode() {
+                                    BrowserPopupMode::Effect => {
+                                        let tab = self.browser_popup.tab();
+                                        actions.push(PanelAction::AddEffect(tab, key as usize));
+                                    }
+                                    BrowserPopupMode::Generator => {
+                                        let layer_id = self.browser_popup.layer_id().clone();
+                                        actions.push(PanelAction::SetGenType(layer_id, key as usize));
+                                    }
+                                }
                             }
                             BrowserPopupAction::Paste => {
                                 actions.push(PanelAction::PasteEffects);
@@ -587,6 +593,7 @@ impl UIRoot {
                 self.browser_popup.open(BrowserPopupRequest {
                     mode: BrowserPopupMode::Effect,
                     tab: *tab,
+                    layer_id: None,
                     item_names: names,
                     item_keys: keys,
                     item_categories: categories,
@@ -598,10 +605,27 @@ impl UIRoot {
             }
             PanelAction::GenTypeClicked(layer_id) => {
                 use manifold_core::types::GeneratorType;
-                let items: Vec<DropdownItem> = GeneratorType::ALL.iter()
-                    .map(|g| DropdownItem::new(g.display_name()))
-                    .collect();
-                self.open_dropdown_at(DropdownContext::GenType(layer_id.clone()), items, trigger);
+                use manifold_ui::panels::browser_popup::*;
+
+                let mut names = Vec::new();
+                let mut keys = Vec::new();
+                for (i, &gt) in GeneratorType::ALL.iter().enumerate() {
+                    names.push(gt.display_name().to_string());
+                    keys.push(i as i32);
+                }
+
+                self.browser_popup.set_screen_size(self.screen_width, self.screen_height);
+                self.browser_popup.open(BrowserPopupRequest {
+                    mode: BrowserPopupMode::Generator,
+                    tab: InspectorTab::Layer,
+                    layer_id: layer_id.clone(),
+                    item_names: names,
+                    item_keys: keys,
+                    item_categories: Vec::new(),
+                    category_names: Vec::new(),
+                    paste_count: 0,
+                    screen_anchor: Vec2::new(trigger.x, trigger.y + trigger.height),
+                });
                 true
             }
             PanelAction::MidiInputClicked(idx) => {
@@ -710,9 +734,6 @@ impl UIRoot {
             }
             DropdownContext::AddEffect(tab) => {
                 Some(PanelAction::AddEffect(tab, index))
-            }
-            DropdownContext::GenType(layer_id) => {
-                Some(PanelAction::SetGenType(layer_id, index))
             }
             DropdownContext::ClipContext(clip_id) => {
                 match index {
