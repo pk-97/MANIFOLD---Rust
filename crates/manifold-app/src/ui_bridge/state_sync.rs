@@ -146,13 +146,17 @@ pub fn push_state(
         // Save button — "SAVE" clean, "SAVE *" dirty with warm brown tint
         ui.transport.set_save_text(tree, if is_dirty { "SAVE *" } else { "SAVE" });
 
-        // Export state
-        let has_export_range = project.timeline.export_in_beat < project.timeline.export_out_beat;
-        if has_export_range {
+        // Export state — matches Unity ExportSection.UpdateUI():
+        // HasExportRange = exportRangeEnabled (any marker set)
+        // HasExportOut = exportRangeEnabled && exportOutBeat > exportInBeat
+        let has_range = project.timeline.export_range_enabled;
+        let has_out = has_range
+            && project.timeline.export_out_beat > project.timeline.export_in_beat;
+        if has_range {
             let in_b = project.timeline.export_in_beat;
             let out_b = project.timeline.export_out_beat;
-            let export_label = if out_b > 0.0 {
-                format!("IN: {:.1} OUT: {:.1}", in_b, out_b)
+            let export_label = if has_out {
+                format!("IN: {:.1}  OUT: {:.1}", in_b, out_b)
             } else {
                 format!("IN: {:.1}", in_b)
             };
@@ -160,15 +164,17 @@ pub fn push_state(
         } else {
             ui.transport.set_export_label(tree, "");
         }
-        let export_active = project.timeline.export_in_beat > 0.0
-            || project.timeline.export_out_beat > 0.0;
-        ui.transport.set_export_active(tree, export_active);
+        ui.transport.set_export_active(tree, has_range);
         ui.transport.set_hdr_active(tree, project.settings.export_hdr);
         let perc_active = project.percussion_import.is_some();
         ui.transport.set_perc_active(tree, perc_active);
 
         // Export range markers on viewport
-        ui.viewport.set_export_range(project.timeline.export_in_beat, project.timeline.export_out_beat);
+        ui.viewport.set_export_range(
+            project.timeline.export_in_beat,
+            project.timeline.export_out_beat,
+            project.timeline.export_range_enabled,
+        );
 
         // Header — project name + dirty bullet
         let project_name = project_path

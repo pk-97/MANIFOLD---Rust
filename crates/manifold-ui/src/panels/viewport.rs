@@ -143,6 +143,7 @@ pub struct TimelineViewportPanel {
     // Export range
     export_in_beat: f32,
     export_out_beat: f32,
+    export_range_enabled: bool,
 
     // Node IDs — fixed export elements
     export_range_id: i32,
@@ -211,6 +212,7 @@ impl TimelineViewportPanel {
             insert_cursor_ruler_id: -1,
             export_in_beat: 0.0,
             export_out_beat: 0.0,
+            export_range_enabled: false,
             export_range_id: -1,
             export_in_marker_id: -1,
             export_out_marker_id: -1,
@@ -474,9 +476,10 @@ impl TimelineViewportPanel {
         self.insert_cursor_beat = beat;
     }
 
-    pub fn set_export_range(&mut self, in_beat: f32, out_beat: f32) {
+    pub fn set_export_range(&mut self, in_beat: f32, out_beat: f32, enabled: bool) {
         self.export_in_beat = in_beat;
         self.export_out_beat = out_beat;
+        self.export_range_enabled = enabled;
     }
 
     pub fn set_playing(&mut self, playing: bool) {
@@ -1269,32 +1272,21 @@ impl TimelineViewportPanel {
     // per-layer bitmaps by LayerBitmapRenderer (matching Unity exactly).
 
     fn build_export_markers(&mut self, tree: &mut UITree) {
-        let has_range = self.export_in_beat < self.export_out_beat;
-        if !has_range {
+        // Unity behavior:
+        // - HasExportRange (exportRangeEnabled): show in-marker
+        // - HasExportOut (exportOutBeat > exportInBeat): also show out-marker + range highlight
+        if !self.export_range_enabled {
             self.export_range_id = -1;
             self.export_in_marker_id = -1;
             self.export_out_marker_id = -1;
             return;
         }
 
-        let in_px = self.beat_to_pixel(self.export_in_beat);
-        let out_px = self.beat_to_pixel(self.export_out_beat);
         let marker_w = 2.0;
+        let has_out = self.export_out_beat > self.export_in_beat;
 
-        // Range highlight across tracks
-        let range_left = in_px.max(self.tracks_rect.x);
-        let range_right = out_px.min(self.tracks_rect.x_max());
-        if range_right > range_left {
-            self.export_range_id = tree.add_panel(
-                -1, range_left, self.tracks_rect.y,
-                range_right - range_left, self.tracks_rect.height,
-                UIStyle { bg_color: color::EXPORT_RANGE_HIGHLIGHT, ..UIStyle::default() },
-            ) as i32;
-        } else {
-            self.export_range_id = -1;
-        }
-
-        // In marker (vertical line on ruler + tracks)
+        // In marker (vertical line on ruler + tracks) — always shown if range enabled
+        let in_px = self.beat_to_pixel(self.export_in_beat);
         let in_visible = in_px >= self.tracks_rect.x && in_px <= self.tracks_rect.x_max();
         if in_visible {
             self.export_in_marker_id = tree.add_panel(
@@ -1306,15 +1298,35 @@ impl TimelineViewportPanel {
             self.export_in_marker_id = -1;
         }
 
-        // Out marker
-        let out_visible = out_px >= self.tracks_rect.x && out_px <= self.tracks_rect.x_max();
-        if out_visible {
-            self.export_out_marker_id = tree.add_panel(
-                -1, out_px - marker_w * 0.5, self.ruler_rect.y,
-                marker_w, self.ruler_rect.height + self.tracks_rect.height,
-                UIStyle { bg_color: color::EXPORT_MARKER_COLOR, ..UIStyle::default() },
-            ) as i32;
+        if has_out {
+            let out_px = self.beat_to_pixel(self.export_out_beat);
+
+            // Range highlight across tracks
+            let range_left = in_px.max(self.tracks_rect.x);
+            let range_right = out_px.min(self.tracks_rect.x_max());
+            if range_right > range_left {
+                self.export_range_id = tree.add_panel(
+                    -1, range_left, self.tracks_rect.y,
+                    range_right - range_left, self.tracks_rect.height,
+                    UIStyle { bg_color: color::EXPORT_RANGE_HIGHLIGHT, ..UIStyle::default() },
+                ) as i32;
+            } else {
+                self.export_range_id = -1;
+            }
+
+            // Out marker
+            let out_visible = out_px >= self.tracks_rect.x && out_px <= self.tracks_rect.x_max();
+            if out_visible {
+                self.export_out_marker_id = tree.add_panel(
+                    -1, out_px - marker_w * 0.5, self.ruler_rect.y,
+                    marker_w, self.ruler_rect.height + self.tracks_rect.height,
+                    UIStyle { bg_color: color::EXPORT_MARKER_COLOR, ..UIStyle::default() },
+                ) as i32;
+            } else {
+                self.export_out_marker_id = -1;
+            }
         } else {
+            self.export_range_id = -1;
             self.export_out_marker_id = -1;
         }
     }
