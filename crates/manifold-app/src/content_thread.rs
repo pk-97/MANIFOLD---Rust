@@ -1408,8 +1408,18 @@ impl ContentThread {
                 frame_idx as u64,
             );
 
-            // Get Metal texture pointer via wgpu as_hal
-            let texture = self.content_pipeline.export_output_texture();
+            // Get Metal texture pointer via wgpu as_hal.
+            // SDR: capture compositor output directly.
+            // HDR: run PQ encoder on compositor output, capture PQ result.
+            let texture = if export_config.hdr {
+                let paper_white = 200.0f32; // TODO: from project settings
+                let max_nits = 10000.0f32;
+                self.content_pipeline.pq_encode_for_export(
+                    &self.gpu, paper_white, max_nits,
+                )
+            } else {
+                self.content_pipeline.export_output_texture()
+            };
             let tex_ptr = unsafe { Self::get_metal_texture_ptr(texture) };
 
             match tex_ptr {

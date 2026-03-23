@@ -16,6 +16,7 @@ pub mod effect_registry;
 pub mod effect_chain;
 pub mod effects;
 pub mod tonemap;
+pub mod pq_encoder;
 pub mod wet_dry_lerp;
 pub mod ui_renderer;
 pub mod layer_bitmap_gpu;

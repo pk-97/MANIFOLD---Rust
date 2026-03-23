@@ -60,6 +60,10 @@ pub trait Compositor: Send {
     /// Used by ContentPipeline to copy the compositor result to a double-buffer.
     fn output_texture(&self) -> &wgpu::Texture;
 
+    /// View of the final compositor output (post-tonemap, post-effects).
+    /// Used by PQ encoder for HDR export.
+    fn output_view(&self) -> &wgpu::TextureView;
+
     /// Clean up per-owner effect state for a stopped clip.
     fn cleanup_clip_owner(&mut self, clip_id: &str);
 }

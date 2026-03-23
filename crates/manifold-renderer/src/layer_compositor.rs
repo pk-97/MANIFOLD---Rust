@@ -812,6 +812,10 @@ impl Compositor for LayerCompositor {
         &self.tonemap.output.texture
     }
 
+    fn output_view(&self) -> &wgpu::TextureView {
+        &self.tonemap.output.view
+    }
+
     fn cleanup_clip_owner(&mut self, clip_id: &str) {
         self.cleanup_clip_owner(clip_id);
     }

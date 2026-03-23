@@ -70,6 +70,8 @@ pub struct ContentPipeline {
     /// EDR headroom from the display (1.0 = SDR, e.g. 2.0 = 2x SDR white).
     /// Used to compute max_display_nits for tonemapping.
     pub edr_headroom: f64,
+    /// PQ encoder for HDR export. Lazily created on first HDR export frame.
+    pq_encoder: Option<manifold_renderer::pq_encoder::PqEncoder>,
     /// Double-buffered output textures. UI reads front, content writes to back.
     /// NOT used on macOS (IOSurface path bypasses double-buffering).
     #[cfg(not(target_os = "macos"))]
@@ -110,6 +112,7 @@ impl ContentPipeline {
         Self {
             compositor,
             edr_headroom: 1.0,
+            pq_encoder: None,
             #[cfg(not(target_os = "macos"))]
             output_buffers: None,
             #[cfg(not(target_os = "macos"))]
@@ -479,10 +482,55 @@ impl ContentPipeline {
         self.compositor.pre_tonemap_output()
     }
 
-    /// Underlying GPU texture of the compositor output for export.
+    /// Underlying GPU texture of the compositor output for SDR export.
     /// Used to extract the raw Metal texture pointer via `as_hal`.
     pub fn export_output_texture(&self) -> &wgpu::Texture {
         self.compositor.output_texture()
+    }
+
+    /// Run the PQ encoder on the final compositor output for HDR export.
+    /// Returns the PQ-encoded texture for the Metal encoder.
+    /// Lazily creates the PQ encoder pipeline on first call.
+    pub fn pq_encode_for_export(
+        &mut self,
+        gpu: &manifold_renderer::gpu::GpuContext,
+        paper_white_nits: f32,
+        max_nits: f32,
+    ) -> &wgpu::Texture {
+        let (w, h) = self.compositor.dimensions();
+
+        // Lazy init PQ encoder
+        if self.pq_encoder.is_none() {
+            self.pq_encoder =
+                Some(manifold_renderer::pq_encoder::PqEncoder::new(&gpu.device, w, h));
+            log::info!("[ContentPipeline] Created PQ encoder {}x{}", w, h);
+        }
+        let pq = self.pq_encoder.as_ref().unwrap();
+
+        // Resize if needed
+        if pq.output.width != w || pq.output.height != h {
+            self.pq_encoder.as_mut().unwrap().resize(&gpu.device, w, h);
+        }
+
+        // Encode: take the final compositor output (post-tonemap, post-effects)
+        // and apply the ST.2084 PQ transfer function.
+        let edr_view = self.compositor.output_view();
+        let mut encoder =
+            gpu.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("PQ Encode"),
+                });
+        self.pq_encoder.as_ref().unwrap().encode(
+            &gpu.device,
+            &gpu.queue,
+            &mut encoder,
+            edr_view,
+            paper_white_nits,
+            max_nits,
+        );
+        gpu.queue.submit(std::iter::once(encoder.finish()));
+
+        &self.pq_encoder.as_ref().unwrap().output.texture
     }
 
     /// Duration of the last GPU poll (wait for completion) in milliseconds.

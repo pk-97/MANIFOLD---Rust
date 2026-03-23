@@ -197,12 +197,6 @@ impl InputHandler {
             return true;
         }
 
-        // ── Export: Cmd+E ──
-        if matches!(logical_key, Key::Character(c) if c.as_str() == "e") && m.is_command_only() {
-            host.start_export();
-            return true;
-        }
-
         // ── Ungroup: Cmd+Shift+G (context-sensitive) (Unity line 323) ──
         if matches!(logical_key, Key::Character(c) if c.as_str() == "g" || c.as_str() == "G")
             && m.is_command_shift()
