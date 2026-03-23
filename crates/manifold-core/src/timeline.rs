@@ -189,7 +189,8 @@ impl Timeline {
     }
 
     /// Reindex all layers and their clips after structural changes.
-    fn reindex_layers(&mut self) {
+    /// Also call after deserialization to populate `layer_id_to_index`.
+    pub fn reindex_layers(&mut self) {
         self.layer_id_to_index.clear();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             layer.index = i as i32;

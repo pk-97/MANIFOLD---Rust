@@ -270,7 +270,9 @@ impl PlaybackEngine {
 
     // ─── Lifecycle ───
 
-    pub fn initialize(&mut self, project: Project) {
+    pub fn initialize(&mut self, mut project: Project) {
+        // Populate layer_id_to_index (skipped by serde) so compositor sort works.
+        project.timeline.reindex_layers();
         self.project = Some(project);
         self.active_window.reset();
         self.current_time_double = 0.0;
