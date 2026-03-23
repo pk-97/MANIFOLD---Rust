@@ -122,8 +122,18 @@ fn field_style() -> UIStyle {
     }
 }
 
-fn bg_style(selected: bool) -> UIStyle {
-    let bg = if selected { BG_SELECTED } else { BG_COLOR };
+/// Blend `tint` into `base` at the given fraction (0.0 = all base, 1.0 = all tint).
+fn tint_bg(base: Color32, tint: Color32, amount: f32) -> Color32 {
+    let blend = |b: u8, t: u8| -> u8 {
+        (b as f32 * (1.0 - amount) + t as f32 * amount) as u8
+    };
+    Color32::new(blend(base.r, tint.r), blend(base.g, tint.g), blend(base.b, tint.b), base.a)
+}
+
+fn bg_style(selected: bool, layer_color: Color32) -> UIStyle {
+    let base = if selected { BG_SELECTED } else { BG_COLOR };
+    let amount = if selected { 0.35 } else { 0.20 };
+    let bg = tint_bg(base, layer_color, amount);
     let hover = lighten(bg, if selected { 10 } else { 12 });
     let pressed = darken(bg, 8);
     UIStyle {
@@ -170,7 +180,6 @@ pub struct LayerInfo {
 #[derive(Default)]
 struct LayerRowData {
     background: Rect,
-    color_bar: Rect,
     chevron: Rect,
     name: Rect,
     drag_handle: Rect,
@@ -214,7 +223,6 @@ fn compute_layer_row(
     let w = if panel_width > 0.0 { panel_width } else { color::LAYER_CONTROLS_WIDTH };
 
     d.background = Rect::new(0.0, y_offset, w, height);
-    d.color_bar = Rect::new(0.0, y_offset, 3.0, height);
 
     let left_indent = if is_child { CHILD_INDENT } else { 0.0 };
     let pad = PAD + left_indent;
@@ -334,7 +342,6 @@ fn compute_layer_row(
 #[derive(Clone)]
 struct LayerRowIds {
     bg: i32,
-    color_bar: i32,
     chevron: i32,
     name: i32,
     drag_handle: i32,
@@ -360,7 +367,7 @@ struct LayerRowIds {
 impl Default for LayerRowIds {
     fn default() -> Self {
         Self {
-            bg: -1, color_bar: -1, chevron: -1, name: -1, drag_handle: -1,
+            bg: -1, chevron: -1, name: -1, drag_handle: -1,
             mute: -1, solo: -1, blend_mode: -1, separator: -1,
             info: -1, accent_bar: -1, connector: -1, bottom_border: -1,
             folder: -1, path_label: -1, new_clip: -1, gen_type: -1,
@@ -428,6 +435,7 @@ pub struct LayerHeaderPanel {
     cached_mute: Vec<bool>,
     cached_solo: Vec<bool>,
     cached_selected: Vec<bool>,
+    cached_colors: Vec<Color32>,
 
     // Active layer (pushed from app layer each frame)
     active_layer: Option<LayerId>,
@@ -459,6 +467,7 @@ impl LayerHeaderPanel {
             cached_mute: Vec::new(),
             cached_solo: Vec::new(),
             cached_selected: Vec::new(),
+            cached_colors: Vec::new(),
             active_layer: None,
             cached_active_layer: None,
             pending_active_layers: None,
@@ -558,7 +567,9 @@ impl LayerHeaderPanel {
                 *cached = selected;
             }
             if row.bg >= 0 {
-                tree.set_style(row.bg as u32, bg_style(selected));
+                let layer_color = self.cached_colors.get(index)
+                    .copied().unwrap_or(Color32::TRANSPARENT);
+                tree.set_style(row.bg as u32, bg_style(selected, layer_color));
             }
         }
     }
@@ -678,7 +689,9 @@ impl LayerHeaderPanel {
         if let Some(row) = self.rows.get(source)
             && row.bg >= 0 {
                 let selected = self.cached_selected.get(source).copied().unwrap_or(false);
-                tree.set_style(row.bg as u32, bg_style(selected));
+                let layer_color = self.cached_colors.get(source)
+                    .copied().unwrap_or(Color32::TRANSPARENT);
+                tree.set_style(row.bg as u32, bg_style(selected, layer_color));
             }
 
         if source != target {
@@ -730,18 +743,11 @@ impl LayerHeaderPanel {
         let ids = &mut self.rows[index];
         let s = |r: Rect| screen(r, origin);
 
-        // Background (full row interactive area)
+        // Background (full row interactive area, tinted with layer color)
         let bg_r = s(row.background);
         ids.bg = tree.add_button(
             clip_parent, bg_r.x, bg_r.y, bg_r.width, bg_r.height,
-            bg_style(layer.is_selected), "",
-        ) as i32;
-
-        // Layer color bar (thin strip at left edge)
-        let cb = s(row.color_bar);
-        ids.color_bar = tree.add_panel(
-            clip_parent, cb.x, cb.y, cb.width, cb.height,
-            UIStyle { bg_color: layer.color, corner_radius: 0.0, ..UIStyle::default() },
+            bg_style(layer.is_selected, layer.color), "",
         ) as i32;
 
         // Group accent bar
@@ -1069,6 +1075,7 @@ impl Panel for LayerHeaderPanel {
         self.cached_mute.resize(layer_count, false);
         self.cached_solo.resize(layer_count, false);
         self.cached_selected.resize(layer_count, false);
+        self.cached_colors.resize(layer_count, Color32::TRANSPARENT);
 
         // Clone layers to avoid borrow conflict in build_layer_row
         let layers_snapshot = self.layers.clone();
@@ -1112,6 +1119,7 @@ impl Panel for LayerHeaderPanel {
             self.cached_mute[i] = layer.is_muted;
             self.cached_solo[i] = layer.is_solo;
             self.cached_selected[i] = layer.is_selected;
+            self.cached_colors[i] = layer.color;
         }
 
         // Insert indicator (hidden off-screen)
