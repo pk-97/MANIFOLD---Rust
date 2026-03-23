@@ -607,9 +607,8 @@ impl Application {
         // 6. Lightweight update (playhead, insert cursor, layer selection, HUD values)
         self.ui_root.update();
 
-        // 6a. Update waveform lane overlay (position + playhead for dirty-checking)
+        // 6a. Update waveform lane overlay (position for dirty-checking)
         {
-            let playhead_beat = self.content_state.current_beat;
             let scroll_x = self.ui_root.viewport.scroll_x_beats() * self.ui_root.viewport.pixels_per_beat();
             let wf = &mut self.ui_root.waveform_lane;
             if wf.is_ready() {
@@ -630,7 +629,6 @@ impl Application {
                 wf.update_overlay(
                     start_beat,
                     duration_beats,
-                    playhead_beat,
                     scroll_x,
                     self.ui_root.viewport.tracks_rect().width,
                     mapper,
@@ -646,7 +644,6 @@ impl Application {
                 let mapper = self.ui_root.viewport.mapper();
                 self.ui_root.stem_lanes.update_overlay(
                     start_beat,
-                    playhead_beat,
                     scroll_x,
                     bpm,
                     mapper,
@@ -980,14 +977,18 @@ impl Application {
                     }
                 }
 
-                // Pass 3: Playhead track-area line ONLY (on top of bitmap textures).
+                // Pass 3: Unified playhead line spanning ruler → waveform → stems → tracks.
+                // Single overlay quad eliminates per-bitmap integer-truncation drift.
                 // TextMode::Skip — no text, no glyphon prepare(), no buffer mutation.
                 if let Some(ui) = &mut self.ui_renderer
                     && let Some(px) = self.ui_root.viewport.playhead_pixel() {
+                        let ruler = self.ui_root.viewport.ruler_rect();
                         let tr = self.ui_root.viewport.get_tracks_rect();
+                        let top = ruler.y;
+                        let height = (tr.y + tr.height) - top;
                         ui.draw_rect(
-                            px - 1.0, tr.y,
-                            manifold_ui::color::PLAYHEAD_WIDTH, tr.height,
+                            px - 1.0, top,
+                            manifold_ui::color::PLAYHEAD_WIDTH, height,
                             manifold_ui::color::PLAYHEAD_RED.to_f32(),
                         );
                         ui.render(

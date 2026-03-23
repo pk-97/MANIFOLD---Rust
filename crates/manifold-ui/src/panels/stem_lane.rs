@@ -2,7 +2,7 @@
 //! managed as a collapsible group.
 //!
 //! Hybrid bitmap + UITree node architecture:
-//! - **Bitmap**: stem waveform bars, playhead, lane backgrounds
+//! - **Bitmap**: stem waveform bars, lane backgrounds
 //! - **UITree nodes**: transparent scrub overlays, mute/solo buttons, stem name labels
 //!
 //! Unity: `StemWaveformLane` + `StemLaneGroup`.
@@ -32,9 +32,6 @@ const STEM_BG_COLORS: [Color32; STEM_COUNT] = [
     color::STEM_LANE_BG_OTHER,
     color::STEM_LANE_BG_VOCALS,
 ];
-
-/// Playhead color (same as master lane).
-const PLAYHEAD_COLOR: Color32 = Color32::new(217, 64, 56, 217);
 
 // ── Mute/Solo button layout ──
 const MUTE_SOLO_BTN_W: f32 = 20.0;
@@ -99,7 +96,6 @@ pub struct StemLaneGroupPanel {
 
     // ── State for overlay ──
     waveform_start_beat: f32,
-    playhead_beat: f32,
     scroll_offset_x: f32,
     bpm: f32,
 
@@ -129,7 +125,6 @@ impl StemLaneGroupPanel {
             buffer_height: 0,
             dirty: true,
             waveform_start_beat: 0.0,
-            playhead_beat: 0.0,
             scroll_offset_x: 0.0,
             bpm: 120.0,
             first_node: usize::MAX,
@@ -339,10 +334,10 @@ impl StemLaneGroupPanel {
     /// Update overlay state each frame.
     ///
     /// Unity: `UpdateOverlay(...)` (lines 119-137).
+    /// Playhead is rendered as a unified overlay in app.rs — not in this bitmap.
     pub fn update_overlay(
         &mut self,
         waveform_start_beat: f32,
-        playhead_beat: f32,
         scroll_offset_x: f32,
         bpm: f32,
         _mapper: &CoordinateMapper,
@@ -352,13 +347,11 @@ impl StemLaneGroupPanel {
         }
 
         let changed = (self.waveform_start_beat - waveform_start_beat).abs() > 0.001
-            || (self.playhead_beat - playhead_beat).abs() > 0.001
             || (self.scroll_offset_x - scroll_offset_x).abs() > 0.5
             || (self.bpm - bpm).abs() > 0.01;
 
         if changed {
             self.waveform_start_beat = waveform_start_beat;
-            self.playhead_beat = playhead_beat;
             self.scroll_offset_x = scroll_offset_x;
             self.bpm = bpm;
             self.dirty = true;
@@ -437,22 +430,6 @@ impl StemLaneGroupPanel {
                             );
                         }
                     }
-            }
-
-            // Draw playhead
-            let playhead_x =
-                (mapper.beat_to_pixel_absolute(self.playhead_beat) - self.scroll_offset_x) as i32;
-            if playhead_x >= 0 && playhead_x < buf_w as i32 {
-                waveform_painter::draw_playhead(
-                    &mut self.pixel_buffer,
-                    buf_w,
-                    buf_h,
-                    playhead_x,
-                    y_offset,
-                    lane_h as i32,
-                    PLAYHEAD_COLOR,
-                    color::PLAYHEAD_WIDTH as i32,
-                );
             }
 
             // Mute/Solo buttons are UITree nodes — not drawn in the bitmap.

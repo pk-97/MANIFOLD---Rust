@@ -1,7 +1,7 @@
 //! Imported audio waveform lane panel.
 //!
 //! Hybrid bitmap + UITree node architecture (matching Unity's pattern):
-//! - **Bitmap** (pixel buffer): waveform spectral bars, playhead, lane background
+//! - **Bitmap** (pixel buffer): waveform spectral bars, lane background
 //! - **UITree nodes**: transparent scrub/drag overlay, buttons with text labels
 //!
 //! Unity: `ImportedAudioWaveformLane` + `ImportedAudioWaveformScrubHandler`
@@ -21,7 +21,7 @@ use crate::waveform_renderer::WaveformRenderer;
 use super::{Panel, PanelAction};
 
 /// Imported audio waveform lane — displays the master audio waveform
-/// with spectral coloring, playhead, and overlay buttons.
+/// with spectral coloring and overlay buttons.
 ///
 /// Unity: `ImportedAudioWaveformLane` (457 lines).
 pub struct WaveformLanePanel {
@@ -38,7 +38,6 @@ pub struct WaveformLanePanel {
     // ── Layout state ──
     waveform_start_beat: f32,
     waveform_duration_beats: f32,
-    playhead_beat: f32,
     scroll_offset_x: f32,
     content_width: f32,
     visible: bool,
@@ -70,13 +69,8 @@ pub struct WaveformLanePanel {
     // ── Cached values for dirty checking ──
     cached_waveform_x: f32,
     cached_waveform_width: f32,
-    cached_playhead_x: f32,
     cached_scroll_offset: f32,
 }
-
-/// Playhead color: PlayheadRed @ 0.85 alpha.
-/// Unity: `ImportedAudioWaveformLane.PlayheadColor` (lines 57-60).
-const PLAYHEAD_COLOR: Color32 = Color32::new(217, 64, 56, 217);
 
 /// Snap step for waveform drag: 1 beat.
 /// Unity: `ImportedAudioWaveformDragHandler.SnapStepBeats = 1f` (line 22).
@@ -140,7 +134,6 @@ impl WaveformLanePanel {
             dirty: true,
             waveform_start_beat: 0.0,
             waveform_duration_beats: 0.0,
-            playhead_beat: 0.0,
             scroll_offset_x: 0.0,
             content_width: 0.0,
             visible: true,
@@ -159,7 +152,6 @@ impl WaveformLanePanel {
             reanalyze_ids: [-1; 5],
             cached_waveform_x: f32::NAN,
             cached_waveform_width: -1.0,
-            cached_playhead_x: f32::NAN,
             cached_scroll_offset: f32::NAN,
         }
     }
@@ -339,18 +331,17 @@ impl WaveformLanePanel {
     /// Update overlay state each frame.
     ///
     /// Unity: `UpdateOverlay(...)` (lines 375-442).
+    /// Playhead is rendered as a unified overlay in app.rs — not in this bitmap.
     pub fn update_overlay(
         &mut self,
         waveform_start_beat: f32,
         waveform_duration_beats: f32,
-        playhead_beat: f32,
         scroll_offset_x: f32,
         content_width: f32,
         mapper: &CoordinateMapper,
     ) {
         self.waveform_start_beat = waveform_start_beat;
         self.waveform_duration_beats = waveform_duration_beats;
-        self.playhead_beat = playhead_beat;
         self.scroll_offset_x = scroll_offset_x;
         self.content_width = content_width;
 
@@ -364,25 +355,21 @@ impl WaveformLanePanel {
                 mapper.beat_to_pixel_absolute(waveform_start_beat.max(0.0));
             let waveform_width =
                 mapper.beat_duration_to_width(waveform_duration_beats).max(1.0);
-            let playhead_x =
-                mapper.beat_to_pixel_absolute(playhead_beat);
 
-            // Dirty check (Unity: Mathf.Approximately comparisons, lines 418-441)
             if (waveform_x - self.cached_waveform_x).abs() > 0.5
                 || (waveform_width - self.cached_waveform_width).abs() > 0.5
-                || (playhead_x - self.cached_playhead_x).abs() > 0.5
                 || (scroll_offset_x - self.cached_scroll_offset).abs() > 0.5
             {
                 self.cached_waveform_x = waveform_x;
                 self.cached_waveform_width = waveform_width;
-                self.cached_playhead_x = playhead_x;
                 self.cached_scroll_offset = scroll_offset_x;
                 self.dirty = true;
             }
         }
     }
 
-    /// Repaint the pixel buffer (waveform visual + playhead only, no buttons).
+    /// Repaint the pixel buffer (waveform visual only, no buttons).
+    /// Playhead is rendered as a unified overlay in app.rs.
     pub fn repaint(&mut self, viewport_width: usize) {
         let lane_height = color::WAVEFORM_LANE_HEIGHT as usize;
 
@@ -437,21 +424,6 @@ impl WaveformLanePanel {
                     );
                 }
             }
-
-        // Draw playhead
-        let playhead_screen_x = (self.cached_playhead_x - self.scroll_offset_x) as i32;
-        if playhead_screen_x >= 0 && playhead_screen_x < buf_w as i32 {
-            waveform_painter::draw_playhead(
-                &mut self.pixel_buffer,
-                buf_w,
-                buf_h,
-                playhead_screen_x,
-                0,
-                buf_h as i32,
-                PLAYHEAD_COLOR,
-                color::PLAYHEAD_WIDTH as i32,
-            );
-        }
 
         // Buttons are UITree nodes — not drawn in the bitmap.
 

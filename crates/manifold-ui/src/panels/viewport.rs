@@ -11,12 +11,7 @@ use super::{Panel, PanelAction};
 // ── Layout constants ────────────────────────────────────────────
 
 const RULER_HEIGHT: f32 = color::RULER_HEIGHT;
-const PLAYHEAD_WIDTH: f32 = color::PLAYHEAD_WIDTH;
 const CLIP_VERTICAL_PAD: f32 = 12.0;
-
-/// Center a vertical line of given width at pixel position `px`.
-#[inline]
-fn centered_line_x(px: f32, width: f32) -> f32 { px - width * 0.5 }
 
 const RULER_FONT_SIZE: u16 = 9;
 const RULER_TICK_W: f32 = 1.0;
@@ -140,8 +135,7 @@ pub struct TimelineViewportPanel {
     bg_panel_id: i32,
     overview_btn_id: i32,
     ruler_bg_id: i32,
-    playhead_ruler_id: i32,
-    // playhead_track_id: removed — rendered as overlay quad in app.rs
+    // playhead: unified overlay quad in app.rs (ruler → waveform → stems → tracks)
     insert_cursor_ruler_id: i32,
     // insert_cursor_track_id: removed — painted into bitmap
     // selection_region_id: removed — painted into bitmap
@@ -214,7 +208,6 @@ impl TimelineViewportPanel {
             bg_panel_id: -1,
             overview_btn_id: -1,
             ruler_bg_id: -1,
-            playhead_ruler_id: -1,
             insert_cursor_ruler_id: -1,
             export_in_beat: 0.0,
             export_out_beat: 0.0,
@@ -807,23 +800,6 @@ impl TimelineViewportPanel {
 
     // ── Sync methods ──────────────────────────────────────────────
 
-    /// Update playhead ruler marker position without rebuilding.
-    /// Track-area playhead is rendered as overlay in app.rs.
-    fn sync_playhead_ruler(&self, tree: &mut UITree) {
-        if self.playhead_ruler_id >= 0 {
-            let px = self.beat_to_pixel(self.playhead_beat);
-            let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();
-            tree.set_visible(self.playhead_ruler_id as u32, in_view);
-            if in_view {
-                tree.set_bounds(
-                    self.playhead_ruler_id as u32,
-                    Rect::new(centered_line_x(px, PLAYHEAD_WIDTH), self.ruler_rect.y,
-                              PLAYHEAD_WIDTH, self.ruler_rect.height),
-                );
-            }
-        }
-    }
-
     /// Update insert cursor ruler marker position without rebuilding.
     /// Track-area cursor is painted into bitmap.
     fn sync_insert_cursor_ruler(&self, tree: &mut UITree) {
@@ -941,14 +917,12 @@ impl Panel for TimelineViewportPanel {
         // Insert cursor ruler marker only (track cursor painted into bitmap)
         self.build_insert_cursor_ruler(tree);
 
-        // Playhead ruler marker only (track playhead rendered as overlay in app.rs)
-        self.build_playhead_ruler(tree);
+        // Playhead: unified overlay quad in app.rs (no UITree node needed)
 
         self.node_count = tree.count() - self.first_node;
     }
 
     fn update(&mut self, tree: &mut UITree) {
-        self.sync_playhead_ruler(tree);
         self.sync_insert_cursor_ruler(tree);
     }
 
@@ -1345,22 +1319,6 @@ impl TimelineViewportPanel {
         }
     }
 
-    /// Build playhead ruler marker only. Track-area playhead is rendered as
-    /// an overlay quad in app.rs (after bitmap textures).
-    fn build_playhead_ruler(&mut self, tree: &mut UITree) {
-        let px = self.beat_to_pixel(self.playhead_beat);
-        let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();
-
-        self.playhead_ruler_id = tree.add_panel(
-            -1, centered_line_x(px, PLAYHEAD_WIDTH), self.ruler_rect.y,
-            PLAYHEAD_WIDTH, self.ruler_rect.height,
-            UIStyle { bg_color: color::PLAYHEAD_RED, ..UIStyle::default() },
-        ) as i32;
-        if !in_view {
-            tree.set_visible(self.playhead_ruler_id as u32, false);
-        }
-    }
-
     /// Build insert cursor ruler marker only. Track-area cursor is painted
     /// into the per-layer bitmap by LayerBitmapRenderer.
     fn build_insert_cursor_ruler(&mut self, tree: &mut UITree) {
@@ -1579,23 +1537,6 @@ mod tests {
             &tree,
         );
         assert!(actions.is_empty(), "tracks clicks handled by overlay, not viewport");
-    }
-
-    #[test]
-    fn sync_playhead_ruler_moves_node() {
-        let mut tree = UITree::new();
-        let mut panel = TimelineViewportPanel::new();
-        let layout = test_layout();
-        panel.set_tracks(test_tracks());
-        panel.build(&mut tree, &layout);
-
-        let original_bounds = tree.get_bounds(panel.playhead_ruler_id as u32);
-
-        panel.playhead_beat = 8.0;
-        panel.sync_playhead_ruler(&mut tree);
-
-        let new_bounds = tree.get_bounds(panel.playhead_ruler_id as u32);
-        assert!(new_bounds.x != original_bounds.x);
     }
 
     #[test]

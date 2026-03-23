@@ -97,33 +97,6 @@ pub fn draw_waveform(
     }
 }
 
-/// Draw the playhead line in the waveform lane.
-///
-/// Unity: playheadRect positioned at BeatToPixelAbsolute(playheadBeat)
-/// with width = PlayheadWidth and color = PlayheadRed @ 0.85 alpha.
-pub fn draw_playhead(
-    buffer: &mut [Color32],
-    buf_w: usize,
-    buf_h: usize,
-    x: i32,
-    y_offset: i32,
-    lane_height: i32,
-    playhead_color: Color32,
-    width: i32,
-) {
-    let half = width / 2;
-    fill_rect(
-        buffer,
-        buf_w,
-        buf_h,
-        x - half,
-        y_offset,
-        width,
-        lane_height,
-        playhead_color,
-    );
-}
-
 /// Draw a small text-style button overlay at a position.
 ///
 /// Used for import/remove/expand/reanalyze buttons overlaid on the waveform lane.
@@ -227,14 +200,4 @@ mod tests {
         assert!(non_transparent > 0, "Waveform should have drawn some pixels");
     }
 
-    #[test]
-    fn draw_playhead_visible() {
-        let mut buf = vec![Color32::TRANSPARENT; 100 * 50];
-        let red = Color32::new(217, 64, 56, 217); // PlayheadRed @ 0.85 alpha
-        draw_playhead(&mut buf, 100, 50, 50, 0, 50, red, 2);
-
-        // Check that pixels at x=49,50 are drawn
-        let idx = 25 * 100 + 49; // mid-height, x=49
-        assert!(buf[idx].a > 0, "Playhead should be visible");
-    }
 }
