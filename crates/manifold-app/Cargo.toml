@@ -14,6 +14,7 @@ manifold-ui = { path = "../manifold-ui" }
 manifold-playback = { path = "../manifold-playback" }
 manifold-renderer = { path = "../manifold-renderer" }
 manifold-io = { path = "../manifold-io" }
+manifold-media = { path = "../manifold-media" }
 winit = { workspace = true }
 wgpu = { workspace = true }
 log = { workspace = true }

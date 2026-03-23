@@ -826,6 +826,46 @@ impl TimelineInputHost for AppInputHost<'_> {
         }
     }
 
+    fn start_export(&mut self) {
+        let project = &*self.project;
+        let (w, h) = (
+            project.settings.output_width.max(1) as u32,
+            project.settings.output_height.max(1) as u32,
+        );
+
+        // Default output path: ~/Desktop/{project_name}.mp4
+        let project_name = if project.project_name.is_empty() {
+            "MANIFOLD_Export"
+        } else {
+            &project.project_name
+        };
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let desktop = std::path::Path::new(&home).join("Desktop");
+        let output_path = desktop
+            .join(format!("{project_name}.mp4"))
+            .to_string_lossy()
+            .to_string();
+
+        let config = manifold_media::export_config::ExportConfig {
+            output_path,
+            width: w,
+            height: h,
+            fps: project.settings.frame_rate,
+            hdr: project.settings.export_hdr,
+            start_beat: project.timeline.export_in_beat,
+            end_beat: project.timeline.export_out_beat,
+            audio_path: None, // TODO: wire from audio sync controller
+            audio_start_beat: 0.0,
+            audio_encoder_delay: 0.0,
+        };
+
+        log::info!("[InputHost] Starting export: {}x{} -> {}", w, h, config.output_path);
+        ContentCommand::send(
+            self.content_tx,
+            ContentCommand::StartExport(Box::new(config)),
+        );
+    }
+
     fn dismiss_context_menu(&mut self) {
         self.ui_root.dropdown.close(&mut self.ui_root.tree);
     }

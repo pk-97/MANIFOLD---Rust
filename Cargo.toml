@@ -9,6 +9,7 @@ members = [
     "crates/manifold-renderer",
     "crates/manifold-native",
     "crates/manifold-profiler",
+    "crates/manifold-media",
     "crates/manifold-app",
 ]
 

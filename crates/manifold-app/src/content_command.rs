@@ -6,6 +6,7 @@
 use manifold_core::{ClipId, LayerId};
 use manifold_core::project::Project;
 use manifold_editing::command::Command;
+use manifold_media::export_config::ExportConfig;
 use manifold_playback::audio_sync::PreloadedAudioData;
 use manifold_playback::audio_decoder::DecodedAudio;
 use manifold_playback::stem_audio::PreloadedStemData;
@@ -140,6 +141,12 @@ pub enum ContentCommand {
     /// Stop profiling and dump session data to disk.
     #[cfg(feature = "profiling")]
     StopProfiling,
+
+    // ── Export ────────────────────────────────────────────────────
+    /// Begin offline video export. Content thread enters export loop.
+    StartExport(Box<ExportConfig>),
+    /// Cancel in-progress export.
+    CancelExport,
 
     // ── Shutdown ──────────────────────────────────────────────────
     Shutdown,

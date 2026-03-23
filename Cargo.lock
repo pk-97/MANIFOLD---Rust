@@ -1982,6 +1982,7 @@ dependencies = [
  "manifold-core",
  "manifold-editing",
  "manifold-io",
+ "manifold-media",
  "manifold-playback",
  "manifold-profiler",
  "manifold-renderer",
@@ -2029,6 +2030,16 @@ dependencies = [
  "serde_json",
  "sha2",
  "zip",
+]
+
+[[package]]
+name = "manifold-media"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "log",
+ "manifold-core",
+ "wgpu",
 ]
 
 [[package]]

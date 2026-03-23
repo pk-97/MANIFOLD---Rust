@@ -8,6 +8,15 @@ use manifold_core::project::Project;
 use manifold_core::types::ClockAuthority;
 use manifold_playback::stem_audio::STEM_COUNT;
 
+/// Sent once when an export finishes.
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub struct ExportFinishedEvent {
+    pub success: bool,
+    pub message: String,
+    pub output_path: String,
+}
+
 /// State snapshot sent from the content thread to the UI thread.
 /// The UI thread drains these from a bounded channel and uses the latest.
 #[derive(Clone)]
@@ -66,6 +75,16 @@ pub struct ContentState {
     /// Number of frames recorded in the current session.
     pub profiling_frame_count: u64,
 
+    // ── Export ────────────────────────────────────────────────────
+    /// Whether an export is currently in progress.
+    pub is_exporting: bool,
+    /// Export progress (0.0..1.0).
+    pub export_progress: f32,
+    /// Export status text (e.g. "Exporting 120/600 (20%)").
+    pub export_status: String,
+    /// Set once when export finishes (success or failure).
+    pub export_finished: Option<ExportFinishedEvent>,
+
     // ── Project snapshot ──────────────────────────────────────────
     /// Sent when data_version changes so the UI thread can update
     /// its local_project for reads. None when version hasn't changed.
@@ -110,6 +129,10 @@ impl Default for ContentState {
             percussion_show_progress: false,
             profiling_active: false,
             profiling_frame_count: 0,
+            is_exporting: false,
+            export_progress: 0.0,
+            export_status: String::new(),
+            export_finished: None,
             project_snapshot: None,
         }
     }

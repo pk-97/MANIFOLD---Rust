@@ -473,10 +473,16 @@ impl ContentPipeline {
         }
     }
 
-    /// Pre-tonemap HDR output for export pipeline (GAP-IO-4).
+    /// Pre-tonemap HDR output for export pipeline.
     #[allow(dead_code)]
     pub fn pre_tonemap_output(&self) -> &wgpu::TextureView {
         self.compositor.pre_tonemap_output()
+    }
+
+    /// Underlying GPU texture of the compositor output for export.
+    /// Used to extract the raw Metal texture pointer via `as_hal`.
+    pub fn export_output_texture(&self) -> &wgpu::Texture {
+        self.compositor.output_texture()
     }
 
     /// Duration of the last GPU poll (wait for completion) in milliseconds.

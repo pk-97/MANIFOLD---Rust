@@ -126,6 +126,36 @@ impl Timeline {
         max_beat
     }
 
+    /// Content range in beats: (start_beat, end_beat).
+    /// If export markers are set, clamps to them.
+    /// Otherwise returns first-clip-start to last-clip-end.
+    /// Port of Unity Timeline.GetContentRange().
+    pub fn content_range_beats(&self) -> (f32, f32) {
+        let mut min_beat = f32::MAX;
+        let mut max_beat = 0.0f32;
+        for layer in &self.layers {
+            for clip in &layer.clips {
+                min_beat = min_beat.min(clip.start_beat);
+                max_beat = max_beat.max(clip.end_beat());
+            }
+        }
+        if min_beat == f32::MAX {
+            return (0.0, 0.0);
+        }
+
+        // Apply export markers if set
+        if self.export_range_enabled {
+            if self.export_in_beat > 0.0 {
+                min_beat = min_beat.max(self.export_in_beat);
+            }
+            if self.export_out_beat > 0.0 {
+                max_beat = max_beat.min(self.export_out_beat);
+            }
+        }
+
+        (min_beat, max_beat)
+    }
+
     /// Total clip count across all layers.
     pub fn total_clip_count(&self) -> usize {
         self.layers.iter().map(|l| l.clips.len()).sum()

@@ -1,0 +1,12 @@
+[package]
+name = "manifold-media"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+manifold-core = { path = "../manifold-core" }
+wgpu = { workspace = true }
+log = { workspace = true }
+
+[build-dependencies]
+cc = "1"

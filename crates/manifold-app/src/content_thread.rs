@@ -25,7 +25,7 @@ use manifold_renderer::gpu::GpuContext;
 
 use crate::content_command::ContentCommand;
 use crate::content_pipeline::ContentPipeline;
-use crate::content_state::ContentState;
+use crate::content_state::{ContentState, ExportFinishedEvent};
 use crate::frame_timer::FrameTimer;
 
 /// Owns all content-side state and runs the content loop.
@@ -90,6 +90,9 @@ impl ContentThread {
             // 1. Drain ALL pending commands
             loop {
                 match cmd_rx.try_recv() {
+                    Ok(ContentCommand::StartExport(config)) => {
+                        self.run_export(*config, &cmd_rx, &state_tx);
+                    }
                     Ok(cmd) => {
                         if self.handle_command(cmd) {
                             log::info!("[ContentThread] shutdown received");
@@ -503,6 +506,10 @@ impl ContentThread {
                     #[cfg(not(feature = "profiling"))]
                     { 0 }
                 },
+                is_exporting: false,
+                export_progress: 0.0,
+                export_status: String::new(),
+                export_finished: None,
                 project_snapshot: snapshot,
             };
 
@@ -1154,6 +1161,14 @@ impl ContentThread {
                 self.engine.mark_compositor_dirty(0.0);
             }
 
+            // ── Export ────────────────────────────────────────────────
+            ContentCommand::StartExport(_) => {
+                // Handled in run() loop directly (needs cmd_rx/state_tx access).
+            }
+            ContentCommand::CancelExport => {
+                // No-op outside of export loop — cancel flag checked inside run_export.
+            }
+
             // ── Lifecycle ────────────────────────────────────────────
             ContentCommand::PauseRendering => {
                 self.rendering_paused = true;
@@ -1242,5 +1257,275 @@ impl ContentThread {
             }
         }
         false
+    }
+
+    /// Run the offline video export loop.
+    ///
+    /// Temporarily replaces the normal content loop: ticks the engine with fixed
+    /// delta, renders each frame, and encodes via the native Metal encoder at
+    /// maximum GPU speed (no frame pacing / sleep).
+    ///
+    /// Port of Unity VideoExporter.ExportCoroutine() (offline / generator-only path).
+    #[cfg(target_os = "macos")]
+    fn run_export(
+        &mut self,
+        config: manifold_media::export_config::ExportConfig,
+        cmd_rx: &Receiver<ContentCommand>,
+        state_tx: &Sender<ContentState>,
+    ) {
+        use manifold_core::tempo::TempoMapConverter;
+        use manifold_media::audio_muxer::AudioMuxer;
+
+        log::info!("[ContentThread] Starting export: {:?}", config);
+
+        // 1. Save playback state for restore
+        let was_playing = self.engine.is_playing();
+        let saved_beat = self.engine.current_beat();
+
+        // 2. Resolve export range
+        let Some(project) = self.engine.project() else {
+            log::error!("[ContentThread] No project loaded, cannot export");
+            self.send_export_finished(state_tx, false, "No project loaded".into(), &config.output_path);
+            return;
+        };
+        let bpm = project.settings.bpm;
+        let (content_start, content_end) = project.timeline.content_range_beats();
+
+        // Use config beats if set, otherwise use content range
+        let start_beat = if config.start_beat > 0.0 {
+            config.start_beat
+        } else {
+            content_start
+        };
+        let end_beat = if config.end_beat > 0.0 {
+            config.end_beat
+        } else {
+            content_end
+        };
+
+        if start_beat >= end_beat || content_start >= content_end {
+            log::error!("[ContentThread] No content in export range ({start_beat}..{end_beat})");
+            self.send_export_finished(state_tx, false, "No content in export range".into(), &config.output_path);
+            return;
+        }
+
+        // Build final config with resolved range
+        let mut export_config = config;
+        export_config.start_beat = start_beat;
+        export_config.end_beat = end_beat;
+
+        // Calculate timing
+        let mut tempo_map = project.tempo_map.clone();
+        let start_seconds =
+            TempoMapConverter::beat_to_seconds(&mut tempo_map, start_beat, bpm);
+        let end_seconds =
+            TempoMapConverter::beat_to_seconds(&mut tempo_map, end_beat, bpm);
+        let duration = end_seconds - start_seconds;
+        let total_frames = (duration * export_config.fps).round() as u32;
+        let frame_dt = 1.0 / export_config.fps as f64;
+
+        if total_frames == 0 {
+            log::error!("[ContentThread] Zero frames to export");
+            self.send_export_finished(state_tx, false, "Zero frames to export".into(), &export_config.output_path);
+            return;
+        }
+
+        log::info!(
+            "[ContentThread] Export: {} frames, {:.2}s, beats {:.1}-{:.1}, {}x{} @ {} fps",
+            total_frames, duration, start_beat, end_beat,
+            export_config.width, export_config.height, export_config.fps,
+        );
+
+        // 3. Enter export mode
+        self.engine.stop();
+        self.engine.set_export_mode(true);
+        // Seek to start
+        let start_time = self.engine.beat_to_timeline_time(start_beat);
+        self.engine.seek_to(start_time);
+        self.engine.play();
+
+        // 4. Create export session (initializes native Metal encoder)
+        let session_result = manifold_media::export_session::ExportSession::new(
+            export_config.clone(),
+            bpm,
+            &mut tempo_map,
+        );
+        let mut session = match session_result {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("[ContentThread] Failed to create export session: {e}");
+                self.engine.set_export_mode(false);
+                self.engine.stop();
+                let restore_time = self.engine.beat_to_timeline_time(saved_beat);
+                self.engine.seek_to(restore_time);
+                self.send_export_finished(state_tx, false, format!("Export failed: {e}"), &export_config.output_path);
+                return;
+            }
+        };
+
+        // 5. Export frame loop — runs as fast as GPU can encode (no sleep)
+        let mut cancelled = false;
+        for frame_idx in 0..total_frames {
+            // Check for cancel command (non-blocking drain)
+            while let Ok(cmd) = cmd_rx.try_recv() {
+                if matches!(cmd, ContentCommand::CancelExport) {
+                    cancelled = true;
+                    break;
+                }
+                // Ignore other commands during export
+            }
+            if cancelled {
+                session.cancel();
+                break;
+            }
+
+            // Tick engine with fixed delta
+            let ctx = TickContext {
+                dt_seconds: frame_dt,
+                realtime_now: frame_idx as f64 * frame_dt,
+                pre_render_dt: frame_dt as f32,
+                frame_count: frame_idx as i32,
+                export_fixed_dt: frame_dt,
+            };
+            let tick_result = self.engine.tick(ctx);
+
+            // Render
+            self.content_pipeline.render_content(
+                &self.gpu,
+                &mut self.engine,
+                &tick_result,
+                frame_dt,
+                frame_idx as u64,
+            );
+
+            // Get Metal texture pointer via wgpu as_hal
+            let texture = self.content_pipeline.export_output_texture();
+            let tex_ptr = unsafe { Self::get_metal_texture_ptr(texture) };
+
+            match tex_ptr {
+                Some(ptr) => {
+                    if let Err(e) = unsafe { session.encode_frame(ptr) } {
+                        log::error!("[ContentThread] Encode failed at frame {frame_idx}: {e}");
+                        cancelled = true;
+                        break;
+                    }
+                }
+                None => {
+                    log::error!("[ContentThread] Failed to get Metal texture pointer at frame {frame_idx}");
+                    cancelled = true;
+                    break;
+                }
+            }
+
+            // Cleanup stopped clips
+            if !tick_result.stopped_clips.is_empty() {
+                self.content_pipeline
+                    .cleanup_stopped_clips(&tick_result.stopped_clips);
+            }
+
+            // Send progress to UI (throttle: every 10 frames)
+            if frame_idx % 10 == 0 {
+                self.send_export_progress(state_tx, &session);
+            }
+        }
+
+        // 6. Finalize
+        if cancelled {
+            log::info!("[ContentThread] Export cancelled at frame {}", session.frames_encoded());
+            // Clean up partial file
+            let _ = std::fs::remove_file(&export_config.output_path);
+            let temp_video = format!("{}.video_only.mp4", export_config.output_path);
+            let _ = std::fs::remove_file(&temp_video);
+        } else {
+            // Resolve FFmpeg for audio muxing
+            let ffmpeg_path = AudioMuxer::resolve_ffmpeg("");
+            match session.finalize(ffmpeg_path.as_deref()) {
+                Ok(result) => {
+                    log::info!(
+                        "[ContentThread] Export complete: {} frames, {:.2}s -> {}",
+                        result.frames_encoded, result.duration_seconds, result.output_path,
+                    );
+                    self.send_export_finished(
+                        state_tx, true,
+                        format!("Export complete: {} frames", result.frames_encoded),
+                        &result.output_path,
+                    );
+                }
+                Err(e) => {
+                    log::error!("[ContentThread] Export finalization failed: {e}");
+                    self.send_export_finished(
+                        state_tx, false,
+                        format!("Export failed: {e}"),
+                        &export_config.output_path,
+                    );
+                }
+            }
+        }
+
+        // 7. Restore playback state
+        self.engine.set_export_mode(false);
+        self.engine.stop();
+        let restore_time = self.engine.beat_to_timeline_time(saved_beat);
+        self.engine.seek_to(restore_time);
+        if was_playing {
+            self.engine.play();
+        }
+
+        if cancelled {
+            self.send_export_finished(
+                state_tx, false, "Export cancelled".into(), &export_config.output_path,
+            );
+        }
+    }
+
+    /// Extract the raw Metal texture pointer from a wgpu Texture.
+    /// Returns `id<MTLTexture>` as `*mut c_void` for the native encoder.
+    #[cfg(target_os = "macos")]
+    unsafe fn get_metal_texture_ptr(texture: &wgpu::Texture) -> Option<*mut std::ffi::c_void> {
+        use foreign_types::ForeignType;
+        use std::ffi::c_void;
+        let hal_texture = unsafe { texture.as_hal::<wgpu_hal::api::Metal>() };
+        hal_texture.map(|tex| {
+            let raw = unsafe { tex.raw_handle() };
+            raw.as_ptr() as *mut c_void
+        })
+    }
+
+    /// Send export progress to the UI thread.
+    #[cfg(target_os = "macos")]
+    fn send_export_progress(
+        &self,
+        state_tx: &Sender<ContentState>,
+        session: &manifold_media::export_session::ExportSession,
+    ) {
+        let state = ContentState {
+            is_exporting: true,
+            export_progress: session.progress(),
+            export_status: session.status_text(),
+            current_beat: self.engine.current_beat(),
+            current_time: self.engine.current_time(),
+            is_playing: self.engine.is_playing(),
+            ..ContentState::default()
+        };
+        let _ = state_tx.try_send(state);
+    }
+
+    /// Send export finished event to the UI thread.
+    fn send_export_finished(
+        &self,
+        state_tx: &Sender<ContentState>,
+        success: bool,
+        message: String,
+        output_path: &str,
+    ) {
+        let state = ContentState {
+            export_finished: Some(ExportFinishedEvent {
+                success,
+                message,
+                output_path: output_path.to_string(),
+            }),
+            ..ContentState::default()
+        };
+        let _ = state_tx.try_send(state);
     }
 }

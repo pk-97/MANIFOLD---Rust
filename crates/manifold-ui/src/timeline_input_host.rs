@@ -178,6 +178,9 @@ pub trait TimelineInputHost {
     /// Clear the export out point.
     fn clear_export_out(&mut self);
 
+    /// Start offline video export with current project settings.
+    fn start_export(&mut self);
+
     /// Dismiss any open context menu / dropdown.
     fn dismiss_context_menu(&mut self);
 
