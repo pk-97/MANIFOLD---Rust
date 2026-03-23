@@ -37,7 +37,7 @@ impl Command for AddLayerCommand {
             new_layer.parent_layer_id = self.parent_group_id.clone();
             if self.layer_type == LayerType::Generator {
                 let gp = new_layer.gen_params.get_or_insert_with(Default::default);
-                gp.generator_type = self.gen_type;
+                gp.change_type(self.gen_type);
             }
             new_layer
         };
