@@ -488,7 +488,7 @@ impl Application {
 
         if needs_structural_sync {
             let active_idx = self.active_layer_id.as_ref().and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
-            crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.local_project, active_idx);
+            crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
             crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
         } else if self.active_layer_id != prev_active_layer {
             let active_idx = self.active_layer_id.as_ref().and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));

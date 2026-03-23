@@ -386,7 +386,7 @@ pub fn push_state(
 /// Sync structural project data (layers, tracks) into UI panels.
 /// Call once at init and whenever the project structure changes.
 /// Triggers a full UI rebuild afterward.
-pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Option<usize>) {
+pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Option<usize>, selection: &SelectionState) {
     {
         // Rebuild CoordinateMapper Y-layout FIRST so layer headers and viewport share
         // the same Y offsets. Unity: LayerHeaderPanel reads from CoordinateMapper.
@@ -415,7 +415,7 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
                 midi_channel: layer.midi_channel,
                 y_offset: y,
                 height: track_h,
-                is_selected: active_layer == Some(i),
+                is_selected: selection.is_layer_active(&layer.layer_id),
                 color: manifold_ui::node::Color32::from_f32(
                     layer.layer_color.r, layer.layer_color.g,
                     layer.layer_color.b, layer.layer_color.a,
