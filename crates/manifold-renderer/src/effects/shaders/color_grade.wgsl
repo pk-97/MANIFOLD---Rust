@@ -101,5 +101,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // line 130: Final amount blend
     let result = mix(src.rgb, c, uniforms.amount);
-    return vec4<f32>(result, src.a);
+    // Clamp to non-negative: contrast pivot can produce negative values for dark
+    // pixels (e.g. (0 - 0.5) * 1.35 + 0.5 = −0.18). ACES tonemap maps negatives
+    // to bright gray (~0.65), causing white-flash on frames with sparse content.
+    return vec4<f32>(max(result, vec3<f32>(0.0)), src.a);
 }
