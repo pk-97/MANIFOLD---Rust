@@ -225,11 +225,13 @@ impl ContentPipeline {
                     .and_then(|gen_r| gen_r.get_clip_texture_view(&clip.id))
             });
             if let Some(view) = texture_view {
-                let layer = layers.get(clip.layer_index as usize);
+                let clip_li = project.and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
+                    .unwrap_or(0);
+                let layer = layers.get(clip_li);
                 clip_descs.push(CompositeClipDescriptor {
                     clip_id: &clip.id,
                     texture_view: view,
-                    layer_index: clip.layer_index,
+                    layer_index: clip_li as i32,
                     blend_mode: layer.map_or(BlendMode::Normal, |l| l.default_blend_mode),
                     opacity: layer.map_or(1.0, |l| l.opacity),
                     translate_x: clip.translate_x,

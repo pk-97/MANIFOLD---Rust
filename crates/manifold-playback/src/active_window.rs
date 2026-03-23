@@ -123,6 +123,14 @@ impl ActiveTimelineClipWindow {
     fn build_index(&mut self, project: &Project) {
         let layers = &project.timeline.layers;
 
+        // Build layer_id → index map for sort comparators
+        self.layer_id_to_index.clear();
+        for (i, layer) in layers.iter().enumerate() {
+            if !layer.layer_id.is_empty() {
+                self.layer_id_to_index.insert(layer.layer_id.clone(), i);
+            }
+        }
+
         // Store per-layer clip counts
         self.indexed_layer_clip_counts.clear();
         for layer in layers {
@@ -140,11 +148,12 @@ impl ActiveTimelineClipWindow {
             }
         }
 
-        self.clips_by_start.sort_by(compare_start_order);
+        let id_map = &self.layer_id_to_index;
+        self.clips_by_start.sort_by(|a, b| compare_start_order(a, b, id_map));
 
         self.clips_by_end.clear();
         self.clips_by_end.extend_from_slice(&self.clips_by_start);
-        self.clips_by_end.sort_by(compare_end_order);
+        self.clips_by_end.sort_by(|a, b| compare_end_order(a, b, id_map));
 
         self.active_by_id.clear();
         self.active_by_id_values.clear();
@@ -234,12 +243,12 @@ impl ActiveTimelineClipWindow {
             if clip.is_muted {
                 continue;
             }
-            let layer_index = clip.layer_index as usize;
-            // layer_index is i32 — guard against negative (corrupt data)
-            if clip.layer_index < 0 || layer_index >= self.visible_layers.len() {
-                continue;
-            }
-            if !self.visible_layers[layer_index] {
+            let layer_index = self.layer_id_to_index.get(&clip.layer_id).copied();
+            let li = match layer_index {
+                Some(idx) if idx < self.visible_layers.len() => idx,
+                _ => continue,
+            };
+            if !self.visible_layers[li] {
                 continue;
             }
             // Safety guard for timing edits while playback is running.
@@ -248,7 +257,8 @@ impl ActiveTimelineClipWindow {
             }
         }
 
-        self.visible_scratch.sort_by(compare_visible_order);
+        let id_map = &self.layer_id_to_index;
+        self.visible_scratch.sort_by(|a, b| compare_visible_order(a, b, id_map));
         results.extend_from_slice(&self.visible_scratch);
     }
 
@@ -349,7 +359,9 @@ fn lower_bound_end(sorted_by_end: &[TimelineClip], beat: f32) -> usize {
 
 /// Sort order: StartBeat → EndBeat → LayerIndex → Id.
 /// Unity ActiveTimelineClipWindow.CompareStartOrder (lines 352-365).
-fn compare_start_order(a: &TimelineClip, b: &TimelineClip) -> std::cmp::Ordering {
+fn compare_start_order(a: &TimelineClip, b: &TimelineClip, id_map: &AHashMap<LayerId, usize>) -> std::cmp::Ordering {
+    let ai = id_map.get(&a.layer_id).copied().unwrap_or(0);
+    let bi = id_map.get(&b.layer_id).copied().unwrap_or(0);
     a.start_beat
         .partial_cmp(&b.start_beat)
         .unwrap_or(std::cmp::Ordering::Equal)
@@ -358,13 +370,15 @@ fn compare_start_order(a: &TimelineClip, b: &TimelineClip) -> std::cmp::Ordering
                 .partial_cmp(&b.end_beat())
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .then_with(|| a.layer_index.cmp(&b.layer_index))
+        .then_with(|| ai.cmp(&bi))
         .then_with(|| a.id.as_str().cmp(b.id.as_str()))
 }
 
 /// Sort order: EndBeat → StartBeat → LayerIndex → Id.
 /// Unity ActiveTimelineClipWindow.CompareEndOrder (lines 367-380).
-fn compare_end_order(a: &TimelineClip, b: &TimelineClip) -> std::cmp::Ordering {
+fn compare_end_order(a: &TimelineClip, b: &TimelineClip, id_map: &AHashMap<LayerId, usize>) -> std::cmp::Ordering {
+    let ai = id_map.get(&a.layer_id).copied().unwrap_or(0);
+    let bi = id_map.get(&b.layer_id).copied().unwrap_or(0);
     a.end_beat()
         .partial_cmp(&b.end_beat())
         .unwrap_or(std::cmp::Ordering::Equal)
@@ -373,15 +387,16 @@ fn compare_end_order(a: &TimelineClip, b: &TimelineClip) -> std::cmp::Ordering {
                 .partial_cmp(&b.start_beat)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .then_with(|| a.layer_index.cmp(&b.layer_index))
+        .then_with(|| ai.cmp(&bi))
         .then_with(|| a.id.as_str().cmp(b.id.as_str()))
 }
 
 /// Sort order: LayerIndex → StartBeat → EndBeat → Id.
 /// Unity ActiveTimelineClipWindow.CompareVisibleOrder (lines 382-395).
-fn compare_visible_order(a: &TimelineClip, b: &TimelineClip) -> std::cmp::Ordering {
-    a.layer_index
-        .cmp(&b.layer_index)
+fn compare_visible_order(a: &TimelineClip, b: &TimelineClip, id_map: &AHashMap<LayerId, usize>) -> std::cmp::Ordering {
+    let ai = id_map.get(&a.layer_id).copied().unwrap_or(0);
+    let bi = id_map.get(&b.layer_id).copied().unwrap_or(0);
+    ai.cmp(&bi)
         .then_with(|| {
             a.start_beat
                 .partial_cmp(&b.start_beat)
@@ -405,10 +420,9 @@ mod tests {
 
     // ── Test helpers ─────────────────────────────────────────────────────────
 
-    fn make_clip(id: &str, layer_index: i32, start_beat: f32, duration_beats: f32) -> TimelineClip {
+    fn make_clip(id: &str, _layer_index: i32, start_beat: f32, duration_beats: f32) -> TimelineClip {
         TimelineClip {
             id: ClipId::new(id),
-            layer_index,
             start_beat,
             duration_beats,
             ..Default::default()
@@ -428,11 +442,11 @@ mod tests {
     fn make_project(layers: Vec<Layer>) -> Project {
         let mut project = Project::default();
         project.timeline.layers = layers;
-        // Sync layer indices and clip layer_index values
+        // Sync layer indices and clip layer_id values
         for (i, layer) in project.timeline.layers.iter_mut().enumerate() {
             layer.index = i as i32;
             for clip in &mut layer.clips {
-                clip.layer_index = i as i32;
+                clip.layer_id = layer.layer_id.clone();
             }
         }
         project

@@ -1484,9 +1484,11 @@ impl PercussionImportOrchestrator {
                 if (new_beat - old_beat).abs() < 0.0001 {
                     continue;
                 }
+                let clip_li = project.timeline.layer_index_for_id(&clip.layer_id)
+                    .unwrap_or(0) as i32;
                 commands.push(Box::new(MoveClipBeatCommand::new(
                     clip.id.clone(),
-                    clip.layer_index,
+                    clip_li,
                     old_beat,
                     new_beat,
                 )));
@@ -2626,7 +2628,7 @@ impl PercussionImportOrchestrator {
         )));
 
         let final_delta = delta;
-        for layer in &project.timeline.layers {
+        for (li, layer) in project.timeline.layers.iter().enumerate() {
             for clip in &layer.clips {
                 let old_beat = clip.start_beat;
                 let new_beat = (old_beat + final_delta).max(0.0);
@@ -2635,7 +2637,7 @@ impl PercussionImportOrchestrator {
                 }
                 commands.push(Box::new(MoveClipBeatCommand::new(
                     clip.id.clone(),
-                    clip.layer_index,
+                    li as i32,
                     old_beat,
                     new_beat,
                 )));

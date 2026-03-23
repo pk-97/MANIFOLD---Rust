@@ -88,12 +88,13 @@ impl MidiImportService {
         // Create clips
         let mut commands: Vec<Box<dyn Command>> = Vec::with_capacity(placements.len());
         let mut source_index: usize = 0;
+        let target_layer_lid = project.timeline.layers[target_layer_index].layer_id.clone();
 
         for note in &placements {
             let clip: TimelineClip = if use_generator {
                 TimelineClip::new_generator(
                     resolved_gen_type,
-                    target_layer_index as i32,
+                    target_layer_lid.clone(),
                     note.start_beat,
                     note.duration_beats,
                 )
@@ -104,7 +105,7 @@ impl MidiImportService {
 
                 TimelineClip::new_video(
                     video_clip_id,
-                    target_layer_index as i32,
+                    target_layer_lid.clone(),
                     note.start_beat,
                     note.duration_beats,
                     0.0,
@@ -112,7 +113,7 @@ impl MidiImportService {
             };
 
             project.timeline.layers[target_layer_index].add_clip(clip.clone());
-            commands.push(Box::new(AddClipCommand::new(clip, target_layer_index as i32)));
+            commands.push(Box::new(AddClipCommand::new(clip, target_layer_lid.clone())));
             result.added_clips += 1;
         }
 

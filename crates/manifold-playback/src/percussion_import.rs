@@ -119,11 +119,12 @@ impl PercussionImportService {
                 Some(l) => l,
                 None => continue,
             };
+            let layer_lid = layer.layer_id.clone();
             let existing_clips: Vec<TimelineClip> = layer.clips.clone();
             for existing in existing_clips {
                 commands.push(Box::new(DeleteClipCommand::new(
                     existing.clone(),
-                    layer_index,
+                    layer_lid.clone(),
                 )));
                 layer.remove_clip(&existing.id);
                 result.cleared_clips += 1;
@@ -148,6 +149,10 @@ impl PercussionImportService {
                         target_layer.name = trigger_layer_name.clone();
                     }
 
+            let target_layer_lid = project.timeline.layers.get(target_layer_index as usize)
+                .map(|l| l.layer_id.clone())
+                .unwrap_or_default();
+
             let timeline_clip: TimelineClip = if placement.is_generator() {
                 // Use the layer's current generator type — respects user customisation
                 // (e.g. user swapped Flash→Voronoi on the Kick layer).
@@ -166,7 +171,7 @@ impl PercussionImportService {
 
                 TimelineClip::new_generator(
                     effective_gen_type,
-                    target_layer_index,
+                    target_layer_lid.clone(),
                     placement.start_beat,
                     placement.duration_beats,
                 )
@@ -181,7 +186,7 @@ impl PercussionImportService {
 
                 TimelineClip::new_video(
                     video_clip_id,
-                    target_layer_index,
+                    target_layer_lid.clone(),
                     placement.start_beat,
                     placement.duration_beats,
                     0.0,
@@ -223,7 +228,7 @@ impl PercussionImportService {
             }
 
             let clip_id = timeline_clip.id.clone();
-            let add_cmd = AddClipCommand::new(timeline_clip.clone(), target_layer_index);
+            let add_cmd = AddClipCommand::new(timeline_clip.clone(), target_layer_lid.clone());
 
             if let Some(target_layer) = project.timeline.layers.get_mut(target_layer_index as usize) {
                 target_layer.add_clip(timeline_clip);

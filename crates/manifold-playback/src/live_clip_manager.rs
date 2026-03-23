@@ -449,9 +449,12 @@ impl LiveClipManager {
         );
 
         // Create phantom clip
+        let layer_id = project.timeline.layers.get(layer_index as usize)
+            .map(|l| l.layer_id.clone())
+            .unwrap_or_default();
         let mut clip = TimelineClip::new_video(
             video_clip_id,
-            layer_index,
+            layer_id,
             snap_beat,
             duration_beats,
             in_point,
@@ -527,8 +530,11 @@ impl LiveClipManager {
             project.settings.time_signature_numerator,
         );
 
+        let layer_id = project.timeline.layers.get(layer_index as usize)
+            .map(|l| l.layer_id.clone())
+            .unwrap_or_default();
         let mut clip = TimelineClip::new_generator(
-            generator_type, layer_index, snap_beat, duration_beats,
+            generator_type, layer_id, snap_beat, duration_beats,
         );
         clip.recorded_bpm = host.get_bpm_at_beat(snap_beat);
 
@@ -730,7 +736,10 @@ impl LiveClipManager {
                 committed.loop_duration_beats = original_duration;
             }
 
-            committed.layer_index = layer_index;
+            let layer_lid = project.timeline.layers.get(layer_index as usize)
+                .map(|l| l.layer_id.clone())
+                .unwrap_or_default();
+            committed.layer_id = layer_lid.clone();
 
             if let Some(layer) = project.timeline.layers.get_mut(layer_index as usize) {
                 layer.add_clip(committed.clone());
@@ -739,7 +748,7 @@ impl LiveClipManager {
 
             host.register_clip_lookup(&committed.id, &committed);
             committed_clip = Some(committed.clone());
-            host.record_command(Box::new(AddClipCommand::new(committed, layer_index)));
+            host.record_command(Box::new(AddClipCommand::new(committed, layer_lid)));
         }
 
         // Recording provenance finalization.
@@ -794,10 +803,12 @@ impl LiveClipManager {
             (start_beat * MIDI_CLOCK_TICKS_PER_BEAT as f32).round() as i32
         };
 
+        let clip_layer_idx = project.timeline.layer_index_for_id(&clip.layer_id)
+            .unwrap_or(0) as i32;
         self.clip_starts.insert(clip.id.clone(), RecordingClipStartInfo {
             clip_id: clip.id.clone(),
             video_clip_id: clip.video_clip_id.clone(),
-            layer_index: clip.layer_index,
+            layer_index: clip_layer_idx,
             midi_note,
             start_time_seconds: host.beat_to_timeline_time(start_beat),
             start_beat,
@@ -839,7 +850,8 @@ impl LiveClipManager {
         // Port of C# TempoRecorder.FinalizeClip lines 219-221.
         let saved_clip_id = recorded_clip.id.clone();
         let saved_video_id = recorded_clip.video_clip_id.clone();
-        let saved_layer = recorded_clip.layer_index;
+        let saved_layer = project.timeline.layer_index_for_id(&recorded_clip.layer_id)
+            .unwrap_or(0) as i32;
 
         let end_bpm = host.get_bpm_at_beat(end_beat);
         let end_source = host.get_tempo_source_at_beat(end_beat);

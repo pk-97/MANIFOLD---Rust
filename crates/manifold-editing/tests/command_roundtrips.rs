@@ -41,13 +41,11 @@ fn make_test_project() -> Project {
     let clip1 = TimelineClip {
         start_beat: 0.0,
         duration_beats: 4.0,
-        layer_index: 0,
         ..Default::default()
     };
     let clip2 = TimelineClip {
         start_beat: 4.0,
         duration_beats: 4.0,
-        layer_index: 0,
         ..Default::default()
     };
     project.timeline.layers[0].add_clip(clip1);
@@ -172,7 +170,8 @@ fn split_clip_undo_roundtrip() {
     tail.start_beat = 2.0;
     tail.duration_beats = 2.0;
 
-    let mut cmd = SplitClipCommand::new(clip_id.clone(), 0, 4.0, 2.0, tail);
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let mut cmd = SplitClipCommand::new(clip_id.clone(), layer_id, 4.0, 2.0, tail);
 
     cmd.execute(&mut project);
     assert_eq!(project.timeline.layers[0].clips.len(), initial_count + 1);

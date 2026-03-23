@@ -37,10 +37,11 @@ fn make_region(project: &Project, start_beat: f32, end_beat: f32, start_layer: u
 }
 
 fn add_clip(project: &mut Project, layer: usize, start: f32, dur: f32) -> ClipId {
+    let layer_id = project.timeline.layers[layer].layer_id.clone();
     let clip = TimelineClip {
         start_beat: start,
         duration_beats: dur,
-        layer_index: layer as i32,
+        layer_id,
         ..Default::default()
     };
     let id = clip.id.clone();
@@ -56,10 +57,11 @@ fn overlap_covers_both_deletes() {
     let mut project = make_project();
     let existing_id = add_clip(&mut project, 0, 2.0, 2.0); // [2..4]
 
+    let layer_id = project.timeline.layers[0].layer_id.clone();
     let placed = TimelineClip {
         start_beat: 1.0,
         duration_beats: 5.0, // [1..6] covers [2..4]
-        layer_index: 0,
+        layer_id: layer_id.clone(),
         ..Default::default()
     };
 
@@ -78,10 +80,11 @@ fn overlap_covers_start_trims() {
     let mut project = make_project();
     let existing_id = add_clip(&mut project, 0, 2.0, 4.0); // [2..6]
 
+    let layer_id = project.timeline.layers[0].layer_id.clone();
     let placed = TimelineClip {
         start_beat: 1.0,
         duration_beats: 3.0, // [1..4] covers start of [2..6]
-        layer_index: 0,
+        layer_id: layer_id.clone(),
         ..Default::default()
     };
 
@@ -102,10 +105,11 @@ fn overlap_covers_end_trims() {
     let mut project = make_project();
     let existing_id = add_clip(&mut project, 0, 2.0, 4.0); // [2..6]
 
+    let layer_id = project.timeline.layers[0].layer_id.clone();
     let placed = TimelineClip {
         start_beat: 4.0,
         duration_beats: 4.0, // [4..8] covers end of [2..6]
-        layer_index: 0,
+        layer_id: layer_id.clone(),
         ..Default::default()
     };
 
@@ -126,10 +130,11 @@ fn overlap_splits_middle() {
     let mut project = make_project();
     let existing_id = add_clip(&mut project, 0, 0.0, 8.0); // [0..8]
 
+    let layer_id = project.timeline.layers[0].layer_id.clone();
     let placed = TimelineClip {
         start_beat: 3.0,
         duration_beats: 2.0, // [3..5] in middle of [0..8]
-        layer_index: 0,
+        layer_id: layer_id.clone(),
         ..Default::default()
     };
 
@@ -201,10 +206,15 @@ fn paste_preserves_relative_offsets() {
     project.timeline.rebuild_clip_lookup();
 
     // Collect pasted clip beats
-    let mut pasted: Vec<(f32, i32)> = result.pasted_clip_ids.iter()
+    let mut pasted: Vec<(f32, usize)> = result.pasted_clip_ids.iter()
         .map(|id| {
-            let c = project.timeline.find_clip_by_id(id).unwrap();
-            (c.start_beat, c.layer_index)
+            // Two-step to avoid borrow conflict (find_clip_by_id takes &mut self)
+            let (beat, lid) = {
+                let c = project.timeline.find_clip_by_id(id).unwrap();
+                (c.start_beat, c.layer_id.clone())
+            };
+            let li = project.timeline.layer_index_for_id(&lid).unwrap_or(0);
+            (beat, li)
         })
         .collect();
     pasted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -431,8 +441,9 @@ fn move_clip_to_layer() {
     let mut service = EditingService::new();
     service.execute(cmd.unwrap(), &mut project);
 
+    let layer1_id = project.timeline.layers[1].layer_id.clone();
     let clip = project.timeline.find_clip_by_id(&id1).unwrap();
-    assert_eq!(clip.layer_index, 1);
+    assert_eq!(clip.layer_id, layer1_id);
 }
 
 // ─── Selection region ───

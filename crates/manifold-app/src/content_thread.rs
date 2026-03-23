@@ -316,7 +316,10 @@ impl ContentThread {
 
                 let active_clip_info: Vec<manifold_profiler::ActiveClipInfo> =
                     tick_result.ready_clips.iter().enumerate().map(|(i, clip)| {
-                        let gen_param_values = layers.get(clip.layer_index as usize)
+                        let clip_layer_idx = self.engine.project()
+                            .and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
+                            .unwrap_or(0);
+                        let gen_param_values = layers.get(clip_layer_idx)
                             .and_then(|l| l.gen_params.as_ref());
                         let gen_params = gen_param_values
                             .map(|gp| build_gen_params(clip.generator_type, &gp.param_values))
@@ -325,7 +328,7 @@ impl ContentThread {
                         manifold_profiler::ActiveClipInfo {
                             clip_id: clip.id.to_string(),
                             generator_type: clip.generator_type.to_string(),
-                            layer_index: clip.layer_index,
+                            layer_index: clip_layer_idx as i32,
                             anim_progress,
                             gen_params,
                         }

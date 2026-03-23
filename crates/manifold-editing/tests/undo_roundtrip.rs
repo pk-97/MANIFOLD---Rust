@@ -3,6 +3,7 @@ use manifold_editing::commands::clip::{MoveClipCommand, TrimClipCommand, MuteCli
 use manifold_editing::commands::settings::ChangeBpmCommand;
 use manifold_editing::undo::UndoRedoManager;
 use manifold_core::clip::TimelineClip;
+use manifold_core::LayerId;
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
     let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -25,7 +26,8 @@ fn move_clip_undo_restores_position() {
     let original_beat = project.timeline.layers[0].clips[0].start_beat;
 
     let new_beat = original_beat + 4.0;
-    let mut cmd = MoveClipCommand::new(clip_id.clone(), original_beat, new_beat, 0, 0);
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let mut cmd = MoveClipCommand::new(clip_id.clone(), original_beat, new_beat, layer_id.clone(), layer_id);
 
     // Execute
     cmd.execute(&mut project);
@@ -107,7 +109,8 @@ fn add_delete_clip_undo_roundtrip() {
     let new_clip_id = new_clip.id.clone();
 
     // Add
-    let mut add_cmd = AddClipCommand::new(new_clip, 0);
+    let layer_id_0 = project.timeline.layers[0].layer_id.clone();
+    let mut add_cmd = AddClipCommand::new(new_clip, layer_id_0.clone());
     add_cmd.execute(&mut project);
     assert_eq!(project.timeline.total_clip_count(), initial_count + 1);
 
@@ -121,7 +124,7 @@ fn add_delete_clip_undo_roundtrip() {
 
     // Delete the clip we added
     let clip_to_delete = project.timeline.layers[0].find_clip(&new_clip_id).unwrap().clone();
-    let mut del_cmd = DeleteClipCommand::new(clip_to_delete, 0);
+    let mut del_cmd = DeleteClipCommand::new(clip_to_delete, layer_id_0.clone());
     del_cmd.execute(&mut project);
     assert_eq!(project.timeline.total_clip_count(), initial_count);
 
@@ -145,7 +148,8 @@ fn undo_manager_multi_command_roundtrip() {
     undo_mgr.record(cmd1);
 
     // Command 2: move clip
-    let mut cmd2 = Box::new(MoveClipCommand::new(clip_id.clone(), original_beat, original_beat + 8.0, 0, 0));
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let mut cmd2 = Box::new(MoveClipCommand::new(clip_id.clone(), original_beat, original_beat + 8.0, layer_id.clone(), layer_id));
     cmd2.execute(&mut project);
     undo_mgr.record(cmd2);
 

@@ -677,7 +677,8 @@ impl PlaybackEngine {
     pub fn start_clip(&mut self, clip: &TimelineClip, realtime_now: f64) {
         // Fix 6: Never start clips on group layers
         if let Some(project) = &self.project
-            && let Some(layer) = project.timeline.layers.get(clip.layer_index as usize)
+            && let Some(li) = project.timeline.layer_index_for_id(&clip.layer_id)
+                && let Some(layer) = project.timeline.layers.get(li)
                 && layer.layer_type == LayerType::Group {
                     return;
                 }
@@ -1621,7 +1622,14 @@ impl PlaybackEngine {
         }
 
         // Sort by layer index descending (back to front for compositing)
-        self.ready_clips_list.sort_by(|a, b| b.layer_index.cmp(&a.layer_index));
+        // Resolve layer_id → positional index via the project's cached map.
+        let id_to_idx = self.project.as_ref()
+            .map(|p| &p.timeline.layer_id_to_index);
+        self.ready_clips_list.sort_by(|a, b| {
+            let ai = id_to_idx.and_then(|m| m.get(&a.layer_id).copied()).unwrap_or(0);
+            let bi = id_to_idx.and_then(|m| m.get(&b.layer_id).copied()).unwrap_or(0);
+            bi.cmp(&ai)
+        });
 
         // Clear expired recently-started entries that passed the gate
         let last_rt = self.last_realtime_now;

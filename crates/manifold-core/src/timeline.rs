@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use ahash::AHashMap;
-use crate::id::ClipId;
+use crate::id::{ClipId, LayerId};
 use crate::clip::TimelineClip;
 use crate::layer::Layer;
 
@@ -24,9 +24,23 @@ pub struct Timeline {
     clip_lookup: AHashMap<ClipId, (usize, usize)>,
     #[serde(skip)]
     clip_lookup_dirty: bool,
+
+    /// Runtime layer_id → position index map. Rebuilt in reindex_layers().
+    #[serde(skip)]
+    pub layer_id_to_index: AHashMap<LayerId, usize>,
 }
 
 impl Timeline {
+    /// Resolve a LayerId to its current positional index.
+    pub fn layer_index_for_id(&self, id: &LayerId) -> Option<usize> {
+        // Fast path: use cached map if populated
+        if let Some(&idx) = self.layer_id_to_index.get(id) {
+            return Some(idx);
+        }
+        // Fallback: linear scan (before first reindex_layers call)
+        self.layers.iter().position(|l| l.layer_id == *id)
+    }
+
     /// Rebuild the O(1) clip lookup cache.
     pub fn rebuild_clip_lookup(&mut self) {
         self.clip_lookup.clear();
@@ -176,10 +190,12 @@ impl Timeline {
 
     /// Reindex all layers and their clips after structural changes.
     fn reindex_layers(&mut self) {
+        self.layer_id_to_index.clear();
         for (i, layer) in self.layers.iter_mut().enumerate() {
             layer.index = i as i32;
+            self.layer_id_to_index.insert(layer.layer_id.clone(), i);
             for clip in &mut layer.clips {
-                clip.layer_index = i as i32;
+                clip.layer_id = layer.layer_id.clone();
             }
         }
         self.mark_clip_lookup_dirty();

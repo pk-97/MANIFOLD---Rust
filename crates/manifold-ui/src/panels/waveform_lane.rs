@@ -7,7 +7,7 @@
 //! Unity: `ImportedAudioWaveformLane` + `ImportedAudioWaveformScrubHandler`
 //!        + `ImportedAudioWaveformDragHandler`.
 
-use manifold_core::ClipId;
+use manifold_core::{ClipId, LayerId};
 
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
@@ -53,9 +53,9 @@ pub struct WaveformLanePanel {
     total_snapped_delta: f32,
     /// Pre-drag audio_start_beat — captured on first DragDelta for undo.
     drag_start_beat: Option<f32>,
-    /// Snapshot of ALL clips before drag: (clip_id, original start_beat, layer_index).
+    /// Snapshot of ALL clips before drag: (clip_id, original start_beat, layer_id).
     /// Unity: `waveformDragClipSnapshots` (EditingService.cs line 1367).
-    pub waveform_drag_clip_snapshots: Vec<(ClipId, f32, i32)>,
+    pub waveform_drag_clip_snapshots: Vec<(ClipId, f32, LayerId)>,
 
     // ── Scrub handler state (ImportedAudioWaveformScrubHandler.cs) ──
     is_scrubbing: bool,

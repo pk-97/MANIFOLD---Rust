@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::id::ClipId;
+use crate::id::{ClipId, LayerId};
 use crate::types::GeneratorType;
 use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope};
 
@@ -10,8 +10,9 @@ pub struct TimelineClip {
     pub id: ClipId,
     #[serde(default)]
     pub video_clip_id: String,
+    /// Stable layer identity — survives reorder, add, remove, undo/redo.
     #[serde(default)]
-    pub layer_index: i32,
+    pub layer_id: LayerId,
 
     // ── Beat-primary timing (source of truth) ──
     #[serde(default)]
@@ -94,7 +95,7 @@ impl TimelineClip {
     }
 
     pub fn overlaps_with(&self, other: &TimelineClip) -> bool {
-        if other.layer_index != self.layer_index {
+        if other.layer_id != self.layer_id {
             return false;
         }
         self.start_beat < other.end_beat() && self.end_beat() > other.start_beat
@@ -177,14 +178,14 @@ impl TimelineClip {
     /// Create a new video clip.
     pub fn new_video(
         video_clip_id: String,
-        layer_index: i32,
+        layer_id: LayerId,
         start_beat: f32,
         duration_beats: f32,
         in_point: f32,
     ) -> Self {
         Self {
             video_clip_id,
-            layer_index,
+            layer_id,
             start_beat,
             duration_beats: duration_beats.max(0.0),
             in_point: in_point.max(0.0),
@@ -195,13 +196,13 @@ impl TimelineClip {
     /// Create a new generator clip.
     pub fn new_generator(
         gen_type: GeneratorType,
-        layer_index: i32,
+        layer_id: LayerId,
         start_beat: f32,
         duration_beats: f32,
     ) -> Self {
         Self {
             generator_type: gen_type,
-            layer_index,
+            layer_id,
             start_beat,
             duration_beats: duration_beats.max(0.0),
             ..Default::default()
@@ -283,7 +284,7 @@ impl Default for TimelineClip {
         Self {
             id: ClipId::new(crate::short_id()),
             video_clip_id: String::new(),
-            layer_index: 0,
+            layer_id: LayerId::default(),
             start_beat: 0.0,
             duration_beats: 1.0,
             in_point: 0.0,
@@ -406,14 +407,14 @@ mod tests {
 
     #[test]
     fn test_new_video_clamps_duration() {
-        let clip = TimelineClip::new_video("v1".into(), 0, 0.0, -3.0, -1.0);
+        let clip = TimelineClip::new_video("v1".into(), LayerId::default(), 0.0, -3.0, -1.0);
         assert_eq!(clip.duration_beats, 0.0);
         assert_eq!(clip.in_point, 0.0);
     }
 
     #[test]
     fn test_new_generator_clamps_duration() {
-        let clip = TimelineClip::new_generator(GeneratorType::None, 0, 0.0, -2.0);
+        let clip = TimelineClip::new_generator(GeneratorType::None, LayerId::default(), 0.0, -2.0);
         assert_eq!(clip.duration_beats, 0.0);
     }
 }

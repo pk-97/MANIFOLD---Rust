@@ -197,7 +197,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             let mut found: Option<(TimelineClip, usize)> = None;
             for layer in &project.timeline.layers {
                 if let Some(clip) = layer.clips.iter().find(|c| c.id == clip_id) {
-                    found = Some((clip.clone(), clip.layer_index as usize));
+                    let li = project.timeline.layer_index_for_id(&clip.layer_id).unwrap_or(0);
+                    found = Some((clip.clone(), li));
                     break;
                 }
             }
@@ -256,7 +257,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
                 // Move clip between layers
                 let mut clip = project.timeline.layers[src_layer].clips.remove(clip_idx);
-                clip.layer_index = target_layer as i32;
+                clip.layer_id = project.timeline.layers[target_layer].layer_id.clone();
 
                 // Gen→gen with different type: adopt target layer's generator type
                 if target_is_gen && clip.generator_type != project.timeline.layers[target_layer].generator_type() {
@@ -353,7 +354,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 let mut found: Option<(TimelineClip, usize)> = None;
                 for layer in &project.timeline.layers {
                     if let Some(clip) = layer.clips.iter().find(|c| c.id == clip_id) {
-                        found = Some((clip.clone(), clip.layer_index as usize));
+                        let li = project.timeline.layer_index_for_id(&clip.layer_id).unwrap_or(0);
+                        found = Some((clip.clone(), li));
                         break;
                     }
                 }
@@ -437,10 +439,16 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         old_start: f32, new_start: f32,
         old_layer: usize, new_layer: usize,
     ) {
+        let old_layer_id = self.project.timeline.layers.get(old_layer)
+            .map(|l| l.layer_id.clone())
+            .unwrap_or_default();
+        let new_layer_id = self.project.timeline.layers.get(new_layer)
+            .map(|l| l.layer_id.clone())
+            .unwrap_or_default();
         let cmd = manifold_editing::commands::clip::MoveClipCommand::new(
             ClipId::new(clip_id),
             old_start, new_start,
-            old_layer as i32, new_layer as i32,
+            old_layer_id, new_layer_id,
         );
         self.command_batch.push(Box::new(cmd));
     }

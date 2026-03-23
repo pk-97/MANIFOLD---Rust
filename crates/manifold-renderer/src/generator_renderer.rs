@@ -305,10 +305,10 @@ impl ClipRenderer for GeneratorRenderer {
     }
 
     fn start_clip(&mut self, clip: &TimelineClip, _current_time: f32, layers: &[Layer]) -> bool {
-        let layer_id = layers.get(clip.layer_index as usize)
-            .map(|l| l.layer_id.clone())
-            .unwrap_or_default();
-        self.acquire_clip(&clip.id, clip.generator_type, layer_id, clip.layer_index)
+        let layer_id = clip.layer_id.clone();
+        let layer_index = layers.iter().position(|l| l.layer_id == layer_id)
+            .map_or(0, |i| i as i32);
+        self.acquire_clip(&clip.id, clip.generator_type, layer_id, layer_index)
     }
 
     fn stop_clip(&mut self, clip_id: &str) {

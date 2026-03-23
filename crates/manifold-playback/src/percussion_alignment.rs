@@ -315,9 +315,9 @@ impl PercussionAlignmentService {
             };
 
             let clip_data = project.timeline.find_clip_by_id(&placement.clip_id).map(|c| {
-                (c.start_beat, c.layer_index)
+                (c.start_beat, c.layer_id.clone())
             });
-            let (old_beat, layer_index) = match clip_data {
+            let (old_beat, layer_id) = match clip_data {
                 Some(d) => d,
                 None => {
                     result.missing += 1;
@@ -335,8 +335,8 @@ impl PercussionAlignmentService {
                 ClipId::new(placement.clip_id.clone()),
                 old_beat,
                 projected_beat,
-                layer_index,
-                layer_index,
+                layer_id.clone(),
+                layer_id,
             )));
             result.moved += 1;
         }
@@ -614,8 +614,8 @@ fn build_reprojection_move_commands_inner(
         let clip_data = project
             .timeline
             .find_clip_by_id(&placement.clip_id)
-            .map(|c| (c.start_beat, c.layer_index));
-        let (old_beat, layer_index) = match clip_data {
+            .map(|c| (c.start_beat, c.layer_id.clone()));
+        let (old_beat, layer_id) = match clip_data {
             Some(d) => d,
             None => {
                 missing += 1;
@@ -631,8 +631,8 @@ fn build_reprojection_move_commands_inner(
             ClipId::new(placement.clip_id.clone()),
             old_beat,
             projected_beat,
-            layer_index,
-            layer_index,
+            layer_id.clone(),
+            layer_id,
         )));
         moved += 1;
     }

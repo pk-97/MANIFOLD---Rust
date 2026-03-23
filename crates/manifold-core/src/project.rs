@@ -75,11 +75,11 @@ impl Project {
         // Align all effect params to current definitions
         self.align_all_effect_params();
 
-        // Sync layer indices
+        // Sync layer indices + layer_ids on clips
         for (i, layer) in self.timeline.layers.iter_mut().enumerate() {
             layer.index = i as i32;
             for clip in &mut layer.clips {
-                clip.layer_index = i as i32;
+                clip.layer_id = layer.layer_id.clone();
             }
         }
     }

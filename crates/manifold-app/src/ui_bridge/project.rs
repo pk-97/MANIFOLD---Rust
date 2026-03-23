@@ -202,7 +202,7 @@ pub(super) fn dispatch_project(
                         ui.waveform_lane.waveform_drag_clip_snapshots.push((
                             clip.id.clone(),
                             clip.start_beat,
-                            clip.layer_index,
+                            clip.layer_id.clone(),
                         ));
                     }
                 }
@@ -273,7 +273,7 @@ pub(super) fn dispatch_project(
                 // Clip move commands (Unity lines 1440-1454)
                 let snapshots =
                     std::mem::take(&mut ui.waveform_lane.waveform_drag_clip_snapshots);
-                for (clip_id, old_beat, layer_idx) in &snapshots {
+                for (clip_id, old_beat, layer_id) in &snapshots {
                     let new_beat = project.timeline.find_clip_by_id(clip_id)
                         .map(|c| c.start_beat);
                     if let Some(new_beat) = new_beat
@@ -284,8 +284,8 @@ pub(super) fn dispatch_project(
                                 clip_id.clone(),
                                 *old_beat,
                                 new_beat,
-                                *layer_idx,
-                                *layer_idx,
+                                layer_id.clone(),
+                                layer_id.clone(),
                             ),
                         ));
                     }

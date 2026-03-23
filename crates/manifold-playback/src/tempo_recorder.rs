@@ -287,7 +287,7 @@ impl TempoRecorder {
             Some(clip) => (
                 clip.id.clone(),
                 clip.video_clip_id.clone(),
-                clip.layer_index,
+                start.layer_index, // layer_index captured at NoteOn time
             ),
             None => (
                 start.clip_id.clone(),

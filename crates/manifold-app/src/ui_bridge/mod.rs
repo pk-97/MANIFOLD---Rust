@@ -250,13 +250,14 @@ fn update_region_from_clip_selection(selection: &mut SelectionState, project: &P
         let mut max_layer = i32::MIN;
         let mut found = false;
 
-        for layer in &project.timeline.layers {
+        for (li, layer) in project.timeline.layers.iter().enumerate() {
+            let li = li as i32;
             for clip in &layer.clips {
                 if selection.selected_clip_ids.contains(&clip.id) {
                     min_beat = min_beat.min(clip.start_beat);
                     max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
-                    min_layer = min_layer.min(clip.layer_index);
-                    max_layer = max_layer.max(clip.layer_index);
+                    min_layer = min_layer.min(li);
+                    max_layer = max_layer.max(li);
                     found = true;
                 }
             }
@@ -280,13 +281,14 @@ pub fn update_region_from_clip_selection_inline(selection: &mut SelectionState, 
     let mut max_layer = i32::MIN;
     let mut found = false;
 
-    for layer in &project.timeline.layers {
+    for (li, layer) in project.timeline.layers.iter().enumerate() {
+        let li = li as i32;
         for clip in &layer.clips {
             if selection.selected_clip_ids.contains(&clip.id) {
                 min_beat = min_beat.min(clip.start_beat);
                 max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
-                min_layer = min_layer.min(clip.layer_index);
-                max_layer = max_layer.max(clip.layer_index);
+                min_layer = min_layer.min(li);
+                max_layer = max_layer.max(li);
                 found = true;
             }
         }
@@ -322,10 +324,10 @@ pub(crate) fn select_region_to_with_project(
             .unwrap_or(0);
         Some((r.start_beat, start_idx))
     } else if let Some(ref clip_id) = selection.primary_selected_clip_id.clone() {
-        project.timeline.layers.iter()
-            .find_map(|l| l.clips.iter()
+        project.timeline.layers.iter().enumerate()
+            .find_map(|(li, l)| l.clips.iter()
                 .find(|c| c.id == *clip_id)
-                .map(|c| (c.start_beat, c.layer_index as usize)))
+                .map(|_c| (_c.start_beat, li)))
     } else {
         None
     };

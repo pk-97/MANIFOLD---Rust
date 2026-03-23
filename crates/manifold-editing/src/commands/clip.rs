@@ -1,5 +1,5 @@
 use crate::command::Command;
-use manifold_core::ClipId;
+use manifold_core::{ClipId, LayerId};
 use manifold_core::project::Project;
 use manifold_core::clip::TimelineClip;
 use manifold_core::types::{GeneratorType, LayerType};
@@ -12,8 +12,8 @@ pub struct MoveClipCommand {
     clip_id: ClipId,
     old_start_beat: f32,
     new_start_beat: f32,
-    old_layer_index: i32,
-    new_layer_index: i32,
+    old_layer_id: LayerId,
+    new_layer_id: LayerId,
     /// Captured at construction time from the clip's current generator_type.
     /// Port of C# MoveClipCommand line 32: captures in constructor.
     old_generator_type: GeneratorType,
@@ -22,52 +22,57 @@ pub struct MoveClipCommand {
 impl MoveClipCommand {
     /// Create a MoveClipCommand. `old_generator_type` captures the clip's generator type
     /// at the time the command is created (matching Unity constructor behavior).
-    pub fn new_with_gen_type(clip_id: ClipId, old_start_beat: f32, new_start_beat: f32, old_layer_index: i32, new_layer_index: i32, old_generator_type: GeneratorType) -> Self {
-        Self { clip_id, old_start_beat, new_start_beat, old_layer_index, new_layer_index, old_generator_type }
+    pub fn new_with_gen_type(clip_id: ClipId, old_start_beat: f32, new_start_beat: f32, old_layer_id: LayerId, new_layer_id: LayerId, old_generator_type: GeneratorType) -> Self {
+        Self { clip_id, old_start_beat, new_start_beat, old_layer_id, new_layer_id, old_generator_type }
     }
 
     /// Convenience constructor that defaults generator type to None.
     /// For callers that know the clip isn't a generator or will look it up themselves.
-    pub fn new(clip_id: ClipId, old_start_beat: f32, new_start_beat: f32, old_layer_index: i32, new_layer_index: i32) -> Self {
-        Self { clip_id, old_start_beat, new_start_beat, old_layer_index, new_layer_index, old_generator_type: GeneratorType::None }
+    pub fn new(clip_id: ClipId, old_start_beat: f32, new_start_beat: f32, old_layer_id: LayerId, new_layer_id: LayerId) -> Self {
+        Self { clip_id, old_start_beat, new_start_beat, old_layer_id, new_layer_id, old_generator_type: GeneratorType::None }
     }
 }
 
 impl Command for MoveClipCommand {
     fn execute(&mut self, project: &mut Project) {
-        if self.old_layer_index != self.new_layer_index {
-            let src = self.old_layer_index as usize;
-            let dst = self.new_layer_index as usize;
+        if self.old_layer_id != self.new_layer_id {
+            let src = project.timeline.layer_index_for_id(&self.old_layer_id);
+            let dst = project.timeline.layer_index_for_id(&self.new_layer_id);
 
             // Remove clip from source layer.
-            let mut clip = if let Some(layer) = project.timeline.layers.get_mut(src) {
-                layer.remove_clip(&self.clip_id)
-            } else {
-                None
-            };
+            let mut clip = if let Some(src_idx) = src
+                && let Some(layer) = project.timeline.layers.get_mut(src_idx) {
+                    layer.remove_clip(&self.clip_id)
+                } else {
+                    None
+                };
 
             if let Some(ref mut c) = clip {
-                c.layer_index = self.new_layer_index;
+                c.layer_id = self.new_layer_id.clone();
 
                 // Generator-type adoption: when target is a generator layer, adopt its type.
-                if let Some(target) = project.timeline.layers.get(dst)
+                if let Some(dst_idx) = dst
+                    && let Some(target) = project.timeline.layers.get(dst_idx)
                     && target.layer_type == LayerType::Generator {
                         c.generator_type = target.generator_type();
                     }
             }
 
             // Add clip to target layer.
-            if let (Some(c), Some(layer)) = (clip, project.timeline.layers.get_mut(dst)) {
-                layer.add_clip(c);
-            }
+            if let Some(c) = clip
+                && let Some(dst_idx) = dst
+                && let Some(layer) = project.timeline.layers.get_mut(dst_idx) {
+                    layer.add_clip(c);
+                }
         } else {
             // Same-layer move: just update start_beat.
             if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
                 clip.start_beat = self.new_start_beat;
             }
-            if let Some(layer) = project.timeline.layers.get_mut(self.new_layer_index as usize) {
-                layer.mark_clips_unsorted();
-            }
+            if let Some(dst_idx) = project.timeline.layer_index_for_id(&self.new_layer_id)
+                && let Some(layer) = project.timeline.layers.get_mut(dst_idx) {
+                    layer.mark_clips_unsorted();
+                }
             project.timeline.mark_clip_lookup_dirty();
             return;
         }
@@ -77,32 +82,36 @@ impl Command for MoveClipCommand {
             clip.start_beat = self.new_start_beat;
         }
 
-        if let Some(layer) = project.timeline.layers.get_mut(self.new_layer_index as usize) {
-            layer.mark_clips_unsorted();
-        }
+        if let Some(dst_idx) = project.timeline.layer_index_for_id(&self.new_layer_id)
+            && let Some(layer) = project.timeline.layers.get_mut(dst_idx) {
+                layer.mark_clips_unsorted();
+            }
         project.timeline.mark_clip_lookup_dirty();
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if self.old_layer_index != self.new_layer_index {
-            let src = self.new_layer_index as usize;
-            let dst = self.old_layer_index as usize;
+        if self.old_layer_id != self.new_layer_id {
+            let src = project.timeline.layer_index_for_id(&self.new_layer_id);
+            let dst = project.timeline.layer_index_for_id(&self.old_layer_id);
 
             // Remove clip from current (new) layer.
-            let mut clip = if let Some(layer) = project.timeline.layers.get_mut(src) {
-                layer.remove_clip(&self.clip_id)
-            } else {
-                None
-            };
+            let mut clip = if let Some(src_idx) = src
+                && let Some(layer) = project.timeline.layers.get_mut(src_idx) {
+                    layer.remove_clip(&self.clip_id)
+                } else {
+                    None
+                };
 
             if let Some(ref mut c) = clip {
-                c.layer_index = self.old_layer_index;
+                c.layer_id = self.old_layer_id.clone();
             }
 
             // Add clip back to original layer.
-            if let (Some(c), Some(layer)) = (clip, project.timeline.layers.get_mut(dst)) {
-                layer.add_clip(c);
-            }
+            if let Some(c) = clip
+                && let Some(dst_idx) = dst
+                && let Some(layer) = project.timeline.layers.get_mut(dst_idx) {
+                    layer.add_clip(c);
+                }
         }
 
         // Restore generator type and start beat.
@@ -111,9 +120,10 @@ impl Command for MoveClipCommand {
             clip.start_beat = self.old_start_beat;
         }
 
-        if let Some(layer) = project.timeline.layers.get_mut(self.old_layer_index as usize) {
-            layer.mark_clips_unsorted();
-        }
+        if let Some(dst_idx) = project.timeline.layer_index_for_id(&self.old_layer_id)
+            && let Some(layer) = project.timeline.layers.get_mut(dst_idx) {
+                layer.mark_clips_unsorted();
+            }
         project.timeline.mark_clip_lookup_dirty();
     }
 
@@ -125,7 +135,7 @@ impl Command for MoveClipCommand {
 #[derive(Debug)]
 pub struct TrimClipCommand {
     clip_id: ClipId,
-    layer_index: Option<i32>,
+    layer_id: Option<LayerId>,
     old_start_beat: f32,
     new_start_beat: f32,
     old_duration_beats: f32,
@@ -141,16 +151,16 @@ impl TrimClipCommand {
         old_duration_beats: f32, new_duration_beats: f32,
         old_in_point: f32, new_in_point: f32,
     ) -> Self {
-        Self { clip_id, layer_index: None, old_start_beat, new_start_beat, old_duration_beats, new_duration_beats, old_in_point, new_in_point }
+        Self { clip_id, layer_id: None, old_start_beat, new_start_beat, old_duration_beats, new_duration_beats, old_in_point, new_in_point }
     }
 }
 
 impl Command for TrimClipCommand {
     fn execute(&mut self, project: &mut Project) {
-        // Capture layer_index on first execute for mark_clips_unsorted.
-        if self.layer_index.is_none() {
-            self.layer_index = project.timeline.find_clip_by_id(&self.clip_id)
-                .map(|c| c.layer_index);
+        // Capture layer_id on first execute for mark_clips_unsorted.
+        if self.layer_id.is_none() {
+            self.layer_id = project.timeline.find_clip_by_id(&self.clip_id)
+                .map(|c| c.layer_id.clone());
         }
 
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
@@ -160,8 +170,9 @@ impl Command for TrimClipCommand {
         }
 
         if (self.old_start_beat - self.new_start_beat).abs() > f32::EPSILON
-            && let Some(li) = self.layer_index
-                && let Some(layer) = project.timeline.layers.get_mut(li as usize) {
+            && let Some(ref lid) = self.layer_id
+                && let Some(li) = project.timeline.layer_index_for_id(lid)
+                && let Some(layer) = project.timeline.layers.get_mut(li) {
                     layer.mark_clips_unsorted();
                 }
     }
@@ -174,8 +185,9 @@ impl Command for TrimClipCommand {
         }
 
         if (self.old_start_beat - self.new_start_beat).abs() > f32::EPSILON
-            && let Some(li) = self.layer_index
-                && let Some(layer) = project.timeline.layers.get_mut(li as usize) {
+            && let Some(ref lid) = self.layer_id
+                && let Some(li) = project.timeline.layer_index_for_id(lid)
+                && let Some(layer) = project.timeline.layers.get_mut(li) {
                     layer.mark_clips_unsorted();
                 }
     }
@@ -187,29 +199,31 @@ impl Command for TrimClipCommand {
 #[derive(Debug)]
 pub struct DeleteClipCommand {
     clip: Option<TimelineClip>,
-    layer_index: i32,
+    layer_id: LayerId,
 }
 
 impl DeleteClipCommand {
-    pub fn new(clip: TimelineClip, layer_index: i32) -> Self {
-        Self { clip: Some(clip), layer_index }
+    pub fn new(clip: TimelineClip, layer_id: LayerId) -> Self {
+        Self { clip: Some(clip), layer_id }
     }
 }
 
 impl Command for DeleteClipCommand {
     fn execute(&mut self, project: &mut Project) {
         let clip_id = self.clip.as_ref().unwrap().id.clone();
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index as usize) {
-            layer.remove_clip(&clip_id);
-        }
+        if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
+            && let Some(layer) = project.timeline.layers.get_mut(li) {
+                layer.remove_clip(&clip_id);
+            }
         project.timeline.mark_clip_lookup_dirty();
     }
 
     fn undo(&mut self, project: &mut Project) {
         if let Some(clip) = self.clip.clone() {
-            if let Some(layer) = project.timeline.layers.get_mut(self.layer_index as usize) {
-                layer.add_clip(clip);
-            }
+            if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
+                && let Some(layer) = project.timeline.layers.get_mut(li) {
+                    layer.add_clip(clip);
+                }
             project.timeline.mark_clip_lookup_dirty();
         }
     }
@@ -221,27 +235,29 @@ impl Command for DeleteClipCommand {
 #[derive(Debug)]
 pub struct AddClipCommand {
     clip: TimelineClip,
-    layer_index: i32,
+    layer_id: LayerId,
 }
 
 impl AddClipCommand {
-    pub fn new(clip: TimelineClip, layer_index: i32) -> Self {
-        Self { clip, layer_index }
+    pub fn new(clip: TimelineClip, layer_id: LayerId) -> Self {
+        Self { clip, layer_id }
     }
 }
 
 impl Command for AddClipCommand {
     fn execute(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index as usize) {
-            layer.add_clip(self.clip.clone());
-        }
+        if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
+            && let Some(layer) = project.timeline.layers.get_mut(li) {
+                layer.add_clip(self.clip.clone());
+            }
         project.timeline.mark_clip_lookup_dirty();
     }
 
     fn undo(&mut self, project: &mut Project) {
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index as usize) {
-            layer.remove_clip(&self.clip.id);
-        }
+        if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
+            && let Some(layer) = project.timeline.layers.get_mut(li) {
+                layer.remove_clip(&self.clip.id);
+            }
         project.timeline.mark_clip_lookup_dirty();
     }
 
@@ -440,7 +456,7 @@ impl Command for ChangeClipRecordedBpmCommand {
 #[derive(Debug)]
 pub struct SplitClipCommand {
     clip_id: ClipId,
-    layer_index: i32,
+    layer_id: LayerId,
     old_duration_beats: f32,
     new_duration_beats: f32,
     tail_clip: TimelineClip,
@@ -449,12 +465,12 @@ pub struct SplitClipCommand {
 impl SplitClipCommand {
     pub fn new(
         clip_id: ClipId,
-        layer_index: i32,
+        layer_id: LayerId,
         old_duration_beats: f32,
         new_duration_beats: f32,
         tail_clip: TimelineClip,
     ) -> Self {
-        Self { clip_id, layer_index, old_duration_beats, new_duration_beats, tail_clip }
+        Self { clip_id, layer_id, old_duration_beats, new_duration_beats, tail_clip }
     }
 }
 
@@ -465,17 +481,19 @@ impl Command for SplitClipCommand {
             clip.duration_beats = self.new_duration_beats;
         }
         // Add tail
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index as usize) {
-            layer.add_clip(self.tail_clip.clone());
-        }
+        if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
+            && let Some(layer) = project.timeline.layers.get_mut(li) {
+                layer.add_clip(self.tail_clip.clone());
+            }
         project.timeline.mark_clip_lookup_dirty();
     }
 
     fn undo(&mut self, project: &mut Project) {
         // Remove tail
-        if let Some(layer) = project.timeline.layers.get_mut(self.layer_index as usize) {
-            layer.remove_clip(&self.tail_clip.id);
-        }
+        if let Some(li) = project.timeline.layer_index_for_id(&self.layer_id)
+            && let Some(layer) = project.timeline.layers.get_mut(li) {
+                layer.remove_clip(&self.tail_clip.id);
+            }
         // Restore original duration
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
             clip.duration_beats = self.old_duration_beats;

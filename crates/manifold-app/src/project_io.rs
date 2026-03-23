@@ -422,9 +422,12 @@ impl ProjectIOService {
             );
 
             // Create timeline clip (Unity lines 301-307)
+            let drop_layer_id = project.timeline.layers.get(drop_layer_index as usize)
+                .map(|l| l.layer_id.clone())
+                .unwrap_or_default();
             let timeline_clip = TimelineClip {
                 video_clip_id: video_clip_id.clone(),
-                layer_index: drop_layer_index,
+                layer_id: drop_layer_id.clone(),
                 start_beat: placement_beat,
                 duration_beats,
                 in_point: 0.0,
@@ -436,7 +439,7 @@ impl ProjectIOService {
             let layer_idx = drop_layer_index as usize;
             if layer_idx < project.timeline.layers.len() {
                 project.timeline.layers[layer_idx].clips.push(timeline_clip.clone());
-                drop_commands.push(Box::new(AddClipCommand::new(timeline_clip, drop_layer_index)));
+                drop_commands.push(Box::new(AddClipCommand::new(timeline_clip, drop_layer_id)));
             }
 
             placement_beat += duration_beats;
