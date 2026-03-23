@@ -6,8 +6,6 @@ use crate::LayerId;
 pub struct SelectionRegion {
     pub start_beat: f32,
     pub end_beat: f32,
-    pub start_layer_index: i32,
-    pub end_layer_index: i32,
     pub is_active: bool,
 
     // ── LayerId-based fields (stable identity) ──
@@ -17,21 +15,7 @@ pub struct SelectionRegion {
 }
 
 impl SelectionRegion {
-    #[allow(dead_code)]
-    pub fn new(start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32) -> Self {
-        Self {
-            start_beat,
-            end_beat,
-            start_layer_index: start_layer,
-            end_layer_index: end_layer,
-            is_active: true,
-            start_layer_id: None,
-            end_layer_id: None,
-            selected_layer_ids: HashSet::new(),
-        }
-    }
-
-    /// Create a region with stable LayerIds. Computes index caches from the layer array.
+    /// Create a region with stable LayerIds. Computes `selected_layer_ids` from the layer array.
     pub fn new_with_ids(
         start_beat: f32,
         end_beat: f32,
@@ -40,12 +24,12 @@ impl SelectionRegion {
         layers: &[crate::layer::Layer],
     ) -> Self {
         let start_idx = layers.iter().position(|l| l.layer_id == start_layer_id)
-            .map(|i| i as i32).unwrap_or(0);
+            .unwrap_or(0);
         let end_idx = layers.iter().position(|l| l.layer_id == end_layer_id)
-            .map(|i| i as i32).unwrap_or(0);
+            .unwrap_or(0);
 
-        let lo = start_idx.min(end_idx) as usize;
-        let hi = start_idx.max(end_idx) as usize;
+        let lo = start_idx.min(end_idx);
+        let hi = start_idx.max(end_idx);
         let mut selected = HashSet::new();
         for layer in layers.iter().skip(lo).take(hi - lo + 1) {
             selected.insert(layer.layer_id.clone());
@@ -54,8 +38,6 @@ impl SelectionRegion {
         Self {
             start_beat,
             end_beat,
-            start_layer_index: start_idx,
-            end_layer_index: end_idx,
             is_active: true,
             start_layer_id: Some(start_layer_id),
             end_layer_id: Some(end_layer_id),
@@ -67,13 +49,6 @@ impl SelectionRegion {
         beat >= self.start_beat && beat < self.end_beat
     }
 
-    #[allow(dead_code)]
-    pub fn contains_layer(&self, layer_index: i32) -> bool {
-        let min = self.start_layer_index.min(self.end_layer_index);
-        let max = self.start_layer_index.max(self.end_layer_index);
-        layer_index >= min && layer_index <= max
-    }
-
     /// Check if a layer is in this region by LayerId (HashSet lookup).
     pub fn contains_layer_id(&self, id: &LayerId) -> bool {
         self.selected_layer_ids.contains(id)
@@ -81,20 +56,6 @@ impl SelectionRegion {
 
     pub fn duration_beats(&self) -> f32 {
         self.end_beat - self.start_beat
-    }
-
-    /// Set the selection region (index-based, backward compat).
-    #[allow(dead_code)]
-    pub fn set(&mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32) {
-        self.start_beat = start_beat;
-        self.end_beat = end_beat;
-        self.start_layer_index = start_layer;
-        self.end_layer_index = end_layer;
-        self.is_active = true;
-        // Clear LayerId fields — caller should use set_with_ids instead
-        self.start_layer_id = None;
-        self.end_layer_id = None;
-        self.selected_layer_ids.clear();
     }
 
     /// Set the selection region with stable LayerIds.
@@ -107,18 +68,16 @@ impl SelectionRegion {
         layers: &[crate::layer::Layer],
     ) {
         let start_idx = layers.iter().position(|l| l.layer_id == start_layer_id)
-            .map(|i| i as i32).unwrap_or(0);
+            .unwrap_or(0);
         let end_idx = layers.iter().position(|l| l.layer_id == end_layer_id)
-            .map(|i| i as i32).unwrap_or(0);
+            .unwrap_or(0);
 
         self.start_beat = start_beat;
         self.end_beat = end_beat;
-        self.start_layer_index = start_idx;
-        self.end_layer_index = end_idx;
         self.is_active = true;
 
-        let lo = start_idx.min(end_idx) as usize;
-        let hi = start_idx.max(end_idx) as usize;
+        let lo = start_idx.min(end_idx);
+        let hi = start_idx.max(end_idx);
         self.selected_layer_ids.clear();
         for layer in layers.iter().skip(lo).take(hi - lo + 1) {
             self.selected_layer_ids.insert(layer.layer_id.clone());
@@ -131,39 +90,39 @@ impl SelectionRegion {
     pub fn clear(&mut self) {
         self.start_beat = 0.0;
         self.end_beat = 0.0;
-        self.start_layer_index = 0;
-        self.end_layer_index = 0;
         self.is_active = false;
         self.start_layer_id = None;
         self.end_layer_id = None;
         self.selected_layer_ids.clear();
     }
 
-    /// Get normalized layer range (min, max).
-    pub fn layer_range(&self) -> (i32, i32) {
-        let min = self.start_layer_index.min(self.end_layer_index);
-        let max = self.start_layer_index.max(self.end_layer_index);
-        (min, max)
+    /// Resolve LayerIds to a normalized index range (min, max) using the given layer array.
+    /// Returns `None` if neither start nor end layer ID is set or found.
+    pub fn layer_index_range(&self, layers: &[crate::layer::Layer]) -> Option<(usize, usize)> {
+        let start_idx = self.start_layer_id.as_ref()
+            .and_then(|id| layers.iter().position(|l| l.layer_id == *id));
+        let end_idx = self.end_layer_id.as_ref()
+            .and_then(|id| layers.iter().position(|l| l.layer_id == *id));
+
+        match (start_idx, end_idx) {
+            (Some(s), Some(e)) => Some((s.min(e), s.max(e))),
+            (Some(s), None) => Some((s, s)),
+            (None, Some(e)) => Some((e, e)),
+            (None, None) => None,
+        }
     }
 }
 
 /// Narrow interface for setting/clearing the selection region.
 /// Port of Unity ISelectionRegionTarget (SelectionRegion.cs lines 22-26).
 pub trait SelectionRegionTarget {
-    fn set_region(&mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32, layers: &[crate::layer::Layer]);
-    fn clear_region(&mut self);
-
-    /// Set region with stable LayerIds. Default impl falls back to index-based set_region.
-    fn set_region_with_ids(
+    fn set_region(
         &mut self,
         start_beat: f32,
         end_beat: f32,
-        start_layer: i32,
-        end_layer: i32,
-        _start_layer_id: LayerId,
-        _end_layer_id: LayerId,
+        start_layer_id: LayerId,
+        end_layer_id: LayerId,
         layers: &[crate::layer::Layer],
-    ) {
-        self.set_region(start_beat, end_beat, start_layer, end_layer, layers);
-    }
+    );
+    fn clear_region(&mut self);
 }

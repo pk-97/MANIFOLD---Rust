@@ -51,7 +51,10 @@ fn select_region_to(
         ))
     } else if ui_state.has_region() {
         let r = ui_state.get_region();
-        Some((r.start_beat, r.start_layer_index as usize))
+        let start_idx = r.layer_index_range(host.layers())
+            .map(|(lo, _)| lo)
+            .unwrap_or(0);
+        Some((r.start_beat, start_idx))
     } else if let Some(clip_id) = ui_state.primary_selected_clip_id.clone() {
         host.find_clip_by_id(&clip_id).map(|c| (c.start_beat, c.layer_index))
     } else {
@@ -752,10 +755,11 @@ impl InteractionOverlay {
         if ui_state.has_region() {
             let region = ui_state.get_region().clone();
             if let Some(clip) = host.find_clip_by_id(clip_id) {
+                let layer_in_region = host.layer_id_at_index(clip.layer_index)
+                    .is_some_and(|lid| region.contains_layer_id(&lid));
                 let hit_in_region = clip.end_beat > region.start_beat
                     && clip.start_beat < region.end_beat
-                    && (clip.layer_index as i32) >= region.start_layer_index
-                    && (clip.layer_index as i32) <= region.end_layer_index;
+                    && layer_in_region;
 
                 if hit_in_region {
                     let split_result = host.split_clips_for_region_move(&region);

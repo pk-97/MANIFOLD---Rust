@@ -536,11 +536,13 @@ impl TimelineInputHost for AppInputHost<'_> {
                     // Shift region forward by region duration (Ableton-style).
                     // Unity lines 743-758.
                     let duration = region.duration_beats();
+                    let (lo, hi) = region.layer_index_range(&project.timeline.layers)
+                        .unwrap_or((0, 0));
                     self.selection.set_region(
                         region.end_beat,
                         region.end_beat + duration,
-                        region.start_layer_index,
-                        region.end_layer_index,
+                        lo as i32,
+                        hi as i32,
                         &project.timeline.layers,
                     );
                 } else {

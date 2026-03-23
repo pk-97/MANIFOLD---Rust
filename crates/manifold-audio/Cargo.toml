@@ -1,0 +1,16 @@
+[package]
+name = "manifold-audio"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+log = { workspace = true }
+cpal = "0.15"
+ringbuf = "0.4"
+rustfft = "6"
+
+# macOS ScreenCaptureKit FFI (per-app audio capture)
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSError", "NSString", "NSArray", "NSObjCRuntime"] }
+block2 = "0.6"

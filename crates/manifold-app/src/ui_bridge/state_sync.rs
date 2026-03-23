@@ -220,12 +220,14 @@ pub fn push_state(
     // Region → viewport (sync from UIState so clearing via set_insert_cursor propagates)
     if selection.has_region() {
         let r = selection.get_region();
+        let (start_layer, end_layer) = r.layer_index_range(&project.timeline.layers)
+            .unwrap_or((0, 0));
         ui.viewport.set_selection_region(Some(
             manifold_ui::panels::viewport::SelectionRegion {
                 start_beat: r.start_beat,
                 end_beat: r.end_beat,
-                start_layer: r.start_layer_index.max(0) as usize,
-                end_layer: r.end_layer_index.max(0) as usize,
+                start_layer,
+                end_layer,
             }
         ));
     } else {
@@ -241,7 +243,10 @@ pub fn push_state(
         ui.layer_headers.set_active_layers(&active_flags);
     }
     // Also set single active_layer for backward compat (inspector routing)
-    ui.layer_headers.set_active_layer(active_layer);
+    let active_layer_id = active_layer
+        .and_then(|i| project.timeline.layers.get(i))
+        .map(|l| l.layer_id.clone());
+    ui.layer_headers.set_active_layer(active_layer_id);
     {
         for (i, layer) in project.timeline.layers.iter().enumerate() {
             ui.layer_headers.set_mute_state(tree, i, layer.is_muted);
@@ -413,7 +418,10 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
                 is_selected: active_layer == Some(i),
             }
         }).collect();
-        ui.layer_headers.set_active_layer(active_layer);
+        let active_layer_id = active_layer
+            .and_then(|i| project.timeline.layers.get(i))
+            .map(|l| l.layer_id.clone());
+        ui.layer_headers.set_active_layer(active_layer_id);
         ui.layer_headers.set_layers(layers);
 
         // Track data → TimelineViewportPanel

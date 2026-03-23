@@ -185,10 +185,12 @@ impl UIState {
         self.primary_selected_layer_id = None;
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_id = None;
-        self.selection_region.set(start_beat, end_beat, start_layer, end_layer);
         // Populate LayerId-based fields from the layer array
-        let min = start_layer.min(end_layer) as usize;
-        let max = start_layer.max(end_layer) as usize;
+        let min = start_layer.min(end_layer).max(0) as usize;
+        let max = start_layer.max(end_layer).max(0) as usize;
+        self.selection_region.start_beat = start_beat;
+        self.selection_region.end_beat = end_beat;
+        self.selection_region.is_active = true;
         self.selection_region.selected_layer_ids.clear();
         let upper = max.min(layers.len().saturating_sub(1));
         for layer in &layers[min..=upper] {
@@ -209,21 +211,20 @@ impl UIState {
         self.clear_layer_selection();
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_id = None;
-        let s_layer = start_layer.min(end_layer);
-        let e_layer = start_layer.max(end_layer);
+        let s_layer = start_layer.min(end_layer).max(0) as usize;
+        let e_layer = start_layer.max(end_layer).max(0) as usize;
         let s_beat = start_beat.min(end_beat);
         let e_beat = start_beat.max(end_beat);
-        self.selection_region.set(s_beat, e_beat, s_layer, e_layer);
-        // Populate LayerId-based fields from the layer array
-        let min = s_layer as usize;
-        let max = e_layer as usize;
+        self.selection_region.start_beat = s_beat;
+        self.selection_region.end_beat = e_beat;
+        self.selection_region.is_active = true;
         self.selection_region.selected_layer_ids.clear();
-        let upper = max.min(layers.len().saturating_sub(1));
-        for layer in &layers[min..=upper] {
+        let upper = e_layer.min(layers.len().saturating_sub(1));
+        for layer in &layers[s_layer..=upper] {
             self.selection_region.selected_layer_ids.insert(layer.layer_id.clone());
         }
-        self.selection_region.start_layer_id = layers.get(min).map(|l| l.layer_id.clone());
-        self.selection_region.end_layer_id = layers.get(max).map(|l| l.layer_id.clone());
+        self.selection_region.start_layer_id = layers.get(s_layer).map(|l| l.layer_id.clone());
+        self.selection_region.end_layer_id = layers.get(e_layer).map(|l| l.layer_id.clone());
         self.selection_version += 1;
     }
 

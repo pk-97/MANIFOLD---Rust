@@ -16,6 +16,26 @@ fn make_project() -> Project {
     project
 }
 
+/// Build a SelectionRegion from layer index range + project layers.
+fn make_region(project: &Project, start_beat: f32, end_beat: f32, start_layer: usize, end_layer: usize) -> SelectionRegion {
+    use std::collections::HashSet;
+    let layers = &project.timeline.layers;
+    let lo = start_layer.min(end_layer);
+    let hi = start_layer.max(end_layer).min(layers.len().saturating_sub(1));
+    let mut selected = HashSet::new();
+    for layer in layers.iter().skip(lo).take(hi - lo + 1) {
+        selected.insert(layer.layer_id.clone());
+    }
+    SelectionRegion {
+        start_beat,
+        end_beat,
+        is_active: true,
+        start_layer_id: layers.get(lo).map(|l| l.layer_id.clone()),
+        end_layer_id: layers.get(hi).map(|l| l.layer_id.clone()),
+        selected_layer_ids: selected,
+    }
+}
+
 fn add_clip(project: &mut Project, layer: usize, start: f32, dur: f32) -> ClipId {
     let clip = TimelineClip {
         start_beat: start,
@@ -205,14 +225,7 @@ fn duplicate_region_shifts_forward() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 0.0, 4.0);
 
-    let region = SelectionRegion {
-        start_beat: 0.0,
-        end_beat: 4.0,
-        start_layer_index: 0,
-        end_layer_index: 0,
-        is_active: true,
-        ..Default::default()
-    };
+    let region = make_region(&project, 0.0, 4.0, 0, 0);
 
     let cmds = EditingService::duplicate_clips(&project, &[id1.clone()], &region, 0.5);
     assert_eq!(cmds.len(), 1);
@@ -431,14 +444,7 @@ fn get_clips_in_region() {
     let _id2 = add_clip(&mut project, 0, 8.0, 4.0); // outside region
     let id3 = add_clip(&mut project, 1, 2.0, 4.0);
 
-    let region = SelectionRegion {
-        start_beat: 1.0,
-        end_beat: 5.0,
-        start_layer_index: 0,
-        end_layer_index: 1,
-        is_active: true,
-        ..Default::default()
-    };
+    let region = make_region(&project, 1.0, 5.0, 0, 1);
 
     let results = EditingService::get_clips_in_region(&project, &region);
     let result_ids: Vec<&ClipId> = results.iter().map(|(_, id)| id).collect();
@@ -454,11 +460,7 @@ fn trim_clip_to_region_fully_inside() {
     let mut project = make_project();
     let _id = add_clip(&mut project, 0, 2.0, 4.0); // beats 2..6
 
-    let region = SelectionRegion {
-        start_beat: 0.0, end_beat: 8.0,
-        start_layer_index: 0, end_layer_index: 0, is_active: true,
-        ..Default::default()
-    };
+    let region = make_region(&project, 0.0, 8.0, 0, 0);
     let clip = &project.timeline.layers[0].clips[0];
     let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
 
@@ -472,11 +474,7 @@ fn trim_clip_to_region_straddles_start() {
     let mut project = make_project();
     let _id = add_clip(&mut project, 0, 0.0, 8.0); // beats 0..8
 
-    let region = SelectionRegion {
-        start_beat: 2.0, end_beat: 10.0,
-        start_layer_index: 0, end_layer_index: 0, is_active: true,
-        ..Default::default()
-    };
+    let region = make_region(&project, 2.0, 10.0, 0, 0);
     let clip = &project.timeline.layers[0].clips[0];
     let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
 
@@ -492,11 +490,7 @@ fn trim_clip_to_region_straddles_end() {
     let mut project = make_project();
     let _id = add_clip(&mut project, 0, 4.0, 8.0); // beats 4..12
 
-    let region = SelectionRegion {
-        start_beat: 0.0, end_beat: 8.0,
-        start_layer_index: 0, end_layer_index: 0, is_active: true,
-        ..Default::default()
-    };
+    let region = make_region(&project, 0.0, 8.0, 0, 0);
     let clip = &project.timeline.layers[0].clips[0];
     let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
 
@@ -510,11 +504,7 @@ fn trim_clip_to_region_straddles_both() {
     let mut project = make_project();
     let _id = add_clip(&mut project, 0, 0.0, 16.0); // beats 0..16
 
-    let region = SelectionRegion {
-        start_beat: 4.0, end_beat: 12.0,
-        start_layer_index: 0, end_layer_index: 0, is_active: true,
-        ..Default::default()
-    };
+    let region = make_region(&project, 4.0, 12.0, 0, 0);
     let clip = &project.timeline.layers[0].clips[0];
     let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
 
@@ -531,11 +521,7 @@ fn copy_clips_region_mode_trims() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 0.0, 8.0); // beats 0..8
 
-    let region = SelectionRegion {
-        start_beat: 2.0, end_beat: 6.0,
-        start_layer_index: 0, end_layer_index: 0, is_active: true,
-        ..Default::default()
-    };
+    let region = make_region(&project, 2.0, 6.0, 0, 0);
 
     let mut service = EditingService::new();
     service.copy_clips(&project, &[id1], Some(&region), 0.5);
@@ -566,11 +552,7 @@ fn duplicate_clips_region_mode_trims() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 0.0, 8.0); // beats 0..8
 
-    let region = SelectionRegion {
-        start_beat: 2.0, end_beat: 6.0,
-        start_layer_index: 0, end_layer_index: 0, is_active: true,
-        ..Default::default()
-    };
+    let region = make_region(&project, 2.0, 6.0, 0, 0);
 
     let cmds = EditingService::duplicate_clips(&project, &[id1], &region, 0.5);
     assert_eq!(cmds.len(), 1);

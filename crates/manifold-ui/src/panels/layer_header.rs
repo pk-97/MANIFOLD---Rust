@@ -3,6 +3,7 @@ use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
 use crate::node::*;
 use crate::tree::UITree;
+use manifold_core::LayerId;
 use super::{Panel, PanelAction};
 
 // ── Layout constants (from LayerHeaderLayout.cs / UIConstants) ───────
@@ -424,8 +425,8 @@ pub struct LayerHeaderPanel {
     cached_selected: Vec<bool>,
 
     // Active layer (pushed from app layer each frame)
-    active_layer: Option<usize>,
-    cached_active_layer: Option<usize>,
+    active_layer: Option<LayerId>,
+    cached_active_layer: Option<LayerId>,
     // Pending multi-select active flags (applied in update())
     pending_active_layers: Option<Vec<bool>>,
 
@@ -478,17 +479,20 @@ impl LayerHeaderPanel {
         self.rows.len()
     }
 
-    /// Set the active (focused) layer index. Applied in update() via dirty-check.
-    pub fn set_active_layer(&mut self, index: Option<usize>) {
-        self.active_layer = index;
+    /// Set the active (focused) layer by LayerId. Applied in update() via dirty-check.
+    pub fn set_active_layer(&mut self, layer_id: Option<LayerId>) {
+        self.active_layer = layer_id;
     }
 
     /// Set per-layer active state from UIState.is_layer_active().
     /// Multiple layers can be active simultaneously (region, multi-select).
     /// Falls back to single active_layer if active_layers is empty.
     pub fn set_active_layers(&mut self, active_layers: &[bool]) {
-        // Find the first active layer as the primary
-        self.active_layer = active_layers.iter().position(|&a| a);
+        // Find the first active layer as the primary — resolve index to LayerId
+        let first_active_idx = active_layers.iter().position(|&a| a);
+        self.active_layer = first_active_idx
+            .and_then(|i| self.layers.get(i))
+            .map(|l| LayerId::new(l.layer_id.clone()));
         // Store full multi-select state for visual update in update()
         self.pending_active_layers = Some(active_layers.to_vec());
     }
@@ -1114,23 +1118,29 @@ impl Panel for LayerHeaderPanel {
             for (i, &active) in flags.iter().enumerate() {
                 self.set_selection(tree, i, active);
             }
-            self.cached_active_layer = self.active_layer;
+            self.cached_active_layer = self.active_layer.clone();
             return;
         }
 
         // Single active layer fallback (dirty-check)
         if self.active_layer != self.cached_active_layer {
-            let old = self.cached_active_layer;
-            let new = self.active_layer;
-            self.cached_active_layer = new;
+            let old = self.cached_active_layer.clone();
+            let new = self.active_layer.clone();
+            self.cached_active_layer = new.clone();
+
+            // Resolve LayerId → index for tree updates
+            let old_idx = old.and_then(|id|
+                self.layers.iter().position(|l| l.layer_id == *id));
+            let new_idx = new.and_then(|id|
+                self.layers.iter().position(|l| l.layer_id == *id));
 
             // Deselect old active layer
-            if let Some(old_idx) = old {
-                self.set_selection(tree, old_idx, false);
+            if let Some(idx) = old_idx {
+                self.set_selection(tree, idx, false);
             }
             // Select new active layer
-            if let Some(new_idx) = new {
-                self.set_selection(tree, new_idx, true);
+            if let Some(idx) = new_idx {
+                self.set_selection(tree, idx, true);
             }
         }
     }

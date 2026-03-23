@@ -130,12 +130,12 @@ impl EditingService {
         if !region.is_active {
             return Vec::new();
         }
-        let (min_layer, max_layer) = region.layer_range();
+        let (min_layer, max_layer) = region.layer_index_range(&project.timeline.layers)
+            .unwrap_or((0, 0));
         let mut results = Vec::new();
 
         for (li, layer) in project.timeline.layers.iter().enumerate() {
-            let li32 = li as i32;
-            if li32 < min_layer || li32 > max_layer {
+            if li < min_layer || li > max_layer {
                 continue;
             }
             for clip in &layer.clips {
@@ -272,7 +272,9 @@ impl EditingService {
                 }
 
                 let origin_beat = region.start_beat;
-                let (min_layer, _) = region.layer_range();
+                let (min_layer, _) = region.layer_index_range(&project.timeline.layers)
+                    .unwrap_or((0, 0));
+                let min_layer = min_layer as i32;
 
                 for clip in overlapping {
                     let trimmed = Self::trim_clip_to_region(clip, region, spb);
@@ -437,10 +439,10 @@ impl EditingService {
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
 
-        let (min_layer, max_layer) = region.layer_range();
         let layer_count = project.timeline.layers.len();
-        let start_layer = (min_layer.max(0) as usize).min(layer_count.saturating_sub(1));
-        let end_layer = (max_layer.max(0) as usize).min(layer_count.saturating_sub(1));
+        let (start_layer, end_layer) = region.layer_index_range(&project.timeline.layers)
+            .map(|(lo, hi)| (lo.min(layer_count.saturating_sub(1)), hi.min(layer_count.saturating_sub(1))))
+            .unwrap_or((0, 0));
 
         for li in start_layer..=end_layer {
             // Snapshot clip IDs (splits add new clips)
@@ -549,9 +551,9 @@ impl EditingService {
             // trim to region boundaries, place copies after region end.
             // The offset is the full region duration, preserving gaps (Ableton behavior).
             let offset = region.duration_beats();
-            let start_layer = region.start_layer_index.min(region.end_layer_index).max(0) as usize;
-            let end_layer = (region.start_layer_index.max(region.end_layer_index) as usize)
-                .min(project.timeline.layers.len().saturating_sub(1));
+            let (start_layer, end_layer) = region.layer_index_range(&project.timeline.layers)
+                .map(|(lo, hi)| (lo, hi.min(project.timeline.layers.len().saturating_sub(1))))
+                .unwrap_or((0, 0));
 
             for li in start_layer..=end_layer {
                 let layer = &project.timeline.layers[li];
@@ -1042,8 +1044,6 @@ impl EditingService {
             Some(SelectionRegion {
                 start_beat: region.end_beat,
                 end_beat: region.end_beat + duration,
-                start_layer_index: region.start_layer_index,
-                end_layer_index: region.end_layer_index,
                 is_active: true,
                 start_layer_id: region.start_layer_id.clone(),
                 end_layer_id: region.end_layer_id.clone(),
