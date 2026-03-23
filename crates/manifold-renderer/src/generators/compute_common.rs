@@ -49,6 +49,11 @@ pub struct PhysarumAgent {
     pub _pad: f32,
 }
 
+// Compile-time layout assertions — must match WGSL struct sizes exactly.
+// If these fail, you've changed a field without updating the WGSL counterpart (or vice versa).
+const _: () = assert!(std::mem::size_of::<Particle>() == 64);
+const _: () = assert!(std::mem::size_of::<PhysarumAgent>() == 16);
+
 /// Fixed-point scale factor for atomic scatter operations.
 /// Energy values are multiplied by this before atomicAdd, divided after resolve.
 pub const FIXED_POINT_SCALE: f32 = 4096.0;

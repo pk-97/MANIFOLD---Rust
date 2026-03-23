@@ -160,6 +160,43 @@ impl Command for ToggleEffectCommand {
     fn description(&self) -> &str { "Toggle Effect" }
 }
 
+/// Reorder a group of effects within a target's effect chain (multi-select).
+#[derive(Debug)]
+pub struct ReorderEffectGroupCommand {
+    target: EffectTarget,
+    /// Snapshot of the entire effects vec before the reorder.
+    old_effects: Vec<EffectInstance>,
+    /// Snapshot of the entire effects vec after the reorder.
+    new_effects: Vec<EffectInstance>,
+}
+
+impl ReorderEffectGroupCommand {
+    /// Construct from before/after snapshots of the effects vec.
+    pub fn new(
+        target: EffectTarget,
+        old_effects: Vec<EffectInstance>,
+        new_effects: Vec<EffectInstance>,
+    ) -> Self {
+        Self { target, old_effects, new_effects }
+    }
+}
+
+impl Command for ReorderEffectGroupCommand {
+    fn execute(&mut self, project: &mut Project) {
+        with_effects_mut(project, &self.target, |effects, _groups| {
+            *effects = self.new_effects.clone();
+        });
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        with_effects_mut(project, &self.target, |effects, _groups| {
+            *effects = self.old_effects.clone();
+        });
+    }
+
+    fn description(&self) -> &str { "Reorder Effects" }
+}
+
 /// Change a single parameter value on an effect.
 #[derive(Debug)]
 pub struct ChangeEffectParamCommand {

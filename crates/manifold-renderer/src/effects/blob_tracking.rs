@@ -96,6 +96,8 @@ struct BlobUniforms {
     blob_connections: [[f32; 4]; 16],
 }
 
+const _: () = assert!(std::mem::size_of::<BlobUniforms>() == 544);
+
 // BlobTrackingFX.cs line 10 — BlobTrackingFX : IPostProcessEffect, IStatefulEffect
 pub struct BlobTrackingFX {
     // Overlay shader pipeline (single pass — BlobTrackingEffect.shader has 1 pass)

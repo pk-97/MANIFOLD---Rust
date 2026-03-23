@@ -135,6 +135,7 @@ pub enum EffectType {
     Glitch = 32,
     FilmGrain = 33,
     Halation = 34,
+    // 35 = Microscope — intentionally removed from Rust port (see KNOWN_DIVERGENCES.md D-28)
     Corruption = 36,
     Infrared = 37,
     Surveillance = 38,

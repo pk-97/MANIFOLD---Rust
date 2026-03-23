@@ -26,7 +26,9 @@ pub(super) fn dispatch_project(
     match action {
         // ── Export/Header/Footer ───────────────────────────────────
         PanelAction::ToggleHdr => {
-            project.settings.export_hdr = !project.settings.export_hdr;
+            let old_hdr = project.settings.export_hdr;
+            let cmd = manifold_editing::commands::settings::ToggleExportHdrCommand::new(old_hdr);
+            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             log::info!("HDR export → {}", project.settings.export_hdr);
             DispatchResult::handled()
         }
@@ -85,16 +87,14 @@ pub(super) fn dispatch_project(
             DispatchResult::structural()
         }
         PanelAction::SetMidiChannel(layer_idx, channel) => {
-            if let Some(layer) = project.timeline.layers.get_mut(*layer_idx) {
-                layer.midi_channel = *channel;
+            if let Some(layer) = project.timeline.layers.get(*layer_idx) {
+                let layer_id = layer.layer_id.clone();
+                let old_channel = layer.midi_channel;
+                let cmd = manifold_editing::commands::settings::ChangeLayerMidiChannelCommand::new(
+                    layer_id, old_channel, *channel,
+                );
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             }
-            let li = *layer_idx;
-            let ch = *channel;
-            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
-                if let Some(layer) = p.timeline.layers.get_mut(li) {
-                    layer.midi_channel = ch;
-                }
-            })));
             DispatchResult::structural()
         }
         PanelAction::SetResolution(preset_idx) => {
@@ -107,14 +107,12 @@ pub(super) fn dispatch_project(
             DispatchResult::resolution()
         }
         PanelAction::SetDisplayResolution(w, h) => {
-            project.settings.output_width = *w;
-            project.settings.output_height = *h;
-            let ww = *w;
-            let hh = *h;
-            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
-                p.settings.output_width = ww;
-                p.settings.output_height = hh;
-            })));
+            let old_w = project.settings.output_width;
+            let old_h = project.settings.output_height;
+            let cmd = manifold_editing::commands::settings::SetDisplayDimensionsCommand::new(
+                old_w, old_h, *w, *h,
+            );
+            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             DispatchResult::resolution()
         }
         PanelAction::SetGenType(opt_layer_id, gen_type_idx) => {
@@ -171,6 +169,9 @@ pub(super) fn dispatch_project(
         }
         PanelAction::RemoveAudioClicked => {
             log::info!("Remove audio clicked");
+            let old_state = project.percussion_import.clone();
+            let cmd = manifold_editing::commands::settings::ClearPercussionCommand::new(old_state);
+            { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             ContentCommand::send(content_tx, ContentCommand::ResetAudio);
             ContentCommand::send(content_tx, ContentCommand::StemReset);
             ui.waveform_lane.clear_audio();

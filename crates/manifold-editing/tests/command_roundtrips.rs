@@ -883,3 +883,154 @@ fn make_envelope() -> ParamEnvelope {
         current_level: 0.0,
     }
 }
+
+// ─── Undo-blind fix commands (invariant audit 2026-03-23) ───
+
+#[test]
+fn toggle_export_hdr_undo_roundtrip() {
+    let mut project = make_test_project();
+    assert!(!project.settings.export_hdr);
+
+    let mut cmd = ToggleExportHdrCommand::new(false);
+    cmd.execute(&mut project);
+    assert!(project.settings.export_hdr);
+
+    cmd.undo(&mut project);
+    assert!(!project.settings.export_hdr);
+}
+
+#[test]
+fn change_midi_channel_undo_roundtrip() {
+    let mut project = make_test_project();
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let old_channel = project.timeline.layers[0].midi_channel;
+
+    let mut cmd = ChangeLayerMidiChannelCommand::new(layer_id, old_channel, 5);
+    cmd.execute(&mut project);
+    assert_eq!(project.timeline.layers[0].midi_channel, 5);
+
+    cmd.undo(&mut project);
+    assert_eq!(project.timeline.layers[0].midi_channel, old_channel);
+}
+
+#[test]
+fn set_display_dimensions_undo_roundtrip() {
+    let mut project = make_test_project();
+    let old_w = project.settings.output_width;
+    let old_h = project.settings.output_height;
+
+    let mut cmd = SetDisplayDimensionsCommand::new(old_w, old_h, 3840, 2160);
+    cmd.execute(&mut project);
+    assert_eq!(project.settings.output_width, 3840);
+    assert_eq!(project.settings.output_height, 2160);
+
+    cmd.undo(&mut project);
+    assert_eq!(project.settings.output_width, old_w);
+    assert_eq!(project.settings.output_height, old_h);
+}
+
+#[test]
+fn clear_percussion_undo_roundtrip() {
+    let mut project = make_test_project();
+    // Set up percussion state
+    project.percussion_import = Some(manifold_core::percussion::PercussionImportState {
+        audio_start_beat: 4.0,
+        audio_path: Some("/test/audio.wav".into()),
+        ..Default::default()
+    });
+
+    let mut cmd = ClearPercussionCommand::new(None);
+    cmd.execute(&mut project);
+    assert!(project.percussion_import.is_none());
+
+    cmd.undo(&mut project);
+    assert!(project.percussion_import.is_some());
+    assert_eq!(project.percussion_import.as_ref().unwrap().audio_start_beat, 4.0);
+    assert_eq!(
+        project.percussion_import.as_ref().unwrap().audio_path.as_deref(),
+        Some("/test/audio.wav"),
+    );
+}
+
+#[test]
+fn reorder_effect_group_undo_roundtrip() {
+    let mut project = make_test_project();
+    // Add 3 master effects
+    let fx_a = EffectInstance::new(EffectType::Bloom);
+    let fx_b = EffectInstance::new(EffectType::CRT);
+    let fx_c = EffectInstance::new(EffectType::Glitch);
+    project.settings.master_effects = vec![fx_a.clone(), fx_b.clone(), fx_c.clone()];
+
+    let old_effects = project.settings.master_effects.clone();
+    // Reorder: move [Bloom, CRT, Glitch] → [CRT, Glitch, Bloom]
+    let new_effects = vec![fx_b.clone(), fx_c.clone(), fx_a.clone()];
+
+    let mut cmd = ReorderEffectGroupCommand::new(
+        EffectTarget::Master,
+        old_effects.clone(),
+        new_effects,
+    );
+    cmd.execute(&mut project);
+    assert_eq!(project.settings.master_effects[0].effect_type(), EffectType::CRT);
+    assert_eq!(project.settings.master_effects[1].effect_type(), EffectType::Glitch);
+    assert_eq!(project.settings.master_effects[2].effect_type(), EffectType::Bloom);
+
+    cmd.undo(&mut project);
+    assert_eq!(project.settings.master_effects[0].effect_type(), EffectType::Bloom);
+    assert_eq!(project.settings.master_effects[1].effect_type(), EffectType::CRT);
+    assert_eq!(project.settings.master_effects[2].effect_type(), EffectType::Glitch);
+}
+
+// ─── Project load → cache verification ───
+
+#[test]
+fn project_load_verifies_caches() {
+    // Default project with layers and clips
+    let mut project = make_test_project();
+
+    // Simulate deserialization: call on_after_deserialize
+    project.on_after_deserialize();
+
+    // Verify clip lookup cache is populated
+    let clip_id = project.timeline.layers[0].clips[0].id.clone();
+    assert!(
+        project.timeline.find_clip_by_id(&clip_id).is_some(),
+        "clip_lookup cache must be populated after on_after_deserialize",
+    );
+
+    // Verify layer index cache is populated
+    let layer_id = project.timeline.layers[0].layer_id.clone();
+    let layer_id = &layer_id;
+    assert!(
+        project.timeline.find_layer_index_by_id(layer_id).is_some(),
+        "layer_id_to_index cache must be populated after on_after_deserialize",
+    );
+
+    // Verify layer indices are synced
+    for (i, layer) in project.timeline.layers.iter().enumerate() {
+        assert_eq!(layer.index, i as i32, "layer.index must match position after reindex");
+    }
+
+    // Verify clip layer_ids are synced
+    for layer in &project.timeline.layers {
+        for clip in &layer.clips {
+            assert_eq!(
+                clip.layer_id, layer.layer_id,
+                "clip.layer_id must match parent layer after reindex",
+            );
+        }
+    }
+}
+
+#[test]
+fn project_load_strips_unknown_effects() {
+    let mut project = make_test_project();
+    // Add a valid and an unknown effect to master
+    project.settings.master_effects.push(EffectInstance::new(EffectType::Bloom));
+    project.settings.master_effects.push(EffectInstance::new(EffectType::Unknown));
+    assert_eq!(project.settings.master_effects.len(), 2);
+
+    project.strip_unknown_effects();
+    assert_eq!(project.settings.master_effects.len(), 1);
+    assert_eq!(project.settings.master_effects[0].effect_type(), EffectType::Bloom);
+}

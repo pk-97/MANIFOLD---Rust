@@ -39,6 +39,8 @@ struct BlendUniforms {
     invert_colors: f32,
 }
 
+const _: () = assert!(std::mem::size_of::<BlendUniforms>() == 32);
+
 /// Initial capacity for the blend uniform ring buffer (grows dynamically).
 const INITIAL_BLEND_SLOTS: u32 = 32;
 

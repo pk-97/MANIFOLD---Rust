@@ -194,12 +194,12 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Approved by:** Peter / task spec
 - **Files affected:** `manifold-playback/src/midi_input.rs`
 
-### [D-28] 10 effects intentionally excluded from Rust port
-- **Unity does:** Has InfiniteZoom, Datamosh, SlitScan, Corruption (stateful), FluidDistortion (complex), GradientMap, Surveillance, Redaction (simple) as post-process effects.
-- **Rust does:** These effects are not ported and not available in the effect dropdown.
-- **Why:** Intentionally excluded — not wanted in the Rust port.
+### [D-28] 11 effects intentionally excluded from Rust port
+- **Unity does:** Has InfiniteZoom, Datamosh, SlitScan, Corruption (stateful), FluidDistortion (complex), GradientMap, Microscope, Surveillance, Redaction (simple) as post-process effects.
+- **Rust does:** These effects are not ported and not available in the effect dropdown. Their enum discriminants are reserved but skipped (e.g. Microscope=35). Old projects with these effects deserialize as `EffectType::Unknown` and are stripped on load.
+- **Why:** Intentionally excluded — not wanted in the Rust port. **DO NOT re-add these variants.** Discriminant gaps in `EffectType` are intentional.
 - **Approved by:** Peter / 2026-03-21
-- **Files affected:** `manifold-renderer/src/effects/`, `manifold-core/src/effect_definition_registry.rs`
+- **Files affected:** `manifold-renderer/src/effects/`, `manifold-core/src/types.rs`, `manifold-core/src/effect_definition_registry.rs`
 
 ### [D-29] ComputeCompositor fast path excluded
 - **Unity does:** `ComputeCompositor` batches up to 8 effect-free layers into a single compute pass for performance.

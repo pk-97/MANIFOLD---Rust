@@ -198,6 +198,8 @@ struct WireUniforms {
     _pad1: f32,
 }
 
+const _: () = assert!(std::mem::size_of::<WireUniforms>() == 80);
+
 // WireframeDepthFX.cs line 16 — WireframeDepthFX : SimpleBlitEffect, IStatefulEffect
 pub struct WireframeDepthFX {
     // 15 render pipelines — one per shader pass

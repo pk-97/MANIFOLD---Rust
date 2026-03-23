@@ -408,6 +408,113 @@ impl Command for ChangeMasterOpacityCommand {
     fn description(&self) -> &str { "Change Master Opacity" }
 }
 
+/// Toggle HDR export setting.
+#[derive(Debug)]
+pub struct ToggleExportHdrCommand {
+    old_hdr: bool,
+}
+
+impl ToggleExportHdrCommand {
+    pub fn new(old_hdr: bool) -> Self {
+        Self { old_hdr }
+    }
+}
+
+impl Command for ToggleExportHdrCommand {
+    fn execute(&mut self, project: &mut Project) {
+        project.settings.export_hdr = !self.old_hdr;
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        project.settings.export_hdr = self.old_hdr;
+    }
+
+    fn description(&self) -> &str { "Toggle HDR Export" }
+}
+
+/// Change a layer's MIDI channel assignment.
+#[derive(Debug)]
+pub struct ChangeLayerMidiChannelCommand {
+    layer_id: LayerId,
+    old_channel: i32,
+    new_channel: i32,
+}
+
+impl ChangeLayerMidiChannelCommand {
+    pub fn new(layer_id: LayerId, old_channel: i32, new_channel: i32) -> Self {
+        Self { layer_id, old_channel, new_channel }
+    }
+}
+
+impl Command for ChangeLayerMidiChannelCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            layer.midi_channel = self.new_channel;
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            layer.midi_channel = self.old_channel;
+        }
+    }
+
+    fn description(&self) -> &str { "Change MIDI Channel" }
+}
+
+/// Change display resolution (direct width/height, not preset-based).
+#[derive(Debug)]
+pub struct SetDisplayDimensionsCommand {
+    old_width: i32,
+    old_height: i32,
+    new_width: i32,
+    new_height: i32,
+}
+
+impl SetDisplayDimensionsCommand {
+    pub fn new(old_width: i32, old_height: i32, new_width: i32, new_height: i32) -> Self {
+        Self { old_width, old_height, new_width, new_height }
+    }
+}
+
+impl Command for SetDisplayDimensionsCommand {
+    fn execute(&mut self, project: &mut Project) {
+        project.settings.output_width = self.new_width;
+        project.settings.output_height = self.new_height;
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        project.settings.output_width = self.old_width;
+        project.settings.output_height = self.old_height;
+    }
+
+    fn description(&self) -> &str { "Set Display Resolution" }
+}
+
+/// Clear percussion import state (remove audio + stems).
+#[derive(Debug)]
+pub struct ClearPercussionCommand {
+    old_state: Option<manifold_core::percussion::PercussionImportState>,
+}
+
+impl ClearPercussionCommand {
+    pub fn new(old_state: Option<manifold_core::percussion::PercussionImportState>) -> Self {
+        Self { old_state }
+    }
+}
+
+impl Command for ClearPercussionCommand {
+    fn execute(&mut self, project: &mut Project) {
+        self.old_state = project.percussion_import.take();
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        project.percussion_import = self.old_state.take();
+    }
+
+    fn description(&self) -> &str { "Remove Audio" }
+}
+
 /// Restore a recorded tempo lane.
 /// Matches Unity's RestoreRecordedTempoLaneCommand exactly.
 #[derive(Debug)]

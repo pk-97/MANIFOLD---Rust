@@ -316,6 +316,16 @@ struct DisplayUniforms {
     _pad1:        f32,
 }
 
+// Compile-time layout assertions — must match WGSL struct sizes exactly.
+const _: () = assert!(std::mem::size_of::<Splat3DUniforms>() == 16);
+const _: () = assert!(std::mem::size_of::<Resolve3DUniforms>() == 16);
+const _: () = assert!(std::mem::size_of::<Blur3DUniforms>() == 16);
+const _: () = assert!(std::mem::size_of::<GradientCurl3DUniforms>() == 48);
+const _: () = assert!(std::mem::size_of::<Sim3DUniforms>() == 92);
+const _: () = assert!(std::mem::size_of::<ProjectedUniforms>() == 112);
+const _: () = assert!(std::mem::size_of::<SeedUniforms>() == 48);
+const _: () = assert!(std::mem::size_of::<DisplayUniforms>() == 32);
+
 pub struct FluidSimulation3DGenerator {
     // Compute pipelines — 3D volume
     splat_3d_pipeline:           wgpu::ComputePipeline,

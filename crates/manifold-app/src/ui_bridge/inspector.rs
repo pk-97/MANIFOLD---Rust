@@ -10,6 +10,7 @@ use manifold_editing::commands::settings::{
 };
 use manifold_editing::commands::effects::{
     ToggleEffectCommand, ChangeEffectParamCommand, RemoveEffectCommand, ReorderEffectCommand,
+    ReorderEffectGroupCommand,
 };
 use manifold_editing::commands::envelopes::{
     ChangeEnvelopeADSRCommand, ChangeLayerEnvelopeADSRCommand,
@@ -1025,10 +1026,13 @@ pub(super) fn dispatch_inspector(
         }
         PanelAction::EffectReorderGroup(source_indices, target_idx) => {
             // Multi-select reorder: move a group of effects to the target position.
-            // Operates on the effects vec directly, wraps in MutateProject for content thread.
             let tab = ui.inspector.last_effect_tab();
+            let target = super::resolve_effect_target(tab, active_layer, project);
             let (effects_mut, _target) = resolve_effects_mut(tab, project, active_layer, selection);
             if let Some(effects) = effects_mut {
+                // Snapshot before
+                let old_effects = effects.clone();
+
                 // Remove selected effects in reverse order (preserving relative order)
                 let mut moving: Vec<(usize, EffectInstance)> = Vec::new();
                 let mut sorted_sources = source_indices.clone();
@@ -1049,42 +1053,14 @@ pub(super) fn dispatch_inspector(
                     let pos = (insert_at + offset).min(effects.len());
                     effects.insert(pos, fx);
                 }
-            }
 
-            // Send to content thread
-            let target = super::resolve_effect_target(tab, active_layer, project);
-            let sources = source_indices.clone();
-            let target_pos = *target_idx;
-            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
-                let effects = match &target {
-                    EffectTarget::Master => Some(&mut p.settings.master_effects),
-                    EffectTarget::Layer { layer_id } => {
-                        p.timeline.find_layer_by_id_mut(layer_id)
-                            .map(|(_, l)| l.effects_mut())
-                    }
-                    EffectTarget::Clip { clip_id, .. } => {
-                        p.timeline.find_clip_by_id_mut(clip_id)
-                            .map(|c| &mut c.effects)
-                    }
-                };
-                if let Some(effects) = effects {
-                    let mut sorted = sources.clone();
-                    sorted.sort_unstable();
-                    let mut moving: Vec<EffectInstance> = Vec::new();
-                    for &idx in sorted.iter().rev() {
-                        if idx < effects.len() {
-                            moving.push(effects.remove(idx));
-                        }
-                    }
-                    moving.reverse();
-                    let removed_before = sorted.iter().filter(|&&i| i < target_pos).count();
-                    let insert_at = target_pos.saturating_sub(removed_before).min(effects.len());
-                    for (offset, fx) in moving.into_iter().enumerate() {
-                        let pos = (insert_at + offset).min(effects.len());
-                        effects.insert(pos, fx);
-                    }
-                }
-            })));
+                // Snapshot after and create undoable command
+                let new_effects = effects.clone();
+                let cmd = ReorderEffectGroupCommand::new(target, old_effects, new_effects);
+                // State already applied — send for undo stack only (don't re-execute)
+                let boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+            }
             // Selection follows automatically (ID-based, no remapping needed)
             DispatchResult::structural()
         }
