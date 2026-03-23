@@ -6,3 +6,5 @@
 .codex/*.local.md
 assets/mri-data/
 profiling_sessions/
+__pycache__/
+.venv/

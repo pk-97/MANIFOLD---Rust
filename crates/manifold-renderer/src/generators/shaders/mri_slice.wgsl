@@ -34,7 +34,19 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let uv = (in.uv - 0.5) * u.uv_scale + 0.5;
+    // Fit image to output preserving native aspect ratio
+    let img_aspect = u.tex_width / u.tex_height;
+    let ratio = u.aspect_ratio / img_aspect;
+    var uv = in.uv - 0.5;
+    if ratio > 1.0 {
+        // Output wider than image — pillarbox
+        uv.x *= ratio;
+    } else {
+        // Output narrower than image — letterbox
+        uv.y /= ratio;
+    }
+    // User zoom
+    uv = uv * u.uv_scale + 0.5;
 
     if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
         return vec4<f32>(0.0, 0.0, 0.0, 1.0);
