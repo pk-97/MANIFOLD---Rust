@@ -1,5 +1,9 @@
-// Mechanical port of Unity HalationFX.cs + HalationEffect.shader.
-// Same logic, same variables, same constants, same edge cases.
+// Halation effect — separable Gaussian blur with threshold extraction.
+// Improvement over Unity's 13-tap 2D cross kernel: separable 17-tap Gaussian
+// produces smooth, gap-free glow at half-resolution (D-32).
+//
+// 4 passes (vs Unity's 3): ThresholdTint → BlurH → BlurV → Composite.
+// Effective coverage: 17×17 = 289 unique positions vs Unity's 13-point cross.
 
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
@@ -8,11 +12,10 @@ use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::render_target::RenderTarget;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
 
-// HalationEffect.shader uniforms
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct HalationUniforms {
-    mode: u32,               // 0=ThresholdTintBlur, 1=BlurWide, 2=Composite
+    mode: u32,               // 0=ThresholdTint, 1=BlurH, 2=BlurV, 3=Composite
     amount: f32,             // _Amount
     threshold: f32,          // _Threshold
     spread: f32,             // _Spread
@@ -21,23 +24,22 @@ struct HalationUniforms {
     tint_b: f32,             // _TintB
     main_texel_size_x: f32,  // _MainTex_TexelSize.x
     main_texel_size_y: f32,  // _MainTex_TexelSize.y
-    halo_texel_size_x: f32,  // _HaloTex_TexelSize.x
-    halo_texel_size_y: f32,  // _HaloTex_TexelSize.y
+    halo_texel_size_x: f32,  // _HaloTex_TexelSize.x (composite pass only)
+    halo_texel_size_y: f32,  // _HaloTex_TexelSize.y (composite pass only)
     _pad: f32,
 }
 
-// HalationFX.cs lines 17-18 — per-owner intermediate buffers (full-res; Unity used half-res)
+/// Per-owner intermediate buffers (half-res, ping-pong for separable blur).
 struct HalationState {
-    buf_a: RenderTarget, // bufs[0]: ThresholdTintBlur output
-    buf_b: RenderTarget, // bufs[1]: BlurWide output
+    buf_a: RenderTarget, // ThresholdTint output / V blur output
+    buf_b: RenderTarget, // H blur output
 }
 
-// HalationFX.cs line 12 — HalationFX : SimpleBlitEffect, IStatefulEffect
 pub struct HalationFX {
     helper: DualTextureBlitHelper,
     states: AHashMap<i64, HalationState>,
-    width: u32,  // HalationFX.cs line 17 — _width
-    height: u32, // HalationFX.cs line 17 — _height
+    width: u32,
+    height: u32,
 }
 
 impl HalationFX {
@@ -55,7 +57,6 @@ impl HalationFX {
         }
     }
 
-    // HalationFX.cs lines 48-63 — GetOrCreateBuffers
     fn ensure_state(&mut self, device: &wgpu::Device, owner_key: i64) {
         if self.states.contains_key(&owner_key) {
             return;
@@ -64,17 +65,16 @@ impl HalationFX {
             return;
         }
         let format = wgpu::TextureFormat::Rgba16Float;
-        // Full-resolution blur buffers (Unity used half-res; we use full for sharper output)
-        let buf_a = RenderTarget::new(device, self.width, self.height, format, &format!("HalationA_{owner_key}"));
-        let buf_b = RenderTarget::new(device, self.width, self.height, format, &format!("HalationB_{owner_key}"));
+        let hw = (self.width / 2).max(1);
+        let hh = (self.height / 2).max(1);
+        let buf_a = RenderTarget::new(device, hw, hh, format, &format!("HalationA_{owner_key}"));
+        let buf_b = RenderTarget::new(device, hw, hh, format, &format!("HalationB_{owner_key}"));
         self.states.insert(owner_key, HalationState { buf_a, buf_b });
     }
 
-    // HalationFX.cs lines 21-40 — HsvToRgb (ported to Rust; NOT in shader)
+    // HalationFX.cs lines 21-40 — HsvToRgb
     fn hsv_to_rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
-        // h = Mathf.Repeat(h / 360f, 1f)
         let h = (h / 360.0).rem_euclid(1.0);
-        // if (s <= 0f) return new Color(v, v, v)
         if s <= 0.0 {
             return (v, v, v);
         }
@@ -105,13 +105,12 @@ impl PostProcessEffect for HalationFX {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        source: &wgpu::TextureView,  // buffer in Unity
-        target: &wgpu::TextureView,  // ctx.Host.GetTargetBuffer() in Unity
+        source: &wgpu::TextureView,
+        target: &wgpu::TextureView,
         fx: &EffectInstance,
         ctx: &EffectContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        // ShouldSkip handles the amount <= 0 check at the chain level now.
         let amount = fx.param_values.first().copied().unwrap_or(0.0);
 
         self.width = ctx.width;
@@ -123,10 +122,8 @@ impl PostProcessEffect for HalationFX {
             None => return,
         };
 
-        // HalationFX.cs lines 72-79: set uniforms
         let threshold = fx.param_values.get(1).copied().unwrap_or(0.5);
         let spread = fx.param_values.get(2).copied().unwrap_or(0.5);
-        // HalationFX.cs line 72: Color tint = HsvToRgb(fx.GetParam(3), fx.GetParam(4), 1f)
         let hue = fx.param_values.get(3).copied().unwrap_or(20.0);
         let saturation = fx.param_values.get(4).copied().unwrap_or(0.6);
         let (tint_r, tint_g, tint_b) = Self::hsv_to_rgb(hue, saturation, 1.0);
@@ -146,9 +143,10 @@ impl PostProcessEffect for HalationFX {
             _pad: 0.0,
         };
 
-        // HalationFX.cs line 82: Graphics.Blit(buffer, bufs[0], material, 0)
-        // Pass 0: ThresholdTintBlur. main_tex = source (full-res), halo_tex = dummy.
-        // _MainTex_TexelSize = 1/source_width, 1/source_height.
+        let half_w = state.buf_a.width;
+        let half_h = state.buf_a.height;
+
+        // Pass 0: ThresholdTint — source (full-res) → buf_a (half-res)
         self.helper.draw(
             device, queue, encoder,
             source,
@@ -160,50 +158,57 @@ impl PostProcessEffect for HalationFX {
                 main_texel_size_y: 1.0 / ctx.height as f32,
                 ..base
             }),
-            "Halation ThresholdTintBlur",
-            state.buf_a.width, state.buf_a.height,
+            "Halation ThresholdTint",
+            half_w, half_h,
             profiler,
         );
 
-        // HalationFX.cs lines 85-86: material.SetTexture("_HaloTex", bufs[0]); Blit(bufs[0], bufs[1], material, 1)
-        // Pass 1: BlurWide. main_tex = bufs[0] (half-res), halo_tex = bufs[0].
-        // Shader reads _HaloTex with _HaloTex_TexelSize. main_texel_size from bufs[0].
-        let half_w = state.buf_a.width;
-        let half_h = state.buf_a.height;
-        let buf_b_w = state.buf_b.width;
-        let buf_b_h = state.buf_b.height;
-
+        // Pass 1: Horizontal Gaussian blur — buf_a → buf_b (half-res)
         self.helper.draw(
             device, queue, encoder,
             &state.buf_a.view,
-            &state.buf_a.view,
+            &self.helper.dummy_view,
             &state.buf_b.view,
             bytemuck::bytes_of(&HalationUniforms {
                 mode: 1,
                 main_texel_size_x: 1.0 / half_w as f32,
                 main_texel_size_y: 1.0 / half_h as f32,
-                halo_texel_size_x: 1.0 / half_w as f32,
-                halo_texel_size_y: 1.0 / half_h as f32,
                 ..base
             }),
-            "Halation BlurWide",
-            buf_b_w, buf_b_h,
+            "Halation BlurH",
+            half_w, half_h,
             profiler,
         );
 
-        // HalationFX.cs lines 89-93: Blit(buffer, target, material, 2) with _HaloTex = bufs[1]
-        // Pass 2: Composite. main_tex = source (full-res), halo_tex = bufs[1] (half-res blurred).
+        // Pass 2: Vertical Gaussian blur — buf_b → buf_a (half-res)
+        self.helper.draw(
+            device, queue, encoder,
+            &state.buf_b.view,
+            &self.helper.dummy_view,
+            &state.buf_a.view,
+            bytemuck::bytes_of(&HalationUniforms {
+                mode: 2,
+                main_texel_size_x: 1.0 / half_w as f32,
+                main_texel_size_y: 1.0 / half_h as f32,
+                ..base
+            }),
+            "Halation BlurV",
+            half_w, half_h,
+            profiler,
+        );
+
+        // Pass 3: Composite — source (full-res) + buf_a (half-res) → target
         self.helper.draw(
             device, queue, encoder,
             source,
-            &state.buf_b.view,
+            &state.buf_a.view,
             target,
             bytemuck::bytes_of(&HalationUniforms {
-                mode: 2,
+                mode: 3,
                 main_texel_size_x: 1.0 / ctx.width as f32,
                 main_texel_size_y: 1.0 / ctx.height as f32,
-                halo_texel_size_x: 1.0 / buf_b_w as f32,
-                halo_texel_size_y: 1.0 / buf_b_h as f32,
+                halo_texel_size_x: 1.0 / half_w as f32,
+                halo_texel_size_y: 1.0 / half_h as f32,
                 ..base
             }),
             "Halation Composite",
@@ -212,22 +217,19 @@ impl PostProcessEffect for HalationFX {
         );
     }
 
-    // HalationFX.cs lines 98-108 — ClearState (clears all owner buffers, does NOT release)
     fn clear_state(&mut self) {
-        // Unity RenderTextureUtil.Clear() zeros the texture contents.
-        // In wgpu we achieve the same by re-creating the textures (no direct clear API).
-        // Drop all states; they will be re-created on next apply().
         self.states.clear();
     }
 
-    // HalationFX.cs lines 42-46 — InitializeState / resize
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.width = width;
         self.height = height;
         let format = wgpu::TextureFormat::Rgba16Float;
+        let hw = (width / 2).max(1);
+        let hh = (height / 2).max(1);
         for (key, state) in &mut self.states {
-            state.buf_a = RenderTarget::new(device, width, height, format, &format!("HalationA_{key}"));
-            state.buf_b = RenderTarget::new(device, width, height, format, &format!("HalationB_{key}"));
+            state.buf_a = RenderTarget::new(device, hw, hh, format, &format!("HalationA_{key}"));
+            state.buf_b = RenderTarget::new(device, hw, hh, format, &format!("HalationB_{key}"));
         }
     }
 
@@ -237,12 +239,10 @@ impl PostProcessEffect for HalationFX {
 }
 
 impl StatefulEffect for HalationFX {
-    // HalationFX.cs lines 110-117 — ClearState(int ownerKey)
     fn clear_state_for_owner(&mut self, owner_key: i64) {
         self.states.remove(&owner_key);
     }
 
-    // HalationFX.cs lines 119-130 — CleanupOwner
     fn cleanup_owner(&mut self, owner_key: i64) {
         self.states.remove(&owner_key);
     }

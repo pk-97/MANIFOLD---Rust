@@ -187,6 +187,9 @@ pub struct Application {
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
     pub(crate) surface_format: wgpu::TextureFormat,
+    /// macOS EDR headroom (1.0 = SDR, e.g. 2.0 = display can show 2x SDR white).
+    /// Queried at surface creation via NSScreen. Used to set max_display_nits.
+    pub(crate) edr_headroom: f64,
 
     // UI
     pub(crate) ui_root: UIRoot,
@@ -301,7 +304,8 @@ impl Application {
             output_blit_format: None,
             ui_renderer: None,
             layer_bitmap_gpu: None,
-            surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            surface_format: wgpu::TextureFormat::Rgba16Float,
+            edr_headroom: 1.0,
             ui_root: UIRoot::new(),
             // UI frame rate: uncapped (120fps target, vsync limits actual present).
             // Content thread has its own timer at project FPS — fully decoupled.
@@ -918,12 +922,19 @@ impl ApplicationHandler for Application {
 
             // Configure surface
             let caps = surface.get_capabilities(&adapter);
-            let format = caps
-                .formats
-                .iter()
-                .find(|f| f.is_srgb())
-                .copied()
-                .unwrap_or(caps.formats[0]);
+            // Prefer Rgba16Float for macOS EDR (extended dynamic range).
+            // edr_surface::configure_edr() sets the CAMetalLayer colorspace to
+            // extendedLinearSRGB after surface creation — required for correct display.
+            // Fallback to sRGB if Rgba16Float isn't available.
+            let format = if caps.formats.contains(&wgpu::TextureFormat::Rgba16Float) {
+                wgpu::TextureFormat::Rgba16Float
+            } else {
+                caps.formats
+                    .iter()
+                    .find(|f| f.is_srgb())
+                    .copied()
+                    .unwrap_or(caps.formats[0])
+            };
 
             let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
                 wgpu::PresentMode::Mailbox
@@ -942,6 +953,12 @@ impl ApplicationHandler for Application {
                 desired_maximum_frame_latency: 2,
             };
             surface.configure(&device, &config);
+
+            // Configure CAMetalLayer for EDR (colorspace + wantsExtendedDynamicRangeContent).
+            // Must happen after surface.configure() which creates the CAMetalLayer.
+            if format == wgpu::TextureFormat::Rgba16Float {
+                self.edr_headroom = crate::edr_surface::configure_edr(&surface);
+            }
 
             let surface_wrapper = SurfaceWrapper {
                 surface,
@@ -1029,6 +1046,7 @@ impl ApplicationHandler for Application {
             let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(
                 Box::new(LayerCompositor::new(&content_gpu.device, &content_gpu.queue, output_w, output_h)),
             );
+            content_pipeline.edr_headroom = self.edr_headroom;
             // Give the content pipeline the IOSurface bridge so it can copy output + signal.
             #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.shared_texture_bridge {

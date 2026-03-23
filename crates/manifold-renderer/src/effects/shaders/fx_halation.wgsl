@@ -1,8 +1,11 @@
-// Mechanical port of Unity HalationEffect.shader.
-// Two textures: main_tex (_MainTex) and halo_tex (_HaloTex).
-// Mode 0: fragThreshold — 13-tap blur with threshold extraction + tint (reads main_tex)
-// Mode 1: fragBlurWide  — 13-tap blur (reads halo_tex)
-// Mode 2: fragComposite — src + halo * amount (reads main_tex + halo_tex)
+// Halation effect — separable Gaussian blur with threshold extraction.
+// Improvement over Unity's 13-tap 2D cross kernel: separable 17-tap Gaussian
+// produces smooth, gap-free glow with equivalent GPU cost at half-resolution.
+//
+// Pass 0 (mode 0): Threshold + Tint — extract bright pixels, apply tint color
+// Pass 1 (mode 1): Horizontal Gaussian blur
+// Pass 2 (mode 2): Vertical Gaussian blur
+// Pass 3 (mode 3): Composite — source + blurred halo × amount
 
 struct Uniforms {
     mode: u32,
@@ -39,151 +42,82 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     return out;
 }
 
+// 17-tap normalized Gaussian kernel (sigma = 4.0 relative to tap indices).
+// Weights sum to 1.0. Wider sigma than a 13-tap kernel produces a softer,
+// more cinematic glow falloff.
+const W0: f32 = 0.10315;
+const W1: f32 = 0.09998;
+const W2: f32 = 0.09103;
+const W3: f32 = 0.07786;
+const W4: f32 = 0.06257;
+const W5: f32 = 0.04723;
+const W6: f32 = 0.03350;
+const W7: f32 = 0.02232;
+const W8: f32 = 0.01396;
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if uniforms.mode == 0u {
-        // HalationEffect.shader Pass 0 (ThresholdTintBlur): fragThreshold
-        // float2 texel = _MainTex_TexelSize.xy;
-        // float r = _Spread * 6.0 + 1.0;
-        // float3 tint = float3(_TintR, _TintG, _TintB);
-        let texel = vec2<f32>(uniforms.main_texel_size_x, uniforms.main_texel_size_y);
-        let r = uniforms.spread * 6.0 + 1.0;
+        // Pass 0: Threshold + Tint — extract bright pixels, apply tint color.
+        // No blur in this pass; the separable H/V passes handle all blurring.
+        let col = textureSample(main_tex, tex_sampler, in.uv).rgb;
+        let lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
+        let mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
         let tint = vec3<f32>(uniforms.tint_r, uniforms.tint_g, uniforms.tint_b);
+        return vec4<f32>(col * mk * tint, 1.0);
 
-        // Port of SAMPLE_THRESH macro (shader lines 76-82):
-        // float2 suv = i.uv + float2(ox, oy) * texel * r;
-        // float3 col = tex2D(_MainTex, suv).rgb;
-        // float lm = dot(col, float3(0.2126, 0.7152, 0.0722));
-        // float mk = smoothstep(_Threshold - 0.1, _Threshold + 0.1, lm);
-        // acc += col * mk * tint * w;
-        var acc = vec3<f32>(0.0);
+    } else if uniforms.mode == 1u {
+        // Pass 1: Horizontal Gaussian blur (17-tap separable)
+        let step_size = uniforms.spread * 5.0 + 1.0;
+        let dx = vec2<f32>(uniforms.main_texel_size_x * step_size, 0.0);
 
-        // SAMPLE_THRESH( 0,  0, 0.16)
-        var suv = in.uv + vec2<f32>( 0.0,  0.0) * texel * r;
-        var col = textureSample(main_tex, tex_sampler, suv).rgb;
-        var lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        var mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.16;
-
-        // SAMPLE_THRESH( 1,  0, 0.10)
-        suv = in.uv + vec2<f32>( 1.0,  0.0) * texel * r;
-        col = textureSample(main_tex, tex_sampler, suv).rgb;
-        lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.10;
-
-        // SAMPLE_THRESH(-1,  0, 0.10)
-        suv = in.uv + vec2<f32>(-1.0,  0.0) * texel * r;
-        col = textureSample(main_tex, tex_sampler, suv).rgb;
-        lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.10;
-
-        // SAMPLE_THRESH( 0,  1, 0.10)
-        suv = in.uv + vec2<f32>( 0.0,  1.0) * texel * r;
-        col = textureSample(main_tex, tex_sampler, suv).rgb;
-        lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.10;
-
-        // SAMPLE_THRESH( 0, -1, 0.10)
-        suv = in.uv + vec2<f32>( 0.0, -1.0) * texel * r;
-        col = textureSample(main_tex, tex_sampler, suv).rgb;
-        lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.10;
-
-        // SAMPLE_THRESH( 1,  1, 0.06)
-        suv = in.uv + vec2<f32>( 1.0,  1.0) * texel * r;
-        col = textureSample(main_tex, tex_sampler, suv).rgb;
-        lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.06;
-
-        // SAMPLE_THRESH(-1,  1, 0.06)
-        suv = in.uv + vec2<f32>(-1.0,  1.0) * texel * r;
-        col = textureSample(main_tex, tex_sampler, suv).rgb;
-        lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.06;
-
-        // SAMPLE_THRESH( 1, -1, 0.06)
-        suv = in.uv + vec2<f32>( 1.0, -1.0) * texel * r;
-        col = textureSample(main_tex, tex_sampler, suv).rgb;
-        lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.06;
-
-        // SAMPLE_THRESH(-1, -1, 0.06)
-        suv = in.uv + vec2<f32>(-1.0, -1.0) * texel * r;
-        col = textureSample(main_tex, tex_sampler, suv).rgb;
-        lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.06;
-
-        // SAMPLE_THRESH( 2,  0, 0.03)
-        suv = in.uv + vec2<f32>( 2.0,  0.0) * texel * r;
-        col = textureSample(main_tex, tex_sampler, suv).rgb;
-        lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.03;
-
-        // SAMPLE_THRESH(-2,  0, 0.03)
-        suv = in.uv + vec2<f32>(-2.0,  0.0) * texel * r;
-        col = textureSample(main_tex, tex_sampler, suv).rgb;
-        lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.03;
-
-        // SAMPLE_THRESH( 0,  2, 0.03)
-        suv = in.uv + vec2<f32>( 0.0,  2.0) * texel * r;
-        col = textureSample(main_tex, tex_sampler, suv).rgb;
-        lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.03;
-
-        // SAMPLE_THRESH( 0, -2, 0.03)
-        suv = in.uv + vec2<f32>( 0.0, -2.0) * texel * r;
-        col = textureSample(main_tex, tex_sampler, suv).rgb;
-        lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        acc += col * mk * tint * 0.03;
+        var acc = textureSample(main_tex, tex_sampler, in.uv).rgb * W0;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dx      ).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dx      ).rgb) * W1;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 2.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dx * 2.0).rgb) * W2;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 3.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dx * 3.0).rgb) * W3;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 4.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dx * 4.0).rgb) * W4;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 5.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dx * 5.0).rgb) * W5;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 6.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dx * 6.0).rgb) * W6;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 7.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dx * 7.0).rgb) * W7;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 8.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dx * 8.0).rgb) * W8;
 
         return vec4<f32>(acc, 1.0);
 
-    } else if uniforms.mode == 1u {
-        // HalationEffect.shader Pass 1 (BlurWide): fragBlurWide
-        // float2 texel = _HaloTex_TexelSize.xy;
-        // float r = _Spread * 8.0 + 2.0;
-        let texel = vec2<f32>(uniforms.halo_texel_size_x, uniforms.halo_texel_size_y);
-        let r = uniforms.spread * 8.0 + 2.0;
+    } else if uniforms.mode == 2u {
+        // Pass 2: Vertical Gaussian blur (17-tap separable)
+        let step_size = uniforms.spread * 5.0 + 1.0;
+        let dy = vec2<f32>(0.0, uniforms.main_texel_size_y * step_size);
 
-        // Port of SAMPLE_BLUR macro (shader line 125):
-        // acc += tex2D(_HaloTex, i.uv + float2(ox, oy) * texel * r).rgb * w;
-        var acc = vec3<f32>(0.0);
-
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>( 0.0,  0.0) * texel * r).rgb * 0.16;
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>( 1.0,  0.0) * texel * r).rgb * 0.10;
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>(-1.0,  0.0) * texel * r).rgb * 0.10;
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>( 0.0,  1.0) * texel * r).rgb * 0.10;
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>( 0.0, -1.0) * texel * r).rgb * 0.10;
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>( 1.0,  1.0) * texel * r).rgb * 0.06;
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>(-1.0,  1.0) * texel * r).rgb * 0.06;
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>( 1.0, -1.0) * texel * r).rgb * 0.06;
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>(-1.0, -1.0) * texel * r).rgb * 0.06;
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>( 2.0,  0.0) * texel * r).rgb * 0.03;
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>(-2.0,  0.0) * texel * r).rgb * 0.03;
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>( 0.0,  2.0) * texel * r).rgb * 0.03;
-        acc += textureSample(halo_tex, tex_sampler, in.uv + vec2<f32>( 0.0, -2.0) * texel * r).rgb * 0.03;
+        var acc = textureSample(main_tex, tex_sampler, in.uv).rgb * W0;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dy      ).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dy      ).rgb) * W1;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dy * 2.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dy * 2.0).rgb) * W2;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dy * 3.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dy * 3.0).rgb) * W3;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dy * 4.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dy * 4.0).rgb) * W4;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dy * 5.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dy * 5.0).rgb) * W5;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dy * 6.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dy * 6.0).rgb) * W6;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dy * 7.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dy * 7.0).rgb) * W7;
+        acc += (textureSample(main_tex, tex_sampler, in.uv + dy * 8.0).rgb
+              + textureSample(main_tex, tex_sampler, in.uv - dy * 8.0).rgb) * W8;
 
         return vec4<f32>(acc, 1.0);
 
     } else {
-        // HalationEffect.shader Pass 2 (Composite): fragComposite
-        // fixed4 src = tex2D(_MainTex, i.uv);
-        // float3 halo = tex2D(_HaloTex, i.uv).rgb;
-        // float3 result = src.rgb + halo * _Amount;
-        // return float4(result, src.a);
+        // Pass 3: Composite — source + halo × amount
         let src = textureSample(main_tex, tex_sampler, in.uv);
         let halo = textureSample(halo_tex, tex_sampler, in.uv).rgb;
         let result = src.rgb + halo * uniforms.amount;

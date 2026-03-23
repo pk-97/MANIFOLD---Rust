@@ -1,8 +1,12 @@
-// Mechanical port of Unity CrtEffect.shader.
+// Port of Unity CrtEffect.shader with HDR glow boost.
 // Two textures: main_tex (_MainTex) and glow_tex (_GlowTex).
-// Mode 0: fragPrefilter  — 4-tap box blur + smoothstep threshold + warm tint → half-res
+// Mode 0: fragPrefilter  — 4-tap box blur + smoothstep threshold + warm tint + HDR boost → half-res
 // Mode 1: fragDownsample — 4-tap box blur → quarter-res
 // Mode 2: fragComposite  — barrel distort + scanlines + phosphor mask + glow + vignette + lerp
+//
+// HDR_BOOST in prefilter produces values > 1.0 so the phosphor glow has
+// real dynamic range. ACES tonemapping (applied after all effects) compresses
+// the result back to display range with smooth highlight rolloff.
 
 struct Uniforms {
     mode: u32,               // 0=prefilter, 1=downsample, 2=composite

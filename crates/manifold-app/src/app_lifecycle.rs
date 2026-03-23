@@ -352,9 +352,12 @@ impl Application {
 
         let surface_format = surface.format();
 
+        // Configure CAMetalLayer for EDR (colorspace + wantsExtendedDynamicRangeContent).
+        if surface_format == wgpu::TextureFormat::Rgba16Float {
+            crate::edr_surface::configure_edr(&surface.surface);
+        }
+
         // Create a blit pipeline matching the output surface format.
-        // The main workspace uses Bgra8UnormSrgb; the output window uses Rgba16Float.
-        // Each needs its own pipeline for the target format.
         if self.output_blit_pipeline.is_none()
             || self.output_blit_format != Some(surface_format)
         {

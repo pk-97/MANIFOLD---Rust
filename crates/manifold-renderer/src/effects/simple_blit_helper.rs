@@ -122,7 +122,7 @@ impl SimpleBlitHelper {
     pub fn draw(
         &self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
@@ -132,7 +132,13 @@ impl SimpleBlitHelper {
         height: u32,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        queue.write_buffer(&self.uniform_buffer, 0, uniform_bytes);
+        // Per-pass uniform buffer — see DualTextureBlitHelper for rationale.
+        use wgpu::util::DeviceExt;
+        let pass_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(label),
+            contents: uniform_bytes,
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(&format!("{label} BG")),
@@ -140,7 +146,7 @@ impl SimpleBlitHelper {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.uniform_buffer.as_entire_binding(),
+                    resource: pass_uniforms.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,

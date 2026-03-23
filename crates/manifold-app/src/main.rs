@@ -7,6 +7,7 @@ mod content_state;
 mod content_thread;
 mod dialog_path_memory;
 mod editing_host;
+mod edr_surface;
 mod frame_timer;
 mod input_handler;
 #[cfg(target_os = "macos")]

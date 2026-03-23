@@ -67,6 +67,9 @@ const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// both threads share the same wgpu Device).
 pub struct ContentPipeline {
     compositor: Box<dyn Compositor>,
+    /// EDR headroom from the display (1.0 = SDR, e.g. 2.0 = 2x SDR white).
+    /// Used to compute max_display_nits for tonemapping.
+    pub edr_headroom: f64,
     /// Double-buffered output textures. UI reads front, content writes to back.
     /// NOT used on macOS (IOSurface path bypasses double-buffering).
     #[cfg(not(target_os = "macos"))]
@@ -106,6 +109,7 @@ impl ContentPipeline {
         let shared = Arc::new(SharedOutputView::new());
         Self {
             compositor,
+            edr_headroom: 1.0,
             #[cfg(not(target_os = "macos"))]
             output_buffers: None,
             #[cfg(not(target_os = "macos"))]
@@ -278,7 +282,15 @@ impl ContentPipeline {
             layers: &layer_descs,
             master_effects,
             master_effect_groups,
-            tonemap: TonemapSettings::default(),
+            tonemap: TonemapSettings {
+                exposure: 1.0,
+                hdr_output_enabled: self.edr_headroom > 1.0,
+                paper_white_nits: 200.0,
+                // Dynamic max nits from actual display EDR headroom.
+                // headroom=1.0 (SDR) → 200 nits, headroom=2.0 → 400 nits, etc.
+                // Unity: MonitorOutput.cs reads HDROutputSettings.maxFullFrameToneMapLuminance.
+                max_display_nits: (200.0 * self.edr_headroom as f32).min(10000.0),
+            },
         };
 
         // Render compositor (records into encoder, returns view into tonemap output)
