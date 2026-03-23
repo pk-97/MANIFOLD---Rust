@@ -321,20 +321,15 @@ impl UIRoot {
                         actions.push(PanelAction::BrowserSearchClicked);
                         consumed = true;
                     } else {
-                        // Capture mode/context before handle_click — close() clears them.
-                        let bp_mode = self.browser_popup.mode();
-                        let bp_tab = self.browser_popup.tab();
-                        let bp_layer_id = self.browser_popup.layer_id().clone();
-
                         if let Some(bp_action) = self.browser_popup.handle_click(*node_id) {
                             match bp_action {
-                                BrowserPopupAction::Selected(key) => {
-                                    match bp_mode {
+                                BrowserPopupAction::Selected { key, mode, tab, layer_id } => {
+                                    match mode {
                                         BrowserPopupMode::Effect => {
-                                            actions.push(PanelAction::AddEffect(bp_tab, key as usize));
+                                            actions.push(PanelAction::AddEffect(tab, key as usize));
                                         }
                                         BrowserPopupMode::Generator => {
-                                            actions.push(PanelAction::SetGenType(bp_layer_id, key as usize));
+                                            actions.push(PanelAction::SetGenType(layer_id, key as usize));
                                         }
                                     }
                                 }

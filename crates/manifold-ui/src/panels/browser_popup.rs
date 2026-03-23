@@ -67,7 +67,14 @@ pub enum BrowserPopupMode {
 /// Result of an interaction.
 #[derive(Debug, Clone)]
 pub enum BrowserPopupAction {
-    Selected(i32),
+    /// Selection carries the popup's context atomically — prevents temporal coupling
+    /// where context could be read after close() clears it.
+    Selected {
+        key: i32,
+        mode: BrowserPopupMode,
+        tab: InspectorTab,
+        layer_id: Option<LayerId>,
+    },
     Paste,
     Dismissed,
 }
@@ -514,8 +521,15 @@ impl BrowserPopupPanel {
         for &(cell_id, src_idx) in &self.cell_ids {
             if id == cell_id {
                 let key = self.item_keys[src_idx];
+                // Capture context BEFORE close() clears it
+                let action = BrowserPopupAction::Selected {
+                    key,
+                    mode: self.mode,
+                    tab: self.tab,
+                    layer_id: self.layer_id.clone(),
+                };
                 self.close();
-                return Some(BrowserPopupAction::Selected(key));
+                return Some(action);
             }
         }
 
