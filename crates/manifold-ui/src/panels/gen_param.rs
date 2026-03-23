@@ -602,8 +602,9 @@ impl GenParamPanel {
                 let norm = BitmapSlider::x_to_normalized(ids.track_rect, pos.x);
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
                 let val = if info.whole_numbers { val.round() } else { val };
+                let display_norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
                 let text = format_param_value(val, info.whole_numbers, info.value_labels.as_deref());
-                BitmapSlider::update_value(tree, ids, norm, &text);
+                BitmapSlider::update_value(tree, ids, display_norm, &text);
                 self.param_cache[pi] = val;
                 return vec![PanelAction::GenParamChanged(pi, val)];
             }
