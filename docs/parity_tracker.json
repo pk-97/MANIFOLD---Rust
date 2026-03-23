@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "last_updated": "2026-03-21",
+    "last_updated": "2026-03-24",
     "audit_source": "docs/DEFINITIVE_PARITY_AUDIT.md",
     "audit_date": "2026-03-17",
     "true_functional_completion_pct": 68,
@@ -529,13 +529,13 @@
       "number": 38,
       "id": "GAP-IO-4",
       "tier": 4,
-      "subsystem": "io",
+      "subsystem": "media",
       "title": "VideoExporter",
       "severity": "medium",
       "est_loc": 1000,
-      "status": "todo",
-      "commit": null,
-      "notes": "1,275 lines. FFmpeg subprocess, GPU readback, Metal encoding, HDR export, audio muxing."
+      "status": "done",
+      "commit": "d754eb0",
+      "notes": "manifold-media crate: native Metal encoder (SDR H.264), ExportSession, AudioMuxer (FFmpeg post-mux), Cmd+E shortcut. HDR HEVC architecture ready but not yet wired."
     },
     {
       "number": 39,
