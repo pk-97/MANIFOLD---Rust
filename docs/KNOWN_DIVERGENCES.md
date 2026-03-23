@@ -215,6 +215,12 @@ Agents: Before adding a divergence, verify it is genuinely necessary. Most "Rust
 - **Approved by:** Peter / task spec
 - **Files affected:** `manifold-playback/src/midi_clock_sync.rs`
 
+### [D-31] EffectType/GeneratorType: integer enum → string-keyed newtype
+- **Unity does:** `EffectType` and `GeneratorType` are C# enums with integer values. Serialized as integers in JSON (e.g. `"effectType": 12` for Bloom).
+- **Rust does:** `EffectTypeId` and `GeneratorTypeId` are `Cow<'static, str>` newtypes with named constants. Serialized as strings (e.g. `"effectType": "Bloom"`). Deserialization accepts both legacy integers and strings for backward compatibility.
+- **Why:** String-keyed IDs eliminate enum discriminant gaps when effects are added/removed, reduce the number of locations to update (8 → 3), enable future plugin/custom effect extensibility, and produce human-readable project files. The integer-to-string deserialization path ensures all existing projects load correctly.
+- **Files affected:** `manifold-core/src/effect_type_id.rs`, `manifold-core/src/generator_type_id.rs`, `manifold-core/src/effect_type_registry.rs`, `manifold-core/src/generator_type_registry.rs`, all crates
+
 ---
 
 ## Add new divergences above this line.
