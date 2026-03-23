@@ -56,7 +56,7 @@ pub(crate) enum ActiveInspectorDrag {
     LayerOpacity { layer_id: LayerId, value: f32 },
     ClipSlip { clip_id: manifold_core::ClipId, value: f32 },
     ClipLoop { clip_id: manifold_core::ClipId, value: f32 },
-    EffectParam { layer_id: LayerId, effect_idx: usize, param_idx: usize, value: f32, is_clip: bool, clip_id: Option<manifold_core::ClipId> },
+    EffectParam { tab: manifold_ui::InspectorTab, layer_id: LayerId, effect_idx: usize, param_idx: usize, value: f32, clip_id: Option<manifold_core::ClipId> },
     GenParam { layer_id: LayerId, param_idx: usize, value: f32 },
 }
 
@@ -82,15 +82,21 @@ impl ActiveInspectorDrag {
                     clip.loop_duration_beats = *value;
                 }
             }
-            Self::EffectParam { layer_id, effect_idx, param_idx, value, is_clip, clip_id } => {
-                let effects: Option<&mut Vec<manifold_core::effects::EffectInstance>> = if *is_clip {
-                    clip_id.as_ref().and_then(|cid| {
-                        project.timeline.find_clip_by_id_mut(cid)
-                            .map(|c| &mut c.effects)
-                    })
-                } else {
-                    project.timeline.find_layer_by_id_mut(layer_id)
-                        .and_then(|(_, l)| l.effects.as_mut())
+            Self::EffectParam { tab, layer_id, effect_idx, param_idx, value, clip_id } => {
+                let effects: Option<&mut Vec<manifold_core::effects::EffectInstance>> = match tab {
+                    manifold_ui::InspectorTab::Master => {
+                        Some(&mut project.settings.master_effects)
+                    }
+                    manifold_ui::InspectorTab::Layer => {
+                        project.timeline.find_layer_by_id_mut(layer_id)
+                            .and_then(|(_, l)| l.effects.as_mut())
+                    }
+                    manifold_ui::InspectorTab::Clip => {
+                        clip_id.as_ref().and_then(|cid| {
+                            project.timeline.find_clip_by_id_mut(cid)
+                                .map(|c| &mut c.effects)
+                        })
+                    }
                 };
                 if let Some(effects) = effects
                     && let Some(effect) = effects.get_mut(*effect_idx)

@@ -437,14 +437,13 @@ pub(super) fn dispatch_inspector(
             if let Some(fx) = effects.and_then(|e| e.get(*fx_idx)) {
                 let val = fx.get_base_param(*param_idx);
                 *drag_snapshot = Some(val);
-                let is_clip = tab == InspectorTab::Clip;
                 *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::EffectParam {
+                    tab,
                     layer_id: active_layer.clone().unwrap_or_default(),
                     effect_idx: *fx_idx,
                     param_idx: *param_idx,
                     value: val,
-                    is_clip,
-                    clip_id: if is_clip { selection.primary_selected_clip_id.clone() } else { None },
+                    clip_id: if tab == InspectorTab::Clip { selection.primary_selected_clip_id.clone() } else { None },
                 });
             }
             DispatchResult::handled()
