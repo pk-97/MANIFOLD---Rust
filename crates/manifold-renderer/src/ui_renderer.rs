@@ -140,16 +140,19 @@ pub struct UIRenderer {
     globals_buffer: wgpu::Buffer,
     globals_bind_group_layout: wgpu::BindGroupLayout,
 
-    // Text rendering — two independent TextRenderers to avoid glyphon vertex
-    // buffer corruption when multiple render() calls share one CommandEncoder.
-    // Each owns its own GPU vertex buffer; they share the glyph atlas.
+    // Text rendering — one TextRenderer for Main, a pool for Overlay passes.
+    // Each TextRenderer owns its own GPU vertex buffer; they share the glyph atlas.
+    // Multiple overlay render() calls per encoder each need a distinct TextRenderer
+    // because prepare() replaces the internal vertex buffer, destroying the one
+    // referenced by the previous (not yet submitted) render pass.
     font_system: FontSystem,
     swash_cache: SwashCache,
     #[allow(dead_code)]
     text_cache: Cache,
     text_atlas: TextAtlas,
     text_renderer: TextRenderer,
-    overlay_text_renderer: TextRenderer,
+    overlay_text_renderers: Vec<TextRenderer>,
+    overlay_pass_index: usize,
     viewport: Viewport,
     text_buffers: Vec<TextBuffer>,
 
@@ -284,8 +287,6 @@ impl UIRenderer {
         let mut text_atlas = TextAtlas::new(device, queue, &cache, target_format);
         let text_renderer =
             TextRenderer::new(&mut text_atlas, device, wgpu::MultisampleState::default(), None);
-        let overlay_text_renderer =
-            TextRenderer::new(&mut text_atlas, device, wgpu::MultisampleState::default(), None);
         let viewport = Viewport::new(device, &cache);
 
         Self {
@@ -297,7 +298,8 @@ impl UIRenderer {
             text_cache: cache,
             text_atlas,
             text_renderer,
-            overlay_text_renderer,
+            overlay_text_renderers: Vec::new(),
+            overlay_pass_index: 0,
             viewport,
             text_buffers: Vec::new(),
             text_buffer_cache: ahash::AHashMap::with_capacity(256),
@@ -591,6 +593,13 @@ impl UIRenderer {
 
     // ── Render pass ─────────────────────────────────────────────────
 
+    /// Reset the overlay pass counter. Call once per frame before any
+    /// `render(..., TextMode::Overlay)` calls so each overlay pass gets
+    /// its own TextRenderer (preventing vertex buffer destruction).
+    pub fn begin_frame(&mut self) {
+        self.overlay_pass_index = 0;
+    }
+
     /// Render all queued commands to the target view.
     ///
     /// `width`/`height`: logical pixel dimensions (matches UITree coordinates).
@@ -666,6 +675,10 @@ impl UIRenderer {
 
         // ── Text preparation (skipped for TextMode::Skip) ──────────
         let has_text = !matches!(text_mode, TextMode::Skip) && !self.text_commands.is_empty();
+
+        // Index into overlay_text_renderers pool for this render() call.
+        // Computed during prepare, used during the render pass.
+        let mut overlay_idx: Option<usize> = None;
 
         if has_text {
             // Prepare text buffers for glyphon — reuse cached buffers where possible.
@@ -745,9 +758,25 @@ impl UIRenderer {
             self.viewport.update(queue, Resolution { width: physical_w, height: physical_h });
 
             // Prepare the appropriate TextRenderer — each has its own vertex buffer.
+            // Overlay passes use a pool: each call within one encoder gets a fresh
+            // TextRenderer so prepare() doesn't destroy the previous pass's buffer.
+            if matches!(text_mode, TextMode::Overlay) {
+                let idx = self.overlay_pass_index;
+                self.overlay_pass_index += 1;
+                // Grow pool on demand
+                while self.overlay_text_renderers.len() <= idx {
+                    self.overlay_text_renderers.push(TextRenderer::new(
+                        &mut self.text_atlas,
+                        device,
+                        wgpu::MultisampleState::default(),
+                        None,
+                    ));
+                }
+                overlay_idx = Some(idx);
+            }
             let renderer = match text_mode {
                 TextMode::Main => &mut self.text_renderer,
-                TextMode::Overlay => &mut self.overlay_text_renderer,
+                TextMode::Overlay => &mut self.overlay_text_renderers[overlay_idx.unwrap()],
                 TextMode::Skip => unreachable!(),
             };
             renderer
@@ -810,7 +839,11 @@ impl UIRenderer {
             if has_text {
                 let renderer = match text_mode {
                     TextMode::Main => &self.text_renderer,
-                    TextMode::Overlay => &self.overlay_text_renderer,
+                    TextMode::Overlay => {
+                        // overlay_pass_index was already incremented, so the
+                        // renderer we prepared is at index - 1.
+                        &self.overlay_text_renderers[overlay_idx.unwrap()]
+                    }
                     TextMode::Skip => unreachable!(),
                 };
                 renderer

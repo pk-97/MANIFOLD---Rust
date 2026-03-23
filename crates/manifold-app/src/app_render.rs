@@ -890,6 +890,13 @@ impl Application {
                 let logical_w = (surface_w as f64 / scale) as u32;
                 let logical_h = (surface_h as f64 / scale) as u32;
 
+                // Reset overlay TextRenderer pool index so each overlay pass
+                // this frame gets its own TextRenderer (prevents vertex buffer
+                // destruction before encoder submission).
+                if let Some(ui) = &mut self.ui_renderer {
+                    ui.begin_frame();
+                }
+
                 // Pass 1: UITree rects + text (track backgrounds, ruler, chrome panels).
                 // Skip overlay nodes that render after bitmap textures: waveform/stem
                 // lane buttons (Pass 2b), perf HUD (Pass 3b), popups (Pass 4).
