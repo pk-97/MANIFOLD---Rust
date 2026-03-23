@@ -1508,6 +1508,16 @@ impl ApplicationHandler for Application {
                             }
                             _ => { consumed = true; } // Suppress all other keys
                         }
+                        // Reactive search: push filter on every keystroke
+                        if consumed
+                            && self.text_input.field
+                                == crate::text_input::TextInputField::SearchFilter
+                        {
+                            self.ui_root
+                                .browser_popup
+                                .set_filter(self.text_input.text.trim().to_string());
+                            self.needs_rebuild = true;
+                        }
                         // Skip normal shortcut processing when text input consumed the key
                         if consumed {
                             return;

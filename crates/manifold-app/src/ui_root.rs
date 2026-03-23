@@ -579,14 +579,17 @@ impl UIRoot {
                 use manifold_core::effect_category_registry;
                 use manifold_ui::panels::browser_popup::*;
 
-                let mut names = Vec::new();
-                let mut keys = Vec::new();
-                let mut categories = Vec::new();
-                for &et in EffectType::ALL {
-                    names.push(et.display_name().to_string());
-                    keys.push(et as i32);
-                    categories.push(effect_category_registry::get_category(et).to_string());
-                }
+                let mut items: Vec<(String, i32, String)> = EffectType::ALL.iter()
+                    .map(|&et| (
+                        et.display_name().to_string(),
+                        et as i32,
+                        effect_category_registry::get_category(et).to_string(),
+                    ))
+                    .collect();
+                items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+                let names: Vec<String> = items.iter().map(|i| i.0.clone()).collect();
+                let keys: Vec<i32> = items.iter().map(|i| i.1).collect();
+                let categories: Vec<String> = items.iter().map(|i| i.2.clone()).collect();
 
                 // Unique category names (excluding Generators)
                 let cat_names: Vec<String> = effect_category_registry::ALL_CATEGORIES.iter()
@@ -612,12 +615,13 @@ impl UIRoot {
                 use manifold_core::types::GeneratorType;
                 use manifold_ui::panels::browser_popup::*;
 
-                let mut names = Vec::new();
-                let mut keys = Vec::new();
-                for (i, &gt) in GeneratorType::ALL.iter().enumerate() {
-                    names.push(gt.display_name().to_string());
-                    keys.push(i as i32);
-                }
+                let mut items: Vec<(String, i32)> = GeneratorType::ALL.iter()
+                    .enumerate()
+                    .map(|(i, &gt)| (gt.display_name().to_string(), i as i32))
+                    .collect();
+                items.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+                let names: Vec<String> = items.iter().map(|i| i.0.clone()).collect();
+                let keys: Vec<i32> = items.iter().map(|i| i.1).collect();
 
                 self.browser_popup.set_screen_size(self.screen_width, self.screen_height);
                 self.browser_popup.open(BrowserPopupRequest {
