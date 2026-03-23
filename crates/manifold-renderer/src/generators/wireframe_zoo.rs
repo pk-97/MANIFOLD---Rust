@@ -212,22 +212,26 @@ impl Generator for WireframeZooGenerator {
         }
 
         // No animation for wireframe zoo (no anim param)
-        let verts = self.helper.build_vertices(
-            ctx.width as f32,
-            ctx.height as f32,
-            ctx.aspect,
-            line,
-            show_verts,
-            vert_size,
-            false,
-            0.0,
-            0.0,
-            ctx.dt,
-            scale,
-            1.0, // dot_scale: default
-        );
+        let (positions, instances, num_edges, edge_half_thick, dot_half_thick) =
+            self.helper.prepare_instances(
+                ctx.height as f32,
+                ctx.aspect,
+                line,
+                show_verts,
+                vert_size,
+                false,
+                0.0,
+                0.0,
+                scale,
+                1.0, // dot_scale: default
+            );
 
-        self.line_pipeline.draw(device, queue, encoder, target, verts, ctx.beat, profiler, "WireframeZoo", ctx.width, ctx.height);
+        self.line_pipeline.draw(
+            device, queue, encoder, target,
+            positions, instances, num_edges,
+            edge_half_thick, dot_half_thick,
+            ctx.beat, profiler, "WireframeZoo", ctx.width, ctx.height,
+        );
         self.helper.anim_progress
     }
 

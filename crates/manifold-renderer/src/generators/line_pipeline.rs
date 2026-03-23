@@ -1,100 +1,106 @@
 use crate::generators::generator_math::DEFAULT_DOT_RADIUS;
 
-/// Vertex format for CPU-expanded line quads.
+/// Per-instance edge data uploaded to the GPU storage buffer.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct LineVertex {
-    pub position: [f32; 2],
-    pub uv: [f32; 2],
-    pub alpha: f32,
-    pub _pad: f32,
+pub struct EdgeInstance {
+    pub a: u32,
+    pub b: u32,
+    pub alpha_bits: u32,
+    pub _pad: u32,
 }
 
-const VERTEX_SIZE: u64 = std::mem::size_of::<LineVertex>() as u64;
+/// Maximum number of projected vertex positions (Duocylinder = 576).
+const MAX_POSITIONS: u64 = 1024;
+/// Maximum instances (edges + dots). Duocylinder = 1152 edges + 576 dots = 1728.
+const MAX_INSTANCES: u64 = 2048;
 
-/// Maximum vertex count: Duocylinder worst case = 1152 edges * 6 + 576 dots * 6 = 10368
-const MAX_VERTICES: u64 = 12288;
+const POSITION_STRIDE: u64 = 8; // vec2<f32>
+const INSTANCE_STRIDE: u64 = 16; // EdgeInstance
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct LineUniforms {
+    rt_width: f32,
+    rt_height: f32,
+    edge_half_thick: f32,
     beat: f32,
-    _pad: [f32; 3],
+    dot_half_thick: f32,
+    num_edges: u32,
+    _pad: [f32; 2],
 }
 
-/// GPU pipeline for anti-aliased line rendering via CPU-expanded quads.
+/// GPU pipeline for instanced anti-aliased line rendering with capsule SDF.
 pub struct LinePipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
-    vertex_buffer: wgpu::Buffer,
+    positions_buffer: wgpu::Buffer,
+    instances_buffer: wgpu::Buffer,
 }
 
 impl LinePipeline {
     pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat, label: &str) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(&format!("{} Line Shader", label)),
+            label: Some(&format!("{label} Line Shader")),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("shaders/generator_lines.wgsl").into(),
             ),
         });
 
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("{} Line BGL", label)),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        let bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some(&format!("{label} Line BGL")),
+                entries: &[
+                    // Uniforms
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Positions storage buffer
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Edges/instances storage buffer
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some(&format!("{} Line Pipeline Layout", label)),
+            label: Some(&format!("{label} Line Pipeline Layout")),
             bind_group_layouts: &[&bind_group_layout],
             immediate_size: 0,
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(&format!("{} Line Pipeline", label)),
+            label: Some(&format!("{label} Line Pipeline")),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: VERTEX_SIZE,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        // position: float2
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        // uv: float2
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1,
-                        },
-                        // alpha: float
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 16,
-                            shader_location: 2,
-                        },
-                        // _pad: float
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32,
-                            offset: 20,
-                            shader_location: 3,
-                        },
-                    ],
-                }],
+                buffers: &[], // No vertex buffers — all data from storage
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -129,16 +135,23 @@ impl LinePipeline {
         });
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("{} Line Uniforms", label)),
+            label: Some(&format!("{label} Line Uniforms")),
             size: std::mem::size_of::<LineUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("{} Line Vertices", label)),
-            size: MAX_VERTICES * VERTEX_SIZE,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        let positions_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("{label} Line Positions")),
+            size: MAX_POSITIONS * POSITION_STRIDE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let instances_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("{label} Line Instances")),
+            size: MAX_INSTANCES * INSTANCE_STRIDE,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -146,28 +159,39 @@ impl LinePipeline {
             pipeline,
             bind_group_layout,
             uniform_buffer,
-            vertex_buffer,
+            positions_buffer,
+            instances_buffer,
         }
     }
 
-    /// Draw the given vertices as anti-aliased line quads.
-    /// Clears the target before drawing.
+    /// Draw line edges and dots via instanced rendering.
+    ///
+    /// `positions`: screen-space [0,1] vertex positions (aspect-corrected).
+    /// `instances`: edge + dot instance data (dots appended after edges).
+    /// `num_edges`: how many of the instances are edges (rest are dots).
+    /// `edge_half_thick` / `dot_half_thick`: half-thickness in pixels.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
-        vertices: &[LineVertex],
+        positions: &[[f32; 2]],
+        instances: &[EdgeInstance],
+        num_edges: u32,
+        edge_half_thick: f32,
+        dot_half_thick: f32,
         beat: f32,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
         profiler_label: &str,
         width: u32,
         height: u32,
     ) {
-        if vertices.is_empty() {
+        if instances.is_empty() {
             // Still clear the target
-            let ts = profiler.and_then(|p| p.render_timestamps(profiler_label, width, height));
+            let ts =
+                profiler.and_then(|p| p.render_timestamps(profiler_label, width, height));
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Line Clear Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -187,32 +211,59 @@ impl LinePipeline {
             return;
         }
 
+        // Upload uniforms
         let uniforms = LineUniforms {
+            rt_width: width as f32,
+            rt_height: height as f32,
+            edge_half_thick,
             beat,
-            _pad: [0.0; 3],
+            dot_half_thick,
+            num_edges,
+            _pad: [0.0; 2],
         };
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let vert_bytes = bytemuck::cast_slice(vertices);
-        let upload_size = vert_bytes.len() as u64;
-        if upload_size > MAX_VERTICES * VERTEX_SIZE {
-            log::warn!("Line vertex count {} exceeds max {}, truncating", vertices.len(), MAX_VERTICES);
-        }
-        let clamped_size = upload_size.min(MAX_VERTICES * VERTEX_SIZE);
-        queue.write_buffer(&self.vertex_buffer, 0, &vert_bytes[..clamped_size as usize]);
+        // Upload positions
+        let pos_bytes = bytemuck::cast_slice(positions);
+        let pos_limit = (MAX_POSITIONS * POSITION_STRIDE) as usize;
+        queue.write_buffer(
+            &self.positions_buffer,
+            0,
+            &pos_bytes[..pos_bytes.len().min(pos_limit)],
+        );
+
+        // Upload instances
+        let inst_bytes = bytemuck::cast_slice(instances);
+        let inst_limit = (MAX_INSTANCES * INSTANCE_STRIDE) as usize;
+        queue.write_buffer(
+            &self.instances_buffer,
+            0,
+            &inst_bytes[..inst_bytes.len().min(inst_limit)],
+        );
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Line BG"),
             layout: &self.bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.uniform_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.positions_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.instances_buffer.as_entire_binding(),
+                },
+            ],
         });
 
-        let vert_count = (clamped_size / VERTEX_SIZE) as u32;
+        let instance_count = (instances.len() as u64).min(MAX_INSTANCES) as u32;
         {
-            let ts = profiler.and_then(|p| p.render_timestamps(profiler_label, width, height));
+            let ts =
+                profiler.and_then(|p| p.render_timestamps(profiler_label, width, height));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Line Draw Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -231,66 +282,15 @@ impl LinePipeline {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..clamped_size));
-            pass.draw(0..vert_count, 0..1);
+            pass.draw(0..6, 0..instance_count);
         }
     }
-}
-
-// ─── Quad building functions ───
-
-/// Build 6 vertices (2 triangles) for a line segment from A to B.
-/// Positions in [0,1] screen space. `half_thick` is in pixels.
-#[inline]
-pub fn build_edge_quad(
-    ax: f32, ay: f32, bx: f32, by: f32,
-    half_thick: f32,
-    rt_width: f32, rt_height: f32,
-    alpha: f32,
-) -> [LineVertex; 6] {
-    let dx = (bx - ax) * rt_width;
-    let dy = (by - ay) * rt_height;
-    let len = (dx * dx + dy * dy).sqrt();
-    if len < 0.001 {
-        return [LineVertex { position: [0.0; 2], uv: [0.0; 2], alpha: 0.0, _pad: 0.0 }; 6];
-    }
-    let inv_len = 1.0 / len;
-    let perp_x = -dy * inv_len * half_thick / rt_width;
-    let perp_y = dx * inv_len * half_thick / rt_height;
-
-    let v0 = LineVertex { position: [ax - perp_x, ay - perp_y], uv: [-1.0, 0.0], alpha, _pad: 0.0 };
-    let v1 = LineVertex { position: [ax + perp_x, ay + perp_y], uv: [1.0, 0.0], alpha, _pad: 0.0 };
-    let v2 = LineVertex { position: [bx + perp_x, by + perp_y], uv: [1.0, 0.0], alpha, _pad: 0.0 };
-    let v3 = LineVertex { position: [bx - perp_x, by - perp_y], uv: [-1.0, 0.0], alpha, _pad: 0.0 };
-
-    // Two triangles: v0,v1,v2 and v0,v2,v3
-    [v0, v1, v2, v0, v2, v3]
-}
-
-/// Build 6 vertices (2 triangles) for a dot at position (cx, cy).
-/// `radius_px` is in pixels.
-#[inline]
-pub fn build_dot_quad(
-    cx: f32, cy: f32,
-    radius_px: f32,
-    rt_width: f32, rt_height: f32,
-    alpha: f32,
-) -> [LineVertex; 6] {
-    let half_x = radius_px / rt_width;
-    let half_y = radius_px / rt_height;
-
-    let v0 = LineVertex { position: [cx - half_x, cy - half_y], uv: [-1.0, -1.0], alpha, _pad: 0.0 };
-    let v1 = LineVertex { position: [cx + half_x, cy - half_y], uv: [1.0, -1.0], alpha, _pad: 0.0 };
-    let v2 = LineVertex { position: [cx + half_x, cy + half_y], uv: [1.0, 1.0], alpha, _pad: 0.0 };
-    let v3 = LineVertex { position: [cx - half_x, cy + half_y], uv: [-1.0, 1.0], alpha, _pad: 0.0 };
-
-    [v0, v1, v2, v0, v2, v3]
 }
 
 // ─── LineGeneratorHelper ───
 
 /// Shared helper for line-based generators. Manages projected vertices,
-/// edge connectivity, animation state, and vertex buffer assembly.
+/// edge connectivity, animation state, and produces GPU-ready instance data.
 pub struct LineGeneratorHelper {
     pub projected_x: Vec<f32>,
     pub projected_y: Vec<f32>,
@@ -298,7 +298,9 @@ pub struct LineGeneratorHelper {
     pub edge_a: Vec<usize>,
     pub edge_b: Vec<usize>,
     pub anim_progress: f32,
-    vertices: Vec<LineVertex>,
+    // GPU upload data
+    positions: Vec<[f32; 2]>,
+    instances: Vec<EdgeInstance>,
     // Depth sorting scratch buffers (Unity: LineMeshUtil.edgeDepth/edgeSortedIdx)
     edge_depth: Vec<f32>,
     edge_sorted_idx: Vec<usize>,
@@ -313,7 +315,8 @@ impl LineGeneratorHelper {
             edge_a: Vec::with_capacity(edge_count),
             edge_b: Vec::with_capacity(edge_count),
             anim_progress: 0.0,
-            vertices: Vec::with_capacity((edge_count + vertex_count) * 6),
+            positions: Vec::with_capacity(vertex_count),
+            instances: Vec::with_capacity(edge_count + vertex_count),
             edge_depth: vec![0.0; edge_count],
             edge_sorted_idx: vec![0; edge_count],
         }
@@ -326,22 +329,14 @@ impl LineGeneratorHelper {
         self.projected_z.resize(count, 0.0);
     }
 
-    /// Build the complete vertex array from projected positions and edge connectivity.
-    /// Returns a slice of vertices ready for GPU upload.
+    /// Prepare instance data for GPU upload. Returns (positions, instances, num_edges,
+    /// edge_half_thick_px, dot_half_thick_px).
     ///
-    /// `line_thickness`: half-thickness in pixels
-    /// `show_verts`: whether to draw vertex dots
-    /// `vert_size`: dot radius multiplier
-    /// `animate`: whether edge animation is active
-    /// `speed`: animation speed multiplier
-    /// `window`: animation window (fraction of total edges visible)
-    /// `dt`: delta time
-    /// `scale`: projection scale multiplier (applied to projected_x/y before building quads)
-    /// `dot_scale`: extra dot radius multiplier (Unity: LineGeneratorBase.GetDotScale).
-    ///              Default 1.0, Lissajous and OscilloscopeXY use 0.5.
-    pub fn build_vertices(
+    /// Positions are in [0,1] screen-space with aspect correction applied.
+    /// Instances contain edges first, then dots (if show_verts).
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_instances(
         &mut self,
-        rt_width: f32,
         rt_height: f32,
         aspect: f32,
         line_thickness: f32,
@@ -350,36 +345,41 @@ impl LineGeneratorHelper {
         animate: bool,
         speed: f32,
         window: f32,
-        _dt: f32,
         scale: f32,
         dot_scale: f32,
-    ) -> &[LineVertex] {
-        self.vertices.clear();
-        let half_thick = line_thickness * rt_height * 0.5;
+    ) -> (&[[f32; 2]], &[EdgeInstance], u32, f32, f32) {
+        let vert_count = self.projected_x.len();
         let edge_count = self.edge_a.len();
-
-        // Apply scale to projected positions (Unity: LineGeneratorBase.Render lines 92-103)
         let s = if scale <= 0.0 { 1.0 } else { scale };
-        if s != 1.0 {
-            let vert_count = self.projected_x.len();
-            for i in 0..vert_count {
-                self.projected_x[i] *= s;
-                self.projected_y[i] *= s;
-            }
+
+        // Build screen-space positions (aspect-corrected, in [0,1])
+        self.positions.clear();
+        for i in 0..vert_count {
+            self.positions.push([
+                self.projected_x[i] * s / aspect + 0.5,
+                self.projected_y[i] * s + 0.5,
+            ]);
         }
 
+        // Build edge instances
+        self.instances.clear();
+        let edge_half_thick = line_thickness * rt_height * 0.5;
+
         if animate && edge_count > 0 {
-            // Depth sort edges back-to-front (Unity: LineMeshUtil.BuildEdgeQuads lines 87-97)
+            // Depth sort edges back-to-front (Unity: LineMeshUtil.BuildEdgeQuads)
             self.ensure_sort_buffers(edge_count);
             for i in 0..edge_count {
                 let a = self.edge_a[i];
                 let b = self.edge_b[i];
-                self.edge_depth[i] = (self.projected_z[a] + self.projected_z[b]) * 0.5;
+                self.edge_depth[i] =
+                    (self.projected_z[a] + self.projected_z[b]) * 0.5;
                 self.edge_sorted_idx[i] = i;
             }
             let depths = &self.edge_depth;
             self.edge_sorted_idx[..edge_count].sort_by(|&a, &b| {
-                depths[a].partial_cmp(&depths[b]).unwrap_or(std::cmp::Ordering::Equal)
+                depths[a]
+                    .partial_cmp(&depths[b])
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
 
             self.anim_progress += speed * (edge_count as f32 / 100.0);
@@ -387,57 +387,60 @@ impl LineGeneratorHelper {
             if self.anim_progress >= total {
                 self.anim_progress -= total;
             }
-            let window_edges = ((edge_count as f32 * window).ceil() as usize).max(1);
-            let window_start = (self.anim_progress / (edge_count as f32 / 100.0).max(1.0)).floor() as usize % edge_count;
+            let window_edges =
+                ((edge_count as f32 * window).ceil() as usize).max(1);
+            let window_start = (self.anim_progress
+                / (edge_count as f32 / 100.0).max(1.0))
+            .floor() as usize
+                % edge_count;
 
             for offset in 0..window_edges {
                 let sort_pos = (window_start + offset) % edge_count;
                 let edge_idx = self.edge_sorted_idx[sort_pos];
                 let fade = 1.0 - offset as f32 / window_edges as f32;
-                let a = self.edge_a[edge_idx];
-                let b = self.edge_b[edge_idx];
-                let ax = self.projected_x[a] / aspect + 0.5;
-                let ay = self.projected_y[a] + 0.5;
-                let bx = self.projected_x[b] / aspect + 0.5;
-                let by = self.projected_y[b] + 0.5;
-                let quad = build_edge_quad(ax, ay, bx, by, half_thick, rt_width, rt_height, fade);
-                self.vertices.extend_from_slice(&quad);
+                self.instances.push(EdgeInstance {
+                    a: self.edge_a[edge_idx] as u32,
+                    b: self.edge_b[edge_idx] as u32,
+                    alpha_bits: fade.to_bits(),
+                    _pad: 0,
+                });
             }
         } else {
             for i in 0..edge_count {
-                let a = self.edge_a[i];
-                let b = self.edge_b[i];
-                let ax = self.projected_x[a] / aspect + 0.5;
-                let ay = self.projected_y[a] + 0.5;
-                let bx = self.projected_x[b] / aspect + 0.5;
-                let by = self.projected_y[b] + 0.5;
-                let quad = build_edge_quad(ax, ay, bx, by, half_thick, rt_width, rt_height, 1.0);
-                self.vertices.extend_from_slice(&quad);
+                self.instances.push(EdgeInstance {
+                    a: self.edge_a[i] as u32,
+                    b: self.edge_b[i] as u32,
+                    alpha_bits: 1.0_f32.to_bits(),
+                    _pad: 0,
+                });
             }
         }
 
-        if show_verts {
+        let num_edges = self.instances.len() as u32;
+
+        // Append dot instances (same position for a and b → capsule degenerates to circle)
+        let dot_half_thick = if show_verts {
             let base_radius = DEFAULT_DOT_RADIUS * rt_height * vert_size * dot_scale;
-            let vert_count = self.projected_x.len();
             for i in 0..vert_count {
-                let cx = self.projected_x[i] / aspect + 0.5;
-                let cy = self.projected_y[i] + 0.5;
-                let quad = build_dot_quad(cx, cy, base_radius, rt_width, rt_height, 1.0);
-                self.vertices.extend_from_slice(&quad);
+                self.instances.push(EdgeInstance {
+                    a: i as u32,
+                    b: i as u32,
+                    alpha_bits: 1.0_f32.to_bits(),
+                    _pad: 0,
+                });
             }
-        }
+            base_radius
+        } else {
+            0.0
+        };
 
-        // Undo scale so projected arrays are not permanently mutated
-        if s != 1.0 {
-            let inv = 1.0 / s;
-            let vert_count = self.projected_x.len();
-            for i in 0..vert_count {
-                self.projected_x[i] *= inv;
-                self.projected_y[i] *= inv;
-            }
-        }
-
-        &self.vertices
+        (
+            &self.positions,
+            &self.instances,
+            num_edges,
+            edge_half_thick,
+            dot_half_thick,
+        )
     }
 
     /// Ensure sort scratch buffers are large enough.

@@ -120,22 +120,26 @@ impl Generator for LissajousGenerator {
             self.helper.projected_z[i] = i as f32 / VERTEX_COUNT as f32;
         }
 
-        let verts = self.helper.build_vertices(
-            ctx.width as f32,
-            ctx.height as f32,
-            ctx.aspect,
-            line,
-            show_verts,
-            vert_size,
-            animate,
-            speed,
-            window,
-            ctx.dt,
-            scale,
-            0.5, // dot_scale: Unity LissajousGenerator.GetDotScale() returns 0.5
-        );
+        let (positions, instances, num_edges, edge_half_thick, dot_half_thick) =
+            self.helper.prepare_instances(
+                ctx.height as f32,
+                ctx.aspect,
+                line,
+                show_verts,
+                vert_size,
+                animate,
+                speed,
+                window,
+                scale,
+                0.5, // dot_scale: Unity LissajousGenerator.GetDotScale() returns 0.5
+            );
 
-        self.line_pipeline.draw(device, queue, encoder, target, verts, ctx.beat, profiler, "Lissajous", ctx.width, ctx.height);
+        self.line_pipeline.draw(
+            device, queue, encoder, target,
+            positions, instances, num_edges,
+            edge_half_thick, dot_half_thick,
+            ctx.beat, profiler, "Lissajous", ctx.width, ctx.height,
+        );
         self.helper.anim_progress
     }
 
