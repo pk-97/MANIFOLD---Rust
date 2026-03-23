@@ -320,32 +320,37 @@ impl UIRoot {
                     if self.browser_popup.is_search_bar(*node_id) {
                         actions.push(PanelAction::BrowserSearchClicked);
                         consumed = true;
-                    } else if let Some(bp_action) = self.browser_popup.handle_click(*node_id) {
-                        match bp_action {
-                            BrowserPopupAction::Selected(key) => {
-                                match self.browser_popup.mode() {
-                                    BrowserPopupMode::Effect => {
-                                        let tab = self.browser_popup.tab();
-                                        actions.push(PanelAction::AddEffect(tab, key as usize));
-                                    }
-                                    BrowserPopupMode::Generator => {
-                                        let layer_id = self.browser_popup.layer_id().clone();
-                                        actions.push(PanelAction::SetGenType(layer_id, key as usize));
+                    } else {
+                        // Capture mode/context before handle_click — close() clears them.
+                        let bp_mode = self.browser_popup.mode();
+                        let bp_tab = self.browser_popup.tab();
+                        let bp_layer_id = self.browser_popup.layer_id().clone();
+
+                        if let Some(bp_action) = self.browser_popup.handle_click(*node_id) {
+                            match bp_action {
+                                BrowserPopupAction::Selected(key) => {
+                                    match bp_mode {
+                                        BrowserPopupMode::Effect => {
+                                            actions.push(PanelAction::AddEffect(bp_tab, key as usize));
+                                        }
+                                        BrowserPopupMode::Generator => {
+                                            actions.push(PanelAction::SetGenType(bp_layer_id, key as usize));
+                                        }
                                     }
                                 }
+                                BrowserPopupAction::Paste => {
+                                    actions.push(PanelAction::PasteEffects);
+                                }
+                                BrowserPopupAction::Dismissed => {}
                             }
-                            BrowserPopupAction::Paste => {
-                                actions.push(PanelAction::PasteEffects);
-                            }
-                            BrowserPopupAction::Dismissed => {}
+                            self.overlay_dirty = true;
+                            consumed = true;
+                        } else if self.browser_popup.contains_node(*node_id) {
+                            // Internal popup click (category chip, background, etc.)
+                            // Consume so it doesn't leak to panels below.
+                            self.overlay_dirty = true;
+                            consumed = true;
                         }
-                        self.overlay_dirty = true;
-                        consumed = true;
-                    } else if self.browser_popup.contains_node(*node_id) {
-                        // Internal popup click (category chip, background, etc.)
-                        // Consume so it doesn't leak to panels below.
-                        self.overlay_dirty = true;
-                        consumed = true;
                     }
                 }
 
