@@ -92,6 +92,10 @@ pub fn load_project_from_json(json: &str) -> Result<Project, LoadError> {
     let mut project: Project = serde_json::from_str(&migrated)
         .map_err(|e| LoadError::Deserialize(format!("{e}")))?;
 
+    // Strip unrecognized effect types (e.g. removed effects from Unity projects).
+    // Without this, Unknown effects stay in the effect list and show in the UI.
+    project.strip_unknown_effects();
+
     // Step 1: Rebuild runtime data structures
     project.on_after_deserialize();
 

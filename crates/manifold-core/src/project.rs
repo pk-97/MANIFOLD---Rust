@@ -52,6 +52,26 @@ pub struct Project {
 }
 
 impl Project {
+    /// Remove effects with unrecognized types (e.g. removed Unity effects).
+    /// Called before on_after_deserialize so they never enter the runtime.
+    pub fn strip_unknown_effects(&mut self) {
+        use crate::EffectType;
+        let strip = |effects: &mut Vec<crate::effects::EffectInstance>| {
+            effects.retain(|fx| fx.effect_type != EffectType::Unknown);
+        };
+        // Master effects
+        strip(&mut self.settings.master_effects);
+        // Layer + clip effects
+        for layer in &mut self.timeline.layers {
+            if let Some(ref mut effects) = layer.effects {
+                strip(effects);
+            }
+            for clip in &mut layer.clips {
+                strip(&mut clip.effects);
+            }
+        }
+    }
+
     /// Post-deserialization initialization. Rebuild caches and run migrations.
     pub fn on_after_deserialize(&mut self) {
         // Rebuild runtime caches
