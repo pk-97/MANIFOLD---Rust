@@ -287,7 +287,7 @@ impl ContentThread {
                     }).collect()
                 }
 
-                fn build_gen_params(gen_type: manifold_core::GeneratorTypeId, values: &[f32]) -> Vec<manifold_profiler::NamedParam> {
+                fn build_gen_params(gen_type: &manifold_core::GeneratorTypeId, values: &[f32]) -> Vec<manifold_profiler::NamedParam> {
                     let def = manifold_core::generator_definition_registry::get(gen_type);
                     values.iter().enumerate().map(|(i, &v)| {
                         let name = def.param_defs.get(i)
@@ -322,7 +322,7 @@ impl ContentThread {
                         let gen_param_values = layers.get(clip_layer_idx)
                             .and_then(|l| l.gen_params());
                         let gen_params = gen_param_values
-                            .map(|gp| build_gen_params(clip.generator_type, &gp.param_values))
+                            .map(|gp| build_gen_params(&clip.generator_type, &gp.param_values))
                             .unwrap_or_default();
                         let anim_progress = anim_map.get(i).map_or(0.0, |a| a.1);
                         manifold_profiler::ActiveClipInfo {
