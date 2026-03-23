@@ -250,7 +250,7 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
         display_name: "Bloom",
         param_count: 1,
         param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.187),
+            pd("Amount", 0.0, 5.0, 0.187),
         ],
         osc_prefix: Some("bloom"),
     });
