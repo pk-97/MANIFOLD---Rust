@@ -221,9 +221,20 @@ pub(super) fn dispatch_layer(
                 let old_order = project.timeline.layers.clone();
                 let mut new_order = old_order.clone();
 
+                // Read target parent from original array (before removals shift indices)
+                let target_parent = old_order.get(*to)
+                    .and_then(|l| l.parent_layer_id.clone());
+
                 if is_multi {
                     // Multi-select: move all selected layers as a group
                     let selected_ids: Vec<LayerId> = selection.selected_layer_ids.iter().cloned().collect();
+
+                    // If target is within the selection, reordering is a no-op
+                    let target_id = old_order.get(*to).map(|l| &l.layer_id);
+                    if target_id.is_some_and(|tid| selected_ids.contains(tid)) {
+                        return DispatchResult::handled();
+                    }
+
                     // Remove selected layers (preserving their relative order)
                     let mut moving: Vec<_> = new_order.iter()
                         .filter(|l| selected_ids.contains(&l.layer_id))
@@ -231,15 +242,13 @@ pub(super) fn dispatch_layer(
                         .collect();
                     new_order.retain(|l| !selected_ids.contains(&l.layer_id));
 
-                    // Find insertion point: where the target index maps to after removals
-                    let target_insert = (*to).min(new_order.len());
-
-                    // Determine parent group at insertion point
-                    let target_parent = if target_insert < new_order.len() {
-                        new_order[target_insert].parent_layer_id.clone()
-                    } else {
-                        new_order.last().and_then(|l| l.parent_layer_id.clone())
-                    };
+                    // Find insertion point by locating the target layer in the
+                    // reduced array (raw index is invalid after removals).
+                    let target_layer_id = old_order.get(*to).map(|l| &l.layer_id);
+                    let target_insert = target_layer_id
+                        .and_then(|tid| new_order.iter().position(|l| l.layer_id == *tid))
+                        .map(|pos| if *to > *from { pos + 1 } else { pos })
+                        .unwrap_or_else(|| (*to).min(new_order.len()));
 
                     // Update parent for all moved layers
                     for layer in &mut moving {
@@ -252,16 +261,12 @@ pub(super) fn dispatch_layer(
                         new_order.insert(pos, layer);
                     }
                 } else if *from < new_order.len() && *to <= new_order.len() {
-                    // Single layer move
+                    // Single layer move.
+                    // Insert at *to (not to-1): the indicator shows "after target"
+                    // when moving down and "before target" when moving up. After
+                    // removing the source, inserting at *to lands exactly there.
                     let layer = new_order.remove(*from);
-                    let insert_at = if *to > *from { to.saturating_sub(1) } else { *to };
-                    let insert_at = insert_at.min(new_order.len());
-
-                    let target_parent = if insert_at < new_order.len() {
-                        new_order[insert_at].parent_layer_id.clone()
-                    } else {
-                        new_order.last().and_then(|l| l.parent_layer_id.clone())
-                    };
+                    let insert_at = (*to).min(new_order.len());
 
                     new_order.insert(insert_at, layer);
                     new_order[insert_at].parent_layer_id = target_parent;
