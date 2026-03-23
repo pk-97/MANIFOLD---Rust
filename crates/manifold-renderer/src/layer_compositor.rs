@@ -1,6 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use manifold_core::BlendMode;
+use manifold_core::{BlendMode, EffectType};
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use crate::effect::EffectContext;
 use crate::effect_chain::EffectChain;
@@ -366,7 +366,10 @@ fn layer_id_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
 /// Unity ref: CompositorStack.cs lines 965-974 — checks enabled && GetParam(0) > 0.
 fn has_enabled_effects(effects: &[EffectInstance]) -> bool {
     for fx in effects {
-        if fx.enabled && fx.param_values.first().copied().unwrap_or(0.0) > 0.0 {
+        if fx.enabled
+            && fx.effect_type != EffectType::Unknown
+            && fx.param_values.first().copied().unwrap_or(0.0) > 0.0
+        {
             return true;
         }
     }

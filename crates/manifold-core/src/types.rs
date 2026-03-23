@@ -139,6 +139,9 @@ pub enum EffectType {
     Infrared = 37,
     Surveillance = 38,
     Redaction = 39,
+    /// Placeholder for unrecognized/removed effect types from Unity projects.
+    /// Renderers skip this — it never applies any GPU work.
+    Unknown = -1,
 }
 
 impl EffectType {
@@ -176,6 +179,7 @@ impl EffectType {
             Self::Infrared => "Infrared",
             Self::Surveillance => "Surveillance",
             Self::Redaction => "Redaction",
+            Self::Unknown => "Unknown",
         }
     }
 
@@ -246,7 +250,7 @@ impl<'de> Deserialize<'de> for EffectType {
                 37 => EffectType::Infrared,
                 38 => EffectType::Surveillance,
                 39 => EffectType::Redaction,
-                _ => EffectType::Transform,
+                _ => EffectType::Unknown,
             },
             serde_json::Value::String(s) => match s.as_str() {
                 "Transform" => EffectType::Transform,
@@ -280,9 +284,9 @@ impl<'de> Deserialize<'de> for EffectType {
                 "Infrared" => EffectType::Infrared,
                 "Surveillance" => EffectType::Surveillance,
                 "Redaction" => EffectType::Redaction,
-                _ => EffectType::Transform,
+                _ => EffectType::Unknown,
             },
-            _ => EffectType::Transform,
+            _ => EffectType::Unknown,
         })
     }
 }

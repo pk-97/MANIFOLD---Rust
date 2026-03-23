@@ -830,6 +830,7 @@ impl Application {
                 // Blit compositor output into the video preview area only (not fullscreen)
                 let video_rect = self.ui_root.layout.video_area();
                 let sf = scale as f32;
+
                 // Clear surface first (black background for areas outside video)
                 {
                     let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
