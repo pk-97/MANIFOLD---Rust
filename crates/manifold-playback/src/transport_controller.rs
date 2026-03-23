@@ -306,7 +306,7 @@ impl TransportController {
     /// Port of Unity TransportController.ClearTempoMap.
     pub fn clear_tempo_map(engine: &mut PlaybackEngine, editing: &mut manifold_editing::service::EditingService) {
         if let Some(project) = engine.project_mut() {
-            if project.tempo_map.points.len() <= 1 { return; }
+            if project.tempo_map.point_count() <= 1 { return; }
             let old_points = project.tempo_map.clone_points();
             let bpm = project.settings.bpm;
             let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(old_points, bpm);

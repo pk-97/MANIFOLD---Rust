@@ -33,7 +33,7 @@ pub fn find_chain_param(
     default: f32,
 ) -> f32 {
     chain.iter()
-        .find(|fx| fx.effect_type == effect_type && fx.enabled)
+        .find(|fx| fx.effect_type() == effect_type && fx.enabled)
         .and_then(|fx| fx.param_values.get(param_index).copied())
         .unwrap_or(default)
 }

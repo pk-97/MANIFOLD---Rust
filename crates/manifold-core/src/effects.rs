@@ -87,7 +87,7 @@ pub struct EffectInstance {
     /// Auto-generated on creation and deserialization (backfills old projects).
     #[serde(default = "generate_effect_id")]
     pub id: EffectId,
-    pub effect_type: EffectType,
+    effect_type: EffectType,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
@@ -130,6 +130,12 @@ impl EffectInstance {
             legacy_param2: None,
             legacy_param3: None,
         }
+    }
+
+    /// Read-only access to the effect type.
+    #[inline]
+    pub fn effect_type(&self) -> EffectType {
+        self.effect_type
     }
 
     /// Has any drivers? Unity EffectInstance.cs line 28.

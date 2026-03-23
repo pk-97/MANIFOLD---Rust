@@ -330,10 +330,8 @@ fn change_layer_opacity_undo_roundtrip() {
 fn change_generator_type_undo_roundtrip() {
     let mut project = make_test_project();
     // Layer 1 is a generator layer
-    let gp = project.timeline.layers[1].gen_params.get_or_insert_with(Default::default);
-    gp.generator_type = GeneratorType::Plasma;
-    gp.param_values = vec![0.5, 0.8, 1.0];
-    gp.base_param_values = Some(vec![0.5, 0.8, 1.0]);
+    let gp = project.timeline.layers[1].gen_params_or_init();
+    gp.restore(GeneratorType::Plasma, vec![0.5, 0.8, 1.0], None, None);
 
     let old_params = project.timeline.layers[1].snapshot_gen_params();
     let old_drivers = project.timeline.layers[1].snapshot_gen_drivers();
@@ -416,12 +414,8 @@ fn add_effect_undo_roundtrip() {
     let mut project = make_test_project();
     let target = EffectTarget::Master;
 
-    let effect = EffectInstance {
-        effect_type: EffectType::Bloom,
-        enabled: true,
-        param_values: vec![0.5],
-        ..make_effect(EffectType::Bloom)
-    };
+    let mut effect = EffectInstance::new(EffectType::Bloom);
+    effect.param_values = vec![0.5];
 
     let mut cmd = AddEffectCommand::new(target, effect, 0);
 
@@ -435,12 +429,11 @@ fn add_effect_undo_roundtrip() {
 #[test]
 fn remove_effect_undo_roundtrip() {
     let mut project = make_test_project();
-    project.settings.master_effects.push(EffectInstance {
-        effect_type: EffectType::Bloom,
-        enabled: true,
-        param_values: vec![0.5],
-        ..make_effect(EffectType::Bloom)
-    });
+    {
+        let mut fx = EffectInstance::new(EffectType::Bloom);
+        fx.param_values = vec![0.5];
+        project.settings.master_effects.push(fx);
+    }
 
     let effect = project.settings.master_effects[0].clone();
     let target = EffectTarget::Master;
@@ -456,11 +449,7 @@ fn remove_effect_undo_roundtrip() {
 #[test]
 fn toggle_effect_undo_roundtrip() {
     let mut project = make_test_project();
-    project.settings.master_effects.push(EffectInstance {
-        effect_type: EffectType::Bloom,
-        enabled: true,
-        ..make_effect(EffectType::Bloom)
-    });
+    project.settings.master_effects.push(EffectInstance::new(EffectType::Bloom));
 
     let target = EffectTarget::Master;
     let mut cmd = ToggleEffectCommand::new(target, 0, true, false);
@@ -475,13 +464,12 @@ fn toggle_effect_undo_roundtrip() {
 #[test]
 fn change_effect_param_undo_roundtrip() {
     let mut project = make_test_project();
-    project.settings.master_effects.push(EffectInstance {
-        effect_type: EffectType::Bloom,
-        enabled: true,
-        param_values: vec![0.5, 0.3],
-        base_param_values: Some(vec![0.5, 0.3]),
-        ..make_effect(EffectType::Bloom)
-    });
+    {
+        let mut fx = EffectInstance::new(EffectType::Bloom);
+        fx.param_values = vec![0.5, 0.3];
+        fx.base_param_values = Some(vec![0.5, 0.3]);
+        project.settings.master_effects.push(fx);
+    }
 
     let target = EffectTarget::Master;
     let mut cmd = ChangeEffectParamCommand::new(target, 0, 0, 0.5, 0.9);
@@ -505,12 +493,12 @@ fn reorder_effect_undo_roundtrip() {
     let mut cmd = ReorderEffectCommand::new(target, 0, 2);
 
     cmd.execute(&mut project);
-    assert_eq!(project.settings.master_effects[0].effect_type, EffectType::Feedback);
-    assert_eq!(project.settings.master_effects[1].effect_type, EffectType::Bloom);
+    assert_eq!(project.settings.master_effects[0].effect_type(), EffectType::Feedback);
+    assert_eq!(project.settings.master_effects[1].effect_type(), EffectType::Bloom);
 
     cmd.undo(&mut project);
-    assert_eq!(project.settings.master_effects[0].effect_type, EffectType::Bloom);
-    assert_eq!(project.settings.master_effects[1].effect_type, EffectType::Feedback);
+    assert_eq!(project.settings.master_effects[0].effect_type(), EffectType::Bloom);
+    assert_eq!(project.settings.master_effects[1].effect_type(), EffectType::Feedback);
 }
 
 #[test]
@@ -518,11 +506,7 @@ fn effect_on_clip_undo_roundtrip() {
     let mut project = make_test_project();
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
 
-    let effect = EffectInstance {
-        effect_type: EffectType::Kaleidoscope,
-        enabled: true,
-        ..make_effect(EffectType::Kaleidoscope)
-    };
+    let effect = EffectInstance::new(EffectType::Kaleidoscope);
     let target = EffectTarget::Clip { clip_id: clip_id.clone() };
     let mut cmd = AddEffectCommand::new(target, effect, 0);
 
@@ -539,11 +523,7 @@ fn effect_on_clip_undo_roundtrip() {
 fn effect_on_layer_undo_roundtrip() {
     let mut project = make_test_project();
 
-    let effect = EffectInstance {
-        effect_type: EffectType::Mirror,
-        enabled: true,
-        ..make_effect(EffectType::Mirror)
-    };
+    let effect = EffectInstance::new(EffectType::Mirror);
     let target = EffectTarget::Layer { layer_id: project.timeline.layers[0].layer_id.clone() };
     let mut cmd = AddEffectCommand::new(target, effect, 0);
 
@@ -581,7 +561,11 @@ fn ungroup_effects_undo_roundtrip() {
     let mut project = make_test_project();
     let group = EffectGroup::new("Test".into());
     let gid = group.id.clone();
-    project.settings.master_effects.push(EffectInstance { effect_type: EffectType::Bloom, group_id: Some(gid.clone()), ..make_effect(EffectType::Bloom) });
+    {
+        let mut fx = EffectInstance::new(EffectType::Bloom);
+        fx.group_id = Some(gid.clone());
+        project.settings.master_effects.push(fx);
+    }
     project.settings.master_effect_groups = Some(vec![group]);
 
     let target = EffectTarget::Master;
@@ -683,14 +667,14 @@ fn add_driver_effect_undo_roundtrip() {
 #[test]
 fn toggle_driver_enabled_undo_roundtrip() {
     let mut project = make_test_project();
-    project.settings.master_effects.push(EffectInstance {
-        effect_type: EffectType::Bloom,
-        drivers: Some(vec![ParameterDriver {
+    {
+        let mut fx = EffectInstance::new(EffectType::Bloom);
+        fx.drivers = Some(vec![ParameterDriver {
             param_index: 0, enabled: true,
             ..make_driver()
-        }]),
-        ..make_effect(EffectType::Bloom)
-    });
+        }]);
+        project.settings.master_effects.push(fx);
+    }
 
     let target = DriverTarget::Effect {
         effect_target: EffectTarget::Master,
@@ -708,14 +692,14 @@ fn toggle_driver_enabled_undo_roundtrip() {
 #[test]
 fn change_driver_waveform_undo_roundtrip() {
     let mut project = make_test_project();
-    project.settings.master_effects.push(EffectInstance {
-        effect_type: EffectType::Bloom,
-        drivers: Some(vec![ParameterDriver {
+    {
+        let mut fx = EffectInstance::new(EffectType::Bloom);
+        fx.drivers = Some(vec![ParameterDriver {
             param_index: 0, waveform: DriverWaveform::Sine,
             ..make_driver()
-        }]),
-        ..make_effect(EffectType::Bloom)
-    });
+        }]);
+        project.settings.master_effects.push(fx);
+    }
 
     let target = DriverTarget::Effect {
         effect_target: EffectTarget::Master,
@@ -733,14 +717,14 @@ fn change_driver_waveform_undo_roundtrip() {
 #[test]
 fn change_trim_undo_roundtrip() {
     let mut project = make_test_project();
-    project.settings.master_effects.push(EffectInstance {
-        effect_type: EffectType::Bloom,
-        drivers: Some(vec![ParameterDriver {
+    {
+        let mut fx = EffectInstance::new(EffectType::Bloom);
+        fx.drivers = Some(vec![ParameterDriver {
             param_index: 0, trim_min: 0.0, trim_max: 1.0,
             ..make_driver()
-        }]),
-        ..make_effect(EffectType::Bloom)
-    });
+        }]);
+        project.settings.master_effects.push(fx);
+    }
 
     let target = DriverTarget::Effect {
         effect_target: EffectTarget::Master,

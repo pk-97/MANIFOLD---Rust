@@ -262,8 +262,8 @@ impl EffectChain {
             .enumerate()
             .filter(|(_, fx)| {
                 if !fx.enabled { return false; }
-                if registry.get_mut(fx.effect_type).is_none() {
-                    log::debug!("Effect {:?} has no GPU processor — skipped", fx.effect_type);
+                if registry.get_mut(fx.effect_type()).is_none() {
+                    log::debug!("Effect {:?} has no GPU processor — skipped", fx.effect_type());
                     return false;
                 }
                 true
@@ -350,7 +350,7 @@ impl EffectChain {
 
             // Apply the effect (skip if ShouldSkip — no GPU work, no swap)
             // Unity ref: CompositorStack checks ShouldSkip before Apply + buffer swap.
-            if let Some(processor) = registry.get_mut(fx.effect_type)
+            if let Some(processor) = registry.get_mut(fx.effect_type())
                 && !processor.should_skip(fx) {
                     processor.apply(
                         device, queue, encoder,

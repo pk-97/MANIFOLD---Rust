@@ -8,7 +8,7 @@ use crate::effects::{ParameterDriver, ParamEnvelope};
 #[serde(rename_all = "camelCase")]
 pub struct GeneratorParamState {
     #[serde(default)]
-    pub generator_type: GeneratorType,
+    generator_type: GeneratorType,
     #[serde(default)]
     pub param_values: Vec<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -24,6 +24,20 @@ pub struct GeneratorParamState {
 }
 
 impl GeneratorParamState {
+    /// Create a new GeneratorParamState with the given type, fully initialized
+    /// from the generator definition registry.
+    pub fn new(gen_type: GeneratorType) -> Self {
+        let mut state = Self::default();
+        state.change_type(gen_type);
+        state
+    }
+
+    /// The generator type for this param state.
+    #[inline]
+    pub fn generator_type(&self) -> GeneratorType {
+        self.generator_type
+    }
+
     pub fn ensure_base_values(&mut self) {
         if self.base_param_values.is_none() ||
            self.base_param_values.as_ref().is_some_and(|b| b.len() != self.param_values.len())

@@ -122,17 +122,17 @@ pub(super) fn dispatch_project(
                 .and_then(|lid| project.timeline.find_layer_index_by_id(lid));
             if let Some(layer_idx) = resolved_idx {
                 let layer = &project.timeline.layers[layer_idx];
-                let old_type = layer.gen_params.as_ref()
-                    .map(|gp| gp.generator_type)
+                let old_type = layer.gen_params()
+                    .map(|gp| gp.generator_type())
                     .unwrap_or(GeneratorType::None);
                 if let Some(new_type) = GeneratorType::from_index(*gen_type_idx)
                     && new_type != old_type {
-                        let old_params = layer.gen_params.as_ref()
+                        let old_params = layer.gen_params()
                             .map(|gp| gp.param_values.clone())
                             .unwrap_or_default();
-                        let old_drivers = layer.gen_params.as_ref()
+                        let old_drivers = layer.gen_params()
                             .and_then(|gp| gp.drivers.clone());
-                        let old_envelopes = layer.gen_params.as_ref()
+                        let old_envelopes = layer.gen_params()
                             .and_then(|gp| gp.envelopes.clone());
                         let layer_id = layer.layer_id.clone();
                         let cmd = manifold_editing::commands::settings::ChangeGeneratorTypeCommand::new(

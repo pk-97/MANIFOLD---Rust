@@ -439,6 +439,7 @@ impl ProjectIOService {
             let layer_idx = drop_layer_index as usize;
             if layer_idx < project.timeline.layers.len() {
                 project.timeline.layers[layer_idx].clips.push(timeline_clip.clone());
+                project.timeline.mark_clip_lookup_dirty();
                 drop_commands.push(Box::new(AddClipCommand::new(timeline_clip, drop_layer_id)));
             }
 

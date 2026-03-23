@@ -26,7 +26,7 @@ pub fn reset_all_effectives(project: &mut Project) {
     for layer in layers.iter_mut() {
         // Generator params: reset only driven/enveloped params (per Unity semantics)
         if layer.layer_type == LayerType::Generator
-            && let Some(gp) = &mut layer.gen_params {
+            && let Some(gp) = layer.gen_params_mut() {
                 gp.reset_effectives();
             }
 
@@ -88,8 +88,8 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: f32) -> bool {
 
         // Generator param drivers
         if layer.layer_type == LayerType::Generator
-            && let Some(gp) = &mut layer.gen_params {
-                let gen_type = gp.generator_type;
+            && let Some(gp) = layer.gen_params_mut() {
+                let gen_type = gp.generator_type();
                 let gen_def = generator_definition_registry::get(gen_type);
                 let gen_defs = &gen_def.param_defs;
 
@@ -151,7 +151,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: f32) -> bool {
         _ => return false,
     };
 
-    let effect_def = effect_definition_registry::get(fx.effect_type);
+    let effect_def = effect_definition_registry::get(fx.effect_type());
     let effect_defs = &effect_def.param_defs;
     let mut any_driven = false;
 
@@ -271,14 +271,14 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
 
                 // Find the target effect on this clip
                 let target_fx = clip.effects.iter_mut().find(|f| {
-                    f.effect_type == target_effect_type && f.enabled
+                    f.effect_type() == target_effect_type && f.enabled
                 });
                 let fx = match target_fx {
                     Some(f) => f,
                     None => continue,
                 };
 
-                let effect_def = effect_definition_registry::get(fx.effect_type);
+                let effect_def = effect_definition_registry::get(fx.effect_type());
                 let idx = param_index as usize;
                 if idx >= effect_def.param_defs.len() || idx >= fx.param_values.len() {
                     continue;
@@ -343,14 +343,14 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
                 };
 
                 let target_fx = layer_effects.iter_mut().find(|f| {
-                    f.effect_type == target_effect_type && f.enabled
+                    f.effect_type() == target_effect_type && f.enabled
                 });
                 let fx = match target_fx {
                     Some(f) => f,
                     None => continue,
                 };
 
-                let effect_def = effect_definition_registry::get(fx.effect_type);
+                let effect_def = effect_definition_registry::get(fx.effect_type());
                 let idx = param_index as usize;
                 if idx >= effect_def.param_defs.len() || idx >= fx.param_values.len() {
                     continue;
@@ -389,21 +389,8 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: f32) ->
             continue;
         }
 
-        let gp = match &mut layer.gen_params {
-            Some(gp) => gp,
-            None => continue,
-        };
-
-        let env_count = gp.envelopes.as_ref().map_or(0, |e| e.len());
-        if env_count == 0 {
-            continue;
-        }
-
-        let gen_type = gp.generator_type;
-        let gen_def = generator_definition_registry::get(gen_type);
-        let gen_defs = &gen_def.param_defs;
-
         // Find first active clip on this layer for envelope timing
+        // (must borrow clips immutably before taking mutable gen_params borrow)
         let mut active_elapsed: f32 = -1.0;
         let mut active_duration: f32 = 0.0;
         for clip in &layer.clips {
@@ -417,6 +404,20 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: f32) ->
                 break;
             }
         }
+
+        let gp = match layer.gen_params_mut() {
+            Some(gp) => gp,
+            None => continue,
+        };
+
+        let env_count = gp.envelopes.as_ref().map_or(0, |e| e.len());
+        if env_count == 0 {
+            continue;
+        }
+
+        let gen_type = gp.generator_type();
+        let gen_def = generator_definition_registry::get(gen_type);
+        let gen_defs = &gen_def.param_defs;
 
         // Index-based iteration to avoid cloning (Phase 9C fix).
         for ei in 0..env_count {

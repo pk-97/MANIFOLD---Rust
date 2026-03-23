@@ -318,7 +318,7 @@ impl PercussionImportService {
             return (PercussionBpmDecision::SuggestedLowConfidence, None);
         }
 
-        let flatten_tempo_map = project.tempo_map.points.len() <= 1;
+        let flatten_tempo_map = project.tempo_map.point_count() <= 1;
         let old_tempo_points = project.tempo_map.clone_points();
 
         let mut change_bpm_command = ChangeBpmCommand::with_tempo_map(

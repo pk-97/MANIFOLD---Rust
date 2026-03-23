@@ -101,7 +101,7 @@ impl ActiveInspectorDrag {
             }
             Self::GenParam { layer_id, param_idx, value } => {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id)
-                    && let Some(gp) = layer.gen_params.as_mut()
+                    && let Some(gp) = layer.gen_params_mut()
                     && *param_idx < gp.param_values.len()
                 {
                     gp.param_values[*param_idx] = *value;
@@ -569,20 +569,20 @@ impl Application {
                     let effect_info = match tab {
                         manifold_ui::InspectorTab::Master => {
                             self.local_project.settings.master_effects.get(effect_idx)
-                                .map(|fx| (fx.effect_type, fx.get_base_param(param_idx)))
+                                .map(|fx| (fx.effect_type(), fx.get_base_param(param_idx)))
                         }
                         manifold_ui::InspectorTab::Layer => {
                             self.active_layer_id.as_ref()
                                 .and_then(|id| self.local_project.timeline.find_layer_by_id(id))
                                 .and_then(|(_, l)| l.effects.as_ref())
                                 .and_then(|e| e.get(effect_idx))
-                                .map(|fx| (fx.effect_type, fx.get_base_param(param_idx)))
+                                .map(|fx| (fx.effect_type(), fx.get_base_param(param_idx)))
                         }
                         manifold_ui::InspectorTab::Clip => {
                             self.selection.primary_selected_clip_id.as_ref()
                                 .and_then(|cid| self.local_project.timeline.find_clip_by_id(cid))
                                 .and_then(|c| c.effects.get(effect_idx))
-                                .map(|fx| (fx.effect_type, fx.get_base_param(param_idx)))
+                                .map(|fx| (fx.effect_type(), fx.get_base_param(param_idx)))
                         }
                     };
                     if let Some((effect_type, old_val)) = effect_info {
@@ -633,7 +633,7 @@ impl Application {
                                     parsed.clamp(pd.min, pd.max)
                                 } else { parsed }
                             } else { parsed };
-                            if let Some(gp) = &layer.gen_params {
+                            if let Some(gp) = layer.gen_params() {
                                 let base = gp.base_param_values.as_ref().unwrap_or(&gp.param_values);
                                 let old_val = base.get(param_idx).copied().unwrap_or(0.0);
                                 if (old_val - new_val).abs() > f32::EPSILON {

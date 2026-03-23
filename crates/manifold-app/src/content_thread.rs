@@ -279,7 +279,7 @@ impl ContentThread {
 
                 // Helper: build named params from values + registry
                 fn build_effect_params(fx: &manifold_core::effects::EffectInstance) -> Vec<manifold_profiler::NamedParam> {
-                    let def = manifold_core::effect_definition_registry::get(fx.effect_type);
+                    let def = manifold_core::effect_definition_registry::get(fx.effect_type());
                     fx.param_values.iter().enumerate().map(|(i, &v)| {
                         let name = def.param_defs.get(i)
                             .map_or_else(|| format!("param_{}", i), |pd| pd.name.clone());
@@ -320,7 +320,7 @@ impl ContentThread {
                             .and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
                             .unwrap_or(0);
                         let gen_param_values = layers.get(clip_layer_idx)
-                            .and_then(|l| l.gen_params.as_ref());
+                            .and_then(|l| l.gen_params());
                         let gen_params = gen_param_values
                             .map(|gp| build_gen_params(clip.generator_type, &gp.param_values))
                             .unwrap_or_default();
@@ -340,7 +340,7 @@ impl ContentThread {
                     for fx in &clip.effects {
                         if fx.enabled {
                             active_effects.push(manifold_profiler::ActiveEffectInfo {
-                                effect_type: fx.effect_type.to_string(),
+                                effect_type: fx.effect_type().to_string(),
                                 scope: format!("clip:{}", clip.id),
                                 group_id: fx.group_id.as_ref().map(|g| g.to_string()),
                                 params: build_effect_params(fx),
@@ -353,7 +353,7 @@ impl ContentThread {
                         for fx in layer_fxs {
                             if fx.enabled {
                                 active_effects.push(manifold_profiler::ActiveEffectInfo {
-                                    effect_type: fx.effect_type.to_string(),
+                                    effect_type: fx.effect_type().to_string(),
                                     scope: format!("layer:{}", layer.index),
                                     group_id: fx.group_id.as_ref().map(|g| g.to_string()),
                                     params: build_effect_params(fx),
@@ -366,7 +366,7 @@ impl ContentThread {
                     for fx in &p.settings.master_effects {
                         if fx.enabled {
                             active_effects.push(manifold_profiler::ActiveEffectInfo {
-                                effect_type: fx.effect_type.to_string(),
+                                effect_type: fx.effect_type().to_string(),
                                 scope: "master".to_string(),
                                 group_id: fx.group_id.as_ref().map(|g| g.to_string()),
                                 params: build_effect_params(fx),
@@ -1188,14 +1188,14 @@ impl ContentThread {
                             .collect();
                         let effects = layer.effects.as_deref().unwrap_or(&[]).iter()
                             .map(|fx| manifold_profiler::EffectSnapshot {
-                                effect_type: fx.effect_type.to_string(),
+                                effect_type: fx.effect_type().to_string(),
                                 enabled: fx.enabled,
                             })
                             .collect();
                         manifold_profiler::LayerSnapshot {
                             index: layer.index,
-                            generator_type: layer.gen_params.as_ref()
-                                .map_or("None".to_string(), |gp| gp.generator_type.to_string()),
+                            generator_type: layer.gen_params()
+                                .map_or("None".to_string(), |gp| gp.generator_type().to_string()),
                             blend_mode: format!("{:?}", layer.default_blend_mode),
                             is_muted: layer.is_muted,
                             clips,
@@ -1204,7 +1204,7 @@ impl ContentThread {
                     }).collect();
                     let master_effects = p.settings.master_effects.iter()
                         .map(|fx| manifold_profiler::EffectSnapshot {
-                            effect_type: fx.effect_type.to_string(),
+                            effect_type: fx.effect_type().to_string(),
                             enabled: fx.enabled,
                         })
                         .collect();

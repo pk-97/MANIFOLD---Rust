@@ -210,7 +210,7 @@ impl RecordingProvenance {
         bpm_epsilon: f32,
     ) -> bool {
         if !self.has_recorded_tempo_lane() {
-            return tempo_map.points.is_empty();
+            return tempo_map.points().is_empty();
         }
 
         let current_lane = tempo_map.get_sorted_points();

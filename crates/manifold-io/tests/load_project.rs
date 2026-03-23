@@ -210,7 +210,7 @@ fn waypoints_gen_drivers_survive_migration() {
     let mut gen_driver_count = 0;
     let mut non_quarter_count = 0;
     for (li, layer) in project.timeline.layers.iter().enumerate() {
-        if let Some(ref gp) = layer.gen_params {
+        if let Some(gp) = layer.gen_params() {
             if let Some(ref drivers) = gp.drivers {
                 for d in drivers {
                     gen_driver_count += 1;

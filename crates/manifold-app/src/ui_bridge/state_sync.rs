@@ -139,7 +139,7 @@ pub fn push_state(
         ui.transport.set_bpm_reset_active(tree, can_reset);
 
         // BPM clear: enabled when tempo map has >1 point
-        let can_clear = project.tempo_map.points.len() > 1;
+        let can_clear = project.tempo_map.point_count() > 1;
         ui.transport.set_bpm_clear_active(tree, can_clear);
 
         // Save button — "SAVE" clean, "SAVE *" dirty with warm brown tint
@@ -336,7 +336,7 @@ pub fn push_state(
         // Master effects
         for (i, effect) in project.settings.master_effects.iter().enumerate() {
             if let Some(card) = ui.inspector.master_effect_mut(i) {
-                card.sync_effect_name(tree, effect.effect_type.display_name());
+                card.sync_effect_name(tree, effect.effect_type().display_name());
                 card.sync_enabled(tree, effect.enabled);
                 card.sync_values(tree, &effect.param_values);
             }
@@ -348,7 +348,7 @@ pub fn push_state(
                 && let Some(effects) = &layer.effects {
                     for (i, effect) in effects.iter().enumerate() {
                         if let Some(card) = ui.inspector.layer_effect_mut(i) {
-                            card.sync_effect_name(tree, effect.effect_type.display_name());
+                            card.sync_effect_name(tree, effect.effect_type().display_name());
                             card.sync_enabled(tree, effect.enabled);
                             card.sync_values(tree, &effect.param_values);
                         }
@@ -363,7 +363,7 @@ pub fn push_state(
             if let Some(clip) = clip {
                 for (i, effect) in clip.effects.iter().enumerate() {
                     if let Some(card) = ui.inspector.clip_effect_mut(i) {
-                        card.sync_effect_name(tree, effect.effect_type.display_name());
+                        card.sync_effect_name(tree, effect.effect_type().display_name());
                         card.sync_enabled(tree, effect.enabled);
                         card.sync_values(tree, &effect.param_values);
                     }
@@ -374,9 +374,9 @@ pub fn push_state(
         // Generator params (stored on layer, not clip)
         if let Some(idx) = active_layer
             && let Some(layer) = project.timeline.layers.get(idx)
-                && let Some(gp_state) = &layer.gen_params
+                && let Some(gp_state) = layer.gen_params()
                     && let Some(gp) = ui.inspector.gen_params_mut() {
-                        gp.sync_gen_type_name(tree, gp_state.generator_type.display_name());
+                        gp.sync_gen_type_name(tree, gp_state.generator_type().display_name());
                         gp.sync_values(tree, &gp_state.param_values);
                     }
     }
@@ -406,8 +406,8 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
                 is_solo: layer.is_solo,
                 parent_layer_id: layer.parent_layer_id.as_ref().map(|id| id.to_string()),
                 blend_mode: format!("{:?}", layer.default_blend_mode),
-                generator_type: layer.gen_params.as_ref()
-                    .map(|g| format!("{:?}", g.generator_type)),
+                generator_type: layer.gen_params()
+                    .map(|g| format!("{:?}", g.generator_type())),
                 clip_count: layer.clips.len(),
                 video_folder_path: layer.video_folder_path.clone(),
                 source_clip_count: 0,
@@ -498,8 +498,8 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
             for clip in &layer.clips {
                 let is_gen = layer.layer_type == LayerType::Generator;
                 let name = if is_gen {
-                    layer.gen_params.as_ref()
-                        .map(|gp| gp.generator_type.display_name().to_string())
+                    layer.gen_params()
+                        .map(|gp| gp.generator_type().display_name().to_string())
                         .unwrap_or_else(|| "Gen".to_string())
                 } else if !clip.video_clip_id.is_empty() {
                     clip.video_clip_id.clone()
@@ -544,8 +544,8 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
         let is_gen = layer.layer_type == LayerType::Generator;
         for clip in &layer.clips {
             let name = if is_gen {
-                layer.gen_params.as_ref()
-                    .map(|gp| gp.generator_type.display_name().to_string())
+                layer.gen_params()
+                    .map(|gp| gp.generator_type().display_name().to_string())
                     .unwrap_or_else(|| "Gen".to_string())
             } else if !clip.video_clip_id.is_empty() {
                 clip.video_clip_id.clone()
@@ -596,8 +596,8 @@ pub fn sync_inspector_data(
             ui.inspector.configure_layer_effects(&layer_effects);
 
             // Generator params
-            let gen_config = layer.gen_params.as_ref()
-                .filter(|gp| gp.generator_type != GeneratorType::None)
+            let gen_config = layer.gen_params()
+                .filter(|gp| gp.generator_type() != GeneratorType::None)
                 .map(gen_params_to_config);
             let layer_id = layer.layer_id.clone();
             ui.inspector.configure_gen_params(gen_config.as_ref(), Some(layer_id));
@@ -634,7 +634,7 @@ pub fn sync_inspector_data(
 /// Unity: EffectCardState.SyncFromDataModel — populates all data-derived visual state.
 fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -> Vec<EffectCardConfig> {
     effects.iter().enumerate().map(|(i, fx)| {
-        let reg_def = manifold_core::effect_definition_registry::get(fx.effect_type);
+        let reg_def = manifold_core::effect_definition_registry::get(fx.effect_type());
         let n = reg_def.param_count;
         let params: Vec<EffectParamInfo> = reg_def.param_defs.iter().map(|pd| {
             EffectParamInfo {
@@ -684,7 +684,7 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -
         let mut env_sustain = vec![0.0f32; n];
         let mut env_release = vec![0.0f32; n];
         for env in envelopes {
-            if env.target_effect_type == fx.effect_type && env.enabled {
+            if env.target_effect_type == fx.effect_type() && env.enabled {
                 let pi = env.param_index as usize;
                 if pi < n {
                     has_env = true;
@@ -701,7 +701,7 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -
         EffectCardConfig {
             effect_index: i,
             effect_id: fx.id.clone(),
-            name: fx.effect_type.display_name().to_string(),
+            name: fx.effect_type().display_name().to_string(),
             enabled: fx.enabled,
             collapsed: fx.collapsed,
             supports_envelopes: true,
@@ -746,7 +746,7 @@ fn beat_div_to_button_index(div: BeatDivision) -> i32 {
 
 /// Convert a `GeneratorParamState` into `GenParamConfig` for the UI.
 fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState) -> GenParamConfig {
-    let reg_def = manifold_core::generator_definition_registry::get(gp.generator_type);
+    let reg_def = manifold_core::generator_definition_registry::get(gp.generator_type());
     let n = reg_def.param_defs.len();
     let params: Vec<GenParamInfo> = reg_def.param_defs.iter().map(|pd| {
         GenParamInfo {
@@ -811,7 +811,7 @@ fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState) -> G
     }
 
     GenParamConfig {
-        gen_type_name: gp.generator_type.display_name().to_string(),
+        gen_type_name: gp.generator_type().display_name().to_string(),
         params,
         driver_active,
         envelope_active,

@@ -673,7 +673,7 @@ mod tests {
     #[test]
     fn test_create_default_bloom() {
         let inst = create_default(EffectType::Bloom);
-        assert_eq!(inst.effect_type, EffectType::Bloom);
+        assert_eq!(inst.effect_type(), EffectType::Bloom);
         assert!(inst.enabled);
         assert_eq!(inst.param_values.len(), 1);
         assert!((inst.param_values[0] - 0.187).abs() < 1e-6);

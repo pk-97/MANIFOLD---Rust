@@ -57,7 +57,7 @@ impl Project {
     pub fn strip_unknown_effects(&mut self) {
         use crate::EffectType;
         let strip = |effects: &mut Vec<crate::effects::EffectInstance>| {
-            effects.retain(|fx| fx.effect_type != EffectType::Unknown);
+            effects.retain(|fx| fx.effect_type() != EffectType::Unknown);
         };
         // Master effects
         strip(&mut self.settings.master_effects);
@@ -95,13 +95,8 @@ impl Project {
         // Align all effect params to current definitions
         self.align_all_effect_params();
 
-        // Sync layer indices + layer_ids on clips
-        for (i, layer) in self.timeline.layers.iter_mut().enumerate() {
-            layer.index = i as i32;
-            for clip in &mut layer.clips {
-                clip.layer_id = layer.layer_id.clone();
-            }
-        }
+        // Rebuild layer index cache + sync layer.index and clip.layer_id
+        self.timeline.reindex_layers();
     }
 
     /// Resize all effect param arrays to match their definitions.

@@ -181,7 +181,7 @@ impl GeneratorRenderer {
             let mut params = [0.0f32; MAX_GEN_PARAMS];
             let mut param_count = 0u32;
             if let Some(layer) = layers.get(layer_index as usize)
-                && let Some(gp) = &layer.gen_params {
+                && let Some(gp) = layer.gen_params() {
                     param_count = gp.param_values.len().min(MAX_GEN_PARAMS) as u32;
                     for (i, val) in gp.param_values.iter().take(MAX_GEN_PARAMS).enumerate() {
                         params[i] = *val;

@@ -237,7 +237,7 @@ impl TimelineClip {
 
     /// Find effect by type. Unity TimelineClip.cs line 230.
     pub fn find_effect(&self, effect_type: crate::types::EffectType) -> Option<&crate::effects::EffectInstance> {
-        self.effects.iter().find(|e| e.effect_type == effect_type)
+        self.effects.iter().find(|e| e.effect_type() == effect_type)
     }
 
     /// Find effect group by ID. Unity TimelineClip.cs line 249.
@@ -263,7 +263,7 @@ impl crate::effects::EffectContainer for TimelineClip {
         !self.effects.is_empty()
     }
     fn find_effect(&self, effect_type: crate::types::EffectType) -> Option<&crate::effects::EffectInstance> {
-        self.effects.iter().find(|e| e.effect_type == effect_type)
+        self.effects.iter().find(|e| e.effect_type() == effect_type)
     }
     fn find_effect_group(&self, group_id: &str) -> Option<&crate::effects::EffectGroup> {
         self.effect_groups.as_ref()?.iter().find(|g| g.id == group_id)

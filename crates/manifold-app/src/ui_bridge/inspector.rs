@@ -539,7 +539,7 @@ pub(super) fn dispatch_inspector(
             let tab = ui.inspector.last_effect_tab();
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
             };
             if let Some(et) = effect_type {
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
@@ -644,7 +644,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
             };
             if let Some(et) = effect_type {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
@@ -746,7 +746,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
             };
             if let Some(et) = effect_type {
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
@@ -835,7 +835,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
             };
             if let Some(et) = effect_type {
                 let envs: Option<&[ParamEnvelope]> = match tab {
@@ -866,7 +866,7 @@ pub(super) fn dispatch_inspector(
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
                 let effect_type = {
                     let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
                 };
                 if let Some(et) = effect_type {
                     match tab {
@@ -911,7 +911,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let effect_type = {
                 let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
             };
             if let Some(et) = effect_type {
                 let envs: Option<&[ParamEnvelope]> = match tab {
@@ -947,7 +947,7 @@ pub(super) fn dispatch_inspector(
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
                 let effect_type = {
                     let effects = resolve_effects_ref(tab, project, active_layer, selection);
-                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type)
+                    effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type())
                 };
                 if let Some(et) = effect_type {
                     match tab {
@@ -1097,7 +1097,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
-                    && let Some(gp) = &layer.gen_params {
+                    && let Some(gp) = layer.gen_params() {
                         let val = gp.get_param_base(*param_idx);
                         *drag_snapshot = Some(val);
                         *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::GenParam {
@@ -1112,7 +1112,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                    && let Some(gp) = &mut layer.gen_params {
+                    && let Some(gp) = layer.gen_params_mut() {
                         gp.set_param_base(*param_idx, *val);
                     }
                 if let Some(crate::app::ActiveInspectorDrag::GenParam { value, .. }) = active_inspector_drag {
@@ -1123,7 +1123,7 @@ pub(super) fn dispatch_inspector(
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
                     if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
-                        && let Some(gp) = &mut layer.gen_params {
+                        && let Some(gp) = layer.gen_params_mut() {
                             gp.set_param_base(pi, v);
                         }
                 })));
@@ -1135,7 +1135,7 @@ pub(super) fn dispatch_inspector(
             if let Some(old_val) = drag_snapshot.take()
                 && let Some(layer_idx) = layer_idx
                     && let Some(layer) = project.timeline.layers.get(layer_idx)
-                        && let Some(gp) = &layer.gen_params {
+                        && let Some(gp) = layer.gen_params() {
                             let new_val = gp.get_param_base(*param_idx);
                             if (old_val - new_val).abs() > f32::EPSILON {
                                 let layer_id = layer.layer_id.clone();
@@ -1158,9 +1158,9 @@ pub(super) fn dispatch_inspector(
         PanelAction::GenParamToggle(param_idx) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                    && let Some(gp) = &mut layer.gen_params {
-                        let layer_id = layer.layer_id.clone();
+                && let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                    let layer_id = layer.layer_id.clone();
+                    if let Some(gp) = layer.gen_params_mut() {
                         let old_val = gp.get_param_base(*param_idx);
                         let new_val = if old_val > 0.5 { 0.0 } else { 1.0 };
                         let base = gp.base_param_values.as_ref()
@@ -1174,14 +1174,15 @@ pub(super) fn dispatch_inspector(
                         );
                         ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                     }
+                }
             DispatchResult::handled()
         }
         PanelAction::GenParamRightClick(param_idx, default_val) => {
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
-                && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                    && let Some(gp) = &mut layer.gen_params {
-                        let layer_id = layer.layer_id.clone();
+                && let Some(layer) = project.timeline.layers.get_mut(layer_idx) {
+                    let layer_id = layer.layer_id.clone();
+                    if let Some(gp) = layer.gen_params_mut() {
                         let old = gp.get_param_base(*param_idx);
                         if (old - *default_val).abs() > f32::EPSILON {
                             let base = gp.base_param_values.as_ref()
@@ -1196,6 +1197,7 @@ pub(super) fn dispatch_inspector(
                             ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
+                }
             *active_inspector_drag = None;
             DispatchResult::handled()
         }
@@ -1207,7 +1209,7 @@ pub(super) fn dispatch_inspector(
                 let layer_id = active_layer.clone().unwrap_or_default();
                 let target = DriverTarget::GeneratorParam { layer_id };
                 if let Some(layer) = project.timeline.layers.get(layer_idx)
-                    && let Some(gp) = &layer.gen_params {
+                    && let Some(gp) = layer.gen_params() {
                         let driver_idx = gp.drivers.as_ref()
                             .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32));
                         if let Some(di) = driver_idx {
@@ -1238,7 +1240,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                    && let Some(gp) = &mut layer.gen_params {
+                    && let Some(gp) = layer.gen_params_mut() {
                         let envs = gp.envelopes.get_or_insert_with(Vec::new);
                         let env_idx = envs.iter().position(|e| e.param_index == *pi as i32);
                         if let Some(idx) = env_idx {
@@ -1265,7 +1267,7 @@ pub(super) fn dispatch_inspector(
                 let layer_id = active_layer.clone().unwrap_or_default();
                 let target = DriverTarget::GeneratorParam { layer_id };
                 if let Some(layer) = project.timeline.layers.get(layer_idx)
-                    && let Some(gp) = &layer.gen_params
+                    && let Some(gp) = layer.gen_params()
                         && let Some(di) = gp.drivers.as_ref()
                             .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32))
                         {
@@ -1308,7 +1310,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                    && let Some(gp) = &mut layer.gen_params
+                    && let Some(gp) = layer.gen_params_mut()
                         && let Some(envs) = &mut gp.envelopes
                             && let Some(env) = envs.iter_mut().find(|e| e.param_index == *pi as i32)
                             {
@@ -1325,7 +1327,7 @@ pub(super) fn dispatch_inspector(
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |proj| {
                     if let Some((_, layer)) = proj.timeline.find_layer_by_id_mut(&layer_id)
-                        && let Some(gp) = &mut layer.gen_params
+                        && let Some(gp) = layer.gen_params_mut()
                             && let Some(envs) = &mut gp.envelopes
                                 && let Some(env) = envs.iter_mut().find(|e| e.param_index == param_i)
                                 {
@@ -1344,7 +1346,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                    && let Some(gp) = &mut layer.gen_params
+                    && let Some(gp) = layer.gen_params_mut()
                         && let Some(drivers) = &mut gp.drivers
                             && let Some(driver) = drivers.iter_mut().find(|d| d.param_index == *pi as i32)
                             {
@@ -1357,7 +1359,7 @@ pub(super) fn dispatch_inspector(
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
                     if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
-                        && let Some(gp) = &mut layer.gen_params
+                        && let Some(gp) = layer.gen_params_mut()
                             && let Some(drivers) = &mut gp.drivers
                                 && let Some(driver) = drivers.iter_mut().find(|d| d.param_index == param_i)
                                 {
@@ -1372,7 +1374,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx {
                 if let Some(layer) = project.timeline.layers.get_mut(layer_idx)
-                    && let Some(gp) = &mut layer.gen_params
+                    && let Some(gp) = layer.gen_params_mut()
                         && let Some(envs) = &mut gp.envelopes
                             && let Some(env) = envs.iter_mut().find(|e| e.param_index == *pi as i32)
                             {
@@ -1383,7 +1385,7 @@ pub(super) fn dispatch_inspector(
                 let layer_id = active_layer.clone().unwrap_or_default();
                 ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
                     if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
-                        && let Some(gp) = &mut layer.gen_params
+                        && let Some(gp) = layer.gen_params_mut()
                             && let Some(envs) = &mut gp.envelopes
                                 && let Some(env) = envs.iter_mut().find(|e| e.param_index == param_i)
                                 {
@@ -1399,7 +1401,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
-                    && let Some(gp) = &layer.gen_params
+                    && let Some(gp) = layer.gen_params()
                         && let Some(driver) = gp.drivers.as_ref()
                             .and_then(|ds| ds.iter().find(|d| d.param_index == *pi as i32))
                         {
@@ -1412,7 +1414,7 @@ pub(super) fn dispatch_inspector(
             if let Some((old_min, old_max)) = trim_snapshot.take()
                 && let Some(layer_idx) = layer_idx
                     && let Some(layer) = project.timeline.layers.get(layer_idx)
-                        && let Some(gp) = &layer.gen_params
+                        && let Some(gp) = layer.gen_params()
                             && let Some(di) = gp.drivers.as_ref()
                                 .and_then(|ds| ds.iter().position(|d| d.param_index == *pi as i32))
                             {
@@ -1433,7 +1435,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
-                    && let Some(gp) = &layer.gen_params
+                    && let Some(gp) = layer.gen_params()
                         && let Some(envs) = &gp.envelopes
                             && let Some(env) = envs.iter().find(|e| e.param_index == *pi as i32) {
                                 *target_snapshot = Some(env.target_normalized);
@@ -1445,7 +1447,7 @@ pub(super) fn dispatch_inspector(
             if let Some(old_target) = target_snapshot.take()
                 && let Some(layer_idx) = layer_idx
                     && let Some(layer) = project.timeline.layers.get(layer_idx)
-                        && let Some(gp) = &layer.gen_params
+                        && let Some(gp) = layer.gen_params()
                             && let Some(envs) = &gp.envelopes
                                 && let Some(env_idx) = envs.iter().position(|e| e.param_index == *pi as i32) {
                                     let env = &envs[env_idx];
@@ -1464,7 +1466,7 @@ pub(super) fn dispatch_inspector(
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             if let Some(layer_idx) = layer_idx
                 && let Some(layer) = project.timeline.layers.get(layer_idx)
-                    && let Some(gp) = &layer.gen_params
+                    && let Some(gp) = layer.gen_params()
                         && let Some(envs) = &gp.envelopes
                             && let Some(env) = envs.iter().find(|e| e.param_index == *pi as i32) {
                                 *adsr_snapshot = Some((env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats));
@@ -1476,7 +1478,7 @@ pub(super) fn dispatch_inspector(
             if let Some((old_a, old_d, old_s, old_r)) = adsr_snapshot.take()
                 && let Some(layer_idx) = layer_idx
                     && let Some(layer) = project.timeline.layers.get(layer_idx)
-                        && let Some(gp) = &layer.gen_params
+                        && let Some(gp) = layer.gen_params()
                             && let Some(envs) = &gp.envelopes
                                 && let Some(env_idx) = envs.iter().position(|e| e.param_index == *pi as i32) {
                                     let env = &envs[env_idx];
@@ -1505,20 +1507,8 @@ pub(super) fn dispatch_inspector(
                 return DispatchResult::handled();
             };
             let defaults = manifold_core::effect_definition_registry::get_defaults(effect_type);
-            let effect = EffectInstance {
-                effect_type,
-                enabled: true,
-                collapsed: false,
-                param_values: defaults,
-                base_param_values: None,
-                drivers: None,
-                group_id: None,
-                legacy_param0: None,
-                legacy_param1: None,
-                legacy_param2: None,
-                legacy_param3: None,
-                ..EffectInstance::new(effect_type)
-            };
+            let mut effect = EffectInstance::new(effect_type);
+            effect.param_values = defaults;
             let layer_idx = super::resolve_active_layer_index(active_layer, project);
             let target = match tab {
                 InspectorTab::Master => EffectTarget::Master,

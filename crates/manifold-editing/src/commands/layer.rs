@@ -33,12 +33,12 @@ impl Command for AddLayerCommand {
         let layer = if let Some(existing) = self.layer.take() {
             existing
         } else {
-            let mut new_layer = Layer::new(self.name.clone(), self.layer_type, 0);
+            let mut new_layer = if self.layer_type == LayerType::Generator {
+                Layer::new_generator(self.name.clone(), self.gen_type, 0)
+            } else {
+                Layer::new(self.name.clone(), self.layer_type, 0)
+            };
             new_layer.parent_layer_id = self.parent_group_id.clone();
-            if self.layer_type == LayerType::Generator {
-                let gp = new_layer.gen_params.get_or_insert_with(Default::default);
-                gp.change_type(self.gen_type);
-            }
             new_layer
         };
         self.layer = Some(layer.clone());

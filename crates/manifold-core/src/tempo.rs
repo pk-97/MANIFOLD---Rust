@@ -19,7 +19,7 @@ pub struct TempoPoint {
 #[serde(rename_all = "camelCase")]
 pub struct TempoMap {
     #[serde(default)]
-    pub points: Vec<TempoPoint>,
+    points: Vec<TempoPoint>,
 
     #[serde(skip)]
     is_sorted: bool,
@@ -104,6 +104,14 @@ impl TempoMap {
         }
     }
 
+    /// Read-only access to tempo points.
+    #[inline]
+    pub fn points(&self) -> &[TempoPoint] {
+        &self.points
+    }
+
+    /// Number of tempo points.
+    #[inline]
     pub fn point_count(&self) -> usize {
         self.points.len()
     }

@@ -47,7 +47,7 @@ pub struct Layer {
 
     // ── Generator params (V1.1.0+, nested) ──
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gen_params: Option<GeneratorParamState>,
+    gen_params: Option<GeneratorParamState>,
 
     // ── Video/MIDI assignment ──
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,6 +116,36 @@ impl Layer {
         }
     }
 
+    /// Create a new generator layer with fully initialized params.
+    pub fn new_generator(name: String, gen_type: GeneratorType, index: i32) -> Self {
+        let mut layer = Self::new(name, LayerType::Generator, index);
+        layer.gen_params = Some(GeneratorParamState::new(gen_type));
+        layer
+    }
+
+    /// Create a new video layer.
+    pub fn new_video(name: String, index: i32) -> Self {
+        Self::new(name, LayerType::Video, index)
+    }
+
+    /// Read-only access to generator params.
+    #[inline]
+    pub fn gen_params(&self) -> Option<&GeneratorParamState> {
+        self.gen_params.as_ref()
+    }
+
+    /// Mutable access to generator params.
+    #[inline]
+    pub fn gen_params_mut(&mut self) -> Option<&mut GeneratorParamState> {
+        self.gen_params.as_mut()
+    }
+
+    /// Mutable access to generator params, creating a default if None.
+    #[inline]
+    pub fn gen_params_or_init(&mut self) -> &mut GeneratorParamState {
+        self.gen_params.get_or_insert_with(GeneratorParamState::default)
+    }
+
     /// Generates a distinct color for layer visualization based on index.
     /// Uses golden ratio hue distribution for maximum visual separation.
     /// From Unity Layer.cs line 586-590.
@@ -131,7 +161,7 @@ impl Layer {
     /// Get the generator type for this layer (from genParams or legacy field).
     pub fn generator_type(&self) -> GeneratorType {
         if let Some(gp) = &self.gen_params {
-            gp.generator_type
+            gp.generator_type()
         } else {
             self.legacy_generator_type.unwrap_or(GeneratorType::None)
         }
@@ -381,11 +411,7 @@ impl Layer {
             return;
         }
         let gp = self.gen_params.get_or_insert_with(GeneratorParamState::default);
-        gp.generator_type = old_type;
-        gp.param_values = params.clone();
-        gp.base_param_values = Some(params);
-        gp.drivers = drivers;
-        gp.envelopes = envelopes;
+        gp.restore(old_type, params, drivers, envelopes);
         self.update_clip_generator_types(old_type);
     }
 
@@ -460,7 +486,7 @@ impl crate::effects::EffectContainer for Layer {
         self.effects.as_ref().is_some_and(|e| !e.is_empty())
     }
     fn find_effect(&self, effect_type: crate::types::EffectType) -> Option<&crate::effects::EffectInstance> {
-        self.effects.as_ref()?.iter().find(|e| e.effect_type == effect_type)
+        self.effects.as_ref()?.iter().find(|e| e.effect_type() == effect_type)
     }
     fn find_effect_group(&self, group_id: &str) -> Option<&crate::effects::EffectGroup> {
         self.effect_groups.as_ref()?.iter().find(|g| g.id == group_id)

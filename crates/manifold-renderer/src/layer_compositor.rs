@@ -367,7 +367,7 @@ fn layer_id_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
 fn has_enabled_effects(effects: &[EffectInstance]) -> bool {
     for fx in effects {
         if fx.enabled
-            && fx.effect_type != EffectType::Unknown
+            && fx.effect_type() != EffectType::Unknown
             && fx.param_values.first().copied().unwrap_or(0.0) > 0.0
         {
             return true;

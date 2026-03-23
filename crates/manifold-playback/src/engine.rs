@@ -1074,7 +1074,7 @@ impl PlaybackEngine {
         if let Some(project) = &mut self.project {
             let bpm = if let Some((live_bpm, _)) = live_tempo {
                 live_bpm
-            } else if !project.tempo_map.points.is_empty() {
+            } else if !project.tempo_map.points().is_empty() {
                 project.tempo_map.get_bpm_at_beat(self.current_beat, project.settings.bpm)
             } else {
                 project.settings.bpm
@@ -1626,7 +1626,7 @@ impl PlaybackEngine {
         // Sort by layer index descending (back to front for compositing)
         // Resolve layer_id → positional index via the project's cached map.
         let id_to_idx = self.project.as_ref()
-            .map(|p| &p.timeline.layer_id_to_index);
+            .map(|p| p.timeline.layer_id_index_map());
         self.ready_clips_list.sort_by(|a, b| {
             let ai = id_to_idx.and_then(|m| m.get(&a.layer_id).copied()).unwrap_or(0);
             let bi = id_to_idx.and_then(|m| m.get(&b.layer_id).copied()).unwrap_or(0);

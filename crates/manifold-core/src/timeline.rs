@@ -27,10 +27,16 @@ pub struct Timeline {
 
     /// Runtime layer_id → position index map. Rebuilt in reindex_layers().
     #[serde(skip)]
-    pub layer_id_to_index: AHashMap<LayerId, usize>,
+    layer_id_to_index: AHashMap<LayerId, usize>,
 }
 
 impl Timeline {
+    /// Read-only access to the layer_id → index cache (for batch lookups in sort).
+    #[inline]
+    pub fn layer_id_index_map(&self) -> &AHashMap<LayerId, usize> {
+        &self.layer_id_to_index
+    }
+
     /// Resolve a LayerId to its current positional index.
     pub fn layer_index_for_id(&self, id: &LayerId) -> Option<usize> {
         // Fast path: use cached map if populated

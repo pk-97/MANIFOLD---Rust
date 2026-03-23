@@ -244,7 +244,7 @@ impl TransportStateCache {
             ui.transport.set_bpm_reset_active(&mut ui.tree, can_reset);
 
             // Clear: enabled when tempo map has >1 point
-            let can_clear = project.tempo_map.points.len() > 1;
+            let can_clear = project.tempo_map.point_count() > 1;
             ui.transport.set_bpm_clear_active(&mut ui.tree, can_clear);
         }
     }
