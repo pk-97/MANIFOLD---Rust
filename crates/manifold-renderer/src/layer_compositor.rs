@@ -320,6 +320,10 @@ impl PingPong {
         self.pong.resize(device, width, height);
     }
 
+    fn source_texture(&self) -> &wgpu::Texture {
+        if self.use_ping_as_source { &self.ping.texture } else { &self.pong.texture }
+    }
+
     fn width(&self) -> u32 { self.ping.width }
     fn height(&self) -> u32 { self.ping.height }
 
@@ -673,27 +677,77 @@ impl LayerCompositor {
             }
         }
 
-        // Apply master effects to final composited buffer
+        // Master effects (bloom, halation, CRT) are applied AFTER tonemapping
+        // in render() so their glow contribution extends above 1.0 for HDR displays.
+        // On SDR displays, values > 1.0 clip to white — visually identical to pre-tonemap.
+    }
+}
+
+impl Compositor for LayerCompositor {
+    fn render(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        frame: &CompositorFrame,
+        gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
+    ) -> &wgpu::TextureView {
+        if frame.clips.is_empty() {
+            self.main.clear_source(encoder, true);
+        } else {
+            self.composite(device, queue, encoder, frame, gpu_profiler);
+        }
+
+        // Tonemap the composited scene (before master glow effects).
+        self.tonemap.apply(
+            device, queue, encoder,
+            self.main.source_view(),
+            &frame.tonemap,
+            gpu_profiler,
+        );
+
+        // Apply master effects (bloom, halation, CRT) AFTER tonemapping.
+        // Glow contribution pushes values > 1.0 for HDR/EDR displays.
+        // On SDR displays, values > 1.0 clip to white — same visual result.
         if has_enabled_effects(frame.master_effects) {
+            let width = self.main.width();
+            let height = self.main.height();
+
+            // Copy tonemapped result back into main's source buffer for effect chain.
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.tonemap.output.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: self.main.source_texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            );
+
             let ctx = EffectContext {
                 time: frame.time,
                 beat: frame.beat,
                 dt: frame.dt,
                 width,
                 height,
-                owner_key: 0, // master
-                is_clip_level: false, edge_stretch_width: 0.5625,
+                owner_key: 0,
+                is_clip_level: false,
+                edge_stretch_width: 0.5625,
                 frame_count: frame.frame_count as i64,
             };
+            let aspect = width as f32 / height as f32;
             if let Some(processed) = Self::apply_effects(
                 &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
                 device, queue, encoder,
                 self.main.source_view(), frame.master_effects, frame.master_effect_groups, &ctx,
                 gpu_profiler,
             ) {
-                // Blit effect chain result back into main via Opaque blend (full replace).
-                // source_view (t_base) and target_view are always different textures (ping/pong).
-                // processed points to effect_chain's internal buffer (third texture). No hazard.
                 let uniforms = BlendUniforms {
                     blend_mode: BlendMode::Opaque as u32,
                     opacity: 1.0,
@@ -714,31 +768,25 @@ impl LayerCompositor {
                 );
                 self.main.swap();
             }
-        }
-    }
-}
 
-impl Compositor for LayerCompositor {
-    fn render(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        frame: &CompositorFrame,
-        gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
-    ) -> &wgpu::TextureView {
-        if frame.clips.is_empty() {
-            self.main.clear_source(encoder, true);
-        } else {
-            self.composite(device, queue, encoder, frame, gpu_profiler);
+            // Copy post-effect result back to tonemap output (standard output path).
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: self.main.source_texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.tonemap.output.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            );
         }
 
-        self.tonemap.apply(
-            device, queue, encoder,
-            self.main.source_view(),
-            &frame.tonemap,
-            gpu_profiler,
-        );
         &self.tonemap.output.view
     }
 
