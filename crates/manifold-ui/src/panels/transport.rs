@@ -466,14 +466,8 @@ impl TransportPanel {
         }
     }
 
-    pub fn set_export_label(&mut self, tree: &mut UITree, text: &str) {
-        if self.export_button_id < 0 {
-            return;
-        }
-        // Show range info on the button when markers are set,
-        // otherwise show "EXPORT".
-        let label = if text.is_empty() { "EXPORT" } else { text };
-        tree.set_text(self.export_button_id as u32, label);
+    pub fn set_export_label(&mut self, _tree: &mut UITree, _text: &str) {
+        // Label display handled by viewport markers, not transport button text.
     }
 
     pub fn set_export_active(&mut self, tree: &mut UITree, active: bool) {

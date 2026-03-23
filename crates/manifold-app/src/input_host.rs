@@ -34,6 +34,7 @@ pub struct AppInputHost<'a> {
     pub current_project_path: &'a Option<std::path::PathBuf>,
     pub has_output_window: bool,
     pub pending_close_output: &'a mut bool,
+    pub pending_export: &'a mut bool,
     pub effect_clipboard: &'a mut manifold_editing::clipboard::EffectClipboard,
 }
 
@@ -772,15 +773,18 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn set_export_in_at_playhead(&mut self) {
-        // Unity InputHandler.SetExportInAtPlayhead (lines 615-628):
-        // Snap to grid before applying.
         let beat = self.content_state.current_beat;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
         let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
-        // Update local copy for immediate UI feedback
         self.project.timeline.export_in_beat = snapped;
         self.project.timeline.export_range_enabled = true;
-        // Sync to content thread so state_sync picks up the change
+        // Push to viewport immediately so build() sees it this frame
+        self.ui_root.viewport.set_export_range(
+            self.project.timeline.export_in_beat,
+            self.project.timeline.export_out_beat,
+            true,
+        );
+        *self.needs_rebuild = true;
         ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
             Box::new(move |p| {
                 p.timeline.export_in_beat = snapped;
@@ -790,15 +794,17 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn set_export_out_at_playhead(&mut self) {
-        // Unity InputHandler.SetExportOutAtPlayhead (lines 630-643):
-        // Snap to grid before applying.
         let beat = self.content_state.current_beat;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
         let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
-        // Update local copy for immediate UI feedback
         self.project.timeline.export_out_beat = snapped;
         self.project.timeline.export_range_enabled = true;
-        // Sync to content thread
+        self.ui_root.viewport.set_export_range(
+            self.project.timeline.export_in_beat,
+            self.project.timeline.export_out_beat,
+            true,
+        );
+        *self.needs_rebuild = true;
         ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
             Box::new(move |p| {
                 p.timeline.export_out_beat = snapped;
@@ -808,12 +814,9 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn clear_export_in(&mut self) {
-        // Unity InputHandler.ClearExportIn (lines 645-662):
-        // If no out-point → clear entire range.
-        // If out-point exists → reset in to 0, keep range enabled.
-        let has_out = self.project.timeline.export_out_beat > 0.0;
+        let has_out = self.project.timeline.export_out_beat
+            > self.project.timeline.export_in_beat;
         if !has_out {
-            // No out-point — clear entire range
             self.project.timeline.export_in_beat = 0.0;
             self.project.timeline.export_out_beat = 0.0;
             self.project.timeline.export_range_enabled = false;
@@ -825,26 +828,28 @@ impl TimelineInputHost for AppInputHost<'_> {
                 }),
             ));
         } else {
-            // Out-point exists — reset in to 0 but keep range
             self.project.timeline.export_in_beat = 0.0;
             ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
-                Box::new(|p| {
-                    p.timeline.export_in_beat = 0.0;
-                }),
+                Box::new(|p| { p.timeline.export_in_beat = 0.0; }),
             ));
         }
+        self.ui_root.viewport.set_export_range(
+            self.project.timeline.export_in_beat,
+            self.project.timeline.export_out_beat,
+            self.project.timeline.export_range_enabled,
+        );
+        *self.needs_rebuild = true;
     }
 
     fn clear_export_out(&mut self) {
-        // Unity InputHandler.ClearExportOut (lines 664-677):
-        // If no range active → no-op.
-        // If range active → clear entire range.
         if !self.project.timeline.export_range_enabled {
-            return; // no-op
+            return;
         }
         self.project.timeline.export_in_beat = 0.0;
         self.project.timeline.export_out_beat = 0.0;
         self.project.timeline.export_range_enabled = false;
+        self.ui_root.viewport.set_export_range(0.0, 0.0, false);
+        *self.needs_rebuild = true;
         ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
             Box::new(|p| {
                 p.timeline.export_in_beat = 0.0;
@@ -855,43 +860,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn start_export(&mut self) {
-        let project = &*self.project;
-        let (w, h) = (
-            project.settings.output_width.max(1) as u32,
-            project.settings.output_height.max(1) as u32,
-        );
-
-        // Default output path: ~/Desktop/{project_name}.mp4
-        let project_name = if project.project_name.is_empty() {
-            "MANIFOLD_Export"
-        } else {
-            &project.project_name
-        };
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let desktop = std::path::Path::new(&home).join("Desktop");
-        let output_path = desktop
-            .join(format!("{project_name}.mp4"))
-            .to_string_lossy()
-            .to_string();
-
-        let config = manifold_media::export_config::ExportConfig {
-            output_path,
-            width: w,
-            height: h,
-            fps: project.settings.frame_rate,
-            hdr: project.settings.export_hdr,
-            start_beat: project.timeline.export_in_beat,
-            end_beat: project.timeline.export_out_beat,
-            audio_path: None, // TODO: wire from audio sync controller
-            audio_start_beat: 0.0,
-            audio_encoder_delay: 0.0,
-        };
-
-        log::info!("[InputHost] Starting export: {}x{} -> {}", w, h, config.output_path);
-        ContentCommand::send(
-            self.content_tx,
-            ContentCommand::StartExport(Box::new(config)),
-        );
+        // Defer to Application::start_export() which opens the file dialog.
+        *self.pending_export = true;
     }
 
     fn dismiss_context_menu(&mut self) {

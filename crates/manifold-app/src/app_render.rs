@@ -520,7 +520,14 @@ impl Application {
         }
         // Legacy drag polling removed — overlay.poll_move_drag() handles it above.
 
-        // 2b. Auto-scroll check for playback (BEFORE build so rebuild includes new scroll)
+        // 2b. Process deferred export (keyboard shortcut sets flag, processed here
+        // where Application has full access for the file dialog).
+        if self.pending_export {
+            self.pending_export = false;
+            self.start_export();
+        }
+
+        // 2c. Auto-scroll check for playback (BEFORE build so rebuild includes new scroll)
         let auto_scroll_changed = crate::ui_bridge::check_auto_scroll(&mut self.ui_root, &self.content_state, &self.local_project);
         let overlay_changed = self.ui_root.overlay_dirty;
         self.ui_root.overlay_dirty = false;

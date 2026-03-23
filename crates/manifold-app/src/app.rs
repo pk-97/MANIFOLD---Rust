@@ -260,6 +260,7 @@ pub struct Application {
     pub(crate) initialized: bool,
     pub(crate) pending_toggle_output: bool,
     pub(crate) pending_close_output: bool,
+    pub(crate) pending_export: bool,
     pub(crate) needs_rebuild: bool,
     /// Set by scroll/zoom events that only affect viewport + layer_headers.
     /// Uses the partial rebuild path (rebuild_scroll_panels) instead of full build.
@@ -346,6 +347,7 @@ impl Application {
             display_resolutions: Vec::new(),
             initialized: false,
             pending_toggle_output: false,
+            pending_export: false,
             pending_close_output: false,
             needs_rebuild: false,
             needs_scroll_rebuild: false,
@@ -1564,6 +1566,7 @@ impl ApplicationHandler for Application {
                             current_project_path: &self.current_project_path,
                             has_output_window: self.window_registry.has_output_window(),
                             pending_close_output: &mut self.pending_close_output,
+                            pending_export: &mut self.pending_export,
                             effect_clipboard: &mut self.effect_clipboard,
                         };
                         if self.input_handler.handle_keyboard_input(

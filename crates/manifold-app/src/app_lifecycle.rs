@@ -55,7 +55,7 @@ impl Application {
         self.apply_project_io_action(action);
     }
 
-    /// Start offline video export with current project settings.
+    /// Start offline video export — opens file save dialog, then encodes.
     pub(crate) fn start_export(&mut self) {
         let project = &self.local_project;
         let (w, h) = (
@@ -68,12 +68,35 @@ impl Application {
         } else {
             &project.project_name
         };
+
+        // Pause rendering while native file dialog is open (macOS GPU contention)
+        self.send_content_cmd(ContentCommand::PauseRendering);
+
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Export Video")
+            .add_filter("MP4 Video", &["mp4"])
+            .set_file_name(format!("{project_name}.mp4"));
+
+        // Default to Desktop
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let output_path = std::path::Path::new(&home)
-            .join("Desktop")
-            .join(format!("{project_name}.mp4"))
-            .to_string_lossy()
-            .to_string();
+        let desktop = std::path::Path::new(&home).join("Desktop");
+        if desktop.exists() {
+            dialog = dialog.set_directory(&desktop);
+        }
+
+        let result = dialog.save_file();
+        self.send_content_cmd(ContentCommand::ResumeRendering);
+
+        let Some(mut path) = result else {
+            return; // User cancelled
+        };
+
+        // Ensure .mp4 extension
+        if path.extension().is_none_or(|e| e != "mp4") {
+            path.set_extension("mp4");
+        }
+
+        let output_path = path.to_string_lossy().to_string();
 
         let config = manifold_media::export_config::ExportConfig {
             output_path,
