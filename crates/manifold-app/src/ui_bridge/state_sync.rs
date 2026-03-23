@@ -416,6 +416,10 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
                 y_offset: y,
                 height: track_h,
                 is_selected: active_layer == Some(i),
+                color: manifold_ui::node::Color32::from_f32(
+                    layer.layer_color.r, layer.layer_color.g,
+                    layer.layer_color.b, layer.layer_color.a,
+                ),
             }
         }).collect();
         let active_layer_id = active_layer
@@ -503,17 +507,17 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
                     "Clip".to_string()
                 };
                 use manifold_ui::panels::viewport::ViewportClip;
+                let clip_color = manifold_ui::node::Color32::from_f32(
+                    layer.layer_color.r, layer.layer_color.g,
+                    layer.layer_color.b, 0.86,
+                );
                 viewport_clips.push(ViewportClip {
                     clip_id: clip.id.clone(),
                     layer_index: i,
                     start_beat: clip.start_beat,
                     duration_beats: clip.duration_beats,
                     name,
-                    color: if is_gen {
-                        manifold_ui::color::CLIP_GEN_NORMAL
-                    } else {
-                        manifold_ui::color::CLIP_NORMAL
-                    },
+                    color: clip_color,
                     is_muted: clip.is_muted,
                     is_locked: false,
                     is_generator: is_gen,
@@ -548,17 +552,17 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
             } else {
                 "Clip".to_string()
             };
+            let clip_color = manifold_ui::node::Color32::from_f32(
+                layer.layer_color.r, layer.layer_color.g,
+                layer.layer_color.b, 0.86,
+            );
             viewport_clips.push(ViewportClip {
                 clip_id: clip.id.clone(),
                 layer_index: i,
                 start_beat: clip.start_beat,
                 duration_beats: clip.duration_beats,
                 name,
-                color: if is_gen {
-                    manifold_ui::color::CLIP_GEN_NORMAL
-                } else {
-                    manifold_ui::color::CLIP_NORMAL
-                },
+                color: clip_color,
                 is_muted: clip.is_muted,
                 is_locked: false,
                 is_generator: is_gen,

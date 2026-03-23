@@ -161,6 +161,8 @@ pub struct LayerInfo {
     /// Height of this layer row.
     pub height: f32,
     pub is_selected: bool,
+    /// Layer color (auto-assigned or user-set).
+    pub color: Color32,
 }
 
 // ── LayerRowData ────────────────────────────────────────────────────
@@ -168,6 +170,7 @@ pub struct LayerInfo {
 #[derive(Default)]
 struct LayerRowData {
     background: Rect,
+    color_bar: Rect,
     chevron: Rect,
     name: Rect,
     drag_handle: Rect,
@@ -211,6 +214,7 @@ fn compute_layer_row(
     let w = if panel_width > 0.0 { panel_width } else { color::LAYER_CONTROLS_WIDTH };
 
     d.background = Rect::new(0.0, y_offset, w, height);
+    d.color_bar = Rect::new(0.0, y_offset, 3.0, height);
 
     let left_indent = if is_child { CHILD_INDENT } else { 0.0 };
     let pad = PAD + left_indent;
@@ -330,6 +334,7 @@ fn compute_layer_row(
 #[derive(Clone)]
 struct LayerRowIds {
     bg: i32,
+    color_bar: i32,
     chevron: i32,
     name: i32,
     drag_handle: i32,
@@ -355,7 +360,7 @@ struct LayerRowIds {
 impl Default for LayerRowIds {
     fn default() -> Self {
         Self {
-            bg: -1, chevron: -1, name: -1, drag_handle: -1,
+            bg: -1, color_bar: -1, chevron: -1, name: -1, drag_handle: -1,
             mute: -1, solo: -1, blend_mode: -1, separator: -1,
             info: -1, accent_bar: -1, connector: -1, bottom_border: -1,
             folder: -1, path_label: -1, new_clip: -1, gen_type: -1,
@@ -730,6 +735,13 @@ impl LayerHeaderPanel {
         ids.bg = tree.add_button(
             clip_parent, bg_r.x, bg_r.y, bg_r.width, bg_r.height,
             bg_style(layer.is_selected), "",
+        ) as i32;
+
+        // Layer color bar (thin strip at left edge)
+        let cb = s(row.color_bar);
+        ids.color_bar = tree.add_panel(
+            clip_parent, cb.x, cb.y, cb.width, cb.height,
+            UIStyle { bg_color: layer.color, corner_radius: 0.0, ..UIStyle::default() },
         ) as i32;
 
         // Group accent bar
@@ -1196,6 +1208,7 @@ mod tests {
             y_offset,
             height,
             is_selected: false,
+            color: Color32::new(100, 148, 210, 220),
         }
     }
 
