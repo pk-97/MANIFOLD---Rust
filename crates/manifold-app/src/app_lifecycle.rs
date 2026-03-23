@@ -55,6 +55,43 @@ impl Application {
         self.apply_project_io_action(action);
     }
 
+    /// Start offline video export with current project settings.
+    pub(crate) fn start_export(&mut self) {
+        let project = &self.local_project;
+        let (w, h) = (
+            project.settings.output_width.max(1) as u32,
+            project.settings.output_height.max(1) as u32,
+        );
+
+        let project_name = if project.project_name.is_empty() {
+            "MANIFOLD_Export"
+        } else {
+            &project.project_name
+        };
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let output_path = std::path::Path::new(&home)
+            .join("Desktop")
+            .join(format!("{project_name}.mp4"))
+            .to_string_lossy()
+            .to_string();
+
+        let config = manifold_media::export_config::ExportConfig {
+            output_path,
+            width: w,
+            height: h,
+            fps: project.settings.frame_rate,
+            hdr: project.settings.export_hdr,
+            start_beat: project.timeline.export_in_beat,
+            end_beat: project.timeline.export_out_beat,
+            audio_path: None, // TODO: wire from audio sync controller
+            audio_start_beat: 0.0,
+            audio_encoder_delay: 0.0,
+        };
+
+        log::info!("[Application] Starting export: {}x{} -> {}", w, h, config.output_path);
+        self.send_content_cmd(ContentCommand::StartExport(Box::new(config)));
+    }
+
     /// Open. Delegates to ProjectIOService.open_project.
     pub(crate) fn open_project(&mut self) {
         self.send_content_cmd(ContentCommand::PauseRendering);

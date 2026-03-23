@@ -279,6 +279,7 @@ impl Application {
                 PanelAction::ToggleMonitor => { self.pending_toggle_output = true; continue; }
                 PanelAction::SaveProject => { self.save_project(); continue; }
                 PanelAction::SaveProjectAs => { self.save_project_as(); continue; }
+                PanelAction::ExportVideo => { self.start_export(); continue; }
                 PanelAction::OpenProject => { self.open_project(); needs_structural_sync = true; continue; }
                 PanelAction::OpenRecent => { self.open_recent_project(); needs_structural_sync = true; continue; }
                 PanelAction::PasteEffects => {

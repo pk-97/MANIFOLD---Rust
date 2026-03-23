@@ -775,40 +775,63 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Unity InputHandler.SetExportInAtPlayhead (lines 615-628):
         // Snap to grid before applying.
         let beat = self.content_state.current_beat;
-        if let Some(project) = Some(&mut *self.project) {
-            let bpb = project.settings.time_signature_numerator.max(1) as u32;
-            let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
-            project.timeline.export_in_beat = snapped;
-            project.timeline.export_range_enabled = true;
-        }
+        let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
+        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
+        // Update local copy for immediate UI feedback
+        self.project.timeline.export_in_beat = snapped;
+        self.project.timeline.export_range_enabled = true;
+        // Sync to content thread so state_sync picks up the change
+        ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
+            Box::new(move |p| {
+                p.timeline.export_in_beat = snapped;
+                p.timeline.export_range_enabled = true;
+            }),
+        ));
     }
 
     fn set_export_out_at_playhead(&mut self) {
         // Unity InputHandler.SetExportOutAtPlayhead (lines 630-643):
         // Snap to grid before applying.
         let beat = self.content_state.current_beat;
-        if let Some(project) = Some(&mut *self.project) {
-            let bpb = project.settings.time_signature_numerator.max(1) as u32;
-            let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
-            project.timeline.export_out_beat = snapped;
-            project.timeline.export_range_enabled = true;
-        }
+        let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
+        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
+        // Update local copy for immediate UI feedback
+        self.project.timeline.export_out_beat = snapped;
+        self.project.timeline.export_range_enabled = true;
+        // Sync to content thread
+        ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
+            Box::new(move |p| {
+                p.timeline.export_out_beat = snapped;
+                p.timeline.export_range_enabled = true;
+            }),
+        ));
     }
 
     fn clear_export_in(&mut self) {
         // Unity InputHandler.ClearExportIn (lines 645-662):
         // If no out-point → clear entire range.
         // If out-point exists → reset in to 0, keep range enabled.
-        if let Some(project) = Some(&mut *self.project) {
-            if project.timeline.export_out_beat <= 0.0 {
-                // No out-point — clear entire range
-                project.timeline.export_in_beat = 0.0;
-                project.timeline.export_out_beat = 0.0;
-                project.timeline.export_range_enabled = false;
-            } else {
-                // Out-point exists — reset in to 0 but keep range
-                project.timeline.export_in_beat = 0.0;
-            }
+        let has_out = self.project.timeline.export_out_beat > 0.0;
+        if !has_out {
+            // No out-point — clear entire range
+            self.project.timeline.export_in_beat = 0.0;
+            self.project.timeline.export_out_beat = 0.0;
+            self.project.timeline.export_range_enabled = false;
+            ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
+                Box::new(|p| {
+                    p.timeline.export_in_beat = 0.0;
+                    p.timeline.export_out_beat = 0.0;
+                    p.timeline.export_range_enabled = false;
+                }),
+            ));
+        } else {
+            // Out-point exists — reset in to 0 but keep range
+            self.project.timeline.export_in_beat = 0.0;
+            ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
+                Box::new(|p| {
+                    p.timeline.export_in_beat = 0.0;
+                }),
+            ));
         }
     }
 
@@ -816,14 +839,19 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Unity InputHandler.ClearExportOut (lines 664-677):
         // If no range active → no-op.
         // If range active → clear entire range.
-        if let Some(project) = Some(&mut *self.project) {
-            if !project.timeline.export_range_enabled {
-                return; // no-op
-            }
-            project.timeline.export_in_beat = 0.0;
-            project.timeline.export_out_beat = 0.0;
-            project.timeline.export_range_enabled = false;
+        if !self.project.timeline.export_range_enabled {
+            return; // no-op
         }
+        self.project.timeline.export_in_beat = 0.0;
+        self.project.timeline.export_out_beat = 0.0;
+        self.project.timeline.export_range_enabled = false;
+        ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
+            Box::new(|p| {
+                p.timeline.export_in_beat = 0.0;
+                p.timeline.export_out_beat = 0.0;
+                p.timeline.export_range_enabled = false;
+            }),
+        ));
     }
 
     fn start_export(&mut self) {
