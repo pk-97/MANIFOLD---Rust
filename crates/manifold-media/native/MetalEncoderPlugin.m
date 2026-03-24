@@ -50,8 +50,7 @@ static NSString* const kCopyShaderSource =
      "    uint2 gid [[thread_position_in_grid]])\n"
      "{\n"
      "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
-     "    uint2 flipped = uint2(gid.x, src.get_height() - 1 - gid.y);\n"
-     "    dst.write(src.read(gid), flipped);\n"
+     "    dst.write(src.read(gid), gid);\n"
      "}\n";
 
 // -- Encoder State ------------------------------------------------------------
