@@ -2,10 +2,9 @@
 // Improvement over Unity's 13-tap 2D cross kernel: separable 17-tap Gaussian
 // produces smooth, gap-free glow with equivalent GPU cost at half-resolution.
 //
-// Pass 0 (mode 0): Threshold + Tint — extract bright pixels, apply tint color
-// Pass 1 (mode 1): Horizontal Gaussian blur
-// Pass 2 (mode 2): Vertical Gaussian blur
-// Pass 3 (mode 3): Composite — source + blurred halo × amount
+// Pass 0 (mode 0): Threshold + Tint + Horizontal Gaussian blur (combined)
+// Pass 1 (mode 1): Vertical Gaussian blur
+// Pass 2 (mode 2): Composite — source + blurred halo × amount
 
 struct Uniforms {
     mode: u32,
@@ -55,44 +54,45 @@ const W6: f32 = 0.03350;
 const W7: f32 = 0.02232;
 const W8: f32 = 0.01396;
 
+// Threshold + Tint helper — extract bright pixels, apply tint color.
+fn threshold_tint(col: vec3<f32>) -> vec3<f32> {
+    let lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
+    let tint = vec3<f32>(uniforms.tint_r, uniforms.tint_g, uniforms.tint_b);
+    return col * mk * tint;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if uniforms.mode == 0u {
-        // Pass 0: Threshold + Tint — extract bright pixels, apply tint color.
-        // No blur in this pass; the separable H/V passes handle all blurring.
-        let col = textureSample(main_tex, tex_sampler, in.uv).rgb;
-        let lm = dot(col, vec3<f32>(0.2126, 0.7152, 0.0722));
-        let mk = smoothstep(uniforms.threshold - 0.1, uniforms.threshold + 0.1, lm);
-        let tint = vec3<f32>(uniforms.tint_r, uniforms.tint_g, uniforms.tint_b);
-        return vec4<f32>(col * mk * tint, 1.0);
-
-    } else if uniforms.mode == 1u {
-        // Pass 1: Horizontal Gaussian blur (17-tap separable)
+        // Pass 0: Combined Threshold + Tint + Horizontal Gaussian blur (17-tap).
+        // Applies threshold/tint per sample during horizontal blur, eliminating
+        // a separate ThresholdTint render pass.
         let step_size = uniforms.spread * 5.0 + 1.0;
         let dx = vec2<f32>(uniforms.main_texel_size_x * step_size, 0.0);
 
-        var acc = textureSample(main_tex, tex_sampler, in.uv).rgb * W0;
-        acc += (textureSample(main_tex, tex_sampler, in.uv + dx      ).rgb
-              + textureSample(main_tex, tex_sampler, in.uv - dx      ).rgb) * W1;
-        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 2.0).rgb
-              + textureSample(main_tex, tex_sampler, in.uv - dx * 2.0).rgb) * W2;
-        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 3.0).rgb
-              + textureSample(main_tex, tex_sampler, in.uv - dx * 3.0).rgb) * W3;
-        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 4.0).rgb
-              + textureSample(main_tex, tex_sampler, in.uv - dx * 4.0).rgb) * W4;
-        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 5.0).rgb
-              + textureSample(main_tex, tex_sampler, in.uv - dx * 5.0).rgb) * W5;
-        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 6.0).rgb
-              + textureSample(main_tex, tex_sampler, in.uv - dx * 6.0).rgb) * W6;
-        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 7.0).rgb
-              + textureSample(main_tex, tex_sampler, in.uv - dx * 7.0).rgb) * W7;
-        acc += (textureSample(main_tex, tex_sampler, in.uv + dx * 8.0).rgb
-              + textureSample(main_tex, tex_sampler, in.uv - dx * 8.0).rgb) * W8;
+        var acc = threshold_tint(textureSample(main_tex, tex_sampler, in.uv).rgb) * W0;
+        acc += (threshold_tint(textureSample(main_tex, tex_sampler, in.uv + dx      ).rgb)
+              + threshold_tint(textureSample(main_tex, tex_sampler, in.uv - dx      ).rgb)) * W1;
+        acc += (threshold_tint(textureSample(main_tex, tex_sampler, in.uv + dx * 2.0).rgb)
+              + threshold_tint(textureSample(main_tex, tex_sampler, in.uv - dx * 2.0).rgb)) * W2;
+        acc += (threshold_tint(textureSample(main_tex, tex_sampler, in.uv + dx * 3.0).rgb)
+              + threshold_tint(textureSample(main_tex, tex_sampler, in.uv - dx * 3.0).rgb)) * W3;
+        acc += (threshold_tint(textureSample(main_tex, tex_sampler, in.uv + dx * 4.0).rgb)
+              + threshold_tint(textureSample(main_tex, tex_sampler, in.uv - dx * 4.0).rgb)) * W4;
+        acc += (threshold_tint(textureSample(main_tex, tex_sampler, in.uv + dx * 5.0).rgb)
+              + threshold_tint(textureSample(main_tex, tex_sampler, in.uv - dx * 5.0).rgb)) * W5;
+        acc += (threshold_tint(textureSample(main_tex, tex_sampler, in.uv + dx * 6.0).rgb)
+              + threshold_tint(textureSample(main_tex, tex_sampler, in.uv - dx * 6.0).rgb)) * W6;
+        acc += (threshold_tint(textureSample(main_tex, tex_sampler, in.uv + dx * 7.0).rgb)
+              + threshold_tint(textureSample(main_tex, tex_sampler, in.uv - dx * 7.0).rgb)) * W7;
+        acc += (threshold_tint(textureSample(main_tex, tex_sampler, in.uv + dx * 8.0).rgb)
+              + threshold_tint(textureSample(main_tex, tex_sampler, in.uv - dx * 8.0).rgb)) * W8;
 
         return vec4<f32>(acc, 1.0);
 
-    } else if uniforms.mode == 2u {
-        // Pass 2: Vertical Gaussian blur (17-tap separable)
+    } else if uniforms.mode == 1u {
+        // Pass 1: Vertical Gaussian blur (17-tap separable)
         let step_size = uniforms.spread * 5.0 + 1.0;
         let dy = vec2<f32>(0.0, uniforms.main_texel_size_y * step_size);
 
@@ -117,7 +117,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return vec4<f32>(acc, 1.0);
 
     } else {
-        // Pass 3: Composite — source + halo × amount
+        // Pass 2: Composite — source + halo × amount
         let src = textureSample(main_tex, tex_sampler, in.uv);
         let halo = textureSample(halo_tex, tex_sampler, in.uv).rgb;
         let result = src.rgb + halo * uniforms.amount;

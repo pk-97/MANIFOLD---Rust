@@ -2,7 +2,9 @@
 // Improvement over Unity's 13-tap 2D cross kernel: separable 17-tap Gaussian
 // produces smooth, gap-free glow at reduced resolution (D-32).
 //
-// 4 passes (vs Unity's 3): ThresholdTint → BlurH → BlurV → Composite.
+// 3 passes: ThresholdTintBlurH → BlurV → Composite.
+// Pass 0 combines threshold extraction + tinting + horizontal Gaussian blur
+// into a single render pass, applying threshold/tint per sample.
 // Effective coverage: 17×17 = 289 unique positions vs Unity's 13-point cross.
 
 use ahash::AHashMap;
@@ -16,7 +18,7 @@ use super::dual_texture_blit_helper::DualTextureBlitHelper;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct HalationUniforms {
-    mode: u32,               // 0=ThresholdTint, 1=BlurH, 2=BlurV, 3=Composite
+    mode: u32,               // 0=ThresholdTintBlurH, 1=BlurV, 2=Composite
     amount: f32,             // _Amount
     threshold: f32,          // _Threshold
     spread: f32,             // _Spread
@@ -32,8 +34,8 @@ struct HalationUniforms {
 
 /// Per-owner intermediate buffers (reduced-res, ping-pong for separable blur).
 struct HalationState {
-    buf_a: RenderTarget, // ThresholdTint output / V blur output
-    buf_b: RenderTarget, // H blur output
+    buf_a: RenderTarget, // V blur output (final halo before composite)
+    buf_b: RenderTarget, // Combined ThresholdTint+BlurH output
 }
 
 pub struct HalationFX {
@@ -148,45 +150,32 @@ impl PostProcessEffect for HalationFX {
         let qw = state.buf_a.width;
         let qh = state.buf_a.height;
 
-        // Pass 0: ThresholdTint — source (full-res) → buf_a (quarter-res)
+        // Pass 0: Combined ThresholdTint + Horizontal Gaussian blur
+        // Reads source (full-res), applies threshold/tint per sample during
+        // horizontal blur, writes to buf_b (reduced-res).
+        // Texel size is from SOURCE (full-res) since we sample source pixels.
         self.helper.draw_main_only(
             device, queue, encoder,
             source,
-            &state.buf_a.view,
+            &state.buf_b.view,
             bytemuck::bytes_of(&HalationUniforms {
                 mode: 0,
                 main_texel_size_x: 1.0 / ctx.width as f32,
                 main_texel_size_y: 1.0 / ctx.height as f32,
                 ..base
             }),
-            "Halation ThresholdTint",
+            "Halation ThresholdTintBlurH",
             qw, qh,
             profiler,
         );
 
-        // Pass 1: Horizontal Gaussian blur — buf_a → buf_b (quarter-res)
+        // Pass 1: Vertical Gaussian blur — buf_b → buf_a (reduced-res)
         self.helper.draw_main_only(
             device, queue, encoder,
-            &state.buf_a.view,
             &state.buf_b.view,
+            &state.buf_a.view,
             bytemuck::bytes_of(&HalationUniforms {
                 mode: 1,
-                main_texel_size_x: 1.0 / qw as f32,
-                main_texel_size_y: 1.0 / qh as f32,
-                ..base
-            }),
-            "Halation BlurH",
-            qw, qh,
-            profiler,
-        );
-
-        // Pass 2: Vertical Gaussian blur — buf_b → buf_a (quarter-res)
-        self.helper.draw_main_only(
-            device, queue, encoder,
-            &state.buf_b.view,
-            &state.buf_a.view,
-            bytemuck::bytes_of(&HalationUniforms {
-                mode: 2,
                 main_texel_size_x: 1.0 / qw as f32,
                 main_texel_size_y: 1.0 / qh as f32,
                 ..base
@@ -196,14 +185,14 @@ impl PostProcessEffect for HalationFX {
             profiler,
         );
 
-        // Pass 3: Composite — source (full-res) + buf_a (quarter-res) → target
+        // Pass 2: Composite — source (full-res) + buf_a (reduced-res) → target
         self.helper.draw(
             device, queue, encoder,
             source,
             &state.buf_a.view,
             target,
             bytemuck::bytes_of(&HalationUniforms {
-                mode: 3,
+                mode: 2,
                 main_texel_size_x: 1.0 / ctx.width as f32,
                 main_texel_size_y: 1.0 / ctx.height as f32,
                 halo_texel_size_x: 1.0 / qw as f32,
