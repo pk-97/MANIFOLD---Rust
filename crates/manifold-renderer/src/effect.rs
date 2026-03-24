@@ -60,6 +60,10 @@ pub trait PostProcessEffect: Send {
 
     /// Apply the effect. Reads source, writes to target.
     /// The caller swaps buffers after each effect.
+    ///
+    /// `target_texture` is the raw `wgpu::Texture` backing `target`. Stateful
+    /// effects (Feedback, StylizedFeedback) use it for `copy_texture_to_texture`
+    /// to copy the result into their state buffer — much cheaper than a blit pass.
     #[allow(clippy::too_many_arguments)]
     fn apply(
         &mut self,
@@ -68,6 +72,7 @@ pub trait PostProcessEffect: Send {
         encoder: &mut wgpu::CommandEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
+        target_texture: &wgpu::Texture,
         fx: &EffectInstance,
         ctx: &EffectContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,

@@ -3,26 +3,6 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::render_target::RenderTarget;
-use super::simple_blit_helper::SimpleBlitHelper;
-
-const PASSTHROUGH_SHADER: &str = r#"
-struct Uniforms { _pad: vec4<f32>, }
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
-@group(0) @binding(1) var source_tex: texture_2d<f32>;
-@group(0) @binding(2) var tex_sampler: sampler;
-struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32>, }
-@vertex fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
-    let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-    let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-    var out: VertexOutput;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
-@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(source_tex, tex_sampler, in.uv);
-}
-"#;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -43,8 +23,6 @@ pub struct FeedbackFX {
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     uniform_buffer: wgpu::Buffer,
-    /// Passthrough blit for copying result into feedback state buffer.
-    copy_blit: SimpleBlitHelper,
     states: AHashMap<i64, FeedbackState>,
     width: u32,
     height: u32,
@@ -173,19 +151,11 @@ impl FeedbackFX {
             mapped_at_creation: false,
         });
 
-        let copy_blit = SimpleBlitHelper::new(
-            device,
-            PASSTHROUGH_SHADER,
-            "Feedback Copy",
-            16, // vec4 pad
-        );
-
         Self {
             pipeline,
             bind_group_layout,
             sampler,
             uniform_buffer,
-            copy_blit,
             states: AHashMap::new(),
             width: 0,
             height: 0,
@@ -220,6 +190,7 @@ impl PostProcessEffect for FeedbackFX {
         encoder: &mut wgpu::CommandEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
+        target_texture: &wgpu::Texture,
         fx: &EffectInstance,
         ctx: &EffectContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
@@ -286,15 +257,27 @@ impl PostProcessEffect for FeedbackFX {
         }
 
         // PostBlit: copy blended result into feedback state buffer for next frame.
-        // Unity ref: Graphics.CopyTexture(result, stateBuffer)
+        // Unity ref: Graphics.CopyTexture(result, stateBuffer) — GPU memcpy, zero
+        // shader cost. Replaces the old SimpleBlitHelper render pass.
         let state = self.states.get(&ctx.owner_key).unwrap();
-        self.copy_blit.draw(
-            device, queue, encoder,
-            target, &state.buffer.view,
-            &[0u8; 16],
-            "Feedback State Copy",
-            ctx.width, ctx.height,
-            profiler,
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: target_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &state.buffer.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: ctx.width,
+                height: ctx.height,
+                depth_or_array_layers: 1,
+            },
         );
     }
 

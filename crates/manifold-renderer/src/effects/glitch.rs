@@ -46,6 +46,7 @@ impl PostProcessEffect for GlitchFX {
         encoder: &mut wgpu::CommandEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
+        _target_texture: &wgpu::Texture,
         fx: &EffectInstance,
         ctx: &EffectContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,

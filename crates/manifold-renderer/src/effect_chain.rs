@@ -215,6 +215,7 @@ impl EffectChain {
                         device, queue, encoder,
                         source_v,
                         self.target_view(),
+                        &self.target().texture,
                         fx, &chain_ctx,
                         gpu_profiler,
                     );

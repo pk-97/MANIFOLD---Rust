@@ -7,30 +7,9 @@ use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::render_target::RenderTarget;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
-use super::simple_blit_helper::SimpleBlitHelper;
 
 // StylizedFeedbackFX.cs line 34 — Mathf.Deg2Rad
 const DEG_TO_RAD: f32 = std::f32::consts::PI / 180.0;
-
-// Passthrough blit shader: used for copying result into state buffer.
-const PASSTHROUGH_SHADER: &str = r#"
-struct Uniforms { _pad: vec4<f32>, }
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
-@group(0) @binding(1) var source_tex: texture_2d<f32>;
-@group(0) @binding(2) var tex_sampler: sampler;
-struct VertexOutput { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f32>, }
-@vertex fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
-    let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-    let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-    var out: VertexOutput;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
-@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(source_tex, tex_sampler, in.uv);
-}
-"#;
 
 // StylizedFeedbackFX.cs lines 34-37 — uniforms matching StylizedFeedbackEffect.shader Properties
 #[repr(C)]
@@ -50,8 +29,6 @@ struct StylizedFeedbackState {
 /// Stylized feedback effect — zoom/rotate/blend current frame with previous frame's state buffer.
 pub struct StylizedFeedbackFX {
     helper: DualTextureBlitHelper,
-    /// Passthrough blit for copying result into feedback state buffer.
-    copy_blit: SimpleBlitHelper,
     states: AHashMap<i64, StylizedFeedbackState>,
     width: u32,
     height: u32,
@@ -87,12 +64,6 @@ impl StylizedFeedbackFX {
                 "StylizedFeedback",
                 std::mem::size_of::<StylizedFeedbackUniforms>() as u64,
             ),
-            copy_blit: SimpleBlitHelper::new(
-                device,
-                PASSTHROUGH_SHADER,
-                "StylizedFeedback Copy",
-                16, // vec4 pad
-            ),
             states: AHashMap::new(),
             width: 0,
             height: 0,
@@ -127,6 +98,7 @@ impl PostProcessEffect for StylizedFeedbackFX {
         encoder: &mut wgpu::CommandEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
+        target_texture: &wgpu::Texture,
         fx: &EffectInstance,
         ctx: &EffectContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
@@ -155,13 +127,28 @@ impl PostProcessEffect for StylizedFeedbackFX {
             profiler,
         );
 
-        // PostBlit: copy result → state buffer
+        // PostBlit: copy result → state buffer via GPU memcpy.
         // Unity ref: Graphics.CopyTexture(result, stateBuffer) — zero-cost memcpy.
-        // TODO: Replace blit with copy_texture_to_texture once apply() receives
-        // the target Texture (not just TextureView). Current blit costs a full
-        // render pass where Unity uses a free GPU memcpy.
         let state = self.states.get(&ctx.owner_key).unwrap();
-        self.copy_blit.draw(device, queue, encoder, target, &state.buffer.view, &[0u8; 16], "StylizedFeedback State Copy", ctx.width, ctx.height, profiler);
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: target_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &state.buffer.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: ctx.width,
+                height: ctx.height,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     fn clear_state(&mut self) {

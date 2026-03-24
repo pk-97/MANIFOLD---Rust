@@ -90,6 +90,7 @@ impl PostProcessEffect for CrtFX {
         encoder: &mut wgpu::CommandEncoder,
         source: &wgpu::TextureView,  // buffer in Unity
         target: &wgpu::TextureView,  // ctx.Host.GetTargetBuffer() in Unity
+        _target_texture: &wgpu::Texture,
         fx: &EffectInstance,
         ctx: &EffectContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
