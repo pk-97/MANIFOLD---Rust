@@ -161,38 +161,6 @@ impl GeneratorRenderer {
             }
         }
 
-        // Skip generators on invisible layers (muted, soloed-out, zero opacity,
-        // or occluded by an Opaque layer above).
-        let any_solo = layers.iter().any(|l| l.is_solo);
-
-        // Opaque occlusion: find the lowest-indexed (visually topmost) Opaque layer
-        // with full opacity and an active clip. All layers with HIGHER index
-        // (visually below) are fully occluded and can be skipped.
-        // Layer index 0 = top of visual stack (rendered last by compositor).
-        let mut occluder_index: Option<usize> = None;
-        {
-            let mut layer_has_clip = [false; 64];
-            for active in self.active_clips.values() {
-                let idx = active.layer_index as usize;
-                if idx < 64 {
-                    layer_has_clip[idx] = true;
-                }
-            }
-            // Scan from visual top (index 0) downward
-            for (idx, layer) in layers.iter().enumerate() {
-                if layer.default_blend_mode == manifold_core::BlendMode::Opaque
-                    && layer.opacity >= 1.0
-                    && !layer.is_muted
-                    && (layer.is_solo || !any_solo)
-                    && idx < 64
-                    && layer_has_clip[idx]
-                {
-                    occluder_index = Some(idx);
-                    break;
-                }
-            }
-        }
-
         // Collect clip IDs into pre-allocated scratch to avoid borrow conflict
         self.render_scratch.clear();
         self.render_scratch
@@ -208,16 +176,6 @@ impl GeneratorRenderer {
                 };
                 (active.layer_id.clone(), active.layer_index, active.generator_type.clone(), active.anim_progress)
             };
-
-            // Skip rendering for invisible layers — saves entire generator cost.
-            if let Some(layer) = layers.get(layer_index as usize)
-                && (layer.is_muted
-                    || (any_solo && !layer.is_solo)
-                    || layer.opacity <= 0.0
-                    || occluder_index.is_some_and(|oi| (layer_index as usize) > oi))
-            {
-                continue;
-            }
 
             // Build GeneratorContext from layer params (zero allocation)
             let mut params = [0.0f32; MAX_GEN_PARAMS];
