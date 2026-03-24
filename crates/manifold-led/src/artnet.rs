@@ -1,13 +1,10 @@
 //! ArtNet external output — full pipeline.
 //! Blits the compositor frame through the edge-extend shader, reads back
 //! the tiny pixel grid asynchronously, packs into DMX universes, and sends
-//! over UDP. Background reachability probe thread.
+//! over UDP.
 //! Unity equivalent: ArtNetOutput.cs
 
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use crate::blit::EdgeExtendBlit;
@@ -40,11 +37,6 @@ pub struct ArtNetOutput {
     strip_start_channels: Vec<usize>,
 
     initialized: bool,
-
-    // Reachability probe
-    host_reachable: Arc<AtomicBool>,
-    shutdown_flag: Arc<AtomicBool>,
-    probe_thread: Option<JoinHandle<()>>,
 
     // Warning throttle
     next_send_warning: Instant,
@@ -79,9 +71,6 @@ impl ArtNetOutput {
             universe_count: 0,
             strip_start_channels: Vec::new(),
             initialized: false,
-            host_reachable: Arc::new(AtomicBool::new(true)),
-            shutdown_flag: Arc::new(AtomicBool::new(false)),
-            probe_thread: None,
             next_send_warning: Instant::now(),
             suppressed_warnings: 0,
             sent_first_packet: false,
@@ -147,21 +136,9 @@ impl ArtNetOutput {
             return false;
         }
 
-        // Start background reachability probe
-        self.shutdown_flag.store(false, Ordering::SeqCst);
-        self.host_reachable.store(true, Ordering::SeqCst);
-
-        let reachable = Arc::clone(&self.host_reachable);
-        let shutdown = Arc::clone(&self.shutdown_flag);
-        let probe_endpoint = self.endpoint;
-        self.probe_thread = Some(
-            thread::Builder::new()
-                .name("ArtNet-ReachabilityProbe".into())
-                .spawn(move || {
-                    reachability_probe_loop(probe_endpoint, reachable, shutdown);
-                })
-                .expect("Failed to spawn ArtNet probe thread"),
-        );
+        // No reachability probe — rely on send-failure logging only.
+        // ArtPoll probe removed: most LED controllers don't implement
+        // ArtPollReply, causing false-negative host-unreachable marking.
 
         self.initialized = true;
         eprintln!(
@@ -332,25 +309,20 @@ impl ArtNetOutput {
             Some(s) => s,
             None => return,
         };
-        if !self.host_reachable.load(Ordering::Relaxed) {
-            return;
-        }
 
         match socket.send_to(packet, self.endpoint) {
             Ok(_) => {
                 if !self.sent_first_packet {
                     self.sent_first_packet = true;
                     eprintln!(
-                        "[ArtNet] First packet sent to {} ({} bytes)",
+                        "[ArtNet] First data packet sent to {} ({} bytes)",
                         self.endpoint,
                         packet.len(),
                     );
                 }
             }
             Err(e) => {
-                // Immediate backoff
-                self.host_reachable.store(false, Ordering::Relaxed);
-
+                // Throttled warning — keep trying (no backoff without probe to recover)
                 let now = Instant::now();
                 if now >= self.next_send_warning {
                     let suffix = if self.suppressed_warnings > 0 {
@@ -373,13 +345,6 @@ impl ArtNetOutput {
 
     fn cleanup(&mut self) {
         self.initialized = false;
-
-        // Stop probe thread before closing socket
-        self.shutdown_flag.store(true, Ordering::SeqCst);
-        if let Some(handle) = self.probe_thread.take() {
-            let _ = handle.join();
-        }
-
         self.udp_socket = None;
         self.edge_blit = None;
         self.dmx_buffers.clear();
@@ -387,90 +352,6 @@ impl ArtNetOutput {
     }
 }
 
-// ── Reachability probe (background thread) ──
-
-/// Pre-built ArtPoll packet (14 bytes, never changes).
-fn build_artpoll_packet() -> [u8; 14] {
-    let mut p = [0u8; 14];
-    // "Art-Net\0"
-    p[0] = 0x41;
-    p[1] = 0x72;
-    p[2] = 0x74;
-    p[3] = 0x2D;
-    p[4] = 0x4E;
-    p[5] = 0x65;
-    p[6] = 0x74;
-    p[7] = 0x00;
-    // OpCode 0x2000 (little-endian)
-    p[8] = (ARTNET_OP_POLL & 0xFF) as u8;
-    p[9] = (ARTNET_OP_POLL >> 8) as u8;
-    // Protocol version 14 (big-endian)
-    p[10] = (ARTNET_PROTOCOL_VERSION >> 8) as u8;
-    p[11] = (ARTNET_PROTOCOL_VERSION & 0xFF) as u8;
-    // TalkToMe: 0x00, Priority: 0x00
-    p
-}
-
-fn probe_via_artpoll(endpoint: SocketAddr) -> bool {
-    let artpoll = build_artpoll_packet();
-
-    let Ok(probe) = UdpSocket::bind("0.0.0.0:0") else {
-        return false;
-    };
-    let _ = probe.set_read_timeout(Some(std::time::Duration::from_secs(1)));
-
-    if probe
-        .send_to(
-            &artpoll,
-            SocketAddr::new(endpoint.ip(), DEFAULT_ARTNET_PORT),
-        )
-        .is_err()
-    {
-        return false;
-    }
-
-    let mut buf = [0u8; 256];
-    match probe.recv_from(&mut buf) {
-        Ok((len, _)) => {
-            // Valid ArtNet response starts with "Art-Net\0"
-            len >= 10
-                && buf[0..8] == [0x41, 0x72, 0x74, 0x2D, 0x4E, 0x65, 0x74, 0x00]
-        }
-        Err(_) => false,
-    }
-}
-
-/// Background thread: probes endpoint reachability every 5 seconds via ArtPoll.
-fn reachability_probe_loop(
-    endpoint: SocketAddr,
-    host_reachable: Arc<AtomicBool>,
-    shutdown: Arc<AtomicBool>,
-) {
-    let mut was_reachable = true;
-
-    while !shutdown.load(Ordering::SeqCst) {
-        let reachable = probe_via_artpoll(endpoint);
-
-        if reachable != was_reachable {
-            was_reachable = reachable;
-            host_reachable.store(reachable, Ordering::SeqCst);
-            if reachable {
-                log::info!("[ArtNetOutput] Host reachable — resuming LED sends.");
-            } else {
-                log::warn!(
-                    "[ArtNetOutput] Host unreachable — pausing LED sends until next probe."
-                );
-            }
-        } else {
-            host_reachable.store(reachable, Ordering::Relaxed);
-        }
-
-        // Sleep in short intervals so shutdown is responsive
-        for _ in 0..50 {
-            if shutdown.load(Ordering::SeqCst) {
-                return;
-            }
-            thread::sleep(std::time::Duration::from_millis(100));
-        }
-    }
-}
+// NOTE: ArtPoll reachability probe removed — most LED controllers don't
+// implement ArtPollReply, causing false-negative host-unreachable marking
+// that silently killed all sends. Now relies on send-failure logging only.
