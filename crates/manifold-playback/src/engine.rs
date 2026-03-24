@@ -269,6 +269,11 @@ impl PlaybackEngine {
         (&mut self.renderers, self.project.as_ref())
     }
 
+    /// Mutable access to renderers for re-notification (e.g. after MutateProject).
+    pub fn renderers_mut(&mut self) -> &mut Vec<Box<dyn ClipRenderer>> {
+        &mut self.renderers
+    }
+
     // ─── Lifecycle ───
 
     pub fn initialize(&mut self, mut project: Project) {
@@ -641,10 +646,8 @@ impl PlaybackEngine {
         // 4. Filter ready clips for compositor.
         //    Port of C# UpdateCompositor (lines 1126-1132).
         //    Only runs while compositor dirty deadline is active or generators are running.
-        let has_generators = self.active_clip_renderers.iter().any(|(_, &idx)| {
-            !self.renderers[idx].needs_prepare_phase()
-        });
-        let compositor_dirty = ctx.realtime_now < self.compositor_dirty_deadline || has_generators;
+        let has_active_clips = !self.active_clip_renderers.is_empty();
+        let compositor_dirty = ctx.realtime_now < self.compositor_dirty_deadline || has_active_clips;
 
         let ready = if compositor_dirty {
             self.filter_ready_clips(ctx.pre_render_dt)

@@ -164,7 +164,7 @@ impl Application {
                 let (duration_secs, res_w, res_h) = match meta {
                     Some(m) => (m.duration, m.width, m.height),
                     None => {
-                        log::warn!("[Import] Failed to probe: {path_str}");
+                        eprintln!("[Import] Probe failed: {path_str}");
                         continue;
                     }
                 };
@@ -214,7 +214,7 @@ impl Application {
                 );
                 commands.push(ContentCommand::Execute(Box::new(cmd)));
 
-                log::info!(
+                eprintln!(
                     "[Import] Added '{file_name}' at beat {insert_beat:.1} \
                      ({duration_secs:.1}s → {duration_beats:.1} beats, {res_w}x{res_h})"
                 );
@@ -222,9 +222,10 @@ impl Application {
                 insert_beat += duration_beats;
             }
 
-            // Push library update to content thread
+            // Push library update FIRST so content thread has the VideoClip
+            // entries before AddClipCommand triggers sync_clips_to_time.
             let lib_clone = project.video_library.clone();
-            commands.push(ContentCommand::MutateProject(Box::new(move |p| {
+            commands.insert(0, ContentCommand::MutateProject(Box::new(move |p| {
                 p.video_library = lib_clone;
             })));
         }

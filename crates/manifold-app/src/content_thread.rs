@@ -853,11 +853,14 @@ impl ContentThread {
                 if let Some(p) = self.engine.project_mut() {
                     self.editing_service.execute(cmd, p);
                 }
+                // Editing commands may add/remove clips — sync on next tick.
+                self.engine.mark_sync_dirty();
             }
             ContentCommand::ExecuteBatch(cmds, desc) => {
                 if let Some(p) = self.engine.project_mut() {
                     self.editing_service.execute_batch(cmds, desc, p);
                 }
+                self.engine.mark_sync_dirty();
             }
             ContentCommand::Undo => {
                 // Capture pre-undo settings so we can detect resolution/FPS changes.
@@ -1057,6 +1060,14 @@ impl ContentThread {
             ContentCommand::MutateProject(f) => {
                 if let Some(p) = self.engine.project_mut() {
                     f(p);
+                }
+                // Re-notify renderers so caches (e.g. VideoRenderer's VideoLibrary)
+                // stay in sync with the mutated project.
+                if let Some(p) = self.engine.project() {
+                    let project_clone = p.clone();
+                    for renderer in self.engine.renderers_mut() {
+                        renderer.on_project_loaded(&project_clone);
+                    }
                 }
             }
 

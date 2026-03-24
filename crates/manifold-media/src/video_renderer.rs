@@ -76,9 +76,12 @@ struct ActiveVideoClip {
     has_frame: bool,
     playback_time: f32,
     media_length: f32,
+    frame_rate: f32,
     looping: bool,
     playback_rate: f32,
     decode_pending: bool,
+    /// Accumulated time since last frame advance (for pacing decode to video fps).
+    time_accumulator: f32,
 }
 
 /// Native video renderer implementing the ClipRenderer trait.
@@ -251,6 +254,15 @@ impl ClipRenderer for VideoRenderer {
                 return false;
             };
 
+            eprintln!(
+                "[VideoRenderer] start_clip: '{}' ({}x{} @ {}fps, {:.1}s)",
+                video_clip.file_name,
+                video_clip.resolution_width,
+                video_clip.resolution_height,
+                0, // frame_rate not known yet, comes from Opened result
+                video_clip.duration,
+            );
+
             (video_clip.file_path.clone(), video_clip.duration)
         };
 
@@ -267,9 +279,11 @@ impl ClipRenderer for VideoRenderer {
                 has_frame: false,
                 playback_time: 0.0,
                 media_length: duration,
+                frame_rate: 30.0, // updated when Opened result arrives
                 looping: clip.is_looping,
                 playback_rate: 1.0,
                 decode_pending: true,
+                time_accumulator: 0.0,
             },
         );
 
@@ -342,18 +356,15 @@ impl ClipRenderer for VideoRenderer {
     }
 
     fn resume_clip(&mut self, clip_id: &str) {
+        eprintln!("[VideoRenderer] resume_clip: {clip_id}");
         if let Some(clip) = self.active_clips.get_mut(clip_id) {
             clip.playing = true;
-            if !clip.decode_pending {
-                clip.decode_pending = true;
-                self.scheduler.submit(DecodeJob::DecodeNext {
-                    clip_id: clip_id.to_string(),
-                });
-            }
+            clip.time_accumulator = 0.0;
         }
     }
 
     fn pause_clip(&mut self, clip_id: &str) {
+        eprintln!("[VideoRenderer] pause_clip: {clip_id}");
         if let Some(clip) = self.active_clips.get_mut(clip_id) {
             clip.playing = false;
         }
@@ -382,7 +393,8 @@ impl ClipRenderer for VideoRenderer {
         }
     }
 
-    fn pre_render(&mut self, _time: f32, _beat: f32, _dt: f32) {
+    fn pre_render(&mut self, _time: f32, _beat: f32, dt: f32) {
+        // 1. Drain decode results and update clip state
         let results = self.scheduler.drain_results();
         let pool = Arc::clone(self.scheduler.pool());
 
@@ -396,12 +408,13 @@ impl ClipRenderer for VideoRenderer {
                     height,
                     frame_rate,
                 } => {
+                    eprintln!(
+                        "[VideoRenderer] Opened {clip_id}: {width}x{height} \
+                         @ {frame_rate}fps, {duration:.1}s"
+                    );
                     if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
                         clip.media_length = duration;
-                        log::debug!(
-                            "[VideoRenderer] Opened {clip_id}: \
-                             {width}x{height} @ {frame_rate}fps, {duration:.1}s"
-                        );
+                        clip.frame_rate = frame_rate.max(1.0);
                     }
                 }
 
@@ -410,20 +423,18 @@ impl ClipRenderer for VideoRenderer {
                         clip.ready = true;
                         clip.decode_pending = false;
 
-                        // Copy first decoded frame to render target
-                        if unsafe {
+                        let copied = unsafe {
                             Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target)
-                        } {
+                        };
+                        if copied {
                             clip.has_frame = true;
                         }
-
-                        // Request next frame if playing
-                        if clip.playing {
-                            clip.decode_pending = true;
-                            self.scheduler.submit(DecodeJob::DecodeNext {
-                                clip_id: clip_id.clone(),
-                            });
-                        }
+                        eprintln!(
+                            "[VideoRenderer] Prepared {clip_id}: \
+                             copy={copied} playing={} ready={}",
+                            clip.playing, clip.ready,
+                        );
+                        // Don't auto-submit DecodeNext — pacing loop below handles it
                     }
                 }
 
@@ -435,20 +446,12 @@ impl ClipRenderer for VideoRenderer {
                         clip.playback_time = frame_time;
                         clip.decode_pending = false;
 
-                        // Copy frame to render target
                         if unsafe {
                             Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target)
                         } {
                             clip.has_frame = true;
                         }
-
-                        // Request next frame if still playing
-                        if clip.playing {
-                            clip.decode_pending = true;
-                            self.scheduler.submit(DecodeJob::DecodeNext {
-                                clip_id: clip_id.clone(),
-                            });
-                        }
+                        // Don't auto-submit — pacing loop below handles it
                     }
                 }
 
@@ -474,34 +477,54 @@ impl ClipRenderer for VideoRenderer {
                     if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
                         clip.playback_time = frame_time;
                         clip.decode_pending = false;
+                        clip.time_accumulator = 0.0; // reset after seek
 
                         if unsafe {
                             Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target)
                         } {
                             clip.has_frame = true;
                         }
-
-                        if clip.playing {
-                            clip.decode_pending = true;
-                            self.scheduler.submit(DecodeJob::DecodeNext {
-                                clip_id: clip_id.clone(),
-                            });
-                        }
+                        // Don't auto-submit — pacing loop below handles it
                     }
                 }
 
-                DecodeResultStatus::WarmReady { video_clip_id } => {
-                    log::debug!(
-                        "[VideoRenderer] Warm cache ready: {video_clip_id}"
-                    );
-                }
+                DecodeResultStatus::WarmReady { .. } => {}
 
                 DecodeResultStatus::Error(msg) => {
-                    log::error!("[VideoRenderer] Error for {clip_id}: {msg}");
+                    eprintln!("[VideoRenderer] Error for {clip_id}: {msg}");
                     if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
                         clip.decode_pending = false;
                     }
                 }
+            }
+        }
+
+        // 2. Pacing: request next frame for playing clips based on video frame rate.
+        // Accumulate dt and submit DecodeNext when enough time has elapsed for
+        // the next video frame. This prevents the decoder from running at full
+        // speed and flooding the result queue.
+        let clip_ids: Vec<String> = self.active_clips.keys().cloned().collect();
+        for clip_id in &clip_ids {
+            let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) else {
+                continue;
+            };
+            if !clip.playing || !clip.ready || clip.decode_pending {
+                continue;
+            }
+
+            clip.time_accumulator += dt * clip.playback_rate;
+            let frame_interval = 1.0 / clip.frame_rate;
+
+            if clip.time_accumulator >= frame_interval {
+                clip.time_accumulator -= frame_interval;
+                // Clamp to prevent spiral if we fall behind
+                if clip.time_accumulator > frame_interval * 2.0 {
+                    clip.time_accumulator = 0.0;
+                }
+                clip.decode_pending = true;
+                self.scheduler.submit(DecodeJob::DecodeNext {
+                    clip_id: clip_id.clone(),
+                });
             }
         }
     }

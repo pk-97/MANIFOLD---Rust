@@ -3,8 +3,14 @@
 //! Owns a fixed pool of worker threads that perform video decode operations
 //! (open, prepare, seek, decode) off the content thread. The content thread
 //! submits jobs and drains results without ever blocking.
+//!
+//! Jobs are routed to workers by clip_id affinity — all jobs for the same
+//! clip always go to the same worker, so the worker's local handle map
+//! stays consistent.
 
+use std::collections::hash_map::DefaultHasher;
 use std::ffi::c_void;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::thread;
 
@@ -60,6 +66,23 @@ pub enum DecodeJob {
     Shutdown,
 }
 
+impl DecodeJob {
+    /// Get the routing key for affinity. Jobs for the same clip go to the same worker.
+    fn routing_key(&self) -> Option<&str> {
+        match self {
+            Self::Open { clip_id, .. }
+            | Self::Prepare { clip_id }
+            | Self::Seek { clip_id, .. }
+            | Self::DecodeNext { clip_id }
+            | Self::Close { clip_id } => Some(clip_id),
+            Self::WarmOpen { video_clip_id, .. }
+            | Self::PromoteWarm { video_clip_id, .. }
+            | Self::WarmClose { video_clip_id } => Some(video_clip_id),
+            Self::Shutdown => None,
+        }
+    }
+}
+
 /// Result sent back from a decode worker to the content thread.
 pub struct DecodeResult {
     pub clip_id: String,
@@ -112,12 +135,13 @@ pub enum DecodeResultStatus {
 // content thread while no decode jobs are in-flight for the same clip.
 unsafe impl Send for DecodeResult {}
 
-/// Decode scheduler owning a fixed thread pool.
+/// Decode scheduler owning a fixed thread pool with affinity routing.
 ///
-/// The content thread submits `DecodeJob`s and drains `DecodeResult`s.
-/// Worker threads own the decoder handles and perform all FFI calls.
+/// Each worker has its own job channel. Jobs are routed by hashing the
+/// clip_id so all jobs for the same clip go to the same worker (ensuring
+/// the worker's local handle map stays consistent).
 pub struct DecodeScheduler {
-    job_tx: Sender<DecodeJob>,
+    worker_txs: Vec<Sender<DecodeJob>>,
     result_rx: Receiver<DecodeResult>,
     workers: Vec<thread::JoinHandle<()>>,
     pool: Arc<DecoderPool>,
@@ -126,33 +150,34 @@ pub struct DecodeScheduler {
 impl DecodeScheduler {
     /// Create a new scheduler with `WORKER_COUNT` threads.
     pub fn new(pool: Arc<DecoderPool>) -> Self {
-        let (job_tx, job_rx) = crossbeam_channel::unbounded::<DecodeJob>();
         let (result_tx, result_rx) = crossbeam_channel::unbounded::<DecodeResult>();
 
         let mut workers = Vec::with_capacity(WORKER_COUNT);
+        let mut worker_txs = Vec::with_capacity(WORKER_COUNT);
 
         for i in 0..WORKER_COUNT {
-            let rx = job_rx.clone();
+            let (job_tx, job_rx) = crossbeam_channel::unbounded::<DecodeJob>();
             let tx = result_tx.clone();
             let pool_ref = Arc::clone(&pool);
 
             let handle = thread::Builder::new()
                 .name(format!("manifold-decode-{i}"))
                 .spawn(move || {
-                    worker_loop(rx, tx, &pool_ref);
+                    worker_loop(job_rx, tx, &pool_ref);
                 })
                 .expect("failed to spawn decode worker");
 
+            worker_txs.push(job_tx);
             workers.push(handle);
         }
 
-        log::info!(
-            "[DecodeScheduler] Started {} decode workers",
+        eprintln!(
+            "[DecodeScheduler] Started {} decode workers (affinity routing)",
             WORKER_COUNT
         );
 
         Self {
-            job_tx,
+            worker_txs,
             result_rx,
             workers,
             pool,
@@ -160,12 +185,20 @@ impl DecodeScheduler {
     }
 
     /// Submit a job to the decode thread pool.
+    /// Jobs are routed to a specific worker by clip_id hash for affinity.
     pub fn submit(&self, job: DecodeJob) {
-        let _ = self.job_tx.send(job);
+        let worker_idx = match job.routing_key() {
+            Some(key) => {
+                let mut hasher = DefaultHasher::new();
+                key.hash(&mut hasher);
+                hasher.finish() as usize % WORKER_COUNT
+            }
+            None => 0, // Shutdown goes to worker 0
+        };
+        let _ = self.worker_txs[worker_idx].send(job);
     }
 
     /// Drain all available results without blocking.
-    /// Returns a Vec of results (may be empty).
     pub fn drain_results(&self) -> Vec<DecodeResult> {
         let mut results = Vec::new();
         loop {
@@ -185,15 +218,13 @@ impl DecodeScheduler {
 
     /// Shut down all worker threads.
     pub fn shutdown(&mut self) {
-        // Send shutdown to all workers
-        for _ in &self.workers {
-            let _ = self.job_tx.send(DecodeJob::Shutdown);
+        for tx in &self.worker_txs {
+            let _ = tx.send(DecodeJob::Shutdown);
         }
-        // Join all workers
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
-        log::info!("[DecodeScheduler] All workers shut down");
+        eprintln!("[DecodeScheduler] All workers shut down");
     }
 }
 
@@ -209,6 +240,8 @@ impl Drop for DecodeScheduler {
 ///
 /// Each worker owns a local map of decoder handles (active clips)
 /// and warm cache handles (pre-opened for MIDI). All FFI calls happen here.
+/// Affinity routing guarantees all jobs for the same clip arrive at the
+/// same worker.
 fn worker_loop(
     job_rx: Receiver<DecodeJob>,
     result_tx: Sender<DecodeResult>,
@@ -278,7 +311,10 @@ fn worker_loop(
                             let handle_ptr = handle.raw_handle();
                             let _ = result_tx.send(DecodeResult {
                                 clip_id,
-                                status: DecodeResultStatus::Seeked { frame_time, handle_ptr },
+                                status: DecodeResultStatus::Seeked {
+                                    frame_time,
+                                    handle_ptr,
+                                },
                             });
                         }
                         Err(e) => {
@@ -326,7 +362,6 @@ fn worker_loop(
             }
 
             DecodeJob::Close { clip_id } => {
-                // Drop the handle — triggers VideoDecoder_Close via Drop
                 active.remove(&clip_id);
             }
 
@@ -335,7 +370,7 @@ fn worker_loop(
                 path,
             } => {
                 if warm.contains_key(&video_clip_id) {
-                    continue; // already warm
+                    continue;
                 }
                 match pool.open(&path) {
                     Ok(mut handle) => {
@@ -350,7 +385,7 @@ fn worker_loop(
                         }
                     }
                     Err(e) => {
-                        log::warn!(
+                        eprintln!(
                             "[DecodeWorker] Warm open failed for {video_clip_id}: {e}"
                         );
                     }
@@ -376,8 +411,6 @@ fn worker_loop(
                             frame_rate,
                         },
                     });
-                    // Also send Prepared since warm handles already have first frame
-                    // (the content thread needs both Opened + Prepared signals)
                 }
             }
 
@@ -386,7 +419,6 @@ fn worker_loop(
             }
 
             DecodeJob::Shutdown => {
-                // Drop all handles
                 active.clear();
                 warm.clear();
                 break;
