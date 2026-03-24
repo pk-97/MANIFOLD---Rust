@@ -143,32 +143,50 @@ impl Application {
 
     /// Import video files at the playhead position on the active layer.
     /// Shared by Cmd+I file dialog and drag-drop.
+    /// Non-blocking: metadata probe runs on a background thread, commands are
+    /// sent directly to the content thread. UI picks up new clips via
+    /// project_snapshot sync.
     pub(crate) fn import_video_files(&mut self, paths: &[std::path::PathBuf]) {
         if paths.is_empty() {
             return;
         }
 
-        let mut commands: Vec<ContentCommand> = Vec::new();
+        let Some(ref content_tx) = self.content_tx else {
+            return;
+        };
+        let content_tx = content_tx.clone();
 
-        {
-            let project = &mut self.local_project;
-            let bpm = project.settings.bpm;
+        let bpm = self.local_project.settings.bpm;
+        let insert_beat = self.content_state.current_beat;
+        let layer_id = self.active_layer_id.as_ref()
+            .and_then(|lid| {
+                self.local_project.timeline.layer_index_for_id(lid)
+                    .and_then(|i| self.local_project.timeline.layers.get(i))
+                    .map(|l| l.layer_id.clone())
+            })
+            .or_else(|| {
+                self.local_project.timeline.layers.first()
+                    .map(|l| l.layer_id.clone())
+            });
+
+        let Some(layer_id) = layer_id else {
+            return;
+        };
+
+        let paths = paths.to_vec();
+
+        std::thread::spawn(move || {
             let spb = 60.0 / bpm;
+            let mut beat = insert_beat;
+            let mut video_clips: Vec<manifold_core::video::VideoClip> = Vec::new();
+            let mut commands: Vec<ContentCommand> = Vec::new();
 
-            let playhead_beat = self.content_state.current_beat;
-            let active_layer_index = self.active_layer_id.as_ref()
-                .and_then(|lid| project.timeline.layer_index_for_id(lid))
-                .unwrap_or(0);
-
-            let mut insert_beat = playhead_beat;
-
-            for path in paths {
+            for path in &paths {
                 let path_str = path.to_string_lossy().to_string();
                 let file_name = path.file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
 
-                // Probe video metadata (duration, resolution)
                 let meta = manifold_media::metadata::probe_video_metadata(&path_str);
                 let (duration_secs, res_w, res_h) = match meta {
                     Some(m) => (m.duration, m.width, m.height),
@@ -178,13 +196,12 @@ impl Application {
                     }
                 };
 
-                // Create VideoClip entry in library
                 let video_clip_id = manifold_core::short_id();
                 let file_size = std::fs::metadata(path)
                     .map(|m| m.len() as i64)
                     .unwrap_or(0);
 
-                let video_clip = manifold_core::video::VideoClip {
+                video_clips.push(manifold_core::video::VideoClip {
                     id: video_clip_id.clone(),
                     file_path: path_str.clone(),
                     relative_file_path: None,
@@ -194,57 +211,49 @@ impl Application {
                     resolution_height: res_h,
                     file_size,
                     last_modified_ticks: 0,
-                };
-                project.video_library.add_clip(video_clip);
+                });
 
-                // Calculate clip duration in beats from video duration
                 let duration_beats = (duration_secs / spb).max(0.25);
 
-                // Ensure we have a layer to place on
-                if project.timeline.layers.is_empty() {
-                    project.timeline.add_layer_default();
-                }
-                let layer_index =
-                    active_layer_index.min(project.timeline.layers.len() - 1);
-                let layer_id =
-                    project.timeline.layers[layer_index].layer_id.clone();
-
-                // Create timeline clip
                 let clip = manifold_core::clip::TimelineClip::new_video(
                     video_clip_id,
                     layer_id.clone(),
-                    insert_beat,
+                    beat,
                     duration_beats,
                     0.0,
                 );
 
-                let cmd = manifold_editing::commands::clip::AddClipCommand::new(
-                    clip, layer_id,
-                );
-                commands.push(ContentCommand::Execute(Box::new(cmd)));
+                commands.push(ContentCommand::Execute(Box::new(
+                    manifold_editing::commands::clip::AddClipCommand::new(
+                        clip, layer_id.clone(),
+                    ),
+                )));
 
                 eprintln!(
-                    "[Import] Added '{file_name}' at beat {insert_beat:.1} \
+                    "[Import] Added '{file_name}' at beat {beat:.1} \
                      ({duration_secs:.1}s → {duration_beats:.1} beats, {res_w}x{res_h})"
                 );
 
-                insert_beat += duration_beats;
+                beat += duration_beats;
             }
 
-            // Push library update FIRST so content thread has the VideoClip
+            if video_clips.is_empty() {
+                return;
+            }
+
+            // Send library update FIRST so content thread has the VideoClip
             // entries before AddClipCommand triggers sync_clips_to_time.
-            let lib_clone = project.video_library.clone();
-            commands.insert(0, ContentCommand::MutateProject(Box::new(move |p| {
-                p.video_library = lib_clone;
+            let _ = content_tx.send(ContentCommand::MutateProject(Box::new(move |p| {
+                for vc in video_clips {
+                    p.video_library.add_clip(vc);
+                }
             })));
-        }
 
-        // Send all commands (project borrow released)
-        for cmd in commands {
-            self.send_content_cmd(cmd);
-        }
-
-        self.needs_rebuild = true;
+            // Then send AddClipCommands
+            for cmd in commands {
+                let _ = content_tx.send(cmd);
+            }
+        });
     }
 
     /// Open. Delegates to ProjectIOService.open_project.
