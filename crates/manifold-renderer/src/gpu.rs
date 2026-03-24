@@ -13,7 +13,7 @@ impl GpuContext {
     /// Pass a compatible surface to ensure the adapter can present to it.
     pub async fn new(compatible_surface: Option<&wgpu::Surface<'_>>) -> Self {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends: wgpu::Backends::METAL,
             ..Default::default()
         });
 
@@ -26,7 +26,9 @@ impl GpuContext {
             .await
             .expect("Failed to find a suitable GPU adapter");
 
-        log::info!("GPU adapter: {:?}", adapter.get_info().name);
+        let info = adapter.get_info();
+        eprintln!("[GPU] adapter={:?} backend={:?} driver={:?}", info.name, info.backend, info.driver);
+        log::info!("GPU adapter: {:?}", info.name);
 
         let (device, queue) = Self::create_device_from_adapter(&adapter, "MANIFOLD Device").await;
 

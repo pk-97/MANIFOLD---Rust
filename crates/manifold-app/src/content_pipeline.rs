@@ -420,12 +420,14 @@ impl ContentPipeline {
 
         // Periodic stderr dump — independent of profiling feature
         let _total_ms = _t_frame.elapsed().as_secs_f64() * 1000.0;
+        let (comp_w, comp_h) = self.compositor.dimensions();
         if frame_count > 0 && frame_count.is_multiple_of(60) {
             eprintln!(
-                "[PERF] frame={} clips={} | gen={:.1}ms desc={:.1}ms comp={:.1}ms \
+                "[PERF] frame={} clips={} res={}x{} | gen={:.1}ms desc={:.1}ms comp={:.1}ms \
                  submit={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
                 frame_count,
                 tick_result.ready_clips.len(),
+                comp_w, comp_h,
                 _gen_ms, _desc_ms, _comp_ms, _submit_ms, _poll_ms, _total_ms,
                 1000.0 / _total_ms.max(0.001),
             );
