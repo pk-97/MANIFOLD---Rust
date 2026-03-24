@@ -326,27 +326,34 @@ impl ContentPipeline {
             Vec::with_capacity(tick_result.ready_clips.len());
 
         for clip in &tick_result.ready_clips {
-            let texture_view = renderers.iter().find_map(|r| {
-                if let Some(v) = r.as_any().downcast_ref::<GeneratorRenderer>()
-                    .and_then(|gen_r| gen_r.get_clip_texture_view(&clip.id))
+            let clip_textures = renderers.iter().find_map(|r| {
+                if let Some(gen_r) = r.as_any().downcast_ref::<GeneratorRenderer>()
+                    && let (Some(v), Some(t)) = (
+                        gen_r.get_clip_texture_view(&clip.id),
+                        gen_r.get_clip_texture(&clip.id),
+                    )
                 {
-                    return Some(v);
+                    return Some((v, t));
                 }
                 #[cfg(target_os = "macos")]
-                if let Some(v) = r.as_any().downcast_ref::<VideoRenderer>()
-                    .and_then(|vid_r| vid_r.get_clip_texture_view(&clip.id))
+                if let Some(vid_r) = r.as_any().downcast_ref::<VideoRenderer>()
+                    && let (Some(v), Some(t)) = (
+                        vid_r.get_clip_texture_view(&clip.id),
+                        vid_r.get_clip_texture(&clip.id),
+                    )
                 {
-                    return Some(v);
+                    return Some((v, t));
                 }
                 None
             });
-            if let Some(view) = texture_view {
+            if let Some((view, texture)) = clip_textures {
                 let clip_li = project.and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
                     .unwrap_or(0);
                 let layer = layers.get(clip_li);
                 clip_descs.push(CompositeClipDescriptor {
                     clip_id: &clip.id,
                     texture_view: view,
+                    texture,
                     layer_index: clip_li as i32,
                     blend_mode: layer.map_or(BlendMode::Normal, |l| l.default_blend_mode),
                     opacity: layer.map_or(1.0, |l| l.opacity),

@@ -141,6 +141,13 @@ impl VideoRenderer {
             .and_then(|c| if c.has_frame { Some(&c.render_target.view) } else { None })
     }
 
+    /// Get the texture for a rendered clip (used for copy_texture_to_texture).
+    pub fn get_clip_texture(&self, clip_id: &str) -> Option<&wgpu::Texture> {
+        self.active_clips
+            .get(clip_id)
+            .and_then(|c| if c.has_frame { Some(&c.render_target.texture) } else { None })
+    }
+
     /// Submit pre-warm requests for clips near the playhead.
     pub fn pre_warm_clips(
         &mut self,

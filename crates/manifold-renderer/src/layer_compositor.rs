@@ -14,6 +14,7 @@ use crate::compositor::{Compositor, CompositorFrame};
 pub struct CompositeClipDescriptor<'a> {
     pub clip_id: &'a str,
     pub texture_view: &'a wgpu::TextureView,
+    pub texture: &'a wgpu::Texture,
     pub layer_index: i32,
     pub blend_mode: BlendMode,
     pub opacity: f32,
@@ -448,6 +449,7 @@ impl LayerCompositor {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         input_view: &'a wgpu::TextureView,
+        input_texture: &wgpu::Texture,
         effects: &[EffectInstance],
         groups: &[EffectGroup],
         ctx: &EffectContext,
@@ -457,6 +459,7 @@ impl LayerCompositor {
             device, queue, encoder,
             registry,
             input_view,
+            input_texture,
             effects,
             groups,
             ctx,
@@ -546,7 +549,8 @@ impl LayerCompositor {
                     Self::apply_effects(
                         &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
                         device, queue, encoder,
-                        clip.texture_view, clip.effects, clip.effect_groups, &ctx,
+                        clip.texture_view, clip.texture,
+                        clip.effects, clip.effect_groups, &ctx,
                         gpu_profiler,
                     )
                 } else {
@@ -599,7 +603,8 @@ impl LayerCompositor {
                         Self::apply_effects(
                             &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
                             device, queue, encoder,
-                            clip.texture_view, clip.effects, clip.effect_groups, &ctx,
+                            clip.texture_view, clip.texture,
+                            clip.effects, clip.effect_groups, &ctx,
                             gpu_profiler,
                         )
                     } else {
@@ -646,7 +651,8 @@ impl LayerCompositor {
                         Self::apply_effects(
                             &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
                             device, queue, encoder,
-                            layer_buf.source_view(), ld.effects, ld.effect_groups, &ctx,
+                            layer_buf.source_view(), layer_buf.source_texture(),
+                            ld.effects, ld.effect_groups, &ctx,
                             gpu_profiler,
                         )
                     } else {
@@ -775,12 +781,13 @@ impl Compositor for LayerCompositor {
             };
             let aspect = width as f32 / height as f32;
 
-            // Feed tonemap output directly into the effect chain — the chain
-            // blits it into its own ping-pong buffers internally.
+            // Feed tonemap output directly into the effect chain — the first
+            // effect reads from tonemap.output without copying.
             if let Some(processed) = Self::apply_effects(
                 &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
                 device, queue, encoder,
-                &self.tonemap.output.view, frame.master_effects,
+                &self.tonemap.output.view, &self.tonemap.output.texture,
+                frame.master_effects,
                 frame.master_effect_groups, &ctx,
                 gpu_profiler,
             ) {

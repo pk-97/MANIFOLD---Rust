@@ -239,6 +239,11 @@ impl GeneratorRenderer {
         self.active_clips.get(clip_id).map(|a| &a.render_target.view)
     }
 
+    /// Get the texture for a rendered clip (used for copy_texture_to_texture).
+    pub fn get_clip_texture(&self, clip_id: &str) -> Option<&wgpu::Texture> {
+        self.active_clips.get(clip_id).map(|a| &a.render_target.texture)
+    }
+
     /// Resize all render targets and generators.
     pub fn resize_gpu(&mut self, width: u32, height: u32) {
         self.width = width;
