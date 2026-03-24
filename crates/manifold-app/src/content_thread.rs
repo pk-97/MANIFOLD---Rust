@@ -1211,6 +1211,11 @@ impl ContentThread {
 
             // ── Display ───────────────────────────────────────────
             ContentCommand::UpdateEdrHeadroom(headroom) => {
+                eprintln!(
+                    "[EDR] Content thread: headroom updated to {:.2}x (mode={})",
+                    headroom,
+                    if headroom > 1.0 { "passthrough" } else { "ACES tonemap" },
+                );
                 self.content_pipeline.edr_headroom = headroom;
                 self.engine.mark_compositor_dirty(0.0);
             }
