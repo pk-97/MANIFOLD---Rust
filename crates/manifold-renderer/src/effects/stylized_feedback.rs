@@ -156,7 +156,10 @@ impl PostProcessEffect for StylizedFeedbackFX {
         );
 
         // PostBlit: copy result → state buffer
-        // Unity ref: Graphics.CopyTexture(result, stateBuffer)
+        // Unity ref: Graphics.CopyTexture(result, stateBuffer) — zero-cost memcpy.
+        // TODO: Replace blit with copy_texture_to_texture once apply() receives
+        // the target Texture (not just TextureView). Current blit costs a full
+        // render pass where Unity uses a free GPU memcpy.
         let state = self.states.get(&ctx.owner_key).unwrap();
         self.copy_blit.draw(device, queue, encoder, target, &state.buffer.view, &[0u8; 16], "StylizedFeedback State Copy", ctx.width, ctx.height, profiler);
     }

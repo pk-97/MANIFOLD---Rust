@@ -698,10 +698,15 @@ impl Compositor for LayerCompositor {
         gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> &wgpu::TextureView {
         if frame.clips.is_empty() {
+            // Unity: CompositorStack.cs returns immediately for empty playback.
+            // Clear to black + return tonemap output (already cleared from previous frame).
+            // Skips ALL master effects, tonemap, and LED tap — zero GPU draw calls.
             self.main.clear_source(encoder, true);
-        } else {
-            self.composite(device, queue, encoder, frame, gpu_profiler);
+            self.tonemap.clear(encoder);
+            return &self.tonemap.output.view;
         }
+
+        self.composite(device, queue, encoder, frame, gpu_profiler);
 
         // LED tap: capture pre-tonemap composite when exit index is 0.
         // main.source holds the all-layers composite at this point, before

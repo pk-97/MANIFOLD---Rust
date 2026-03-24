@@ -225,6 +225,28 @@ impl TonemapPipeline {
         pass.draw(0..3, 0..1);
     }
 
+    /// Clear the tonemap output to black. Used when no clips are active
+    /// to skip the full tonemap + master effect chain (Unity parity:
+    /// CompositorStack returns immediately for empty playback).
+    pub fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Tonemap Clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.output.view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    }
+
     /// Resize the tonemap output buffer. Matches Unity's lazy reallocation in
     /// ApplyTonemap() when hdrSource dimensions change.
     pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {

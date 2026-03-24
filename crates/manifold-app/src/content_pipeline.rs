@@ -181,6 +181,8 @@ impl ContentPipeline {
         dt: f64,
         frame_count: u64,
     ) {
+        let _t_frame = std::time::Instant::now();
+
         #[cfg(not(target_os = "macos"))]
         self.ensure_output_buffers(&gpu.device);
 
@@ -210,6 +212,7 @@ impl ContentPipeline {
             }
         }
 
+        let _t0 = std::time::Instant::now();
         // Render generators via downcast (GPU rendering needs queue + encoder)
         for renderer in renderers.iter_mut() {
             if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
@@ -224,6 +227,9 @@ impl ContentPipeline {
             }
         }
 
+        let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+        let _t0 = std::time::Instant::now();
         // Build clip descriptors for compositor
         let mut clip_descs: Vec<CompositeClipDescriptor> =
             Vec::with_capacity(tick_result.ready_clips.len());
@@ -311,6 +317,9 @@ impl ContentPipeline {
             },
         };
 
+        let _desc_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+        let _t0 = std::time::Instant::now();
         // Render compositor (records into encoder, returns view into tonemap output)
         #[cfg(feature = "profiling")]
         let gpu_prof = self.gpu_profiler.as_ref();
@@ -319,6 +328,7 @@ impl ContentPipeline {
         let _compositor_view = self.compositor.render(
             &gpu.device, &gpu.queue, &mut encoder, &frame, gpu_prof,
         );
+        let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
         let (comp_w, comp_h) = self.compositor.dimensions();
 
@@ -384,17 +394,20 @@ impl ContentPipeline {
         }
 
         // Submit all GPU work (generators + compositor + copy)
+        let _t0 = std::time::Instant::now();
         gpu.queue.submit(std::iter::once(encoder.finish()));
+        let _submit_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
         // Wait for GPU to finish this frame before returning. Prevents command
         // buffer pileup that causes periodic stalls (3 frames queue, 4th blocks hard).
         // Makes frame timing consistent: GPU-bound frames run at steady reduced FPS
         // instead of 60-60-60-stall judder. Only blocks the content device — UI is
         // on its own device/queue and is completely unaffected.
-        #[cfg(feature = "profiling")]
         let _poll_start = std::time::Instant::now();
 
         let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+
+        let _poll_ms = _poll_start.elapsed().as_secs_f64() * 1000.0;
 
         #[cfg(feature = "profiling")]
         {
@@ -403,6 +416,19 @@ impl ContentPipeline {
             self.last_gpu_pass_results = self.gpu_profiler
                 .as_ref()
                 .map_or_else(Vec::new, |p| p.read_results(&gpu.device));
+        }
+
+        // Periodic stderr dump — independent of profiling feature
+        let _total_ms = _t_frame.elapsed().as_secs_f64() * 1000.0;
+        if frame_count > 0 && frame_count.is_multiple_of(60) {
+            eprintln!(
+                "[PERF] frame={} clips={} | gen={:.1}ms desc={:.1}ms comp={:.1}ms \
+                 submit={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
+                frame_count,
+                tick_result.ready_clips.len(),
+                _gen_ms, _desc_ms, _comp_ms, _submit_ms, _poll_ms, _total_ms,
+                1000.0 / _total_ms.max(0.001),
+            );
         }
 
         // Swap + update shared output view (non-macOS fallback path)
