@@ -269,17 +269,10 @@ impl ContentThread {
                 // Poll previous frame's readback first (now that GPU has been polled).
                 led.poll_readback(&self.gpu.device);
 
-                // Route LED source based on led_exit_index:
-                //   0  = before master effects + tonemap (cleanest signal)
-                //   -1 = after all effects + tonemap (default)
-                let led_exit_index = self.engine.project()
-                    .map(|p| p.settings.led_exit_index)
-                    .unwrap_or(-1);
-                let source_view = if led_exit_index == 0 {
-                    self.content_pipeline.pre_tonemap_output()
-                } else {
-                    self.content_pipeline.compositor_output_view()
-                };
+                // LED source routed by compositor based on led_exit_index:
+                //   0  = pre-tonemap composite (clean, no master FX)
+                //   -1 = final output (default, post-tonemap + master FX)
+                let source_view = self.content_pipeline.led_source_view();
 
                 let active_count = tick_result.ready_clips.len();
                 let mut led_encoder = self.gpu.device.create_command_encoder(
@@ -974,6 +967,9 @@ impl ContentThread {
             }
             ContentCommand::SetProject => {
                 self.editing_service.set_project();
+            }
+            ContentCommand::MarkClean => {
+                self.editing_service.mark_clean();
             }
 
             // ── Project lifecycle ──────────────────────────────────

@@ -287,6 +287,8 @@ impl ContentPipeline {
             .and_then(|p| p.settings.master_effect_groups.as_deref())
             .unwrap_or(empty_groups);
 
+        let led_exit_index = project.map_or(-1, |p| p.settings.led_exit_index);
+
         let frame = CompositorFrame {
             time,
             beat,
@@ -297,6 +299,7 @@ impl ContentPipeline {
             layers: &layer_descs,
             master_effects,
             master_effect_groups,
+            led_exit_index,
             tonemap: TonemapSettings {
                 exposure: 1.0,
                 hdr_output_enabled: self.edr_headroom > 1.0,
@@ -504,6 +507,12 @@ impl ContentPipeline {
     /// through the edge-extend shader. The texture has TEXTURE_BINDING usage.
     pub fn compositor_output_view(&self) -> &wgpu::TextureView {
         self.compositor.output_view()
+    }
+
+    /// LED tap view: pre-tonemap composite captured when led_exit_index == 0.
+    /// Returns the tap if available, otherwise falls back to the final output.
+    pub fn led_source_view(&self) -> &wgpu::TextureView {
+        self.compositor.led_tap_view().unwrap_or_else(|| self.compositor.output_view())
     }
 
     /// Run the PQ encoder on the final compositor output for HDR export.

@@ -409,6 +409,10 @@ pub struct LayerCompositor {
     /// ACES tonemapping pipeline. Matches Unity's CompositorStack.tonemapMaterial +
     /// tonemappedOutput. Applied as the final step after master effects.
     tonemap: TonemapPipeline,
+    /// LED tap: dedicated copy of the pre-tonemap composite, populated when
+    /// led_exit_index == 0. Avoids the main buffer being overwritten by tonemap
+    /// and master effects before the LED pipeline reads it.
+    led_tap: Option<crate::render_target::RenderTarget>,
 }
 
 impl LayerCompositor {
@@ -421,6 +425,7 @@ impl LayerCompositor {
             effect_registry: EffectRegistry::new(device, queue),
             wet_dry_lerp: WetDryLerpPipeline::new(device),
             tonemap: TonemapPipeline::new(device, width, height),
+            led_tap: None,
         }
     }
 
@@ -698,6 +703,41 @@ impl Compositor for LayerCompositor {
             self.composite(device, queue, encoder, frame, gpu_profiler);
         }
 
+        // LED tap: capture pre-tonemap composite when exit index is 0.
+        // main.source holds the all-layers composite at this point, before
+        // tonemap and master effects overwrite it.
+        if frame.led_exit_index == 0 {
+            let (w, h) = (self.main.width(), self.main.height());
+            let tap = self.led_tap.get_or_insert_with(|| {
+                crate::render_target::RenderTarget::new(
+                    device, w, h, wgpu::TextureFormat::Rgba16Float, "LED_Tap",
+                )
+            });
+            if tap.width != w || tap.height != h {
+                *tap = crate::render_target::RenderTarget::new(
+                    device, w, h, wgpu::TextureFormat::Rgba16Float, "LED_Tap",
+                );
+            }
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: self.main.source_texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &tap.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+        } else {
+            // Free the tap buffer when not needed
+            self.led_tap = None;
+        }
+
         // Tonemap the composited scene (before master glow effects).
         self.tonemap.apply(
             device, queue, encoder,
@@ -798,6 +838,8 @@ impl Compositor for LayerCompositor {
         self.effect_chain.resize(device, width, height);
         self.effect_registry.resize_all(device, width, height);
         self.tonemap.resize(device, width, height);
+        // LED tap will be recreated at new size on next frame if needed.
+        self.led_tap = None;
     }
 
     fn dimensions(&self) -> (u32, u32) {
@@ -814,6 +856,10 @@ impl Compositor for LayerCompositor {
 
     fn output_view(&self) -> &wgpu::TextureView {
         &self.tonemap.output.view
+    }
+
+    fn led_tap_view(&self) -> Option<&wgpu::TextureView> {
+        self.led_tap.as_ref().map(|t| &t.view)
     }
 
     fn cleanup_clip_owner(&mut self, clip_id: &str) {

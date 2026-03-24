@@ -30,6 +30,10 @@ pub struct CompositorFrame<'a> {
     /// Tonemap settings for this frame. Matches Unity CompositorStack properties:
     /// TonemapExposure, HDROutputEnabled, PaperWhiteNits, MaxDisplayNits.
     pub tonemap: TonemapSettings,
+    /// LED exit path index: 0 = capture pre-tonemap composite for LED output,
+    /// -1 = use final output (default). When 0, the compositor copies the
+    /// pre-tonemap buffer into a dedicated texture accessible via led_tap_view().
+    pub led_exit_index: i32,
 }
 
 /// Trait for compositing layers into a final output.
@@ -66,5 +70,9 @@ pub trait Compositor: Send {
 
     /// Clean up per-owner effect state for a stopped clip.
     fn cleanup_clip_owner(&mut self, clip_id: &str);
+
+    /// LED tap view: pre-tonemap composite captured when led_exit_index == 0.
+    /// Returns None if exit index is -1 (use output_view instead).
+    fn led_tap_view(&self) -> Option<&wgpu::TextureView>;
 }
 
