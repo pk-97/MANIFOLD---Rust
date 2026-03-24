@@ -85,6 +85,11 @@ struct SplatUniforms {
     width: u32,
     height: u32,
     scaled_energy: u32,
+    // Pad to 32 bytes — shared fluid_scatter.wgsl BGL slot requires matching largest struct
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+    _pad3: u32,
 }
 
 #[repr(C)]
@@ -94,7 +99,16 @@ struct ResolveUniforms {
     height: u32,
     _pad0: u32,
     _pad1: u32,
+    // Pad to 32 bytes — shared fluid_scatter.wgsl BGL slot requires matching largest struct
+    _pad2: u32,
+    _pad3: u32,
+    _pad4: u32,
+    _pad5: u32,
 }
+
+// Shared fluid_scatter.wgsl requires both uniforms at 32 bytes (same binding slot)
+const _: () = assert!(std::mem::size_of::<SplatUniforms>() == 32);
+const _: () = assert!(std::mem::size_of::<ResolveUniforms>() == 32);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -557,6 +571,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
             width: sw,
             height: sh,
             scaled_energy,
+            _pad0: 0, _pad1: 0, _pad2: 0, _pad3: 0,
         }));
 
         let splat_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -583,7 +598,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
 
         // ── Phase 3: Resolve (ResolveKernel) ──
         queue.write_buffer(&self.resolve_uniform_buf, 0, bytemuck::bytes_of(&ResolveUniforms {
-            width: sw, height: sh, _pad0: 0, _pad1: 0,
+            width: sw, height: sh, _pad0: 0, _pad1: 0, _pad2: 0, _pad3: 0, _pad4: 0, _pad5: 0,
         }));
 
         let resolve_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
