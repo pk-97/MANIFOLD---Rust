@@ -140,8 +140,8 @@ impl ArtNetOutput {
 
         // Open UDP socket
         if !self.open_socket(&settings.artnet_ip, settings.artnet_port) {
-            log::error!(
-                "[ArtNetOutput] Socket failed to open — no LED packets will be sent."
+            eprintln!(
+                "[ArtNet] Socket failed to open — no LED packets will be sent."
             );
             self.cleanup();
             return false;
@@ -164,8 +164,8 @@ impl ArtNetOutput {
         );
 
         self.initialized = true;
-        log::info!(
-            "[ArtNetOutput] Initialized: {} universe(s), {}x{} LEDs, {:?} addressing, \
+        eprintln!(
+            "[ArtNet] Initialized: {} universe(s), {}x{} LEDs, {:?} addressing, \
              BGR={}, target={}",
             self.universe_count,
             self.strip_count,
@@ -232,8 +232,8 @@ impl ArtNetOutput {
         if let Some(pixels) = self.readback.try_read(device) {
             self.readback_count += 1;
             if self.readback_count == 1 {
-                log::info!(
-                    "[ArtNetOutput] First readback received: {} bytes, {}x{} pixels",
+                eprintln!(
+                    "[ArtNet] First readback: {} bytes ({}x{} px)",
                     pixels.len(),
                     self.strip_count,
                     self.leds_per_strip,
@@ -340,8 +340,8 @@ impl ArtNetOutput {
             Ok(_) => {
                 if !self.sent_first_packet {
                     self.sent_first_packet = true;
-                    log::info!(
-                        "[ArtNetOutput] First ArtNet packet sent to {} ({} bytes)",
+                    eprintln!(
+                        "[ArtNet] First packet sent to {} ({} bytes)",
                         self.endpoint,
                         packet.len(),
                     );
@@ -361,7 +361,7 @@ impl ArtNetOutput {
                     } else {
                         String::new()
                     };
-                    log::warn!("[ArtNetOutput] Send failed: {}{}", e, suffix);
+                    eprintln!("[ArtNet] Send failed: {}{}", e, suffix);
                     self.next_send_warning = now + std::time::Duration::from_secs(5);
                     self.suppressed_warnings = 0;
                 } else {

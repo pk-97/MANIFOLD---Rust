@@ -97,9 +97,11 @@ impl ContentThread {
             let mut ctrl = manifold_led::LedOutputController::new();
             if ctrl.initialize(&self.gpu.device, &settings) {
                 self.led_controller = Some(ctrl);
-                log::info!("[ContentThread] LED output auto-initialized with defaults.");
+                eprintln!("[LED] Auto-initialized: {}x{} LEDs, target={}:{}",
+                    settings.strip_count, settings.leds_per_strip,
+                    settings.artnet_ip, settings.artnet_port);
             } else {
-                log::warn!("[ContentThread] LED output auto-init failed (no device?).");
+                eprintln!("[LED] Auto-init FAILED");
             }
         }
 
