@@ -57,18 +57,6 @@ impl GpuContext {
         if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS) {
             features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         }
-        // Texture binding arrays for compute batch blending (bindless layer textures).
-        // Unconditionally available on Metal (Apple Silicon argument buffers).
-        if adapter.features().contains(wgpu::Features::TEXTURE_BINDING_ARRAY) {
-            features |= wgpu::Features::TEXTURE_BINDING_ARRAY;
-        }
-        if adapter
-            .features()
-            .contains(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING)
-        {
-            features |=
-                wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
-        }
 
         adapter
             .request_device(&wgpu::DeviceDescriptor {
