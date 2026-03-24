@@ -8,6 +8,8 @@ use manifold_renderer::compositor::{Compositor, CompositeLayerDescriptor, Compos
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu::GpuContext;
 use manifold_renderer::layer_compositor::CompositeClipDescriptor;
+#[cfg(target_os = "macos")]
+use manifold_media::video_renderer::VideoRenderer;
 #[cfg(not(target_os = "macos"))]
 use manifold_renderer::render_target::RenderTarget;
 use manifold_renderer::tonemap::TonemapSettings;
@@ -228,8 +230,18 @@ impl ContentPipeline {
 
         for clip in &tick_result.ready_clips {
             let texture_view = renderers.iter().find_map(|r| {
-                r.as_any().downcast_ref::<GeneratorRenderer>()
+                if let Some(v) = r.as_any().downcast_ref::<GeneratorRenderer>()
                     .and_then(|gen_r| gen_r.get_clip_texture_view(&clip.id))
+                {
+                    return Some(v);
+                }
+                #[cfg(target_os = "macos")]
+                if let Some(v) = r.as_any().downcast_ref::<VideoRenderer>()
+                    .and_then(|vid_r| vid_r.get_clip_texture_view(&clip.id))
+                {
+                    return Some(v);
+                }
+                None
             });
             if let Some(view) = texture_view {
                 let clip_li = project.and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))

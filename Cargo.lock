@@ -2036,10 +2036,18 @@ dependencies = [
 name = "manifold-media"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "cc",
+ "crossbeam-channel",
+ "foreign-types",
  "log",
  "manifold-core",
+ "manifold-playback",
+ "metal",
+ "objc",
  "wgpu",
+ "wgpu-hal",
+ "wgpu-types",
 ]
 
 [[package]]

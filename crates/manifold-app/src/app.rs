@@ -15,6 +15,7 @@ use manifold_playback::audio_sync::{ImportedAudioSyncController, PreloadedAudioD
 use manifold_playback::audio_decoder::DecodedAudio;
 use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 use manifold_playback::engine::PlaybackEngine;
+#[cfg(not(target_os = "macos"))]
 use manifold_playback::renderer::StubRenderer;
 use manifold_renderer::blit::BlitPipeline;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
@@ -1039,6 +1040,15 @@ impl ApplicationHandler for Application {
             }
 
             let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
+                #[cfg(target_os = "macos")]
+                Box::new(manifold_media::video_renderer::VideoRenderer::new(
+                    Arc::clone(&content_gpu.device),
+                    output_w,
+                    output_h,
+                    compositor_format,
+                    8,
+                )),
+                #[cfg(not(target_os = "macos"))]
                 Box::new(StubRenderer::new_video()),
                 Box::new(GeneratorRenderer::new(
                     Arc::clone(&content_gpu.device),

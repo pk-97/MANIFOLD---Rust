@@ -5,8 +5,18 @@ edition = "2024"
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
+manifold-playback = { path = "../manifold-playback" }
 wgpu = { workspace = true }
 log = { workspace = true }
+ahash = { workspace = true }
+crossbeam-channel = "0.5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu-hal = { version = "28" }
+wgpu-types = { version = "28" }
+metal = "0.33"
+foreign-types = "0.5"
+objc = "0.2"
 
 [build-dependencies]
 cc = "1"

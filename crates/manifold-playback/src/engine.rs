@@ -286,6 +286,14 @@ impl PlaybackEngine {
         self.sync_clips_dirty = false;
         self.last_realtime_now = 0.0;
         self.last_frame_count = 0;
+
+        // Notify all renderers of the new project (GAP-PLAY-5).
+        // Port of C# PlaybackController.LoadProject → renderer.OnProjectLoaded().
+        if let Some(ref project) = self.project {
+            for renderer in &mut self.renderers {
+                renderer.on_project_loaded(project);
+            }
+        }
     }
 
     /// Set the LiveClipManager after construction. Must be called before first tick.
