@@ -75,6 +75,7 @@ impl LedOutputController {
         encoder: &mut wgpu::CommandEncoder,
         source: &wgpu::TextureView,
         active_clip_count: usize,
+        brightness: f32,
     ) {
         if !self.initialized || !self.enabled {
             return;
@@ -91,9 +92,8 @@ impl LedOutputController {
 
         self.sent_blackout = false;
 
-        // Brightness is always 1.0 (energy gate deferred)
         self.output
-            .process_frame(device, queue, encoder, source, 1.0);
+            .process_frame(device, queue, encoder, source, brightness.clamp(0.0, 1.0));
     }
 
     /// Poll GPU readback and send DMX data if ready. Call AFTER device.poll().

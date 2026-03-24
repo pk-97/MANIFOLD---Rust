@@ -32,10 +32,11 @@ pub struct MasterChromePanel {
     chevron_btn_id: i32,
     exit_path_label_id: i32,
     exit_path_btn_id: i32,
-    divider_ids: [i32; 3],
+    divider_ids: [i32; 4],
 
-    // Slider — single source of truth for drag state + cache
+    // Sliders — single source of truth for drag state + cache
     opacity: SliderDragState,
+    led_brightness: SliderDragState,
 
     // State
     is_collapsed: bool,
@@ -53,8 +54,9 @@ impl MasterChromePanel {
             chevron_btn_id: -1,
             exit_path_label_id: -1,
             exit_path_btn_id: -1,
-            divider_ids: [-1; 3],
-            opacity: SliderDragState::default(), // min=0, max=1
+            divider_ids: [-1; 4],
+            opacity: SliderDragState::default(),
+            led_brightness: SliderDragState::default(),
             is_collapsed: false,
             cached_exit_path: "Default".into(),
             first_node: 0,
@@ -68,13 +70,14 @@ impl MasterChromePanel {
         } else {
             PAD_V + HEADER_ROW_H + DIVIDER_H
                 + EXIT_PATH_ROW_H + DIVIDER_H
+                + SLIDER_ROW_H + DIVIDER_H
                 + SLIDER_ROW_H + DIVIDER_H + PAD_V
         }
     }
 
     pub fn first_node(&self) -> usize { self.first_node }
     pub fn node_count(&self) -> usize { self.node_count }
-    pub fn is_dragging(&self) -> bool { self.opacity.is_dragging() }
+    pub fn is_dragging(&self) -> bool { self.opacity.is_dragging() || self.led_brightness.is_dragging() }
     pub fn is_collapsed(&self) -> bool { self.is_collapsed }
 
     pub fn toggle_collapsed(&mut self) {
@@ -126,6 +129,7 @@ impl MasterChromePanel {
 
         if self.is_collapsed {
             self.opacity.clear();
+            self.led_brightness.clear();
             self.node_count = tree.count() - self.first_node;
             return;
         }
@@ -191,6 +195,27 @@ impl MasterChromePanel {
             -1, cx, cy, content_w, DIVIDER_H,
             UIStyle { bg_color: color::DIVIDER_C32, ..UIStyle::default() },
         ) as i32;
+        cy += DIVIDER_H;
+
+        // LED Brightness slider
+        let led_val = self.led_brightness.cached_value();
+        let led_brightness = if led_val.is_nan() { 1.0 } else { led_val };
+        let led_slider_rect = Rect::new(cx, cy, content_w, SLIDER_ROW_H);
+        let led_val_text = fmt_opacity(led_brightness);
+        let led_ids = BitmapSlider::build(
+            tree, -1, led_slider_rect,
+            Some("LED"), led_brightness,
+            &led_val_text, &SliderColors::default_slider(),
+            FONT_SIZE, OPACITY_LABEL_W,
+        );
+        self.led_brightness.set_ids(led_ids);
+        cy += SLIDER_ROW_H;
+
+        // Divider 3
+        self.divider_ids[3] = tree.add_panel(
+            -1, cx, cy, content_w, DIVIDER_H,
+            UIStyle { bg_color: color::DIVIDER_C32, ..UIStyle::default() },
+        ) as i32;
 
         self.node_count = tree.count() - self.first_node;
     }
@@ -199,6 +224,10 @@ impl MasterChromePanel {
 
     pub fn sync_opacity(&mut self, tree: &mut UITree, value: f32) {
         self.opacity.sync(tree, value, &fmt_opacity);
+    }
+
+    pub fn sync_led_brightness(&mut self, tree: &mut UITree, value: f32) {
+        self.led_brightness.sync(tree, value, &fmt_opacity);
     }
 
     pub fn sync_exit_path(&mut self, tree: &mut UITree, path: &str) {
@@ -238,12 +267,21 @@ impl MasterChromePanel {
                 PanelAction::MasterOpacityChanged(val),
             ];
         }
+        if let Some(val) = self.led_brightness.try_start_drag(node_id, pos.x) {
+            return vec![
+                PanelAction::LedBrightnessSnapshot,
+                PanelAction::LedBrightnessChanged(val),
+            ];
+        }
         Vec::new()
     }
 
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         if let Some(val) = self.opacity.apply_drag(pos.x, tree, &fmt_opacity) {
             return vec![PanelAction::MasterOpacityChanged(val)];
+        }
+        if let Some(val) = self.led_brightness.apply_drag(pos.x, tree, &fmt_opacity) {
+            return vec![PanelAction::LedBrightnessChanged(val)];
         }
         Vec::new()
     }
@@ -252,12 +290,18 @@ impl MasterChromePanel {
         if self.opacity.end_drag() {
             return vec![PanelAction::MasterOpacityCommit];
         }
+        if self.led_brightness.end_drag() {
+            return vec![PanelAction::LedBrightnessCommit];
+        }
         Vec::new()
     }
 
     pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
         if self.opacity.ids().is_some_and(|ids| node_id == ids.track) {
             return vec![PanelAction::MasterOpacityRightClick];
+        }
+        if self.led_brightness.ids().is_some_and(|ids| node_id == ids.track) {
+            return vec![PanelAction::LedBrightnessRightClick];
         }
         Vec::new()
     }

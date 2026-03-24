@@ -289,8 +289,9 @@ pub fn push_state(
                 ui.inspector.layer_chrome_mut().sync_opacity(tree, layer.opacity);
                 ui.inspector.layer_chrome_mut().sync_name(tree, &layer.name);
             }
-            // Master opacity
+            // Master opacity + LED brightness
             ui.inspector.master_chrome_mut().sync_opacity(tree, project.settings.master_opacity);
+            ui.inspector.master_chrome_mut().sync_led_brightness(tree, project.settings.led_brightness);
 
             // LED exit path label + cached effect names for dropdown
             let exit_label = super::led_exit_path_label(

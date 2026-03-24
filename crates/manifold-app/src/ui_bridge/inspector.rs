@@ -6,7 +6,8 @@ use manifold_core::effects::{EffectInstance, ParameterDriver, ParamEnvelope};
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_editing::commands::settings::{
-    ChangeMasterOpacityCommand, ChangeLayerOpacityCommand, ChangeGeneratorParamsCommand,
+    ChangeMasterOpacityCommand, ChangeLedBrightnessCommand,
+    ChangeLayerOpacityCommand, ChangeGeneratorParamsCommand,
 };
 use manifold_editing::commands::effects::{
     ToggleEffectCommand, ChangeEffectParamCommand, RemoveEffectCommand, ReorderEffectCommand,
@@ -101,6 +102,47 @@ pub(super) fn dispatch_inspector(
             if (old - 1.0).abs() > f32::EPSILON {
                 project.settings.master_opacity = 1.0;
                 let cmd = ChangeMasterOpacityCommand::new(old, 1.0);
+                ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+            }
+            *active_inspector_drag = None;
+            DispatchResult::handled()
+        }
+
+        // ── LED brightness ───────────────────────────────────────
+        PanelAction::LedBrightnessSnapshot => {
+            *drag_snapshot = Some(project.settings.led_brightness);
+            *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::LedBrightness(
+                project.settings.led_brightness,
+            ));
+            DispatchResult::handled()
+        }
+        PanelAction::LedBrightnessChanged(val) => {
+            project.settings.led_brightness = *val;
+            if let Some(crate::app::ActiveInspectorDrag::LedBrightness(v)) = active_inspector_drag {
+                *v = *val;
+            }
+            let v = *val;
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                p.settings.led_brightness = v;
+            })));
+            DispatchResult::handled()
+        }
+        PanelAction::LedBrightnessCommit => {
+            if let Some(old_val) = drag_snapshot.take() {
+                let new_val = project.settings.led_brightness;
+                if (old_val - new_val).abs() > f32::EPSILON {
+                    let cmd = ChangeLedBrightnessCommand::new(old_val, new_val);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            *active_inspector_drag = None;
+            DispatchResult::handled()
+        }
+        PanelAction::LedBrightnessRightClick => {
+            let old = project.settings.led_brightness;
+            if (old - 1.0).abs() > f32::EPSILON {
+                project.settings.led_brightness = 1.0;
+                let cmd = ChangeLedBrightnessCommand::new(old, 1.0);
                 ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
             }
             *active_inspector_drag = None;

@@ -116,6 +116,10 @@ pub fn dispatch(
         | PanelAction::MasterExitPathClicked
         | PanelAction::SetLedExitIndex(_)
         | PanelAction::MasterOpacityRightClick
+        | PanelAction::LedBrightnessSnapshot
+        | PanelAction::LedBrightnessChanged(_)
+        | PanelAction::LedBrightnessCommit
+        | PanelAction::LedBrightnessRightClick
         | PanelAction::LayerOpacitySnapshot
         | PanelAction::LayerOpacityChanged(_)
         | PanelAction::LayerOpacityCommit

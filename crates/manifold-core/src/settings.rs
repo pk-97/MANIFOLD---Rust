@@ -44,6 +44,8 @@ pub struct ProjectSettings {
 
     #[serde(default = "default_neg_one_i32")]
     pub led_exit_index: i32,
+    #[serde(default = "default_one")]
+    pub led_brightness: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub midi_clock_source_name: Option<String>,
     #[serde(default)]
@@ -119,6 +121,7 @@ impl Default for ProjectSettings {
             master_effects: Vec::new(),
             master_effect_groups: None,
             led_exit_index: -1,
+            led_brightness: 1.0,
             midi_clock_source_name: None,
             clock_authority: ClockAuthority::Internal,
             osc_send_port: 9001,

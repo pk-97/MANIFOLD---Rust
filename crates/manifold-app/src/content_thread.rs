@@ -275,6 +275,9 @@ impl ContentThread {
                 let source_view = self.content_pipeline.led_source_view();
 
                 let active_count = tick_result.ready_clips.len();
+                let brightness = self.engine.project()
+                    .map(|p| p.settings.led_brightness)
+                    .unwrap_or(1.0);
                 let mut led_encoder = self.gpu.device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor {
                         label: Some("LED Encoder"),
@@ -286,6 +289,7 @@ impl ContentThread {
                     &mut led_encoder,
                     source_view,
                     active_count,
+                    brightness,
                 );
                 self.gpu.queue.submit(std::iter::once(led_encoder.finish()));
             }

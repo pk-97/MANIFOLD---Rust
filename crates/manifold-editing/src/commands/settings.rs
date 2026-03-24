@@ -409,6 +409,31 @@ impl Command for ChangeMasterOpacityCommand {
     fn description(&self) -> &str { "Change Master Opacity" }
 }
 
+/// Change LED brightness.
+#[derive(Debug)]
+pub struct ChangeLedBrightnessCommand {
+    old_brightness: f32,
+    new_brightness: f32,
+}
+
+impl ChangeLedBrightnessCommand {
+    pub fn new(old_brightness: f32, new_brightness: f32) -> Self {
+        Self { old_brightness, new_brightness }
+    }
+}
+
+impl Command for ChangeLedBrightnessCommand {
+    fn execute(&mut self, project: &mut Project) {
+        project.settings.led_brightness = self.new_brightness;
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        project.settings.led_brightness = self.old_brightness;
+    }
+
+    fn description(&self) -> &str { "Change LED Brightness" }
+}
+
 /// Toggle HDR export setting.
 #[derive(Debug)]
 pub struct ToggleExportHdrCommand {

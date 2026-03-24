@@ -54,6 +54,7 @@ pub type SelectionState = UIState;
 #[derive(Debug, Clone)]
 pub(crate) enum ActiveInspectorDrag {
     MasterOpacity(f32),
+    LedBrightness(f32),
     LayerOpacity { layer_id: LayerId, value: f32 },
     ClipSlip { clip_id: manifold_core::ClipId, value: f32 },
     ClipLoop { clip_id: manifold_core::ClipId, value: f32 },
@@ -67,6 +68,9 @@ impl ActiveInspectorDrag {
         match self {
             Self::MasterOpacity(v) => {
                 project.settings.master_opacity = *v;
+            }
+            Self::LedBrightness(v) => {
+                project.settings.led_brightness = *v;
             }
             Self::LayerOpacity { layer_id, value } => {
                 if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(layer_id) {
