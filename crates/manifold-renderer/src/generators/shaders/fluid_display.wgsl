@@ -1,7 +1,7 @@
-// FluidParticleDisplay — port of Unity GeneratorFluidParticleDisplay.shader
-// Extended Reinhard tone mapping of density field with 2 display modes:
+// FluidParticleDisplay — tone mapping of unified density+color texture.
+// Extended Reinhard tone mapping with 2 display modes:
 //   Mono:  lum = extended Reinhard; output = vec4(lum, lum, lum, lum)
-//   Color: scalar density drives brightness; color texture provides hue only.
+//   Color: density (.r) drives brightness; hue (.gba) provides color.
 //
 // WHITE_POINT = 3.0 (matches Unity #define WHITE_POINT 3.0)
 // UV scale: (uv - 0.5) / max(uv_scale, 0.001) + 0.5  (>1 zooms in, <1 zooms out)
@@ -20,8 +20,6 @@ struct DisplayUniforms {
 @group(0) @binding(0) var<uniform> params: DisplayUniforms;
 @group(0) @binding(1) var t_density: texture_2d<f32>;
 @group(0) @binding(2) var s_density: sampler;
-@group(0) @binding(3) var t_color: texture_2d<f32>;
-@group(0) @binding(4) var s_color: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -44,8 +42,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Unity: float2 uv = (i.uv - 0.5) / max(_UVScale, 0.001) + 0.5
     let uv = (in.uv - vec2<f32>(0.5)) / max(params.uv_scale, 0.001) + vec2<f32>(0.5);
 
-    // Scalar density drives brightness for BOTH paths (identical contrast)
-    let density = textureSample(t_density, s_density, uv).r;
+    // Unified texture: .r = density, .gba = pre-normalized hue
+    let tex = textureSample(t_density, s_density, uv);
+    let density = tex.r;
 
     // Extended Reinhard tone curve: x*(1 + x/W^2) / (1 + x), W = 3.0
     // Unity: float x = density * _Intensity * _Contrast; lum = x*(1+x/9) / (1+x)
@@ -54,13 +53,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     if params.color_mode > 0.5 {
         // --- Color path ---
-        // Use scalar density for brightness (matches mono exactly).
-        // Color texture provides hue only (pre-normalized in ResolveColorKernel).
-        let col = textureSample(t_color, s_color, uv);
-
-        // Hue is pre-normalized: if a > 0.001 use col.rgb, else white
-        // Unity: float3 hue = col.a > 0.001 ? col.rgb : float3(1,1,1)
-        let hue = select(vec3<f32>(1.0), col.rgb, col.a > 0.001);
+        // Hue is pre-normalized in resolve: .gba = rgb/energy, (1,1,1) when no data
+        let hue = tex.gba;
 
         // Blend between white and the hue based on Color Bright.
         // 0 = fully white (mono), 1 = balanced, >1 = saturated color

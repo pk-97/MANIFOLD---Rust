@@ -1,7 +1,7 @@
 // Density-displacement particle compute fluid simulation.
 // Port of Unity FluidSimulationGenerator.cs — mechanical translation.
 // Pipeline per frame:
-//   Scatter (splat + resolve) -> [Color scatter (splat_color + resolve_color)] ->
+//   Scatter (unified RGBA splat + resolve) ->
 //   Blur density (H + V) -> GradientRotate -> Blur vector (H + V) ->
 //   Simulate -> Display
 
@@ -68,24 +68,7 @@ struct SplatUniforms {
     height: u32,
     // pre-scaled energy: 0.005 * (splat_size/3) * (1_000_000/active_count) * 4096 + 0.5
     scaled_energy: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct ResolveUniforms {
-    width: u32,
-    height: u32,
-    _pad0: u32,
-    _pad1: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct SplatColorUniforms {
-    active_count: u32,
-    width: u32,
-    height: u32,
-    scaled_energy: u32,
+    // 0=mono, 1-5=color palette
     color_mode: u32,
     _pad0: u32,
     _pad1: u32,
@@ -94,7 +77,7 @@ struct SplatColorUniforms {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct ResolveColorUniforms {
+struct ResolveUniforms {
     width: u32,
     height: u32,
     _pad0: u32,
@@ -133,29 +116,24 @@ struct SimUniforms {
     field_width: u32,
     field_height: u32,
     speed: f32,
-    // noise amplitude (NoiseAmplitude)
     noise_amplitude: f32,
-    // density noise gain (DensityNoiseGain)
     density_noise_gain: f32,
-    // diffusion amount (Diffusion)
     diffusion: f32,
-    // per-frame respawn probability (RefreshRate)
     refresh_rate: f32,
-    // extra respawn in dense regions (DensityRefreshScale)
     density_refresh_scale: f32,
-    // color mode: 0=mono, >0=inject
     color_mode: u32,
-    // monotonic frame counter
     frame_count: u32,
-    // -1 = off, 0-3 = active zone index
-    inject_index: i32,
-    // injection force strength
+    // injection point UV (random per trigger)
+    inject_point_x: f32,
+    inject_point_y: f32,
     inject_force: f32,
-    // injection burst progress 0->1
     inject_phase: f32,
-    // clip-relative time for noise evolution
     time_val: f32,
-    _pad: f32,
+    // color index for injection (1-4 cycling)
+    inject_color_index: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 }
 
 #[repr(C)]
@@ -186,10 +164,6 @@ pub struct FluidSimulationGenerator {
     splat_bgl: wgpu::BindGroupLayout,
     resolve_pipeline: wgpu::ComputePipeline,
     resolve_bgl: wgpu::BindGroupLayout,
-    splat_color_pipeline: wgpu::ComputePipeline,
-    splat_color_bgl: wgpu::BindGroupLayout,
-    resolve_color_pipeline: wgpu::ComputePipeline,
-    resolve_color_bgl: wgpu::BindGroupLayout,
     simulate_pipeline: wgpu::ComputePipeline,
     simulate_bgl: wgpu::BindGroupLayout,
     seed_pipeline: wgpu::ComputePipeline,
@@ -207,18 +181,14 @@ pub struct FluidSimulationGenerator {
     // GPU resources (lazy-init)
     particle_buffer: Option<wgpu::Buffer>,
     scatter_accum: Option<wgpu::Buffer>,
-    color_accum: Option<wgpu::Buffer>,
     density_rt: Option<RenderTarget>,
     blur_density_rt: Option<RenderTarget>,
     vector_field_rt: Option<RenderTarget>,
     blur_temp_rt: Option<RenderTarget>,
-    color_density_rt: Option<RenderTarget>,
 
     // Uniform buffers
     splat_uniform_buf: wgpu::Buffer,
     resolve_uniform_buf: wgpu::Buffer,
-    splat_color_uniform_buf: wgpu::Buffer,
-    resolve_color_uniform_buf: wgpu::Buffer,
     // 5 blur uniform buffers — one per blur invocation per frame. Each render pass
     // needs its own buffer because queue.write_buffer overwrites are not flushed until
     // queue.submit, so a shared buffer would only retain the last write.
@@ -227,10 +197,6 @@ pub struct FluidSimulationGenerator {
     sim_uniform_buf: wgpu::Buffer,
     seed_uniform_buf: wgpu::Buffer,
     display_uniform_buf: wgpu::Buffer,
-
-    // White texture fallback for display pass when color_density_rt is None
-    _white_texture: wgpu::Texture,
-    white_view: wgpu::TextureView,
 
     sampler: wgpu::Sampler,
 
@@ -242,16 +208,17 @@ pub struct FluidSimulationGenerator {
     initialized: bool,
     current_density_res: f32,
 
-    // Snap envelope state (Unity: snapEnvelope, activeSnapMode, lastTriggerCount)
+    // Snap envelope state
     last_trigger_count: i32,
     snap_envelope: f32,
     active_snap_mode: i32,
 
-    // Injection zone state machine (Unity: injectZoneIndex, injectFramesRemaining, nextInjectZone)
+    // Injection state machine
     last_color_mode: i32,
-    inject_zone_index: i32,   // -1 = inactive, 0-3 = current zone
+    inject_active: bool,
+    inject_point: [f32; 2],
+    inject_color_counter: u32,
     inject_frames_remaining: i32,
-    next_inject_zone: i32,
 }
 
 impl FluidSimulationGenerator {
@@ -265,7 +232,7 @@ impl FluidSimulationGenerator {
             ..Default::default()
         });
 
-        // ── Scatter shader (splat + resolve + splat_color + resolve_color) ──
+        // ── Scatter shader (unified RGBA splat + resolve) ──
         let scatter_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("FluidSim Scatter Shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -324,61 +291,6 @@ impl FluidSimulationGenerator {
             layout: Some(&resolve_layout),
             module: &scatter_shader,
             entry_point: Some("resolve_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        // SplatColor: color_particles(ro) + color_accum(rw) + uniforms
-        let splat_color_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("FluidSim SplatColor BGL"),
-            entries: &[
-                bgl_storage_ro(0, wgpu::ShaderStages::COMPUTE),
-                bgl_storage_rw(1, wgpu::ShaderStages::COMPUTE),
-                bgl_uniform(2, wgpu::ShaderStages::COMPUTE),
-            ],
-        });
-        let splat_color_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("FluidSim SplatColor Layout"),
-            bind_group_layouts: &[&splat_color_bgl],
-            immediate_size: 0,
-        });
-        let splat_color_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("FluidSim SplatColor Pipeline"),
-            layout: Some(&splat_color_layout),
-            module: &scatter_shader,
-            entry_point: Some("splat_color_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        // ResolveColor: color_resolve_accum(rw) + color_density_out(storage_tex_write) + uniforms
-        let resolve_color_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("FluidSim ResolveColor BGL"),
-            entries: &[
-                bgl_storage_rw(0, wgpu::ShaderStages::COMPUTE),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: DENSITY_FORMAT,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                bgl_uniform(2, wgpu::ShaderStages::COMPUTE),
-            ],
-        });
-        let resolve_color_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("FluidSim ResolveColor Layout"),
-            bind_group_layouts: &[&resolve_color_bgl],
-            immediate_size: 0,
-        });
-        let resolve_color_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("FluidSim ResolveColor Pipeline"),
-            layout: Some(&resolve_color_layout),
-            module: &scatter_shader,
-            entry_point: Some("resolve_color_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
@@ -515,8 +427,6 @@ impl FluidSimulationGenerator {
                 bgl_uniform(0, wgpu::ShaderStages::FRAGMENT),
                 bgl_texture_filterable(1, wgpu::ShaderStages::FRAGMENT),
                 bgl_sampler(2, wgpu::ShaderStages::FRAGMENT),
-                bgl_texture_filterable(3, wgpu::ShaderStages::FRAGMENT),
-                bgl_sampler(4, wgpu::ShaderStages::FRAGMENT),
             ],
         });
         let display_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -531,8 +441,6 @@ impl FluidSimulationGenerator {
         // ── Uniform buffers ──
         let splat_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<SplatUniforms>(), "FluidSim Splat Uniforms");
         let resolve_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<ResolveUniforms>(), "FluidSim Resolve Uniforms");
-        let splat_color_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<SplatColorUniforms>(), "FluidSim SplatColor Uniforms");
-        let resolve_color_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<ResolveColorUniforms>(), "FluidSim ResolveColor Uniforms");
         let blur_uniform_bufs = std::array::from_fn(|i| {
             create_uniform_buffer(device, std::mem::size_of::<BlurUniforms>(), &format!("FluidSim Blur Uniforms {i}"))
         });
@@ -541,28 +449,11 @@ impl FluidSimulationGenerator {
         let seed_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<SeedUniforms>(), "FluidSim Seed Uniforms");
         let display_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<DisplayUniforms>(), "FluidSim Display Uniforms");
 
-        // ── White texture fallback for display pass (1×1 RGBA white) ──
-        let white_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("FluidSim White Fallback"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: DENSITY_FORMAT,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let white_view = white_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
         Self {
             splat_pipeline,
             splat_bgl,
             resolve_pipeline,
             resolve_bgl,
-            splat_color_pipeline,
-            splat_color_bgl,
-            resolve_color_pipeline,
-            resolve_color_bgl,
             simulate_pipeline,
             simulate_bgl,
             seed_pipeline,
@@ -576,23 +467,17 @@ impl FluidSimulationGenerator {
             display_bgl,
             particle_buffer: None,
             scatter_accum: None,
-            color_accum: None,
             density_rt: None,
             blur_density_rt: None,
             vector_field_rt: None,
             blur_temp_rt: None,
-            color_density_rt: None,
             splat_uniform_buf,
             resolve_uniform_buf,
-            splat_color_uniform_buf,
-            resolve_color_uniform_buf,
             blur_uniform_bufs,
             gradient_uniform_buf,
             sim_uniform_buf,
             seed_uniform_buf,
             display_uniform_buf,
-            _white_texture: white_texture,
-            white_view,
             sampler,
             active_count: 0,
             scatter_width: 0,
@@ -604,9 +489,10 @@ impl FluidSimulationGenerator {
             snap_envelope: 0.0,
             active_snap_mode: 0,
             last_color_mode: 0,
-            inject_zone_index: -1,
+            inject_active: false,
+            inject_point: [0.0; 2],
+            inject_color_counter: 0,
             inject_frames_remaining: 0,
-            next_inject_zone: 0,
         }
     }
 
@@ -658,8 +544,8 @@ impl FluidSimulationGenerator {
         self.scatter_width = sw;
         self.scatter_height = sh;
 
-        // Scatter accum: sw × sh × 4 bytes (atomic u32, scalar density)
-        let accum_size = (sw as u64) * (sh as u64) * 4;
+        // Scatter accum: sw × sh × 4 channels × 4 bytes (RGBA, 4 atomic u32 per texel)
+        let accum_size = (sw as u64) * (sh as u64) * 4 * 4;
         let scatter_accum = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("FluidSim Scatter Accum"),
             size: accum_size,
@@ -668,36 +554,21 @@ impl FluidSimulationGenerator {
         });
         queue.write_buffer(&scatter_accum, 0, &vec![0u8; accum_size as usize]);
 
-        // Color accum: sw × sh × 4 channels × 4 bytes (4 atomic u32 per texel)
-        let color_accum_size = (sw as u64) * (sh as u64) * 4 * 4;
-        let color_accum = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("FluidSim Color Accum"),
-            size: color_accum_size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&color_accum, 0, &vec![0u8; color_accum_size as usize]);
-
-        // Density RT: full scatter resolution
+        // Density RT: full scatter resolution (.r = density, .gba = pre-normalized hue)
         let density_rt = RenderTarget::new(device, sw, sh, DENSITY_FORMAT, "FluidSim Density");
 
-        // Blur + vector field RTs: quarter scatter resolution (PRE_SHRINK=4)
+        // Blur + vector field RTs: half scatter resolution (PRE_SHRINK=2)
         let bw = (sw / PRE_SHRINK).max(1);
         let bh = (sh / PRE_SHRINK).max(1);
         let blur_density_rt = RenderTarget::new(device, bw, bh, DENSITY_FORMAT, "FluidSim Blur Density");
         let vector_field_rt = RenderTarget::new(device, bw, bh, VECTOR_FORMAT, "FluidSim Vector Field");
         let blur_temp_rt = RenderTarget::new(device, bw, bh, VECTOR_FORMAT, "FluidSim Blur Temp");
 
-        // Color density RT: same resolution as scatter (bilinear sampling in display)
-        let color_density_rt = RenderTarget::new(device, sw, sh, DENSITY_FORMAT, "FluidSim Color Density");
-
         self.scatter_accum = Some(scatter_accum);
-        self.color_accum = Some(color_accum);
         self.density_rt = Some(density_rt);
         self.blur_density_rt = Some(blur_density_rt);
         self.vector_field_rt = Some(vector_field_rt);
         self.blur_temp_rt = Some(blur_temp_rt);
-        self.color_density_rt = Some(color_density_rt);
         self.frame_count = 0;
     }
 
@@ -877,11 +748,15 @@ impl Generator for FluidSimulationGenerator {
                     let pattern = (trigger_count as u32) % PATTERN_COUNT;
                     self.dispatch_seed(queue, encoder, device, pattern, trigger_count as u32, profiler);
                 } else if self.active_snap_mode == 4 {
-                    // Mode 4: inject zone (only when color mode is active)
+                    // Mode 4: inject at random point (only when color mode is active)
                     if color_mode > 0 {
-                        self.inject_zone_index = self.next_inject_zone;
+                        self.inject_active = true;
+                        self.inject_point = random_inject_uv(
+                            trigger_count as u32,
+                            self.frame_count,
+                        );
+                        self.inject_color_counter = (self.inject_color_counter + 1) % 4;
                         self.inject_frames_remaining = INJECT_FRAMES_PER_ZONE;
-                        self.next_inject_zone = (self.next_inject_zone + 1) % 4;
                     }
                 }
             }
@@ -915,29 +790,27 @@ impl Generator for FluidSimulationGenerator {
         }
 
         // --- Color mode transition: reset injection state ---
-        // Unity: if colorMode == 0 && lastColorMode > 0 -> reset inject state
         if color_mode == 0 && self.last_color_mode > 0 {
-            self.inject_zone_index = -1;
+            self.inject_active = false;
             self.inject_frames_remaining = 0;
-            self.next_inject_zone = 0;
+            self.inject_color_counter = 0;
         }
         self.last_color_mode = color_mode;
 
         // --- Advance injection state machine ---
-        // Unity: injectFramesRemaining--; if <= 0 -> injectZoneIndex = -1
-        if self.inject_zone_index >= 0 {
+        if self.inject_active {
             self.inject_frames_remaining -= 1;
             if self.inject_frames_remaining <= 0 {
-                self.inject_zone_index = -1;
+                self.inject_active = false;
             }
         }
 
-        let inject_phase = if self.inject_zone_index >= 0 {
+        let inject_phase = if self.inject_active {
             1.0 - (self.inject_frames_remaining as f32 / INJECT_FRAMES_PER_ZONE as f32)
         } else {
             0.0
         };
-        let active_inject_force = if self.inject_zone_index >= 0 { inject_force } else { 0.0 };
+        let active_inject_force = if self.inject_active { inject_force } else { 0.0 };
 
         // --- Pre-computed energy for scatter (avoids shader float imprecision) ---
         // Unity: energy = 0.005 * splatSize/3 * (1_000_000/activeCount)
@@ -953,6 +826,10 @@ impl Generator for FluidSimulationGenerator {
             width: sw,
             height: sh,
             scaled_energy,
+            color_mode: color_mode as u32,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         queue.write_buffer(&self.splat_uniform_buf, 0, bytemuck::bytes_of(&splat_uniforms));
 
@@ -1006,74 +883,6 @@ impl Generator for FluidSimulationGenerator {
             pass.set_pipeline(&self.resolve_pipeline);
             pass.set_bind_group(0, &resolve_bg, &[]);
             pass.dispatch_workgroups(sw.div_ceil(16), sh.div_ceil(16), 1);
-        }
-
-        // ================================================================
-        // PHASE 1B: Color scatter (parallel to scalar, only when color_mode > 0)
-        // Unity: DispatchColorScatter — SplatColorKernel + ResolveColorKernel
-        // ================================================================
-
-        if color_mode > 0 {
-            // Clear color accum before splat
-            let color_accum = self.color_accum.as_ref().unwrap();
-            encoder.clear_buffer(color_accum, 0, None);
-
-            let splat_color_uniforms = SplatColorUniforms {
-                active_count,
-                width: sw,
-                height: sh,
-                scaled_energy,
-                color_mode: color_mode as u32,
-                _pad0: 0,
-                _pad1: 0,
-                _pad2: 0,
-            };
-            queue.write_buffer(&self.splat_color_uniform_buf, 0, bytemuck::bytes_of(&splat_color_uniforms));
-
-            let color_accum = self.color_accum.as_ref().unwrap();
-            let splat_color_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("FluidSim SplatColor BG"),
-                layout: &self.splat_color_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: particle_buffer.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: color_accum.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: self.splat_color_uniform_buf.as_entire_binding() },
-                ],
-            });
-            {
-                let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim SplatColor", sw, sh));
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("FluidSim SplatColor Pass"),
-                    timestamp_writes: ts,
-                });
-                pass.set_pipeline(&self.splat_color_pipeline);
-                pass.set_bind_group(0, &splat_color_bg, &[]);
-                pass.dispatch_workgroups(active_count.div_ceil(256), 1, 1);
-            }
-
-            let resolve_color_uniforms = ResolveColorUniforms { width: sw, height: sh, _pad0: 0, _pad1: 0 };
-            queue.write_buffer(&self.resolve_color_uniform_buf, 0, bytemuck::bytes_of(&resolve_color_uniforms));
-
-            let color_density_rt = self.color_density_rt.as_ref().unwrap();
-            let resolve_color_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("FluidSim ResolveColor BG"),
-                layout: &self.resolve_color_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: color_accum.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&color_density_rt.view) },
-                    wgpu::BindGroupEntry { binding: 2, resource: self.resolve_color_uniform_buf.as_entire_binding() },
-                ],
-            });
-            {
-                let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim ResolveColor", sw, sh));
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("FluidSim ResolveColor Pass"),
-                    timestamp_writes: ts,
-                });
-                pass.set_pipeline(&self.resolve_color_pipeline);
-                pass.set_bind_group(0, &resolve_color_bg, &[]);
-                pass.dispatch_workgroups(sw.div_ceil(16), sh.div_ceil(16), 1);
-            }
         }
 
         // ================================================================
@@ -1193,11 +1002,15 @@ impl Generator for FluidSimulationGenerator {
             density_refresh_scale: density_refresh,
             color_mode: color_mode as u32,
             frame_count: self.frame_count,
-            inject_index: self.inject_zone_index,
+            inject_point_x: if self.inject_active { self.inject_point[0] } else { 0.0 },
+            inject_point_y: if self.inject_active { self.inject_point[1] } else { 0.0 },
             inject_force: active_inject_force,
             inject_phase,
             time_val: ctx.time,
-            _pad: 0.0,
+            inject_color_index: self.inject_color_counter + 1,
+            _pad0: 0,
+            _pad1: 0,
+            _pad2: 0,
         };
         queue.write_buffer(&self.sim_uniform_buf, 0, bytemuck::bytes_of(&sim_uniforms));
 
@@ -1251,13 +1064,6 @@ impl Generator for FluidSimulationGenerator {
 
         let density_rt = self.density_rt.as_ref().unwrap();
 
-        // Color texture: use color_density_rt when color_mode > 0, else white fallback
-        let color_view: &wgpu::TextureView = if color_mode > 0 {
-            &self.color_density_rt.as_ref().unwrap().view
-        } else {
-            &self.white_view
-        };
-
         let display_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim Display BG"),
             layout: &self.display_bgl,
@@ -1265,8 +1071,6 @@ impl Generator for FluidSimulationGenerator {
                 wgpu::BindGroupEntry { binding: 0, resource: self.display_uniform_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&density_rt.view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(color_view) },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.sampler) },
             ],
         });
         {
@@ -1306,6 +1110,20 @@ impl Generator for FluidSimulationGenerator {
 }
 
 // ── Helpers ──
+
+/// Generate a random UV injection point from trigger count + frame count.
+/// Wang hash for good distribution; 10% edge margin to keep bursts visible.
+fn random_inject_uv(trigger: u32, frame: u32) -> [f32; 2] {
+    let seed = trigger.wrapping_mul(747796405).wrapping_add(frame);
+    let mut s = (seed ^ 61) ^ (seed >> 16);
+    s = s.wrapping_mul(9);
+    s = s ^ (s >> 4);
+    s = s.wrapping_mul(0x27d4eb2d);
+    s = s ^ (s >> 15);
+    let x = (s & 0xFFFF) as f32 / 65535.0;
+    let y = ((s >> 16) & 0xFFFF) as f32 / 65535.0;
+    [0.1 + x * 0.8, 0.1 + y * 0.8]
+}
 
 fn bgl_uniform(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {

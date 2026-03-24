@@ -21,11 +21,17 @@ struct SimUniforms {
     density_refresh_scale: f32,
     color_mode: u32,
     frame_count: u32,
-    inject_index: i32,
+    // injection point UV (random per trigger, from host)
+    inject_point_x: f32,
+    inject_point_y: f32,
     inject_force: f32,
     inject_phase: f32,
     time_val: f32,
-    _pad: f32,
+    // color index for injection (1-4 cycling)
+    inject_color_index: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
 };
 
 struct Particle {
@@ -45,9 +51,6 @@ struct Particle {
 
 const PI: f32 = 3.14159265;
 
-// 4 fixed injection zone positions in UV space (matches Unity INJECT_POINTS)
-const INJECT_POINTS_X: array<f32, 4> = array<f32, 4>(0.5, 0.8, 0.5, 0.2);
-const INJECT_POINTS_Y: array<f32, 4> = array<f32, 4>(0.2, 0.5, 0.8, 0.5);
 const INJECT_COLOR_RADIUS: f32 = 0.04;
 const INJECT_FORCE_RADIUS: f32 = 0.25;
 
@@ -183,9 +186,10 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     p.position = vec3<f32>(fract(current_uv + force * params.speed + 1.0), 0.0);
 
     // 7. Injection disturbance (applied AFTER integration)
-    if params.inject_index >= 0 {
-        let zone = u32(params.inject_index);
-        let inject_pt = vec2<f32>(INJECT_POINTS_X[zone], INJECT_POINTS_Y[zone]);
+    //    Injection point is a random UV passed from host (was fixed 4-point array).
+    //    inject_force > 0 signals active injection.
+    if params.inject_force > 0.0 {
+        let inject_pt = vec2<f32>(params.inject_point_x, params.inject_point_y);
         let pos = p.position.xy;
         let delta = pos - inject_pt;
         let dist2 = dot(delta, delta);
@@ -225,7 +229,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let color_r = INJECT_COLOR_RADIUS;
             let d = p.position.xy - inject_pt;
             if dot(d, d) < color_r * color_r {
-                p.age = f32(params.inject_index + 1);
+                p.age = f32(params.inject_color_index);
             }
         }
     }
