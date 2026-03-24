@@ -1,9 +1,9 @@
 {
   "metadata": {
-    "last_updated": "2026-03-24",
+    "last_updated": "2026-03-25",
     "audit_source": "docs/DEFINITIVE_PARITY_AUDIT.md",
     "audit_date": "2026-03-17",
-    "true_functional_completion_pct": 68,
+    "true_functional_completion_pct": 72,
     "notes": "Generated from Section 25 of the Definitive Parity Audit. Gap IDs reference audit sections for full context. GAP-AUDIO pipeline batch 2026-03-19: Ported entire percussion/audio import pipeline (8 gaps, ~3900 LOC). GAP-INFRA-1 ExternalProcessRunner (process_runner.rs). GAP-AUDIO-1 PercussionAnalysisModels (percussion_analysis.rs + percussion_settings.rs + percussion_binding.rs in manifold-core). GAP-AUDIO-2 PercussionAnalysisParser (percussion_parser.rs). GAP-AUDIO-6 PercussionPipelineBackendResolver (percussion_backend.rs). GAP-AUDIO-3 PercussionTimelinePlanner + PercussionImportService (percussion_planner.rs + percussion_import.rs). GAP-AUDIO-5 MidiFileParser + MidiImportService (midi_parser.rs + midi_import.rs). GAP-AUDIO-4 PercussionImportOrchestrator (percussion_orchestrator.rs). GAP-AUDIO-8 PercussionAlignmentService (percussion_alignment.rs). All in manifold-playback except core types. 2026-03-21 bug fix + wiring pass: Fixed CursorLeft drag cancel, undo/redo sync dirty, NaN panics (4 sites), region-aware selection for all keyboard shortcuts. Wired effect/gen param text input commit, browser paste button, effect group/ungroup shortcuts, MIDI import context menu, recording provenance in LiveClipManager. Eliminated ~90 compiler warnings. Deleted dead code across 6 files."
   },
   "subsystems": {
@@ -185,9 +185,9 @@
       "title": "Implement video file drag-and-drop",
       "severity": "critical",
       "est_loc": 150,
-      "status": "todo",
-      "commit": null,
-      "notes": "All video extensions log a message and do nothing. No clip creation, no library import."
+      "status": "done",
+      "commit": "ebaa01d",
+      "notes": "Video drag-drop and Cmd+I import share import_video_files() helper. Non-blocking: metadata probe (AVAsset) runs on background thread, commands sent to content thread via crossbeam channel. UI picks up new clips via project_snapshot sync. Supports .mp4, .mov, .webm, .avi. Clips placed at playhead on active layer with duration calculated from video metadata."
     },
     {
       "number": 11,
@@ -534,8 +534,8 @@
       "severity": "medium",
       "est_loc": 1000,
       "status": "done",
-      "commit": "d754eb0",
-      "notes": "manifold-media crate: native Metal encoder (SDR H.264), ExportSession, AudioMuxer (FFmpeg post-mux), Cmd+E shortcut. HDR HEVC architecture ready but not yet wired."
+      "commit": "1e8c8ce",
+      "notes": "manifold-media crate: native Metal encoder (SDR H.264 50Mbps + HDR HEVC 10-bit 100Mbps BT.2020/PQ), ExportSession, AudioMuxer (FFmpeg 256k AAC post-mux). SDR export applies linear→sRGB gamma in Metal compute shader. HDR export uses PqEncoder pass (EDR→ST.2084 PQ). Y-flip removed (wgpu top-left origin matches video encoding). Export button in transport bar with native file save dialog. I/O markers for export range."
     },
     {
       "number": 39,
@@ -632,6 +632,30 @@
       "status": "done",
       "commit": null,
       "notes": "All 5 verified: (1) seconds_per_beat_from_bpm — already had clamp(20,300). (2) overlaps_with — FIXED: added layer_index guard matching Unity. (3) ensure_base_values — already checks is_none OR length mismatch. (4) change_generator_type — FIXED: added LayerType::Generator guard + update_clip_generator_types() propagation; also fixed restore_generator_state. (5) BeatQuantizer negative sentinel — already fixed (negative values returned as-is)."
+    },
+    {
+      "number": 47,
+      "id": "GAP-MEDIA-1",
+      "tier": 1,
+      "subsystem": "media",
+      "title": "Native video decode and playback (VideoRenderer)",
+      "severity": "critical",
+      "est_loc": 2000,
+      "status": "done",
+      "commit": "7f274d0",
+      "notes": "Rust-native implementation (not porting Unity VideoPlayer). AVAssetReader + VideoToolbox hardware decode on macOS. Metal compute NV12→Rgba16Float copy. Decode thread pool (4 workers) with affinity routing. VideoRenderer implements ClipRenderer. Frame pacing at video FPS with time accumulator. Seek coalescing (queue latest target when decode pending). Frame-skip via Seek for extreme playback rates (>3x). Drift correction with 0.1s threshold. Playback rate sync (timeline BPM / recorded BPM). Duration clamping wired via get_max_duration_beats(). Non-blocking import (background thread probe). Scrubbing: seek_active_clips() called from seek_to() and tick_non_playing()."
+    },
+    {
+      "number": 48,
+      "id": "GAP-MEDIA-2",
+      "tier": 2,
+      "subsystem": "media",
+      "title": "EDR passthrough tonemap mode for HDR displays",
+      "severity": "medium",
+      "est_loc": 30,
+      "status": "done",
+      "commit": "c608b0c",
+      "notes": "Rust improvement (not Unity parity). Mode 3 in aces_tonemap.wgsl: bypasses ACES filmic curve, passes linear values directly to macOS EDR. Soft-clip knee at 80% of display peak prevents hard clipping. Live HDR preview now matches export quality. SDR displays unchanged (mode 0). Also fixed SDR export: sRGB gamma encoding in Metal encoder compute shader (1e8c8ce), Y-flip removal (71feca7), rerun-if-changed for native .m files (9feda4a)."
     }
   ]
 }
