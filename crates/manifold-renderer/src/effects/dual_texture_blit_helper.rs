@@ -15,6 +15,14 @@ use std::cell::Cell;
 const RING_SLOTS: u64 = 64;
 const UNIFORM_OFFSET_ALIGN: u64 = 256;
 
+/// Cached bind group keyed by main + secondary texture view pointers.
+/// Reused across frames when the same textures are bound (common case).
+struct CachedBG {
+    bind_group: wgpu::BindGroup,
+    main_ptr: usize,
+    secondary_ptr: usize,
+}
+
 pub struct DualTextureBlitHelper {
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
@@ -25,6 +33,7 @@ pub struct DualTextureBlitHelper {
     ring_index: Cell<u64>,
     /// 1x1 placeholder bound as secondary_tex when it's not read.
     pub dummy_view: wgpu::TextureView,
+    cached: Option<CachedBG>,
 }
 
 impl DualTextureBlitHelper {
@@ -47,14 +56,14 @@ impl DualTextureBlitHelper {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some(&format!("{label} BGL")),
             entries: &[
-                // binding 0: uniforms
+                // binding 0: uniforms (dynamic offset for bind group caching)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                        has_dynamic_offset: true,
+                        min_binding_size: std::num::NonZero::new(uniform_size),
                     },
                     count: None,
                 },
@@ -163,14 +172,164 @@ impl DualTextureBlitHelper {
             slot_stride,
             ring_index: Cell::new(0),
             dummy_view,
+            cached: None,
+        }
+    }
+
+    /// Ensure the cached bind group is valid for the given main/secondary views.
+    /// Uses dynamic uniform offset so the bind group can be reused across
+    /// frames when the same textures are bound (saves ~10us per call).
+    fn ensure_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        main_view: &wgpu::TextureView,
+        secondary_view: &wgpu::TextureView,
+        label: &str,
+    ) {
+        let main_ptr = std::ptr::from_ref(main_view) as usize;
+        let sec_ptr = std::ptr::from_ref(secondary_view) as usize;
+
+        let needs_recreate = match &self.cached {
+            Some(c) => c.main_ptr != main_ptr || c.secondary_ptr != sec_ptr,
+            None => true,
+        };
+
+        if needs_recreate {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &self.ring_buffer,
+                            offset: 0,
+                            size: std::num::NonZero::new(self.uniform_size),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(main_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(secondary_view),
+                    },
+                ],
+            });
+            self.cached = Some(CachedBG {
+                bind_group,
+                main_ptr,
+                secondary_ptr: sec_ptr,
+            });
+        }
+    }
+
+    /// Execute a fullscreen pass reading only the main texture.
+    /// Binds the internal 1x1 dummy as the secondary texture.
+    ///
+    /// Use this instead of `draw(..., &self.dummy_view, ...)` to avoid
+    /// borrow conflicts (`&mut self` + `&self.dummy_view` on the same helper).
+    pub fn draw_main_only(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        main_view: &wgpu::TextureView,
+        target_view: &wgpu::TextureView,
+        uniform_bytes: &[u8],
+        label: &str,
+        width: u32,
+        height: u32,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
+    ) {
+        let slot = self.ring_index.get() % RING_SLOTS;
+        self.ring_index.set(self.ring_index.get() + 1);
+        let byte_offset = slot * self.slot_stride;
+
+        queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
+
+        // Inline ensure_bind_group with split borrows — avoids &mut self +
+        // &self.dummy_view conflict that would occur if calling draw_inner.
+        let main_ptr = std::ptr::from_ref(main_view) as usize;
+        let sec_ptr = std::ptr::from_ref(&self.dummy_view) as usize;
+
+        let needs_recreate = match &self.cached {
+            Some(c) => c.main_ptr != main_ptr || c.secondary_ptr != sec_ptr,
+            None => true,
+        };
+
+        if needs_recreate {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &self.ring_buffer,
+                            offset: 0,
+                            size: std::num::NonZero::new(self.uniform_size),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(main_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&self.dummy_view),
+                    },
+                ],
+            });
+            self.cached = Some(CachedBG {
+                bind_group,
+                main_ptr,
+                secondary_ptr: sec_ptr,
+            });
+        }
+
+        {
+            let ts = profiler.and_then(|p| p.render_timestamps(label, width, height));
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: ts,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(
+                0,
+                &self.cached.as_ref().unwrap().bind_group,
+                &[byte_offset as u32],
+            );
+            pass.draw(0..3, 0..1);
         }
     }
 
     /// Execute a fullscreen pass reading two textures.
     ///
-    /// For passes that don't read the secondary texture, pass `&self.dummy_view`.
+    /// For passes that don't read the secondary texture, use `draw_main_only`.
     pub fn draw(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
@@ -193,7 +352,7 @@ impl DualTextureBlitHelper {
     /// NOT written back to VRAM after the pass. Use for intermediate render
     /// targets that will be immediately overwritten or only read once.
     pub fn draw_discard(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
@@ -214,7 +373,7 @@ impl DualTextureBlitHelper {
 
     #[allow(clippy::too_many_arguments)]
     fn draw_inner(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
@@ -234,32 +393,9 @@ impl DualTextureBlitHelper {
 
         queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(label),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.ring_buffer,
-                        offset: byte_offset,
-                        size: std::num::NonZero::new(self.uniform_size),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(main_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(secondary_view),
-                },
-            ],
-        });
+        // Update cached bind group if textures changed (mutation done before
+        // the render pass borrow to satisfy the borrow checker).
+        self.ensure_bind_group(device, main_view, secondary_view, label);
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps(label, width, height));
@@ -280,7 +416,11 @@ impl DualTextureBlitHelper {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
+            pass.set_bind_group(
+                0,
+                &self.cached.as_ref().unwrap().bind_group,
+                &[byte_offset as u32],
+            );
             pass.draw(0..3, 0..1);
         }
     }

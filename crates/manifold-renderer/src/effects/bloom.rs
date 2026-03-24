@@ -125,9 +125,9 @@ impl PostProcessEffect for BloomFX {
 
         let state = self.states.get(&ctx.owner_key).unwrap();
         if state.count == 0 {
-            self.helper.draw(
+            self.helper.draw_main_only(
                 device, queue, encoder,
-                source, &self.helper.dummy_view, target,
+                source, target,
                 bytemuck::bytes_of(&BloomUniforms {
                     mode: 3, threshold: 0.0, knee: 0.0, intensity: 0.0,
                     radius_scale: 1.0, combine_weight: 0.0,
@@ -161,9 +161,9 @@ impl PostProcessEffect for BloomFX {
         };
 
         // Pass 0: Prefilter
-        self.helper.draw(
+        self.helper.draw_main_only(
             device, queue, encoder,
-            source, &self.helper.dummy_view, &state.mips_a[0].view,
+            source, &state.mips_a[0].view,
             bytemuck::bytes_of(&BloomUniforms {
                 mode: 0,
                 main_texel_size_x: 1.0 / ctx.width as f32,
@@ -179,9 +179,9 @@ impl PostProcessEffect for BloomFX {
         for i in 1..used_levels {
             let src_w = state.mips_a[i - 1].width;
             let src_h = state.mips_a[i - 1].height;
-            self.helper.draw(
+            self.helper.draw_main_only(
                 device, queue, encoder,
-                &state.mips_a[i - 1].view, &self.helper.dummy_view, &state.mips_a[i].view,
+                &state.mips_a[i - 1].view, &state.mips_a[i].view,
                 bytemuck::bytes_of(&BloomUniforms {
                     mode: 1,
                     main_texel_size_x: 1.0 / src_w as f32,

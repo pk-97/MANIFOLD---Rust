@@ -18,6 +18,14 @@ use std::cell::Cell;
 const RING_SLOTS: u64 = 64;
 const UNIFORM_OFFSET_ALIGN: u64 = 256;
 
+/// Cached bind group keyed by source/target texture view pointers.
+/// Reused across frames when the same textures are bound (common case).
+struct CachedBG {
+    bind_group: wgpu::BindGroup,
+    source_ptr: usize,
+    target_ptr: usize,
+}
+
 pub struct ComputeBlitHelper {
     pub pipeline: wgpu::ComputePipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
@@ -26,6 +34,7 @@ pub struct ComputeBlitHelper {
     uniform_size: u64,
     slot_stride: u64,
     ring_index: Cell<u64>,
+    cached: Option<CachedBG>,
 }
 
 impl ComputeBlitHelper {
@@ -51,14 +60,14 @@ impl ComputeBlitHelper {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some(&format!("{label} Compute BGL")),
             entries: &[
-                // binding 0: uniforms
+                // binding 0: uniforms (dynamic offset for bind group caching)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                        has_dynamic_offset: true,
+                        min_binding_size: std::num::NonZero::new(uniform_size),
                     },
                     count: None,
                 },
@@ -133,6 +142,60 @@ impl ComputeBlitHelper {
             uniform_size,
             slot_stride,
             ring_index: Cell::new(0),
+            cached: None,
+        }
+    }
+
+    /// Ensure the cached bind group is valid for the given source/target views.
+    /// Uses dynamic uniform offset so the bind group can be reused across
+    /// frames when the same textures are bound (saves ~10μs per call).
+    fn ensure_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        source_view: &wgpu::TextureView,
+        target_view: &wgpu::TextureView,
+        label: &str,
+    ) {
+        let src_ptr = std::ptr::from_ref(source_view) as usize;
+        let tgt_ptr = std::ptr::from_ref(target_view) as usize;
+
+        let needs_recreate = match &self.cached {
+            Some(c) => c.source_ptr != src_ptr || c.target_ptr != tgt_ptr,
+            None => true,
+        };
+
+        if needs_recreate {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: &self.ring_buffer,
+                            offset: 0,
+                            size: std::num::NonZero::new(self.uniform_size),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(source_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(target_view),
+                    },
+                ],
+            });
+            self.cached = Some(CachedBG {
+                bind_group,
+                source_ptr: src_ptr,
+                target_ptr: tgt_ptr,
+            });
         }
     }
 
@@ -140,7 +203,7 @@ impl ComputeBlitHelper {
     /// Dispatches ceil(width/16) x ceil(height/16) workgroups of 16x16 threads.
     #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
@@ -158,46 +221,25 @@ impl ComputeBlitHelper {
 
         queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(label),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.ring_buffer,
-                        offset: byte_offset,
-                        size: std::num::NonZero::new(self.uniform_size),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(source_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(target_view),
-                },
-            ],
-        });
+        // Update cached bind group if textures changed (mutation done before
+        // the compute pass borrow to satisfy the borrow checker).
+        self.ensure_bind_group(device, source_view, target_view, label);
 
-        {
-            let ts = profiler.and_then(|p| p.compute_timestamps(label, width, height));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some(label),
-                timestamp_writes: ts,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(
-                width.div_ceil(16),
-                height.div_ceil(16),
-                1,
-            );
-        }
+        let ts = profiler.and_then(|p| p.compute_timestamps(label, width, height));
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some(label),
+            timestamp_writes: ts,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(
+            0,
+            &self.cached.as_ref().unwrap().bind_group,
+            &[byte_offset as u32],
+        );
+        pass.dispatch_workgroups(
+            width.div_ceil(16),
+            height.div_ceil(16),
+            1,
+        );
     }
 }

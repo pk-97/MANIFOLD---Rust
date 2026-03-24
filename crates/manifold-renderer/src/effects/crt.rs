@@ -116,10 +116,9 @@ impl PostProcessEffect for CrtFX {
         // ── Pass 0: Prefilter — source → halfRes ──────────────────────────────
         // CrtFX.cs line 66: Graphics.Blit(buffer, state.halfRes, material, 0)
         // _MainTex_TexelSize = 1/source_width, 1/source_height (Unity auto-sets from SOURCE)
-        self.helper.draw(
+        self.helper.draw_main_only(
             device, queue, encoder,
             source,                       // main_tex = buffer (source)
-            &self.helper.dummy_view,      // glow_tex = dummy (not read in mode 0)
             &state.half_res.view,         // target = halfRes
             bytemuck::bytes_of(&CrtUniforms {
                 mode: 0,
@@ -146,10 +145,9 @@ impl PostProcessEffect for CrtFX {
         let hw = state.half_res.width;
         let hh = state.half_res.height;
         let qw = state.quarter_res.width;
-        self.helper.draw(
+        self.helper.draw_main_only(
             device, queue, encoder,
             &state.half_res.view,         // main_tex = halfRes
-            &self.helper.dummy_view,      // glow_tex = dummy (not read in mode 1)
             &state.quarter_res.view,      // target = quarterRes
             bytemuck::bytes_of(&CrtUniforms {
                 mode: 1,

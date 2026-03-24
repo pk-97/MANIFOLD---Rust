@@ -149,10 +149,9 @@ impl PostProcessEffect for HalationFX {
         let qh = state.buf_a.height;
 
         // Pass 0: ThresholdTint — source (full-res) → buf_a (quarter-res)
-        self.helper.draw(
+        self.helper.draw_main_only(
             device, queue, encoder,
             source,
-            &self.helper.dummy_view,
             &state.buf_a.view,
             bytemuck::bytes_of(&HalationUniforms {
                 mode: 0,
@@ -166,10 +165,9 @@ impl PostProcessEffect for HalationFX {
         );
 
         // Pass 1: Horizontal Gaussian blur — buf_a → buf_b (quarter-res)
-        self.helper.draw(
+        self.helper.draw_main_only(
             device, queue, encoder,
             &state.buf_a.view,
-            &self.helper.dummy_view,
             &state.buf_b.view,
             bytemuck::bytes_of(&HalationUniforms {
                 mode: 1,
@@ -183,10 +181,9 @@ impl PostProcessEffect for HalationFX {
         );
 
         // Pass 2: Vertical Gaussian blur — buf_b → buf_a (quarter-res)
-        self.helper.draw(
+        self.helper.draw_main_only(
             device, queue, encoder,
             &state.buf_b.view,
-            &self.helper.dummy_view,
             &state.buf_a.view,
             bytemuck::bytes_of(&HalationUniforms {
                 mode: 2,
