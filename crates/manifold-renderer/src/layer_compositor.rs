@@ -7,6 +7,7 @@ use crate::effect_chain::EffectChain;
 use crate::effect_registry::EffectRegistry;
 use crate::render_target::RenderTarget;
 use crate::tonemap::TonemapPipeline;
+use crate::uniform_arena::UniformArena;
 use crate::wet_dry_lerp::WetDryLerpPipeline;
 use crate::compositor::{Compositor, CompositorFrame};
 
@@ -42,9 +43,6 @@ struct BlendUniforms {
 
 const _: () = assert!(std::mem::size_of::<BlendUniforms>() == 32);
 
-/// Initial capacity for the blend uniform ring buffer (grows dynamically).
-const INITIAL_BLEND_SLOTS: u32 = 32;
-
 /// Shared GPU resources for blend operations. Extracted from the compositor
 /// so they can be borrowed independently from ping-pong buffers.
 ///
@@ -61,15 +59,6 @@ struct BlendResources {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    uniform_buffer: wgpu::Buffer,
-    /// Alignment-padded stride per slot (>= minUniformBufferOffsetAlignment).
-    slot_stride: u32,
-    /// Number of slots currently allocated in the buffer.
-    capacity: u32,
-    /// Next slot index for the current frame.
-    next_slot: u32,
-    /// High-water mark from the previous frame (used to grow the buffer).
-    prev_frame_slots: u32,
     /// Compositor width/height — needed for dispatch_workgroups.
     width: u32,
     height: u32,
@@ -165,73 +154,27 @@ impl BlendResources {
             ..Default::default()
         });
 
-        let min_align = device.limits().min_uniform_buffer_offset_alignment;
-        let raw = std::mem::size_of::<BlendUniforms>() as u32;
-        let slot_stride = raw.div_ceil(min_align) * min_align;
-
-        let capacity = INITIAL_BLEND_SLOTS;
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Blend Uniforms Ring"),
-            size: (slot_stride * capacity) as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         Self {
-            pipeline, bind_group_layout, sampler, uniform_buffer,
-            slot_stride, capacity, next_slot: 0, prev_frame_slots: 0,
+            pipeline, bind_group_layout, sampler,
             width, height,
         }
     }
 
-    /// Reset the ring buffer for a new frame. Grows the buffer if the
-    /// previous frame needed more slots than currently allocated.
-    fn reset_slots(&mut self, device: &wgpu::Device) {
-        self.prev_frame_slots = self.next_slot;
-        self.next_slot = 0;
-
-        if self.prev_frame_slots > self.capacity {
-            // Double capacity to amortize growth (minimum: what we actually needed)
-            self.capacity = (self.capacity * 2).max(self.prev_frame_slots);
-            self.uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Blend Uniforms Ring"),
-                size: (self.slot_stride * self.capacity) as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-    }
-
     /// Execute a compute blend: reads source + blend textures, writes to target storage texture.
-    /// Each call writes to a unique slot in the ring buffer so multiple blend
-    /// passes within a single frame each read their own uniforms.
+    /// Pushes uniforms into the shared arena (flushed once per frame) instead of
+    /// calling queue.write_buffer per pass — reduces wgpu staging overhead.
     fn blend_pass(
-        &mut self,
+        &self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
+        arena: &mut UniformArena,
         source_view: &wgpu::TextureView,
         blend_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
         uniforms: &BlendUniforms,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        let slot = self.next_slot;
-        self.next_slot += 1;
-
-        // Grow buffer mid-frame if capacity exceeded
-        if slot >= self.capacity {
-            self.capacity = (self.capacity * 2).max(slot + 1);
-            self.uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Blend Uniforms Ring"),
-                size: (self.slot_stride * self.capacity) as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-
-        let offset = (slot * self.slot_stride) as u64;
-        queue.write_buffer(&self.uniform_buffer, offset, bytemuck::bytes_of(uniforms));
+        let offset = arena.push(uniforms);
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Blend Compute BG"),
@@ -240,9 +183,11 @@ impl BlendResources {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.uniform_buffer,
+                        buffer: arena.buffer(),
                         offset: 0,
-                        size: wgpu::BufferSize::new(self.slot_stride as u64),
+                        size: wgpu::BufferSize::new(
+                            std::mem::size_of::<BlendUniforms>() as u64,
+                        ),
                     }),
                 },
                 wgpu::BindGroupEntry {
@@ -264,20 +209,18 @@ impl BlendResources {
             ],
         });
 
-        {
-            let ts = profiler.and_then(|p| p.compute_timestamps("Blend Pass", self.width, self.height));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Blend Pass"),
-                timestamp_writes: ts,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[offset as u32]);
-            pass.dispatch_workgroups(
-                self.width.div_ceil(16),
-                self.height.div_ceil(16),
-                1,
-            );
-        }
+        let ts = profiler.and_then(|p| p.compute_timestamps("Blend Pass", self.width, self.height));
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Blend Pass"),
+            timestamp_writes: ts,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &bind_group, &[offset as u32]);
+        pass.dispatch_workgroups(
+            self.width.div_ceil(16),
+            self.height.div_ceil(16),
+            1,
+        );
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -401,6 +344,9 @@ pub struct LayerCompositor {
     layer_buf: Option<PingPong>,
     /// GPU resources for blend operations (pipeline, sampler, uniforms).
     blend: BlendResources,
+    /// Per-frame uniform sub-allocator — batches all blend uniform writes into
+    /// a single `queue.write_buffer()` call, reducing wgpu staging overhead.
+    uniform_arena: UniformArena,
     /// Effect chain processor (owns its own ping-pong for effect processing).
     effect_chain: EffectChain,
     /// Registry of all effect processors.
@@ -422,6 +368,7 @@ impl LayerCompositor {
             main: PingPong::new(device, width, height, "Compositor"),
             layer_buf: None,
             blend: BlendResources::new(device, width, height),
+            uniform_arena: UniformArena::new(device),
             effect_chain: EffectChain::new(),
             effect_registry: EffectRegistry::new(device, queue),
             wet_dry_lerp: WetDryLerpPipeline::new(device),
@@ -488,8 +435,9 @@ impl LayerCompositor {
         let height = self.main.height();
         let aspect = width as f32 / height as f32;
 
-        // Reset blend uniform ring buffer for this frame
-        self.blend.reset_slots(device);
+        // Reset uniform arena for this frame — all blend uniform writes
+        // will be batched into a single queue.write_buffer at frame end.
+        self.uniform_arena.reset();
 
         // Clear main to opaque black
         self.main.clear_source(encoder, true);
@@ -570,7 +518,7 @@ impl LayerCompositor {
                 };
 
                 self.blend.blend_pass(
-                    device, queue, encoder,
+                    device, encoder, &mut self.uniform_arena,
                     self.main.source_view(),
                     effective_blend_view,
                     self.main.target_view(),
@@ -624,7 +572,7 @@ impl LayerCompositor {
                     };
 
                     self.blend.blend_pass(
-                        device, queue, encoder,
+                        device, encoder, &mut self.uniform_arena,
                         layer_buf.source_view(),
                         effective_blend_view,
                         layer_buf.target_view(),
@@ -677,7 +625,7 @@ impl LayerCompositor {
                 };
 
                 self.blend.blend_pass(
-                    device, queue, encoder,
+                    device, encoder, &mut self.uniform_arena,
                     self.main.source_view(),
                     effective_layer_view,
                     self.main.target_view(),
@@ -814,6 +762,9 @@ impl Compositor for LayerCompositor {
                 );
             }
         }
+
+        // Flush all accumulated blend uniforms to the GPU in a single write.
+        self.uniform_arena.flush(device, queue);
 
         &self.tonemap.output.view
     }
