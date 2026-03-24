@@ -1603,6 +1603,11 @@ impl ApplicationHandler for Application {
                             self.open_project();
                             consumed = true;
                         }
+                        // ── Import Video: Cmd+I ──
+                        Key::Character(c) if c.as_str() == "i" && m.is_command_only() => {
+                            self.import_video_clip();
+                            consumed = true;
+                        }
                         // ── New: Cmd+N ──
                         Key::Character(c) if c.as_str() == "n" && m.is_command_only() => {
                             let project = Self::create_default_project();

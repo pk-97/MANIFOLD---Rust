@@ -115,6 +115,128 @@ impl Application {
         self.send_content_cmd(ContentCommand::StartExport(Box::new(config)));
     }
 
+    /// Import a video file and place it on the timeline at the current playhead.
+    /// Opens a native file dialog, probes metadata, adds to VideoLibrary, and
+    /// creates a TimelineClip at the playhead beat on the active layer.
+    pub(crate) fn import_video_clip(&mut self) {
+        self.send_content_cmd(ContentCommand::PauseRendering);
+
+        let mut dialog = rfd::FileDialog::new()
+            .set_title("Import Video")
+            .add_filter("Video Files", &["mp4", "mov", "webm", "avi"]);
+
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        let desktop = std::path::Path::new(&home).join("Desktop");
+        if desktop.exists() {
+            dialog = dialog.set_directory(&desktop);
+        }
+
+        let result = dialog.pick_files();
+        self.send_content_cmd(ContentCommand::ResumeRendering);
+
+        let Some(paths) = result else {
+            return; // User cancelled
+        };
+
+        // Collect commands to send after releasing the project borrow
+        let mut commands: Vec<ContentCommand> = Vec::new();
+
+        {
+            let project = &mut self.local_project;
+            let bpm = project.settings.bpm;
+            let spb = 60.0 / bpm;
+
+            let playhead_beat = self.content_state.current_beat;
+            let active_layer_index = self.active_layer_id.as_ref()
+                .and_then(|lid| project.timeline.layer_index_for_id(lid))
+                .unwrap_or(0);
+
+            let mut insert_beat = playhead_beat;
+
+            for path in &paths {
+                let path_str = path.to_string_lossy().to_string();
+                let file_name = path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+
+                // Probe video metadata (duration, resolution)
+                let meta = manifold_media::metadata::probe_video_metadata(&path_str);
+                let (duration_secs, res_w, res_h) = match meta {
+                    Some(m) => (m.duration, m.width, m.height),
+                    None => {
+                        log::warn!("[Import] Failed to probe: {path_str}");
+                        continue;
+                    }
+                };
+
+                // Create VideoClip entry in library
+                let video_clip_id = manifold_core::short_id();
+                let file_size = std::fs::metadata(path)
+                    .map(|m| m.len() as i64)
+                    .unwrap_or(0);
+
+                let video_clip = manifold_core::video::VideoClip {
+                    id: video_clip_id.clone(),
+                    file_path: path_str.clone(),
+                    relative_file_path: None,
+                    file_name: file_name.clone(),
+                    duration: duration_secs,
+                    resolution_width: res_w,
+                    resolution_height: res_h,
+                    file_size,
+                    last_modified_ticks: 0,
+                };
+                project.video_library.add_clip(video_clip);
+
+                // Calculate clip duration in beats from video duration
+                let duration_beats = (duration_secs / spb).max(0.25);
+
+                // Ensure we have a layer to place on
+                if project.timeline.layers.is_empty() {
+                    project.timeline.add_layer_default();
+                }
+                let layer_index =
+                    active_layer_index.min(project.timeline.layers.len() - 1);
+                let layer_id =
+                    project.timeline.layers[layer_index].layer_id.clone();
+
+                // Create timeline clip
+                let clip = manifold_core::clip::TimelineClip::new_video(
+                    video_clip_id,
+                    layer_id.clone(),
+                    insert_beat,
+                    duration_beats,
+                    0.0,
+                );
+
+                let cmd = manifold_editing::commands::clip::AddClipCommand::new(
+                    clip, layer_id,
+                );
+                commands.push(ContentCommand::Execute(Box::new(cmd)));
+
+                log::info!(
+                    "[Import] Added '{file_name}' at beat {insert_beat:.1} \
+                     ({duration_secs:.1}s → {duration_beats:.1} beats, {res_w}x{res_h})"
+                );
+
+                insert_beat += duration_beats;
+            }
+
+            // Push library update to content thread
+            let lib_clone = project.video_library.clone();
+            commands.push(ContentCommand::MutateProject(Box::new(move |p| {
+                p.video_library = lib_clone;
+            })));
+        }
+
+        // Send all commands (project borrow released)
+        for cmd in commands {
+            self.send_content_cmd(cmd);
+        }
+
+        self.needs_rebuild = true;
+    }
+
     /// Open. Delegates to ProjectIOService.open_project.
     pub(crate) fn open_project(&mut self) {
         self.send_content_cmd(ContentCommand::PauseRendering);
