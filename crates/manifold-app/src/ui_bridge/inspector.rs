@@ -81,6 +81,19 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::MasterExitPathClicked => {
+            // Handled by try_open_dropdown in ui_root.rs — opens exit path dropdown.
+            DispatchResult::handled()
+        }
+        PanelAction::SetLedExitIndex(idx) => {
+            let idx = *idx;
+            project.settings.led_exit_index = idx;
+            // Push to content thread so the LED pipeline picks it up
+            ContentCommand::send(
+                content_tx,
+                ContentCommand::MutateProject(Box::new(move |p| {
+                    p.settings.led_exit_index = idx;
+                })),
+            );
             DispatchResult::handled()
         }
         PanelAction::MasterOpacityRightClick => {

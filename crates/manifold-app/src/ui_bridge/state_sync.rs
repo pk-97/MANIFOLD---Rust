@@ -291,7 +291,23 @@ pub fn push_state(
             }
             // Master opacity
             ui.inspector.master_chrome_mut().sync_opacity(tree, project.settings.master_opacity);
+
+            // LED exit path label + cached effect names for dropdown
+            let exit_label = super::led_exit_path_label(
+                project.settings.led_exit_index,
+                &project.settings.master_effects,
+            );
+            ui.inspector.master_chrome_mut().sync_exit_path(tree, &exit_label);
         }
+    }
+
+    // Cache master effect names for the LED exit path dropdown
+    {
+        use manifold_core::effect_type_registry;
+        let names: Vec<String> = project.settings.master_effects.iter()
+            .map(|fx| effect_type_registry::display_name(fx.effect_type()).to_string())
+            .collect();
+        ui.master_effect_names = names;
     }
 
     // Sync clip chrome from primary selected clip

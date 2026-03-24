@@ -114,6 +114,7 @@ pub fn dispatch(
         | PanelAction::MasterOpacityCommit
         | PanelAction::MasterCollapseToggle
         | PanelAction::MasterExitPathClicked
+        | PanelAction::SetLedExitIndex(_)
         | PanelAction::MasterOpacityRightClick
         | PanelAction::LayerOpacitySnapshot
         | PanelAction::LayerOpacityChanged(_)
@@ -459,6 +460,26 @@ pub(crate) fn resolve_effects_mut<'a>(
                     .map(|c| &mut c.effects)
             });
             (effects, target)
+        }
+    }
+}
+
+/// Build the display label for the LED exit path dropdown button.
+pub(crate) fn led_exit_path_label(
+    led_exit_index: i32,
+    master_effects: &[manifold_core::effects::EffectInstance],
+) -> String {
+    use manifold_core::effect_type_registry;
+    match led_exit_index {
+        -1 => "After All FX".into(),
+        0 => "Before FX".into(),
+        n => {
+            let idx = (n - 1) as usize;
+            if let Some(fx) = master_effects.get(idx) {
+                format!("After {}", effect_type_registry::display_name(fx.effect_type()))
+            } else {
+                "After All FX".into()
+            }
         }
     }
 }

@@ -111,6 +111,8 @@ pub enum PanelAction {
     // Inspector chrome — Master
     MasterCollapseToggle,
     MasterExitPathClicked,
+    /// Set LED exit path index: -1 = after all FX, 0 = before FX, N = after effect N-1.
+    SetLedExitIndex(i32),
     MasterOpacitySnapshot,
     MasterOpacityChanged(f32),
     MasterOpacityCommit,

@@ -20,6 +20,7 @@ pub enum DropdownContext {
     ClipContext(String),     // right-click on clip: clip_id
     TrackContext(f32, usize), // right-click on empty track: beat, layer
     LayerContext(usize),     // right-click on layer header: layer_index
+    MasterExitPath,          // LED exit path dropdown
 }
 
 /// Owns all UI state for one window.
@@ -60,6 +61,10 @@ pub struct UIRoot {
     /// Detected display resolutions from winit monitors: (w, h, label).
     /// Set by Application after monitor enumeration.
     display_resolutions: Vec<(u32, u32, String)>,
+
+    /// Cached master effect names for the LED exit path dropdown.
+    /// Updated by state_sync when project changes.
+    pub master_effect_names: Vec<String>,
 
     // Inspector resize state
     pub inspector_resize_dragging: bool,
@@ -121,6 +126,7 @@ impl UIRoot {
             scroll_panels_start: 0,
             dropdown_context: None,
             display_resolutions: Vec::new(),
+            master_effect_names: Vec::new(),
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
@@ -667,6 +673,18 @@ impl UIRoot {
                 self.open_dropdown_at(DropdownContext::Resolution, items, trigger);
                 true
             }
+            PanelAction::MasterExitPathClicked => {
+                // Build dropdown: "After All FX" (default), "Before FX", then each effect
+                let mut items = vec![
+                    DropdownItem::new("After All FX"),
+                    DropdownItem::new("Before FX"),
+                ];
+                for name in &self.master_effect_names {
+                    items.push(DropdownItem::new(&format!("After {}", name)));
+                }
+                self.open_dropdown_at(DropdownContext::MasterExitPath, items, trigger);
+                true
+            }
             PanelAction::ClipRightClicked(clip_id) => {
                 let items = vec![
                     DropdownItem::new("Split at Playhead"),
@@ -768,6 +786,17 @@ impl UIRoot {
                     6 => Some(PanelAction::ContextDeleteLayer(layer_idx)),
                     _ => None,
                 }
+            }
+            DropdownContext::MasterExitPath => {
+                // 0 = "After All FX" → led_exit_index -1
+                // 1 = "Before FX"    → led_exit_index 0
+                // 2+ = "After {N}"   → led_exit_index N (1-based in Unity convention)
+                let exit_index: i32 = match index {
+                    0 => -1,
+                    1 => 0,
+                    n => n as i32 - 1,
+                };
+                Some(PanelAction::SetLedExitIndex(exit_index))
             }
         }
     }
