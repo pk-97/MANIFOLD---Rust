@@ -543,18 +543,6 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
         osc_prefix: Some("glitch"),
     });
 
-    // FilmGrain
-    m.insert(EffectTypeId::FILM_GRAIN, EffectDef {
-        display_name: "Film Grain",
-        param_count: 4,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Size", 0.5, 4.0, 1.5, "Size"),
-            pd_osc("LumaWt", 0.0, 1.0, 0.5, "LumaWeight"),
-            pd_osc("Color", 0.0, 1.0, 0.0, "ColorGrain"),
-        ],
-        osc_prefix: Some("filmGrain"),
-    });
 
     // Halation
     m.insert(EffectTypeId::HALATION, EffectDef {

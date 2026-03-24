@@ -11,7 +11,6 @@ pub mod mirror;
 pub mod feedback;
 pub mod bloom;
 pub mod chromatic_aberration;
-pub mod film_grain;
 pub mod glitch;
 pub mod dither;
 pub mod halation;

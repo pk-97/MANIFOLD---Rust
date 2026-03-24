@@ -60,7 +60,6 @@ fn build_registry() -> Vec<EffectTypeRegistration> {
         reg(E::CHROMATIC_ABERRATION, "Chromatic Aberration",  FILMIC,       true),
         reg(E::GRADIENT_MAP,         "Gradient Map",          FILMIC,       false),
         reg(E::GLITCH,               "Glitch",                FILMIC,       true),
-        reg(E::FILM_GRAIN,           "Film Grain",            FILMIC,       true),
         reg(E::HALATION,             "Halation",              FILMIC,       true),
         // Surveillance
         reg(E::CORRUPTION,           "Corruption",           SURVEILLANCE,  false),

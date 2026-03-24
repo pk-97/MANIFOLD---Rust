@@ -7,7 +7,6 @@ use crate::effects::mirror::MirrorFX;
 use crate::effects::feedback::FeedbackFX;
 use crate::effects::bloom::BloomFX;
 use crate::effects::chromatic_aberration::ChromaticAberrationFX;
-use crate::effects::film_grain::FilmGrainFX;
 use crate::effects::glitch::GlitchFX;
 use crate::effects::dither::DitherFX;
 use crate::effects::halation::HalationFX;
@@ -40,7 +39,6 @@ impl EffectRegistry {
         processors.insert(EffectTypeId::FEEDBACK, Box::new(FeedbackFX::new(device)));
         processors.insert(EffectTypeId::BLOOM, Box::new(BloomFX::new(device)));
         processors.insert(EffectTypeId::CHROMATIC_ABERRATION, Box::new(ChromaticAberrationFX::new(device)));
-        processors.insert(EffectTypeId::FILM_GRAIN, Box::new(FilmGrainFX::new(device)));
         processors.insert(EffectTypeId::GLITCH, Box::new(GlitchFX::new(device)));
         processors.insert(EffectTypeId::DITHER, Box::new(DitherFX::new(device)));
         processors.insert(EffectTypeId::HALATION, Box::new(HalationFX::new(device)));

@@ -63,7 +63,6 @@ impl EffectTypeId {
     pub const CHROMATIC_ABERRATION: Self = Self(Cow::Borrowed("ChromaticAberration"));
     pub const GRADIENT_MAP: Self = Self(Cow::Borrowed("GradientMap"));
     pub const GLITCH: Self = Self(Cow::Borrowed("Glitch"));
-    pub const FILM_GRAIN: Self = Self(Cow::Borrowed("FilmGrain"));
     pub const HALATION: Self = Self(Cow::Borrowed("Halation"));
     pub const CORRUPTION: Self = Self(Cow::Borrowed("Corruption"));
     pub const INFRARED: Self = Self(Cow::Borrowed("Infrared"));
@@ -107,7 +106,7 @@ impl EffectTypeId {
             30 => Self::CHROMATIC_ABERRATION,
             31 => Self::GRADIENT_MAP,
             32 => Self::GLITCH,
-            33 => Self::FILM_GRAIN,
+            33 => Self::UNKNOWN,
             34 => Self::HALATION,
             36 => Self::CORRUPTION,
             37 => Self::INFRARED,

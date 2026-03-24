@@ -74,7 +74,6 @@ fn build_effect_categories() -> HashMap<EffectTypeId, &'static str> {
     m.insert(EffectTypeId::CHROMATIC_ABERRATION, FILMIC);
     m.insert(EffectTypeId::GRADIENT_MAP, FILMIC);
     m.insert(EffectTypeId::GLITCH, FILMIC);
-    m.insert(EffectTypeId::FILM_GRAIN, FILMIC);
     m.insert(EffectTypeId::HALATION, FILMIC);
     // Surveillance
     m.insert(EffectTypeId::CORRUPTION, SURVEILLANCE);
