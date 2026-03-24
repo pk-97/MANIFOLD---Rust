@@ -73,6 +73,11 @@ pub struct LedSettings {
     pub is_bgr: bool,
     #[serde(default)]
     pub strip_addressing: StripAddressing,
+
+    /// Spatial blur radius in source texels. Smooths out single-pixel flicker
+    /// on physical LEDs. 0 = no blur, 8-16 = good default for 1080p source.
+    #[serde(default = "default_blur_radius")]
+    pub blur_radius: f32,
 }
 
 impl Default for LedSettings {
@@ -89,6 +94,7 @@ impl Default for LedSettings {
             leds_per_strip: DEFAULT_LEDS_PER_STRIP,
             is_bgr: true,
             strip_addressing: StripAddressing::PerUniverse,
+            blur_radius: 12.0,
         }
     }
 }
@@ -100,3 +106,4 @@ fn default_artnet_ip() -> String { DEFAULT_ARTNET_IP.to_string() }
 fn default_artnet_port() -> u16 { DEFAULT_ARTNET_PORT }
 fn default_strip_count() -> u32 { DEFAULT_STRIP_COUNT }
 fn default_leds_per_strip() -> u32 { DEFAULT_LEDS_PER_STRIP }
+fn default_blur_radius() -> f32 { 12.0 }

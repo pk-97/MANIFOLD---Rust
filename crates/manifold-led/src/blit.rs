@@ -19,7 +19,8 @@ pub struct EdgeExtendBlit {
 struct EdgeExtendUniforms {
     left_edge_width: f32,
     right_edge_width: f32,
-    _pad: [f32; 2],
+    blur_radius: f32,
+    _pad: f32,
 }
 
 impl EdgeExtendBlit {
@@ -151,11 +152,13 @@ impl EdgeExtendBlit {
         source: &wgpu::TextureView,
         left_edge_width: f32,
         right_edge_width: f32,
+        blur_radius: f32,
     ) {
         let uniforms = EdgeExtendUniforms {
             left_edge_width,
             right_edge_width,
-            _pad: [0.0; 2],
+            blur_radius,
+            _pad: 0.0,
         };
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {

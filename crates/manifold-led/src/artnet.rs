@@ -20,6 +20,7 @@ pub struct ArtNetOutput {
     pending_brightness: f32,
     left_edge_width: f32,
     right_edge_width: f32,
+    blur_radius: f32,
 
     // Network
     udp_socket: Option<UdpSocket>,
@@ -61,6 +62,7 @@ impl ArtNetOutput {
             pending_brightness: 1.0,
             left_edge_width: 0.2,
             right_edge_width: 0.2,
+            blur_radius: 12.0,
             udp_socket: None,
             endpoint: SocketAddr::from(([0, 0, 0, 0], 0)),
             dmx_buffers: Vec::new(),
@@ -86,6 +88,7 @@ impl ArtNetOutput {
         self.is_bgr = settings.is_bgr;
         self.left_edge_width = settings.left_edge_width;
         self.right_edge_width = settings.right_edge_width;
+        self.blur_radius = settings.blur_radius;
 
         // Pre-compute strip start channels and universe count
         self.strip_start_channels = vec![0usize; self.strip_count as usize];
@@ -185,6 +188,7 @@ impl ArtNetOutput {
             source,
             self.left_edge_width,
             self.right_edge_width,
+            self.blur_radius,
         );
 
         // Submit readback of the tiny texture
