@@ -745,22 +745,28 @@ impl Application {
         };
 
         // Present using IOSurface shared texture (dual device, zero GPU copy).
-        // The content thread writes to the IOSurface-backed texture on its device;
-        // the UI device reads the same GPU memory via its own imported texture.
+        // The content thread writes to one IOSurface while the UI reads the other.
+        // front_index tells us which surface has the latest completed frame.
         #[cfg(target_os = "macos")]
         {
-            // Detect bridge resize (generation changed) and re-import UI texture.
+            // Detect bridge resize (generation changed) and re-import both UI textures.
             if let Some(ref bridge) = self.shared_texture_bridge {
                 let bridge_gen = bridge.generation();
                 if bridge_gen != self.last_bridge_generation {
                     self.last_bridge_generation = bridge_gen;
-                    let ui_tex = unsafe { bridge.import_texture(&gpu.device) };
-                    self.ui_shared_view = Some(ui_tex.create_view(&wgpu::TextureViewDescriptor::default()));
-                    self.ui_shared_texture = Some(ui_tex);
-                    log::info!("[UI] re-imported IOSurface texture after resize (gen={})", bridge_gen);
+                    let ui_tex_a = unsafe { bridge.import_texture(&gpu.device, 0) };
+                    let ui_tex_b = unsafe { bridge.import_texture(&gpu.device, 1) };
+                    let view_a = ui_tex_a.create_view(&wgpu::TextureViewDescriptor::default());
+                    let view_b = ui_tex_b.create_view(&wgpu::TextureViewDescriptor::default());
+                    self.ui_shared_textures = [Some(ui_tex_a), Some(ui_tex_b)];
+                    self.ui_shared_views = [Some(view_a), Some(view_b)];
+                    log::info!("[UI] re-imported both IOSurface textures after resize (gen={})", bridge_gen);
                 }
             }
-            let view = self.ui_shared_view.clone();
+            // Read the front surface published by the content thread.
+            let front = self.shared_texture_bridge.as_ref()
+                .map_or(0, |b| b.front_index()) as usize;
+            let view = self.ui_shared_views[front].clone();
             if let Some(ref v) = view {
                 self.present_all_windows(v);
             }

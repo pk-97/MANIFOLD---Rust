@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::RwLock;
 
 use manifold_core::effects::{EffectGroup, EffectInstance};
@@ -86,16 +87,30 @@ pub struct ContentPipeline {
     last_content_time: f64,
     /// Shared output view for cross-thread access (fallback for non-macOS).
     shared_output: Arc<SharedOutputView>,
-    /// IOSurface-backed texture on the content device. Compositor output is
-    /// copied here; the UI device reads the same GPU memory via its own texture.
+    /// Double-buffered IOSurface textures on the content device. Content writes
+    /// to shared_textures[write_surface_index]; UI reads the other surface.
     #[cfg(target_os = "macos")]
-    shared_texture: Option<wgpu::Texture>,
+    shared_textures: [Option<wgpu::Texture>; 2],
+    /// Which surface we're writing to THIS frame (0 or 1).
+    #[cfg(target_os = "macos")]
+    write_surface_index: usize,
     /// IOSurface bridge for cross-device sharing.
     #[cfg(target_os = "macos")]
     shared_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// Last seen bridge generation — used to detect resize and re-import.
     #[cfg(target_os = "macos")]
     shared_generation: u64,
+    /// GPU fence: tiny buffer copied at end of each frame. When map_async
+    /// callback fires, we know the GPU finished this frame's work.
+    fence_buffer: Option<wgpu::Buffer>,
+    fence_staging: Option<wgpu::Buffer>,
+    /// Set to true by map_async callback when GPU finishes the frame.
+    fence_ready: Arc<AtomicBool>,
+    /// True when a frame has been submitted but fence hasn't been checked yet.
+    fence_pending: bool,
+    /// Which IOSurface the PREVIOUS frame wrote to (published after fence ready).
+    #[cfg(target_os = "macos")]
+    last_write_surface: usize,
     /// Duration of the last GPU poll (wait for completion) in milliseconds.
     /// Captured inside render_content(), read by the profiler.
     #[cfg(feature = "profiling")]
@@ -123,11 +138,19 @@ impl ContentPipeline {
             last_content_time: 0.0,
             shared_output: shared,
             #[cfg(target_os = "macos")]
-            shared_texture: None,
+            shared_textures: [None, None],
+            #[cfg(target_os = "macos")]
+            write_surface_index: 0,
             #[cfg(target_os = "macos")]
             shared_bridge: None,
             #[cfg(target_os = "macos")]
             shared_generation: 0,
+            fence_buffer: None,
+            fence_staging: None,
+            fence_ready: Arc::new(AtomicBool::new(false)),
+            fence_pending: false,
+            #[cfg(target_os = "macos")]
+            last_write_surface: 0,
             #[cfg(feature = "profiling")]
             gpu_poll_ms: 0.0,
             #[cfg(feature = "profiling")]
@@ -137,15 +160,16 @@ impl ContentPipeline {
         }
     }
 
-    /// Set the IOSurface shared texture and bridge. Called during init after
-    /// the bridge imports a texture on the content device.
+    /// Set the double-buffered IOSurface shared textures and bridge.
+    /// Called during init after the bridge imports both textures on the content device.
     #[cfg(target_os = "macos")]
-    pub fn set_shared_texture(
+    pub fn set_shared_textures(
         &mut self,
-        texture: wgpu::Texture,
+        tex_a: wgpu::Texture,
+        tex_b: wgpu::Texture,
         bridge: Arc<crate::shared_texture::SharedTextureBridge>,
     ) {
-        self.shared_texture = Some(texture);
+        self.shared_textures = [Some(tex_a), Some(tex_b)];
         self.shared_bridge = Some(bridge);
     }
 
@@ -170,9 +194,68 @@ impl ContentPipeline {
         self.front_index = 0;
     }
 
-    /// Render all generators and composite into the back buffer, then swap.
+    /// Lazily create the GPU fence buffers used for async frame completion.
+    fn ensure_fence_buffers(&mut self, device: &wgpu::Device) {
+        if self.fence_buffer.is_some() {
+            return;
+        }
+        self.fence_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Frame Fence"),
+            size: 4,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+        // Staging buffer with sentinel value — copied to fence at end of each frame.
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Frame Fence Staging"),
+            size: 4,
+            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::MAP_WRITE,
+            mapped_at_creation: true,
+        });
+        // Write sentinel so the copy is always valid.
+        staging.slice(..).get_mapped_range_mut()[..4]
+            .copy_from_slice(&0xDEADBEEFu32.to_ne_bytes());
+        staging.unmap();
+        self.fence_staging = Some(staging);
+    }
+
+    /// Wait for the previous frame's GPU work to finish (if pending).
+    /// Called at the START of each frame before encoding new work.
+    /// Publishes the completed IOSurface so the UI can read it.
+    fn wait_previous_frame(&mut self, device: &wgpu::Device) {
+        if !self.fence_pending {
+            return;
+        }
+
+        // Non-blocking check first — if the GPU finished between frames, no wait.
+        if !self.fence_ready.load(Ordering::Acquire) {
+            let _ = device.poll(wgpu::PollType::Poll);
+        }
+
+        // If still not ready, the GPU is truly behind — must block.
+        if !self.fence_ready.load(Ordering::Acquire) {
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        }
+
+        // Fence is ready — unmap and reset.
+        if let Some(ref fence) = self.fence_buffer {
+            fence.unmap();
+        }
+        self.fence_ready.store(false, Ordering::Release);
+        self.fence_pending = false;
+
+        // Publish the completed surface for the UI to read.
+        #[cfg(target_os = "macos")]
+        if let Some(ref bridge) = self.shared_bridge {
+            bridge.publish_front(self.last_write_surface as u32);
+        }
+    }
+
+    /// Render all generators and composite, then submit asynchronously.
     ///
-    /// After this call, `output_view()` returns the newly rendered frame.
+    /// Uses double-buffered output: content writes to one surface while
+    /// the UI reads the other. A fence buffer detects GPU completion so
+    /// we only block if the GPU is truly behind (2 frames in flight).
     pub fn render_content(
         &mut self,
         gpu: &GpuContext,
@@ -182,6 +265,14 @@ impl ContentPipeline {
         frame_count: u64,
     ) {
         let _t_frame = std::time::Instant::now();
+
+        self.ensure_fence_buffers(&gpu.device);
+
+        // Wait for PREVIOUS frame's GPU work before encoding this frame.
+        // If the GPU finished quickly (likely), this returns immediately.
+        let _poll_start = std::time::Instant::now();
+        self.wait_previous_frame(&gpu.device);
+        let _poll_ms = _poll_start.elapsed().as_secs_f64() * 1000.0;
 
         #[cfg(not(target_os = "macos"))]
         self.ensure_output_buffers(&gpu.device);
@@ -333,11 +424,11 @@ impl ContentPipeline {
         let (comp_w, comp_h) = self.compositor.dimensions();
 
         // Copy compositor output to the appropriate destination.
-        // macOS: IOSurface shared texture (UI reads via its own imported texture).
+        // macOS: IOSurface shared texture (double-buffered, write to current surface).
         // Other: double-buffered output textures (UI reads via SharedOutputView).
         #[cfg(target_os = "macos")]
         {
-            if let Some(ref shared_tex) = self.shared_texture
+            if let Some(ref shared_tex) = self.shared_textures[self.write_surface_index]
                 && shared_tex.width() == comp_w && shared_tex.height() == comp_h {
                     encoder.copy_texture_to_texture(
                         wgpu::TexelCopyTextureInfo {
@@ -393,26 +484,42 @@ impl ContentPipeline {
             profiler.resolve(&mut encoder);
         }
 
-        // Submit all GPU work (generators + compositor + copy)
+        // Append fence copy at the end of the encoder — when the GPU executes
+        // this copy, we know all preceding work is done.
+        if let (Some(staging), Some(fence)) =
+            (&self.fence_staging, &self.fence_buffer)
+        {
+            encoder.copy_buffer_to_buffer(staging, 0, fence, 0, 4);
+        }
+
+        // Submit all GPU work (generators + compositor + copy + fence)
         let _t0 = std::time::Instant::now();
         gpu.queue.submit(std::iter::once(encoder.finish()));
         let _submit_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
-        // Wait for GPU to finish this frame before returning. Prevents command
-        // buffer pileup that causes periodic stalls (3 frames queue, 4th blocks hard).
-        // Makes frame timing consistent: GPU-bound frames run at steady reduced FPS
-        // instead of 60-60-60-stall judder. Only blocks the content device — UI is
-        // on its own device/queue and is completely unaffected.
-        let _poll_start = std::time::Instant::now();
+        // Start async fence: map_async fires when GPU finishes this frame.
+        // We check fence_ready at the START of the NEXT frame — if the GPU
+        // finished between frames (likely), no blocking occurs at all.
+        if let Some(ref fence) = self.fence_buffer {
+            let ready = Arc::clone(&self.fence_ready);
+            fence.slice(..).map_async(wgpu::MapMode::Read, move |_| {
+                ready.store(true, Ordering::Release);
+            });
+            self.fence_pending = true;
+        }
 
-        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        // Remember which surface we wrote to so we can publish it next frame.
+        #[cfg(target_os = "macos")]
+        {
+            self.last_write_surface = self.write_surface_index;
+            self.write_surface_index = 1 - self.write_surface_index;
+        }
 
-        let _poll_ms = _poll_start.elapsed().as_secs_f64() * 1000.0;
-
+        // GPU profiler: read PREVIOUS frame's results (deferred readback).
+        // The fence check at frame start guaranteed the previous frame completed.
         #[cfg(feature = "profiling")]
         {
-            self.gpu_poll_ms = _poll_start.elapsed().as_secs_f64() * 1000.0;
-            // Read GPU timestamp results after poll completes
+            self.gpu_poll_ms = _poll_ms;
             self.last_gpu_pass_results = self.gpu_profiler
                 .as_ref()
                 .map_or_else(Vec::new, |p| p.read_results(&gpu.device));
@@ -494,11 +601,15 @@ impl ContentPipeline {
             ]);
             self.front_index = 0;
         }
-        // Resize IOSurface bridge and re-import content texture
+        // Resize IOSurface bridge and re-import both content textures
         #[cfg(target_os = "macos")]
         if let Some(ref bridge) = self.shared_bridge {
             bridge.resize(width, height);
-            self.shared_texture = Some(unsafe { bridge.import_texture(device) });
+            self.shared_textures = [
+                Some(unsafe { bridge.import_texture(device, 0) }),
+                Some(unsafe { bridge.import_texture(device, 1) }),
+            ];
+            self.write_surface_index = 0;
             self.shared_generation = bridge.generation();
         }
         // Update shared dimensions for UI thread
