@@ -5,6 +5,7 @@ use manifold_core::{GeneratorTypeId, LayerId};
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_playback::renderer::ClipRenderer;
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use crate::generator::Generator;
 use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
@@ -145,8 +146,7 @@ impl GeneratorRenderer {
     /// Port of C# GeneratorRenderer.RenderAll().
     pub fn render_all(
         &mut self,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         time: f32,
         beat: f32,
         dt: f32,
@@ -214,9 +214,7 @@ impl GeneratorRenderer {
                         profiler.set_scope(&format!("clip:{}:", id));
                     }
                     let new_progress = layer_state.generator.render(
-                        &self.device,
-                        queue,
-                        encoder,
+                        gpu,
                         &active.render_target.view,
                         &ctx,
                         gpu_profiler,

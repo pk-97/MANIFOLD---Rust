@@ -1,5 +1,6 @@
 use manifold_core::GeneratorTypeId;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 
 /// GPU-aware generator processor. Each instance owns its wgpu pipeline(s)
 /// and any per-generator GPU state (compute buffers, temporal state, etc.).
@@ -17,9 +18,7 @@ pub trait Generator: Send {
     /// Returns updated anim_progress for this clip.
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,

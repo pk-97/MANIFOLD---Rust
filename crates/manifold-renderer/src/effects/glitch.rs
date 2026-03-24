@@ -1,6 +1,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
+use crate::gpu_encoder::GpuEncoder;
 use super::compute_blit_helper::ComputeBlitHelper;
 
 #[repr(C)]
@@ -41,9 +42,7 @@ impl PostProcessEffect for GlitchFX {
 
     fn apply(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         _target_texture: &wgpu::Texture,
@@ -65,7 +64,7 @@ impl PostProcessEffect for GlitchFX {
         };
 
         self.helper.dispatch(
-            device, queue, encoder,
+            gpu,
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Glitch Pass",

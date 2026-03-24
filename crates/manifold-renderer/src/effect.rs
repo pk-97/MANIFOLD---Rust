@@ -1,5 +1,6 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
+use crate::gpu_encoder::GpuEncoder;
 
 /// Per-frame context for effects.
 /// Unity ref: EffectContext.cs
@@ -67,9 +68,7 @@ pub trait PostProcessEffect: Send {
     #[allow(clippy::too_many_arguments)]
     fn apply(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         target_texture: &wgpu::Texture,

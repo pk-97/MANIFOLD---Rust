@@ -5,6 +5,8 @@
 //! - wet = buffer after group effects ran
 //! - wetDry = 1.0 -> fully wet (all effects), 0.0 -> fully dry (bypass)
 
+use crate::gpu_encoder::GpuEncoder;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct WetDryUniforms {
@@ -128,9 +130,7 @@ impl WetDryLerpPipeline {
     /// wet_dry = 1.0 means fully wet (effects applied), 0.0 means fully dry (bypass).
     pub fn apply(
         &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         dry_view: &wgpu::TextureView,
         wet_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
@@ -141,9 +141,9 @@ impl WetDryLerpPipeline {
             wet_dry,
             _pad: [0.0; 3],
         };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("WetDry Lerp BG"),
             layout: &self.bind_group_layout,
             entries: &[
@@ -167,7 +167,7 @@ impl WetDryLerpPipeline {
         });
 
         let ts = profiler.and_then(|p| p.render_timestamps("WetDry Lerp", 0, 0));
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("WetDry Lerp Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target_view,

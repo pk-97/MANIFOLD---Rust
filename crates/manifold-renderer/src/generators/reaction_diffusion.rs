@@ -1,6 +1,7 @@
 use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 use super::stateful_base::StatefulState;
 
 // Parameter indices matching types.rs param_defs
@@ -249,9 +250,7 @@ impl Generator for ReactionDiffusionGenerator {
 
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
@@ -259,7 +258,7 @@ impl Generator for ReactionDiffusionGenerator {
         // Internal resolution: full res (1.0)
         let w = ctx.width;
         let h = ctx.height;
-        self.ensure_state(device, w, h);
+        self.ensure_state(gpu.device, w, h);
         let state = self.state.as_mut().unwrap();
 
         let feed = if ctx.param_count > FEED as u32 { ctx.params[FEED] } else { 0.055 };
@@ -284,11 +283,11 @@ impl Generator for ReactionDiffusionGenerator {
             texel_y,
             _pad: 0.0,
         };
-        queue.write_buffer(&self.sim_uniform_buffer, 0, bytemuck::bytes_of(&sim_uniforms));
+        gpu.queue.write_buffer(&self.sim_uniform_buffer, 0, bytemuck::bytes_of(&sim_uniforms));
 
         // Run N simulation steps
         for _ in 0..STEPS_PER_FRAME {
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("RD Sim BG"),
                 layout: &self.sim_bgl,
                 entries: &[
@@ -309,7 +308,7 @@ impl Generator for ReactionDiffusionGenerator {
 
             {
                 let ts = profiler.and_then(|p| p.render_timestamps("RD Sim", w, h));
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("RD Sim Pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: state.write_view(),
@@ -338,9 +337,9 @@ impl Generator for ReactionDiffusionGenerator {
             uv_scale,
             _pad: [0.0; 3],
         };
-        queue.write_buffer(&self.display_uniform_buffer, 0, bytemuck::bytes_of(&display_uniforms));
+        gpu.queue.write_buffer(&self.display_uniform_buffer, 0, bytemuck::bytes_of(&display_uniforms));
 
-        let display_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let display_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("RD Display BG"),
             layout: &self.display_bgl,
             entries: &[
@@ -361,7 +360,7 @@ impl Generator for ReactionDiffusionGenerator {
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps("RD Display", ctx.width, ctx.height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("RD Display Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,

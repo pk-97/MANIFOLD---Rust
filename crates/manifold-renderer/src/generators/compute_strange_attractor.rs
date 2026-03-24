@@ -13,6 +13,7 @@
 use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 
 // Parameter indices matching GeneratorDefinitionRegistry order
@@ -436,14 +437,12 @@ impl Generator for ComputeStrangeAttractorGenerator {
 
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
-        self.ensure_resources(device, ctx.width, ctx.height);
+        self.ensure_resources(gpu.device, ctx.width, ctx.height);
 
         // ── Resolve parameters ──
         let snap     = param(ctx, SNAP, 0.0);
@@ -486,7 +485,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
         if attractor_type as i32 != self.last_attractor_type {
             // Seed with cam_angle=0, cam_tilt=0.3, uv_scale=1.0, chaos=0.0 (Unity DispatchSeedKernel)
             self.write_sim_uniforms(
-                queue,
+                gpu.queue,
                 ctx.time, ctx.dt, ctx.beat,
                 active_count,
                 anim_speed, 1.0,           // uv_scale = 1.0 for seed
@@ -498,7 +497,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
                 center, att_scale,
             );
 
-            let seed_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let seed_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Attractor Seed BG"),
                 layout: &self.sim_bgl,
                 entries: &[
@@ -509,7 +508,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
 
             {
                 let ts = profiler.and_then(|p| p.compute_timestamps("Attractor SeedKernel", active_count, 1));
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("Attractor SeedKernel"),
                     timestamp_writes: ts,
                 });
@@ -528,7 +527,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
 
         // ── Phase 1: Simulate (CSMain) ──
         self.write_sim_uniforms(
-            queue,
+            gpu.queue,
             ctx.time, ctx.dt, ctx.beat,
             active_count,
             anim_speed, uv_scale,
@@ -540,7 +539,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
             center, att_scale,
         );
 
-        let sim_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let sim_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Attractor Sim BG"),
             layout: &self.sim_bgl,
             entries: &[
@@ -551,7 +550,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
 
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("Attractor CSMain", active_count, 1));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Attractor CSMain"),
                 timestamp_writes: ts,
             });
@@ -566,7 +565,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
         let energy        = 0.005 * splat_size / 3.0 * (1_000_000.0 / active_count as f32);
         let scaled_energy = (energy * 4096.0 + 0.5) as u32;
 
-        queue.write_buffer(&self.splat_uniform_buf, 0, bytemuck::bytes_of(&SplatUniforms {
+        gpu.queue.write_buffer(&self.splat_uniform_buf, 0, bytemuck::bytes_of(&SplatUniforms {
             active_count,
             width: sw,
             height: sh,
@@ -574,7 +573,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
             _pad0: 0, _pad1: 0, _pad2: 0, _pad3: 0,
         }));
 
-        let splat_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let splat_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Attractor Splat BG"),
             layout: &self.splat_bgl,
             entries: &[
@@ -586,7 +585,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
 
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("Attractor SplatKernel", sw, sh));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Attractor SplatKernel"),
                 timestamp_writes: ts,
             });
@@ -597,11 +596,11 @@ impl Generator for ComputeStrangeAttractorGenerator {
         }
 
         // ── Phase 3: Resolve (ResolveKernel) ──
-        queue.write_buffer(&self.resolve_uniform_buf, 0, bytemuck::bytes_of(&ResolveUniforms {
+        gpu.queue.write_buffer(&self.resolve_uniform_buf, 0, bytemuck::bytes_of(&ResolveUniforms {
             width: sw, height: sh, _pad0: 0, _pad1: 0, _pad2: 0, _pad3: 0, _pad4: 0, _pad5: 0,
         }));
 
-        let resolve_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let resolve_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Attractor Resolve BG"),
             layout: &self.resolve_bgl,
             entries: &[
@@ -613,7 +612,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
 
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("Attractor ResolveKernel", sw, sh));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Attractor ResolveKernel"),
                 timestamp_writes: ts,
             });
@@ -629,14 +628,14 @@ impl Generator for ComputeStrangeAttractorGenerator {
         let area_scale = (sw * sh) as f32 / SCATTER_REFERENCE_AREA;
         let intensity  = 3.0 * area_scale;
 
-        queue.write_buffer(&self.display_uniform_buf, 0, bytemuck::bytes_of(&DisplayUniforms {
+        gpu.queue.write_buffer(&self.display_uniform_buf, 0, bytemuck::bytes_of(&DisplayUniforms {
             intensity,
             contrast,
             invert,
             uv_scale: scale,  // display uses raw scale, not 1/scale
         }));
 
-        let display_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let display_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Attractor Display BG"),
             layout: &self.display_bgl,
             entries: &[
@@ -648,7 +647,7 @@ impl Generator for ComputeStrangeAttractorGenerator {
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps("Attractor Display", ctx.width, ctx.height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Attractor Display"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,

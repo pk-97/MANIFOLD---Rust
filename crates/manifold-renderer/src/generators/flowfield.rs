@@ -2,6 +2,7 @@ use manifold_core::GeneratorTypeId;
 use crate::blit::BlitPipeline;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 use super::stateful_base::StatefulState;
 
 // Parameter indices matching types.rs param_defs
@@ -167,16 +168,14 @@ impl Generator for FlowfieldGenerator {
 
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         let iw = (ctx.width / 2).max(1);
         let ih = (ctx.height / 2).max(1);
-        self.ensure_state(device, iw, ih);
+        self.ensure_state(gpu.device, iw, ih);
         let state = self.state.as_mut().unwrap();
 
         let mut noise_scale = if ctx.param_count > NOISE as u32 { ctx.params[NOISE] } else { 1.5 };
@@ -210,10 +209,10 @@ impl Generator for FlowfieldGenerator {
             texel_y,
             _pad: [0.0; 2],
         };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         // Single simulation step (combined sim+display in shader)
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Flowfield BG"),
             layout: &self.bgl,
             entries: &[
@@ -234,7 +233,7 @@ impl Generator for FlowfieldGenerator {
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps("Flowfield Sim", iw, ih));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Flowfield Sim Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: state.write_view(),
@@ -258,7 +257,7 @@ impl Generator for FlowfieldGenerator {
         state.swap();
 
         // Blit half-res state to full-res output (with bilinear upscale)
-        self.blit.blit(device, encoder, state.read_view(), target);
+        self.blit.blit(gpu.device, gpu.encoder, state.read_view(), target);
 
         ctx.anim_progress
     }

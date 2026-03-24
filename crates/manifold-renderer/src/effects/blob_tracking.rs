@@ -10,6 +10,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
 
@@ -719,9 +720,7 @@ impl PostProcessEffect for BlobTrackingFX {
 
     fn apply(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         _target_texture: &wgpu::Texture,
@@ -740,11 +739,11 @@ impl PostProcessEffect for BlobTrackingFX {
         let connect_dist = fx.param_values.get(4).copied().unwrap_or(0.35);
 
         // BlobTrackingFX.cs line 133
-        self.get_or_create_owner(device, ctx.owner_key);
+        self.get_or_create_owner(gpu.device, ctx.owner_key);
 
         // ---- Phase 0: poll any pending readback from a previous frame ----
         // Unity: OnReadbackComplete fires asynchronously; we poll here instead.
-        self.poll_readback(device, ctx.owner_key);
+        self.poll_readback(gpu.device, ctx.owner_key);
 
         let state = self.owner_states.get_mut(&ctx.owner_key).unwrap();
 
@@ -755,7 +754,7 @@ impl PostProcessEffect for BlobTrackingFX {
             && frame - state.last_readback_frame >= READBACK_INTERVAL_FRAMES
         {
             // Graphics.Blit(buffer, state.downsampleRT) — encode blit pass
-            let blit_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let blit_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("BlobTracking Downsample BG"),
                 layout: &self.blit_bgl,
                 entries: &[
@@ -772,7 +771,7 @@ impl PostProcessEffect for BlobTrackingFX {
 
             {
                 let ts = profiler.and_then(|p| p.render_timestamps("BlobTracking Downsample", ctx.width, ctx.height));
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("BlobTracking Downsample"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &state.downsample_rt.view,
@@ -795,8 +794,8 @@ impl PostProcessEffect for BlobTrackingFX {
 
             // AsyncGPUReadback.Request(state.downsampleRT, ...) — submit readback
             state.readback.submit(
-                device,
-                encoder,
+                gpu.device,
+                gpu.encoder,
                 &state.downsample_rt.texture,
                 READBACK_WIDTH,
                 READBACK_HEIGHT,
@@ -852,10 +851,10 @@ impl PostProcessEffect for BlobTrackingFX {
             blob_connections: blob_connections_arr,
         };
 
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         // BlobTrackingFX.cs lines 178-181 — Blit with overlay shader
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("BlobTracking BG"),
             layout: &self.bind_group_layout,
             entries: &[
@@ -884,7 +883,7 @@ impl PostProcessEffect for BlobTrackingFX {
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps("BlobTracking Overlay", ctx.width, ctx.height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("BlobTracking Overlay"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,

@@ -15,6 +15,7 @@ use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::gpu_encoder::GpuEncoder;
 
 // --- ComputeSortEffect.cs line 66 — ShouldSkip default ---
 // ComputePixelSortFX inherits: ShouldSkip => param0 <= 0.
@@ -433,9 +434,7 @@ impl PostProcessEffect for PixelSortFX {
 
     fn apply(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         _target_texture: &wgpu::Texture,
@@ -473,7 +472,7 @@ impl PostProcessEffect for PixelSortFX {
 
         // ComputeSortEffect.cs lines 164-165 — GetOrCreateBuffers
         let padded_dim = {
-            let buffers = self.get_or_create_buffers(device, ctx.owner_key, sort_dim, rows);
+            let buffers = self.get_or_create_buffers(gpu.device, ctx.owner_key, sort_dim, rows);
             buffers.padded_width
         };
 
@@ -492,7 +491,7 @@ impl PostProcessEffect for PixelSortFX {
             _pad0: 0.0,
             _pad1: 0.0,
         };
-        queue.write_buffer(&self.key_uniform_buf, 0, bytemuck::bytes_of(&key_params));
+        gpu.queue.write_buffer(&self.key_uniform_buf, 0, bytemuck::bytes_of(&key_params));
 
         // ComputeSortEffect.cs line 176 — keyGroupsX = Mathf.CeilToInt(paddedDim / 256f)
         let key_groups_x = padded_dim.div_ceil(256).max(1);
@@ -501,7 +500,7 @@ impl PostProcessEffect for PixelSortFX {
             let sort_buf_slice = self.per_owner_buffers.get(&ctx.owner_key)
                 .expect("sort buffer must exist after get_or_create");
 
-            let key_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let key_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("PixelSortKeys BG"),
                 layout: &self.key_bgl,
                 entries: &[
@@ -525,7 +524,7 @@ impl PostProcessEffect for PixelSortFX {
             });
 
             let ts = profiler.and_then(|p| p.compute_timestamps("PixelSort KeyExtract", ctx.width, ctx.height));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("PixelSort KeyExtract"),
                 timestamp_writes: ts,
             });
@@ -557,13 +556,13 @@ impl PostProcessEffect for PixelSortFX {
                         padded_width: padded_dim,
                         height: rows,
                     };
-                    queue.write_buffer(
+                    gpu.queue.write_buffer(
                         &self.bitonic_uniform_buf,
                         0,
                         bytemuck::bytes_of(&bitonic_params),
                     );
 
-                    let bitonic_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    let bitonic_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some(&format!("BitonicSort BG l={level} s={step}")),
                         layout: &self.bitonic_bgl,
                         entries: &[
@@ -580,7 +579,7 @@ impl PostProcessEffect for PixelSortFX {
 
                     let ts_label = format!("BitonicSort l={level} s={step}");
                     let ts = profiler.and_then(|p| p.compute_timestamps(&ts_label, ctx.width, ctx.height));
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some(&ts_label),
                         timestamp_writes: ts,
                     });
@@ -605,13 +604,13 @@ impl PostProcessEffect for PixelSortFX {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        queue.write_buffer(&self.viz_uniform_buf, 0, bytemuck::bytes_of(&viz_params));
+        gpu.queue.write_buffer(&self.viz_uniform_buf, 0, bytemuck::bytes_of(&viz_params));
 
         {
             let sort_buf_slice = self.per_owner_buffers.get(&ctx.owner_key)
                 .expect("sort buffer must exist after get_or_create");
 
-            let viz_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let viz_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("PixelSortVisualize BG"),
                 layout: &self.viz_bgl,
                 entries: &[
@@ -635,7 +634,7 @@ impl PostProcessEffect for PixelSortFX {
             });
 
             let ts = profiler.and_then(|p| p.render_timestamps("PixelSortVisualize", ctx.width, ctx.height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("PixelSortVisualize"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,

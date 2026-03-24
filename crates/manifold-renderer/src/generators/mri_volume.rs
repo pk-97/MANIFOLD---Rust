@@ -1,6 +1,7 @@
 use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 use super::mri_volume_loader::{ScanInfo, discover_scans, load_tiff_slice};
 use std::path::PathBuf;
 
@@ -343,15 +344,13 @@ impl Generator for MriVolumeGenerator {
 
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         if self.scans.is_empty() {
-            Self::render_black(encoder, target);
+            Self::render_black(gpu.encoder, target);
             return ctx.anim_progress;
         }
 
@@ -362,7 +361,7 @@ impl Generator for MriVolumeGenerator {
 
         let scan = &self.scans[scan_index as usize];
         let Some(axis_slices) = &scan.axes[axis as usize] else {
-            Self::render_black(encoder, target);
+            Self::render_black(gpu.encoder, target);
             return ctx.anim_progress;
         };
 
@@ -381,22 +380,22 @@ impl Generator for MriVolumeGenerator {
             let path = &axis_slices.paths[slice_index as usize];
             match load_tiff_slice(path) {
                 Ok((w, h, data)) => {
-                    self.ensure_texture(device, w, h);
-                    self.upload_slice(queue, w, h, &data);
+                    self.ensure_texture(gpu.device, w, h);
+                    self.upload_slice(gpu.queue, w, h, &data);
                     self.current_scan_index = scan_index;
                     self.current_axis = axis;
                     self.current_slice_index = slice_index;
                 }
                 Err(e) => {
                     log::error!("MRI: {e}");
-                    Self::render_black(encoder, target);
+                    Self::render_black(gpu.encoder, target);
                     return ctx.anim_progress;
                 }
             }
         }
 
         let Some(view) = &self.slice_view else {
-            Self::render_black(encoder, target);
+            Self::render_black(gpu.encoder, target);
             return ctx.anim_progress;
         };
 
@@ -416,14 +415,14 @@ impl Generator for MriVolumeGenerator {
             tex_width: self.current_tex_dims.0 as f32,
             tex_height: self.current_tex_dims.1 as f32,
         };
-        queue.write_buffer(
+        gpu.queue.write_buffer(
             &self.slice_uniform_buf,
             0,
             bytemuck::bytes_of(&uniforms),
         );
 
         let bind_group =
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
+            gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("MRI Slice BG"),
                 layout: &self.slice_bgl,
                 entries: &[
@@ -450,7 +449,7 @@ impl Generator for MriVolumeGenerator {
             p.render_timestamps("MRI Slice", ctx.width, ctx.height)
         });
         let mut pass =
-            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("MRI Slice Pass"),
                 color_attachments: &[Some(
                     wgpu::RenderPassColorAttachment {

@@ -14,6 +14,7 @@
 //   textureStore(target, coord, color)             — NOT fragment output
 
 use std::cell::Cell;
+use crate::gpu_encoder::GpuEncoder;
 
 const RING_SLOTS: u64 = 64;
 const UNIFORM_OFFSET_ALIGN: u64 = 256;
@@ -201,12 +202,9 @@ impl ComputeBlitHelper {
 
     /// Execute a compute dispatch: reads source texture, writes to target storage texture.
     /// Dispatches ceil(width/16) x ceil(height/16) workgroups of 16x16 threads.
-    #[allow(clippy::too_many_arguments)]
     pub fn dispatch(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
         uniform_bytes: &[u8],
@@ -219,14 +217,14 @@ impl ComputeBlitHelper {
         self.ring_index.set(self.ring_index.get() + 1);
         let byte_offset = slot * self.slot_stride;
 
-        queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
+        gpu.queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
 
         // Update cached bind group if textures changed (mutation done before
         // the compute pass borrow to satisfy the borrow checker).
-        self.ensure_bind_group(device, source_view, target_view, label);
+        self.ensure_bind_group(gpu.device, source_view, target_view, label);
 
         let ts = profiler.and_then(|p| p.compute_timestamps(label, width, height));
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some(label),
             timestamp_writes: ts,
         });

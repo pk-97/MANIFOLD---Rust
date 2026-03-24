@@ -16,6 +16,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
+use crate::gpu_encoder::GpuEncoder;
 use super::compute_blit_helper::ComputeBlitHelper;
 
 const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
@@ -83,9 +84,7 @@ impl PostProcessEffect for TransformFX {
 
     fn apply(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         _target_texture: &wgpu::Texture,
@@ -121,7 +120,7 @@ impl PostProcessEffect for TransformFX {
         };
 
         self.helper.dispatch(
-            device, queue, encoder,
+            gpu,
             source, target,
             bytemuck::bytes_of(&uniforms),
             "Transform Pass",

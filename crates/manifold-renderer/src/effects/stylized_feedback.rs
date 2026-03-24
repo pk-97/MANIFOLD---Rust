@@ -5,6 +5,7 @@ use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
 
@@ -93,9 +94,7 @@ impl PostProcessEffect for StylizedFeedbackFX {
 
     fn apply(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         target_texture: &wgpu::Texture,
@@ -105,7 +104,7 @@ impl PostProcessEffect for StylizedFeedbackFX {
     ) {
         self.width = ctx.width;
         self.height = ctx.height;
-        self.ensure_state(device, encoder, ctx.owner_key);
+        self.ensure_state(gpu.device, gpu.encoder, ctx.owner_key);
 
         let state = self.states.get(&ctx.owner_key).unwrap();
 
@@ -119,7 +118,7 @@ impl PostProcessEffect for StylizedFeedbackFX {
 
         // main_tex = source (current frame), secondary_tex = state buffer (previous frame)
         self.helper.draw(
-            device, queue, encoder,
+            gpu,
             source, &state.buffer.view, target,
             bytemuck::bytes_of(&uniforms),
             "StylizedFeedback Pass",
@@ -130,7 +129,7 @@ impl PostProcessEffect for StylizedFeedbackFX {
         // PostBlit: copy result → state buffer via GPU memcpy.
         // Unity ref: Graphics.CopyTexture(result, stateBuffer) — zero-cost memcpy.
         let state = self.states.get(&ctx.owner_key).unwrap();
-        encoder.copy_texture_to_texture(
+        gpu.encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: target_texture,
                 mip_level: 0,

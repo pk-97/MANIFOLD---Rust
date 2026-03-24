@@ -8,6 +8,7 @@ use manifold_core::types::BlendMode;
 use manifold_renderer::compositor::{Compositor, CompositeLayerDescriptor, CompositorFrame};
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu::GpuContext;
+use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::layer_compositor::CompositeClipDescriptor;
 #[cfg(target_os = "macos")]
 use manifold_media::video_renderer::VideoRenderer;
@@ -281,11 +282,12 @@ impl ContentPipeline {
         let time = engine.current_time();
         let beat = engine.current_beat();
 
-        let mut encoder =
+        let mut wgpu_encoder =
             gpu.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Frame Encoder"),
                 });
+        let mut gpu_enc = GpuEncoder::new(&gpu.device, &gpu.queue, &mut wgpu_encoder);
 
         // Split borrow: get renderers + project from engine simultaneously.
         let (renderers, project) = engine.split_renderer_project();
@@ -312,7 +314,7 @@ impl ContentPipeline {
                 #[cfg(not(feature = "profiling"))]
                 let gpu_prof: Option<&manifold_renderer::gpu_profiler::GpuProfiler> = None;
                 gen_renderer.render_all(
-                    &gpu.queue, &mut encoder, time, beat, dt as f32, layers, gpu_prof,
+                    &mut gpu_enc, time, beat, dt as f32, layers, gpu_prof,
                 );
                 break;
             }
@@ -424,7 +426,7 @@ impl ContentPipeline {
         #[cfg(not(feature = "profiling"))]
         let gpu_prof: Option<&manifold_renderer::gpu_profiler::GpuProfiler> = None;
         let _compositor_view = self.compositor.render(
-            &gpu.device, &gpu.queue, &mut encoder, &frame, gpu_prof,
+            &mut gpu_enc, &frame, gpu_prof,
         );
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -437,7 +439,7 @@ impl ContentPipeline {
         {
             if let Some(ref shared_tex) = self.shared_textures[self.write_surface_index]
                 && shared_tex.width() == comp_w && shared_tex.height() == comp_h {
-                    encoder.copy_texture_to_texture(
+                    gpu_enc.encoder.copy_texture_to_texture(
                         wgpu::TexelCopyTextureInfo {
                             texture: self.compositor.output_texture(),
                             mip_level: 0,
@@ -468,7 +470,7 @@ impl ContentPipeline {
                 height: comp_h.min(bufs[back_index].height),
                 depth_or_array_layers: 1,
             };
-            encoder.copy_texture_to_texture(
+            gpu_enc.encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: self.compositor.output_texture(),
                     mip_level: 0,
@@ -488,7 +490,7 @@ impl ContentPipeline {
         // GPU profiler: resolve timestamp queries before submission
         #[cfg(feature = "profiling")]
         if let Some(ref profiler) = self.gpu_profiler {
-            profiler.resolve(&mut encoder);
+            profiler.resolve(gpu_enc.encoder);
         }
 
         // Append fence copy at the end of the encoder — when the GPU executes
@@ -496,12 +498,16 @@ impl ContentPipeline {
         if let (Some(staging), Some(fence)) =
             (&self.fence_staging, &self.fence_buffer)
         {
-            encoder.copy_buffer_to_buffer(staging, 0, fence, 0, 4);
+            gpu_enc.encoder.copy_buffer_to_buffer(staging, 0, fence, 0, 4);
         }
+
+        // Drop GpuEncoder to release mutable borrow on wgpu_encoder before finish().
+        #[allow(clippy::drop_non_drop)]
+        drop(gpu_enc);
 
         // Submit all GPU work (generators + compositor + copy + fence)
         let _t0 = std::time::Instant::now();
-        gpu.queue.submit(std::iter::once(encoder.finish()));
+        gpu.queue.submit(std::iter::once(wgpu_encoder.finish()));
         let _submit_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
         // Start async fence: map_async fires when GPU finishes this frame.

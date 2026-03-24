@@ -1,6 +1,7 @@
 use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 
 // Parameter indices matching Unity's ConcentricTunnelGenerator.cs
 const SHAPE: usize = 0;
@@ -111,9 +112,7 @@ impl Generator for ConcentricTunnelGenerator {
 
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
@@ -165,9 +164,9 @@ impl Generator for ConcentricTunnelGenerator {
             trigger_count: ctx.trigger_count as f32,
             _pad: [0.0; 3],
         };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ConcentricTunnel BG"),
             layout: &self.bind_group_layout,
             entries: &[
@@ -186,7 +185,7 @@ impl Generator for ConcentricTunnelGenerator {
             let ts = profiler.and_then(|p| {
                 p.compute_timestamps("ConcentricTunnel", ctx.width, ctx.height)
             });
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("ConcentricTunnel Pass"),
                 timestamp_writes: ts,
             });

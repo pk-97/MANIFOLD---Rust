@@ -1,6 +1,7 @@
 use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 use crate::generators::generator_math::PROJ_SCALE;
 use crate::generators::line_pipeline::{LinePipeline, LineGeneratorHelper};
 
@@ -55,9 +56,7 @@ impl Generator for LissajousGenerator {
 
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
@@ -135,7 +134,7 @@ impl Generator for LissajousGenerator {
             );
 
         self.line_pipeline.draw(
-            device, queue, encoder, target,
+            gpu.device, gpu.queue, gpu.encoder, target,
             positions, instances, num_edges,
             edge_half_thick, dot_half_thick,
             ctx.beat, profiler, "Lissajous", ctx.width, ctx.height,

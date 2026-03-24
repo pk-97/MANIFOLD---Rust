@@ -1,6 +1,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
+use crate::gpu_encoder::GpuEncoder;
 use super::compute_blit_helper::ComputeBlitHelper;
 
 // EdgeGlowFX.cs:16-19 — shader property IDs (_Amount, _Threshold, _Glow, _Mode)
@@ -43,9 +44,7 @@ impl PostProcessEffect for EdgeGlowFX {
 
     fn apply(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         _target_texture: &wgpu::Texture,
@@ -67,7 +66,7 @@ impl PostProcessEffect for EdgeGlowFX {
         };
 
         self.helper.dispatch(
-            device, queue, encoder,
+            gpu,
             source, target,
             bytemuck::bytes_of(&uniforms),
             "EdgeGlow Pass",

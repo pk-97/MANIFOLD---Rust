@@ -5,6 +5,7 @@ use manifold_core::effects::{EffectGroup, EffectInstance};
 use crate::effect::EffectContext;
 use crate::effect_chain::EffectChain;
 use crate::effect_registry::EffectRegistry;
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use crate::tonemap::TonemapPipeline;
 use crate::uniform_arena::UniformArena;
@@ -165,8 +166,7 @@ impl BlendResources {
     /// calling queue.write_buffer per pass — reduces wgpu staging overhead.
     fn blend_pass(
         &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         arena: &mut UniformArena,
         source_view: &wgpu::TextureView,
         blend_view: &wgpu::TextureView,
@@ -176,7 +176,7 @@ impl BlendResources {
     ) {
         let offset = arena.push(uniforms);
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Blend Compute BG"),
             layout: &self.bind_group_layout,
             entries: &[
@@ -210,7 +210,7 @@ impl BlendResources {
         });
 
         let ts = profiler.and_then(|p| p.compute_timestamps("Blend Pass", self.width, self.height));
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Blend Pass"),
             timestamp_writes: ts,
         });
@@ -392,9 +392,7 @@ impl LayerCompositor {
         effect_chain: &'a mut EffectChain,
         registry: &mut EffectRegistry,
         wet_dry_lerp: &WetDryLerpPipeline,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         input_view: &'a wgpu::TextureView,
         input_texture: &wgpu::Texture,
         effects: &[EffectInstance],
@@ -403,7 +401,7 @@ impl LayerCompositor {
         gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> Option<&'a wgpu::TextureView> {
         effect_chain.apply_chain(
-            device, queue, encoder,
+            gpu,
             registry,
             input_view,
             input_texture,
@@ -424,9 +422,7 @@ impl LayerCompositor {
     /// Composite all clips into main buffer, grouping by layer.
     fn composite(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         frame: &CompositorFrame,
         gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
@@ -440,7 +436,7 @@ impl LayerCompositor {
         self.uniform_arena.reset();
 
         // Clear main to opaque black
-        self.main.clear_source(encoder, true);
+        self.main.clear_source(gpu.encoder, true);
 
         // Check for any solo layer
         let any_solo = frame.layers.iter().any(|l| l.is_solo);
@@ -496,7 +492,7 @@ impl LayerCompositor {
                     };
                     Self::apply_effects(
                         &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
-                        device, queue, encoder,
+                        gpu,
                         clip.texture_view, clip.texture,
                         clip.effects, clip.effect_groups, &ctx,
                         gpu_profiler,
@@ -518,7 +514,7 @@ impl LayerCompositor {
                 };
 
                 self.blend.blend_pass(
-                    device, encoder, &mut self.uniform_arena,
+                    gpu, &mut self.uniform_arena,
                     self.main.source_view(),
                     effective_blend_view,
                     self.main.target_view(),
@@ -528,11 +524,11 @@ impl LayerCompositor {
                 self.main.swap();
             } else {
                 // Multi-clip: composite into layer buffer, then into main
-                self.ensure_layer_buffers(device);
+                self.ensure_layer_buffers(gpu.device);
                 let layer_buf = self.layer_buf.as_mut().unwrap();
 
                 // Clear layer buffer to transparent
-                layer_buf.clear_source(encoder, false);
+                layer_buf.clear_source(gpu.encoder, false);
 
                 // Composite each clip into layer buffer with Normal blend
                 for clip in group {
@@ -550,7 +546,7 @@ impl LayerCompositor {
                         };
                         Self::apply_effects(
                             &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
-                            device, queue, encoder,
+                            gpu,
                             clip.texture_view, clip.texture,
                             clip.effects, clip.effect_groups, &ctx,
                             gpu_profiler,
@@ -572,7 +568,7 @@ impl LayerCompositor {
                     };
 
                     self.blend.blend_pass(
-                        device, encoder, &mut self.uniform_arena,
+                        gpu, &mut self.uniform_arena,
                         layer_buf.source_view(),
                         effective_blend_view,
                         layer_buf.target_view(),
@@ -598,7 +594,7 @@ impl LayerCompositor {
                         let layer_buf = self.layer_buf.as_ref().unwrap();
                         Self::apply_effects(
                             &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
-                            device, queue, encoder,
+                            gpu,
                             layer_buf.source_view(), layer_buf.source_texture(),
                             ld.effects, ld.effect_groups, &ctx,
                             gpu_profiler,
@@ -625,7 +621,7 @@ impl LayerCompositor {
                 };
 
                 self.blend.blend_pass(
-                    device, encoder, &mut self.uniform_arena,
+                    gpu, &mut self.uniform_arena,
                     self.main.source_view(),
                     effective_layer_view,
                     self.main.target_view(),
@@ -645,9 +641,7 @@ impl LayerCompositor {
 impl Compositor for LayerCompositor {
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         frame: &CompositorFrame,
         gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> &wgpu::TextureView {
@@ -655,12 +649,12 @@ impl Compositor for LayerCompositor {
             // Unity: CompositorStack.cs returns immediately for empty playback.
             // Clear to black + return tonemap output (already cleared from previous frame).
             // Skips ALL master effects, tonemap, and LED tap — zero GPU draw calls.
-            self.main.clear_source(encoder, true);
-            self.tonemap.clear(encoder);
+            self.main.clear_source(gpu.encoder, true);
+            self.tonemap.clear(gpu.encoder);
             return &self.tonemap.output.view;
         }
 
-        self.composite(device, queue, encoder, frame, gpu_profiler);
+        self.composite(gpu, frame, gpu_profiler);
 
         // LED tap: capture pre-tonemap composite when exit index is 0.
         // main.source holds the all-layers composite at this point, before
@@ -669,15 +663,15 @@ impl Compositor for LayerCompositor {
             let (w, h) = (self.main.width(), self.main.height());
             let tap = self.led_tap.get_or_insert_with(|| {
                 crate::render_target::RenderTarget::new(
-                    device, w, h, wgpu::TextureFormat::Rgba16Float, "LED_Tap",
+                    gpu.device, w, h, wgpu::TextureFormat::Rgba16Float, "LED_Tap",
                 )
             });
             if tap.width != w || tap.height != h {
                 *tap = crate::render_target::RenderTarget::new(
-                    device, w, h, wgpu::TextureFormat::Rgba16Float, "LED_Tap",
+                    gpu.device, w, h, wgpu::TextureFormat::Rgba16Float, "LED_Tap",
                 );
             }
-            encoder.copy_texture_to_texture(
+            gpu.encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: self.main.source_texture(),
                     mip_level: 0,
@@ -699,7 +693,7 @@ impl Compositor for LayerCompositor {
 
         // Tonemap the composited scene (before master glow effects).
         self.tonemap.apply(
-            device, queue, encoder,
+            gpu,
             self.main.source_view(),
             &frame.tonemap,
             gpu_profiler,
@@ -732,7 +726,7 @@ impl Compositor for LayerCompositor {
             // effect reads from tonemap.output without copying.
             if let Some(_processed) = Self::apply_effects(
                 &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
-                device, queue, encoder,
+                gpu,
                 &self.tonemap.output.view, &self.tonemap.output.texture,
                 frame.master_effects,
                 frame.master_effect_groups, &ctx,
@@ -741,7 +735,7 @@ impl Compositor for LayerCompositor {
                 // Copy processed result back into tonemap output via GPU memcpy.
                 // Replaces the old Opaque compute blend pass — same result, zero
                 // shader cost. Unity ref: same pattern as Graphics.CopyTexture.
-                encoder.copy_texture_to_texture(
+                gpu.encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: self.effect_chain.source_texture(),
                         mip_level: 0,
@@ -764,7 +758,7 @@ impl Compositor for LayerCompositor {
         }
 
         // Flush all accumulated blend uniforms to the GPU in a single write.
-        self.uniform_arena.flush(device, queue);
+        self.uniform_arena.flush(gpu.device, gpu.queue);
 
         &self.tonemap.output.view
     }

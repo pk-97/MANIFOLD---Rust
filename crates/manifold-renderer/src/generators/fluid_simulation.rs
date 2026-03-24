@@ -8,6 +8,7 @@
 use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::compute_common::Particle;
 
@@ -688,9 +689,7 @@ impl Generator for FluidSimulationGenerator {
 
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
@@ -725,12 +724,12 @@ impl Generator for FluidSimulationGenerator {
 
         // Unity: particles created once in Initialize(), never recreated for param changes.
         if !self.initialized {
-            self.init_particles(device, queue, encoder);
+            self.init_particles(gpu.device, gpu.queue, gpu.encoder);
         }
 
         // Unity: density_res change → Resize() which only rebuilds scatter-resolution RTs.
         // "Particle buffer is resolution-independent — no rebuild needed."
-        self.ensure_scatter_resources(device, queue, ctx.width, ctx.height, density_res);
+        self.ensure_scatter_resources(gpu.device, gpu.queue, ctx.width, ctx.height, density_res);
         let sw = self.scatter_width;
         let sh = self.scatter_height;
         let bw = (sw / PRE_SHRINK).max(1);
@@ -754,7 +753,7 @@ impl Generator for FluidSimulationGenerator {
                 if self.active_snap_mode == 3 {
                     // Mode 3: seed pattern
                     let pattern = (trigger_count as u32) % PATTERN_COUNT;
-                    self.dispatch_seed(queue, encoder, device, pattern, trigger_count as u32, profiler);
+                    self.dispatch_seed(gpu.queue, gpu.encoder, gpu.device, pattern, trigger_count as u32, profiler);
                 } else if self.active_snap_mode == 4 {
                     // Mode 4: inject at random point (only when color mode is active)
                     if color_mode > 0 {
@@ -839,16 +838,16 @@ impl Generator for FluidSimulationGenerator {
             _pad1: 0,
             _pad2: 0,
         };
-        queue.write_buffer(&self.splat_uniform_buf, 0, bytemuck::bytes_of(&splat_uniforms));
+        gpu.queue.write_buffer(&self.splat_uniform_buf, 0, bytemuck::bytes_of(&splat_uniforms));
 
         let particle_buffer = self.particle_buffer.as_ref().unwrap();
         let scatter_accum = self.scatter_accum.as_ref().unwrap();
 
         // Clear scatter accum to zero before each frame's splat
         // (atomicAdd compounds; must reset per-frame)
-        encoder.clear_buffer(scatter_accum, 0, None);
+        gpu.encoder.clear_buffer(scatter_accum, 0, None);
 
-        let splat_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let splat_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim Splat BG"),
             layout: &self.splat_bgl,
             entries: &[
@@ -859,7 +858,7 @@ impl Generator for FluidSimulationGenerator {
         });
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim Splat", sw, sh));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("FluidSim Splat Pass"),
                 timestamp_writes: ts,
             });
@@ -870,10 +869,10 @@ impl Generator for FluidSimulationGenerator {
 
         // Resolve accumulator to density texture
         let resolve_uniforms = ResolveUniforms { width: sw, height: sh, _pad0: 0, _pad1: 0, _pad2: 0, _pad3: 0, _pad4: 0, _pad5: 0 };
-        queue.write_buffer(&self.resolve_uniform_buf, 0, bytemuck::bytes_of(&resolve_uniforms));
+        gpu.queue.write_buffer(&self.resolve_uniform_buf, 0, bytemuck::bytes_of(&resolve_uniforms));
 
         let density_rt = self.density_rt.as_ref().unwrap();
-        let resolve_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let resolve_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim Resolve BG"),
             layout: &self.resolve_bgl,
             entries: &[
@@ -884,7 +883,7 @@ impl Generator for FluidSimulationGenerator {
         });
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim Resolve", sw, sh));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("FluidSim Resolve Pass"),
                 timestamp_writes: ts,
             });
@@ -917,19 +916,19 @@ impl Generator for FluidSimulationGenerator {
         // Use blur pass with radius=0 as a bilinear downsample blit
         let density_rt = self.density_rt.as_ref().unwrap();
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
-        self.run_blur_pass(device, queue, encoder, &density_rt.view, &blur_density_rt.view,
+        self.run_blur_pass(gpu.device, gpu.queue, gpu.encoder, &density_rt.view, &blur_density_rt.view,
             &self.blur_pipeline, [0.0, 0.0], 0.0, blur_texel_x, blur_texel_y, 0, profiler);
 
         // Step 2: H blur: blur_density_rt → blur_temp_rt
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
-        self.run_blur_pass(device, queue, encoder, &blur_density_rt.view, &blur_temp_rt.view,
+        self.run_blur_pass(gpu.device, gpu.queue, gpu.encoder, &blur_density_rt.view, &blur_temp_rt.view,
             &self.blur_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, 1, profiler);
 
         // Step 3: V blur: blur_temp_rt → blur_density_rt (in-place result)
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
-        self.run_blur_pass(device, queue, encoder, &blur_temp_rt.view, &blur_density_rt.view,
+        self.run_blur_pass(gpu.device, gpu.queue, gpu.encoder, &blur_temp_rt.view, &blur_density_rt.view,
             &self.blur_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, 2, profiler);
 
         // Gradient + Rotate: blurredDensity → vector field
@@ -947,12 +946,12 @@ impl Generator for FluidSimulationGenerator {
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        queue.write_buffer(&self.gradient_uniform_buf, 0, bytemuck::bytes_of(&gradient_uniforms));
+        gpu.queue.write_buffer(&self.gradient_uniform_buf, 0, bytemuck::bytes_of(&gradient_uniforms));
 
         // Unity: Graphics.Blit(blurredDensityRT, vectorFieldRT, gradientMat)
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
-        let gradient_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let gradient_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim GradientRotate BG"),
             layout: &self.gradient_rotate_bgl,
             entries: &[
@@ -962,7 +961,7 @@ impl Generator for FluidSimulationGenerator {
         });
         {
             let ts = profiler.and_then(|p| p.render_timestamps("FluidSim GradientRotate", bw, bh));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("FluidSim GradientRotate Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &vector_field_rt.view,
@@ -987,11 +986,11 @@ impl Generator for FluidSimulationGenerator {
         // Unity: ApplyGaussianBlur(vectorFieldRT, blurTempRT, scaledRadius) — SAME radius
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
-        self.run_blur_pass(device, queue, encoder, &vector_field_rt.view, &blur_temp_rt.view,
+        self.run_blur_pass(gpu.device, gpu.queue, gpu.encoder, &vector_field_rt.view, &blur_temp_rt.view,
             &self.blur_vector_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, 3, profiler);
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
-        self.run_blur_pass(device, queue, encoder, &blur_temp_rt.view, &vector_field_rt.view,
+        self.run_blur_pass(gpu.device, gpu.queue, gpu.encoder, &blur_temp_rt.view, &vector_field_rt.view,
             &self.blur_vector_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, 4, profiler);
 
         // ================================================================
@@ -1020,14 +1019,14 @@ impl Generator for FluidSimulationGenerator {
             _pad1: 0,
             _pad2: 0,
         };
-        queue.write_buffer(&self.sim_uniform_buf, 0, bytemuck::bytes_of(&sim_uniforms));
+        gpu.queue.write_buffer(&self.sim_uniform_buf, 0, bytemuck::bytes_of(&sim_uniforms));
 
         let particle_buffer = self.particle_buffer.as_ref().unwrap();
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
         // Unity: SetSimulationParams binds blurredDensityRT to _DensityTex
         let blurred_density_rt = self.blur_density_rt.as_ref().unwrap();
 
-        let sim_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let sim_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim Simulate BG"),
             layout: &self.simulate_bgl,
             entries: &[
@@ -1041,7 +1040,7 @@ impl Generator for FluidSimulationGenerator {
         });
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim Simulate", active_count, 1));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("FluidSim Simulate Pass"),
                 timestamp_writes: ts,
             });
@@ -1068,11 +1067,11 @@ impl Generator for FluidSimulationGenerator {
             _pad0: 0.0,
             _pad1: 0.0,
         };
-        queue.write_buffer(&self.display_uniform_buf, 0, bytemuck::bytes_of(&display_uniforms));
+        gpu.queue.write_buffer(&self.display_uniform_buf, 0, bytemuck::bytes_of(&display_uniforms));
 
         let density_rt = self.density_rt.as_ref().unwrap();
 
-        let display_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let display_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim Display BG"),
             layout: &self.display_bgl,
             entries: &[
@@ -1083,7 +1082,7 @@ impl Generator for FluidSimulationGenerator {
         });
         {
             let ts = profiler.and_then(|p| p.render_timestamps("FluidSim Display", ctx.width, ctx.height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("FluidSim Display Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,

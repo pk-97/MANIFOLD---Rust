@@ -11,6 +11,7 @@ use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::HDR_BUFFER_DIVISOR;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
@@ -105,9 +106,7 @@ impl PostProcessEffect for HalationFX {
 
     fn apply(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         _target_texture: &wgpu::Texture,
@@ -119,7 +118,7 @@ impl PostProcessEffect for HalationFX {
 
         self.width = ctx.width;
         self.height = ctx.height;
-        self.ensure_state(device, ctx.owner_key);
+        self.ensure_state(gpu.device, ctx.owner_key);
 
         let state = match self.states.get(&ctx.owner_key) {
             Some(s) => s,
@@ -155,7 +154,7 @@ impl PostProcessEffect for HalationFX {
         // horizontal blur, writes to buf_b (reduced-res).
         // Texel size is from SOURCE (full-res) since we sample source pixels.
         self.helper.draw_main_only(
-            device, queue, encoder,
+            gpu,
             source,
             &state.buf_b.view,
             bytemuck::bytes_of(&HalationUniforms {
@@ -171,7 +170,7 @@ impl PostProcessEffect for HalationFX {
 
         // Pass 1: Vertical Gaussian blur — buf_b → buf_a (reduced-res)
         self.helper.draw_main_only(
-            device, queue, encoder,
+            gpu,
             &state.buf_b.view,
             &state.buf_a.view,
             bytemuck::bytes_of(&HalationUniforms {
@@ -187,7 +186,7 @@ impl PostProcessEffect for HalationFX {
 
         // Pass 2: Composite — source (full-res) + buf_a (reduced-res) → target
         self.helper.draw(
-            device, queue, encoder,
+            gpu,
             source,
             &state.buf_a.view,
             target,

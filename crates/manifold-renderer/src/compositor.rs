@@ -1,3 +1,4 @@
+use crate::gpu_encoder::GpuEncoder;
 use crate::layer_compositor::CompositeClipDescriptor;
 use crate::tonemap::TonemapSettings;
 use manifold_core::LayerId;
@@ -42,9 +43,7 @@ pub trait Compositor: Send {
     /// Returns the tonemapped texture view to present.
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         frame: &CompositorFrame,
         gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> &wgpu::TextureView;
@@ -75,4 +74,3 @@ pub trait Compositor: Send {
     /// Returns None if exit index is -1 (use output_view instead).
     fn led_tap_view(&self) -> Option<&wgpu::TextureView>;
 }
-

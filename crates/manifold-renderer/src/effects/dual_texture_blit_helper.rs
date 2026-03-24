@@ -11,6 +11,7 @@
 // slot via `queue.write_buffer()`.
 
 use std::cell::Cell;
+use crate::gpu_encoder::GpuEncoder;
 
 const RING_SLOTS: u64 = 64;
 const UNIFORM_OFFSET_ALIGN: u64 = 256;
@@ -236,9 +237,7 @@ impl DualTextureBlitHelper {
     /// borrow conflicts (`&mut self` + `&self.dummy_view` on the same helper).
     pub fn draw_main_only(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         main_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
         uniform_bytes: &[u8],
@@ -251,7 +250,7 @@ impl DualTextureBlitHelper {
         self.ring_index.set(self.ring_index.get() + 1);
         let byte_offset = slot * self.slot_stride;
 
-        queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
+        gpu.queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
 
         // Inline ensure_bind_group with split borrows — avoids &mut self +
         // &self.dummy_view conflict that would occur if calling draw_inner.
@@ -264,7 +263,7 @@ impl DualTextureBlitHelper {
         };
 
         if needs_recreate {
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(label),
                 layout: &self.bind_group_layout,
                 entries: &[
@@ -299,7 +298,7 @@ impl DualTextureBlitHelper {
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps(label, width, height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,
@@ -330,9 +329,7 @@ impl DualTextureBlitHelper {
     /// For passes that don't read the secondary texture, use `draw_main_only`.
     pub fn draw(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         main_view: &wgpu::TextureView,
         secondary_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
@@ -343,7 +340,7 @@ impl DualTextureBlitHelper {
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         self.draw_inner(
-            device, queue, encoder, main_view, secondary_view, target_view,
+            gpu, main_view, secondary_view, target_view,
             uniform_bytes, label, width, height, wgpu::StoreOp::Store, profiler,
         );
     }
@@ -353,9 +350,7 @@ impl DualTextureBlitHelper {
     /// targets that will be immediately overwritten or only read once.
     pub fn draw_discard(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         main_view: &wgpu::TextureView,
         secondary_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
@@ -366,7 +361,7 @@ impl DualTextureBlitHelper {
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         self.draw_inner(
-            device, queue, encoder, main_view, secondary_view, target_view,
+            gpu, main_view, secondary_view, target_view,
             uniform_bytes, label, width, height, wgpu::StoreOp::Discard, profiler,
         );
     }
@@ -374,9 +369,7 @@ impl DualTextureBlitHelper {
     #[allow(clippy::too_many_arguments)]
     fn draw_inner(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         main_view: &wgpu::TextureView,
         secondary_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
@@ -391,15 +384,15 @@ impl DualTextureBlitHelper {
         self.ring_index.set(self.ring_index.get() + 1);
         let byte_offset = slot * self.slot_stride;
 
-        queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
+        gpu.queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
 
         // Update cached bind group if textures changed (mutation done before
         // the render pass borrow to satisfy the borrow checker).
-        self.ensure_bind_group(device, main_view, secondary_view, label);
+        self.ensure_bind_group(gpu.device, main_view, secondary_view, label);
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps(label, width, height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,

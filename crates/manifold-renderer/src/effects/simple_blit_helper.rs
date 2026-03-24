@@ -10,6 +10,7 @@
 // so the GPU sees correct data per pass despite batched writes.
 
 use std::cell::Cell;
+use crate::gpu_encoder::GpuEncoder;
 
 const RING_SLOTS: u64 = 64;
 const UNIFORM_OFFSET_ALIGN: u64 = 256;
@@ -200,9 +201,7 @@ impl SimpleBlitHelper {
     /// Execute a single fullscreen pass: reads source texture, writes to target.
     pub fn draw(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
         uniform_bytes: &[u8],
@@ -212,7 +211,7 @@ impl SimpleBlitHelper {
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         self.draw_inner(
-            device, queue, encoder, source_view, target_view,
+            gpu, source_view, target_view,
             uniform_bytes, label, width, height, wgpu::StoreOp::Store, profiler,
         );
     }
@@ -222,9 +221,7 @@ impl SimpleBlitHelper {
     /// targets that will be immediately overwritten or only read once.
     pub fn draw_discard(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
         uniform_bytes: &[u8],
@@ -234,7 +231,7 @@ impl SimpleBlitHelper {
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         self.draw_inner(
-            device, queue, encoder, source_view, target_view,
+            gpu, source_view, target_view,
             uniform_bytes, label, width, height, wgpu::StoreOp::Discard, profiler,
         );
     }
@@ -242,9 +239,7 @@ impl SimpleBlitHelper {
     #[allow(clippy::too_many_arguments)]
     fn draw_inner(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
         uniform_bytes: &[u8],
@@ -258,15 +253,15 @@ impl SimpleBlitHelper {
         self.ring_index.set(self.ring_index.get() + 1);
         let byte_offset = slot * self.slot_stride;
 
-        queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
+        gpu.queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
 
         // Update cached bind group if source texture changed (mutation done
         // before the render pass borrow to satisfy the borrow checker).
-        self.ensure_bind_group(device, source_view, label);
+        self.ensure_bind_group(gpu.device, source_view, label);
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps(label, width, height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,

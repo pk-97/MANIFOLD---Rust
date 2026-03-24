@@ -2,6 +2,7 @@ use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 
 #[repr(C)]
@@ -185,9 +186,7 @@ impl PostProcessEffect for FeedbackFX {
 
     fn apply(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         target_texture: &wgpu::Texture,
@@ -197,7 +196,7 @@ impl PostProcessEffect for FeedbackFX {
     ) {
         self.width = ctx.width;
         self.height = ctx.height;
-        self.ensure_state(device, encoder, ctx.owner_key);
+        self.ensure_state(gpu.device, gpu.encoder, ctx.owner_key);
 
         let state = self.states.get(&ctx.owner_key).unwrap();
 
@@ -208,9 +207,9 @@ impl PostProcessEffect for FeedbackFX {
             _pad: [0.0; 3],
         };
 
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Feedback BG"),
             layout: &self.bind_group_layout,
             entries: &[
@@ -235,7 +234,7 @@ impl PostProcessEffect for FeedbackFX {
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps("Feedback Pass", ctx.width, ctx.height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Feedback Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,
@@ -260,7 +259,7 @@ impl PostProcessEffect for FeedbackFX {
         // Unity ref: Graphics.CopyTexture(result, stateBuffer) — GPU memcpy, zero
         // shader cost. Replaces the old SimpleBlitHelper render pass.
         let state = self.states.get(&ctx.owner_key).unwrap();
-        encoder.copy_texture_to_texture(
+        gpu.encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: target_texture,
                 mip_level: 0,

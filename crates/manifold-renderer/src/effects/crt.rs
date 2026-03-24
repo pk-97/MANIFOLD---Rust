@@ -5,6 +5,7 @@ use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
 
@@ -85,9 +86,7 @@ impl PostProcessEffect for CrtFX {
 
     fn apply(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source: &wgpu::TextureView,  // buffer in Unity
         target: &wgpu::TextureView,  // ctx.Host.GetTargetBuffer() in Unity
         _target_texture: &wgpu::Texture,
@@ -100,7 +99,7 @@ impl PostProcessEffect for CrtFX {
 
         self.width = ctx.width;
         self.height = ctx.height;
-        self.ensure_state(device, ctx.owner_key);
+        self.ensure_state(gpu.device, ctx.owner_key);
 
         let state = match self.states.get(&ctx.owner_key) {
             Some(s) => s,
@@ -117,7 +116,7 @@ impl PostProcessEffect for CrtFX {
         // CrtFX.cs line 66: Graphics.Blit(buffer, state.halfRes, material, 0)
         // _MainTex_TexelSize = 1/source_width, 1/source_height (Unity auto-sets from SOURCE)
         self.helper.draw_main_only(
-            device, queue, encoder,
+            gpu,
             source,                       // main_tex = buffer (source)
             &state.half_res.view,         // target = halfRes
             bytemuck::bytes_of(&CrtUniforms {
@@ -146,7 +145,7 @@ impl PostProcessEffect for CrtFX {
         let hh = state.half_res.height;
         let qw = state.quarter_res.width;
         self.helper.draw_main_only(
-            device, queue, encoder,
+            gpu,
             &state.half_res.view,         // main_tex = halfRes
             &state.quarter_res.view,      // target = quarterRes
             bytemuck::bytes_of(&CrtUniforms {
@@ -172,7 +171,7 @@ impl PostProcessEffect for CrtFX {
         // CrtFX.cs lines 72-80: material.SetTexture("_GlowTex", state.quarterRes); Blit(buffer, target, 2)
         // _MainTex_TexelSize = 1/source_width, 1/source_height (SOURCE = buffer)
         self.helper.draw(
-            device, queue, encoder,
+            gpu,
             source,                       // main_tex = buffer (source)
             &state.quarter_res.view,      // glow_tex = quarterRes (_GlowTex)
             target,                       // output = target

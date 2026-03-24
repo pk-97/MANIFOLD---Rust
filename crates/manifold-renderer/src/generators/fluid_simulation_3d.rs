@@ -12,6 +12,7 @@ use std::f32::consts::PI;
 use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::compute_common::Particle;
 
@@ -879,9 +880,7 @@ impl Generator for FluidSimulation3DGenerator {
 
     fn render(
         &mut self,
-        device:  &wgpu::Device,
-        queue:   &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target:  &wgpu::TextureView,
         ctx:     &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
@@ -932,14 +931,14 @@ impl Generator for FluidSimulation3DGenerator {
         // Unity: particles created once in Initialize(), never recreated for param changes.
         // Buffer is always MAX_PARTICLES; activeCount is dispatch-only.
         if !self.initialized {
-            self.init_particles(device, queue);
+            self.init_particles(gpu.device, gpu.queue);
         }
 
         // Unity EnsureVolumeResources: only recreate when vol_res changes
-        self.ensure_volume_resources(device, queue, desired_vol_res);
+        self.ensure_volume_resources(gpu.device, gpu.queue, desired_vol_res);
 
         // Unity EnsureDisplayResources: only recreate when display dims change
-        self.ensure_display_resources(device, queue, desired_dw, desired_dh);
+        self.ensure_display_resources(gpu.device, gpu.queue, desired_dw, desired_dh);
         let vol_res      = self.vol_res;
         let dw           = self.disp_w;
         let dh           = self.disp_h;
@@ -965,7 +964,7 @@ impl Generator for FluidSimulation3DGenerator {
                 if self.active_snap_mode == 3 {
                     // Seed pattern: dispatch SeedPatternKernel
                     self.dispatch_seed_pattern(
-                        queue, encoder, device,
+                        gpu.queue, gpu.encoder, gpu.device,
                         ctx.trigger_count % PATTERN_COUNT,
                         ctx.trigger_count,
                         container_type,
@@ -1095,12 +1094,12 @@ impl Generator for FluidSimulation3DGenerator {
                     scaled_energy: scaled_energy_3d,
                     _pad: [0; 24],
                 };
-                queue.write_buffer(&self.splat_3d_uniform_buf, 0, bytemuck::bytes_of(&splat_uniforms));
+                gpu.queue.write_buffer(&self.splat_3d_uniform_buf, 0, bytemuck::bytes_of(&splat_uniforms));
 
                 let particle_buffer = self.particle_buffer.as_ref().unwrap();
                 let accum_3d = self.accum_3d.as_ref().unwrap();
 
-                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                let bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label:   Some("FluidSim3D Splat3D BG"),
                     layout:  &self.splat_3d_bgl,
                     entries: &[
@@ -1110,7 +1109,7 @@ impl Generator for FluidSimulation3DGenerator {
                     ],
                 });
                 let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D Splat3D", vol_res, vol_res));
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Splat3D"), timestamp_writes: ts });
+                let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Splat3D"), timestamp_writes: ts });
                 pass.set_pipeline(&self.splat_3d_pipeline);
                 pass.set_bind_group(0, &bg, &[]);
                 pass.dispatch_workgroups(active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1);
@@ -1125,12 +1124,12 @@ impl Generator for FluidSimulation3DGenerator {
                     _pad1: 0,
                     _pad: [0; 24],
                 };
-                queue.write_buffer(&self.resolve_3d_uniform_buf, 0, bytemuck::bytes_of(&resolve_uniforms));
+                gpu.queue.write_buffer(&self.resolve_3d_uniform_buf, 0, bytemuck::bytes_of(&resolve_uniforms));
 
                 let accum_3d = self.accum_3d.as_ref().unwrap();
                 let density_vol = self.density_volume.as_ref().unwrap();
 
-                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                let bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label:   Some("FluidSim3D Resolve3D BG"),
                     layout:  &self.resolve_3d_bgl,
                     entries: &[
@@ -1141,7 +1140,7 @@ impl Generator for FluidSimulation3DGenerator {
                 });
                 let wg = vol_res.div_ceil(BAKE_GROUP_SIZE);
                 let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D Resolve3D", vol_res, vol_res));
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Resolve3D"), timestamp_writes: ts });
+                let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Resolve3D"), timestamp_writes: ts });
                 pass.set_pipeline(&self.resolve_3d_pipeline);
                 pass.set_bind_group(0, &bg, &[]);
                 pass.dispatch_workgroups(wg, wg, wg);
@@ -1154,19 +1153,19 @@ impl Generator for FluidSimulation3DGenerator {
                 let density_vol  = self.density_volume.as_ref().unwrap();
                 let density_temp = self.density_blur_temp.as_ref().unwrap();
                 // X: density_volume -> density_blur_temp
-                self.dispatch_blur_scalar(device, queue, encoder, scaled_radius, &density_vol.view, &density_temp.view, 0, 0, profiler);
+                self.dispatch_blur_scalar(gpu.device, gpu.queue, gpu.encoder, scaled_radius, &density_vol.view, &density_temp.view, 0, 0, profiler);
             }
             {
                 let density_vol  = self.density_volume.as_ref().unwrap();
                 let density_temp = self.density_blur_temp.as_ref().unwrap();
                 // Y: density_blur_temp -> density_volume
-                self.dispatch_blur_scalar(device, queue, encoder, scaled_radius, &density_temp.view, &density_vol.view, 1, 1, profiler);
+                self.dispatch_blur_scalar(gpu.device, gpu.queue, gpu.encoder, scaled_radius, &density_temp.view, &density_vol.view, 1, 1, profiler);
             }
             if vol_res >= 8 {
                 let density_vol  = self.density_volume.as_ref().unwrap();
                 let density_temp = self.density_blur_temp.as_ref().unwrap();
                 // Z: density_volume -> density_blur_temp (result in blur_temp)
-                self.dispatch_blur_scalar(device, queue, encoder, scaled_radius, &density_vol.view, &density_temp.view, 2, 2, profiler);
+                self.dispatch_blur_scalar(gpu.device, gpu.queue, gpu.encoder, scaled_radius, &density_vol.view, &density_temp.view, 2, 2, profiler);
                 // After Z blur, blurred density is in density_blur_temp (Unity BlurScalar3D returns temp)
             }
             // else: no Z blur, result is in density_volume (copied to temp in Unity via Graphics.CopyTexture)
@@ -1196,9 +1195,9 @@ impl Generator for FluidSimulation3DGenerator {
                     _pad3: 0.0,
                     _pad4: 0.0,
                 };
-                queue.write_buffer(&self.gradient_curl_3d_uniform_buf, 0, bytemuck::bytes_of(&gradient_uniforms));
+                gpu.queue.write_buffer(&self.gradient_curl_3d_uniform_buf, 0, bytemuck::bytes_of(&gradient_uniforms));
 
-                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                let bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label:   Some("FluidSim3D GradientCurl3D BG"),
                     layout:  &self.gradient_curl_3d_bgl,
                     entries: &[
@@ -1209,7 +1208,7 @@ impl Generator for FluidSimulation3DGenerator {
                 });
                 let wg = vol_res.div_ceil(BAKE_GROUP_SIZE);
                 let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D GradientCurl3D", vol_res, vol_res));
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D GradientCurl3D"), timestamp_writes: ts });
+                let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D GradientCurl3D"), timestamp_writes: ts });
                 pass.set_pipeline(&self.gradient_curl_3d_pipeline);
                 pass.set_bind_group(0, &bg, &[]);
                 pass.dispatch_workgroups(wg, wg, wg);
@@ -1221,19 +1220,19 @@ impl Generator for FluidSimulation3DGenerator {
                 let vector_vol  = self.vector_volume.as_ref().unwrap();
                 let vector_temp = self.vector_blur_temp.as_ref().unwrap();
                 // X: vector_volume -> vector_blur_temp
-                self.dispatch_blur_vector(device, queue, encoder, scaled_radius, &vector_vol.view, &vector_temp.view, 0, 3, profiler);
+                self.dispatch_blur_vector(gpu.device, gpu.queue, gpu.encoder, scaled_radius, &vector_vol.view, &vector_temp.view, 0, 3, profiler);
             }
             {
                 let vector_vol  = self.vector_volume.as_ref().unwrap();
                 let vector_temp = self.vector_blur_temp.as_ref().unwrap();
                 // Y: vector_blur_temp -> vector_volume
-                self.dispatch_blur_vector(device, queue, encoder, scaled_radius, &vector_temp.view, &vector_vol.view, 1, 4, profiler);
+                self.dispatch_blur_vector(gpu.device, gpu.queue, gpu.encoder, scaled_radius, &vector_temp.view, &vector_vol.view, 1, 4, profiler);
             }
             if vol_res >= 8 {
                 let vector_vol  = self.vector_volume.as_ref().unwrap();
                 let vector_temp = self.vector_blur_temp.as_ref().unwrap();
                 // Z: vector_volume -> vector_blur_temp (result in blur_temp)
-                self.dispatch_blur_vector(device, queue, encoder, scaled_radius, &vector_vol.view, &vector_temp.view, 2, 5, profiler);
+                self.dispatch_blur_vector(gpu.device, gpu.queue, gpu.encoder, scaled_radius, &vector_vol.view, &vector_temp.view, 2, 5, profiler);
             }
         }
 
@@ -1267,7 +1266,7 @@ impl Generator for FluidSimulation3DGenerator {
                 _pad1: 0.0,
                 _pad2: 0.0,
             };
-            queue.write_buffer(&self.sim_3d_uniform_buf, 0, bytemuck::bytes_of(&sim_uniforms));
+            gpu.queue.write_buffer(&self.sim_3d_uniform_buf, 0, bytemuck::bytes_of(&sim_uniforms));
 
             // Vector field: from vector_blur_temp (result after Z blur, or vector_volume if no Z)
             // Density: from density_blur_temp (result after Z blur, or density_volume if no Z)
@@ -1284,7 +1283,7 @@ impl Generator for FluidSimulation3DGenerator {
 
             let particle_buffer = self.particle_buffer.as_ref().unwrap();
 
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label:   Some("FluidSim3D Simulate3D BG"),
                 layout:  &self.simulate_3d_bgl,
                 entries: &[
@@ -1296,7 +1295,7 @@ impl Generator for FluidSimulation3DGenerator {
                 ],
             });
             let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D Simulate3D", active_count, 1));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Simulate3D"), timestamp_writes: ts });
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D Simulate3D"), timestamp_writes: ts });
             pass.set_pipeline(&self.simulate_3d_pipeline);
             pass.set_bind_group(0, &bg, &[]);
             pass.dispatch_workgroups(active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1);
@@ -1327,12 +1326,12 @@ impl Generator for FluidSimulation3DGenerator {
                 _pad8: 0.0,
                 _pad9: 0.0,
             };
-            queue.write_buffer(&self.projected_uniform_buf, 0, bytemuck::bytes_of(&proj_uniforms));
+            gpu.queue.write_buffer(&self.projected_uniform_buf, 0, bytemuck::bytes_of(&proj_uniforms));
 
             let particle_buffer = self.particle_buffer.as_ref().unwrap();
             let display_accum   = self.display_accum.as_ref().unwrap();
 
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label:   Some("FluidSim3D SplatProjected BG"),
                 layout:  &self.splat_projected_bgl,
                 entries: &[
@@ -1342,7 +1341,7 @@ impl Generator for FluidSimulation3DGenerator {
                 ],
             });
             let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D SplatProjected", dw, dh));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D SplatProjected"), timestamp_writes: ts });
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D SplatProjected"), timestamp_writes: ts });
             pass.set_pipeline(&self.splat_projected_pipeline);
             pass.set_bind_group(0, &bg, &[]);
             pass.dispatch_workgroups(active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1);
@@ -1358,12 +1357,12 @@ impl Generator for FluidSimulation3DGenerator {
                 _pad1: 0,
                 _pad: [0; 24],
             };
-            queue.write_buffer(&self.resolve_display_uniform_buf, 0, bytemuck::bytes_of(&resolve_disp_uniforms));
+            gpu.queue.write_buffer(&self.resolve_display_uniform_buf, 0, bytemuck::bytes_of(&resolve_disp_uniforms));
 
             let display_accum      = self.display_accum.as_ref().unwrap();
             let display_density_rt = self.display_density_rt.as_ref().unwrap();
 
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label:   Some("FluidSim3D ResolveDisplay BG"),
                 layout:  &self.resolve_display_bgl,
                 entries: &[
@@ -1373,7 +1372,7 @@ impl Generator for FluidSimulation3DGenerator {
                 ],
             });
             let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim3D ResolveDisplay", dw, dh));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D ResolveDisplay"), timestamp_writes: ts });
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("FluidSim3D ResolveDisplay"), timestamp_writes: ts });
             pass.set_pipeline(&self.resolve_display_pipeline);
             pass.set_bind_group(0, &bg, &[]);
             // Unity: resolveGroupsX = CeilToInt(w/16f), resolveGroupsY = CeilToInt(h/16f)
@@ -1401,11 +1400,11 @@ impl Generator for FluidSimulation3DGenerator {
                 _pad0: 0.0,
                 _pad1: 0.0,
             };
-            queue.write_buffer(&self.display_uniform_buf, 0, bytemuck::bytes_of(&display_uniforms));
+            gpu.queue.write_buffer(&self.display_uniform_buf, 0, bytemuck::bytes_of(&display_uniforms));
 
             let display_density_rt = self.display_density_rt.as_ref().unwrap();
 
-            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label:   Some("FluidSim3D Display BG"),
                 layout:  &self.display_bgl,
                 entries: &[
@@ -1419,7 +1418,7 @@ impl Generator for FluidSimulation3DGenerator {
             });
 
             let ts = profiler.and_then(|p| p.render_timestamps("FluidSim3D Display", ctx.width, ctx.height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("FluidSim3D Display Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view:           target,

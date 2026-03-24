@@ -2,6 +2,7 @@ use manifold_core::GeneratorTypeId;
 use crate::blit::BlitPipeline;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 use super::stateful_base::StatefulState;
 
 // Parameter indices matching types.rs param_defs
@@ -461,17 +462,15 @@ impl Generator for StrangeAttractorGenerator {
 
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         let iw = (ctx.width / 2).max(1);
         let ih = (ctx.height / 2).max(1);
-        self.ensure_state(device, iw, ih);
-        self.ensure_position_texture(device);
+        self.ensure_state(gpu.device, iw, ih);
+        self.ensure_position_texture(gpu.device);
 
         let attractor_type = if ctx.param_count > TYPE as u32 {
             ctx.params[TYPE].round() as i32
@@ -499,7 +498,7 @@ impl Generator for StrangeAttractorGenerator {
         // Camera angle matches Unity: time * animSpeed * 0.25
         let cam_angle = ctx.time * speed * 0.25;
         let aspect = ctx.width as f32 / ctx.height.max(1) as f32;
-        self.project_and_upload(queue, attractor_type, cam_angle, scale, aspect);
+        self.project_and_upload(gpu.queue, attractor_type, cam_angle, scale, aspect);
 
         let state = self.state.as_mut().unwrap();
         let texel_x = 1.0 / iw as f32;
@@ -514,10 +513,10 @@ impl Generator for StrangeAttractorGenerator {
             texel_y,
             _pad: [0.0; 2],
         };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         // GPU pass: decay + splat
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Attractor BG"),
             layout: &self.bgl,
             entries: &[
@@ -544,7 +543,7 @@ impl Generator for StrangeAttractorGenerator {
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps("Attractor Splat", iw, ih));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Attractor Splat Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: state.write_view(),
@@ -568,7 +567,7 @@ impl Generator for StrangeAttractorGenerator {
         state.swap();
 
         // Blit half-res state to full-res output
-        self.blit.blit(device, encoder, state.read_view(), target);
+        self.blit.blit(gpu.device, gpu.encoder, state.read_view(), target);
 
         ctx.anim_progress
     }

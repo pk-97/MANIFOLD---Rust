@@ -2,6 +2,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use crate::effect::{EffectContext, find_chain_param};
 use crate::effect_registry::EffectRegistry;
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use crate::wet_dry_lerp::WetDryLerpPipeline;
 
@@ -94,9 +95,7 @@ impl EffectChain {
     #[allow(clippy::too_many_arguments)]
     pub fn apply_chain(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         registry: &mut EffectRegistry,
         input_view: &wgpu::TextureView,
         input_texture: &wgpu::Texture,
@@ -125,7 +124,7 @@ impl EffectChain {
             return None;
         }
 
-        self.ensure_buffers(device, ctx.width, ctx.height);
+        self.ensure_buffers(gpu.device, ctx.width, ctx.height);
         self.use_ping_as_source = true;
 
         // Precompute cross-chain params for effects that need them.
@@ -167,7 +166,7 @@ impl EffectChain {
                 if let Some(prev_gid) = current_group_id
                     && let Some(group) = groups.iter().find(|g| g.id == prev_gid) {
                         self.apply_wet_dry_lerp(
-                            device, queue, encoder, group.wet_dry, wet_dry_lerp, gpu_profiler,
+                            gpu, group.wet_dry, wet_dry_lerp, gpu_profiler,
                         );
                     }
 
@@ -183,14 +182,14 @@ impl EffectChain {
                             // GPU memcpy so the dry snapshot captures the input.
                             if first_effect_pending {
                                 copy_tex_to_rt(
-                                    encoder, input_texture, self.source(),
+                                    gpu.encoder, input_texture, self.source(),
                                 );
                                 first_effect_pending = false;
                             }
-                            self.ensure_dry_snapshot(device, ctx.width, ctx.height);
+                            self.ensure_dry_snapshot(gpu.device, ctx.width, ctx.height);
                             // GPU copy source → dry_snapshot
                             copy_rt_to_rt(
-                                encoder,
+                                gpu.encoder,
                                 self.source(),
                                 self.dry_snapshot.as_ref().unwrap(),
                             );
@@ -218,7 +217,7 @@ impl EffectChain {
                         self.source_view()
                     };
                     processor.apply(
-                        device, queue, encoder,
+                        gpu,
                         source_v,
                         self.target_view(),
                         &self.target().texture,
@@ -234,7 +233,7 @@ impl EffectChain {
         if let Some(prev_gid) = current_group_id
             && let Some(group) = groups.iter().find(|g| g.id == prev_gid) {
                 self.apply_wet_dry_lerp(
-                    device, queue, encoder, group.wet_dry, wet_dry_lerp, gpu_profiler,
+                    gpu, group.wet_dry, wet_dry_lerp, gpu_profiler,
                 );
             }
 
@@ -255,9 +254,7 @@ impl EffectChain {
     /// Apply wet/dry lerp if wet_dry < 1.0 and dry snapshot exists.
     fn apply_wet_dry_lerp(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         wet_dry: f32,
         lerp_pipeline: Option<&WetDryLerpPipeline>,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
@@ -276,7 +273,7 @@ impl EffectChain {
 
         // Lerp: dry_snapshot (dry) + source (wet) → target
         lerp.apply(
-            device, queue, encoder,
+            gpu,
             &dry_snap.view,
             self.source_view(),
             self.target_view(),

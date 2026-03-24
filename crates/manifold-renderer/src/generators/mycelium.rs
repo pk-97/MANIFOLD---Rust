@@ -7,6 +7,7 @@
 use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::compute_common::{PhysarumAgent, FIXED_POINT_SCALE};
 
@@ -614,9 +615,7 @@ impl Generator for MyceliumGenerator {
 
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
@@ -639,7 +638,7 @@ impl Generator for MyceliumGenerator {
 
         // Lazy-init or re-seed
         if !self.initialized || seeds_int != self.current_seeds || desired_agents != self.agent_count {
-            self.init_resources(device, queue, ctx.width, ctx.height, desired_agents, seeds_int);
+            self.init_resources(gpu.device, gpu.queue, ctx.width, ctx.height, desired_agents, seeds_int);
         }
 
         let tw = self.trail_width;
@@ -662,7 +661,7 @@ impl Generator for MyceliumGenerator {
             reactivity,
             _pad: 0.0,
         };
-        queue.write_buffer(&self.agent_uniform_buffer, 0, bytemuck::bytes_of(&agent_uniforms));
+        gpu.queue.write_buffer(&self.agent_uniform_buffer, 0, bytemuck::bytes_of(&agent_uniforms));
 
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
@@ -670,7 +669,7 @@ impl Generator for MyceliumGenerator {
         let accum_buffer = self.accum_buffer.as_ref().unwrap();
 
         // Agent update reads trail_a, writes to accum
-        let agent_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let agent_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Mycelium Agent Update BG"),
             layout: &self.agent_update_bgl,
             entries: &[
@@ -695,7 +694,7 @@ impl Generator for MyceliumGenerator {
 
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("Mycelium Agent Update", tw, th));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Mycelium Agent Update Pass"),
                 timestamp_writes: ts,
             });
@@ -712,9 +711,9 @@ impl Generator for MyceliumGenerator {
             _pad0: 0,
             _pad1: 0,
         };
-        queue.write_buffer(&self.resolve_uniform_buffer, 0, bytemuck::bytes_of(&resolve_uniforms));
+        gpu.queue.write_buffer(&self.resolve_uniform_buffer, 0, bytemuck::bytes_of(&resolve_uniforms));
 
-        let resolve_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let resolve_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Mycelium Resolve BG"),
             layout: &self.resolve_bgl,
             entries: &[
@@ -739,7 +738,7 @@ impl Generator for MyceliumGenerator {
 
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("Mycelium Resolve", tw, th));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Mycelium Resolve Pass"),
                 timestamp_writes: ts,
             });
@@ -753,15 +752,15 @@ impl Generator for MyceliumGenerator {
         // Pass 0: B→A with decay + evaporation
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
-        self.run_diffuse_pass(device, queue, encoder, &trail_b.view, &trail_a.view, decay, 0.003, profiler);
+        self.run_diffuse_pass(gpu.device, gpu.queue, gpu.encoder, &trail_b.view, &trail_a.view, decay, 0.003, profiler);
         // Pass 1: A→B pure blur
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
-        self.run_diffuse_pass(device, queue, encoder, &trail_a.view, &trail_b.view, 1.0, 0.0, profiler);
+        self.run_diffuse_pass(gpu.device, gpu.queue, gpu.encoder, &trail_a.view, &trail_b.view, 1.0, 0.0, profiler);
         // Pass 2: B→A pure blur
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
-        self.run_diffuse_pass(device, queue, encoder, &trail_b.view, &trail_a.view, 1.0, 0.0, profiler);
+        self.run_diffuse_pass(gpu.device, gpu.queue, gpu.encoder, &trail_b.view, &trail_a.view, 1.0, 0.0, profiler);
 
         // ── Pass 4: Display (fragment) ──
         // trail_a has final diffused result
@@ -772,10 +771,10 @@ impl Generator for MyceliumGenerator {
             uv_scale,
             time: ctx.time,
         };
-        queue.write_buffer(&self.display_uniform_buffer, 0, bytemuck::bytes_of(&display_uniforms));
+        gpu.queue.write_buffer(&self.display_uniform_buffer, 0, bytemuck::bytes_of(&display_uniforms));
 
         let trail_a = self.trail_a.as_ref().unwrap();
-        let display_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let display_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Mycelium Display BG"),
             layout: &self.display_bgl,
             entries: &[
@@ -796,7 +795,7 @@ impl Generator for MyceliumGenerator {
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps("Mycelium Display", ctx.width, ctx.height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Mycelium Display Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,

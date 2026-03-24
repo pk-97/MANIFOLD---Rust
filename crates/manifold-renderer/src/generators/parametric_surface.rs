@@ -1,6 +1,7 @@
 use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 
 // Parameter indices matching Unity ComputeParametricSurfaceGenerator
 const SHAPE: usize = 0;
@@ -257,9 +258,7 @@ impl Generator for ParametricSurfaceGenerator {
 
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
@@ -280,9 +279,9 @@ impl Generator for ParametricSurfaceGenerator {
                 vol_res: VOL_SIZE as f32,
                 _pad0: 0.0,
             };
-            queue.write_buffer(&self.bake_uniform_buffer, 0, bytemuck::bytes_of(&bake_uniforms));
+            gpu.queue.write_buffer(&self.bake_uniform_buffer, 0, bytemuck::bytes_of(&bake_uniforms));
 
-            let compute_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let compute_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("ParametricSurface Compute BG"),
                 layout: &self.compute_bgl,
                 entries: &[
@@ -299,7 +298,7 @@ impl Generator for ParametricSurfaceGenerator {
 
             {
                 let ts = profiler.and_then(|p| p.compute_timestamps("ParametricSurface Bake", VOL_SIZE, VOL_SIZE));
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("ParametricSurface Bake Pass"),
                     timestamp_writes: ts,
                 });
@@ -320,9 +319,9 @@ impl Generator for ParametricSurfaceGenerator {
             aspect_ratio: ctx.aspect,
             uv_scale,
         };
-        queue.write_buffer(&self.raymarch_uniform_buffer, 0, bytemuck::bytes_of(&raymarch_uniforms));
+        gpu.queue.write_buffer(&self.raymarch_uniform_buffer, 0, bytemuck::bytes_of(&raymarch_uniforms));
 
-        let raymarch_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let raymarch_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ParametricSurface Raymarch BG"),
             layout: &self.raymarch_bgl,
             entries: &[
@@ -343,7 +342,7 @@ impl Generator for ParametricSurfaceGenerator {
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps("ParametricSurface Raymarch", ctx.width, ctx.height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ParametricSurface Raymarch Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,

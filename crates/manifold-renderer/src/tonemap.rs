@@ -4,6 +4,7 @@
 //! Owned by the compositor. Applied as the final step after master effects,
 //! before the blit to the display surface.
 
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 
 /// Per-frame tonemap settings. Matches Unity CompositorStack properties:
@@ -162,9 +163,7 @@ impl TonemapPipeline {
     /// hdr_output_enabled. PQ (mode 1) is reserved for export pipeline.
     pub fn apply(
         &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         hdr_source: &wgpu::TextureView,
         settings: &TonemapSettings,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
@@ -180,9 +179,9 @@ impl TonemapPipeline {
             max_nits: settings.max_display_nits,
             mode,
         };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Tonemap BG"),
             layout: &self.bind_group_layout,
             entries: &[
@@ -204,7 +203,7 @@ impl TonemapPipeline {
         let ts = profiler.and_then(|p| {
             p.render_timestamps("Tonemap", self.output.width, self.output.height)
         });
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Tonemap Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &self.output.view,

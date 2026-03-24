@@ -5,6 +5,7 @@ use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::HDR_BUFFER_DIVISOR;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
@@ -106,9 +107,7 @@ impl PostProcessEffect for BloomFX {
 
     fn apply(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         source: &wgpu::TextureView,
         target: &wgpu::TextureView,
         _target_texture: &wgpu::Texture,
@@ -121,12 +120,12 @@ impl PostProcessEffect for BloomFX {
 
         self.width = ctx.width;
         self.height = ctx.height;
-        self.ensure_state(device, ctx.owner_key);
+        self.ensure_state(gpu.device, ctx.owner_key);
 
         let state = self.states.get(&ctx.owner_key).unwrap();
         if state.count == 0 {
             self.helper.draw_main_only(
-                device, queue, encoder,
+                gpu,
                 source, target,
                 bytemuck::bytes_of(&BloomUniforms {
                     mode: 3, threshold: 0.0, knee: 0.0, intensity: 0.0,
@@ -162,7 +161,7 @@ impl PostProcessEffect for BloomFX {
 
         // Pass 0: Prefilter
         self.helper.draw_main_only(
-            device, queue, encoder,
+            gpu,
             source, &state.mips_a[0].view,
             bytemuck::bytes_of(&BloomUniforms {
                 mode: 0,
@@ -180,7 +179,7 @@ impl PostProcessEffect for BloomFX {
             let src_w = state.mips_a[i - 1].width;
             let src_h = state.mips_a[i - 1].height;
             self.helper.draw_main_only(
-                device, queue, encoder,
+                gpu,
                 &state.mips_a[i - 1].view, &state.mips_a[i].view,
                 bytemuck::bytes_of(&BloomUniforms {
                     mode: 1,
@@ -207,7 +206,7 @@ impl PostProcessEffect for BloomFX {
             let lo_h = if i == used_levels - 2 { state.mips_a[i + 1].height } else { state.mips_b[i + 1].height };
 
             self.helper.draw(
-                device, queue, encoder,
+                gpu,
                 &state.mips_a[i].view, lo_view, &state.mips_b[i].view,
                 bytemuck::bytes_of(&BloomUniforms {
                     mode: 2,
@@ -227,7 +226,7 @@ impl PostProcessEffect for BloomFX {
         let bloom_w = state.mips_b[0].width;
         let bloom_h = state.mips_b[0].height;
         self.helper.draw(
-            device, queue, encoder,
+            gpu,
             source, &state.mips_b[0].view, target,
             bytemuck::bytes_of(&BloomUniforms {
                 mode: 3,

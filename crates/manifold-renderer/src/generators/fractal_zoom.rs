@@ -1,6 +1,7 @@
 use manifold_core::GeneratorTypeId;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
+use crate::gpu_encoder::GpuEncoder;
 
 // Parameter indices matching Unity's FractalZoomGenerator.cs
 const SPEED: usize = 0;
@@ -96,9 +97,7 @@ impl Generator for FractalZoomGenerator {
 
     fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        gpu: &mut GpuEncoder,
         target: &wgpu::TextureView,
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
@@ -115,9 +114,9 @@ impl Generator for FractalZoomGenerator {
             trigger_count: ctx.trigger_count as f32,
             _pad: [0.0; 2],
         };
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FractalZoom BG"),
             layout: &self.bind_group_layout,
             entries: &[
@@ -136,7 +135,7 @@ impl Generator for FractalZoomGenerator {
             let ts = profiler.and_then(|p| {
                 p.compute_timestamps("FractalZoom", ctx.width, ctx.height)
             });
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("FractalZoom Pass"),
                 timestamp_writes: ts,
             });
