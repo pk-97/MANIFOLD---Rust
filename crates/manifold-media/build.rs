@@ -1,6 +1,9 @@
 fn main() {
     #[cfg(target_os = "macos")]
     {
+        println!("cargo:rerun-if-changed=native/MetalEncoderPlugin.m");
+        println!("cargo:rerun-if-changed=native/MetalVideoDecoderPlugin.m");
+
         cc::Build::new()
             .file("native/MetalEncoderPlugin.m")
             .flag("-fobjc-arc")
