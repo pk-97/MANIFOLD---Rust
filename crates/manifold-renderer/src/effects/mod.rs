@@ -3,6 +3,7 @@
 pub const HDR_BUFFER_DIVISOR: u32 = 2;
 
 pub mod simple_blit_helper;
+pub mod compute_blit_helper;
 pub mod dual_texture_blit_helper;
 pub mod invert_colors;
 pub mod color_grade;

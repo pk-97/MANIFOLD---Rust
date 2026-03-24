@@ -1,7 +1,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
-use super::simple_blit_helper::SimpleBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -12,16 +12,17 @@ struct MirrorUniforms {
 }
 
 /// Mirror effect — horizontal, vertical, or quad mirror.
+/// Uses compute dispatch to bypass Metal TBDR tile overhead.
 pub struct MirrorFX {
-    helper: SimpleBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl MirrorFX {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            helper: SimpleBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
-                include_str!("shaders/mirror.wgsl"),
+                include_str!("shaders/mirror_compute.wgsl"),
                 "Mirror",
                 std::mem::size_of::<MirrorUniforms>() as u64,
             ),
@@ -45,7 +46,6 @@ impl PostProcessEffect for MirrorFX {
         ctx: &EffectContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        // MirrorFX.cs:13-14 — GetParam(0)=Amount, Mathf.Round(GetParam(1))=Mode
         let p = &fx.param_values;
         let amount = p.first().copied().unwrap_or(1.0);
         let mode = p.get(1).copied().unwrap_or(0.0).round() as u32;
@@ -55,7 +55,7 @@ impl PostProcessEffect for MirrorFX {
             _pad: [0.0; 2],
         };
 
-        self.helper.draw(
+        self.helper.dispatch(
             device, queue, encoder,
             source, target,
             bytemuck::bytes_of(&uniforms),

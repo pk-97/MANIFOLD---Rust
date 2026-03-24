@@ -54,8 +54,10 @@ const INITIAL_BLEND_SLOTS: u32 = 32;
 ///
 /// The buffer grows dynamically when a frame needs more slots than currently
 /// allocated, so there is no hard limit on project complexity.
+/// Compute-based blend resources. Uses compute dispatches instead of render
+/// passes to bypass Metal TBDR tile overhead (~290us per pass at 4K).
 struct BlendResources {
-    pipeline: wgpu::RenderPipeline,
+    pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     uniform_buffer: wgpu::Buffer,
@@ -67,25 +69,27 @@ struct BlendResources {
     next_slot: u32,
     /// High-water mark from the previous frame (used to grow the buffer).
     prev_frame_slots: u32,
+    /// Compositor width/height — needed for dispatch_workgroups.
+    width: u32,
+    height: u32,
 }
 
 impl BlendResources {
-    fn new(device: &wgpu::Device) -> Self {
-        let format = wgpu::TextureFormat::Rgba16Float;
-
+    fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Compositor Blend"),
+            label: Some("Compositor Blend Compute"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("generators/shaders/compositor_blend.wgsl").into(),
+                include_str!("generators/shaders/compositor_blend_compute.wgsl").into(),
             ),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Blend BGL"),
+            label: Some("Blend Compute BGL"),
             entries: &[
+                // binding 0: uniforms (dynamic offset)
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
@@ -95,9 +99,10 @@ impl BlendResources {
                     },
                     count: None,
                 },
+                // binding 1: base texture
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -105,9 +110,10 @@ impl BlendResources {
                     },
                     count: None,
                 },
+                // binding 2: blend texture
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -115,47 +121,39 @@ impl BlendResources {
                     },
                     count: None,
                 },
+                // binding 3: sampler
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // binding 4: output storage texture (write-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
                     count: None,
                 },
             ],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Blend Pipeline Layout"),
+            label: Some("Blend Compute Pipeline Layout"),
             bind_group_layouts: &[&bind_group_layout],
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Blend Pipeline"),
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Blend Compute Pipeline"),
             layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
+            module: &shader,
+            entry_point: Some("cs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
 
@@ -181,6 +179,7 @@ impl BlendResources {
         Self {
             pipeline, bind_group_layout, sampler, uniform_buffer,
             slot_stride, capacity, next_slot: 0, prev_frame_slots: 0,
+            width, height,
         }
     }
 
@@ -202,7 +201,7 @@ impl BlendResources {
         }
     }
 
-    /// Execute a blend pass: reads source + blend textures, writes to target.
+    /// Execute a compute blend: reads source + blend textures, writes to target storage texture.
     /// Each call writes to a unique slot in the ring buffer so multiple blend
     /// passes within a single frame each read their own uniforms.
     fn blend_pass(
@@ -234,7 +233,7 @@ impl BlendResources {
         queue.write_buffer(&self.uniform_buffer, offset, bytemuck::bytes_of(uniforms));
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Blend BG"),
+            label: Some("Blend Compute BG"),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -257,31 +256,32 @@ impl BlendResources {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(target_view),
+                },
             ],
         });
 
         {
-            let ts = profiler.and_then(|p| p.render_timestamps("Blend Pass", 0, 0));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let ts = profiler.and_then(|p| p.compute_timestamps("Blend Pass", self.width, self.height));
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("Blend Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
                 timestamp_writes: ts,
-                occlusion_query_set: None,
-                multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[offset as u32]);
-            pass.draw(0..3, 0..1);
+            pass.dispatch_workgroups(
+                self.width.div_ceil(16),
+                self.height.div_ceil(16),
+                1,
+            );
         }
+    }
+
+    fn resize(&mut self, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
     }
 }
 
@@ -420,7 +420,7 @@ impl LayerCompositor {
         Self {
             main: PingPong::new(device, width, height, "Compositor"),
             layer_buf: None,
-            blend: BlendResources::new(device),
+            blend: BlendResources::new(device, width, height),
             effect_chain: EffectChain::new(),
             effect_registry: EffectRegistry::new(device, queue),
             wet_dry_lerp: WetDryLerpPipeline::new(device),
@@ -816,6 +816,7 @@ impl Compositor for LayerCompositor {
         if let Some(lb) = &mut self.layer_buf {
             lb.resize(device, width, height);
         }
+        self.blend.resize(width, height);
         self.effect_chain.resize(device, width, height);
         self.effect_registry.resize_all(device, width, height);
         self.tonemap.resize(device, width, height);
