@@ -161,36 +161,8 @@ impl GeneratorRenderer {
             }
         }
 
-        // Skip generators on invisible layers (muted, soloed-out, zero opacity,
-        // or occluded by an Opaque layer above).
+        // Skip generators on invisible layers (muted, soloed-out, zero opacity).
         let any_solo = layers.iter().any(|l| l.is_solo);
-
-        // Opaque occlusion: find the topmost Opaque layer (full opacity) that has
-        // an active clip. All layers below it are invisible and can be skipped.
-        let mut first_visible_layer: usize = 0;
-        {
-            // Build set of layer indices that have active clips
-            let mut layer_has_clip = [false; 64];
-            for active in self.active_clips.values() {
-                let idx = active.layer_index as usize;
-                if idx < 64 {
-                    layer_has_clip[idx] = true;
-                }
-            }
-            // Scan top-to-bottom for the highest opaque occluder
-            for (idx, layer) in layers.iter().enumerate().rev() {
-                if layer.default_blend_mode == manifold_core::BlendMode::Opaque
-                    && layer.opacity >= 1.0
-                    && !layer.is_muted
-                    && (layer.is_solo || !any_solo)
-                    && idx < 64
-                    && layer_has_clip[idx]
-                {
-                    first_visible_layer = idx;
-                    break;
-                }
-            }
-        }
 
         // Collect clip IDs into pre-allocated scratch to avoid borrow conflict
         self.render_scratch.clear();
@@ -212,8 +184,7 @@ impl GeneratorRenderer {
             if let Some(layer) = layers.get(layer_index as usize)
                 && (layer.is_muted
                     || (any_solo && !layer.is_solo)
-                    || layer.opacity <= 0.0
-                    || (layer_index as usize) < first_visible_layer)
+                    || layer.opacity <= 0.0)
             {
                 continue;
             }

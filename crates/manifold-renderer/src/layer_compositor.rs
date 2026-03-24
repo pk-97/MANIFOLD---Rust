@@ -354,6 +354,339 @@ impl PingPong {
     }
 }
 
+// ── Compute batch blender ──────────────────────────────────────────────
+
+/// GPU-side descriptor matching the WGSL `LayerDesc` struct (48 bytes, 16-aligned).
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BatchLayerDesc {
+    texture_index: u32,
+    blend_mode: u32,
+    opacity: f32,
+    translate_x: f32,
+    translate_y: f32,
+    scale_val: f32,
+    rotation: f32,
+    aspect_ratio: f32,
+    invert_colors: f32,
+    _pad: f32,
+    _pad1: f32,
+    _pad2: f32,
+}
+
+const _: () = assert!(std::mem::size_of::<BatchLayerDesc>() == 48);
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct BatchParams {
+    layer_count: u32,
+    width: u32,
+    height: u32,
+    _pad: u32,
+}
+
+const INITIAL_BATCH_CAPACITY: u32 = 8;
+
+/// Batches consecutive effect-free layers into a single compute dispatch.
+/// Uses `binding_array<texture_2d<f32>>` for bindless layer texture access.
+struct ComputeBatcher {
+    pipeline: wgpu::ComputePipeline,
+    /// Group 0: binding array + textures + storage (no uniform — wgpu constraint)
+    bgl_main: wgpu::BindGroupLayout,
+    /// Group 1: uniform params (separate group)
+    bgl_params: wgpu::BindGroupLayout,
+    params_bg: wgpu::BindGroup,
+    sampler: wgpu::Sampler,
+    descriptor_buffer: wgpu::Buffer,
+    params_buffer: wgpu::Buffer,
+    dummy_view: wgpu::TextureView,
+    shader_module: wgpu::ShaderModule,
+    array_capacity: u32,
+}
+
+impl ComputeBatcher {
+    fn new(device: &wgpu::Device, initial_layers: u32) -> Self {
+        let capacity = initial_layers.max(INITIAL_BATCH_CAPACITY);
+        let format = wgpu::TextureFormat::Rgba16Float;
+
+        let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("CompositorBatch"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("generators/shaders/compositor_batch.wgsl").into(),
+            ),
+        });
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("CompositorBatch Sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let dummy_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("CompositorBatch Dummy"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_view = dummy_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let descriptor_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("CompositorBatch Descriptors"),
+            size: (capacity as u64) * std::mem::size_of::<BatchLayerDesc>() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("CompositorBatch Params"),
+            size: std::mem::size_of::<BatchParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Group 0: binding array + textures + storage (no uniform — wgpu constraint)
+        let bgl_main = Self::create_bgl_main(device, capacity);
+        // Group 1: uniform params (separate — can't mix uniform + binding_array)
+        let bgl_params = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("CompositorBatch Params BGL"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let params_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("CompositorBatch Params BG"),
+            layout: &bgl_params,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            }],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("CompositorBatch PL"),
+            bind_group_layouts: &[&bgl_main, &bgl_params],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("CompositorBatch Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader_module,
+            entry_point: Some("cs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+
+        Self {
+            pipeline,
+            bgl_main,
+            bgl_params,
+            params_bg,
+            sampler,
+            descriptor_buffer,
+            params_buffer,
+            dummy_view,
+            shader_module,
+            array_capacity: capacity,
+        }
+    }
+
+    fn create_bgl_main(device: &wgpu::Device, array_size: u32) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("CompositorBatch Main BGL"),
+            entries: &[
+                // 0: base texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // 1: sampler
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // 2: output storage texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                // 3: layer descriptors (storage buffer)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // 4: layer textures (binding array)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: std::num::NonZero::new(array_size),
+                },
+            ],
+        })
+    }
+
+    /// Grow the binding array if needed. Rebuilds pipeline + main BGL.
+    fn ensure_capacity(&mut self, device: &wgpu::Device, needed: u32) {
+        if needed <= self.array_capacity {
+            return;
+        }
+        let new_cap = (self.array_capacity * 2).max(needed);
+        log::info!(
+            "[ComputeBatcher] Growing binding array: {} → {}",
+            self.array_capacity, new_cap
+        );
+
+        self.descriptor_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("CompositorBatch Descriptors"),
+            size: (new_cap as u64) * std::mem::size_of::<BatchLayerDesc>() as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        self.bgl_main = Self::create_bgl_main(device, new_cap);
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("CompositorBatch PL"),
+            bind_group_layouts: &[&self.bgl_main, &self.bgl_params],
+            immediate_size: 0,
+        });
+        self.pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("CompositorBatch Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &self.shader_module,
+            entry_point: Some("cs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
+        self.array_capacity = new_cap;
+    }
+
+    /// Dispatch a batch of layers as a single compute pass.
+    #[allow(clippy::too_many_arguments)]
+    fn flush(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        base_view: &wgpu::TextureView,
+        target_view: &wgpu::TextureView,
+        layer_views: &[&wgpu::TextureView],
+        descs: &[BatchLayerDesc],
+        width: u32,
+        height: u32,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
+    ) {
+        let count = descs.len() as u32;
+        if count == 0 {
+            return;
+        }
+
+        self.ensure_capacity(device, count);
+
+        // Upload descriptors + params
+        queue.write_buffer(
+            &self.descriptor_buffer,
+            0,
+            bytemuck::cast_slice(descs),
+        );
+        queue.write_buffer(
+            &self.params_buffer,
+            0,
+            bytemuck::bytes_of(&BatchParams {
+                layer_count: count,
+                width,
+                height,
+                _pad: 0,
+            }),
+        );
+
+        // Build texture view array (pad unused slots with dummy)
+        let mut views: Vec<&wgpu::TextureView> =
+            Vec::with_capacity(self.array_capacity as usize);
+        for view in layer_views {
+            views.push(view);
+        }
+        while views.len() < self.array_capacity as usize {
+            views.push(&self.dummy_view);
+        }
+
+        let main_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("CompositorBatch Main BG"),
+            layout: &self.bgl_main,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(base_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(target_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.descriptor_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureViewArray(&views),
+                },
+            ],
+        });
+
+        let ts = profiler.and_then(|p| p.compute_timestamps("Batch Blend", width, height));
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("Batch Blend"),
+            timestamp_writes: ts,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &main_bg, &[]);
+        pass.set_bind_group(1, &self.params_bg, &[]);
+        pass.dispatch_workgroups(width.div_ceil(16), height.div_ceil(16), 1);
+    }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────
+
 /// Deterministic hash of a clip ID string to produce an owner_key for effect context.
 fn clip_id_owner_key(clip_id: &str) -> i64 {
     let mut hasher = DefaultHasher::new();
@@ -413,6 +746,8 @@ pub struct LayerCompositor {
     /// led_exit_index == 0. Avoids the main buffer being overwritten by tonemap
     /// and master effects before the LED pipeline reads it.
     led_tap: Option<crate::render_target::RenderTarget>,
+    /// Compute batch blender for consecutive effect-free layers.
+    batcher: ComputeBatcher,
 }
 
 impl LayerCompositor {
@@ -421,6 +756,7 @@ impl LayerCompositor {
             main: PingPong::new(device, width, height, "Compositor"),
             layer_buf: None,
             blend: BlendResources::new(device),
+            batcher: ComputeBatcher::new(device, INITIAL_BATCH_CAPACITY),
             effect_chain: EffectChain::new(),
             effect_registry: EffectRegistry::new(device, queue),
             wet_dry_lerp: WetDryLerpPipeline::new(device),
@@ -494,6 +830,10 @@ impl LayerCompositor {
         // Check for any solo layer
         let any_solo = frame.layers.iter().any(|l| l.is_solo);
 
+        // Batch state: accumulate consecutive effect-free single-clip layers.
+        let mut batch_descs: Vec<BatchLayerDesc> = Vec::new();
+        let mut batch_views: Vec<&wgpu::TextureView> = Vec::new();
+
         // Group clips by layer_index. Clips are sorted by layer_index descending
         // (higher index = bottom of timeline = rendered first as base).
         let mut i = 0;
@@ -528,30 +868,77 @@ impl LayerCompositor {
                 .is_some_and(|ld| has_enabled_effects(ld.effects));
 
             if group.len() == 1 && !has_layer_effects {
-                // Single clip with NO layer effects: blit directly into main with layer blend mode
                 let clip = &group[0];
+                let has_clip_effects = has_enabled_effects(clip.effects);
 
-                // Apply clip-level effects if present
-                let blend_input = if has_enabled_effects(clip.effects) {
-                    let ctx = EffectContext {
-                        time: frame.time,
-                        beat: frame.beat,
-                        dt: frame.dt,
-                        width,
-                        height,
-                        owner_key: clip_id_owner_key(clip.clip_id),
-                        is_clip_level: true, edge_stretch_width: 0.5625,
-                        frame_count: frame.frame_count as i64,
-                    };
-                    Self::apply_effects(
-                        &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
+                // Batchable: single clip, no layer effects, no clip effects
+                if !has_clip_effects {
+                    batch_descs.push(BatchLayerDesc {
+                        texture_index: batch_views.len() as u32,
+                        blend_mode: layer_blend as u32,
+                        opacity: layer_opacity * clip.opacity,
+                        translate_x: clip.translate_x,
+                        translate_y: clip.translate_y,
+                        scale_val: clip.scale,
+                        rotation: clip.rotation,
+                        aspect_ratio: aspect,
+                        invert_colors: if clip.invert_colors { 1.0 } else { 0.0 },
+                        _pad: 0.0,
+                        _pad1: 0.0,
+                        _pad2: 0.0,
+                    });
+                    batch_views.push(clip.texture_view);
+                    continue;
+                }
+
+                // Has clip effects — flush batch first, then process normally
+                if batch_descs.len() >= 2 {
+                    self.batcher.flush(
                         device, queue, encoder,
-                        clip.texture_view, clip.effects, clip.effect_groups, &ctx,
-                        gpu_profiler,
-                    )
-                } else {
-                    None
+                        self.main.source_view(), self.main.target_view(),
+                        &batch_views, &batch_descs, width, height, gpu_profiler,
+                    );
+                    self.main.swap();
+                } else if batch_descs.len() == 1 {
+                    // Single batchable layer — faster to use normal blend_pass
+                    let bd = &batch_descs[0];
+                    let uniforms = BlendUniforms {
+                        blend_mode: bd.blend_mode,
+                        opacity: bd.opacity,
+                        translate_x: bd.translate_x,
+                        translate_y: bd.translate_y,
+                        scale_val: bd.scale_val,
+                        rotation: bd.rotation,
+                        aspect_ratio: bd.aspect_ratio,
+                        invert_colors: bd.invert_colors,
+                    };
+                    self.blend.blend_pass(
+                        device, queue, encoder,
+                        self.main.source_view(), batch_views[0],
+                        self.main.target_view(), &uniforms, gpu_profiler,
+                    );
+                    self.main.swap();
+                }
+                batch_descs.clear();
+                batch_views.clear();
+
+                // Apply clip-level effects
+                let ctx = EffectContext {
+                    time: frame.time,
+                    beat: frame.beat,
+                    dt: frame.dt,
+                    width,
+                    height,
+                    owner_key: clip_id_owner_key(clip.clip_id),
+                    is_clip_level: true, edge_stretch_width: 0.5625,
+                    frame_count: frame.frame_count as i64,
                 };
+                let blend_input = Self::apply_effects(
+                    &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
+                    device, queue, encoder,
+                    clip.texture_view, clip.effects, clip.effect_groups, &ctx,
+                    gpu_profiler,
+                );
                 let effective_blend_view = blend_input.unwrap_or(clip.texture_view);
 
                 let uniforms = BlendUniforms {
@@ -575,6 +962,35 @@ impl LayerCompositor {
                 );
                 self.main.swap();
             } else {
+                // Multi-clip or layer-effects — flush batch first
+                if batch_descs.len() >= 2 {
+                    self.batcher.flush(
+                        device, queue, encoder,
+                        self.main.source_view(), self.main.target_view(),
+                        &batch_views, &batch_descs, width, height, gpu_profiler,
+                    );
+                    self.main.swap();
+                } else if batch_descs.len() == 1 {
+                    let bd = &batch_descs[0];
+                    let uniforms = BlendUniforms {
+                        blend_mode: bd.blend_mode,
+                        opacity: bd.opacity,
+                        translate_x: bd.translate_x,
+                        translate_y: bd.translate_y,
+                        scale_val: bd.scale_val,
+                        rotation: bd.rotation,
+                        aspect_ratio: bd.aspect_ratio,
+                        invert_colors: bd.invert_colors,
+                    };
+                    self.blend.blend_pass(
+                        device, queue, encoder,
+                        self.main.source_view(), batch_views[0],
+                        self.main.target_view(), &uniforms, gpu_profiler,
+                    );
+                    self.main.swap();
+                }
+                batch_descs.clear();
+                batch_views.clear();
                 // Multi-clip: composite into layer buffer, then into main
                 self.ensure_layer_buffers(device);
                 let layer_buf = self.layer_buf.as_mut().unwrap();
@@ -680,6 +1096,34 @@ impl LayerCompositor {
                 );
                 self.main.swap();
             }
+        }
+
+        // Flush any remaining batch after the loop
+        if batch_descs.len() >= 2 {
+            self.batcher.flush(
+                device, queue, encoder,
+                self.main.source_view(), self.main.target_view(),
+                &batch_views, &batch_descs, width, height, gpu_profiler,
+            );
+            self.main.swap();
+        } else if batch_descs.len() == 1 {
+            let bd = &batch_descs[0];
+            let uniforms = BlendUniforms {
+                blend_mode: bd.blend_mode,
+                opacity: bd.opacity,
+                translate_x: bd.translate_x,
+                translate_y: bd.translate_y,
+                scale_val: bd.scale_val,
+                rotation: bd.rotation,
+                aspect_ratio: bd.aspect_ratio,
+                invert_colors: bd.invert_colors,
+            };
+            self.blend.blend_pass(
+                device, queue, encoder,
+                self.main.source_view(), batch_views[0],
+                self.main.target_view(), &uniforms, gpu_profiler,
+            );
+            self.main.swap();
         }
 
         // Master effects (bloom, halation, CRT) are applied AFTER tonemapping
