@@ -1,7 +1,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
-use super::simple_blit_helper::SimpleBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -18,15 +18,15 @@ const NOTE_RATES: [f32; 9] = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
 
 /// Strobe effect — beat-synced square wave flash.
 pub struct StrobeFX {
-    helper: SimpleBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl StrobeFX {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            helper: SimpleBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
-                include_str!("shaders/fx_strobe.wgsl"),
+                include_str!("shaders/fx_strobe_compute.wgsl"),
                 "Strobe",
                 std::mem::size_of::<StrobeUniforms>() as u64,
             ),
@@ -61,7 +61,7 @@ impl PostProcessEffect for StrobeFX {
             beat: ctx.beat,
         };
 
-        self.helper.draw(
+        self.helper.dispatch(
             device, queue, encoder,
             source, target,
             bytemuck::bytes_of(&uniforms),

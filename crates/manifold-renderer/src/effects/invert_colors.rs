@@ -1,7 +1,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
-use super::simple_blit_helper::SimpleBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -12,15 +12,15 @@ struct InvertUniforms {
 
 /// InvertColors effect — `1.0 - rgb`. Simplest possible effect for smoke testing.
 pub struct InvertColorsFX {
-    helper: SimpleBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl InvertColorsFX {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            helper: SimpleBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
-                include_str!("shaders/invert_colors.wgsl"),
+                include_str!("shaders/invert_colors_compute.wgsl"),
                 "InvertColors",
                 std::mem::size_of::<InvertUniforms>() as u64,
             ),
@@ -50,7 +50,7 @@ impl PostProcessEffect for InvertColorsFX {
             _pad: [0.0; 3],
         };
 
-        self.helper.draw(
+        self.helper.dispatch(
             device, queue, encoder,
             source, target,
             bytemuck::bytes_of(&uniforms),

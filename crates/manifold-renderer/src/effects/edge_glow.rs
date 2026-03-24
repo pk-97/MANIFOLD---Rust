@@ -1,7 +1,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
-use super::simple_blit_helper::SimpleBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 // EdgeGlowFX.cs:16-19 — shader property IDs (_Amount, _Threshold, _Glow, _Mode)
 // + _MainTex_TexelSize from the shader (xy = 1/width, 1/height)
@@ -20,15 +20,15 @@ struct EdgeGlowUniforms {
 /// Edge detection with soft glow.
 /// Stateless single-pass effect. Translated from EdgeGlowFX.cs + EdgeGlowEffect.shader.
 pub struct EdgeGlowFX {
-    helper: SimpleBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl EdgeGlowFX {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            helper: SimpleBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
-                include_str!("shaders/fx_edge_glow.wgsl"),
+                include_str!("shaders/fx_edge_glow_compute.wgsl"),
                 "EdgeGlow",
                 std::mem::size_of::<EdgeGlowUniforms>() as u64,
             ),
@@ -65,7 +65,7 @@ impl PostProcessEffect for EdgeGlowFX {
             _pad: [0.0; 2],
         };
 
-        self.helper.draw(
+        self.helper.dispatch(
             device, queue, encoder,
             source, target,
             bytemuck::bytes_of(&uniforms),

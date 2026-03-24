@@ -1,7 +1,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
-use super::simple_blit_helper::SimpleBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -18,15 +18,15 @@ struct GlitchUniforms {
 
 /// Glitch effect — block displacement, scanline jitter, RGB channel split.
 pub struct GlitchFX {
-    helper: SimpleBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl GlitchFX {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            helper: SimpleBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
-                include_str!("shaders/fx_glitch.wgsl"),
+                include_str!("shaders/fx_glitch_compute.wgsl"),
                 "Glitch",
                 std::mem::size_of::<GlitchUniforms>() as u64,
             ),
@@ -63,7 +63,7 @@ impl PostProcessEffect for GlitchFX {
             resolution_y: ctx.height as f32,
         };
 
-        self.helper.draw(
+        self.helper.dispatch(
             device, queue, encoder,
             source, target,
             bytemuck::bytes_of(&uniforms),

@@ -1,7 +1,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
-use super::simple_blit_helper::SimpleBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -18,15 +18,15 @@ struct FilmGrainUniforms {
 
 /// FilmGrain effect — hash-based temporal noise with luma-weighted intensity.
 pub struct FilmGrainFX {
-    helper: SimpleBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl FilmGrainFX {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            helper: SimpleBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
-                include_str!("shaders/fx_film_grain.wgsl"),
+                include_str!("shaders/fx_film_grain_compute.wgsl"),
                 "FilmGrain",
                 std::mem::size_of::<FilmGrainUniforms>() as u64,
             ),
@@ -62,7 +62,7 @@ impl PostProcessEffect for FilmGrainFX {
             _pad0: 0.0,
         };
 
-        self.helper.draw(
+        self.helper.dispatch(
             device, queue, encoder,
             source, target,
             bytemuck::bytes_of(&uniforms),

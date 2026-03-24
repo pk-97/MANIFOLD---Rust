@@ -1,7 +1,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
-use super::simple_blit_helper::SimpleBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -14,15 +14,15 @@ struct DitherUniforms {
 
 /// Dither effect — 6 dithering algorithms with luminance-preserving quantization.
 pub struct DitherFX {
-    helper: SimpleBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl DitherFX {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            helper: SimpleBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
-                include_str!("shaders/fx_dither.wgsl"),
+                include_str!("shaders/fx_dither_compute.wgsl"),
                 "Dither",
                 std::mem::size_of::<DitherUniforms>() as u64,
             ),
@@ -54,7 +54,7 @@ impl PostProcessEffect for DitherFX {
             resolution_y: ctx.height as f32,
         };
 
-        self.helper.draw(
+        self.helper.dispatch(
             device, queue, encoder,
             source, target,
             bytemuck::bytes_of(&uniforms),

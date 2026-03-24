@@ -1,7 +1,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
-use super::simple_blit_helper::SimpleBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -23,15 +23,15 @@ struct InfraredUniforms {
 /// Infrared / thermal vision effect.
 /// Unity ref: InfraredFX.cs / InfraredEffect.shader
 pub struct InfraredFX {
-    helper: SimpleBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl InfraredFX {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            helper: SimpleBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
-                include_str!("shaders/fx_infrared.wgsl"),
+                include_str!("shaders/fx_infrared_compute.wgsl"),
                 "Infrared",
                 std::mem::size_of::<InfraredUniforms>() as u64,
             ),
@@ -77,7 +77,7 @@ impl PostProcessEffect for InfraredFX {
             _pad0: 0.0,
         };
 
-        self.helper.draw(
+        self.helper.dispatch(
             device, queue, encoder,
             source, target,
             bytemuck::bytes_of(&uniforms),

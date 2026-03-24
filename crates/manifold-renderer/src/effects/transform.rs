@@ -16,7 +16,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
-use super::simple_blit_helper::SimpleBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
 
@@ -45,15 +45,15 @@ struct TransformUniforms {
 /// Clip-level Transform is handled as compositor uniforms in BlitClip, not here.
 /// Unity ref: TransformFX.cs
 pub struct TransformFX {
-    helper: SimpleBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl TransformFX {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            helper: SimpleBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
-                include_str!("shaders/fx_transform.wgsl"),
+                include_str!("shaders/fx_transform_compute.wgsl"),
                 "Transform",
                 std::mem::size_of::<TransformUniforms>() as u64,
             ),
@@ -119,7 +119,7 @@ impl PostProcessEffect for TransformFX {
             _pad2: 0.0,
         };
 
-        self.helper.draw(
+        self.helper.dispatch(
             device, queue, encoder,
             source, target,
             bytemuck::bytes_of(&uniforms),

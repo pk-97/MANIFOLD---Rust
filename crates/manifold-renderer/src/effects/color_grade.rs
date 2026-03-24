@@ -4,7 +4,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
-use super::simple_blit_helper::SimpleBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 // ColorGradeFX.cs line 11
 const EPSILON: f32 = 0.001;
@@ -29,15 +29,15 @@ struct ColorGradeUniforms {
 
 /// ColorGrade effect — gain, saturation, hue shift, contrast, colorize tinting.
 pub struct ColorGradeFX {
-    helper: SimpleBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl ColorGradeFX {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            helper: SimpleBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
-                include_str!("shaders/color_grade.wgsl"),
+                include_str!("shaders/color_grade_compute.wgsl"),
                 "ColorGrade",
                 std::mem::size_of::<ColorGradeUniforms>() as u64,
             ),
@@ -100,7 +100,7 @@ impl PostProcessEffect for ColorGradeFX {
             _pad2: 0.0,
         };
 
-        self.helper.draw(
+        self.helper.dispatch(
             device, queue, encoder,
             source, target,
             bytemuck::bytes_of(&uniforms),

@@ -1,7 +1,7 @@
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
-use super::simple_blit_helper::SimpleBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -14,15 +14,15 @@ struct EdgeStretchUniforms {
 
 /// EdgeStretch effect — clamps UVs to a center strip, stretching edge pixels.
 pub struct EdgeStretchFX {
-    helper: SimpleBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl EdgeStretchFX {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            helper: SimpleBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
-                include_str!("shaders/fx_edge_stretch.wgsl"),
+                include_str!("shaders/fx_edge_stretch_compute.wgsl"),
                 "EdgeStretch",
                 std::mem::size_of::<EdgeStretchUniforms>() as u64,
             ),
@@ -55,7 +55,7 @@ impl PostProcessEffect for EdgeStretchFX {
             _pad: 0.0,
         };
 
-        self.helper.draw(
+        self.helper.dispatch(
             device, queue, encoder,
             source, target,
             bytemuck::bytes_of(&uniforms),
