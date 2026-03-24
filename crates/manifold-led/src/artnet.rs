@@ -49,6 +49,10 @@ pub struct ArtNetOutput {
     // Warning throttle
     next_send_warning: Instant,
     suppressed_warnings: u32,
+
+    // Debug: log first successful send
+    sent_first_packet: bool,
+    readback_count: u64,
 }
 
 impl Default for ArtNetOutput {
@@ -80,6 +84,8 @@ impl ArtNetOutput {
             probe_thread: None,
             next_send_warning: Instant::now(),
             suppressed_warnings: 0,
+            sent_first_packet: false,
+            readback_count: 0,
         }
     }
 
@@ -224,6 +230,15 @@ impl ArtNetOutput {
             return;
         }
         if let Some(pixels) = self.readback.try_read(device) {
+            self.readback_count += 1;
+            if self.readback_count == 1 {
+                log::info!(
+                    "[ArtNetOutput] First readback received: {} bytes, {}x{} pixels",
+                    pixels.len(),
+                    self.strip_count,
+                    self.leds_per_strip,
+                );
+            }
             let brightness = self.pending_brightness;
             self.pack_and_send(&pixels, brightness);
         }
@@ -321,25 +336,37 @@ impl ArtNetOutput {
             return;
         }
 
-        if let Err(e) = socket.send_to(packet, self.endpoint) {
-            // Immediate backoff
-            self.host_reachable.store(false, Ordering::Relaxed);
+        match socket.send_to(packet, self.endpoint) {
+            Ok(_) => {
+                if !self.sent_first_packet {
+                    self.sent_first_packet = true;
+                    log::info!(
+                        "[ArtNetOutput] First ArtNet packet sent to {} ({} bytes)",
+                        self.endpoint,
+                        packet.len(),
+                    );
+                }
+            }
+            Err(e) => {
+                // Immediate backoff
+                self.host_reachable.store(false, Ordering::Relaxed);
 
-            let now = Instant::now();
-            if now >= self.next_send_warning {
-                let suffix = if self.suppressed_warnings > 0 {
-                    format!(
-                        " (suppressed {} identical warnings)",
-                        self.suppressed_warnings
-                    )
+                let now = Instant::now();
+                if now >= self.next_send_warning {
+                    let suffix = if self.suppressed_warnings > 0 {
+                        format!(
+                            " (suppressed {} identical warnings)",
+                            self.suppressed_warnings
+                        )
+                    } else {
+                        String::new()
+                    };
+                    log::warn!("[ArtNetOutput] Send failed: {}{}", e, suffix);
+                    self.next_send_warning = now + std::time::Duration::from_secs(5);
+                    self.suppressed_warnings = 0;
                 } else {
-                    String::new()
-                };
-                log::warn!("[ArtNetOutput] Send failed: {}{}", e, suffix);
-                self.next_send_warning = now + std::time::Duration::from_secs(5);
-                self.suppressed_warnings = 0;
-            } else {
-                self.suppressed_warnings += 1;
+                    self.suppressed_warnings += 1;
+                }
             }
         }
     }

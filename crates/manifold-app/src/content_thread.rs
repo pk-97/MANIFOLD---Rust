@@ -90,6 +90,19 @@ impl ContentThread {
     ) {
         log::info!("[ContentThread] started");
 
+        // Auto-initialize LED output with default settings.
+        // Can be reconfigured at runtime via InitLedOutput command.
+        {
+            let settings = manifold_led::LedSettings::default();
+            let mut ctrl = manifold_led::LedOutputController::new();
+            if ctrl.initialize(&self.gpu.device, &settings) {
+                self.led_controller = Some(ctrl);
+                log::info!("[ContentThread] LED output auto-initialized with defaults.");
+            } else {
+                log::warn!("[ContentThread] LED output auto-init failed (no device?).");
+            }
+        }
+
         loop {
             // 1. Drain ALL pending commands
             loop {
@@ -254,8 +267,18 @@ impl ContentThread {
                 // Poll previous frame's readback first (now that GPU has been polled).
                 led.poll_readback(&self.gpu.device);
 
-                // Submit new blit + readback for this frame.
-                let source_view = self.content_pipeline.compositor_output_view();
+                // Route LED source based on led_exit_index:
+                //   0  = before master effects + tonemap (cleanest signal)
+                //   -1 = after all effects + tonemap (default)
+                let led_exit_index = self.engine.project()
+                    .map(|p| p.settings.led_exit_index)
+                    .unwrap_or(-1);
+                let source_view = if led_exit_index == 0 {
+                    self.content_pipeline.pre_tonemap_output()
+                } else {
+                    self.content_pipeline.compositor_output_view()
+                };
+
                 let active_count = tick_result.ready_clips.len();
                 let mut led_encoder = self.gpu.device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor {
