@@ -40,7 +40,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
 
     // Center tap
-    var result = textureSample(t_source, s_source, uv);
+    var result = textureSampleLevel(t_source, s_source, uv, 0.0);
     var total_weight = 1.0;
 
     // Bilinear tap trick: pair adjacent samples (j, j+1) into a single
@@ -60,13 +60,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let w_ab = w_a + w_b;
             let offset = fj + w_b / w_ab;
 
-            result += textureSample(t_source, s_source, uv + texel_step * offset) * w_ab;
-            result += textureSample(t_source, s_source, uv - texel_step * offset) * w_ab;
+            result += textureSampleLevel(t_source, s_source, uv + texel_step * offset, 0.0) * w_ab;
+            result += textureSampleLevel(t_source, s_source, uv - texel_step * offset, 0.0) * w_ab;
             total_weight += w_ab * 2.0;
         } else {
             // Unpaired last tap (odd radius)
-            result += textureSample(t_source, s_source, uv + texel_step * fj) * w_a;
-            result += textureSample(t_source, s_source, uv - texel_step * fj) * w_a;
+            result += textureSampleLevel(t_source, s_source, uv + texel_step * fj, 0.0) * w_a;
+            result += textureSampleLevel(t_source, s_source, uv - texel_step * fj, 0.0) * w_a;
             total_weight += w_a * 2.0;
         }
 

@@ -1,21 +1,28 @@
-/// Reusable GPU pipeline for two-texture fullscreen effects.
-///
-/// Extends SimpleBlitHelper's pattern with a second texture binding for effects
-/// that read from two sources (e.g. bloom reads _MainTex + _BloomTex, CRT reads
-/// _MainTex + _GlowTex, halation reads _MainTex + _HaloTex).
-///
-/// Bind group layout:
-///   @group(0) @binding(0) var<uniform> uniforms: YourStruct;
-///   @group(0) @binding(1) var main_tex: texture_2d<f32>;
-///   @group(0) @binding(2) var tex_sampler: sampler;
-///   @group(0) @binding(3) var secondary_tex: texture_2d<f32>;
-///
-/// Includes a 1x1 dummy texture for passes that don't read the secondary texture.
+// Reusable GPU pipeline for two-texture fullscreen effects.
+//
+// Extends SimpleBlitHelper's pattern with a second texture binding for effects
+// that read from two sources (e.g. bloom reads _MainTex + _BloomTex, CRT reads
+// _MainTex + _GlowTex, halation reads _MainTex + _HaloTex).
+//
+// Includes a 1x1 dummy texture for passes that don't read the secondary texture.
+//
+// Uniforms use a ring buffer with 256-byte-aligned slots to avoid
+// per-frame Metal buffer allocation. Each `draw()` writes to the next
+// slot via `queue.write_buffer()`.
+
+use std::cell::Cell;
+
+const RING_SLOTS: u64 = 64;
+const UNIFORM_OFFSET_ALIGN: u64 = 256;
+
 pub struct DualTextureBlitHelper {
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub sampler: wgpu::Sampler,
-    pub uniform_buffer: wgpu::Buffer,
+    ring_buffer: wgpu::Buffer,
+    uniform_size: u64,
+    slot_stride: u64,
+    ring_index: Cell<u64>,
     /// 1x1 placeholder bound as secondary_tex when it's not read.
     pub dummy_view: wgpu::TextureView,
 }
@@ -125,9 +132,11 @@ impl DualTextureBlitHelper {
             ..Default::default()
         });
 
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("{label} Uniforms")),
-            size: uniform_size,
+        let slot_stride =
+            (uniform_size + UNIFORM_OFFSET_ALIGN - 1) & !(UNIFORM_OFFSET_ALIGN - 1);
+        let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("{label} Ring UBO")),
+            size: slot_stride * RING_SLOTS,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -145,7 +154,16 @@ impl DualTextureBlitHelper {
         });
         let dummy_view = dummy_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
-        Self { pipeline, bind_group_layout, sampler, uniform_buffer, dummy_view }
+        Self {
+            pipeline,
+            bind_group_layout,
+            sampler,
+            ring_buffer,
+            uniform_size,
+            slot_stride,
+            ring_index: Cell::new(0),
+            dummy_view,
+        }
     }
 
     /// Execute a fullscreen pass reading two textures.
@@ -154,7 +172,7 @@ impl DualTextureBlitHelper {
     pub fn draw(
         &self,
         device: &wgpu::Device,
-        _queue: &wgpu::Queue,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         main_view: &wgpu::TextureView,
         secondary_view: &wgpu::TextureView,
@@ -165,16 +183,14 @@ impl DualTextureBlitHelper {
         height: u32,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        // Per-pass uniform buffer: queue.write_buffer() batches all writes before
-        // GPU execution, so a shared buffer causes every pass to read the LAST
-        // written value. Each draw call needs its own buffer to ensure the correct
-        // mode/uniforms reach each render pass.
-        use wgpu::util::DeviceExt;
-        let pass_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(label),
-            contents: uniform_bytes,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        // Write uniforms into the next ring buffer slot. Each slot is at a
+        // different 256-byte-aligned offset, so batched queue.write_buffer()
+        // calls don't overwrite each other before GPU execution.
+        let slot = self.ring_index.get() % RING_SLOTS;
+        self.ring_index.set(self.ring_index.get() + 1);
+        let byte_offset = slot * self.slot_stride;
+
+        queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
@@ -182,7 +198,11 @@ impl DualTextureBlitHelper {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: pass_uniforms.as_entire_binding(),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.ring_buffer,
+                        offset: byte_offset,
+                        size: std::num::NonZero::new(self.uniform_size),
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,

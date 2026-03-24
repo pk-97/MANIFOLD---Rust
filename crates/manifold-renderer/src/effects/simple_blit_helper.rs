@@ -1,13 +1,27 @@
-/// Reusable GPU pipeline for single-pass fullscreen effects.
-///
-/// Encapsulates: pipeline creation, uniform buffer, bind group layout,
-/// sampler, and fullscreen triangle draw. Every single-pass effect
-/// creates one of these at init and calls `draw()` each frame.
+// Reusable GPU pipeline for single-pass fullscreen effects.
+//
+// Encapsulates: pipeline creation, ring-buffered uniforms, bind group layout,
+// sampler, and fullscreen triangle draw. Every single-pass effect
+// creates one of these at init and calls `draw()` each frame.
+//
+// Uniforms use a ring buffer with 256-byte-aligned slots to avoid
+// per-frame Metal buffer allocation. Each `draw()` writes to the next
+// slot via `queue.write_buffer()` — all writes target different offsets,
+// so the GPU sees correct data per pass despite batched writes.
+
+use std::cell::Cell;
+
+const RING_SLOTS: u64 = 64;
+const UNIFORM_OFFSET_ALIGN: u64 = 256;
+
 pub struct SimpleBlitHelper {
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
     pub sampler: wgpu::Sampler,
-    pub uniform_buffer: wgpu::Buffer,
+    ring_buffer: wgpu::Buffer,
+    uniform_size: u64,
+    slot_stride: u64,
+    ring_index: Cell<u64>,
 }
 
 impl SimpleBlitHelper {
@@ -108,21 +122,31 @@ impl SimpleBlitHelper {
             ..Default::default()
         });
 
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("{label} Uniforms")),
-            size: uniform_size,
+        let slot_stride =
+            (uniform_size + UNIFORM_OFFSET_ALIGN - 1) & !(UNIFORM_OFFSET_ALIGN - 1);
+        let ring_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("{label} Ring UBO")),
+            size: slot_stride * RING_SLOTS,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        Self { pipeline, bind_group_layout, sampler, uniform_buffer }
+        Self {
+            pipeline,
+            bind_group_layout,
+            sampler,
+            ring_buffer,
+            uniform_size,
+            slot_stride,
+            ring_index: Cell::new(0),
+        }
     }
 
     /// Execute a single fullscreen pass: reads source texture, writes to target.
     pub fn draw(
         &self,
         device: &wgpu::Device,
-        _queue: &wgpu::Queue,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         source_view: &wgpu::TextureView,
         target_view: &wgpu::TextureView,
@@ -132,21 +156,26 @@ impl SimpleBlitHelper {
         height: u32,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        // Per-pass uniform buffer — see DualTextureBlitHelper for rationale.
-        use wgpu::util::DeviceExt;
-        let pass_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(label),
-            contents: uniform_bytes,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        // Write uniforms into the next ring buffer slot. Each slot is at a
+        // different 256-byte-aligned offset, so batched queue.write_buffer()
+        // calls don't overwrite each other before GPU execution.
+        let slot = self.ring_index.get() % RING_SLOTS;
+        self.ring_index.set(self.ring_index.get() + 1);
+        let byte_offset = slot * self.slot_stride;
+
+        queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(&format!("{label} BG")),
+            label: Some(label),
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: pass_uniforms.as_entire_binding(),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.ring_buffer,
+                        offset: byte_offset,
+                        size: std::num::NonZero::new(self.uniform_size),
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
