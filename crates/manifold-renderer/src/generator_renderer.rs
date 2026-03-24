@@ -165,11 +165,12 @@ impl GeneratorRenderer {
         // or occluded by an Opaque layer above).
         let any_solo = layers.iter().any(|l| l.is_solo);
 
-        // Opaque occlusion: find the topmost Opaque layer (full opacity) that has
-        // an active clip. All layers below it are invisible and can be skipped.
-        let mut first_visible_layer: usize = 0;
+        // Opaque occlusion: find the lowest-indexed (visually topmost) Opaque layer
+        // with full opacity and an active clip. All layers with HIGHER index
+        // (visually below) are fully occluded and can be skipped.
+        // Layer index 0 = top of visual stack (rendered last by compositor).
+        let mut occluder_index: Option<usize> = None;
         {
-            // Build set of layer indices that have active clips
             let mut layer_has_clip = [false; 64];
             for active in self.active_clips.values() {
                 let idx = active.layer_index as usize;
@@ -177,8 +178,8 @@ impl GeneratorRenderer {
                     layer_has_clip[idx] = true;
                 }
             }
-            // Scan top-to-bottom for the highest opaque occluder
-            for (idx, layer) in layers.iter().enumerate().rev() {
+            // Scan from visual top (index 0) downward
+            for (idx, layer) in layers.iter().enumerate() {
                 if layer.default_blend_mode == manifold_core::BlendMode::Opaque
                     && layer.opacity >= 1.0
                     && !layer.is_muted
@@ -186,7 +187,7 @@ impl GeneratorRenderer {
                     && idx < 64
                     && layer_has_clip[idx]
                 {
-                    first_visible_layer = idx;
+                    occluder_index = Some(idx);
                     break;
                 }
             }
@@ -213,7 +214,7 @@ impl GeneratorRenderer {
                 && (layer.is_muted
                     || (any_solo && !layer.is_solo)
                     || layer.opacity <= 0.0
-                    || (layer_index as usize) < first_visible_layer)
+                    || occluder_index.is_some_and(|oi| (layer_index as usize) > oi))
             {
                 continue;
             }
