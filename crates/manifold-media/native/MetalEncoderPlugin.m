@@ -41,7 +41,24 @@
 // in shader space is all that's needed -- no manual channel swizzle.
 // Works for both BGRA8Unorm (SDR) and RGBA16Float (HDR) destinations.
 
-static NSString* const kCopyShaderSource =
+// SDR: apply linear → sRGB gamma (compositor outputs linear light;
+// CAMetalLayer applies gamma for display, but export needs it baked in).
+static NSString* const kCopyShaderSDR =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "kernel void copy_texture(\n"
+     "    texture2d<half, access::read>  src [[texture(0)]],\n"
+     "    texture2d<half, access::write> dst [[texture(1)]],\n"
+     "    uint2 gid [[thread_position_in_grid]])\n"
+     "{\n"
+     "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
+     "    half4 c = src.read(gid);\n"
+     "    c.rgb = pow(max(c.rgb, half3(0.0h)), half3(1.0h / 2.2h));\n"
+     "    dst.write(c, gid);\n"
+     "}\n";
+
+// HDR: straight copy (PQ encoding already applied by PqEncoder pass).
+static NSString* const kCopyShaderHDR =
     @"#include <metal_stdlib>\n"
      "using namespace metal;\n"
      "kernel void copy_texture(\n"
@@ -149,7 +166,8 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
 
         // Compile texture copy compute shader from source
         NSError* shaderError = nil;
-        id<MTLLibrary> library = [device newLibraryWithSource:kCopyShaderSource
+        NSString* shaderSrc = hdr ? kCopyShaderHDR : kCopyShaderSDR;
+        id<MTLLibrary> library = [device newLibraryWithSource:shaderSrc
                                                       options:nil
                                                         error:&shaderError];
         if (library == nil)
