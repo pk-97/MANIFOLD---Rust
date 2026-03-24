@@ -462,6 +462,7 @@ impl PlaybackEngine {
         // PlaybackController.Seek() which always calls SyncClipsToTime() + SeekActiveClips()
         // regardless of playback state. This is what makes scrub-while-stopped work.
         self.sync_clips_to_time();
+        self.seek_active_clips();
 
         // Mark compositor dirty so the stopped-state tick renders the new frame.
         // Port of Unity SeekActiveClips() setting compositorDirtyDeadline.

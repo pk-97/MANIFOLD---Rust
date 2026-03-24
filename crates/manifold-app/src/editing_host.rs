@@ -518,9 +518,33 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Video metadata ──────────────────────────────────────────
 
-    fn get_max_duration_beats(&self, _clip_id: &str) -> f32 {
-        // TODO: wire to video library metadata
-        // Returns max clip duration based on source video length minus InPoint
-        0.0
+    fn get_max_duration_beats(&self, clip_id: &str) -> f32 {
+        // Linear scan — find_clip_by_id requires &mut self (self-healing cache)
+        let clip = self.project.timeline.layers.iter()
+            .flat_map(|l| l.clips.iter())
+            .find(|c| c.id.as_ref() == clip_id);
+
+        let clip = match clip {
+            Some(c) => c,
+            None => return 0.0,
+        };
+        if clip.is_generator() {
+            return 0.0;
+        }
+
+        let video_clip = match self.project.video_library.find_clip_by_id(
+            &clip.video_clip_id,
+        ) {
+            Some(vc) => vc,
+            None => return 0.0,
+        };
+
+        if video_clip.duration <= 0.0 {
+            return 0.0;
+        }
+
+        let available_seconds = (video_clip.duration - clip.in_point).max(0.0);
+        let spb = self.get_seconds_per_beat();
+        if spb > 0.0 { available_seconds / spb } else { 0.0 }
     }
 }

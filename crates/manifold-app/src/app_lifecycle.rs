@@ -138,7 +138,16 @@ impl Application {
             return; // User cancelled
         };
 
-        // Collect commands to send after releasing the project borrow
+        self.import_video_files(&paths);
+    }
+
+    /// Import video files at the playhead position on the active layer.
+    /// Shared by Cmd+I file dialog and drag-drop.
+    pub(crate) fn import_video_files(&mut self, paths: &[std::path::PathBuf]) {
+        if paths.is_empty() {
+            return;
+        }
+
         let mut commands: Vec<ContentCommand> = Vec::new();
 
         {
@@ -153,7 +162,7 @@ impl Application {
 
             let mut insert_beat = playhead_beat;
 
-            for path in &paths {
+            for path in paths {
                 let path_str = path.to_string_lossy().to_string();
                 let file_name = path.file_name()
                     .map(|n| n.to_string_lossy().to_string())

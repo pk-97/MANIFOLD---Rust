@@ -254,12 +254,11 @@ impl ClipRenderer for VideoRenderer {
                 return false;
             };
 
-            eprintln!(
-                "[VideoRenderer] start_clip: '{}' ({}x{} @ {}fps, {:.1}s)",
+            log::info!(
+                "[VideoRenderer] start_clip: '{}' ({}x{}, {:.1}s)",
                 video_clip.file_name,
                 video_clip.resolution_width,
                 video_clip.resolution_height,
-                0, // frame_rate not known yet, comes from Opened result
                 video_clip.duration,
             );
 
@@ -356,7 +355,6 @@ impl ClipRenderer for VideoRenderer {
     }
 
     fn resume_clip(&mut self, clip_id: &str) {
-        eprintln!("[VideoRenderer] resume_clip: {clip_id}");
         if let Some(clip) = self.active_clips.get_mut(clip_id) {
             clip.playing = true;
             clip.time_accumulator = 0.0;
@@ -364,7 +362,6 @@ impl ClipRenderer for VideoRenderer {
     }
 
     fn pause_clip(&mut self, clip_id: &str) {
-        eprintln!("[VideoRenderer] pause_clip: {clip_id}");
         if let Some(clip) = self.active_clips.get_mut(clip_id) {
             clip.playing = false;
         }
@@ -404,14 +401,10 @@ impl ClipRenderer for VideoRenderer {
             match result.status {
                 DecodeResultStatus::Opened {
                     duration,
-                    width,
-                    height,
+                    width: _,
+                    height: _,
                     frame_rate,
                 } => {
-                    eprintln!(
-                        "[VideoRenderer] Opened {clip_id}: {width}x{height} \
-                         @ {frame_rate}fps, {duration:.1}s"
-                    );
                     if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
                         clip.media_length = duration;
                         clip.frame_rate = frame_rate.max(1.0);
@@ -429,11 +422,6 @@ impl ClipRenderer for VideoRenderer {
                         if copied {
                             clip.has_frame = true;
                         }
-                        eprintln!(
-                            "[VideoRenderer] Prepared {clip_id}: \
-                             copy={copied} playing={} ready={}",
-                            clip.playing, clip.ready,
-                        );
                         // Don't auto-submit DecodeNext — pacing loop below handles it
                     }
                 }
@@ -513,18 +501,30 @@ impl ClipRenderer for VideoRenderer {
             }
 
             clip.time_accumulator += dt * clip.playback_rate;
+            clip.playback_time += dt * clip.playback_rate;
             let frame_interval = 1.0 / clip.frame_rate;
 
             if clip.time_accumulator >= frame_interval {
                 clip.time_accumulator -= frame_interval;
-                // Clamp to prevent spiral if we fall behind
-                if clip.time_accumulator > frame_interval * 2.0 {
+
+                if clip.time_accumulator > frame_interval * 3.0 {
+                    // Too far behind — seek to skip frames instead of sequential decode
+                    let skip_time = clip.playback_time;
                     clip.time_accumulator = 0.0;
+                    clip.decode_pending = true;
+                    self.scheduler.submit(DecodeJob::Seek {
+                        clip_id: clip_id.clone(),
+                        target_time: skip_time,
+                    });
+                } else {
+                    if clip.time_accumulator > frame_interval * 2.0 {
+                        clip.time_accumulator = 0.0;
+                    }
+                    clip.decode_pending = true;
+                    self.scheduler.submit(DecodeJob::DecodeNext {
+                        clip_id: clip_id.clone(),
+                    });
                 }
-                clip.decode_pending = true;
-                self.scheduler.submit(DecodeJob::DecodeNext {
-                    clip_id: clip_id.clone(),
-                });
             }
         }
     }

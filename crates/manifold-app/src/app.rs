@@ -1718,28 +1718,26 @@ impl ApplicationHandler for Application {
                     .map(|e| e.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
 
-                if crate::project_io::is_supported_video_extension(&path)
-                    || crate::project_io::is_supported_midi_extension(&path)
-                {
-                    // Video/MIDI files → route through ProjectIOService.
-                    // Drop at playhead beat on active layer (Unity ProcessDroppedFiles).
+                if crate::project_io::is_supported_video_extension(&path) {
+                    // Video files → shared import path (same as Cmd+I)
+                    self.import_video_files(std::slice::from_ref(&path));
+                } else if crate::project_io::is_supported_midi_extension(&path) {
+                    // MIDI files → route through ProjectIOService
                     let drop_beat = self.content_state.current_beat;
                     let drop_layer = self.active_layer_id.as_ref()
                         .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
                         .unwrap_or(0) as i32;
                     let spb = manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(
-                        Some(&self.local_project).map(|p| p.settings.bpm).unwrap_or(120.0),
+                        self.local_project.settings.bpm,
                     );
-                    if let Some(project) = Some(&mut self.local_project) {
-                        let action = self.project_io.process_dropped_files(
-                            std::slice::from_ref(&path),
-                            drop_beat,
-                            drop_layer,
-                            project,
-                            spb,
-                        );
-                        self.apply_project_io_action(action);
-                    }
+                    let action = self.project_io.process_dropped_files(
+                        std::slice::from_ref(&path),
+                        drop_beat,
+                        drop_layer,
+                        &mut self.local_project,
+                        spb,
+                    );
+                    self.apply_project_io_action(action);
                 } else if ext == "json" || ext == "manifold" {
                     // Project files → load project
                     self.open_project_from_path(path.clone());
