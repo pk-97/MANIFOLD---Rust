@@ -14,7 +14,8 @@ const PAD_H: f32 = 2.0;
 const PAD_V: f32 = 2.0;
 const GAP: f32 = 4.0;
 const CHEVRON_W: f32 = 18.0;
-const EXIT_LABEL_W: f32 = 60.0;
+const LED_LABEL_W: f32 = 28.0;
+const LED_SLIDER_W: f32 = 80.0;
 const OPACITY_LABEL_W: f32 = 50.0;
 const FONT_SIZE: u16 = 10;
 
@@ -32,7 +33,7 @@ pub struct MasterChromePanel {
     chevron_btn_id: i32,
     exit_path_label_id: i32,
     exit_path_btn_id: i32,
-    divider_ids: [i32; 4],
+    divider_ids: [i32; 3],
 
     // Sliders — single source of truth for drag state + cache
     opacity: SliderDragState,
@@ -54,7 +55,7 @@ impl MasterChromePanel {
             chevron_btn_id: -1,
             exit_path_label_id: -1,
             exit_path_btn_id: -1,
-            divider_ids: [-1; 4],
+            divider_ids: [-1; 3],
             opacity: SliderDragState::default(),
             led_brightness: SliderDragState::default(),
             is_collapsed: false,
@@ -70,7 +71,6 @@ impl MasterChromePanel {
         } else {
             PAD_V + HEADER_ROW_H + DIVIDER_H
                 + EXIT_PATH_ROW_H + DIVIDER_H
-                + SLIDER_ROW_H + DIVIDER_H
                 + SLIDER_ROW_H + DIVIDER_H + PAD_V
         }
     }
@@ -141,10 +141,13 @@ impl MasterChromePanel {
         ) as i32;
         cy += DIVIDER_H;
 
-        // Exit path row
+        // LED row: [LED label] [exit path dropdown] [mini brightness slider]
+        let led_val = self.led_brightness.cached_value();
+        let led_brightness = if led_val.is_nan() { 1.0 } else { led_val };
+
         self.exit_path_label_id = tree.add_label(
-            -1, cx, cy, EXIT_LABEL_W, EXIT_PATH_ROW_H,
-            "Exit Path",
+            -1, cx, cy, LED_LABEL_W, EXIT_PATH_ROW_H,
+            "LED",
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
                 font_size: FONT_SIZE,
@@ -153,8 +156,9 @@ impl MasterChromePanel {
             },
         ) as i32;
 
-        let btn_x = cx + EXIT_LABEL_W + GAP;
-        let btn_w = (content_w - EXIT_LABEL_W - GAP).max(20.0);
+        // Dropdown button — fills middle space
+        let btn_x = cx + LED_LABEL_W + GAP;
+        let btn_w = (content_w - LED_LABEL_W - GAP - GAP - LED_SLIDER_W).max(20.0);
         self.exit_path_btn_id = tree.add_button(
             -1, btn_x, cy + (EXIT_PATH_ROW_H - 18.0) * 0.5, btn_w, 18.0,
             UIStyle {
@@ -169,6 +173,21 @@ impl MasterChromePanel {
             },
             &exit_path,
         ) as i32;
+
+        // Mini brightness slider (no label, inline)
+        let slider_x = btn_x + btn_w + GAP;
+        let led_slider_rect = Rect::new(
+            slider_x, cy + (EXIT_PATH_ROW_H - SLIDER_ROW_H) * 0.5,
+            LED_SLIDER_W, SLIDER_ROW_H,
+        );
+        let led_val_text = fmt_opacity(led_brightness);
+        let led_ids = BitmapSlider::build(
+            tree, -1, led_slider_rect,
+            None, led_brightness,
+            &led_val_text, &SliderColors::default_slider(),
+            FONT_SIZE, 0.0,
+        );
+        self.led_brightness.set_ids(led_ids);
         cy += EXIT_PATH_ROW_H;
 
         // Divider 1
@@ -192,27 +211,6 @@ impl MasterChromePanel {
 
         // Divider 2
         self.divider_ids[2] = tree.add_panel(
-            -1, cx, cy, content_w, DIVIDER_H,
-            UIStyle { bg_color: color::DIVIDER_C32, ..UIStyle::default() },
-        ) as i32;
-        cy += DIVIDER_H;
-
-        // LED Brightness slider
-        let led_val = self.led_brightness.cached_value();
-        let led_brightness = if led_val.is_nan() { 1.0 } else { led_val };
-        let led_slider_rect = Rect::new(cx, cy, content_w, SLIDER_ROW_H);
-        let led_val_text = fmt_opacity(led_brightness);
-        let led_ids = BitmapSlider::build(
-            tree, -1, led_slider_rect,
-            Some("LED"), led_brightness,
-            &led_val_text, &SliderColors::default_slider(),
-            FONT_SIZE, OPACITY_LABEL_W,
-        );
-        self.led_brightness.set_ids(led_ids);
-        cy += SLIDER_ROW_H;
-
-        // Divider 3
-        self.divider_ids[3] = tree.add_panel(
             -1, cx, cy, content_w, DIVIDER_H,
             UIStyle { bg_color: color::DIVIDER_C32, ..UIStyle::default() },
         ) as i32;
