@@ -34,13 +34,14 @@ pub struct ColorGradeFX {
 }
 
 impl ColorGradeFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/color_grade_compute.wgsl"),
                 "ColorGrade",
                 std::mem::size_of::<ColorGradeUniforms>() as u64,
+                hal_ctx,
             ),
         }
     }

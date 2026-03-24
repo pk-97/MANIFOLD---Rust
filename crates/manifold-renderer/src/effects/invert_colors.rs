@@ -17,13 +17,14 @@ pub struct InvertColorsFX {
 }
 
 impl InvertColorsFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/invert_colors_compute.wgsl"),
                 "InvertColors",
                 std::mem::size_of::<InvertUniforms>() as u64,
+                hal_ctx,
             ),
         }
     }

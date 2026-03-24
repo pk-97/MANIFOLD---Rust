@@ -50,13 +50,14 @@ pub struct TransformFX {
 }
 
 impl TransformFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/fx_transform_compute.wgsl"),
                 "Transform",
                 std::mem::size_of::<TransformUniforms>() as u64,
+                hal_ctx,
             ),
         }
     }

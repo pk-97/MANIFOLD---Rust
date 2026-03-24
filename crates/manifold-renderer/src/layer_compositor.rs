@@ -363,14 +363,20 @@ pub struct LayerCompositor {
 }
 
 impl LayerCompositor {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
         Self {
             main: PingPong::new(device, width, height, "Compositor"),
             layer_buf: None,
             blend: BlendResources::new(device, width, height),
             uniform_arena: UniformArena::new(device),
             effect_chain: EffectChain::new(),
-            effect_registry: EffectRegistry::new(device, queue),
+            effect_registry: EffectRegistry::new(device, queue, hal_ctx),
             wet_dry_lerp: WetDryLerpPipeline::new(device),
             tonemap: TonemapPipeline::new(device, width, height),
             led_tap: None,

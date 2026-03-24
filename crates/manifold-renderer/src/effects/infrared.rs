@@ -28,13 +28,14 @@ pub struct InfraredFX {
 }
 
 impl InfraredFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/fx_infrared_compute.wgsl"),
                 "Infrared",
                 std::mem::size_of::<InfraredUniforms>() as u64,
+                hal_ctx,
             ),
         }
     }

@@ -25,13 +25,14 @@ pub struct EdgeGlowFX {
 }
 
 impl EdgeGlowFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/fx_edge_glow_compute.wgsl"),
                 "EdgeGlow",
                 std::mem::size_of::<EdgeGlowUniforms>() as u64,
+                hal_ctx,
             ),
         }
     }

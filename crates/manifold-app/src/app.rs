@@ -1077,7 +1077,7 @@ impl ApplicationHandler for Application {
             engine.initialize(self.local_project.clone());
 
             let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(
-                Box::new(LayerCompositor::new(&content_gpu.device, &content_gpu.queue, output_w, output_h)),
+                Box::new(LayerCompositor::new(&content_gpu.device, &content_gpu.queue, output_w, output_h, None)),
             );
             content_pipeline.edr_headroom = self.edr_headroom;
             // Give the content pipeline both IOSurface textures for double-buffered async output.

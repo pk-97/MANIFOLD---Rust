@@ -17,13 +17,14 @@ pub struct QuadMirrorFX {
 }
 
 impl QuadMirrorFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/fx_quad_mirror_compute.wgsl"),
                 "QuadMirror",
                 std::mem::size_of::<QuadMirrorUniforms>() as u64,
+                hal_ctx,
             ),
         }
     }

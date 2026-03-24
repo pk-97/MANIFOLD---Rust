@@ -19,13 +19,14 @@ pub struct DitherFX {
 }
 
 impl DitherFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/fx_dither_compute.wgsl"),
                 "Dither",
                 std::mem::size_of::<DitherUniforms>() as u64,
+                hal_ctx,
             ),
         }
     }

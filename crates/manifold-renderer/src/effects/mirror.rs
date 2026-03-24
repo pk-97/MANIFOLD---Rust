@@ -19,13 +19,14 @@ pub struct MirrorFX {
 }
 
 impl MirrorFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/mirror_compute.wgsl"),
                 "Mirror",
                 std::mem::size_of::<MirrorUniforms>() as u64,
+                hal_ctx,
             ),
         }
     }

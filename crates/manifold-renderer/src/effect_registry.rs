@@ -31,27 +31,27 @@ pub struct EffectRegistry {
 }
 
 impl EffectRegistry {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         let mut processors: HashMap<EffectTypeId, Box<dyn PostProcessEffect>> = HashMap::new();
-        processors.insert(EffectTypeId::INVERT_COLORS, Box::new(InvertColorsFX::new(device)));
-        processors.insert(EffectTypeId::COLOR_GRADE, Box::new(ColorGradeFX::new(device)));
-        processors.insert(EffectTypeId::MIRROR, Box::new(MirrorFX::new(device)));
+        processors.insert(EffectTypeId::INVERT_COLORS, Box::new(InvertColorsFX::new(device, hal_ctx)));
+        processors.insert(EffectTypeId::COLOR_GRADE, Box::new(ColorGradeFX::new(device, hal_ctx)));
+        processors.insert(EffectTypeId::MIRROR, Box::new(MirrorFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::FEEDBACK, Box::new(FeedbackFX::new(device)));
         processors.insert(EffectTypeId::BLOOM, Box::new(BloomFX::new(device)));
-        processors.insert(EffectTypeId::CHROMATIC_ABERRATION, Box::new(ChromaticAberrationFX::new(device)));
-        processors.insert(EffectTypeId::GLITCH, Box::new(GlitchFX::new(device)));
-        processors.insert(EffectTypeId::DITHER, Box::new(DitherFX::new(device)));
+        processors.insert(EffectTypeId::CHROMATIC_ABERRATION, Box::new(ChromaticAberrationFX::new(device, hal_ctx)));
+        processors.insert(EffectTypeId::GLITCH, Box::new(GlitchFX::new(device, hal_ctx)));
+        processors.insert(EffectTypeId::DITHER, Box::new(DitherFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::HALATION, Box::new(HalationFX::new(device)));
-        processors.insert(EffectTypeId::KALEIDOSCOPE, Box::new(KaleidoscopeFX::new(device)));
-        processors.insert(EffectTypeId::EDGE_STRETCH, Box::new(EdgeStretchFX::new(device)));
-        processors.insert(EffectTypeId::QUAD_MIRROR, Box::new(QuadMirrorFX::new(device)));
-        processors.insert(EffectTypeId::STROBE, Box::new(StrobeFX::new(device)));
+        processors.insert(EffectTypeId::KALEIDOSCOPE, Box::new(KaleidoscopeFX::new(device, hal_ctx)));
+        processors.insert(EffectTypeId::EDGE_STRETCH, Box::new(EdgeStretchFX::new(device, hal_ctx)));
+        processors.insert(EffectTypeId::QUAD_MIRROR, Box::new(QuadMirrorFX::new(device, hal_ctx)));
+        processors.insert(EffectTypeId::STROBE, Box::new(StrobeFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::CRT, Box::new(CrtFX::new(device)));
         processors.insert(EffectTypeId::STYLIZED_FEEDBACK, Box::new(StylizedFeedbackFX::new(device)));
-        processors.insert(EffectTypeId::EDGE_GLOW, Box::new(EdgeGlowFX::new(device)));
-        processors.insert(EffectTypeId::TRANSFORM, Box::new(TransformFX::new(device)));
-        processors.insert(EffectTypeId::INFRARED, Box::new(InfraredFX::new(device)));
-        processors.insert(EffectTypeId::VORONOI_PRISM, Box::new(VoronoiPrismFX::new(device)));
+        processors.insert(EffectTypeId::EDGE_GLOW, Box::new(EdgeGlowFX::new(device, hal_ctx)));
+        processors.insert(EffectTypeId::TRANSFORM, Box::new(TransformFX::new(device, hal_ctx)));
+        processors.insert(EffectTypeId::INFRARED, Box::new(InfraredFX::new(device, hal_ctx)));
+        processors.insert(EffectTypeId::VORONOI_PRISM, Box::new(VoronoiPrismFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::PIXEL_SORT, Box::new(PixelSortFX::new(device)));
         // BlobTrackingFX needs queue for font atlas upload
         processors.insert(EffectTypeId::BLOB_TRACKING, Box::new(BlobTrackingFX::new(device, queue)));

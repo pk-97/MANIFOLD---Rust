@@ -25,13 +25,14 @@ pub struct VoronoiPrismFX {
 }
 
 impl VoronoiPrismFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/fx_voronoi_prism_compute.wgsl"),
                 "VoronoiPrism",
                 std::mem::size_of::<VoronoiPrismUniforms>() as u64,
+                hal_ctx,
             ),
         }
     }

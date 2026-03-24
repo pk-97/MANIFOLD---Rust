@@ -19,13 +19,14 @@ pub struct KaleidoscopeFX {
 }
 
 impl KaleidoscopeFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/fx_kaleidoscope_compute.wgsl"),
                 "Kaleidoscope",
                 std::mem::size_of::<KaleidoscopeUniforms>() as u64,
+                hal_ctx,
             ),
         }
     }
