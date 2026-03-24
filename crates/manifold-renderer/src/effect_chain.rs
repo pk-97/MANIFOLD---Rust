@@ -70,6 +70,12 @@ impl EffectChain {
         &self.source().view
     }
 
+    /// The raw texture backing the current source buffer.
+    /// Used by the compositor for copy_texture_to_texture after master effects.
+    pub fn source_texture(&self) -> &wgpu::Texture {
+        &self.source().texture
+    }
+
     fn target_view(&self) -> &wgpu::TextureView {
         &self.target().view
     }

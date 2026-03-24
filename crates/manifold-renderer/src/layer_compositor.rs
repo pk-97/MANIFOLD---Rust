@@ -779,11 +779,10 @@ impl Compositor for LayerCompositor {
                 edge_stretch_width: 0.5625,
                 frame_count: frame.frame_count as i64,
             };
-            let aspect = width as f32 / height as f32;
 
             // Feed tonemap output directly into the effect chain — the first
             // effect reads from tonemap.output without copying.
-            if let Some(processed) = Self::apply_effects(
+            if let Some(_processed) = Self::apply_effects(
                 &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
                 device, queue, encoder,
                 &self.tonemap.output.view, &self.tonemap.output.texture,
@@ -791,26 +790,27 @@ impl Compositor for LayerCompositor {
                 frame.master_effect_groups, &ctx,
                 gpu_profiler,
             ) {
-                // Blit processed result directly into tonemap output (Opaque = full replace).
-                // main.source is stale but unused by Opaque blend — only the blend
-                // texture (processed) contributes to the output.
-                let uniforms = BlendUniforms {
-                    blend_mode: BlendMode::Opaque as u32,
-                    opacity: 1.0,
-                    translate_x: 0.0,
-                    translate_y: 0.0,
-                    scale_val: 1.0,
-                    rotation: 0.0,
-                    aspect_ratio: aspect,
-                    invert_colors: 0.0,
-                };
-                self.blend.blend_pass(
-                    device, queue, encoder,
-                    self.main.source_view(),
-                    processed,
-                    &self.tonemap.output.view,
-                    &uniforms,
-                    gpu_profiler,
+                // Copy processed result back into tonemap output via GPU memcpy.
+                // Replaces the old Opaque compute blend pass — same result, zero
+                // shader cost. Unity ref: same pattern as Graphics.CopyTexture.
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: self.effect_chain.source_texture(),
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.tonemap.output.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: 1,
+                    },
                 );
             }
         }
