@@ -182,16 +182,21 @@ fn normalize3(v: [f32; 3]) -> [f32; 3] {
 // All must be 16-byte aligned (pad to vec4 boundaries).
 
 // Splat3DUniforms — matches fluid_scatter_3d.wgsl Splat3DUniforms
+// Padded to 112 bytes: wgpu/naga derives min_binding_size from the maximum
+// uniform at @group(0) @binding(2) across ALL entry points in the shader module.
+// ProjectedUniforms is 112 bytes at the same binding slot.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Splat3DUniforms {
     active_count:  u32,
     vol_res:       u32,
     vol_depth:     u32,
-    scaled_energy: u32,  // precomputed: uint(energy * 4096 + 0.5)
+    scaled_energy: u32,
+    _pad: [u32; 24],  // pad to 112 bytes (matches ProjectedUniforms)
 }
 
 // Resolve3DUniforms — matches fluid_scatter_3d.wgsl Resolve3DUniforms
+// Padded to 112 bytes for same reason as Splat3DUniforms.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Resolve3DUniforms {
@@ -199,6 +204,7 @@ struct Resolve3DUniforms {
     vol_depth: u32,
     _pad0:     u32,
     _pad1:     u32,
+    _pad: [u32; 24],  // pad to 112 bytes (matches ProjectedUniforms)
 }
 
 // Blur3DUniforms — matches fluid_blur_3d.wgsl BlurUniforms { vol_res, axis, radius: f32, _pad }
@@ -317,8 +323,8 @@ struct DisplayUniforms {
 }
 
 // Compile-time layout assertions — must match WGSL struct sizes exactly.
-const _: () = assert!(std::mem::size_of::<Splat3DUniforms>() == 16);
-const _: () = assert!(std::mem::size_of::<Resolve3DUniforms>() == 16);
+const _: () = assert!(std::mem::size_of::<Splat3DUniforms>() == 112);
+const _: () = assert!(std::mem::size_of::<Resolve3DUniforms>() == 112);
 const _: () = assert!(std::mem::size_of::<Blur3DUniforms>() == 16);
 const _: () = assert!(std::mem::size_of::<GradientCurl3DUniforms>() == 48);
 const _: () = assert!(std::mem::size_of::<Sim3DUniforms>() == 92);
@@ -1085,8 +1091,9 @@ impl Generator for FluidSimulation3DGenerator {
                 let splat_uniforms = Splat3DUniforms {
                     active_count,
                     vol_res,
-                    vol_depth: vol_res,     // QuantizeDepth returns full res
+                    vol_depth: vol_res,
                     scaled_energy: scaled_energy_3d,
+                    _pad: [0; 24],
                 };
                 queue.write_buffer(&self.splat_3d_uniform_buf, 0, bytemuck::bytes_of(&splat_uniforms));
 
@@ -1116,6 +1123,7 @@ impl Generator for FluidSimulation3DGenerator {
                     vol_depth: vol_res,
                     _pad0: 0,
                     _pad1: 0,
+                    _pad: [0; 24],
                 };
                 queue.write_buffer(&self.resolve_3d_uniform_buf, 0, bytemuck::bytes_of(&resolve_uniforms));
 
@@ -1348,6 +1356,7 @@ impl Generator for FluidSimulation3DGenerator {
                 vol_depth: dh,
                 _pad0: 0,
                 _pad1: 0,
+                _pad: [0; 24],
             };
             queue.write_buffer(&self.resolve_display_uniform_buf, 0, bytemuck::bytes_of(&resolve_disp_uniforms));
 

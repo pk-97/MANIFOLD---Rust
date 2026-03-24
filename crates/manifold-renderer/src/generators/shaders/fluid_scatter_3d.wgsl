@@ -21,11 +21,15 @@ struct Particle {
 // FluidDensityScatter3D.compute SplatKernel3D
 // Unity energy: (R/128)^2 * 0.005 * (1e6 / activeCount), scaled by 4096, precomputed on CPU.
 
+// Padded to 112 bytes: wgpu/naga requires all @binding(2) uniforms in the same
+// shader module to match the maximum size (ProjectedUniforms = 112 bytes).
 struct Splat3DUniforms {
     active_count:   u32,
     vol_res:        u32,
     vol_depth:      u32,
-    scaled_energy:  u32,  // precomputed: uint(energy * 4096 + 0.5)
+    scaled_energy:  u32,
+    _pad0: vec4<u32>, _pad1: vec4<u32>, _pad2: vec4<u32>,
+    _pad3: vec4<u32>, _pad4: vec4<u32>, _pad5: vec4<u32>,
 };
 
 @group(0) @binding(0) var<storage, read>       particles: array<Particle>;
@@ -58,11 +62,14 @@ fn splat_3d(@builtin(global_invocation_id) id: vec3<u32>) {
 // ── Resolve 3D ──
 // Unity ResolveKernel3D: fixed-point -> float density + self-clear
 
+// Padded to 112 bytes (same reason as Splat3DUniforms).
 struct Resolve3DUniforms {
     vol_res:   u32,
     vol_depth: u32,
     _pad0:     u32,
     _pad1:     u32,
+    _pad2: vec4<u32>, _pad3: vec4<u32>, _pad4: vec4<u32>,
+    _pad5: vec4<u32>, _pad6: vec4<u32>, _pad7: vec4<u32>,
 };
 
 @group(0) @binding(0) var<storage, read_write> resolve_accum: array<atomic<u32>>;
