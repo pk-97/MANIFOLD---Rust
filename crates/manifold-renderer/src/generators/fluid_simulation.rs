@@ -82,6 +82,14 @@ struct ResolveUniforms {
     height: u32,
     _pad0: u32,
     _pad1: u32,
+    // Pad to 32 bytes: wgpu/naga derives min_binding_size from the maximum
+    // uniform at @group(0) @binding(2) across ALL entry points in the same
+    // shader module. SplatUniforms is 32 bytes at the same binding slot,
+    // so this struct must match.
+    _pad2: u32,
+    _pad3: u32,
+    _pad4: u32,
+    _pad5: u32,
 }
 
 #[repr(C)]
@@ -861,7 +869,7 @@ impl Generator for FluidSimulationGenerator {
         }
 
         // Resolve accumulator to density texture
-        let resolve_uniforms = ResolveUniforms { width: sw, height: sh, _pad0: 0, _pad1: 0 };
+        let resolve_uniforms = ResolveUniforms { width: sw, height: sh, _pad0: 0, _pad1: 0, _pad2: 0, _pad3: 0, _pad4: 0, _pad5: 0 };
         queue.write_buffer(&self.resolve_uniform_buf, 0, bytemuck::bytes_of(&resolve_uniforms));
 
         let density_rt = self.density_rt.as_ref().unwrap();
