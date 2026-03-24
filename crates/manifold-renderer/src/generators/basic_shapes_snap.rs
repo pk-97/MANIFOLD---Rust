@@ -20,32 +20,44 @@ struct BasicShapesSnapUniforms {
 }
 
 pub struct BasicShapesSnapGenerator {
-    pipeline: wgpu::RenderPipeline,
+    pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
 }
 
 impl BasicShapesSnapGenerator {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+    pub fn new(device: &wgpu::Device, _target_format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("BasicShapesSnap Generator"),
+            label: Some("BasicShapesSnap Compute Generator"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/basic_shapes_snap.wgsl").into(),
+                include_str!("shaders/basic_shapes_snap_compute.wgsl").into(),
             ),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("BasicShapesSnap BGL"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -54,32 +66,12 @@ impl BasicShapesSnapGenerator {
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("BasicShapesSnap Pipeline"),
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("BasicShapesSnap Compute Pipeline"),
             layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
+            module: &shader,
+            entry_point: Some("cs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
 
@@ -129,39 +121,39 @@ impl Generator for BasicShapesSnapGenerator {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("BasicShapesSnap BG"),
             layout: &self.bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.uniform_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(target),
+                },
+            ],
         });
 
         {
-            let ts = profiler.and_then(|p| p.render_timestamps("BasicShapesSnap", ctx.width, ctx.height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let ts = profiler.and_then(|p| {
+                p.compute_timestamps("BasicShapesSnap", ctx.width, ctx.height)
+            });
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("BasicShapesSnap Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
                 timestamp_writes: ts,
-                occlusion_query_set: None,
-                multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
+            pass.dispatch_workgroups(
+                ctx.width.div_ceil(16),
+                ctx.height.div_ceil(16),
+                1,
+            );
         }
 
         ctx.anim_progress
     }
 
     fn resize(&mut self, _device: &wgpu::Device, _width: u32, _height: u32) {
-        // Fragment shader generators have no resolution-dependent resources
+        // Compute generators have no resolution-dependent resources
     }
 }
