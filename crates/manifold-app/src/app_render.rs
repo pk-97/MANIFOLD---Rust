@@ -864,10 +864,11 @@ impl Application {
                     video_rect.width * sf, video_rect.height * sf,
                     source_aspect,
                 );
-            } else {
+            } else if let Some(tonemap_blit) = self.output_blit_pipeline.as_ref() {
                 // Output windows: project resolution centered with letterbox/pillarbox.
+                // Per-window tonemap: ACES for SDR displays, passthrough for HDR.
+                let sdr_tonemap = self.output_edr_headroom <= 1.0;
                 // Clear to black first (bars around content when window != project aspect).
-                let output_blit = self.output_blit_pipeline.as_ref().unwrap_or(blit);
                 {
                     let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Clear Output"),
@@ -886,10 +887,11 @@ impl Application {
                         multiview_mask: None,
                     });
                 }
-                output_blit.blit_to_rect_fit(
-                    &gpu.device, &mut encoder, compositor_output, &surface_view,
+                tonemap_blit.blit_to_rect_fit(
+                    &gpu.device, &gpu.queue, &mut encoder,
+                    compositor_output, &surface_view,
                     0.0, 0.0, surface_w as f32, surface_h as f32,
-                    source_aspect,
+                    source_aspect, sdr_tonemap,
                 );
             }
 

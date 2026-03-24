@@ -189,17 +189,17 @@ pub struct Application {
     #[cfg(target_os = "macos")]
     pub(crate) last_bridge_generation: u64,
     pub(crate) blit_pipeline: Option<BlitPipeline>,
-    pub(crate) output_blit_pipeline: Option<BlitPipeline>,
+    pub(crate) output_blit_pipeline: Option<manifold_renderer::tonemap_blit::TonemapBlitPipeline>,
     pub(crate) output_blit_format: Option<wgpu::TextureFormat>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
     pub(crate) surface_format: wgpu::TextureFormat,
     /// macOS EDR headroom for the primary window (1.0 = SDR, >1.0 = HDR capable).
+    /// Drives compositor tonemap (passthrough if > 1.0, ACES if ≤ 1.0).
     pub(crate) edr_headroom: f64,
-    /// macOS EDR headroom for the output window (tracked separately).
-    output_edr_headroom: f64,
-    /// Effective headroom sent to content pipeline (min of primary and output).
-    content_pipeline_headroom: f64,
+    /// macOS EDR headroom for the output window. Drives the per-window
+    /// tonemap blit (ACES if ≤ 1.0 SDR, passthrough if > 1.0 HDR).
+    pub(crate) output_edr_headroom: f64,
 
     // UI
     pub(crate) ui_root: UIRoot,
@@ -318,7 +318,6 @@ impl Application {
             surface_format: wgpu::TextureFormat::Rgba16Float,
             edr_headroom: 1.0,
             output_edr_headroom: 1.0,
-            content_pipeline_headroom: 1.0,
             ui_root: UIRoot::new(),
             // UI frame rate: uncapped (120fps target, vsync limits actual present).
             // Content thread has its own timer at project FPS — fully decoupled.
@@ -972,7 +971,6 @@ impl ApplicationHandler for Application {
             // Must happen after surface.configure() which creates the CAMetalLayer.
             if format == wgpu::TextureFormat::Rgba16Float {
                 self.edr_headroom = crate::edr_surface::configure_edr(&surface);
-                self.content_pipeline_headroom = self.edr_headroom;
                 // Register NSNotification observers for dynamic headroom updates
                 // when windows move between displays or display params change.
                 crate::edr_surface::register_screen_change_observer();
@@ -1827,50 +1825,30 @@ impl Application {
     /// Called when NSNotification fires (window moved between displays
     /// or display parameters changed).
     fn update_edr_headroom(&mut self) {
-        // Query headroom for primary window.
-        if let Some(pid) = self.primary_window_id {
-            if let Some(ws) = self.window_registry.get(&pid) {
-                let h = crate::edr_surface::query_window_headroom(&ws.window);
-                if (h - self.edr_headroom).abs() > 0.01 {
-                    eprintln!("[EDR] Primary: {:.2}x → {:.2}x", self.edr_headroom, h);
-                    self.edr_headroom = h;
-                }
+        // Query headroom for primary window → drives compositor tonemap.
+        if let Some(pid) = self.primary_window_id
+            && let Some(ws) = self.window_registry.get(&pid)
+        {
+            let h = crate::edr_surface::query_window_headroom(&ws.window);
+            if (h - self.edr_headroom).abs() > 0.01 {
+                eprintln!("[EDR] Primary: {:.2}x → {:.2}x", self.edr_headroom, h);
+                self.edr_headroom = h;
+                self.send_content_cmd(ContentCommand::UpdateEdrHeadroom(h));
             }
         }
 
-        // Query headroom for output window (if open).
+        // Query headroom for output window → drives per-window tonemap blit.
         for (_, ws) in self.window_registry.iter() {
             if matches!(ws.role, WindowRole::Output { .. }) {
                 let h = crate::edr_surface::query_window_headroom(&ws.window);
                 if (h - self.output_edr_headroom).abs() > 0.01 {
                     eprintln!(
-                        "[EDR] Output: {:.2}x → {:.2}x ({})",
+                        "[EDR] Output: {:.2}x → {:.2}x (blit={})",
                         self.output_edr_headroom, h,
-                        if h > 1.0 { "HDR" } else { "SDR" },
+                        if h > 1.0 { "passthrough" } else { "ACES tonemap" },
                     );
                     self.output_edr_headroom = h;
                 }
-            }
-        }
-
-        // Effective headroom = min across all windows. Ensures audience
-        // output (SDR projector) is always correctly tonemapped.
-        let effective = if self.window_registry.has_output_window() {
-            self.edr_headroom.min(self.output_edr_headroom)
-        } else {
-            self.edr_headroom
-        };
-        if let Some(ref tx) = self.content_tx {
-            // Only send if effective headroom actually changed.
-            let prev = self.content_pipeline_headroom;
-            if (effective - prev).abs() > 0.01 {
-                eprintln!(
-                    "[EDR] Effective headroom: {:.2}x (mode={})",
-                    effective,
-                    if effective > 1.0 { "passthrough" } else { "ACES" },
-                );
-                self.content_pipeline_headroom = effective;
-                ContentCommand::send(tx, ContentCommand::UpdateEdrHeadroom(effective));
             }
         }
     }

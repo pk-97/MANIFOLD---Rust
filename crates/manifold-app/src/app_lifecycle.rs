@@ -10,7 +10,6 @@ use winit::event_loop::ActiveEventLoop;
 
 use manifold_editing::service::EditingService;
 use manifold_playback::audio_decoder::DecodedAudio;
-use manifold_renderer::blit::BlitPipeline;
 use manifold_renderer::surface::SurfaceWrapper;
 
 use crate::app::{Application, PendingAudioLoadResult};
@@ -567,7 +566,11 @@ impl Application {
         if self.output_blit_pipeline.is_none()
             || self.output_blit_format != Some(surface_format)
         {
-            self.output_blit_pipeline = Some(BlitPipeline::new(&gpu.device, surface_format));
+            self.output_blit_pipeline = Some(
+                manifold_renderer::tonemap_blit::TonemapBlitPipeline::new(
+                    &gpu.device, surface_format,
+                ),
+            );
             self.output_blit_format = Some(surface_format);
             log::info!(
                 "[OutputWindow] Created blit pipeline for {:?}",
