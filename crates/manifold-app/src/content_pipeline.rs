@@ -500,6 +500,12 @@ impl ContentPipeline {
         self.compositor.output_texture()
     }
 
+    /// Compositor output view (post-tonemap). Used by LED output to blit
+    /// through the edge-extend shader. The texture has TEXTURE_BINDING usage.
+    pub fn compositor_output_view(&self) -> &wgpu::TextureView {
+        self.compositor.output_view()
+    }
+
     /// Run the PQ encoder on the final compositor output for HDR export.
     /// Returns the PQ-encoded texture for the Metal encoder.
     /// Lazily creates the PQ encoder pipeline on first call.

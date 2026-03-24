@@ -116,6 +116,14 @@ pub enum ContentCommand {
     // ── Compositor ────────────────────────────────────────────────
     MarkCompositorDirty,
 
+    // ── LED output ──────────────────────────────────────────────
+    /// Initialize LED/ArtNet output with the given settings.
+    InitLedOutput(Box<manifold_led::LedSettings>),
+    /// Shut down LED output pipeline.
+    ShutdownLedOutput,
+    /// Enable or disable LED output (without reinitializing).
+    SetLedEnabled(bool),
+
     // ── Generator ──────────────────────────────────────────────────
     /// Notify renderer that a layer's generator type changed.
     /// Port of C# PlaybackController.NotifyGeneratorTypeChanged().

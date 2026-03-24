@@ -75,6 +75,12 @@ pub struct ContentState {
     /// Number of frames recorded in the current session.
     pub profiling_frame_count: u64,
 
+    // ── LED output ────────────────────────────────────────────────
+    /// Whether LED output is enabled.
+    pub led_enabled: bool,
+    /// Whether the LED pipeline is initialized and ready.
+    pub led_initialized: bool,
+
     // ── Export ────────────────────────────────────────────────────
     /// Whether an export is currently in progress.
     pub is_exporting: bool,
@@ -129,6 +135,8 @@ impl Default for ContentState {
             percussion_show_progress: false,
             profiling_active: false,
             profiling_frame_count: 0,
+            led_enabled: false,
+            led_initialized: false,
             is_exporting: false,
             export_progress: 0.0,
             export_status: String::new(),

@@ -71,6 +71,10 @@ pub struct ContentThread {
     /// Port of C# PlaybackController.linkBeatOffset field (line 74).
     pub link_beat_offset: f64,
 
+    // ── LED output ──
+    /// LED/ArtNet output controller. None when not initialized.
+    pub led_controller: Option<manifold_led::LedOutputController>,
+
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
     #[cfg(feature = "profiling")]
@@ -241,6 +245,31 @@ impl ContentThread {
 
             if !tick_result.stopped_clips.is_empty() {
                 self.content_pipeline.cleanup_stopped_clips(&tick_result.stopped_clips);
+            }
+
+            // 7c. LED output — blit compositor output through edge-extend shader
+            // and submit readback. Uses a separate encoder since render_content
+            // already submitted its own.
+            if let Some(ref mut led) = self.led_controller {
+                // Poll previous frame's readback first (now that GPU has been polled).
+                led.poll_readback(&self.gpu.device);
+
+                // Submit new blit + readback for this frame.
+                let source_view = self.content_pipeline.compositor_output_view();
+                let active_count = tick_result.ready_clips.len();
+                let mut led_encoder = self.gpu.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor {
+                        label: Some("LED Encoder"),
+                    },
+                );
+                led.process_frame(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    &mut led_encoder,
+                    source_view,
+                    active_count,
+                );
+                self.gpu.queue.submit(std::iter::once(led_encoder.finish()));
             }
 
             #[cfg(feature = "profiling")]
@@ -506,6 +535,8 @@ impl ContentThread {
                     #[cfg(not(feature = "profiling"))]
                     { 0 }
                 },
+                led_enabled: self.led_controller.as_ref().is_some_and(|c| c.is_enabled()),
+                led_initialized: self.led_controller.as_ref().is_some_and(|c| c.is_initialized()),
                 is_exporting: false,
                 export_progress: 0.0,
                 export_status: String::new(),
@@ -1170,6 +1201,29 @@ impl ContentThread {
                     }
                 }
                 self.engine.mark_compositor_dirty(0.0);
+            }
+
+            // ── LED output ─────────────────────────────────────────────
+            ContentCommand::InitLedOutput(settings) => {
+                let mut ctrl = manifold_led::LedOutputController::new();
+                if ctrl.initialize(&self.gpu.device, &settings) {
+                    self.led_controller = Some(ctrl);
+                    log::info!("[ContentThread] LED output initialized.");
+                } else {
+                    log::warn!("[ContentThread] LED output failed to initialize.");
+                }
+            }
+            ContentCommand::ShutdownLedOutput => {
+                if let Some(ref mut ctrl) = self.led_controller {
+                    ctrl.shutdown();
+                }
+                self.led_controller = None;
+                log::info!("[ContentThread] LED output shut down.");
+            }
+            ContentCommand::SetLedEnabled(enabled) => {
+                if let Some(ref mut ctrl) = self.led_controller {
+                    ctrl.set_enabled(enabled);
+                }
             }
 
             // ── Export ────────────────────────────────────────────────

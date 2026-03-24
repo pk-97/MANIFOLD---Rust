@@ -1982,6 +1982,7 @@ dependencies = [
  "manifold-core",
  "manifold-editing",
  "manifold-io",
+ "manifold-led",
  "manifold-media",
  "manifold-playback",
  "manifold-profiler",
@@ -2030,6 +2031,18 @@ dependencies = [
  "serde_json",
  "sha2",
  "zip",
+]
+
+[[package]]
+name = "manifold-led"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "log",
+ "naga",
+ "parking_lot",
+ "serde",
+ "wgpu",
 ]
 
 [[package]]
