@@ -156,9 +156,49 @@ impl SimpleBlitHelper {
         height: u32,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        // Write uniforms into the next ring buffer slot. Each slot is at a
-        // different 256-byte-aligned offset, so batched queue.write_buffer()
-        // calls don't overwrite each other before GPU execution.
+        self.draw_inner(
+            device, queue, encoder, source_view, target_view,
+            uniform_bytes, label, width, height, wgpu::StoreOp::Store, profiler,
+        );
+    }
+
+    /// Like `draw`, but uses `StoreOp::Discard` — the target's tile memory is
+    /// NOT written back to VRAM after the pass. Use for intermediate render
+    /// targets that will be immediately overwritten or only read once.
+    pub fn draw_discard(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source_view: &wgpu::TextureView,
+        target_view: &wgpu::TextureView,
+        uniform_bytes: &[u8],
+        label: &str,
+        width: u32,
+        height: u32,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
+    ) {
+        self.draw_inner(
+            device, queue, encoder, source_view, target_view,
+            uniform_bytes, label, width, height, wgpu::StoreOp::Discard, profiler,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_inner(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source_view: &wgpu::TextureView,
+        target_view: &wgpu::TextureView,
+        uniform_bytes: &[u8],
+        label: &str,
+        width: u32,
+        height: u32,
+        store_op: wgpu::StoreOp,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
+    ) {
         let slot = self.ring_index.get() % RING_SLOTS;
         self.ring_index.set(self.ring_index.get() + 1);
         let byte_offset = slot * self.slot_stride;
@@ -198,7 +238,7 @@ impl SimpleBlitHelper {
                     depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
+                        store: store_op,
                     },
                 })],
                 depth_stencil_attachment: None,
