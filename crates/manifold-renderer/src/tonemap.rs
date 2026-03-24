@@ -169,9 +169,10 @@ impl TonemapPipeline {
         settings: &TonemapSettings,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        // Realtime HDR preview uses display-linear EDR pass (2).
-        // Pass 1 remains reserved for explicit PQ workflows (e.g. export).
-        let mode = if settings.hdr_output_enabled { 2u32 } else { 0u32 };
+        // Realtime HDR preview uses EDR passthrough (3) — no ACES compression,
+        // linear values passed directly to macOS EDR with soft-clip at display peak.
+        // Mode 2 (ACES EDR) retained for explicit use. Mode 1 reserved for PQ export.
+        let mode = if settings.hdr_output_enabled { 3u32 } else { 0u32 };
 
         let uniforms = TonemapUniforms {
             exposure: settings.exposure,

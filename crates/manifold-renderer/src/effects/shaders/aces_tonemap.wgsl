@@ -1,8 +1,9 @@
 // ACES filmic tonemapping — mechanical translation of ACESTonemap.shader.
-// Narkowicz 2015 fit. Three modes selected by uniform:
+// Narkowicz 2015 fit. Four modes selected by uniform:
 //   0 = SDR (clamped ACES -> sRGB)
 //   1 = PQ  (unclamped ACES -> ST.2084 perceptual quantizer, for export)
 //   2 = EDR (unclamped ACES -> display-linear, for macOS EDR)
+//   3 = EDR passthrough (no ACES, linear values -> EDR with soft-clip at peak)
 
 struct Uniforms {
     exposure: f32,
@@ -69,19 +70,26 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Pass 1: HDR PQ output (export pipeline).
         // Unclamped ACES — values > 1.0 carry highlight detail.
         let mapped = aces_film_raw(hdr);
-        // Scene 1.0 (ACES midtone) -> paper_white nits.
-        // Highlights above 1.0 extend toward max_nits, then hard-cap.
         let nits = clamp(mapped * u.paper_white, vec3<f32>(0.0), vec3<f32>(u.max_nits));
-        // Normalize to 10,000-nit PQ domain and encode.
         result = linear_to_pq(nits / 10000.0);
     } else if (u.mode == 2u) {
         // Pass 2: HDR display-linear output (macOS EDR).
         // Unclamped ACES — preserves highlight separation.
         let mapped = aces_film_raw(hdr);
-        // Scene 1.0 -> paper_white nits -> EDR 1.0 (SDR white).
-        // Highlights extend up to max_nits / paper_white in EDR units.
         let nits = clamp(mapped * u.paper_white, vec3<f32>(0.0), vec3<f32>(u.max_nits));
         result = nits / max(u.paper_white, 1.0);
+    } else if (u.mode == 3u) {
+        // Pass 3: EDR passthrough — no ACES, linear values directly to EDR.
+        // 1.0 in scene = SDR white. Values > 1.0 use HDR headroom.
+        // Soft-clip near display peak to prevent hard clipping.
+        let peak = u.max_nits / max(u.paper_white, 1.0);
+        let edr = max(hdr, vec3<f32>(0.0));
+        // Soft knee: smoothly compress values approaching peak
+        let knee = peak * 0.8;
+        let compressed = knee + (peak - knee) * tanh((edr - knee) / (peak - knee));
+        // Use linear below knee, compressed above
+        let below = vec3<f32>(f32(edr.r < knee), f32(edr.g < knee), f32(edr.b < knee));
+        result = mix(compressed, edr, below);
     } else {
         // Pass 0: SDR output (default).
         // Clamped ACES -> [0,1] for sRGB display.
