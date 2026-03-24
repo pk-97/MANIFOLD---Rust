@@ -626,6 +626,7 @@ impl PlaybackEngine {
         //    Port of C# lines 1117-1120.
         if self.consume_sync_dirty() {
             self.sync_clips_to_time();
+            self.seek_active_clips();
         }
 
         // 2. Keep active clip playback rates aligned.

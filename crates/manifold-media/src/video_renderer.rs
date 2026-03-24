@@ -80,6 +80,9 @@ struct ActiveVideoClip {
     looping: bool,
     playback_rate: f32,
     decode_pending: bool,
+    /// Queued seek target when a seek arrives while decode_pending is true.
+    /// Dispatched when the pending decode completes.
+    pending_seek_time: Option<f32>,
     /// Accumulated time since last frame advance (for pacing decode to video fps).
     time_accumulator: f32,
 }
@@ -282,6 +285,7 @@ impl ClipRenderer for VideoRenderer {
                 looping: clip.is_looping,
                 playback_rate: 1.0,
                 decode_pending: true,
+                pending_seek_time: None,
                 time_accumulator: 0.0,
             },
         );
@@ -370,11 +374,18 @@ impl ClipRenderer for VideoRenderer {
     fn seek_clip(&mut self, clip_id: &str, video_time: f32) {
         if let Some(clip) = self.active_clips.get_mut(clip_id) {
             clip.playback_time = video_time;
-            clip.decode_pending = true;
-            self.scheduler.submit(DecodeJob::Seek {
-                clip_id: clip_id.to_string(),
-                target_time: video_time,
-            });
+            if clip.decode_pending {
+                // Coalesce: worker is busy, queue the latest target.
+                // Will be dispatched when the pending decode completes.
+                clip.pending_seek_time = Some(video_time);
+            } else {
+                clip.decode_pending = true;
+                clip.pending_seek_time = None;
+                self.scheduler.submit(DecodeJob::Seek {
+                    clip_id: clip_id.to_string(),
+                    target_time: video_time,
+                });
+            }
         }
     }
 
@@ -487,7 +498,24 @@ impl ClipRenderer for VideoRenderer {
             }
         }
 
-        // 2. Pacing: request next frame for playing clips based on video frame rate.
+        // 2. Dispatch any queued seeks that were coalesced while decode was pending.
+        let pending: Vec<(String, f32)> = self.active_clips.iter_mut()
+            .filter_map(|(id, clip)| {
+                if !clip.decode_pending && clip.pending_seek_time.is_some() {
+                    let t = clip.pending_seek_time.take().unwrap();
+                    clip.decode_pending = true;
+                    clip.playback_time = t;
+                    Some((id.clone(), t))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for (clip_id, target_time) in pending {
+            self.scheduler.submit(DecodeJob::Seek { clip_id, target_time });
+        }
+
+        // 3. Pacing: request next frame for playing clips based on video frame rate.
         // Accumulate dt and submit DecodeNext when enough time has elapsed for
         // the next video frame. This prevents the decoder from running at full
         // speed and flooding the result queue.
