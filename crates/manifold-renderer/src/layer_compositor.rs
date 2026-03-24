@@ -749,26 +749,13 @@ impl Compositor for LayerCompositor {
         // Apply master effects (bloom, halation, CRT) AFTER tonemapping.
         // Glow contribution pushes values > 1.0 for HDR/EDR displays.
         // On SDR displays, values > 1.0 clip to white — same visual result.
+        //
+        // The effect chain reads directly from tonemap.output (no copy into main)
+        // and blits the processed result back to tonemap.output via Opaque blend.
+        // Saves 2× full-resolution texture copies per frame.
         if has_enabled_effects(frame.master_effects) {
             let width = self.main.width();
             let height = self.main.height();
-
-            // Copy tonemapped result back into main's source buffer for effect chain.
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.tonemap.output.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: self.main.source_texture(),
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            );
 
             let ctx = EffectContext {
                 time: frame.time,
@@ -782,12 +769,19 @@ impl Compositor for LayerCompositor {
                 frame_count: frame.frame_count as i64,
             };
             let aspect = width as f32 / height as f32;
+
+            // Feed tonemap output directly into the effect chain — the chain
+            // blits it into its own ping-pong buffers internally.
             if let Some(processed) = Self::apply_effects(
                 &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
                 device, queue, encoder,
-                self.main.source_view(), frame.master_effects, frame.master_effect_groups, &ctx,
+                &self.tonemap.output.view, frame.master_effects,
+                frame.master_effect_groups, &ctx,
                 gpu_profiler,
             ) {
+                // Blit processed result directly into tonemap output (Opaque = full replace).
+                // main.source is stale but unused by Opaque blend — only the blend
+                // texture (processed) contributes to the output.
                 let uniforms = BlendUniforms {
                     blend_mode: BlendMode::Opaque as u32,
                     opacity: 1.0,
@@ -802,29 +796,11 @@ impl Compositor for LayerCompositor {
                     device, queue, encoder,
                     self.main.source_view(),
                     processed,
-                    self.main.target_view(),
+                    &self.tonemap.output.view,
                     &uniforms,
                     gpu_profiler,
                 );
-                self.main.swap();
             }
-
-            // Copy post-effect result back to tonemap output (standard output path).
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: self.main.source_texture(),
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.tonemap.output.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            );
         }
 
         &self.tonemap.output.view
