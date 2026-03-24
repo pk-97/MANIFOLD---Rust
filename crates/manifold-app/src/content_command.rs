@@ -27,8 +27,10 @@ pub enum ContentCommand {
     ExecuteBatch(Vec<Box<dyn Command>>, String),
     Undo,
     Redo,
-    /// Mark editing service as clean after save/load.
+    /// Reset editing service (clear undo, clipboard) after project load.
     SetProject,
+    /// Mark editing service as clean (saved) without clearing undo history.
+    MarkClean,
 
     // ── Project lifecycle ──────────────────────────────────────────
     LoadProject(Box<Project>),
@@ -149,6 +151,10 @@ pub enum ContentCommand {
     /// Stop profiling and dump session data to disk.
     #[cfg(feature = "profiling")]
     StopProfiling,
+
+    // ── Display ───────────────────────────────────────────────────
+    /// Update EDR headroom when window moves to a different display.
+    UpdateEdrHeadroom(f64),
 
     // ── Export ────────────────────────────────────────────────────
     /// Begin offline video export. Content thread enters export loop.

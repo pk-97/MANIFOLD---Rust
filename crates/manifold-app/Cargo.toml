@@ -37,6 +37,7 @@ foreign-types = "0.5"
 core-foundation = "0.10"
 wgpu-hal = "28"
 wgpu-types = "28"
+raw-window-handle = "0.6"
 
 [features]
 profiling = ["dep:manifold-profiler"]

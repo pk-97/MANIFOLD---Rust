@@ -967,6 +967,9 @@ impl ApplicationHandler for Application {
             // Must happen after surface.configure() which creates the CAMetalLayer.
             if format == wgpu::TextureFormat::Rgba16Float {
                 self.edr_headroom = crate::edr_surface::configure_edr(&surface);
+                // Register NSNotification observers for dynamic headroom updates
+                // when windows move between displays or display params change.
+                crate::edr_surface::register_screen_change_observer();
             }
 
             let surface_wrapper = SurfaceWrapper {
@@ -1792,6 +1795,12 @@ impl ApplicationHandler for Application {
             }
         }
 
+        // Check if a screen change notification fired — update EDR headroom
+        // per-window and send to content thread if it changed.
+        if crate::edr_surface::edr_screen_changed() {
+            self.update_edr_headroom();
+        }
+
         if self.frame_timer.should_tick() {
             self.tick_and_render();
         }
@@ -1803,6 +1812,26 @@ impl ApplicationHandler for Application {
             .collect::<Vec<_>>()
         {
             window.request_redraw();
+        }
+    }
+}
+
+impl Application {
+    /// Re-query EDR headroom for the primary window's current screen.
+    /// Called when NSNotification fires (window moved between displays
+    /// or display parameters changed).
+    fn update_edr_headroom(&mut self) {
+        let Some(pid) = self.primary_window_id else { return };
+        let Some(ws) = self.window_registry.get(&pid) else { return };
+
+        let new_headroom = crate::edr_surface::query_window_headroom(&ws.window);
+        if (new_headroom - self.edr_headroom).abs() > 0.01 {
+            eprintln!(
+                "[EDR] Headroom changed: {:.2}x → {:.2}x",
+                self.edr_headroom, new_headroom,
+            );
+            self.edr_headroom = new_headroom;
+            self.send_content_cmd(ContentCommand::UpdateEdrHeadroom(new_headroom));
         }
     }
 }

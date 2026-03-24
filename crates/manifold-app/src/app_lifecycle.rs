@@ -30,7 +30,7 @@ impl Application {
         if let Some(path) = current_path.as_deref() {
             match manifold_io::saver::save_project(&mut self.local_project, path, None, false) {
                 Ok(()) => {
-                    self.send_content_cmd(ContentCommand::SetProject);
+                    self.send_content_cmd(ContentCommand::MarkClean);
                     log::info!("[ProjectIO] Saved to {}", path.display());
                 }
                 Err(e) => log::error!("[ProjectIO] Save failed: {e}"),
@@ -360,6 +360,11 @@ impl Application {
         // Structural sync
         if action.needs_structural_sync {
             self.needs_structural_sync = true;
+        }
+
+        // Mark clean on content thread (save succeeded)
+        if action.mark_clean {
+            self.send_content_cmd(ContentCommand::MarkClean);
         }
 
         // Clip sync

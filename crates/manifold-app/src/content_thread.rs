@@ -1209,6 +1209,12 @@ impl ContentThread {
                 self.engine.mark_compositor_dirty(0.0);
             }
 
+            // ── Display ───────────────────────────────────────────
+            ContentCommand::UpdateEdrHeadroom(headroom) => {
+                self.content_pipeline.edr_headroom = headroom;
+                self.engine.mark_compositor_dirty(0.0);
+            }
+
             // ── Generator ─────────────────────────────────────────
             ContentCommand::GeneratorTypeChanged { layer_id, new_type } => {
                 // Port of C# PlaybackController.NotifyGeneratorTypeChanged().
