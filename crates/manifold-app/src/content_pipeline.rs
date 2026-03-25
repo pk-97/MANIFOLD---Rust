@@ -88,11 +88,11 @@ pub struct ContentPipeline {
     last_content_time: f64,
     /// Shared output view for cross-thread access (fallback for non-macOS).
     shared_output: Arc<SharedOutputView>,
-    /// Double-buffered IOSurface textures on the content device. Content writes
-    /// to shared_textures[write_surface_index]; UI reads the other surface.
+    /// Triple-buffered IOSurface textures on the content device. Content writes
+    /// to shared_textures[write_surface_index]; UI reads the published surface.
     #[cfg(target_os = "macos")]
-    shared_textures: [Option<wgpu::Texture>; 2],
-    /// Which surface we're writing to THIS frame (0 or 1).
+    shared_textures: [Option<wgpu::Texture>; 3],
+    /// Which surface we're writing to THIS frame (0, 1, or 2).
     #[cfg(target_os = "macos")]
     write_surface_index: usize,
     /// IOSurface bridge for cross-device sharing.
@@ -112,6 +112,9 @@ pub struct ContentPipeline {
     /// Which IOSurface the PREVIOUS frame wrote to (published after fence ready).
     #[cfg(target_os = "macos")]
     last_write_surface: usize,
+    /// Which IOSurface the frame before that wrote to (for triple-buffer publishing).
+    #[cfg(target_os = "macos")]
+    second_last_write_surface: usize,
     /// Duration of the last GPU poll (wait for completion) in milliseconds.
     /// Captured inside render_content(), read by the profiler.
     #[cfg(feature = "profiling")]
@@ -124,10 +127,11 @@ pub struct ContentPipeline {
     last_gpu_pass_results: Vec<manifold_renderer::gpu_profiler::GpuPassTiming>,
     /// HAL context for zero-overhead GPU encoding (macOS + hal-encoding feature).
     hal_ctx: Option<manifold_renderer::hal_context::HalContext>,
-    /// Signal value from the previous frame's MTLSharedEvent.
-    /// Checked by wait_previous_frame() to detect GPU completion without device.poll().
+    /// Per-surface MTLSharedEvent signal values for triple-buffer fence tracking.
+    /// Each entry records the signal value from the frame that last wrote to that surface.
+    /// wait_previous_frame() waits for the target surface's signal before reusing it.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_signal_value: u64,
+    surface_signal_values: [u64; 3],
 }
 
 impl ContentPipeline {
@@ -148,7 +152,7 @@ impl ContentPipeline {
             last_content_time: 0.0,
             shared_output: shared,
             #[cfg(target_os = "macos")]
-            shared_textures: [None, None],
+            shared_textures: [None, None, None],
             #[cfg(target_os = "macos")]
             write_surface_index: 0,
             #[cfg(target_os = "macos")]
@@ -161,6 +165,8 @@ impl ContentPipeline {
             fence_pending: false,
             #[cfg(target_os = "macos")]
             last_write_surface: 0,
+            #[cfg(target_os = "macos")]
+            second_last_write_surface: 0,
             #[cfg(feature = "profiling")]
             gpu_poll_ms: 0.0,
             #[cfg(feature = "profiling")]
@@ -169,20 +175,21 @@ impl ContentPipeline {
             last_gpu_pass_results: Vec::new(),
             hal_ctx,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_signal_value: 0,
+            surface_signal_values: [0; 3],
         }
     }
 
-    /// Set the double-buffered IOSurface shared textures and bridge.
-    /// Called during init after the bridge imports both textures on the content device.
+    /// Set the triple-buffered IOSurface shared textures and bridge.
+    /// Called during init after the bridge imports all textures on the content device.
     #[cfg(target_os = "macos")]
     pub fn set_shared_textures(
         &mut self,
         tex_a: wgpu::Texture,
         tex_b: wgpu::Texture,
+        tex_c: wgpu::Texture,
         bridge: Arc<crate::shared_texture::SharedTextureBridge>,
     ) {
-        self.shared_textures = [Some(tex_a), Some(tex_b)];
+        self.shared_textures = [Some(tex_a), Some(tex_b), Some(tex_c)];
         self.shared_bridge = Some(bridge);
     }
 
@@ -236,19 +243,28 @@ impl ContentPipeline {
     /// Called at the START of each frame before encoding new work.
     /// Publishes the completed IOSurface so the UI can read it.
     fn wait_previous_frame(&mut self, device: &wgpu::Device) {
-        // ── HAL path: MTLSharedEvent sync ────────────────────────────────
-        // signaled_value() is a direct GPU counter read — microsecond latency
-        // vs device.poll() which goes through wgpu's internal machinery and
-        // wgpu-hal's 1ms sleep loop.
+        // ── HAL path: MTLSharedEvent sync (triple-buffered) ───────────────
+        // Wait only for the surface we're about to reuse (last written ~3 frames ago).
+        // signaled_value() is a direct GPU counter read — microsecond latency.
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         if let Some(ref hal_ctx) = self.hal_ctx {
-            if self.hal_signal_value > 0 {
-                while !hal_ctx.is_frame_done(self.hal_signal_value) {
+            // Wait for the target surface to be free (written ~3 frames ago).
+            let target_signal = self.surface_signal_values[self.write_surface_index];
+            if target_signal > 0 {
+                while !hal_ctx.is_frame_done(target_signal) {
                     std::thread::yield_now();
                 }
-                // Publish the completed IOSurface for the UI thread.
-                if let Some(ref bridge) = self.shared_bridge {
+            }
+            // Publish the most recent completed surface for the UI thread.
+            // Check N-1 first (lowest latency), fall back to N-2.
+            if let Some(ref bridge) = self.shared_bridge {
+                let n1_signal = self.surface_signal_values[self.last_write_surface];
+                let n2_signal =
+                    self.surface_signal_values[self.second_last_write_surface];
+                if n1_signal > 0 && hal_ctx.is_frame_done(n1_signal) {
                     bridge.publish_front(self.last_write_surface as u32);
+                } else if n2_signal > 0 && hal_ctx.is_frame_done(n2_signal) {
+                    bridge.publish_front(self.second_last_write_surface as u32);
                 }
             }
             // Non-blocking poll for wgpu bookkeeping (readback map_async
@@ -572,11 +588,12 @@ impl ContentPipeline {
             self.fence_pending = true;
         }
 
-        // Remember which surface we wrote to so we can publish it next frame.
+        // Advance triple-buffered surface ring: 0 → 1 → 2 → 0.
         #[cfg(target_os = "macos")]
         {
+            self.second_last_write_surface = self.last_write_surface;
             self.last_write_surface = self.write_surface_index;
-            self.write_surface_index = 1 - self.write_surface_index;
+            self.write_surface_index = (self.write_surface_index + 1) % 3;
         }
 
         // GPU profiler: read PREVIOUS frame's results (deferred readback).
@@ -868,14 +885,17 @@ impl ContentPipeline {
         // in-order execution guarantees it fires after compositor + copy +
         // readbacks all complete.
         unsafe { hal_ctx.signal_frame_completion(); }
-        self.hal_signal_value = hal_ctx.current_signal_value();
+        // Record per-surface signal value for triple-buffer fence tracking.
+        self.surface_signal_values[self.write_surface_index] =
+            hal_ctx.current_signal_value();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
-        // Surface swap
+        // Advance triple-buffered surface ring: 0 → 1 → 2 → 0.
         #[cfg(target_os = "macos")]
         {
+            self.second_last_write_surface = self.last_write_surface;
             self.last_write_surface = self.write_surface_index;
-            self.write_surface_index = 1 - self.write_surface_index;
+            self.write_surface_index = (self.write_surface_index + 1) % 3;
         }
 
         // Periodic perf dump
@@ -949,13 +969,14 @@ impl ContentPipeline {
             ]);
             self.front_index = 0;
         }
-        // Resize IOSurface bridge and re-import both content textures
+        // Resize IOSurface bridge and re-import all content textures
         #[cfg(target_os = "macos")]
         if let Some(ref bridge) = self.shared_bridge {
             bridge.resize(width, height);
             self.shared_textures = [
                 Some(unsafe { bridge.import_texture(device, 0) }),
                 Some(unsafe { bridge.import_texture(device, 1) }),
+                Some(unsafe { bridge.import_texture(device, 2) }),
             ];
             self.write_surface_index = 0;
             self.shared_generation = bridge.generation();
