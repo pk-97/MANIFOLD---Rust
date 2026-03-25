@@ -25,6 +25,126 @@ use crate::gpu_encoder::GpuEncoder;
 const SORT_ROWS: bool = false;             // SortRows = false → vertical (sort columns)
 const SORT_RESOLUTION_SCALE: f32 = 0.5;   // SortResolutionScale = 0.5
 
+// ── BGL entry constants for hal pipeline creation ────────────────────────────
+// These mirror the wgpu BGL entries and are passed to hal pipeline builders.
+
+/// Key extraction compute pipeline BGL entries.
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const KEY_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
+    // binding 0: KeyParams uniform
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    // binding 1: source texture (Rgba16Float, filterable)
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    // binding 2: sampler (linear clamp)
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+    // binding 3: sort buffer (read_write storage)
+    wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: false },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+];
+
+/// Bitonic sort compute pipeline BGL entries.
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const BITONIC_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 2] = [
+    // binding 0: BitonicParams uniform
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    // binding 1: sort buffer (read_write storage)
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: false },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+];
+
+/// Visualization render pipeline BGL entries.
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const VIZ_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
+    // binding 0: VizParams uniform
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    // binding 1: source texture
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    // binding 2: sampler
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+    // binding 3: sort buffer — read-only at fragment stage
+    wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+];
+
 // --- ComputeSortEffect.cs lines 157-158 — effective dimension clamp ---
 const MIN_SORT_DIM: u32 = 16;
 
@@ -111,10 +231,38 @@ pub struct PixelSortFX {
     // ComputeSortEffect.cs lines 90-92
     output_width:  u32,
     output_height: u32,
+
+    // --- hal encoding fields (macOS + hal-encoding feature) ---
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_key_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_key_sampler: Option<crate::hal_context::MetalSampler>,
+
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_bitonic_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
+
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_viz_pipeline: Option<crate::hal_pipeline::HalRenderPipeline>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_viz_sampler: Option<crate::hal_context::MetalSampler>,
 }
 
+// Safety: hal pipeline/sampler types are GPU resources created on the content
+// thread which owns this struct. No cross-thread aliasing.
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+unsafe impl Send for PixelSortFX {}
+
 impl PixelSortFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
         // ComputeSortEffect.cs lines 106-148 — Initialize()
 
         // --- Key extraction pipeline ---
@@ -368,6 +516,91 @@ impl PixelSortFX {
             ..Default::default()
         });
 
+        // --- hal pipeline creation (macOS + hal-encoding feature) ---
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (
+            hal_key_pipeline,
+            hal_key_sampler,
+            hal_bitonic_pipeline,
+            hal_viz_pipeline,
+            hal_viz_sampler,
+        ) = if let Some(ctx) = hal_ctx {
+            use wgpu::hal::Device as HalDevice;
+
+            // Key extraction compute pipeline
+            let hal_key_pipe = crate::hal_pipeline::create_compute_pipeline(
+                ctx,
+                include_str!("shaders/pixel_sort_keys.wgsl"),
+                "cs_extract_keys",
+                &KEY_BGL_ENTRIES,
+                "PixelSortKeys",
+            );
+
+            // Key extraction sampler (linear clamp)
+            let hal_key_samp = unsafe {
+                ctx.device()
+                    .create_sampler(&wgpu::hal::SamplerDescriptor {
+                        label: Some("PixelSortKeys"),
+                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                        lod_clamp: 0.0..32.0,
+                        compare: None,
+                        anisotropy_clamp: 1,
+                        border_color: None,
+                    })
+                    .expect("Failed to create hal key sampler")
+            };
+
+            // Bitonic sort compute pipeline
+            let hal_bitonic_pipe = crate::hal_pipeline::create_compute_pipeline(
+                ctx,
+                include_str!("shaders/bitonic_sort.wgsl"),
+                "bitonic_sort_step",
+                &BITONIC_BGL_ENTRIES,
+                "BitonicSort",
+            );
+
+            // Visualization render pipeline
+            let hal_viz_pipe = crate::hal_pipeline::create_render_pipeline(
+                ctx,
+                include_str!("shaders/pixel_sort_visualize.wgsl"),
+                "vs_main",
+                "fs_main",
+                &VIZ_BGL_ENTRIES,
+                wgpu::TextureFormat::Rgba16Float,
+                "PixelSortVisualize",
+            );
+
+            // Visualization sampler (linear clamp)
+            let hal_viz_samp = unsafe {
+                ctx.device()
+                    .create_sampler(&wgpu::hal::SamplerDescriptor {
+                        label: Some("PixelSortVisualize"),
+                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                        lod_clamp: 0.0..32.0,
+                        compare: None,
+                        anisotropy_clamp: 1,
+                        border_color: None,
+                    })
+                    .expect("Failed to create hal viz sampler")
+            };
+
+            (
+                Some(hal_key_pipe),
+                Some(hal_key_samp),
+                Some(hal_bitonic_pipe),
+                Some(hal_viz_pipe),
+                Some(hal_viz_samp),
+            )
+        } else {
+            (None, None, None, None, None)
+        };
+
         Self {
             key_pipeline,
             key_bgl,
@@ -383,6 +616,16 @@ impl PixelSortFX {
             viz_sampler,
             output_width: 0,
             output_height: 0,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_key_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_key_sampler,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_bitonic_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_viz_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_viz_sampler,
         }
     }
 

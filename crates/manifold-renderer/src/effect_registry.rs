@@ -36,7 +36,7 @@ impl EffectRegistry {
         processors.insert(EffectTypeId::INVERT_COLORS, Box::new(InvertColorsFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::COLOR_GRADE, Box::new(ColorGradeFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::MIRROR, Box::new(MirrorFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::FEEDBACK, Box::new(FeedbackFX::new(device)));
+        processors.insert(EffectTypeId::FEEDBACK, Box::new(FeedbackFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::BLOOM, Box::new(BloomFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::CHROMATIC_ABERRATION, Box::new(ChromaticAberrationFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::GLITCH, Box::new(GlitchFX::new(device, hal_ctx)));
@@ -52,9 +52,9 @@ impl EffectRegistry {
         processors.insert(EffectTypeId::TRANSFORM, Box::new(TransformFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::INFRARED, Box::new(InfraredFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::VORONOI_PRISM, Box::new(VoronoiPrismFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::PIXEL_SORT, Box::new(PixelSortFX::new(device)));
+        processors.insert(EffectTypeId::PIXEL_SORT, Box::new(PixelSortFX::new(device, hal_ctx)));
         // BlobTrackingFX needs queue for font atlas upload
-        processors.insert(EffectTypeId::BLOB_TRACKING, Box::new(BlobTrackingFX::new(device, queue)));
+        processors.insert(EffectTypeId::BLOB_TRACKING, Box::new(BlobTrackingFX::new(device, queue, hal_ctx)));
         // WireframeDepthFX needs queue for dummy texture uploads
         processors.insert(EffectTypeId::WIREFRAME_DEPTH, Box::new(WireframeDepthFX::new(device)));
         Self { processors }

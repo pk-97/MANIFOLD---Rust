@@ -99,6 +99,76 @@ struct BlobUniforms {
 
 const _: () = assert!(std::mem::size_of::<BlobUniforms>() == 544);
 
+/// BGL entries for the overlay render pipeline (shared between wgpu and hal).
+/// Bindings: 0=uniforms, 1=_MainTex, 2=sampler, 3=_FontTex, 4=point_sampler
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const OVERLAY_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 5] = [
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 4,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+        count: None,
+    },
+];
+
+/// BGL entries for the blit/downsample pipeline (shared between wgpu and hal).
+/// Bindings: 0=source texture, 1=filtering sampler
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const BLIT_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 2] = [
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+];
+
 // BlobTrackingFX.cs line 10 — BlobTrackingFX : IPostProcessEffect, IStatefulEffect
 pub struct BlobTrackingFX {
     // Overlay shader pipeline (single pass — BlobTrackingEffect.shader has 1 pass)
@@ -121,10 +191,31 @@ pub struct BlobTrackingFX {
     pending_worker_owner: Option<i64>,
     // BlobTrackingFX.cs line 70 — ownerStates
     owner_states: AHashMap<i64, OwnerState>,
+    // --- hal dual-path fields ---
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_overlay: Option<crate::hal_pipeline::HalRenderPipeline>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_blit: Option<crate::hal_pipeline::HalRenderPipeline>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_sampler: Option<crate::hal_context::MetalSampler>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_point_sampler: Option<crate::hal_context::MetalSampler>,
 }
 
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+unsafe impl Send for BlobTrackingFX {}
+
 impl BlobTrackingFX {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let _ = &hal_ctx;
         // BlobTrackingFX.cs line 108-117 — try to create native detector
         // Plugin is created on the worker thread (single creation, no probe).
         // try_new returns None if the plugin isn't available.
@@ -348,6 +439,64 @@ impl BlobTrackingFX {
         // BlobTrackingFX.cs lines 385-442 — CreateFontAtlas()
         let (font_atlas, font_atlas_view) = create_font_atlas(device, queue);
 
+        // --- hal pipelines ---
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (hal_overlay, hal_blit, hal_sampler, hal_point_sampler) =
+        if let Some(ctx) = hal_ctx {
+            use wgpu::hal::Device as HalDevice;
+            let overlay_pipe = crate::hal_pipeline::create_render_pipeline(
+                ctx,
+                include_str!("shaders/fx_blob_tracking.wgsl"),
+                "vs_main",
+                "fs_main",
+                &OVERLAY_BGL_ENTRIES,
+                wgpu::TextureFormat::Rgba16Float,
+                "BlobTracking",
+            );
+            let blit_pipe = crate::hal_pipeline::create_render_pipeline(
+                ctx,
+                BLIT_SHADER,
+                "vs_main",
+                "fs_main",
+                &BLIT_BGL_ENTRIES,
+                wgpu::TextureFormat::Rgba8Unorm,
+                "BlobTracking Blit",
+            );
+            let hal_samp = unsafe {
+                ctx.device()
+                    .create_sampler(&wgpu::hal::SamplerDescriptor {
+                        label: Some("BlobTracking Bilinear"),
+                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                        lod_clamp: 0.0..32.0,
+                        compare: None,
+                        anisotropy_clamp: 1,
+                        border_color: None,
+                    })
+                    .expect("Failed to create hal blob tracking bilinear sampler")
+            };
+            let hal_pt_samp = unsafe {
+                ctx.device()
+                    .create_sampler(&wgpu::hal::SamplerDescriptor {
+                        label: Some("BlobTracking Point"),
+                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
+                        mag_filter: wgpu::FilterMode::Nearest,
+                        min_filter: wgpu::FilterMode::Nearest,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                        lod_clamp: 0.0..32.0,
+                        compare: None,
+                        anisotropy_clamp: 1,
+                        border_color: None,
+                    })
+                    .expect("Failed to create hal blob tracking point sampler")
+            };
+            (Some(overlay_pipe), Some(blit_pipe), Some(hal_samp), Some(hal_pt_samp))
+        } else {
+            (None, None, None, None)
+        };
+
         Self {
             pipeline,
             bind_group_layout,
@@ -361,6 +510,14 @@ impl BlobTrackingFX {
             worker,
             pending_worker_owner: None,
             owner_states: AHashMap::new(),
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_overlay,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_blit,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_sampler,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_point_sampler,
         }
     }
 
