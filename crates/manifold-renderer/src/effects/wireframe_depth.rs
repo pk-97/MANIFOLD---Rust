@@ -381,6 +381,9 @@ pub struct WireframeDepthFX {
     hal_pipelines: Option<Vec<crate::hal_pipeline::HalRenderPipeline>>,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_sampler: Option<crate::hal_context::MetalSampler>,
+    /// Persistent mapped pointer to shared-memory main uniform buffer (hal path).
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_uniform_mapped_ptr: Option<*mut u8>,
 }
 
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -647,9 +650,53 @@ impl WireframeDepthFX {
             ..Default::default()
         });
 
+        let ubo_size = std::mem::size_of::<WireUniforms>() as u64;
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (uniform_buffer, _wd_hal_ubo_mapped) = if let Some(ctx) = hal_ctx {
+            use wgpu::hal::Device as HalDevice;
+            let hal_buf = unsafe {
+                ctx.device()
+                    .create_buffer(&wgpu::hal::BufferDescriptor {
+                        label: Some("WireframeDepth UBO HAL"),
+                        size: ubo_size,
+                        usage: wgpu::wgt::BufferUses::UNIFORM
+                            | wgpu::wgt::BufferUses::MAP_WRITE,
+                        memory_flags: wgpu::hal::MemoryFlags::PREFER_COHERENT,
+                    })
+                    .expect("Failed to create hal WD uniform buffer")
+            };
+            let mapping = unsafe {
+                ctx.device()
+                    .map_buffer(&hal_buf, 0..ubo_size)
+                    .expect("Failed to map hal WD uniform buffer")
+            };
+            let mapped_ptr = mapping.ptr.as_ptr();
+            let wgpu_buf = unsafe {
+                device.create_buffer_from_hal::<wgpu::hal::api::Metal>(
+                    hal_buf,
+                    &wgpu::BufferDescriptor {
+                        label: Some("WireframeDepth UBO"),
+                        size: ubo_size,
+                        usage: wgpu::BufferUsages::UNIFORM
+                            | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    },
+                )
+            };
+            (wgpu_buf, Some(mapped_ptr))
+        } else {
+            let wgpu_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("WireframeDepth UBO"),
+                size: ubo_size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            (wgpu_buf, None)
+        };
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("WireframeDepth UBO"),
-            size: std::mem::size_of::<WireUniforms>() as u64,
+            size: ubo_size,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -742,6 +789,8 @@ impl WireframeDepthFX {
             hal_pipelines,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_sampler,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_uniform_mapped_ptr: _wd_hal_ubo_mapped,
         }
     }
 
@@ -2689,6 +2738,17 @@ impl PostProcessEffect for WireframeDepthFX {
             ..uniforms_analysis
         };
 
+        // Write main UBO — shared-memory memcpy when hal active, queue.write_buffer otherwise
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if let Some(mapped_ptr) = self.hal_uniform_mapped_ptr {
+            let bytes = bytemuck::bytes_of(&uniforms_analysis);
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapped_ptr, bytes.len());
+            }
+        } else {
+            gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms_analysis));
+        }
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
         gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms_analysis));
 
         // Build per-call UBOs (analysis + wire + source resolution)

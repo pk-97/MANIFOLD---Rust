@@ -204,6 +204,12 @@ pub struct BlobTrackingFX {
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     #[allow(dead_code)]
     hal_point_sampler: Option<crate::hal_context::MetalSampler>,
+    /// Persistent mapped pointer to shared-memory uniform buffer (hal path).
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_uniform_mapped_ptr: Option<*mut u8>,
+    /// Cached hal pointer to uniform buffer for bind groups.
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_uniform_buf_ptr: Option<*const crate::hal_context::MetalBuffer>,
 }
 
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -427,10 +433,61 @@ impl BlobTrackingFX {
             ..Default::default()
         });
 
-        // ---- Uniform buffer ----
+        // ---- Uniform buffer (shared-memory when hal active) ----
+        let ubo_size = std::mem::size_of::<BlobUniforms>() as u64;
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (uniform_buffer, hal_uniform_mapped_ptr, hal_uniform_buf_ptr) =
+        if let Some(ctx) = hal_ctx {
+            use wgpu::hal::Device as HalDevice;
+            let hal_buf = unsafe {
+                ctx.device()
+                    .create_buffer(&wgpu::hal::BufferDescriptor {
+                        label: Some("BlobTracking Uniforms HAL"),
+                        size: ubo_size,
+                        usage: wgpu::wgt::BufferUses::UNIFORM
+                            | wgpu::wgt::BufferUses::MAP_WRITE,
+                        memory_flags: wgpu::hal::MemoryFlags::PREFER_COHERENT,
+                    })
+                    .expect("Failed to create hal blob uniform buffer")
+            };
+            let mapping = unsafe {
+                ctx.device()
+                    .map_buffer(&hal_buf, 0..ubo_size)
+                    .expect("Failed to map hal blob uniform buffer")
+            };
+            let mapped_ptr = mapping.ptr.as_ptr();
+            let wgpu_buf = unsafe {
+                device.create_buffer_from_hal::<wgpu::hal::api::Metal>(
+                    hal_buf,
+                    &wgpu::BufferDescriptor {
+                        label: Some("BlobTracking Uniforms"),
+                        size: ubo_size,
+                        usage: wgpu::BufferUsages::UNIFORM
+                            | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    },
+                )
+            };
+            let buf_hal_ptr = {
+                let guard = unsafe { wgpu_buf.as_hal::<wgpu::hal::api::Metal>() }
+                    .expect("blob ubo not Metal");
+                let ptr: *const _ = &*guard;
+                ptr
+            };
+            (wgpu_buf, Some(mapped_ptr), Some(buf_hal_ptr))
+        } else {
+            let wgpu_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("BlobTracking Uniforms"),
+                size: ubo_size,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            (wgpu_buf, None, None)
+        };
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("BlobTracking Uniforms"),
-            size: std::mem::size_of::<BlobUniforms>() as u64,
+            size: ubo_size,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -518,6 +575,10 @@ impl BlobTrackingFX {
             hal_sampler,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_point_sampler,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_uniform_mapped_ptr,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_uniform_buf_ptr,
         }
     }
 
@@ -1112,8 +1173,17 @@ impl PostProcessEffect for BlobTrackingFX {
             type MetalApi = wgpu::hal::api::Metal;
             use wgpu::hal::{self as hal, CommandEncoder as _, Device as _};
 
-            // Write uniforms via queue (shared memory import means this works)
-            gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+            // Direct memcpy to shared-memory uniform buffer
+            if let Some(mapped_ptr) = self.hal_uniform_mapped_ptr {
+                let bytes = bytemuck::bytes_of(&uniforms);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        bytes.as_ptr(),
+                        mapped_ptr,
+                        bytes.len(),
+                    );
+                }
+            }
 
             let source_ptr = {
                 let g = unsafe { source.as_hal::<MetalApi>() }
@@ -1130,11 +1200,8 @@ impl PostProcessEffect for BlobTrackingFX {
                     .expect("font atlas not Metal");
                 &*g as *const _
             };
-            let ubo_ptr = {
-                let g = unsafe { self.uniform_buffer.as_hal::<MetalApi>() }
-                    .expect("ubo not Metal");
-                &*g as *const _
-            };
+            let ubo_ptr = self.hal_uniform_buf_ptr
+                .expect("blob hal ubo ptr");
 
             let hal_overlay = self.hal_overlay.as_ref().expect("hal overlay pipeline");
             let hal_samp = self.hal_sampler.as_ref().expect("hal sampler");

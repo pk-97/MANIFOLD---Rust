@@ -746,33 +746,26 @@ impl ContentPipeline {
                 .expect("hal begin_encoding failed");
         }
 
-        // Staging encoder: some effects call queue.write_buffer() during
-        // hal compositing. Those writes go to wgpu's internal staging and
-        // must be flushed (via a wgpu submit) BEFORE the hal command buffer
-        // executes. This encoder collects those writes; we submit it before
-        // the hal submit to ensure data is available.
-        let mut staging_enc = gpu.device.create_command_encoder(
+        // Dummy wgpu encoder for GpuEncoder struct (never used for encoding —
+        // all components branch to hal via gpu.has_hal_encoder()).
+        let mut dummy_enc = gpu.device.create_command_encoder(
             &wgpu::CommandEncoderDescriptor {
-                label: Some("HAL Compositor (staging)"),
+                label: Some("HAL Compositor (dummy)"),
             },
         );
         {
             let mut gpu_comp = GpuEncoder::new(
-                &gpu.device, &gpu.queue, &mut staging_enc, Some(hal_ctx),
+                &gpu.device, &gpu.queue, &mut dummy_enc, Some(hal_ctx),
             );
             gpu_comp.hal_enc =
                 Some(&mut hal_enc as *mut manifold_renderer::hal_context::MetalCommandEncoder);
 
-            // Compositor render — all sub-components detect hal_enc and
-            // encode via hal. Any queue.write_buffer() calls during this
-            // are staged for the next wgpu submit.
+            // Compositor render — all sub-components encode via hal.
+            // No queue.write_buffer() allowed in hal path — all uniform
+            // writes use shared-memory mapped pointers (direct memcpy).
             let _compositor_view =
                 self.compositor.render(&mut gpu_comp, &frame, None);
         }
-        // Flush any pending queue.write_buffer() staging data. This wgpu
-        // submit executes BEFORE the hal submit on the same Metal queue,
-        // ensuring uniform data is available when hal passes read it.
-        gpu.queue.submit(std::iter::once(staging_enc.finish()));
 
         let hal_cmd_buf = unsafe {
             hal_enc
