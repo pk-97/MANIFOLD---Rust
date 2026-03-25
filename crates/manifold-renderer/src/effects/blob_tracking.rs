@@ -169,6 +169,97 @@ const BLIT_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 2] = [
     },
 ];
 
+/// BGL entries for the overlay COMPUTE pipeline (hal path).
+/// Bindings: 0=uniforms, 1=_MainTex, 2=sampler, 3=_FontTex, 4=point_sampler,
+///           5=output storage texture (rgba16float, write)
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const OVERLAY_COMPUTE_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 6] = [
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 4,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 5,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::Rgba16Float,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    },
+];
+
+/// BGL entries for the downsample COMPUTE pipeline (hal path).
+/// Bindings: 0=source texture, 1=sampler, 2=output storage texture (rgba8unorm, write)
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const DOWNSAMPLE_COMPUTE_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 3] = [
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    },
+];
+
 // BlobTrackingFX.cs line 10 — BlobTrackingFX : IPostProcessEffect, IStatefulEffect
 pub struct BlobTrackingFX {
     // Overlay shader pipeline (single pass — BlobTrackingEffect.shader has 1 pass)
@@ -192,18 +283,24 @@ pub struct BlobTrackingFX {
     // BlobTrackingFX.cs line 70 — ownerStates
     owner_states: AHashMap<i64, OwnerState>,
     // --- hal dual-path fields ---
+    /// hal render pipeline for overlay (fallback if compute unavailable).
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     #[allow(dead_code)]
     hal_overlay: Option<crate::hal_pipeline::HalRenderPipeline>,
+    /// hal render pipeline for downsample blit (fallback if compute unavailable).
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     #[allow(dead_code)]
     hal_blit: Option<crate::hal_pipeline::HalRenderPipeline>,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(dead_code)]
     hal_sampler: Option<crate::hal_context::MetalSampler>,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(dead_code)]
     hal_point_sampler: Option<crate::hal_context::MetalSampler>,
+    /// hal compute pipeline for overlay pass (eliminates TBDR tile overhead).
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_compute_overlay: Option<crate::hal_pipeline::HalComputePipeline>,
+    /// hal compute pipeline for downsample pass (eliminates TBDR tile overhead).
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_compute_downsample: Option<crate::hal_pipeline::HalComputePipeline>,
     /// Persistent mapped pointer to shared-memory uniform buffer (hal path).
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_uniform_mapped_ptr: Option<*mut u8>,
@@ -498,7 +595,10 @@ impl BlobTrackingFX {
 
         // --- hal pipelines ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let (hal_overlay, hal_blit, hal_sampler, hal_point_sampler) =
+        let (
+            hal_overlay, hal_blit, hal_sampler, hal_point_sampler,
+            hal_compute_overlay, hal_compute_downsample,
+        ) =
         if let Some(ctx) = hal_ctx {
             use wgpu::hal::Device as HalDevice;
             let overlay_pipe = crate::hal_pipeline::create_render_pipeline(
@@ -549,9 +649,28 @@ impl BlobTrackingFX {
                     })
                     .expect("Failed to create hal blob tracking point sampler")
             };
-            (Some(overlay_pipe), Some(blit_pipe), Some(hal_samp), Some(hal_pt_samp))
+            // Compute pipelines (eliminate TBDR tile overhead)
+            let cs_overlay = crate::hal_pipeline::create_compute_pipeline(
+                ctx,
+                include_str!("shaders/fx_blob_tracking_compute.wgsl"),
+                "cs_main",
+                &OVERLAY_COMPUTE_BGL_ENTRIES,
+                "BlobTracking Overlay CS",
+            );
+            let cs_downsample = crate::hal_pipeline::create_compute_pipeline(
+                ctx,
+                DOWNSAMPLE_COMPUTE_SHADER,
+                "cs_downsample",
+                &DOWNSAMPLE_COMPUTE_BGL_ENTRIES,
+                "BlobTracking Downsample CS",
+            );
+            (
+                Some(overlay_pipe), Some(blit_pipe),
+                Some(hal_samp), Some(hal_pt_samp),
+                Some(cs_overlay), Some(cs_downsample),
+            )
         } else {
-            (None, None, None, None)
+            (None, None, None, None, None, None)
         };
 
         Self {
@@ -575,6 +694,10 @@ impl BlobTrackingFX {
             hal_sampler,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_point_sampler,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_compute_overlay,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_compute_downsample,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_uniform_mapped_ptr,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -963,6 +1086,26 @@ fn create_font_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Textu
     (texture, view)
 }
 
+// Compute variant of the downsample blit — bilinear sample, write to storage texture.
+// Eliminates TBDR tile overhead for the downsample pass (hal path only).
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const DOWNSAMPLE_COMPUTE_SHADER: &str = r#"
+@group(0) @binding(0) var source_tex: texture_2d<f32>;
+@group(0) @binding(1) var tex_sampler: sampler;
+@group(0) @binding(2) var output_tex: texture_storage_2d<rgba8unorm, write>;
+
+@compute @workgroup_size(16, 16)
+fn cs_downsample(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(output_tex);
+    if id.x >= u32(dims.x) || id.y >= u32(dims.y) {
+        return;
+    }
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+    let color = textureSampleLevel(source_tex, tex_sampler, uv, 0.0);
+    textureStore(output_tex, vec2<i32>(id.xy), color);
+}
+"#;
+
 // Minimal passthrough blit shader — used for the downsample pass.
 // Unity: Graphics.Blit(buffer, state.downsampleRT) — bilinear blit.
 const BLIT_SHADER: &str = r#"
@@ -1035,7 +1178,7 @@ impl PostProcessEffect for BlobTrackingFX {
         if !state.readback.is_pending()
             && frame - state.last_readback_frame >= READBACK_INTERVAL_FRAMES
         {
-            // --- hal path for downsample blit ---
+            // --- hal path for downsample (compute dispatch) ---
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             if gpu.has_hal_encoder() {
                 type MetalApi = wgpu::hal::api::Metal;
@@ -1052,54 +1195,56 @@ impl PostProcessEffect for BlobTrackingFX {
                     &*g as *const _
                 };
                 let hal_samp = self.hal_sampler.as_ref().expect("hal sampler");
-                let hal_blit = self.hal_blit.as_ref().expect("hal blit pipeline");
+                let hal_cs_ds = self.hal_compute_downsample.as_ref()
+                    .expect("hal compute downsample");
                 let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
 
                 let bg = unsafe {
                     hal_ctx.device().create_bind_group(&hal::BindGroupDescriptor {
                         label: None,
-                        layout: &hal_blit.bind_group_layout,
+                        layout: &hal_cs_ds.bind_group_layout,
                         entries: &[
-                            hal::BindGroupEntry { binding: 0, resource_index: 0, count: 1 },
-                            hal::BindGroupEntry { binding: 1, resource_index: 0, count: 1 },
+                            hal::BindGroupEntry {
+                                binding: 0, resource_index: 0, count: 1,
+                            },
+                            hal::BindGroupEntry {
+                                binding: 1, resource_index: 0, count: 1,
+                            },
+                            hal::BindGroupEntry {
+                                binding: 2, resource_index: 1, count: 1,
+                            },
                         ],
                         buffers: &[],
                         samplers: &[hal_samp],
-                        textures: &[hal::TextureBinding {
-                            view: &*source_ptr,
-                            usage: wgpu::wgt::TextureUses::RESOURCE,
-                        }],
+                        textures: &[
+                            hal::TextureBinding {
+                                view: &*source_ptr,
+                                usage: wgpu::wgt::TextureUses::RESOURCE,
+                            },
+                            hal::TextureBinding {
+                                view: &*ds_view_ptr,
+                                usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
+                            },
+                        ],
                         acceleration_structures: &[],
                         external_textures: &[],
-                    }).expect("hal blit bg")
+                    }).expect("hal downsample compute bg")
                 };
                 unsafe {
-                    hal_enc.begin_render_pass(&hal::RenderPassDescriptor {
-                        label: Some("BlobTracking Downsample"),
-                        extent: wgpu::Extent3d {
-                            width: READBACK_WIDTH, height: READBACK_HEIGHT,
-                            depth_or_array_layers: 1,
-                        },
-                        sample_count: 1,
-                        color_attachments: &[Some(hal::ColorAttachment {
-                            target: hal::Attachment {
-                                view: &*ds_view_ptr,
-                                usage: wgpu::wgt::TextureUses::COLOR_TARGET,
-                            },
-                            resolve_target: None,
-                            ops: hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE,
-                            clear_value: wgpu::Color::TRANSPARENT,
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        multiview_mask: None,
+                    hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
+                        label: None,
                         timestamp_writes: None,
-                        occlusion_query_set: None,
-                    }).expect("hal begin_render_pass failed");
-                    hal_enc.set_render_pipeline(&hal_blit.pipeline);
-                    hal_enc.set_bind_group(&hal_blit.pipeline_layout, 0, &bg, &[]);
-                    hal_enc.draw(0, 3, 0, 1);
-                    hal_enc.end_render_pass();
+                    });
+                    hal_enc.set_compute_pipeline(&hal_cs_ds.pipeline);
+                    hal_enc.set_bind_group(
+                        &hal_cs_ds.pipeline_layout, 0, &bg, &[],
+                    );
+                    hal_enc.dispatch([
+                        READBACK_WIDTH.div_ceil(16),
+                        READBACK_HEIGHT.div_ceil(16),
+                        1,
+                    ]);
+                    hal_enc.end_compute_pass();
                     hal_ctx.device().destroy_bind_group(bg);
                 }
 
@@ -1171,7 +1316,7 @@ impl PostProcessEffect for BlobTrackingFX {
             blob_connections: blob_connections_arr,
         };
 
-        // --- hal path for overlay ---
+        // --- hal path for overlay (compute dispatch) ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         if gpu.has_hal_encoder() {
             type MetalApi = wgpu::hal::api::Metal;
@@ -1207,21 +1352,36 @@ impl PostProcessEffect for BlobTrackingFX {
             let ubo_ptr = self.hal_uniform_buf_ptr
                 .expect("blob hal ubo ptr");
 
-            let hal_overlay = self.hal_overlay.as_ref().expect("hal overlay pipeline");
+            let hal_cs_overlay = self.hal_compute_overlay.as_ref()
+                .expect("hal compute overlay");
             let hal_samp = self.hal_sampler.as_ref().expect("hal sampler");
-            let hal_point = self.hal_point_sampler.as_ref().expect("hal point sampler");
+            let hal_point = self.hal_point_sampler.as_ref()
+                .expect("hal point sampler");
             let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
 
             let bg = unsafe {
                 hal_ctx.device().create_bind_group(&hal::BindGroupDescriptor {
                     label: None,
-                    layout: &hal_overlay.bind_group_layout,
+                    layout: &hal_cs_overlay.bind_group_layout,
                     entries: &[
-                        hal::BindGroupEntry { binding: 0, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 1, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 2, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 3, resource_index: 1, count: 1 },
-                        hal::BindGroupEntry { binding: 4, resource_index: 1, count: 1 },
+                        hal::BindGroupEntry {
+                            binding: 0, resource_index: 0, count: 1,
+                        },
+                        hal::BindGroupEntry {
+                            binding: 1, resource_index: 0, count: 1,
+                        },
+                        hal::BindGroupEntry {
+                            binding: 2, resource_index: 0, count: 1,
+                        },
+                        hal::BindGroupEntry {
+                            binding: 3, resource_index: 1, count: 1,
+                        },
+                        hal::BindGroupEntry {
+                            binding: 4, resource_index: 1, count: 1,
+                        },
+                        hal::BindGroupEntry {
+                            binding: 5, resource_index: 2, count: 1,
+                        },
                     ],
                     buffers: &[hal::BufferBinding::new_unchecked(
                         &*ubo_ptr, 0,
@@ -1239,39 +1399,31 @@ impl PostProcessEffect for BlobTrackingFX {
                             view: &*font_ptr,
                             usage: wgpu::wgt::TextureUses::RESOURCE,
                         },
+                        hal::TextureBinding {
+                            view: &*target_ptr,
+                            usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
+                        },
                     ],
                     acceleration_structures: &[],
                     external_textures: &[],
-                }).expect("hal overlay bg")
+                }).expect("hal overlay compute bg")
             };
 
             unsafe {
-                hal_enc.begin_render_pass(&hal::RenderPassDescriptor {
-                    label: Some("BlobTracking Overlay"),
-                    extent: wgpu::Extent3d {
-                        width: ctx.width, height: ctx.height,
-                        depth_or_array_layers: 1,
-                    },
-                    sample_count: 1,
-                    color_attachments: &[Some(hal::ColorAttachment {
-                        target: hal::Attachment {
-                            view: &*target_ptr,
-                            usage: wgpu::wgt::TextureUses::COLOR_TARGET,
-                        },
-                        resolve_target: None,
-                        ops: hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE,
-                        clear_value: wgpu::Color::TRANSPARENT,
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    multiview_mask: None,
+                hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
+                    label: None,
                     timestamp_writes: None,
-                    occlusion_query_set: None,
-                }).expect("hal begin_render_pass failed");
-                hal_enc.set_render_pipeline(&hal_overlay.pipeline);
-                hal_enc.set_bind_group(&hal_overlay.pipeline_layout, 0, &bg, &[]);
-                hal_enc.draw(0, 3, 0, 1);
-                hal_enc.end_render_pass();
+                });
+                hal_enc.set_compute_pipeline(&hal_cs_overlay.pipeline);
+                hal_enc.set_bind_group(
+                    &hal_cs_overlay.pipeline_layout, 0, &bg, &[],
+                );
+                hal_enc.dispatch([
+                    ctx.width.div_ceil(16),
+                    ctx.height.div_ceil(16),
+                    1,
+                ]);
+                hal_enc.end_compute_pass();
                 hal_ctx.device().destroy_bind_group(bg);
             }
             return;

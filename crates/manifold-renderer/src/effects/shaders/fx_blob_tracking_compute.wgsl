@@ -1,5 +1,7 @@
 // Compute variant of fx_blob_tracking.wgsl — same math, no TBDR tile overhead.
-// Overlay pass: reads source + font atlas, draws procedural SDF overlay, writes to storage texture.
+// Two entry points:
+//   cs_downsample — bilinear blit to smaller storage texture (replaces downsample render pass)
+//   cs_main       — overlay pass: reads source + font atlas, draws procedural SDF shapes
 // textureSample → textureSampleLevel, fragment output → textureStore.
 
 struct BlobUniforms {
