@@ -1,9 +1,9 @@
-use ahash::AHashMap;
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
+use ahash::AHashMap;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -12,12 +12,13 @@ struct FeedbackUniforms {
     _pad: [f32; 3],
 }
 
-/// BGL entries for the feedback render pipeline (shared between wgpu and hal).
+/// BGL entries for the feedback compute pipeline (hal path).
+/// 5 bindings: uniform, source texture, sampler, feedback texture, output storage texture.
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-const FEEDBACK_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
+const FEEDBACK_COMPUTE_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 5] = [
     wgpu::BindGroupLayoutEntry {
         binding: 0,
-        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+        visibility: wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: false,
@@ -27,7 +28,7 @@ const FEEDBACK_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
     },
     wgpu::BindGroupLayoutEntry {
         binding: 1,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Texture {
             sample_type: wgpu::TextureSampleType::Float { filterable: true },
             view_dimension: wgpu::TextureViewDimension::D2,
@@ -37,17 +38,27 @@ const FEEDBACK_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
     },
     wgpu::BindGroupLayoutEntry {
         binding: 2,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
         count: None,
     },
     wgpu::BindGroupLayoutEntry {
         binding: 3,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Texture {
             sample_type: wgpu::TextureSampleType::Float { filterable: true },
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 4,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::Rgba16Float,
+            view_dimension: wgpu::TextureViewDimension::D2,
         },
         count: None,
     },
@@ -68,15 +79,25 @@ pub struct FeedbackFX {
     states: AHashMap<i64, FeedbackState>,
     width: u32,
     height: u32,
+    /// Compute pipeline for hal-encoding path (eliminates TBDR tile overhead).
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    compute_pipeline: Option<wgpu::ComputePipeline>,
+    /// BGL for the compute pipeline (5 bindings: uniform, source, sampler,
+    /// feedback, output storage).
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    compute_bind_group_layout: Option<wgpu::BindGroupLayout>,
+    /// HAL compute pipeline for zero-overhead encoding.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     #[allow(dead_code)]
-    hal_pipeline: Option<crate::hal_pipeline::HalRenderPipeline>,
+    hal_compute_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     #[allow(dead_code)]
     hal_sampler: Option<crate::hal_context::MetalSampler>,
+    /// Persistent mapped pointer to shared-memory uniform buffer.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     #[allow(dead_code)]
     hal_uniform_mapped_ptr: Option<*mut u8>,
+    /// Cached hal pointer to uniform buffer for bind groups.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     #[allow(dead_code)]
     hal_uniform_buf_ptr: Option<*const crate::hal_context::MetalBuffer>,
@@ -94,18 +115,13 @@ fn clear_render_target(encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Textu
 }
 
 impl FeedbackFX {
-    pub fn new(
-        device: &wgpu::Device,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         let _ = &hal_ctx;
         let format = wgpu::TextureFormat::Rgba16Float;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Feedback"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/feedback.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/feedback.wgsl").into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -192,24 +208,85 @@ impl FeedbackFX {
             ..Default::default()
         });
 
-        // --- hal pipeline + shared-memory uniform buffer ---
+        // --- hal compute pipeline + shared-memory uniform buffer ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let (hal_pipeline, hal_sampler, uniform_buffer, hal_uniform_mapped_ptr,
-             hal_uniform_buf_ptr) =
-        if let Some(ctx) = hal_ctx {
+        let (
+            compute_pipeline,
+            compute_bind_group_layout,
+            hal_compute_pipeline,
+            hal_sampler,
+            uniform_buffer,
+            hal_uniform_mapped_ptr,
+            hal_uniform_buf_ptr,
+        ) = if let Some(ctx) = hal_ctx {
             use wgpu::hal::Device as HalDevice;
-            let hal_pipe = crate::hal_pipeline::create_render_pipeline(
+
+            // wgpu compute pipeline (fallback when hal encoder isn't active)
+            let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Feedback Compute Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/feedback_compute.wgsl").into(),
+                ),
+            });
+
+            let compute_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Feedback Compute BGL"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    FEEDBACK_COMPUTE_BGL_ENTRIES[2],
+                    FEEDBACK_COMPUTE_BGL_ENTRIES[3],
+                    FEEDBACK_COMPUTE_BGL_ENTRIES[4],
+                ],
+            });
+
+            let compute_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Feedback Compute Layout"),
+                bind_group_layouts: &[&compute_bgl],
+                immediate_size: 0,
+            });
+
+            let compute_pipe = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Feedback Compute Pipeline"),
+                layout: Some(&compute_layout),
+                module: &compute_shader,
+                entry_point: Some("cs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
+            // hal compute pipeline
+            let hal_comp_pipe = crate::hal_pipeline::create_compute_pipeline(
                 ctx,
-                include_str!("shaders/feedback.wgsl"),
-                "vs_main", "fs_main",
-                &FEEDBACK_BGL_ENTRIES,
-                wgpu::TextureFormat::Rgba16Float,
-                "Feedback HAL",
+                include_str!("shaders/feedback_compute.wgsl"),
+                "cs_main",
+                &FEEDBACK_COMPUTE_BGL_ENTRIES,
+                "Feedback Compute HAL",
             );
+
+            // hal sampler
             let hal_samp = unsafe {
                 ctx.device()
                     .create_sampler(&wgpu::hal::SamplerDescriptor {
-                        label: Some("Feedback HAL"),
+                        label: Some("Feedback Sampler HAL"),
                         address_modes: [wgpu::AddressMode::ClampToEdge; 3],
                         mag_filter: wgpu::FilterMode::Linear,
                         min_filter: wgpu::FilterMode::Linear,
@@ -221,21 +298,22 @@ impl FeedbackFX {
                     })
                     .expect("Failed to create hal feedback sampler")
             };
-            let buf_size = std::mem::size_of::<FeedbackUniforms>() as u64;
+
+            // Shared-memory uniform buffer
+            let ubo_size = std::mem::size_of::<FeedbackUniforms>() as u64;
             let hal_buf = unsafe {
                 ctx.device()
                     .create_buffer(&wgpu::hal::BufferDescriptor {
-                        label: Some("Feedback HAL"),
-                        size: buf_size,
-                        usage: wgpu::wgt::BufferUses::UNIFORM
-                            | wgpu::wgt::BufferUses::MAP_WRITE,
+                        label: Some("Feedback Uniforms HAL"),
+                        size: ubo_size,
+                        usage: wgpu::wgt::BufferUses::UNIFORM | wgpu::wgt::BufferUses::MAP_WRITE,
                         memory_flags: wgpu::hal::MemoryFlags::PREFER_COHERENT,
                     })
                     .expect("Failed to create hal feedback uniform buffer")
             };
             let mapping = unsafe {
                 ctx.device()
-                    .map_buffer(&hal_buf, 0..buf_size)
+                    .map_buffer(&hal_buf, 0..ubo_size)
                     .expect("Failed to map hal feedback uniform buffer")
             };
             let mapped_ptr = mapping.ptr.as_ptr();
@@ -244,9 +322,8 @@ impl FeedbackFX {
                     hal_buf,
                     &wgpu::BufferDescriptor {
                         label: Some("Feedback Uniforms"),
-                        size: buf_size,
-                        usage: wgpu::BufferUsages::UNIFORM
-                            | wgpu::BufferUsages::COPY_DST,
+                        size: ubo_size,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                         mapped_at_creation: false,
                     },
                 )
@@ -257,8 +334,15 @@ impl FeedbackFX {
                 let ptr: *const _ = &*guard;
                 ptr
             };
-            (Some(hal_pipe), Some(hal_samp), wgpu_buf, Some(mapped_ptr),
-             Some(buf_hal_ptr))
+            (
+                Some(compute_pipe),
+                Some(compute_bgl),
+                Some(hal_comp_pipe),
+                Some(hal_samp),
+                wgpu_buf,
+                Some(mapped_ptr),
+                Some(buf_hal_ptr),
+            )
         } else {
             let wgpu_buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Feedback Uniforms"),
@@ -266,7 +350,7 @@ impl FeedbackFX {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            (None, None, wgpu_buf, None, None)
+            (None, None, None, None, wgpu_buf, None, None)
         };
 
         #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
@@ -286,7 +370,11 @@ impl FeedbackFX {
             width: 0,
             height: 0,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_pipeline,
+            compute_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            compute_bind_group_layout,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_compute_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_sampler,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -298,10 +386,16 @@ impl FeedbackFX {
 
     /// Create state buffer and clear to black.
     /// Unity ref: GetOrCreateState + RenderTextureUtil.Clear()
-    fn ensure_state(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, owner_key: i64) {
+    fn ensure_state(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        owner_key: i64,
+    ) {
         if !self.states.contains_key(&owner_key) && self.width > 0 && self.height > 0 {
             let format = wgpu::TextureFormat::Rgba16Float;
-            let buffer = RenderTarget::new(device, self.width, self.height, format, "Feedback State");
+            let buffer =
+                RenderTarget::new(device, self.width, self.height, format, "Feedback State");
             // Clear to black so first-frame shader reads black prev buffer,
             // producing mix(current, black, amount) — matching Unity behavior.
             clear_render_target(encoder, &buffer.texture);
@@ -309,12 +403,12 @@ impl FeedbackFX {
         }
     }
 
-    /// HAL path: encode the feedback render pass via hal command encoder.
-    /// Writes uniforms directly to shared-memory buffer (no API call).
+    /// HAL path: encode the feedback effect as a compute dispatch via hal
+    /// command encoder. Writes uniforms directly to shared-memory buffer (no
+    /// API call). Eliminates TBDR tile overhead vs the render pass path.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(dead_code)]
     #[allow(clippy::too_many_arguments)]
-    pub(crate) unsafe fn apply_hal(
+    pub(crate) unsafe fn apply_hal_compute(
         &self,
         hal_enc: &mut crate::hal_context::MetalCommandEncoder,
         hal_ctx: &crate::hal_context::HalContext,
@@ -343,29 +437,50 @@ impl FeedbackFX {
             }
         }
 
-        let hal_pipe = self.hal_pipeline.as_ref().expect("feedback hal pipeline");
+        let hal_pipe = self
+            .hal_compute_pipeline
+            .as_ref()
+            .expect("feedback hal compute pipeline");
         let hal_samp = self.hal_sampler.as_ref().expect("feedback hal sampler");
-        let hal_buf = unsafe {
-            &*self.hal_uniform_buf_ptr.expect("feedback hal uniform buf")
-        };
+        let hal_buf = unsafe { &*self.hal_uniform_buf_ptr.expect("feedback hal uniform buf") };
 
         let hal_bg = unsafe {
-            hal_ctx.device().create_bind_group(
-                &hal::BindGroupDescriptor {
+            hal_ctx
+                .device()
+                .create_bind_group(&hal::BindGroupDescriptor {
                     label: None,
                     layout: &hal_pipe.bind_group_layout,
                     entries: &[
-                        hal::BindGroupEntry { binding: 0, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 1, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 2, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 3, resource_index: 1, count: 1 },
+                        hal::BindGroupEntry {
+                            binding: 0,
+                            resource_index: 0,
+                            count: 1,
+                        },
+                        hal::BindGroupEntry {
+                            binding: 1,
+                            resource_index: 0,
+                            count: 1,
+                        },
+                        hal::BindGroupEntry {
+                            binding: 2,
+                            resource_index: 0,
+                            count: 1,
+                        },
+                        hal::BindGroupEntry {
+                            binding: 3,
+                            resource_index: 1,
+                            count: 1,
+                        },
+                        hal::BindGroupEntry {
+                            binding: 4,
+                            resource_index: 2,
+                            count: 1,
+                        },
                     ],
                     buffers: &[hal::BufferBinding::new_unchecked(
                         hal_buf,
                         0,
-                        std::num::NonZero::new(
-                            std::mem::size_of::<FeedbackUniforms>() as u64,
-                        ),
+                        std::num::NonZero::new(std::mem::size_of::<FeedbackUniforms>() as u64),
                     )],
                     samplers: &[hal_samp],
                     textures: &[
@@ -377,41 +492,29 @@ impl FeedbackFX {
                             view: prev_hal_view,
                             usage: wgpu::wgt::TextureUses::RESOURCE,
                         },
+                        hal::TextureBinding {
+                            view: target_hal_view,
+                            usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
+                        },
                     ],
                     acceleration_structures: &[],
                     external_textures: &[],
-                },
-            )
-            .expect("Failed to create hal feedback bind group")
+                })
+                .expect("Failed to create hal feedback compute bind group")
         };
 
         unsafe {
-            hal_enc.begin_render_pass(&hal::RenderPassDescriptor {
-                label: None,
-                extent: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-                sample_count: 1,
-                color_attachments: &[Some(hal::ColorAttachment {
-                    target: hal::Attachment {
-                        view: target_hal_view,
-                        usage: wgpu::wgt::TextureUses::COLOR_TARGET,
-                    },
-                    resolve_target: None,
-                    ops: hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE,
-                    clear_value: wgpu::Color::TRANSPARENT,
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                multiview_mask: None,
+            hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
+                label: Some("Feedback Compute"),
                 timestamp_writes: None,
-                occlusion_query_set: None,
-            }).expect("hal begin_render_pass failed");
-            hal_enc.set_render_pipeline(&hal_pipe.pipeline);
-            hal_enc.set_bind_group(
-                &hal_pipe.pipeline_layout, 0, &hal_bg,
-                &[],
-            );
-            hal_enc.draw(0, 3, 0, 1);
-            hal_enc.end_render_pass();
+            });
+            hal_enc.set_compute_pipeline(&hal_pipe.pipeline);
+            hal_enc.set_bind_group(&hal_pipe.pipeline_layout, 0, &hal_bg, &[]);
+            hal_enc.dispatch([width.div_ceil(16), height.div_ceil(16), 1]);
+            hal_enc.end_compute_pass();
+        }
+
+        unsafe {
             hal_ctx.device().destroy_bind_group(hal_bg);
         }
     }
@@ -422,9 +525,12 @@ impl PostProcessEffect for FeedbackFX {
         &EffectTypeId::FEEDBACK
     }
 
-    fn supports_hal(&self) -> bool { true }
+    fn supports_hal(&self) -> bool {
+        true
+    }
 
-    // ShouldSkip: default (param[0] <= 0) — matches Unity SimpleBlitEffect.ShouldSkip.
+    // ShouldSkip: default (param[0] <= 0) — matches Unity
+    // SimpleBlitEffect.ShouldSkip.
 
     fn apply(
         &mut self,
@@ -439,7 +545,7 @@ impl PostProcessEffect for FeedbackFX {
         self.width = ctx.width;
         self.height = ctx.height;
 
-        // --- hal path ---
+        // --- hal compute path ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         if gpu.has_hal_encoder() {
             type MetalApi = wgpu::hal::api::Metal;
@@ -449,7 +555,11 @@ impl PostProcessEffect for FeedbackFX {
             if !self.states.contains_key(&ctx.owner_key) && self.width > 0 && self.height > 0 {
                 let format = wgpu::TextureFormat::Rgba16Float;
                 let buffer = RenderTarget::new(
-                    gpu.device, self.width, self.height, format, "Feedback State",
+                    gpu.device,
+                    self.width,
+                    self.height,
+                    format,
+                    "Feedback State",
                 );
                 // Clear via hal render pass
                 let view_ptr = {
@@ -459,69 +569,72 @@ impl PostProcessEffect for FeedbackFX {
                 };
                 let (hal_enc, _hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
                 unsafe {
-                    use wgpu::hal as hal;
-                    hal_enc.begin_render_pass(&hal::RenderPassDescriptor {
-                        label: Some("Clear Feedback State"),
-                        extent: wgpu::Extent3d {
-                            width: self.width, height: self.height,
-                            depth_or_array_layers: 1,
-                        },
-                        sample_count: 1,
-                        color_attachments: &[Some(hal::ColorAttachment {
-                            target: hal::Attachment {
-                                view: &*view_ptr,
-                                usage: wgpu::wgt::TextureUses::COLOR_TARGET,
+                    use wgpu::hal;
+                    hal_enc
+                        .begin_render_pass(&hal::RenderPassDescriptor {
+                            label: Some("Clear Feedback State"),
+                            extent: wgpu::Extent3d {
+                                width: self.width,
+                                height: self.height,
+                                depth_or_array_layers: 1,
                             },
-                            resolve_target: None,
-                            ops: hal::AttachmentOps::LOAD_CLEAR
-                                | hal::AttachmentOps::STORE,
-                            clear_value: wgpu::Color::TRANSPARENT,
-                            depth_slice: None,
-                        })],
-                        depth_stencil_attachment: None,
-                        multiview_mask: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                    }).expect("hal begin_render_pass failed");
+                            sample_count: 1,
+                            color_attachments: &[Some(hal::ColorAttachment {
+                                target: hal::Attachment {
+                                    view: &*view_ptr,
+                                    usage: wgpu::wgt::TextureUses::COLOR_TARGET,
+                                },
+                                resolve_target: None,
+                                ops: hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE,
+                                clear_value: wgpu::Color::TRANSPARENT,
+                                depth_slice: None,
+                            })],
+                            depth_stencil_attachment: None,
+                            multiview_mask: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        })
+                        .expect("hal begin_render_pass failed");
                     hal_enc.end_render_pass();
                 }
                 self.states.insert(ctx.owner_key, FeedbackState { buffer });
             }
 
             let state = self.states.get(&ctx.owner_key).unwrap();
-            let feedback_amount =
-                fx.param_values.first().copied().unwrap_or(0.0).min(0.98);
+            let feedback_amount = fx.param_values.first().copied().unwrap_or(0.0).min(0.98);
 
             // Extract hal texture view pointers (sequential snatch lock)
             let source_ptr = {
-                let g = unsafe { source.as_hal::<MetalApi>() }
-                    .expect("source not Metal");
+                let g = unsafe { source.as_hal::<MetalApi>() }.expect("source not Metal");
                 &*g as *const _
             };
             let prev_ptr = {
-                let g = unsafe { state.buffer.view.as_hal::<MetalApi>() }
-                    .expect("prev not Metal");
+                let g = unsafe { state.buffer.view.as_hal::<MetalApi>() }.expect("prev not Metal");
                 &*g as *const _
             };
             let target_ptr = {
-                let g = unsafe { target.as_hal::<MetalApi>() }
-                    .expect("target not Metal");
+                let g = unsafe { target.as_hal::<MetalApi>() }.expect("target not Metal");
                 &*g as *const _
             };
 
             let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
             unsafe {
-                self.apply_hal(
-                    hal_enc, hal_ctx,
-                    &*source_ptr, &*prev_ptr, &*target_ptr,
-                    ctx.width, ctx.height, feedback_amount,
+                self.apply_hal_compute(
+                    hal_enc,
+                    hal_ctx,
+                    &*source_ptr,
+                    &*prev_ptr,
+                    &*target_ptr,
+                    ctx.width,
+                    ctx.height,
+                    feedback_amount,
                 );
             }
 
             // PostBlit copy via hal: target → state buffer
             let target_tex_ptr = {
-                let g = unsafe { target_texture.as_hal::<MetalApi>() }
-                    .expect("target tex not Metal");
+                let g =
+                    unsafe { target_texture.as_hal::<MetalApi>() }.expect("target tex not Metal");
                 &*g as *const _
             };
             let state_tex_ptr = {
@@ -570,8 +683,82 @@ impl PostProcessEffect for FeedbackFX {
             _pad: [0.0; 3],
         };
 
-        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        gpu.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
+        // When compute pipeline is available (hal-encoding feature) and no hal
+        // encoder is active, use wgpu compute dispatch as fallback.
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if let (Some(compute_pipe), Some(compute_bgl)) =
+            (&self.compute_pipeline, &self.compute_bind_group_layout)
+        {
+            let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Feedback Compute BG"),
+                layout: compute_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&state.buffer.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(target),
+                    },
+                ],
+            });
+
+            let ts = profiler
+                .and_then(|p| p.compute_timestamps("Feedback Compute", ctx.width, ctx.height));
+            let mut pass = gpu
+                .encoder
+                .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Feedback Compute Pass"),
+                    timestamp_writes: ts,
+                });
+            pass.set_pipeline(compute_pipe);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1);
+            // Compute pass dropped here.
+            drop(pass);
+
+            // PostBlit: copy blended result into feedback state buffer for
+            // next frame.
+            let state = self.states.get(&ctx.owner_key).unwrap();
+            gpu.encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: target_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &state.buffer.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: ctx.width,
+                    height: ctx.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+            return;
+        }
+
+        // --- render pass fallback (non-hal-encoding builds) ---
         let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Feedback BG"),
             layout: &self.bind_group_layout,
@@ -596,7 +783,8 @@ impl PostProcessEffect for FeedbackFX {
         });
 
         {
-            let ts = profiler.and_then(|p| p.render_timestamps("Feedback Pass", ctx.width, ctx.height));
+            let ts =
+                profiler.and_then(|p| p.render_timestamps("Feedback Pass", ctx.width, ctx.height));
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Feedback Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -618,9 +806,10 @@ impl PostProcessEffect for FeedbackFX {
             pass.draw(0..3, 0..1);
         }
 
-        // PostBlit: copy blended result into feedback state buffer for next frame.
-        // Unity ref: Graphics.CopyTexture(result, stateBuffer) — GPU memcpy, zero
-        // shader cost. Replaces the old SimpleBlitHelper render pass.
+        // PostBlit: copy blended result into feedback state buffer for next
+        // frame. Unity ref: Graphics.CopyTexture(result, stateBuffer) — GPU
+        // memcpy, zero shader cost. Replaces the old SimpleBlitHelper render
+        // pass.
         let state = self.states.get(&ctx.owner_key).unwrap();
         gpu.encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
@@ -644,8 +833,8 @@ impl PostProcessEffect for FeedbackFX {
     }
 
     // FeedbackFX.cs lines 42-46 — ClearState: zeros ALL state buffer contents.
-    // Without an encoder, we remove entries so they get re-created (and cleared to
-    // black) on the next ensure_state call.
+    // Without an encoder, we remove entries so they get re-created (and cleared
+    // to black) on the next ensure_state call.
     fn clear_state(&mut self) {
         self.states.clear();
     }
@@ -671,5 +860,7 @@ impl StatefulEffect for FeedbackFX {
     fn cleanup_owner(&mut self, owner_key: i64) {
         self.states.remove(&owner_key);
     }
-    fn cleanup_all_owners(&mut self, _device: &wgpu::Device) { self.states.clear(); }
+    fn cleanup_all_owners(&mut self, _device: &wgpu::Device) {
+        self.states.clear();
+    }
 }

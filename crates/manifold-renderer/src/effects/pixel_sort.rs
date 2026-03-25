@@ -1,5 +1,5 @@
 // Mechanical port of ComputePixelSortFX.cs + ComputeSortEffect.cs.
-// Compute-based pixel sort: O(log²N) bitonic merge sort replaces the O(N²)
+// Compute-based pixel sort: O(log^2 N) bitonic merge sort replaces the O(N^2)
 // counting sort from the original PixelSortFX. Same user-facing params.
 //
 // Unity refs:
@@ -8,22 +8,22 @@
 //
 // Pipeline (3 stages):
 //   1. Key extraction (compute) — CSExtractKeys kernel
-//   2. Bitonic sort   (compute) — BitonicSortStep kernel, O(log²N) dispatches
-//   3. Visualization  (render)  — fragment shader scatter
+//   2. Bitonic sort   (compute) — BitonicSortStep kernel, O(log^2 N) dispatches
+//   3. Visualization  (compute when hal-encoding, render otherwise)
 
+use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
+use crate::gpu_encoder::GpuEncoder;
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
-use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
-use crate::gpu_encoder::GpuEncoder;
 
 // --- ComputeSortEffect.cs line 66 — ShouldSkip default ---
 // ComputePixelSortFX inherits: ShouldSkip => param0 <= 0.
 // Matches ComputeSortEffect.cs: `fx.GetParam(0) <= 0f`
 
 // --- ComputePixelSortFX.cs lines 22-23 ---
-const SORT_ROWS: bool = false;             // SortRows = false → vertical (sort columns)
-const SORT_RESOLUTION_SCALE: f32 = 0.5;   // SortResolutionScale = 0.5
+const SORT_ROWS: bool = false; // SortRows = false -> vertical (sort columns)
+const SORT_RESOLUTION_SCALE: f32 = 0.5; // SortResolutionScale = 0.5
 
 // --- ComputeSortEffect.cs lines 157-158 — effective dimension clamp ---
 const MIN_SORT_DIM: u32 = 16;
@@ -32,7 +32,7 @@ const MIN_SORT_DIM: u32 = 16;
 const SCALE_MIN: f32 = 0.25;
 const SCALE_MAX: f32 = 1.0;
 
-// ── BGL entry constants for hal pipeline creation ────────────────────────────
+// -- BGL entry constants for hal pipeline creation ----
 
 /// Key extraction compute pipeline BGL entries.
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -106,13 +106,15 @@ const BITONIC_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 2] = [
     },
 ];
 
-/// Visualization render pipeline BGL entries.
+/// Visualization compute pipeline BGL entries (hal path).
+/// 5 bindings: uniform, source texture, sampler, sort buffer (read), output
+/// storage texture.
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-const VIZ_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
+const VIZ_COMPUTE_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 5] = [
     // binding 0: VizParams uniform
     wgpu::BindGroupLayoutEntry {
         binding: 0,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: false,
@@ -123,7 +125,7 @@ const VIZ_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
     // binding 1: source texture
     wgpu::BindGroupLayoutEntry {
         binding: 1,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Texture {
             sample_type: wgpu::TextureSampleType::Float { filterable: true },
             view_dimension: wgpu::TextureViewDimension::D2,
@@ -134,14 +136,14 @@ const VIZ_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
     // binding 2: sampler
     wgpu::BindGroupLayoutEntry {
         binding: 2,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
         count: None,
     },
-    // binding 3: sort buffer — read-only at fragment stage
+    // binding 3: sort buffer — read-only storage
     wgpu::BindGroupLayoutEntry {
         binding: 3,
-        visibility: wgpu::ShaderStages::FRAGMENT,
+        visibility: wgpu::ShaderStages::COMPUTE,
         ty: wgpu::BindingType::Buffer {
             ty: wgpu::BufferBindingType::Storage { read_only: true },
             has_dynamic_offset: false,
@@ -149,86 +151,98 @@ const VIZ_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
         },
         count: None,
     },
+    // binding 4: output storage texture (write-only)
+    wgpu::BindGroupLayoutEntry {
+        binding: 4,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::Rgba16Float,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    },
 ];
 
-// ── Key extraction uniform struct ─────────────────────────────────────────────
+// -- Key extraction uniform struct --
 // Matches PixelSortKeys.compute uniforms in declaration order, 16-byte aligned.
 // Unity: _PaddedWidth (int), _Width (int), _Height (int), _SortVertical (int),
 //        _Amount (float), _Threshold (float)
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct KeyParams {
-    padded_width:  u32,  // _PaddedWidth
-    width:         u32,  // _Width
-    height:        u32,  // _Height
-    sort_vertical: u32,  // _SortVertical — 0=horizontal, 1=vertical
-    amount:        f32,  // _Amount
-    threshold:     f32,  // _Threshold
-    _pad0:         f32,
-    _pad1:         f32,
+    padded_width: u32,  // _PaddedWidth
+    width: u32,         // _Width
+    height: u32,        // _Height
+    sort_vertical: u32, // _SortVertical — 0=horizontal, 1=vertical
+    amount: f32,        // _Amount
+    threshold: f32,     // _Threshold
+    _pad0: f32,
+    _pad1: f32,
 }
 
-// ── Bitonic sort uniform struct ───────────────────────────────────────────────
+// -- Bitonic sort uniform struct --
 // Matches BitonicSort.compute uniforms: _Level, _Step, _PaddedWidth, _Height
 // 16 bytes, naturally aligned.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BitonicParams {
-    level:        u32,  // _Level
-    step:         u32,  // _Step
-    padded_width: u32,  // _PaddedWidth
-    height:       u32,  // _Height
+    level: u32,        // _Level
+    step: u32,         // _Step
+    padded_width: u32, // _PaddedWidth
+    height: u32,       // _Height
 }
 
-// ── Visualization uniform struct ──────────────────────────────────────────────
+// -- Visualization uniform struct --
 // Matches ComputePixelSortVisualize.shader uniforms.
-// Unity: _PaddedWidth (int), _Width (int), _Height (int), _SortVertical (int), _Amount (float)
+// Unity: _PaddedWidth (int), _Width (int), _Height (int), _SortVertical (int),
+//        _Amount (float)
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct VizParams {
-    padded_width:  u32,  // _PaddedWidth
-    width:         u32,  // _Width
-    height:        u32,  // _Height
-    sort_vertical: u32,  // _SortVertical
-    amount:        f32,  // _Amount
-    _pad0:         f32,
-    _pad1:         f32,
-    _pad2:         f32,
+    padded_width: u32,  // _PaddedWidth
+    width: u32,         // _Width
+    height: u32,        // _Height
+    sort_vertical: u32, // _SortVertical
+    amount: f32,        // _Amount
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
-// ── Per-owner GPU state ───────────────────────────────────────────────────────
+// -- Per-owner GPU state --
 // ComputeSortEffect.cs lines 94-99 — OwnerBuffers struct
 struct OwnerBuffers {
-    sort_buffer:  wgpu::Buffer, // uint2 per element (8 bytes) — ComputeSortEffect.cs line 282
-    padded_width: u32,           // paddedWidth at time of allocation
-    sort_height:  u32,           // rows at time of allocation
+    sort_buffer: wgpu::Buffer, // uint2 per element (8 bytes)
+    padded_width: u32,         // paddedWidth at time of allocation
+    sort_height: u32,          // rows at time of allocation
 }
 
-// ── Main struct ───────────────────────────────────────────────────────────────
+// -- Main struct --
 
 pub struct PixelSortFX {
     // Key extraction compute pipeline
-    key_pipeline:        wgpu::ComputePipeline,
-    key_bgl:             wgpu::BindGroupLayout,
-    key_uniform_buf:     wgpu::Buffer,
-    key_sampler:         wgpu::Sampler,
+    key_pipeline: wgpu::ComputePipeline,
+    key_bgl: wgpu::BindGroupLayout,
+    key_uniform_buf: wgpu::Buffer,
+    key_sampler: wgpu::Sampler,
 
     // Bitonic sort compute pipeline
-    bitonic_pipeline:    wgpu::ComputePipeline,
-    bitonic_bgl:         wgpu::BindGroupLayout,
+    bitonic_pipeline: wgpu::ComputePipeline,
+    bitonic_bgl: wgpu::BindGroupLayout,
     bitonic_uniform_buf: wgpu::Buffer,
 
-    // Visualization render pipeline
-    viz_pipeline:        wgpu::RenderPipeline,
-    viz_bgl:             wgpu::BindGroupLayout,
-    viz_uniform_buf:     wgpu::Buffer,
-    viz_sampler:         wgpu::Sampler,
+    // Visualization render pipeline (fallback)
+    viz_pipeline: wgpu::RenderPipeline,
+    viz_bgl: wgpu::BindGroupLayout,
+    viz_uniform_buf: wgpu::Buffer,
+    viz_sampler: wgpu::Sampler,
 
     // ComputeSortEffect.cs lines 101-102 — per-owner sort buffers
     per_owner_buffers: AHashMap<i64, OwnerBuffers>,
 
     // ComputeSortEffect.cs lines 90-92
-    output_width:  u32,
+    output_width: u32,
     output_height: u32,
 
     // --- hal encoding fields (macOS + hal-encoding feature) ---
@@ -243,9 +257,14 @@ pub struct PixelSortFX {
     #[allow(dead_code)]
     hal_bitonic_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
 
+    // Visualization compute pipeline (eliminates TBDR tile overhead)
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    viz_compute_pipeline: Option<wgpu::ComputePipeline>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    viz_compute_bgl: Option<wgpu::BindGroupLayout>,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     #[allow(dead_code)]
-    hal_viz_pipeline: Option<crate::hal_pipeline::HalRenderPipeline>,
+    hal_viz_compute_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     #[allow(dead_code)]
     hal_viz_sampler: Option<crate::hal_context::MetalSampler>,
@@ -257,19 +276,14 @@ pub struct PixelSortFX {
 unsafe impl Send for PixelSortFX {}
 
 impl PixelSortFX {
-    pub fn new(
-        device: &wgpu::Device,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
         // ComputeSortEffect.cs lines 106-148 — Initialize()
 
         // --- Key extraction pipeline ---
         let key_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("PixelSortKeys"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/pixel_sort_keys.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/pixel_sort_keys.wgsl").into()),
         });
 
         let key_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -297,7 +311,7 @@ impl PixelSortFX {
                     },
                     count: None,
                 },
-                // binding 2: sampler (linear clamp — PixelSortKeys.compute: sampler_linear_clamp)
+                // binding 2: sampler (linear clamp)
                 wgpu::BindGroupLayoutEntry {
                     binding: 2,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -352,9 +366,7 @@ impl PixelSortFX {
         // --- Bitonic sort pipeline ---
         let bitonic_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("BitonicSort"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/bitonic_sort.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/bitonic_sort.wgsl").into()),
         });
 
         let bitonic_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -417,7 +429,8 @@ impl PixelSortFX {
         });
 
         // IMPORTANT: sort_buffer at fragment stage must be ReadOnlyStorage.
-        // ComputePixelSortVisualize.shader: StructuredBuffer<uint2> _SortBuffer (read-only)
+        // ComputePixelSortVisualize.shader: StructuredBuffer<uint2>
+        // _SortBuffer (read-only)
         let viz_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("PixelSortVisualize BGL"),
             entries: &[
@@ -521,7 +534,9 @@ impl PixelSortFX {
             hal_key_pipeline,
             hal_key_sampler,
             hal_bitonic_pipeline,
-            hal_viz_pipeline,
+            viz_compute_pipeline,
+            viz_compute_bgl,
+            hal_viz_compute_pipeline,
             hal_viz_sampler,
         ) = if let Some(ctx) = hal_ctx {
             use wgpu::hal::Device as HalDevice;
@@ -561,15 +576,48 @@ impl PixelSortFX {
                 "BitonicSort",
             );
 
-            // Visualization render pipeline
-            let hal_viz_pipe = crate::hal_pipeline::create_render_pipeline(
+            // Visualization compute pipeline (wgpu fallback)
+            let viz_compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("PixelSortVisualize Compute"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/pixel_sort_visualize_compute.wgsl").into(),
+                ),
+            });
+
+            let viz_comp_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("PixelSortVisualize Compute BGL"),
+                entries: &[
+                    VIZ_COMPUTE_BGL_ENTRIES[0],
+                    VIZ_COMPUTE_BGL_ENTRIES[1],
+                    VIZ_COMPUTE_BGL_ENTRIES[2],
+                    VIZ_COMPUTE_BGL_ENTRIES[3],
+                    VIZ_COMPUTE_BGL_ENTRIES[4],
+                ],
+            });
+
+            let viz_compute_layout =
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("PixelSortVisualize Compute Layout"),
+                    bind_group_layouts: &[&viz_comp_bgl],
+                    immediate_size: 0,
+                });
+
+            let viz_comp_pipe = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("PixelSortVisualize Compute Pipeline"),
+                layout: Some(&viz_compute_layout),
+                module: &viz_compute_shader,
+                entry_point: Some("cs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
+            // Visualization hal compute pipeline
+            let hal_viz_comp_pipe = crate::hal_pipeline::create_compute_pipeline(
                 ctx,
-                include_str!("shaders/pixel_sort_visualize.wgsl"),
-                "vs_main",
-                "fs_main",
-                &VIZ_BGL_ENTRIES,
-                wgpu::TextureFormat::Rgba16Float,
-                "PixelSortVisualize",
+                include_str!("shaders/pixel_sort_visualize_compute.wgsl"),
+                "cs_main",
+                &VIZ_COMPUTE_BGL_ENTRIES,
+                "PixelSortVisualize Compute",
             );
 
             // Visualization sampler (linear clamp)
@@ -593,11 +641,13 @@ impl PixelSortFX {
                 Some(hal_key_pipe),
                 Some(hal_key_samp),
                 Some(hal_bitonic_pipe),
-                Some(hal_viz_pipe),
+                Some(viz_comp_pipe),
+                Some(viz_comp_bgl),
+                Some(hal_viz_comp_pipe),
                 Some(hal_viz_samp),
             )
         } else {
-            (None, None, None, None, None)
+            (None, None, None, None, None, None, None)
         };
 
         Self {
@@ -622,7 +672,11 @@ impl PixelSortFX {
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_bitonic_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_viz_pipeline,
+            viz_compute_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            viz_compute_bgl,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_viz_compute_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_viz_sampler,
         }
@@ -639,24 +693,32 @@ impl PixelSortFX {
         let padded_dim = next_power_of_two(sort_dim);
 
         // Check if existing buffers still match — skip reallocation if so
-        let needs_realloc = !matches!(self.per_owner_buffers.get(&owner_key), Some(buf) if buf.padded_width == padded_dim && buf.sort_height == rows);
+        let needs_realloc = !matches!(
+            self.per_owner_buffers.get(&owner_key),
+            Some(buf) if buf.padded_width == padded_dim
+                && buf.sort_height == rows
+        );
 
         if needs_realloc {
             // Release old (drop happens automatically), allocate new
-            // ComputeSortEffect.cs line 282: ComputeBuffer(paddedDim * rows, 8) — uint2 = 8 bytes
+            // ComputeSortEffect.cs line 282: ComputeBuffer(paddedDim * rows,
+            // 8) — uint2 = 8 bytes
             let element_count = padded_dim * rows;
             let sort_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(&format!("PixelSort SortBuffer owner={owner_key}")),
-                size: element_count as u64 * 8, // uint2 = 8 bytes per element
+                size: element_count as u64 * 8, // uint2 = 8 bytes
                 usage: wgpu::BufferUsages::STORAGE,
                 mapped_at_creation: false,
             });
 
-            self.per_owner_buffers.insert(owner_key, OwnerBuffers {
-                sort_buffer,
-                padded_width: padded_dim,
-                sort_height:  rows,
-            });
+            self.per_owner_buffers.insert(
+                owner_key,
+                OwnerBuffers {
+                    sort_buffer,
+                    padded_width: padded_dim,
+                    sort_height: rows,
+                },
+            );
         }
 
         self.per_owner_buffers.get(&owner_key).unwrap()
@@ -669,7 +731,9 @@ impl PostProcessEffect for PixelSortFX {
         &EffectTypeId::PIXEL_SORT
     }
 
-    fn supports_hal(&self) -> bool { false }
+    fn supports_hal(&self) -> bool {
+        false
+    }
 
     // ComputeSortEffect.cs line 66 — ShouldSkip: param0 <= 0
     fn should_skip(&self, fx: &EffectInstance) -> bool {
@@ -687,7 +751,7 @@ impl PostProcessEffect for PixelSortFX {
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // ComputeSortEffect.cs lines 107-109 — store current output dimensions
-        self.output_width  = ctx.width;
+        self.output_width = ctx.width;
         self.output_height = ctx.height;
 
         // ComputePixelSortFX.cs line 34 — param 0 = Amount
@@ -699,15 +763,16 @@ impl PostProcessEffect for PixelSortFX {
         // ComputeSortEffect.cs lines 157-162 — effective sort dimensions
         // scale = Mathf.Clamp(SortResolutionScale, 0.25f, 1f)
         let scale = SORT_RESOLUTION_SCALE.clamp(SCALE_MIN, SCALE_MAX);
-        // effectiveWidth  = Mathf.Max(16, Mathf.RoundToInt(outputWidth  * scale))
-        let effective_width  = (self.output_width  as f32 * scale).round() as u32;
-        let effective_width  = effective_width.max(MIN_SORT_DIM);
-        // effectiveHeight = Mathf.Max(16, Mathf.RoundToInt(outputHeight * scale))
+        // effectiveWidth = Mathf.Max(16, Mathf.RoundToInt(outputWidth * scale))
+        let effective_width = (self.output_width as f32 * scale).round() as u32;
+        let effective_width = effective_width.max(MIN_SORT_DIM);
+        // effectiveHeight = Mathf.Max(16,
+        //   Mathf.RoundToInt(outputHeight * scale))
         let effective_height = (self.output_height as f32 * scale).round() as u32;
         let effective_height = effective_height.max(MIN_SORT_DIM);
 
         // ComputeSortEffect.cs lines 161-162
-        // SortRows=false → sort columns → sortDim=height, rows=width
+        // SortRows=false -> sort columns -> sortDim=height, rows=width
         let (sort_dim, rows) = if SORT_ROWS {
             (effective_width, effective_height)
         } else {
@@ -722,26 +787,30 @@ impl PostProcessEffect for PixelSortFX {
 
         let sort_vertical: u32 = if SORT_ROWS { 0 } else { 1 };
 
-        // ── Stage 1: Key extraction ───────────────────────────────────────────
+        // == Stage 1: Key extraction ==
         // ComputeSortEffect.cs lines 167-177
 
         let key_params = KeyParams {
-            padded_width:  padded_dim,
-            width:         sort_dim,
-            height:        rows,
+            padded_width: padded_dim,
+            width: sort_dim,
+            height: rows,
             sort_vertical,
             amount,
             threshold,
             _pad0: 0.0,
             _pad1: 0.0,
         };
-        gpu.queue.write_buffer(&self.key_uniform_buf, 0, bytemuck::bytes_of(&key_params));
+        gpu.queue
+            .write_buffer(&self.key_uniform_buf, 0, bytemuck::bytes_of(&key_params));
 
-        // ComputeSortEffect.cs line 176 — keyGroupsX = Mathf.CeilToInt(paddedDim / 256f)
+        // ComputeSortEffect.cs line 176 —
+        //   keyGroupsX = Mathf.CeilToInt(paddedDim / 256f)
         let key_groups_x = padded_dim.div_ceil(256).max(1);
 
         {
-            let sort_buf_slice = self.per_owner_buffers.get(&ctx.owner_key)
+            let sort_buf_slice = self
+                .per_owner_buffers
+                .get(&ctx.owner_key)
                 .expect("sort buffer must exist after get_or_create");
 
             let key_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -767,18 +836,22 @@ impl PostProcessEffect for PixelSortFX {
                 ],
             });
 
-            let ts = profiler.and_then(|p| p.compute_timestamps("PixelSort KeyExtract", ctx.width, ctx.height));
-            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("PixelSort KeyExtract"),
-                timestamp_writes: ts,
-            });
+            let ts = profiler
+                .and_then(|p| p.compute_timestamps("PixelSort KeyExtract", ctx.width, ctx.height));
+            let mut pass = gpu
+                .encoder
+                .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("PixelSort KeyExtract"),
+                    timestamp_writes: ts,
+                });
             pass.set_pipeline(&self.key_pipeline);
             pass.set_bind_group(0, &key_bg, &[]);
-            // ComputeSortEffect.cs line 177 — Dispatch(keyGroupsX, rows, 1)
+            // ComputeSortEffect.cs line 177 —
+            //   Dispatch(keyGroupsX, rows, 1)
             pass.dispatch_workgroups(key_groups_x, rows, 1);
         }
 
-        // ── Stage 2: Bitonic sort ─────────────────────────────────────────────
+        // == Stage 2: Bitonic sort ==
         // ComputeSortEffect.cs lines 179-196
 
         // ComputeSortEffect.cs line 180
@@ -788,7 +861,9 @@ impl PostProcessEffect for PixelSortFX {
         let bitonic_groups_x = (padded_dim / 2).div_ceil(256).max(1);
 
         {
-            let sort_buf_slice = self.per_owner_buffers.get(&ctx.owner_key)
+            let sort_buf_slice = self
+                .per_owner_buffers
+                .get(&ctx.owner_key)
                 .expect("sort buffer must exist after get_or_create");
 
             // ComputeSortEffect.cs lines 188-196 — for level / for step loop
@@ -822,36 +897,97 @@ impl PostProcessEffect for PixelSortFX {
                     });
 
                     let ts_label = format!("BitonicSort l={level} s={step}");
-                    let ts = profiler.and_then(|p| p.compute_timestamps(&ts_label, ctx.width, ctx.height));
-                    let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some(&ts_label),
-                        timestamp_writes: ts,
-                    });
+                    let ts = profiler
+                        .and_then(|p| p.compute_timestamps(&ts_label, ctx.width, ctx.height));
+                    let mut pass = gpu
+                        .encoder
+                        .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some(&ts_label),
+                            timestamp_writes: ts,
+                        });
                     pass.set_pipeline(&self.bitonic_pipeline);
                     pass.set_bind_group(0, &bitonic_bg, &[]);
-                    // ComputeSortEffect.cs line 194 — Dispatch(bitonicGroupsX, rows, 1)
+                    // ComputeSortEffect.cs line 194 —
+                    //   Dispatch(bitonicGroupsX, rows, 1)
                     pass.dispatch_workgroups(bitonic_groups_x, rows, 1);
                 }
             }
         }
 
-        // ── Stage 3: Visualization ────────────────────────────────────────────
+        // == Stage 3: Visualization ==
         // ComputeSortEffect.cs lines 198-213
 
         let viz_params = VizParams {
             padded_width: padded_dim,
-            width:        sort_dim,
-            height:       rows,
+            width: sort_dim,
+            height: rows,
             sort_vertical,
             amount,
             _pad0: 0.0,
             _pad1: 0.0,
             _pad2: 0.0,
         };
-        gpu.queue.write_buffer(&self.viz_uniform_buf, 0, bytemuck::bytes_of(&viz_params));
+        gpu.queue
+            .write_buffer(&self.viz_uniform_buf, 0, bytemuck::bytes_of(&viz_params));
 
+        // When compute pipeline is available (hal-encoding feature), use
+        // wgpu compute dispatch instead of render pass.
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if let (Some(compute_pipe), Some(compute_bgl)) =
+            (&self.viz_compute_pipeline, &self.viz_compute_bgl)
         {
-            let sort_buf_slice = self.per_owner_buffers.get(&ctx.owner_key)
+            let sort_buf_slice = self
+                .per_owner_buffers
+                .get(&ctx.owner_key)
+                .expect("sort buffer must exist after get_or_create");
+
+            let viz_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("PixelSortVisualize Compute BG"),
+                layout: compute_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.viz_uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.viz_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: sort_buf_slice.sort_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::TextureView(target),
+                    },
+                ],
+            });
+
+            let ts = profiler.and_then(|p| {
+                p.compute_timestamps("PixelSortVisualize Compute", ctx.width, ctx.height)
+            });
+            let mut pass = gpu
+                .encoder
+                .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("PixelSortVisualize Compute"),
+                    timestamp_writes: ts,
+                });
+            pass.set_pipeline(compute_pipe);
+            pass.set_bind_group(0, &viz_bg, &[]);
+            pass.dispatch_workgroups(ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1);
+            return;
+        }
+
+        // --- render pass fallback (non-hal-encoding builds) ---
+        {
+            let sort_buf_slice = self
+                .per_owner_buffers
+                .get(&ctx.owner_key)
                 .expect("sort buffer must exist after get_or_create");
 
             let viz_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -877,7 +1013,8 @@ impl PostProcessEffect for PixelSortFX {
                 ],
             });
 
-            let ts = profiler.and_then(|p| p.render_timestamps("PixelSortVisualize", ctx.width, ctx.height));
+            let ts = profiler
+                .and_then(|p| p.render_timestamps("PixelSortVisualize", ctx.width, ctx.height));
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("PixelSortVisualize"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -906,7 +1043,7 @@ impl PostProcessEffect for PixelSortFX {
 
     // ComputeSortEffect.cs lines 222-227 — Resize()
     fn resize(&mut self, _device: &wgpu::Device, width: u32, height: u32) {
-        self.output_width  = width;
+        self.output_width = width;
         self.output_height = height;
         // Recreate buffers lazily on next Apply (size may have changed)
         // Unity: CleanupAllOwners() called here
@@ -933,7 +1070,7 @@ impl StatefulEffect for PixelSortFX {
     }
 }
 
-// ── Private helpers ───────────────────────────────────────────────────────────
+// -- Private helpers --
 
 // ComputeSortEffect.cs lines 289-298 — NextPowerOfTwo
 fn next_power_of_two(mut v: u32) -> u32 {
