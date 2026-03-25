@@ -144,6 +144,12 @@ pub struct ComputeStrangeAttractorGenerator {
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     display_compute_bgl: wgpu::BindGroupLayout,
 
+    // HAL pipeline for zero-overhead display dispatch
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_display_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_sampler: Option<crate::hal_context::MetalSampler>,
+
     // Uniform buffers
     sim_uniform_buf: wgpu::Buffer,
     splat_uniform_buf: wgpu::Buffer,
@@ -166,7 +172,12 @@ pub struct ComputeStrangeAttractorGenerator {
 }
 
 impl ComputeStrangeAttractorGenerator {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
         // ── Simulate + Seed compute pipelines ──
         let sim_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("AttractorSimulate Shader"),
@@ -398,6 +409,83 @@ impl ComputeStrangeAttractorGenerator {
             ..Default::default()
         });
 
+        // ── HAL pipeline for zero-overhead display dispatch ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (hal_display_pipeline, hal_sampler) = if let Some(ctx) = hal_ctx {
+            use wgpu::hal::Device as HalDevice;
+
+            let display_bgl_entries: [wgpu::BindGroupLayoutEntry; 4] = [
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float {
+                            filterable: true,
+                        },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Sampler(
+                        wgpu::SamplerBindingType::Filtering,
+                    ),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ];
+
+            let hal_pipe = crate::hal_pipeline::create_compute_pipeline(
+                ctx,
+                include_str!("shaders/compute_strange_attractor_compute.wgsl"),
+                "cs_main",
+                &display_bgl_entries,
+                "Attractor Display HAL",
+            );
+
+            let hal_samp = unsafe {
+                ctx.device()
+                    .create_sampler(&wgpu::hal::SamplerDescriptor {
+                        label: Some("Attractor Sampler HAL"),
+                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                        lod_clamp: 0.0..32.0,
+                        compare: None,
+                        anisotropy_clamp: 1,
+                        border_color: None,
+                    })
+                    .expect("Failed to create Attractor hal sampler")
+            };
+
+            (Some(hal_pipe), Some(hal_samp))
+        } else {
+            (None, None)
+        };
+
         Self {
             sim_pipeline,
             seed_pipeline,
@@ -412,6 +500,10 @@ impl ComputeStrangeAttractorGenerator {
             display_compute_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             display_compute_bgl,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_display_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_sampler,
             sim_uniform_buf,
             splat_uniform_buf,
             resolve_uniform_buf,
@@ -696,12 +788,110 @@ impl Generator for ComputeStrangeAttractorGenerator {
         let area_scale = (sw * sh) as f32 / SCATTER_REFERENCE_AREA;
         let intensity  = 3.0 * area_scale;
 
-        gpu.queue.write_buffer(&self.display_uniform_buf, 0, bytemuck::bytes_of(&DisplayUniforms {
+        let display_uniforms = DisplayUniforms {
             intensity,
             contrast,
             invert,
             uv_scale: scale,  // display uses raw scale, not 1/scale
-        }));
+        };
+        gpu.queue.write_buffer(&self.display_uniform_buf, 0, bytemuck::bytes_of(&display_uniforms));
+
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if let Some(ref hal_pipe) = self.hal_display_pipeline
+            && let Some(ref hal_samp) = self.hal_sampler
+            && gpu.has_hal_encoder()
+        {
+            use crate::hal_dispatch::*;
+            use wgpu::hal::{self, Device as HalDevice};
+
+            let offset = unsafe { gpu.uniform_arena_mut() }
+                .expect("uniform_arena not set")
+                .push(&display_uniforms);
+
+            let (hal_enc, hal_ctx) =
+                unsafe { gpu.hal_encoder_mut() }.unwrap();
+            let arena_buf_ptr = unsafe { gpu.uniform_arena_mut() }
+                .unwrap()
+                .hal_buffer_ptr()
+                .expect("arena hal buffer not available");
+            let density_ptr =
+                unsafe { extract_hal_view(&density_rt.view) };
+            let target_ptr = unsafe { extract_hal_view(target) };
+            let uniform_size =
+                std::mem::size_of::<DisplayUniforms>() as u64;
+
+            let bg = unsafe {
+                hal_ctx.device().create_bind_group(
+                    &hal::BindGroupDescriptor {
+                        label: None,
+                        layout: &hal_pipe.bind_group_layout,
+                        entries: &[
+                            hal::BindGroupEntry {
+                                binding: 0,
+                                resource_index: 0,
+                                count: 1,
+                            },
+                            hal::BindGroupEntry {
+                                binding: 1,
+                                resource_index: 0,
+                                count: 1,
+                            },
+                            hal::BindGroupEntry {
+                                binding: 2,
+                                resource_index: 0,
+                                count: 1,
+                            },
+                            hal::BindGroupEntry {
+                                binding: 3,
+                                resource_index: 1,
+                                count: 1,
+                            },
+                        ],
+                        buffers: &[hal::BufferBinding::new_unchecked(
+                            &*arena_buf_ptr,
+                            0,
+                            std::num::NonZero::new(uniform_size),
+                        )],
+                        samplers: &[hal_samp],
+                        textures: &[
+                            hal::TextureBinding {
+                                view: &*density_ptr,
+                                usage: wgpu::wgt::TextureUses::RESOURCE,
+                            },
+                            hal::TextureBinding {
+                                view: &*target_ptr,
+                                usage:
+                                    wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
+                            },
+                        ],
+                        acceleration_structures: &[],
+                        external_textures: &[],
+                    },
+                )
+                .expect(
+                    "Failed to create Attractor Display hal bind group",
+                )
+            };
+
+            unsafe {
+                dispatch_hal_compute(
+                    hal_enc,
+                    hal_ctx,
+                    hal_pipe,
+                    bg,
+                    &[offset as u32],
+                    [
+                        ctx.width.div_ceil(16),
+                        ctx.height.div_ceil(16),
+                        1,
+                    ],
+                    "Attractor Display Compute",
+                );
+            }
+
+            self.frame_count += 1;
+            return ctx.anim_progress;
+        }
 
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         {

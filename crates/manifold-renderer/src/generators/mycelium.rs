@@ -75,6 +75,51 @@ struct DisplayUniforms {
     time: f32,
 }
 
+/// BGL entries for the hal diffuse pipeline:
+///   binding 0: uniform (dynamic offset)
+///   binding 1: texture_2d filterable (read trail)
+///   binding 2: sampler (filtering)
+///   binding 3: storage_texture (write trail)
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const HAL_DIFFUSE_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: true,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: TRAIL_FORMAT,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    },
+];
+
 pub struct MyceliumGenerator {
     // Compute pipelines
     agent_update_pipeline: wgpu::ComputePipeline,
@@ -97,6 +142,12 @@ pub struct MyceliumGenerator {
     diffuse_compute_pipeline: wgpu::ComputePipeline,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     diffuse_compute_bgl: wgpu::BindGroupLayout,
+
+    // HAL pipeline for zero-overhead diffuse dispatch
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_diffuse_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_sampler: Option<crate::hal_context::MetalSampler>,
 
     // GPU resources (lazy-init on first render)
     agent_buffer: Option<wgpu::Buffer>,
@@ -121,7 +172,12 @@ pub struct MyceliumGenerator {
 }
 
 impl MyceliumGenerator {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Mycelium Sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -520,6 +576,40 @@ impl MyceliumGenerator {
             mapped_at_creation: false,
         });
 
+        // ── HAL pipeline for zero-overhead diffuse dispatch ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (hal_diffuse_pipeline, hal_sampler) = if let Some(ctx) = hal_ctx {
+            use wgpu::hal::Device as HalDevice;
+
+            let hal_pipe = crate::hal_pipeline::create_compute_pipeline(
+                ctx,
+                include_str!("shaders/mycelium_diffuse_compute.wgsl"),
+                "cs_main",
+                &HAL_DIFFUSE_BGL_ENTRIES,
+                "Mycelium Diffuse HAL",
+            );
+
+            let hal_samp = unsafe {
+                ctx.device()
+                    .create_sampler(&wgpu::hal::SamplerDescriptor {
+                        label: Some("Mycelium Sampler HAL"),
+                        address_modes: [wgpu::AddressMode::Repeat; 3],
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                        lod_clamp: 0.0..32.0,
+                        compare: None,
+                        anisotropy_clamp: 1,
+                        border_color: None,
+                    })
+                    .expect("Failed to create Mycelium hal sampler")
+            };
+
+            (Some(hal_pipe), Some(hal_samp))
+        } else {
+            (None, None)
+        };
+
         Self {
             agent_update_pipeline,
             agent_update_bgl,
@@ -533,6 +623,10 @@ impl MyceliumGenerator {
             diffuse_compute_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             diffuse_compute_bgl,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_diffuse_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_sampler,
             agent_buffer: None,
             accum_buffer: None,
             trail_a: None,
@@ -620,6 +714,121 @@ impl MyceliumGenerator {
             });
         }
         queue.write_buffer(buffer, 0, bytemuck::cast_slice(&agents));
+    }
+
+    fn run_diffuse_pass_hal(
+        &self,
+        gpu: &mut GpuEncoder,
+        source: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        decay: f32,
+        sub_decay: f32,
+    ) -> bool {
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if let Some(ref hal_pipe) = self.hal_diffuse_pipeline
+            && let Some(ref hal_samp) = self.hal_sampler
+            && gpu.has_hal_encoder()
+        {
+            use crate::hal_dispatch::*;
+            use wgpu::hal::{self, Device as HalDevice};
+
+            let uniforms = DiffuseUniforms {
+                decay,
+                sub_decay,
+                texel_x: 1.0 / self.trail_width as f32,
+                texel_y: 1.0 / self.trail_height as f32,
+            };
+
+            let offset = unsafe { gpu.uniform_arena_mut() }
+                .expect("uniform_arena not set")
+                .push(&uniforms);
+
+            let (hal_enc, hal_ctx) =
+                unsafe { gpu.hal_encoder_mut() }.unwrap();
+
+            let arena_buf_ptr = unsafe { gpu.uniform_arena_mut() }
+                .unwrap()
+                .hal_buffer_ptr()
+                .expect("arena hal buffer not available");
+            let src_ptr = unsafe { extract_hal_view(source) };
+            let dst_ptr = unsafe { extract_hal_view(target) };
+
+            let uniform_size =
+                std::mem::size_of::<DiffuseUniforms>() as u64;
+
+            let bg = unsafe {
+                hal_ctx.device().create_bind_group(
+                    &hal::BindGroupDescriptor {
+                        label: None,
+                        layout: &hal_pipe.bind_group_layout,
+                        entries: &[
+                            hal::BindGroupEntry {
+                                binding: 0,
+                                resource_index: 0,
+                                count: 1,
+                            },
+                            hal::BindGroupEntry {
+                                binding: 1,
+                                resource_index: 0,
+                                count: 1,
+                            },
+                            hal::BindGroupEntry {
+                                binding: 2,
+                                resource_index: 0,
+                                count: 1,
+                            },
+                            hal::BindGroupEntry {
+                                binding: 3,
+                                resource_index: 1,
+                                count: 1,
+                            },
+                        ],
+                        buffers: &[hal::BufferBinding::new_unchecked(
+                            &*arena_buf_ptr,
+                            0,
+                            std::num::NonZero::new(uniform_size),
+                        )],
+                        samplers: &[hal_samp],
+                        textures: &[
+                            hal::TextureBinding {
+                                view: &*src_ptr,
+                                usage: wgpu::wgt::TextureUses::RESOURCE,
+                            },
+                            hal::TextureBinding {
+                                view: &*dst_ptr,
+                                usage:
+                                    wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
+                            },
+                        ],
+                        acceleration_structures: &[],
+                        external_textures: &[],
+                    },
+                )
+                .expect(
+                    "Failed to create Mycelium Diffuse hal bind group",
+                )
+            };
+
+            unsafe {
+                dispatch_hal_compute(
+                    hal_enc,
+                    hal_ctx,
+                    hal_pipe,
+                    bg,
+                    &[offset as u32],
+                    [
+                        self.trail_width.div_ceil(16),
+                        self.trail_height.div_ceil(16),
+                        1,
+                    ],
+                    "Mycelium Diffuse Compute",
+                );
+            }
+
+            return true;
+        }
+        let _ = (gpu, source, target, decay, sub_decay);
+        false
     }
 
     fn run_diffuse_pass(
@@ -963,45 +1172,40 @@ impl Generator for MyceliumGenerator {
 
         // ── Pass 3: Diffuse (3 blits) ──
         // After resolve: trail_b has new data. trail_a is stale.
-        // Pass 0: B→A with decay + evaporation
+        // Try hal dispatch first; fall back to wgpu path
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
-        self.run_diffuse_pass(
-            gpu.device,
-            gpu.queue,
-            gpu.encoder,
-            &trail_b.view,
-            &trail_a.view,
-            decay,
-            0.003,
-            profiler,
-        );
+        // Pass 0: B→A with decay + evaporation
+        if !self.run_diffuse_pass_hal(gpu, &trail_b.view, &trail_a.view, decay, 0.003) {
+            let trail_a2 = self.trail_a.as_ref().unwrap();
+            let trail_b2 = self.trail_b.as_ref().unwrap();
+            self.run_diffuse_pass(
+                gpu.device, gpu.queue, gpu.encoder,
+                &trail_b2.view, &trail_a2.view, decay, 0.003, profiler,
+            );
+        }
         // Pass 1: A→B pure blur
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
-        self.run_diffuse_pass(
-            gpu.device,
-            gpu.queue,
-            gpu.encoder,
-            &trail_a.view,
-            &trail_b.view,
-            1.0,
-            0.0,
-            profiler,
-        );
+        if !self.run_diffuse_pass_hal(gpu, &trail_a.view, &trail_b.view, 1.0, 0.0) {
+            let trail_a2 = self.trail_a.as_ref().unwrap();
+            let trail_b2 = self.trail_b.as_ref().unwrap();
+            self.run_diffuse_pass(
+                gpu.device, gpu.queue, gpu.encoder,
+                &trail_a2.view, &trail_b2.view, 1.0, 0.0, profiler,
+            );
+        }
         // Pass 2: B→A pure blur
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
-        self.run_diffuse_pass(
-            gpu.device,
-            gpu.queue,
-            gpu.encoder,
-            &trail_b.view,
-            &trail_a.view,
-            1.0,
-            0.0,
-            profiler,
-        );
+        if !self.run_diffuse_pass_hal(gpu, &trail_b.view, &trail_a.view, 1.0, 0.0) {
+            let trail_a2 = self.trail_a.as_ref().unwrap();
+            let trail_b2 = self.trail_b.as_ref().unwrap();
+            self.run_diffuse_pass(
+                gpu.device, gpu.queue, gpu.encoder,
+                &trail_b2.view, &trail_a2.view, 1.0, 0.0, profiler,
+            );
+        }
 
         // ── Pass 4: Display (fragment) ──
         // trail_a has final diffused result
