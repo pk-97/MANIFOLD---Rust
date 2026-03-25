@@ -1102,6 +1102,9 @@ impl ApplicationHandler for Application {
                 hal_ctx,
             );
             content_pipeline.edr_headroom = self.edr_headroom;
+            // Initialize native Metal GPU device for zero-wgpu content encoding.
+            #[cfg(target_os = "macos")]
+            content_pipeline.init_native_gpu();
             // Give the content pipeline both IOSurface textures for double-buffered async output.
             #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.shared_texture_bridge {

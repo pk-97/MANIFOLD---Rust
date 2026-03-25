@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 manifold-core = { path = "../manifold-core" }
+manifold-gpu = { path = "../manifold-gpu" }
 manifold-native = { path = "../manifold-native" }
 manifold-playback = { path = "../manifold-playback" }
 manifold-ui = { path = "../manifold-ui" }

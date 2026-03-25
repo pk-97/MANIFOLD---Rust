@@ -1,20 +1,18 @@
 //! Unified GPU encoding context for the content thread hot path.
 //!
-//! Wraps wgpu types with public field access. When `hal-encoding` is enabled,
-//! also carries an optional hal command encoder. Components check `hal_enc`
-//! to decide whether to encode via hal (zero overhead) or wgpu (default).
+//! On macOS, carries a `manifold_gpu::GpuEncoder` for native Metal encoding.
+//! On other platforms (or when native encoder is unavailable), falls back to
+//! wgpu command encoder.
 //!
-//! In Phase 3e's three-encoder split:
-//! - Generators get a GpuEncoder with hal_enc=None (wgpu encoding)
-//! - Compositor gets a GpuEncoder with hal_enc=Some (hal encoding)
-//! - Copy/fence gets raw wgpu encoder (no GpuEncoder needed)
+//! Components check `has_native_encoder()` to decide the dispatch path.
+//! The native path uses `manifold_gpu` types for zero-overhead Metal encoding.
+//! The wgpu path uses `gpu.encoder` as before.
 
 /// GPU encoding context passed through the entire content thread render loop.
-/// Replaces the `(device, queue, encoder)` triplet in all hot-path signatures.
 ///
-/// When `hal_enc` is Some, compositor components encode via the hal command
-/// encoder for zero-overhead Metal encoding. When None, they use the wgpu
-/// `encoder` field as before.
+/// When `native_enc` is Some, components should encode via the native Metal
+/// encoder (zero overhead, no wgpu). When None, they use the wgpu `encoder`
+/// field as before.
 pub struct GpuEncoder<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
@@ -33,11 +31,19 @@ pub struct GpuEncoder<'a> {
     /// Owned by GeneratorRenderer, set during render_all().
     /// Generators push uniform data here instead of calling queue.write_buffer().
     pub uniform_arena: Option<*mut crate::uniform_arena::UniformArena>,
+    /// Native Metal encoder from manifold-gpu.
+    /// When Some, components should dispatch through this for zero wgpu overhead.
+    /// Raw pointer avoids borrow conflicts. Valid for the frame's duration.
+    #[cfg(target_os = "macos")]
+    pub native_enc: Option<*mut manifold_gpu::GpuEncoder>,
+    /// Native Metal GPU device for pipeline/resource creation.
+    /// Available when native Metal path is active.
+    #[cfg(target_os = "macos")]
+    pub native_device: Option<*const manifold_gpu::GpuDevice>,
 }
 
-// Safety: hal_enc points to a hal encoder on the content thread's stack.
+// Safety: native_enc points to a manifold-gpu encoder on the content thread's stack.
 // GpuEncoder is only used within a single frame on the content thread.
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
 unsafe impl Send for GpuEncoder<'_> {}
 
 impl<'a> GpuEncoder<'a> {
@@ -55,7 +61,29 @@ impl<'a> GpuEncoder<'a> {
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_enc: None,
             uniform_arena: None,
+            #[cfg(target_os = "macos")]
+            native_enc: None,
+            #[cfg(target_os = "macos")]
+            native_device: None,
         }
+    }
+
+    /// Check if native Metal encoding is active.
+    #[cfg(target_os = "macos")]
+    #[inline]
+    pub fn has_native_encoder(&self) -> bool {
+        self.native_enc.is_some()
+    }
+
+    /// Get mutable reference to the native Metal encoder.
+    ///
+    /// # Safety
+    /// Caller must ensure no other mutable reference to the encoder exists.
+    #[cfg(target_os = "macos")]
+    #[inline]
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn native_encoder_mut(&self) -> Option<&mut manifold_gpu::GpuEncoder> {
+        self.native_enc.map(|p| unsafe { &mut *p })
     }
 
     /// Check if hal encoding is active (hal encoder available).

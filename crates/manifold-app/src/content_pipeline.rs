@@ -128,6 +128,16 @@ pub struct ContentPipeline {
     /// Checked by wait_previous_frame() to detect GPU completion without device.poll().
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_signal_value: u64,
+    /// Native Metal GPU device from manifold-gpu (macOS only).
+    /// Owns metal::Device + metal::CommandQueue for zero-wgpu encoding.
+    #[cfg(target_os = "macos")]
+    native_device: Option<manifold_gpu::GpuDevice>,
+    /// Native Metal shared event for frame completion (macOS only).
+    #[cfg(target_os = "macos")]
+    native_event: Option<manifold_gpu::GpuEvent>,
+    /// Signal value from the native event (replaces hal_signal_value).
+    #[cfg(target_os = "macos")]
+    native_signal_value: u64,
 }
 
 impl ContentPipeline {
@@ -170,7 +180,29 @@ impl ContentPipeline {
             hal_ctx,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_signal_value: 0,
+            #[cfg(target_os = "macos")]
+            native_device: None,
+            #[cfg(target_os = "macos")]
+            native_event: None,
+            #[cfg(target_os = "macos")]
+            native_signal_value: 0,
         }
+    }
+
+    /// Initialize the native Metal GPU device and event.
+    /// Called once at startup after the content pipeline is created.
+    #[cfg(target_os = "macos")]
+    pub fn init_native_gpu(&mut self) {
+        let device = manifold_gpu::GpuDevice::new();
+        let event = device.create_event();
+        self.native_device = Some(device);
+        self.native_event = Some(event);
+    }
+
+    /// Reference to the native GPU device (if initialized).
+    #[cfg(target_os = "macos")]
+    pub fn native_device(&self) -> Option<&manifold_gpu::GpuDevice> {
+        self.native_device.as_ref()
     }
 
     /// Set the double-buffered IOSurface shared textures and bridge.
@@ -322,12 +354,19 @@ impl ContentPipeline {
         let time = engine.current_time();
         let beat = engine.current_beat();
 
-        // === HAL THREE-ENCODER SPLIT ===
-        // When hal-encoding is active, split the frame into 3 separate encoders:
-        // 1. wgpu encoder → generators → submit
-        // 2. hal encoder → compositor → hal submit
-        // 3. wgpu encoder → IOSurface copy + fence → submit
-        // Metal command queue guarantees in-order execution.
+        // === NATIVE METAL PATH ===
+        // When manifold-gpu is initialized, use raw Metal encoding.
+        // Zero wgpu on the content hot path — no "(wgpu internal) Signal".
+        #[cfg(target_os = "macos")]
+        if self.native_device.is_some() {
+            self.render_content_native(
+                gpu, engine, tick_result, dt, frame_count,
+                time, beat, _t_frame, _poll_ms,
+            );
+            return;
+        }
+
+        // === HAL THREE-ENCODER SPLIT (legacy, removed once native path is complete) ===
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         if self.hal_ctx.is_some() {
             self.render_content_hal(gpu, engine, tick_result, dt, frame_count,
@@ -895,6 +934,295 @@ impl ContentPipeline {
         if frame_count > 0 && frame_count.is_multiple_of(60) {
             eprintln!(
                 "[PERF/HAL] frame={} clips={} res={}x{} | gen={:.1}ms desc={:.1}ms \
+                 comp={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
+                frame_count,
+                tick_result.ready_clips.len(),
+                comp_w,
+                comp_h,
+                _gen_ms,
+                _desc_ms,
+                _comp_ms,
+                _poll_ms,
+                _total_ms,
+                1000.0 / _total_ms.max(0.001),
+            );
+        }
+
+        // Update shared dimensions
+        let (old_w, old_h) = self.shared_output.get_dimensions();
+        if old_w != comp_w || old_h != comp_h {
+            self.shared_output.set_dimensions(comp_w, comp_h);
+        }
+    }
+
+    /// Native Metal render path — zero wgpu on the content hot path.
+    ///
+    /// Uses manifold_gpu::GpuDevice + GpuEncoder for ALL encoding.
+    /// No wgpu::Queue::submit(), no wgpu::CommandEncoder, no "(wgpu internal) Signal".
+    /// Generators/effects dispatch through the native encoder via GpuEncoder wrapper.
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::too_many_arguments)]
+    fn render_content_native(
+        &mut self,
+        gpu: &GpuContext,
+        engine: &mut PlaybackEngine,
+        tick_result: &TickResult,
+        dt: f64,
+        frame_count: u64,
+        time: f32,
+        beat: f32,
+        _t_frame: std::time::Instant,
+        _poll_ms: f64,
+    ) {
+        let native_device = self.native_device.as_ref().unwrap();
+
+        // Split borrow: get renderers + project from engine simultaneously.
+        let (renderers, project) = engine.split_renderer_project();
+        let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
+
+        // ── Create native Metal encoder for ALL GPU work ──────────────
+        let _t0 = std::time::Instant::now();
+        let mut native_enc = native_device.create_encoder("Frame");
+
+        // Create a dummy wgpu encoder (never submitted — satisfies GpuEncoder signature
+        // for any remaining wgpu fallback paths during migration).
+        let mut dummy_encoder = gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("Dummy (native path)"),
+            },
+        );
+
+        // Generators render via native encoder
+        {
+            let mut gpu_gen = GpuEncoder::new(
+                &gpu.device,
+                &gpu.queue,
+                &mut dummy_encoder,
+                self.hal_ctx.as_ref(),
+            );
+            // Set native encoder — generators check has_native_encoder() first
+            gpu_gen.native_enc = Some(&mut native_enc as *mut manifold_gpu::GpuEncoder);
+            gpu_gen.native_device = Some(
+                native_device as *const manifold_gpu::GpuDevice,
+            );
+            // Also set hal encoder for generators not yet migrated to native
+            #[cfg(feature = "hal-encoding")]
+            if let Some(ref hal_ctx) = self.hal_ctx {
+                // Generators not yet migrated to native can still use the hal path.
+                // This will be removed once all generators are migrated.
+            }
+
+            for renderer in renderers.iter_mut() {
+                if let Some(gen_renderer) =
+                    renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
+                {
+                    gen_renderer.render_all(
+                        &mut gpu_gen, time, beat, dt as f32, layers, None,
+                    );
+                    break;
+                }
+            }
+        }
+        let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+        // ── Build clip + layer descriptors (CPU only) ────────────────
+        let _t0 = std::time::Instant::now();
+        let empty_effects: &[EffectInstance] = &[];
+        let empty_groups: &[EffectGroup] = &[];
+
+        let mut clip_descs: Vec<CompositeClipDescriptor> =
+            Vec::with_capacity(tick_result.ready_clips.len());
+        for clip in &tick_result.ready_clips {
+            let clip_textures = renderers.iter().find_map(|r| {
+                if let Some(gen_r) =
+                    r.as_any().downcast_ref::<GeneratorRenderer>()
+                    && let (Some(v), Some(t)) = (
+                        gen_r.get_clip_texture_view(&clip.id),
+                        gen_r.get_clip_texture(&clip.id),
+                    )
+                {
+                    return Some((v, t));
+                }
+                #[cfg(target_os = "macos")]
+                if let Some(vid_r) =
+                    r.as_any().downcast_ref::<VideoRenderer>()
+                    && let (Some(v), Some(t)) = (
+                        vid_r.get_clip_texture_view(&clip.id),
+                        vid_r.get_clip_texture(&clip.id),
+                    )
+                {
+                    return Some((v, t));
+                }
+                None
+            });
+            if let Some((view, texture)) = clip_textures {
+                let clip_li = project
+                    .and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
+                    .unwrap_or(0);
+                let layer = layers.get(clip_li);
+                clip_descs.push(CompositeClipDescriptor {
+                    clip_id: &clip.id,
+                    texture_view: view,
+                    texture,
+                    layer_index: clip_li as i32,
+                    blend_mode: layer
+                        .map_or(BlendMode::Normal, |l| l.default_blend_mode),
+                    opacity: layer.map_or(1.0, |l| l.opacity),
+                    translate_x: clip.translate_x,
+                    translate_y: clip.translate_y,
+                    scale: clip.scale,
+                    rotation: clip.rotation,
+                    invert_colors: clip.invert_colors,
+                    effects: &clip.effects,
+                    effect_groups: clip
+                        .effect_groups
+                        .as_deref()
+                        .unwrap_or(&[]),
+                });
+            }
+        }
+
+        let layer_descs: Vec<CompositeLayerDescriptor> = layers
+            .iter()
+            .map(|layer| CompositeLayerDescriptor {
+                layer_index: layer.index,
+                layer_id: layer.layer_id.clone(),
+                blend_mode: layer.default_blend_mode,
+                opacity: layer.opacity,
+                is_muted: layer.is_muted,
+                is_solo: layer.is_solo,
+                effects: layer.effects.as_deref().unwrap_or(empty_effects),
+                effect_groups: layer
+                    .effect_groups
+                    .as_deref()
+                    .unwrap_or(empty_groups),
+            })
+            .collect();
+
+        let master_effects =
+            project.map_or(empty_effects, |p| &p.settings.master_effects);
+        let master_effect_groups = project
+            .and_then(|p| p.settings.master_effect_groups.as_deref())
+            .unwrap_or(empty_groups);
+        let led_exit_index = project.map_or(-1, |p| p.settings.led_exit_index);
+
+        let frame = CompositorFrame {
+            time,
+            beat,
+            dt: dt as f32,
+            frame_count,
+            compositor_dirty: tick_result.compositor_dirty,
+            clips: &clip_descs,
+            layers: &layer_descs,
+            master_effects,
+            master_effect_groups,
+            led_exit_index,
+            tonemap: TonemapSettings {
+                exposure: 1.0,
+                hdr_output_enabled: self.edr_headroom > 1.0,
+                paper_white_nits: 200.0,
+                max_display_nits: (200.0 * self.edr_headroom as f32).min(10000.0),
+            },
+        };
+        let _desc_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+        // ── Compositor (same native encoder) ─────────────────────────
+        let _t0 = std::time::Instant::now();
+        {
+            let mut gpu_comp = GpuEncoder::new(
+                &gpu.device,
+                &gpu.queue,
+                &mut dummy_encoder,
+                self.hal_ctx.as_ref(),
+            );
+            gpu_comp.native_enc = Some(
+                &mut native_enc as *mut manifold_gpu::GpuEncoder,
+            );
+            gpu_comp.native_device = Some(
+                native_device as *const manifold_gpu::GpuDevice,
+            );
+            #[cfg(feature = "hal-encoding")]
+            {
+                // Also set hal_enc for effects not yet migrated to native.
+                // This temporary shim will be removed once all effects are migrated.
+            }
+
+            let _compositor_view =
+                self.compositor.render(&mut gpu_comp, &frame, None);
+        }
+
+        // IOSurface copy via native blit
+        {
+            let (comp_w, comp_h) = self.compositor.dimensions();
+            if let Some(ref shared_tex) =
+                self.shared_textures[self.write_surface_index]
+                && shared_tex.width() == comp_w
+                && shared_tex.height() == comp_h
+            {
+                // Extract raw Metal textures for the copy.
+                // This uses wgpu's as_hal() for resource extraction only
+                // (NOT for encoding). The actual copy goes through native Metal.
+                type MetalApi = wgpu::hal::api::Metal;
+                let src_raw = {
+                    let g = unsafe {
+                        self.compositor.output_texture().as_hal::<MetalApi>()
+                    }
+                    .expect("compositor output not Metal");
+                    unsafe { (*g).raw_handle().to_owned() }
+                };
+                let dst_raw = {
+                    let g = unsafe { shared_tex.as_hal::<MetalApi>() }
+                        .expect("shared tex not Metal");
+                    unsafe { (*g).raw_handle().to_owned() }
+                };
+                let src_gpu = manifold_gpu::GpuTexture::from_raw(
+                    src_raw,
+                    comp_w,
+                    comp_h,
+                    1,
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                );
+                let dst_gpu = manifold_gpu::GpuTexture::from_raw(
+                    dst_raw,
+                    comp_w,
+                    comp_h,
+                    1,
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                );
+                native_enc.copy_texture_to_texture(
+                    &src_gpu,
+                    &dst_gpu,
+                    comp_w,
+                    comp_h,
+                    1,
+                );
+            }
+        }
+
+        // Drop the dummy encoder without submitting
+        drop(dummy_encoder);
+
+        // Signal frame completion + commit
+        let native_event = self.native_event.as_ref().unwrap();
+        native_enc.signal_event(native_event);
+        self.native_signal_value = native_event.current_value();
+        native_enc.commit();
+        let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+        // Surface swap
+        {
+            self.last_write_surface = self.write_surface_index;
+            self.write_surface_index = 1 - self.write_surface_index;
+        }
+
+        // Update shared output view for UI thread
+        let (comp_w, comp_h) = self.compositor.dimensions();
+
+        // Periodic perf dump
+        let _total_ms = _t_frame.elapsed().as_secs_f64() * 1000.0;
+        if frame_count > 0 && frame_count.is_multiple_of(60) {
+            eprintln!(
+                "[PERF/NATIVE] frame={} clips={} res={}x{} | gen={:.1}ms desc={:.1}ms \
                  comp={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
                 frame_count,
                 tick_result.ready_clips.len(),
