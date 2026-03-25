@@ -199,6 +199,16 @@ impl ContentPipeline {
         self.native_event = Some(event);
     }
 
+    /// Set a pre-created native GPU device (transfers ownership).
+    /// Used when the device must exist before the content pipeline (e.g. for
+    /// compositor native pipeline creation).
+    #[cfg(target_os = "macos")]
+    pub fn set_native_gpu(&mut self, device: manifold_gpu::GpuDevice) {
+        let event = device.create_event();
+        self.native_device = Some(device);
+        self.native_event = Some(event);
+    }
+
     /// Reference to the native GPU device (if initialized).
     #[cfg(target_os = "macos")]
     pub fn native_device(&self) -> Option<&manifold_gpu::GpuDevice> {
@@ -274,6 +284,24 @@ impl ContentPipeline {
     /// Called at the START of each frame before encoding new work.
     /// Publishes the completed IOSurface so the UI can read it.
     fn wait_previous_frame(&mut self, device: &wgpu::Device) {
+        // ── Native Metal path: GpuEvent sync ────────────────────────────
+        // Direct GPU counter read via MTLSharedEvent — microsecond latency.
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_event) = self.native_event {
+            if self.native_signal_value > 0 {
+                while !native_event.is_done(self.native_signal_value) {
+                    std::thread::yield_now();
+                }
+                if let Some(ref bridge) = self.shared_bridge {
+                    bridge.publish_front(self.last_write_surface as u32);
+                }
+            }
+            // Non-blocking poll for wgpu bookkeeping (readback map_async,
+            // resource reclamation for wgpu-created textures still alive).
+            let _ = device.poll(wgpu::PollType::Poll);
+            return;
+        }
+
         // ── HAL path: MTLSharedEvent sync ────────────────────────────────
         // signaled_value() is a direct GPU counter read — microsecond latency
         // vs device.poll() which goes through wgpu's internal machinery and
@@ -1163,9 +1191,13 @@ impl ContentPipeline {
                 // This uses wgpu's as_hal() for resource extraction only
                 // (NOT for encoding). The actual copy goes through native Metal.
                 type MetalApi = wgpu::hal::api::Metal;
+                // Use pre-tonemap output: tonemap isn't migrated to native yet,
+                // so output_texture() (tonemap output) is empty.
+                // pre_tonemap_texture() is the main compositor buffer written
+                // by the native blend passes.
                 let src_raw = {
                     let g = unsafe {
-                        self.compositor.output_texture().as_hal::<MetalApi>()
+                        self.compositor.pre_tonemap_texture().as_hal::<MetalApi>()
                     }
                     .expect("compositor output not Metal");
                     unsafe { (*g).raw_handle().to_owned() }

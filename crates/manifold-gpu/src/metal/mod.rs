@@ -169,7 +169,7 @@ impl GpuDevice {
         entry_point: &str,
         label: &str,
     ) -> GpuComputePipeline {
-        let (slot_map, msl_source, msl_entry_name) =
+        let (slot_map, msl_source, msl_entry_name, workgroup_size) =
             compile_wgsl_to_msl(wgsl_source, entry_point, label);
 
         let compile_opts = metal::CompileOptions::new();
@@ -201,6 +201,7 @@ impl GpuDevice {
             state,
             slot_map,
             label: label.to_string(),
+            workgroup_size,
         }
     }
 
@@ -398,6 +399,9 @@ pub struct GpuComputePipeline {
     pub(crate) state: metal::ComputePipelineState,
     pub slot_map: SlotMap,
     pub label: String,
+    /// Workgroup size from the shader's @workgroup_size declaration.
+    /// Used for dispatch_thread_groups second argument.
+    pub workgroup_size: [u32; 3],
 }
 
 unsafe impl Send for GpuComputePipeline {}
@@ -560,9 +564,10 @@ impl GpuEncoder {
             }
         }
 
+        let wg = pipeline.workgroup_size;
         enc.dispatch_thread_groups(
             metal::MTLSize::new(workgroups[0] as _, workgroups[1] as _, workgroups[2] as _),
-            pipeline.state.thread_execution_width_and_height(),
+            metal::MTLSize::new(wg[0] as _, wg[1] as _, wg[2] as _),
         );
     }
 
@@ -634,6 +639,20 @@ impl GpuEncoder {
         // State goes back to None (render encoder consumed).
     }
 
+    /// Clear a texture to a solid color via a render pass with MTLLoadAction::Clear.
+    /// No draw call — just load-clear + store.
+    pub fn clear_texture(&mut self, texture: &GpuTexture, r: f64, g: f64, b: f64, a: f64) {
+        self.end_current();
+        let desc = metal::RenderPassDescriptor::new();
+        let color = desc.color_attachments().object_at(0).unwrap();
+        color.set_texture(Some(&texture.raw));
+        color.set_load_action(metal::MTLLoadAction::Clear);
+        color.set_store_action(metal::MTLStoreAction::Store);
+        color.set_clear_color(metal::MTLClearColor::new(r, g, b, a));
+        let enc = self.cmd_buf().new_render_command_encoder(desc);
+        enc.end_encoding();
+    }
+
     /// Copy texture to texture via blit encoder.
     pub fn copy_texture_to_texture(
         &mut self,
@@ -700,7 +719,7 @@ fn compile_wgsl_to_msl(
     wgsl_source: &str,
     entry_point: &str,
     label: &str,
-) -> (SlotMap, String, String) {
+) -> (SlotMap, String, String, [u32; 3]) {
     // Step 1: Parse WGSL
     let module = naga::front::wgsl::parse_str(wgsl_source)
         .unwrap_or_else(|e| panic!("{label}: WGSL parse error: {e}"));
@@ -739,7 +758,7 @@ fn compile_wgsl_to_msl(
         naga::back::msl::write_string(&module, &info, &options, &pipeline_options)
             .unwrap_or_else(|e| panic!("{label}: MSL compilation error: {e}"));
 
-    // Step 5: Get actual MSL entry point name (naga may mangle it)
+    // Step 5: Get actual MSL entry point name and workgroup size
     let entry_idx = module
         .entry_points
         .iter()
@@ -750,7 +769,9 @@ fn compile_wgsl_to_msl(
         .unwrap_or_else(|e| panic!("{label}: entry point error: {e:?}"))
         .clone();
 
-    (slot_map, msl_source, msl_entry_name)
+    let workgroup_size = module.entry_points[entry_idx].workgroup_size;
+
+    (slot_map, msl_source, msl_entry_name, workgroup_size)
 }
 
 /// Parse WGSL, introspect bindings, compile to MSL for render (vertex + fragment).
@@ -1018,17 +1039,3 @@ fn to_mtl_blend_op(op: GpuBlendOp) -> metal::MTLBlendOperation {
     }
 }
 
-// ─── Dispatch helper for thread group size ─────────────────────────────
-
-trait ThreadGroupSize {
-    fn thread_execution_width_and_height(&self) -> metal::MTLSize;
-}
-
-impl ThreadGroupSize for metal::ComputePipelineState {
-    fn thread_execution_width_and_height(&self) -> metal::MTLSize {
-        let w = self.thread_execution_width();
-        let max = self.max_total_threads_per_threadgroup();
-        let h = if w > 0 { max / w } else { 1 };
-        metal::MTLSize::new(w, h.max(1), 1)
-    }
-}

@@ -120,9 +120,14 @@ struct BlendResources {
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     #[allow(dead_code)]
     hal_sampler: Option<crate::hal_context::MetalSampler>,
+    /// Native Metal compute pipeline for blend dispatch.
+    #[cfg(target_os = "macos")]
+    native_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    /// Native Metal sampler for blend texture sampling.
+    #[cfg(target_os = "macos")]
+    native_sampler: Option<manifold_gpu::GpuSampler>,
 }
 
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
 unsafe impl Send for BlendResources {}
 
 impl BlendResources {
@@ -131,6 +136,7 @@ impl BlendResources {
         width: u32,
         height: u32,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -251,6 +257,26 @@ impl BlendResources {
             (None, None)
         };
 
+        #[cfg(target_os = "macos")]
+        let (native_pipeline, native_sampler) = if let Some(nd) = native_device {
+            let np = nd.create_compute_pipeline(
+                include_str!("generators/shaders/compositor_blend_compute.wgsl"),
+                "cs_main",
+                "Blend Compute Native",
+            );
+            let ns = nd.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                min_filter: manifold_gpu::GpuFilterMode::Linear,
+                mag_filter: manifold_gpu::GpuFilterMode::Linear,
+                mip_filter: manifold_gpu::GpuFilterMode::Nearest,
+                address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
+                address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
+                address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
+            });
+            (Some(np), Some(ns))
+        } else {
+            (None, None)
+        };
+
         Self {
             pipeline, bind_group_layout, sampler,
             width, height,
@@ -258,6 +284,10 @@ impl BlendResources {
             hal_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_sampler,
+            #[cfg(target_os = "macos")]
+            native_pipeline,
+            #[cfg(target_os = "macos")]
+            native_sampler,
         }
     }
 
@@ -273,8 +303,60 @@ impl BlendResources {
         target_view: &wgpu::TextureView,
         uniforms: &BlendUniforms,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
+        #[cfg(target_os = "macos")] source_tex: Option<&wgpu::Texture>,
+        #[cfg(target_os = "macos")] blend_tex: Option<&wgpu::Texture>,
+        #[cfg(target_os = "macos")] target_tex: Option<&wgpu::Texture>,
     ) {
         let offset = arena.push(uniforms);
+
+        // --- native Metal path: zero wgpu ---
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_pipe) = self.native_pipeline
+            && let Some(ref native_samp) = self.native_sampler
+            && gpu.has_native_encoder()
+            && let Some(src_wgpu) = source_tex
+            && let Some(bld_wgpu) = blend_tex
+            && let Some(tgt_wgpu) = target_tex
+        {
+            let src_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(src_wgpu)
+            };
+            let blend_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(bld_wgpu)
+            };
+            let tgt_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(tgt_wgpu)
+            };
+            let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            enc.dispatch_compute(
+                native_pipe,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: &src_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 2,
+                        texture: &blend_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 3,
+                        sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 4,
+                        texture: &tgt_gpu,
+                    },
+                ],
+                [self.width.div_ceil(16), self.height.div_ceil(16), 1],
+                "Blend Pass",
+            );
+            return;
+        }
 
         // --- hal path: encode via hal command encoder ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -472,6 +554,14 @@ impl PingPong {
         if self.use_ping_as_source { &self.pong.view } else { &self.ping.view }
     }
 
+    fn source_texture(&self) -> &wgpu::Texture {
+        if self.use_ping_as_source { &self.ping.texture } else { &self.pong.texture }
+    }
+
+    fn target_texture(&self) -> &wgpu::Texture {
+        if self.use_ping_as_source { &self.pong.texture } else { &self.ping.texture }
+    }
+
     fn swap(&mut self) {
         self.use_ping_as_source = !self.use_ping_as_source;
     }
@@ -479,10 +569,6 @@ impl PingPong {
     fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         self.ping.resize(device, width, height);
         self.pong.resize(device, width, height);
-    }
-
-    fn source_texture(&self) -> &wgpu::Texture {
-        if self.use_ping_as_source { &self.ping.texture } else { &self.pong.texture }
     }
 
     fn width(&self) -> u32 { self.ping.width }
@@ -641,11 +727,15 @@ impl LayerCompositor {
         width: u32,
         height: u32,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         Self {
             main: PingPong::new(device, width, height, "Compositor"),
             layer_buf: None,
-            blend: BlendResources::new(device, width, height, hal_ctx),
+            blend: BlendResources::new(
+                device, width, height, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            ),
             uniform_arena: UniformArena::new(device, hal_ctx),
             effect_chain: EffectChain::new(),
             effect_registry: EffectRegistry::new(device, queue, hal_ctx),
@@ -714,20 +804,31 @@ impl LayerCompositor {
         self.uniform_arena.reset();
 
         // Clear main to opaque black
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            type MetalApi = wgpu::hal::api::Metal;
-            let view_ptr = {
-                let g = unsafe { self.main.source_view().as_hal::<MetalApi>() }
-                    .expect("main source not Metal");
-                &*g as *const _
+        #[cfg(target_os = "macos")]
+        if gpu.has_native_encoder() {
+            let src_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(self.main.source_texture())
             };
-            let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-            unsafe { self.main.clear_source_hal(hal_enc, &*view_ptr, true); }
+            let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            enc.clear_texture(&src_gpu, 0.0, 0.0, 0.0, 1.0);
         } else {
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            if gpu.has_hal_encoder() {
+                type MetalApi = wgpu::hal::api::Metal;
+                let view_ptr = {
+                    let g = unsafe { self.main.source_view().as_hal::<MetalApi>() }
+                        .expect("main source not Metal");
+                    &*g as *const _
+                };
+                let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+                unsafe { self.main.clear_source_hal(hal_enc, &*view_ptr, true); }
+            } else {
+                self.main.clear_source(gpu.encoder, true);
+            }
+            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
             self.main.clear_source(gpu.encoder, true);
         }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        #[cfg(not(target_os = "macos"))]
         self.main.clear_source(gpu.encoder, true);
 
         // Check for any solo layer
@@ -812,6 +913,12 @@ impl LayerCompositor {
                     self.main.target_view(),
                     &uniforms,
                     gpu_profiler,
+                    #[cfg(target_os = "macos")]
+                    Some(self.main.source_texture()),
+                    #[cfg(target_os = "macos")]
+                    if blend_input.is_none() { Some(clip.texture) } else { None },
+                    #[cfg(target_os = "macos")]
+                    Some(self.main.target_texture()),
                 );
                 self.main.swap();
             } else {
@@ -820,6 +927,14 @@ impl LayerCompositor {
                 let layer_buf = self.layer_buf.as_mut().unwrap();
 
                 // Clear layer buffer to transparent
+                #[cfg(target_os = "macos")]
+                if gpu.has_native_encoder() {
+                    let src_gpu = unsafe {
+                        crate::gpu_encoder::extract_native_texture(layer_buf.source_texture())
+                    };
+                    let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+                    enc.clear_texture(&src_gpu, 0.0, 0.0, 0.0, 0.0);
+                } else {
                 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
                 if gpu.has_hal_encoder() {
                     type MetalApi = wgpu::hal::api::Metal;
@@ -834,6 +949,9 @@ impl LayerCompositor {
                     layer_buf.clear_source(gpu.encoder, false);
                 }
                 #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+                layer_buf.clear_source(gpu.encoder, false);
+                }
+                #[cfg(not(target_os = "macos"))]
                 layer_buf.clear_source(gpu.encoder, false);
 
                 // Composite each clip into layer buffer with Normal blend
@@ -880,6 +998,12 @@ impl LayerCompositor {
                         layer_buf.target_view(),
                         &uniforms,
                         gpu_profiler,
+                        #[cfg(target_os = "macos")]
+                        Some(layer_buf.source_texture()),
+                        #[cfg(target_os = "macos")]
+                        if blend_input.is_none() { Some(clip.texture) } else { None },
+                        #[cfg(target_os = "macos")]
+                        Some(layer_buf.target_texture()),
                     );
                     layer_buf.swap();
                 }
@@ -933,6 +1057,12 @@ impl LayerCompositor {
                     self.main.target_view(),
                     &uniforms,
                     gpu_profiler,
+                    #[cfg(target_os = "macos")]
+                    Some(self.main.source_texture()),
+                    #[cfg(target_os = "macos")]
+                    None, // layer buffer texture — TODO: extract
+                    #[cfg(target_os = "macos")]
+                    Some(self.main.target_texture()),
                 );
                 self.main.swap();
             }
@@ -955,6 +1085,16 @@ impl Compositor for LayerCompositor {
             // Unity: CompositorStack.cs returns immediately for empty playback.
             // Clear to black + return tonemap output (already cleared from previous frame).
             // Skips ALL master effects, tonemap, and LED tap — zero GPU draw calls.
+            #[cfg(target_os = "macos")]
+            if gpu.has_native_encoder() {
+                let src_gpu = unsafe {
+                    crate::gpu_encoder::extract_native_texture(self.main.source_texture())
+                };
+                let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+                enc.clear_texture(&src_gpu, 0.0, 0.0, 0.0, 1.0);
+                // Skip tonemap clear — native path bypasses tonemap
+                return self.main.source_view();
+            }
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             if gpu.has_hal_encoder() {
                 type MetalApi = wgpu::hal::api::Metal;
@@ -1233,6 +1373,10 @@ impl Compositor for LayerCompositor {
 
     fn pre_tonemap_output(&self) -> &wgpu::TextureView {
         self.main.source_view()
+    }
+
+    fn pre_tonemap_texture(&self) -> &wgpu::Texture {
+        self.main.source_texture()
     }
 
     fn output_texture(&self) -> &wgpu::Texture {

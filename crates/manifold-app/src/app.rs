@@ -1093,18 +1093,24 @@ impl ApplicationHandler for Application {
             let mut engine = PlaybackEngine::new(renderers);
             engine.initialize(self.local_project.clone());
 
+            // Create native Metal device BEFORE compositor so it can build native pipelines.
+            #[cfg(target_os = "macos")]
+            let native_device = manifold_gpu::GpuDevice::new();
+
             let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(
                 Box::new(LayerCompositor::new(
                     &content_gpu.device, &content_gpu.queue,
                     output_w, output_h,
                     hal_ctx.as_ref(),
+                    #[cfg(target_os = "macos")]
+                    Some(&native_device),
                 )),
                 hal_ctx,
             );
             content_pipeline.edr_headroom = self.edr_headroom;
-            // Initialize native Metal GPU device for zero-wgpu content encoding.
+            // Transfer native device ownership to content pipeline.
             #[cfg(target_os = "macos")]
-            content_pipeline.init_native_gpu();
+            content_pipeline.set_native_gpu(native_device);
             // Give the content pipeline both IOSurface textures for double-buffered async output.
             #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.shared_texture_bridge {
