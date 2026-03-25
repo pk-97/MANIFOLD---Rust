@@ -362,17 +362,17 @@ impl ComputeBlitHelper {
         self.ring_index.set(self.ring_index.get() + 1);
         let byte_offset = slot * self.slot_stride;
 
-        // --- hal dispatch path ---
+        // --- hal dispatch path (via as_hal_mut on wgpu encoder) ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if let (Some(hal_pipe), Some(mapped_ptr), true) = (
+        if let (Some(hal_pipe), Some(mapped_ptr), Some(hal_ctx)) = (
             &self.hal_pipeline,
             self.ring_mapped_ptr,
-            gpu.has_hal(),
+            gpu.hal_ctx,
         ) {
-            use wgpu::hal::{self as hal, Device as HalDevice};
+            use wgpu::hal::{self as hal, CommandEncoder as HalCmdEnc, Device as HalDevice};
             type MetalApi = hal::api::Metal;
 
-            // Direct memcpy to shared-memory buffer (no API call)
+            // Direct memcpy to shared-memory buffer (no API call, no staging)
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     uniform_bytes.as_ptr(),
@@ -383,6 +383,8 @@ impl ComputeBlitHelper {
 
             // Extract hal texture view pointers — MUST drop each guard before
             // acquiring the next to avoid wgpu's non-reentrant snatch lock panic.
+            // These pointers are valid because the wgpu TextureViews (owned by
+            // compositor ping-pong buffers) are alive for this entire frame.
             let hal_source_ptr = {
                 let guard = unsafe { source_view.as_hal::<MetalApi>() }
                     .expect("source view not Metal");
@@ -395,18 +397,15 @@ impl ComputeBlitHelper {
                 &*guard as *const <MetalApi as hal::Api>::TextureView
             }; // guard dropped
 
-            // Ring buffer + sampler use cached pointers (no snatch lock needed)
+            // Ring buffer uses cached pointer (no snatch lock needed)
             let hal_ring_ref = unsafe { &*self.hal_ring_ptr.unwrap() };
             let hal_sampler = self.hal_sampler.as_ref().unwrap();
-
-            // Safety: texture view pointers are valid because the wgpu TextureViews
-            // (owned by compositor ping-pong buffers) are alive for this entire frame.
             let hal_source_ref = unsafe { &*hal_source_ptr };
             let hal_target_ref = unsafe { &*hal_target_ptr };
 
             // Create lightweight hal bind group (~0.1μs — copies pointers)
             let hal_bg = unsafe {
-                gpu.hal_ctx.unwrap().device().create_bind_group(
+                hal_ctx.device().create_bind_group(
                     &hal::BindGroupDescriptor {
                         label: None,
                         layout: &hal_pipe.bind_group_layout,
@@ -441,27 +440,29 @@ impl ComputeBlitHelper {
                 .expect("Failed to create hal bind group")
             };
 
-            // Encode via hal — zero validation overhead
+            // Encode into wgpu's command buffer via as_hal_mut — correct interleaving,
+            // zero validation overhead, single command buffer submission.
             unsafe {
-                gpu.hal_begin_compute_pass(label);
-                gpu.hal_set_compute_pipeline(&hal_pipe.pipeline);
-                gpu.hal_set_bind_group(
-                    0,
-                    &hal_pipe.pipeline_layout,
-                    &hal_bg,
-                    &[byte_offset as u32],
-                );
-                gpu.hal_dispatch(width.div_ceil(16), height.div_ceil(16), 1);
-                gpu.hal_end_compute_pass();
+                gpu.encoder.as_hal_mut::<MetalApi, _, _>(|hal_enc| {
+                    let enc = hal_enc.expect("encoder not Metal");
+                    enc.begin_compute_pass(&hal::ComputePassDescriptor {
+                        label: Some(label),
+                        timestamp_writes: None,
+                    });
+                    enc.set_compute_pipeline(&hal_pipe.pipeline);
+                    enc.set_bind_group(
+                        &hal_pipe.pipeline_layout,
+                        0,
+                        &hal_bg,
+                        &[byte_offset as u32],
+                    );
+                    enc.dispatch([width.div_ceil(16), height.div_ceil(16), 1]);
+                    enc.end_compute_pass();
+                });
             }
 
             // Clean up the ephemeral bind group
-            unsafe {
-                gpu.hal_ctx
-                    .unwrap()
-                    .device()
-                    .destroy_bind_group(hal_bg);
-            }
+            unsafe { hal_ctx.device().destroy_bind_group(hal_bg); }
 
             return;
         }
