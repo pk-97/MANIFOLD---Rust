@@ -1100,6 +1100,94 @@ impl WireframeDepthFX {
         }
     }
 
+    /// Unified encode: render pass via hal or wgpu, dispatching automatically.
+    /// Replaces the `make_bind_group + run_pass` pattern everywhere.
+    #[allow(clippy::too_many_arguments)]
+    fn encode_pass(
+        &self,
+        gpu: &mut GpuEncoder,
+        pass_idx: usize,
+        ubo: &wgpu::Buffer,
+        main_view: &wgpu::TextureView,
+        prev_analysis_view: &wgpu::TextureView,
+        prev_depth_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        history_view: &wgpu::TextureView,
+        flow_view: &wgpu::TextureView,
+        mesh_coord_view: &wgpu::TextureView,
+        prev_mesh_coord_view: &wgpu::TextureView,
+        semantic_view: &wgpu::TextureView,
+        surface_cache_view: &wgpu::TextureView,
+        prev_surface_cache_view: &wgpu::TextureView,
+        subject_mask_view: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        w: u32,
+        h: u32,
+        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
+    ) {
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if gpu.has_hal_encoder() {
+            self.run_pass_hal(
+                gpu, pass_idx, ubo,
+                main_view, prev_analysis_view, prev_depth_view, depth_view,
+                history_view, flow_view, mesh_coord_view, prev_mesh_coord_view,
+                semantic_view, surface_cache_view, prev_surface_cache_view,
+                subject_mask_view, target, w, h,
+            );
+            return;
+        }
+        let bg = self.make_bind_group(
+            gpu.device, ubo,
+            main_view, prev_analysis_view, prev_depth_view, depth_view,
+            history_view, flow_view, mesh_coord_view, prev_mesh_coord_view,
+            semantic_view, surface_cache_view, prev_surface_cache_view,
+            subject_mask_view,
+        );
+        self.run_pass(
+            gpu.encoder, &self.pipelines[pass_idx], &bg, target, w, h, profiler,
+        );
+    }
+
+    /// Unified encode: copy texture to texture via hal or wgpu.
+    fn encode_copy(
+        gpu: &mut GpuEncoder,
+        src: &wgpu::Texture,
+        dst: &wgpu::Texture,
+        w: u32,
+        h: u32,
+    ) {
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if gpu.has_hal_encoder() {
+            Self::copy_texture_hal(gpu, src, dst, w, h);
+            return;
+        }
+        gpu.encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: src,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: dst,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+    }
+
+    /// Unified encode: clear a RenderTarget to black via hal or wgpu.
+    fn encode_clear(gpu: &mut GpuEncoder, rt: &RenderTarget) {
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if gpu.has_hal_encoder() {
+            Self::clear_rt_hal(gpu, rt);
+            return;
+        }
+        Self::clear_rt(gpu.encoder, rt);
+    }
+
     // Create a CPU-upload 2D texture (Rgba8Unorm or Rgba32Float) for DNN outputs.
     fn create_cpu_texture(
         device: &wgpu::Device,
@@ -1147,14 +1235,7 @@ impl WireframeDepthFX {
                     wgpu::TextureFormat::Rgba8Unorm,
                     &format!("WireframeDepthHistory_{owner_key}"),
                 );
-                #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-                if gpu.has_hal_encoder() {
-                    Self::clear_rt_hal(gpu, &state.line_history_tex);
-                } else {
-                    Self::clear_rt(gpu.encoder, &state.line_history_tex);
-                }
-                #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-                Self::clear_rt(gpu.encoder, &state.line_history_tex);
+                Self::encode_clear(gpu, &state.line_history_tex);
             }
             // Rust borrow checker: re-borrow mutably after the if-chain
             return self.owner_states.get_mut(&owner_key).unwrap();
@@ -1211,34 +1292,13 @@ impl WireframeDepthFX {
             &format!("WireframeDepthDnnSubject_{owner_key}"));
 
         // WireframeDepthFX.cs line 224-231: clear RTs
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            Self::clear_rt_hal(gpu, &previous_analysis_tex);
-            Self::clear_rt_hal(gpu, &depth_tex);
-            Self::clear_rt_hal(gpu, &line_history_tex);
-            Self::clear_rt_hal(gpu, &flow_tex);
-            Self::clear_rt_hal(gpu, &semantic_tex);
-            Self::clear_rt_hal(gpu, &surface_cache_tex);
-            Self::clear_rt_hal(gpu, &dnn_input_tex);
-        } else {
-            Self::clear_rt(gpu.encoder, &previous_analysis_tex);
-            Self::clear_rt(gpu.encoder, &depth_tex);
-            Self::clear_rt(gpu.encoder, &line_history_tex);
-            Self::clear_rt(gpu.encoder, &flow_tex);
-            Self::clear_rt(gpu.encoder, &semantic_tex);
-            Self::clear_rt(gpu.encoder, &surface_cache_tex);
-            Self::clear_rt(gpu.encoder, &dnn_input_tex);
-        }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        {
-            Self::clear_rt(gpu.encoder, &previous_analysis_tex);
-            Self::clear_rt(gpu.encoder, &depth_tex);
-            Self::clear_rt(gpu.encoder, &line_history_tex);
-            Self::clear_rt(gpu.encoder, &flow_tex);
-            Self::clear_rt(gpu.encoder, &semantic_tex);
-            Self::clear_rt(gpu.encoder, &surface_cache_tex);
-            Self::clear_rt(gpu.encoder, &dnn_input_tex);
-        }
+        Self::encode_clear(gpu, &previous_analysis_tex);
+        Self::encode_clear(gpu, &depth_tex);
+        Self::encode_clear(gpu, &line_history_tex);
+        Self::encode_clear(gpu, &flow_tex);
+        Self::encode_clear(gpu, &semantic_tex);
+        Self::encode_clear(gpu, &surface_cache_tex);
+        Self::encode_clear(gpu, &dnn_input_tex);
 
         let mut state = OwnerState {
             analysis_width:  aw,
@@ -1330,49 +1390,17 @@ impl WireframeDepthFX {
             usage: wgpu::BufferUsages::UNIFORM,
         });
 
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            self.run_pass_hal(gpu, PASS_INIT_MESH_COORD, &temp_ubo,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &state.mesh_coord_tex.view, aw, ah);
-            // PASS_SURFACE_CACHE_UPDATE from fresh mesh coord
-            self.run_pass_hal(gpu, PASS_SURFACE_CACHE_UPDATE, &temp_ubo,
-                &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &state.surface_cache_tex.view, aw, ah);
-        } else {
-            let bg = self.make_bind_group(gpu.device, &temp_ubo,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_INIT_MESH_COORD], &bg, &state.mesh_coord_tex.view, aw, ah, profiler);
-            let bg2 = self.make_bind_group(gpu.device, &temp_ubo,
-                &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_SURFACE_CACHE_UPDATE], &bg2, &state.surface_cache_tex.view, aw, ah, profiler);
-        }
-
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        {
-            let bg = self.make_bind_group(gpu.device, &temp_ubo,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_INIT_MESH_COORD], &bg, &state.mesh_coord_tex.view, aw, ah, profiler);
-            let bg2 = self.make_bind_group(gpu.device, &temp_ubo,
-                &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_SURFACE_CACHE_UPDATE], &bg2, &state.surface_cache_tex.view, aw, ah, profiler);
-        }
+        self.encode_pass(gpu, PASS_INIT_MESH_COORD, &temp_ubo,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &state.mesh_coord_tex.view, aw, ah, profiler);
+        // PASS_SURFACE_CACHE_UPDATE from fresh mesh coord
+        self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, &temp_ubo,
+            &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &state.surface_cache_tex.view, aw, ah, profiler);
     }
 
     // Helper: encode a single render pass (blit-style, no vertex buffer).
@@ -1810,34 +1838,7 @@ impl WireframeDepthFX {
         // Copy source → dnn_input_tex via a blit (we copy at texture level since both are Rgba8Unorm)
         let copy_aw = state.analysis_width;
         let copy_ah = state.analysis_height;
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            Self::copy_texture_hal(gpu, source_tex, &state.dnn_input_tex.texture, copy_aw, copy_ah);
-        } else {
-            gpu.encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: source_tex, mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &state.dnn_input_tex.texture, mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d { width: copy_aw, height: copy_ah, depth_or_array_layers: 1 },
-            );
-        }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        gpu.encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: source_tex, mip_level: 0,
-                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &state.dnn_input_tex.texture, mip_level: 0,
-                origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d { width: copy_aw, height: copy_ah, depth_or_array_layers: 1 },
-        );
+        Self::encode_copy(gpu, source_tex, &state.dnn_input_tex.texture, copy_aw, copy_ah);
 
         state.native_request_wants_depth   = wants_depth;
         state.native_request_wants_flow    = wants_flow;
@@ -1904,50 +1905,15 @@ impl WireframeDepthFX {
         let depth_next = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD DepthNext");
 
         // PASS_HEURISTIC_DEPTH: analysis → depthNext
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            self.run_pass_hal(gpu, PASS_HEURISTIC_DEPTH, ubo,
-                analysis_view, &state.previous_analysis_tex.view, &state.depth_tex.view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &depth_next.view, aw, ah);
-            Self::copy_texture_hal(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
-            return;
-        }
-
-        let bg = self.make_bind_group(gpu.device, ubo,
-            analysis_view,                       // main_tex = analysis
-            &state.previous_analysis_tex.view,   // prev_analysis_tex
-            &state.depth_tex.view,               // prev_depth_tex
-            &self.dummy_view,                    // depth_tex (not used)
-            &self.dummy_view,                    // history_tex
-            &self.dummy_view,                    // flow_tex
-            &self.dummy_view,                    // mesh_coord_tex
-            &self.dummy_view,                    // prev_mesh_coord_tex
-            &self.dummy_view,                    // semantic_tex
-            &self.dummy_view,                    // surface_cache_tex
-            &self.dummy_view,                    // prev_surface_cache_tex
-            &self.dummy_view,                    // subject_mask_tex
-        );
-        self.run_pass(gpu.encoder, &self.pipelines[PASS_HEURISTIC_DEPTH], &bg, &depth_next.view, aw, ah, profiler);
+        self.encode_pass(gpu, PASS_HEURISTIC_DEPTH, ubo,
+            analysis_view, &state.previous_analysis_tex.view, &state.depth_tex.view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &depth_next.view, aw, ah, profiler);
 
         // Graphics.Blit(depthNext, state.depthTex) — copy
-        gpu.encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &depth_next.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &state.depth_tex.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d { width: aw, height: ah, depth_or_array_layers: 1 },
-        );
+        Self::encode_copy(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
     }
 
     // WireframeDepthFX.cs line 420-453 — TryEstimateDepthDnn
@@ -1972,50 +1938,15 @@ impl WireframeDepthFX {
         let depth_next = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD DnnDepthNext");
 
         // PASS_DNN_DEPTH_POST: dnnDepthTexture → depthNext
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            self.run_pass_hal(gpu, PASS_DNN_DEPTH_POST, ubo,
-                &state.dnn_depth_texture_view, &self.dummy_view, &state.depth_tex.view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &depth_next.view, aw, ah);
-            Self::copy_texture_hal(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
-            return true;
-        }
-
-        let bg = self.make_bind_group(gpu.device, ubo,
-            &state.dnn_depth_texture_view,  // main_tex = dnnDepthTexture
-            &self.dummy_view,               // prev_analysis_tex
-            &state.depth_tex.view,          // prev_depth_tex
-            &self.dummy_view,               // depth_tex
-            &self.dummy_view,               // history_tex
-            &self.dummy_view,               // flow_tex
-            &self.dummy_view,               // mesh_coord_tex
-            &self.dummy_view,               // prev_mesh_coord_tex
-            &self.dummy_view,               // semantic_tex
-            &self.dummy_view,               // surface_cache_tex
-            &self.dummy_view,               // prev_surface_cache_tex
-            &self.dummy_view,               // subject_mask_tex
-        );
-        self.run_pass(gpu.encoder, &self.pipelines[PASS_DNN_DEPTH_POST], &bg, &depth_next.view, aw, ah, profiler);
+        self.encode_pass(gpu, PASS_DNN_DEPTH_POST, ubo,
+            &state.dnn_depth_texture_view, &self.dummy_view, &state.depth_tex.view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &depth_next.view, aw, ah, profiler);
 
         // Graphics.Blit(depthNext, state.depthTex)
-        gpu.encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &depth_next.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &state.depth_tex.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d { width: aw, height: ah, depth_or_array_layers: 1 },
-        );
+        Self::encode_copy(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
 
         true
     }
@@ -2051,19 +1982,8 @@ impl WireframeDepthFX {
             let aw = state.analysis_width;
             let ah = state.analysis_height;
             // Clear lineHistoryTex, semanticTex
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
-                Self::clear_rt_hal(gpu, &state.line_history_tex);
-                Self::clear_rt_hal(gpu, &state.semantic_tex);
-            } else {
-                Self::clear_rt(gpu.encoder, &state.line_history_tex);
-                Self::clear_rt(gpu.encoder, &state.semantic_tex);
-            }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            {
-                Self::clear_rt(gpu.encoder, &state.line_history_tex);
-                Self::clear_rt(gpu.encoder, &state.semantic_tex);
-            }
+            Self::encode_clear(gpu, &state.line_history_tex);
+            Self::encode_clear(gpu, &state.semantic_tex);
             // Re-initialize mesh coord
             let uniforms = WireUniforms {
                 surface_persistence: 0.9,
@@ -2078,47 +1998,16 @@ impl WireframeDepthFX {
                 contents: bytemuck::bytes_of(&uniforms),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
-                self.run_pass_hal(gpu, PASS_INIT_MESH_COORD, &temp_ubo,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &state.mesh_coord_tex.view, aw, ah);
-                self.run_pass_hal(gpu, PASS_SURFACE_CACHE_UPDATE, &temp_ubo,
-                    &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &state.surface_cache_tex.view, aw, ah);
-            } else {
-                let bg = self.make_bind_group(gpu.device, &temp_ubo,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_INIT_MESH_COORD], &bg, &state.mesh_coord_tex.view, aw, ah, profiler);
-                let bg2 = self.make_bind_group(gpu.device, &temp_ubo,
-                    &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_SURFACE_CACHE_UPDATE], &bg2, &state.surface_cache_tex.view, aw, ah, profiler);
-            }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            {
-                let bg = self.make_bind_group(gpu.device, &temp_ubo,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_INIT_MESH_COORD], &bg, &state.mesh_coord_tex.view, aw, ah, profiler);
-                let bg2 = self.make_bind_group(gpu.device, &temp_ubo,
-                    &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_SURFACE_CACHE_UPDATE], &bg2, &state.surface_cache_tex.view, aw, ah, profiler);
-            }
+            self.encode_pass(gpu, PASS_INIT_MESH_COORD, &temp_ubo,
+                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &state.mesh_coord_tex.view, aw, ah, profiler);
+            self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, &temp_ubo,
+                &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &state.surface_cache_tex.view, aw, ah, profiler);
 
             state.dnn_has_subject_mask = false;
             if !state.dnn_subject_history_buffer.is_empty() {
@@ -2129,34 +2018,7 @@ impl WireframeDepthFX {
             state.native_flow_has_data = false;
             state.last_mesh_update_frame = frame_count;
             // Blit analysis → previousAnalysisTex
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
-                Self::copy_texture_hal(gpu, &state.dnn_input_tex.texture, &state.previous_analysis_tex.texture, aw, ah);
-            } else {
-                gpu.encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &state.dnn_input_tex.texture, mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &state.previous_analysis_tex.texture, mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d { width: aw, height: ah, depth_or_array_layers: 1 },
-                );
-            }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            gpu.encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &state.dnn_input_tex.texture, mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &state.previous_analysis_tex.texture, mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d { width: aw, height: ah, depth_or_array_layers: 1 },
-            );
+            Self::encode_copy(gpu, &state.dnn_input_tex.texture, &state.previous_analysis_tex.texture, aw, ah);
             return;
         }
 
@@ -2176,97 +2038,34 @@ impl WireframeDepthFX {
             &state.native_flow_texture_view
         } else {
             // PASS_FLOW_ESTIMATE: analysis → flowTex
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
-                self.run_pass_hal(gpu, PASS_FLOW_ESTIMATE, ubo,
-                    analysis_view, &state.previous_analysis_tex.view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &state.flow_tex.view, aw, ah);
-            } else {
-                let bg = self.make_bind_group(gpu.device, ubo,
-                    analysis_view, &state.previous_analysis_tex.view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_FLOW_ESTIMATE], &bg, &state.flow_tex.view, aw, ah, profiler);
-            }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            {
-                let bg = self.make_bind_group(gpu.device, ubo,
-                    analysis_view, &state.previous_analysis_tex.view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_FLOW_ESTIMATE], &bg, &state.flow_tex.view, aw, ah, profiler);
-            }
+            self.encode_pass(gpu, PASS_FLOW_ESTIMATE, ubo,
+                analysis_view, &state.previous_analysis_tex.view,
+                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &state.flow_tex.view, aw, ah, profiler);
             &state.flow_tex.view
         };
 
         // WireframeDepthFX.cs line 792-826 — flowFiltered, temp RTs
         let flow_filtered = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD FlowFiltered");
         // PASS_FLOW_HYGIENE: flowInput → flowFiltered
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            self.run_pass_hal(gpu, PASS_FLOW_HYGIENE, ubo,
-                flow_input_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &flow_filtered.view, aw, ah);
-        } else {
-            let bg_hygiene = self.make_bind_group(gpu.device, ubo,
-                flow_input_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_FLOW_HYGIENE], &bg_hygiene, &flow_filtered.view, aw, ah, profiler);
-        }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        {
-            let bg_hygiene = self.make_bind_group(gpu.device, ubo,
-                flow_input_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_FLOW_HYGIENE], &bg_hygiene, &flow_filtered.view, aw, ah, profiler);
-        }
+        self.encode_pass(gpu, PASS_FLOW_HYGIENE, ubo,
+            flow_input_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &flow_filtered.view, aw, ah, profiler);
         let flow_stable_view = &flow_filtered.view;
 
         // WireframeDepthFX.cs line 808-826: semantic mask
         // PASS_SEMANTIC_MASK: analysis → semanticTex
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            self.run_pass_hal(gpu, PASS_SEMANTIC_MASK, ubo,
-                analysis_view, &state.previous_analysis_tex.view,
-                &self.dummy_view, &state.depth_tex.view,
-                &self.dummy_view, flow_stable_view,
-                &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &state.semantic_tex.view, aw, ah);
-        } else {
-            let bg_sem = self.make_bind_group(gpu.device, ubo,
-                analysis_view, &state.previous_analysis_tex.view,
-                &self.dummy_view, &state.depth_tex.view,
-                &self.dummy_view, flow_stable_view,
-                &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_SEMANTIC_MASK], &bg_sem, &state.semantic_tex.view, aw, ah, profiler);
-        }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        {
-            let bg_sem = self.make_bind_group(gpu.device, ubo,
-                analysis_view, &state.previous_analysis_tex.view,
-                &self.dummy_view, &state.depth_tex.view,
-                &self.dummy_view, flow_stable_view,
-                &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_SEMANTIC_MASK], &bg_sem, &state.semantic_tex.view, aw, ah, profiler);
-        }
+        self.encode_pass(gpu, PASS_SEMANTIC_MASK, ubo,
+            analysis_view, &state.previous_analysis_tex.view,
+            &self.dummy_view, &state.depth_tex.view,
+            &self.dummy_view, flow_stable_view,
+            &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &state.semantic_tex.view, aw, ah, profiler);
 
         // WireframeDepthFX.cs line 811-826: temp coord RTs
         let coord_next       = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD CoordNext");
@@ -2275,61 +2074,19 @@ impl WireframeDepthFX {
         let surface_next     = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD SurfaceNext");
 
         // WireframeDepthFX.cs line 829-835: PASS_FLOW_ADVECT_COORD
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            self.run_pass_hal(gpu, PASS_FLOW_ADVECT_COORD, ubo,
-                analysis_view, &state.previous_analysis_tex.view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                flow_stable_view, &self.dummy_view, &state.mesh_coord_tex.view,
-                &state.semantic_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &coord_next.view, aw, ah);
-        } else {
-            let bg_advect = self.make_bind_group(gpu.device, ubo,
-                analysis_view, &state.previous_analysis_tex.view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                flow_stable_view, &self.dummy_view, &state.mesh_coord_tex.view,
-                &state.semantic_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_FLOW_ADVECT_COORD], &bg_advect, &coord_next.view, aw, ah, profiler);
-        }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        {
-            let bg_advect = self.make_bind_group(gpu.device, ubo,
-                analysis_view, &state.previous_analysis_tex.view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                flow_stable_view, &self.dummy_view, &state.mesh_coord_tex.view,
-                &state.semantic_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_FLOW_ADVECT_COORD], &bg_advect, &coord_next.view, aw, ah, profiler);
-        }
+        self.encode_pass(gpu, PASS_FLOW_ADVECT_COORD, ubo,
+            analysis_view, &state.previous_analysis_tex.view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            flow_stable_view, &self.dummy_view, &state.mesh_coord_tex.view,
+            &state.semantic_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &coord_next.view, aw, ah, profiler);
 
         // WireframeDepthFX.cs line 837-841: PASS_MESH_CELL_AFFINE
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            self.run_pass_hal(gpu, PASS_MESH_CELL_AFFINE, ubo,
-                &coord_next.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &coord_affine.view, aw, ah);
-        } else {
-            let bg_affine = self.make_bind_group(gpu.device, ubo,
-                &coord_next.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, flow_stable_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_MESH_CELL_AFFINE], &bg_affine, &coord_affine.view, aw, ah, profiler);
-        }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        {
-            let bg_affine = self.make_bind_group(gpu.device, ubo,
-                &coord_next.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, flow_stable_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_MESH_CELL_AFFINE], &bg_affine, &coord_affine.view, aw, ah, profiler);
-        }
+        self.encode_pass(gpu, PASS_MESH_CELL_AFFINE, ubo,
+            &coord_next.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &coord_affine.view, aw, ah, profiler);
 
         // WireframeDepthFX.cs line 843-862: optional face warp pass
         let pre_regularize_view: &wgpu::TextureView;
@@ -2341,30 +2098,11 @@ impl WireframeDepthFX {
             } else {
                 &state.semantic_tex.view
             };
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
-                self.run_pass_hal(gpu, PASS_MESH_FACE_WARP, ubo,
-                    &coord_affine.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
-                    edge_follow_mask_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &coord_face.view, aw, ah);
-            } else {
-                let bg_face = self.make_bind_group(gpu.device, ubo,
-                    &coord_affine.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
-                    edge_follow_mask_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_MESH_FACE_WARP], &bg_face, &coord_face.view, aw, ah, profiler);
-            }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            {
-                let bg_face = self.make_bind_group(gpu.device, ubo,
-                    &coord_affine.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
-                    edge_follow_mask_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_MESH_FACE_WARP], &bg_face, &coord_face.view, aw, ah, profiler);
-            }
+            self.encode_pass(gpu, PASS_MESH_FACE_WARP, ubo,
+                &coord_affine.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
+                edge_follow_mask_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &coord_face.view, aw, ah, profiler);
             coord_face_opt = Some(coord_face);
             pre_regularize_view = &coord_face_opt.as_ref().unwrap().view;
         } else {
@@ -2373,121 +2111,35 @@ impl WireframeDepthFX {
         }
 
         // WireframeDepthFX.cs line 863-871: PASS_MESH_REGULARIZE
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            self.run_pass_hal(gpu, PASS_MESH_REGULARIZE, ubo,
-                pre_regularize_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, flow_stable_view, &self.dummy_view,
-                &state.mesh_coord_tex.view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &coord_regularized.view, aw, ah);
-            Self::copy_texture_hal(gpu, &coord_regularized.texture, &state.mesh_coord_tex.texture, aw, ah);
-        } else {
-            let bg_reg = self.make_bind_group(gpu.device, ubo,
-                pre_regularize_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, flow_stable_view, &self.dummy_view,
-                &state.mesh_coord_tex.view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_MESH_REGULARIZE], &bg_reg, &coord_regularized.view, aw, ah, profiler);
-            gpu.encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &coord_regularized.texture,
-                    mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &state.mesh_coord_tex.texture,
-                    mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d { width: aw, height: ah, depth_or_array_layers: 1 },
-            );
-        }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        {
-            let bg_reg = self.make_bind_group(gpu.device, ubo,
-                pre_regularize_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, flow_stable_view, &self.dummy_view,
-                &state.mesh_coord_tex.view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_MESH_REGULARIZE], &bg_reg, &coord_regularized.view, aw, ah, profiler);
-            gpu.encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &coord_regularized.texture,
-                    mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &state.mesh_coord_tex.texture,
-                    mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d { width: aw, height: ah, depth_or_array_layers: 1 },
-            );
-        }
+        self.encode_pass(gpu, PASS_MESH_REGULARIZE, ubo,
+            pre_regularize_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, flow_stable_view, &self.dummy_view,
+            &state.mesh_coord_tex.view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &coord_regularized.view, aw, ah, profiler);
+        Self::encode_copy(gpu, &coord_regularized.texture, &state.mesh_coord_tex.texture, aw, ah);
 
         // WireframeDepthFX.cs line 873-879: PASS_SURFACE_CACHE_UPDATE
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            self.run_pass_hal(gpu, PASS_SURFACE_CACHE_UPDATE, ubo,
-                &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &state.surface_cache_tex.view, &self.dummy_view,
-                &surface_next.view, aw, ah);
-            Self::copy_texture_hal(gpu, &surface_next.texture, &state.surface_cache_tex.texture, aw, ah);
-        } else {
-            let bg_surf = self.make_bind_group(gpu.device, ubo,
-                &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view,
-                &state.surface_cache_tex.view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_SURFACE_CACHE_UPDATE], &bg_surf, &surface_next.view, aw, ah, profiler);
-            gpu.encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &surface_next.texture,
-                    mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &state.surface_cache_tex.texture,
-                    mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d { width: aw, height: ah, depth_or_array_layers: 1 },
-            );
-        }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        {
-            let bg_surf = self.make_bind_group(gpu.device, ubo,
-                &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view,
-                &state.surface_cache_tex.view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_SURFACE_CACHE_UPDATE], &bg_surf, &surface_next.view, aw, ah, profiler);
-            gpu.encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &surface_next.texture,
-                    mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &state.surface_cache_tex.texture,
-                    mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d { width: aw, height: ah, depth_or_array_layers: 1 },
-            );
-        }
+        self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, ubo,
+            &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &state.surface_cache_tex.view, &self.dummy_view,
+            &surface_next.view, aw, ah, profiler);
+        Self::encode_copy(gpu, &surface_next.texture, &state.surface_cache_tex.texture, aw, ah);
         // coord_face_opt drops here (ReleaseTemporary equivalent)
         let _ = coord_face_opt;
     }
 
     // WireframeDepthFX.cs line 927-978 — ClearOwnerState
     #[allow(dead_code)]
-    fn clear_owner_state(encoder: &mut wgpu::CommandEncoder, state: &mut OwnerState) {
-        Self::clear_rt(encoder, &state.previous_analysis_tex);
-        Self::clear_rt(encoder, &state.depth_tex);
-        Self::clear_rt(encoder, &state.line_history_tex);
-        Self::clear_rt(encoder, &state.flow_tex);
-        Self::clear_rt(encoder, &state.mesh_coord_tex);
-        Self::clear_rt(encoder, &state.semantic_tex);
-        Self::clear_rt(encoder, &state.surface_cache_tex);
+    fn clear_owner_state(gpu: &mut GpuEncoder, state: &mut OwnerState) {
+        Self::encode_clear(gpu, &state.previous_analysis_tex);
+        Self::encode_clear(gpu, &state.depth_tex);
+        Self::encode_clear(gpu, &state.line_history_tex);
+        Self::encode_clear(gpu, &state.flow_tex);
+        Self::encode_clear(gpu, &state.mesh_coord_tex);
+        Self::encode_clear(gpu, &state.semantic_tex);
+        Self::encode_clear(gpu, &state.surface_cache_tex);
         state.dnn_readback_pending     = false;
         state.dnn_has_depth            = false;
         state.dnn_depth_dirty          = false;
@@ -2774,30 +2426,11 @@ impl PostProcessEffect for WireframeDepthFX {
 
         // PASS_ANALYSIS: source → analysis (temp RT at analysis resolution)
         let analysis_rt = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba8Unorm, "WD Analysis");
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            self.run_pass_hal(gpu, PASS_ANALYSIS, &ubo_analysis,
-                source, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &analysis_rt.view, aw, ah);
-        } else {
-            let bg = self.make_bind_group(gpu.device, &ubo_analysis,
-                source, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_ANALYSIS], &bg, &analysis_rt.view, aw, ah, profiler);
-        }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        {
-            let bg = self.make_bind_group(gpu.device, &ubo_analysis,
-                source, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            );
-            self.run_pass(gpu.encoder, &self.pipelines[PASS_ANALYSIS], &bg, &analysis_rt.view, aw, ah, profiler);
-        }
+        self.encode_pass(gpu, PASS_ANALYSIS, &ubo_analysis,
+            source, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+            &analysis_rt.view, aw, ah, profiler);
 
         // WireframeDepthFX.cs line 388-394 — request native readback
         if native_flow_enabled && flow_lock_enabled {
@@ -2853,34 +2486,7 @@ impl PostProcessEffect for WireframeDepthFX {
         // Always copy analysis → previousAnalysisTex (WireframeDepthFX.cs line 412 / 891)
         {
             let state = self.owner_states.get(&owner_key).unwrap();
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
-                Self::copy_texture_hal(gpu, &analysis_rt.texture, &state.previous_analysis_tex.texture, aw, ah);
-            } else {
-                gpu.encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &analysis_rt.texture,
-                        mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &state.previous_analysis_tex.texture,
-                        mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d { width: aw, height: ah, depth_or_array_layers: 1 },
-                );
-            }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            gpu.encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &analysis_rt.texture,
-                    mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &state.previous_analysis_tex.texture,
-                    mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d { width: aw, height: ah, depth_or_array_layers: 1 },
-            );
+            Self::encode_copy(gpu, &analysis_rt.texture, &state.previous_analysis_tex.texture, aw, ah);
         }
 
         // --- Upload DNN subject texture if dirty ---
@@ -2904,36 +2510,13 @@ impl PostProcessEffect for WireframeDepthFX {
             } else {
                 &self.dummy_view
             };
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
-                self.run_pass_hal(gpu, PASS_WIREFRAME_MASK, &ubo_wire,
-                    source, &self.dummy_view, &self.dummy_view,
-                    &state.depth_tex.view, &self.dummy_view, &self.dummy_view,
-                    &state.mesh_coord_tex.view, &self.dummy_view,
-                    &state.semantic_tex.view, &state.surface_cache_tex.view,
-                    &self.dummy_view, subject_mask_view,
-                    &line_mask.view, ww, wh);
-            } else {
-                let bg = self.make_bind_group(gpu.device, &ubo_wire,
-                    source, &self.dummy_view, &self.dummy_view,
-                    &state.depth_tex.view, &self.dummy_view, &self.dummy_view,
-                    &state.mesh_coord_tex.view, &self.dummy_view,
-                    &state.semantic_tex.view, &state.surface_cache_tex.view,
-                    &self.dummy_view, subject_mask_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_WIREFRAME_MASK], &bg, &line_mask.view, ww, wh, profiler);
-            }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            {
-                let bg = self.make_bind_group(gpu.device, &ubo_wire,
-                    source, &self.dummy_view, &self.dummy_view,
-                    &state.depth_tex.view, &self.dummy_view, &self.dummy_view,
-                    &state.mesh_coord_tex.view, &self.dummy_view,
-                    &state.semantic_tex.view, &state.surface_cache_tex.view,
-                    &self.dummy_view, subject_mask_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_WIREFRAME_MASK], &bg, &line_mask.view, ww, wh, profiler);
-            }
+            self.encode_pass(gpu, PASS_WIREFRAME_MASK, &ubo_wire,
+                source, &self.dummy_view, &self.dummy_view,
+                &state.depth_tex.view, &self.dummy_view, &self.dummy_view,
+                &state.mesh_coord_tex.view, &self.dummy_view,
+                &state.semantic_tex.view, &state.surface_cache_tex.view,
+                &self.dummy_view, subject_mask_view,
+                &line_mask.view, ww, wh, profiler);
         }
 
         // --- Update history pass (Pass 3) + copy → lineHistoryTex ---
@@ -2941,89 +2524,25 @@ impl PostProcessEffect for WireframeDepthFX {
         let history_next = RenderTarget::new(gpu.device, ww, wh, wgpu::TextureFormat::Rgba8Unorm, "WD HistoryNext");
         {
             let state = self.owner_states.get(&owner_key).unwrap();
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
-                self.run_pass_hal(gpu, PASS_UPDATE_HISTORY, &ubo_wire,
-                    &line_mask.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &state.line_history_tex.view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &state.surface_cache_tex.view, &self.dummy_view, &self.dummy_view,
-                    &history_next.view, ww, wh);
-                Self::copy_texture_hal(gpu, &history_next.texture, &state.line_history_tex.texture, ww, wh);
-            } else {
-                let bg = self.make_bind_group(gpu.device, &ubo_wire,
-                    &line_mask.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &state.line_history_tex.view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &state.surface_cache_tex.view, &self.dummy_view, &self.dummy_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_UPDATE_HISTORY], &bg, &history_next.view, ww, wh, profiler);
-                gpu.encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &history_next.texture,
-                        mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &state.line_history_tex.texture,
-                        mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d { width: ww, height: wh, depth_or_array_layers: 1 },
-                );
-            }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            {
-                let bg = self.make_bind_group(gpu.device, &ubo_wire,
-                    &line_mask.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &state.line_history_tex.view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &state.surface_cache_tex.view, &self.dummy_view, &self.dummy_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_UPDATE_HISTORY], &bg, &history_next.view, ww, wh, profiler);
-                gpu.encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &history_next.texture,
-                        mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &state.line_history_tex.texture,
-                        mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d { width: ww, height: wh, depth_or_array_layers: 1 },
-                );
-            }
+            self.encode_pass(gpu, PASS_UPDATE_HISTORY, &ubo_wire,
+                &line_mask.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &state.line_history_tex.view, &self.dummy_view,
+                &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &state.surface_cache_tex.view, &self.dummy_view, &self.dummy_view,
+                &history_next.view, ww, wh, profiler);
+            Self::encode_copy(gpu, &history_next.texture, &state.line_history_tex.texture, ww, wh);
         }
 
         // --- Composite pass (Pass 4) → target ---
         // WireframeDepthFX.cs line 349-355
         {
             let state = self.owner_states.get(&owner_key).unwrap();
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
-                self.run_pass_hal(gpu, PASS_COMPOSITE, &ubo_source,
-                    source, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &state.line_history_tex.view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    target, self.width, self.height);
-            } else {
-                let bg = self.make_bind_group(gpu.device, &ubo_source,
-                    source, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &state.line_history_tex.view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_COMPOSITE], &bg, target, self.width, self.height, profiler);
-            }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            {
-                let bg = self.make_bind_group(gpu.device, &ubo_source,
-                    source, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &state.line_history_tex.view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                    &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                );
-                self.run_pass(gpu.encoder, &self.pipelines[PASS_COMPOSITE], &bg, target, self.width, self.height, profiler);
-            }
+            self.encode_pass(gpu, PASS_COMPOSITE, &ubo_source,
+                source, &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &state.line_history_tex.view, &self.dummy_view,
+                &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                &self.dummy_view, &self.dummy_view, &self.dummy_view,
+                target, self.width, self.height, profiler);
         }
     }
 
