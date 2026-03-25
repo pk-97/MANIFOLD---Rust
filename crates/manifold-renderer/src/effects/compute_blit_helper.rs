@@ -91,6 +91,10 @@ pub struct ComputeBlitHelper {
     /// Writes are direct memcpy — no API call, no staging.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     ring_mapped_ptr: Option<*mut u8>,
+    /// Cached hal pointer to ring buffer — extracted once at construction.
+    /// Avoids per-dispatch as_hal() snatch lock acquisition.
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_ring_ptr: Option<*const <wgpu::hal::api::Metal as wgpu::hal::Api>::Buffer>,
 }
 
 // Safety: the mapped pointer points to a GPU buffer that is Send+Sync
@@ -169,9 +173,8 @@ impl ComputeBlitHelper {
 
         // --- hal pipeline + shared-memory ring buffer (when feature enabled) ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let (hal_pipeline, hal_sampler, ring_buffer, ring_mapped_ptr) = if let Some(ctx) =
-            hal_ctx
-        {
+        let (hal_pipeline, hal_sampler, ring_buffer, ring_mapped_ptr, hal_ring_ptr) =
+        if let Some(ctx) = hal_ctx {
             use wgpu::hal::Device as HalDevice;
 
             // Create hal compute pipeline from same WGSL source
@@ -234,7 +237,18 @@ impl ComputeBlitHelper {
                 )
             };
 
-            (Some(hal_pipe), Some(hal_samp), wgpu_buf, Some(mapped_ptr))
+            // Cache the hal pointer to the ring buffer — avoids per-dispatch
+            // as_hal() snatch lock. Safe: wgpu_buf owns the underlying Metal buffer
+            // which lives as long as this ComputeBlitHelper.
+            let ring_hal_ptr = {
+                let guard = unsafe { wgpu_buf.as_hal::<wgpu::hal::api::Metal>() }
+                    .expect("ring buffer not Metal");
+                let ptr: *const _ = &*guard;
+                // Guard dropped here — snatch lock released.
+                ptr
+            };
+
+            (Some(hal_pipe), Some(hal_samp), wgpu_buf, Some(mapped_ptr), Some(ring_hal_ptr))
         } else {
             let wgpu_buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(&format!("{label} Compute Ring UBO")),
@@ -242,7 +256,7 @@ impl ComputeBlitHelper {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            (None, None, wgpu_buf, None)
+            (None, None, wgpu_buf, None, None)
         };
 
         // wgpu-only ring buffer (when feature not enabled)
@@ -269,6 +283,8 @@ impl ComputeBlitHelper {
             hal_sampler,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             ring_mapped_ptr,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_ring_ptr,
         }
     }
 
@@ -365,14 +381,28 @@ impl ComputeBlitHelper {
                 );
             }
 
-            // Extract hal texture views from wgpu views
-            let hal_source = unsafe { source_view.as_hal::<MetalApi>() }
-                .expect("source view not Metal");
-            let hal_target = unsafe { target_view.as_hal::<MetalApi>() }
-                .expect("target view not Metal");
-            let hal_ring = unsafe { self.ring_buffer.as_hal::<MetalApi>() }
-                .expect("ring buffer not Metal");
+            // Extract hal texture view pointers — MUST drop each guard before
+            // acquiring the next to avoid wgpu's non-reentrant snatch lock panic.
+            let hal_source_ptr = {
+                let guard = unsafe { source_view.as_hal::<MetalApi>() }
+                    .expect("source view not Metal");
+                &*guard as *const <MetalApi as hal::Api>::TextureView
+            }; // guard dropped — snatch lock released
+
+            let hal_target_ptr = {
+                let guard = unsafe { target_view.as_hal::<MetalApi>() }
+                    .expect("target view not Metal");
+                &*guard as *const <MetalApi as hal::Api>::TextureView
+            }; // guard dropped
+
+            // Ring buffer + sampler use cached pointers (no snatch lock needed)
+            let hal_ring_ref = unsafe { &*self.hal_ring_ptr.unwrap() };
             let hal_sampler = self.hal_sampler.as_ref().unwrap();
+
+            // Safety: texture view pointers are valid because the wgpu TextureViews
+            // (owned by compositor ping-pong buffers) are alive for this entire frame.
+            let hal_source_ref = unsafe { &*hal_source_ptr };
+            let hal_target_ref = unsafe { &*hal_target_ptr };
 
             // Create lightweight hal bind group (~0.1μs — copies pointers)
             let hal_bg = unsafe {
@@ -388,7 +418,7 @@ impl ComputeBlitHelper {
                         ],
                         buffers: &[
                             hal::BufferBinding::new_unchecked(
-                                &*hal_ring,
+                                hal_ring_ref,
                                 0,
                                 std::num::NonZero::new(self.uniform_size),
                             ),
@@ -396,11 +426,11 @@ impl ComputeBlitHelper {
                         samplers: &[hal_sampler],
                         textures: &[
                             hal::TextureBinding {
-                                view: &*hal_source,
+                                view: hal_source_ref,
                                 usage: wgpu::wgt::TextureUses::RESOURCE,
                             },
                             hal::TextureBinding {
-                                view: &*hal_target,
+                                view: hal_target_ref,
                                 usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
                             },
                         ],
