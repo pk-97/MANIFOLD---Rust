@@ -706,7 +706,10 @@ impl BlobTrackingFX {
         let Some(state) = self.owner_states.get_mut(&owner_key) else { return };
 
         let pixels = match state.readback.try_read(device) {
-            Some(p) => p,
+            Some(p) => {
+                eprintln!("[BlobTracking] readback data received! {} bytes", p.len());
+                p
+            }
             None => return,
         };
 
@@ -1030,6 +1033,18 @@ impl PostProcessEffect for BlobTrackingFX {
 
         let state = self.owner_states.get_mut(&ctx.owner_key).unwrap();
 
+        if ctx.frame_count % 60 == 0 {
+            eprintln!(
+                "[BlobTracking] frame={} has_hal={} pending={} blob_count={} last_rb_frame={} tracked={}",
+                ctx.frame_count,
+                gpu.hal_ctx.is_some(),
+                state.readback.is_pending(),
+                state.blob_count,
+                state.last_readback_frame,
+                state.tracked_count,
+            );
+        }
+
         // ---- Phase 1: Blit to downsample RT and request readback (throttled) ----
         let frame = ctx.frame_count;
         if !state.readback.is_pending()
@@ -1113,6 +1128,7 @@ impl PostProcessEffect for BlobTrackingFX {
                     READBACK_WIDTH,
                     READBACK_HEIGHT,
                 );
+                eprintln!("[BlobTracking] HAL blit + readback submitted frame={}", frame);
                 state.pending_threshold = threshold;
                 state.pending_sensitivity = sensitivity;
                 state.last_readback_frame = frame;
