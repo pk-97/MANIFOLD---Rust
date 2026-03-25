@@ -122,10 +122,15 @@ pub struct ContentPipeline {
     /// GPU pass timing results from the last frame.
     #[cfg(feature = "profiling")]
     last_gpu_pass_results: Vec<manifold_renderer::gpu_profiler::GpuPassTiming>,
+    /// HAL context for zero-overhead GPU encoding (macOS + hal-encoding feature).
+    hal_ctx: Option<manifold_renderer::hal_context::HalContext>,
 }
 
 impl ContentPipeline {
-    pub fn new(compositor: Box<dyn Compositor>) -> Self {
+    pub fn new(
+        compositor: Box<dyn Compositor>,
+        hal_ctx: Option<manifold_renderer::hal_context::HalContext>,
+    ) -> Self {
         let shared = Arc::new(SharedOutputView::new());
         Self {
             compositor,
@@ -158,6 +163,7 @@ impl ContentPipeline {
             gpu_profiler: None,
             #[cfg(feature = "profiling")]
             last_gpu_pass_results: Vec::new(),
+            hal_ctx,
         }
     }
 
@@ -287,6 +293,14 @@ impl ContentPipeline {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Frame Encoder"),
                 });
+
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let mut gpu_enc = if let Some(ref hal_ctx) = self.hal_ctx {
+            GpuEncoder::new_hal(&gpu.device, &gpu.queue, &mut wgpu_encoder, hal_ctx)
+        } else {
+            GpuEncoder::new(&gpu.device, &gpu.queue, &mut wgpu_encoder)
+        };
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
         let mut gpu_enc = GpuEncoder::new(&gpu.device, &gpu.queue, &mut wgpu_encoder);
 
         // Split borrow: get renderers + project from engine simultaneously.
@@ -501,11 +515,36 @@ impl ContentPipeline {
             gpu_enc.encoder.copy_buffer_to_buffer(staging, 0, fence, 0, 4);
         }
 
+        // Finish hal encoder (if active) — produces a Metal command buffer that
+        // will be submitted before the wgpu command buffer for correct ordering.
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let hal_cmd_buf = unsafe { gpu_enc.finish_hal() };
+
         // Drop GpuEncoder to release mutable borrow on wgpu_encoder before finish().
         #[allow(clippy::drop_non_drop)]
         drop(gpu_enc);
 
-        // Submit all GPU work (generators + compositor + copy + fence)
+        // Submit hal command buffer first (if active), then wgpu.
+        // Both go through the same Metal command queue — ordering preserved.
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if let (Some(cmd_buf), Some(hal_ctx)) = (hal_cmd_buf, &self.hal_ctx) {
+            use wgpu::hal::{Device as HalDevice, Queue as HalQueue};
+            // Submit without fence — the wgpu fence handles completion detection.
+            // We just need the hal work to execute before the wgpu copy/fence commands.
+            unsafe {
+                // Create a temporary fence for the hal submit call
+                // (hal Queue::submit requires a fence parameter)
+                let mut fence = hal_ctx.create_fence();
+                hal_ctx
+                    .queue()
+                    .submit(&[&cmd_buf], &[], (&mut fence, 1))
+                    .expect("Failed to submit hal command buffer");
+                // Fence is dropped — we use wgpu's fence for actual sync
+                hal_ctx.device().destroy_fence(fence);
+            }
+        }
+
+        // Submit all wgpu GPU work (generators + copies + fence)
         let _t0 = std::time::Instant::now();
         gpu.queue.submit(std::iter::once(wgpu_encoder.finish()));
         let _submit_ms = _t0.elapsed().as_secs_f64() * 1000.0;
