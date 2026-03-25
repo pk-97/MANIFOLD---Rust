@@ -90,6 +90,22 @@ impl ContentThread {
     ) {
         log::info!("[ContentThread] started");
 
+        // Set stable hal_ctx pointer on GeneratorRenderer. This must happen here
+        // (after all moves into ContentThread are complete) so the pointer targets
+        // the final heap location of hal_ctx inside content_pipeline.
+        {
+            let hal_ctx_ref = self.content_pipeline.hal_ctx();
+            let (renderers, _) = self.engine.split_renderer_project();
+            for renderer in renderers.iter_mut() {
+                if let Some(gen_renderer) = renderer
+                    .as_any_mut()
+                    .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
+                {
+                    gen_renderer.set_hal_ctx(hal_ctx_ref);
+                }
+            }
+        }
+
         // Auto-initialize LED output with default settings.
         // Can be reconfigured at runtime via InitLedOutput command.
         {

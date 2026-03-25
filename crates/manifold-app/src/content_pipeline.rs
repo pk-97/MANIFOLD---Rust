@@ -192,6 +192,12 @@ impl ContentPipeline {
         Arc::clone(&self.shared_output)
     }
 
+    /// Get a reference to the hal context (if hal-encoding is active).
+    /// Used by content_thread to set stable hal_ctx pointers after all moves.
+    pub fn hal_ctx(&self) -> Option<&manifold_renderer::hal_context::HalContext> {
+        self.hal_ctx.as_ref()
+    }
+
     /// Lazily create the double-buffer pair at compositor dimensions.
     /// Only used on non-macOS (macOS uses IOSurface zero-copy path).
     #[cfg(not(target_os = "macos"))]

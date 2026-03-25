@@ -77,7 +77,9 @@ impl GeneratorRenderer {
         }
 
         let uniform_arena = UniformArena::new(&device, hal_ctx);
-        let hal_ctx_ptr = hal_ctx.map(|ctx| ctx as *const _);
+        // Don't store hal_ctx_ptr here — it points to the stack and will be
+        // moved into ContentPipeline. set_hal_ctx() must be called after the move.
+        let hal_ctx_ptr = None;
 
         Self {
             device,
@@ -161,6 +163,12 @@ impl GeneratorRenderer {
         );
 
         true
+    }
+
+    /// Set the hal context pointer after it has been moved to its final location
+    /// (inside ContentPipeline). Must be called before any generator is created.
+    pub fn set_hal_ctx(&mut self, ctx: Option<&crate::hal_context::HalContext>) {
+        self.hal_ctx_ptr = ctx.map(|c| c as *const _);
     }
 
     /// Render all active generator clips.
