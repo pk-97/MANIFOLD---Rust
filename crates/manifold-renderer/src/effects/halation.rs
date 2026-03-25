@@ -15,6 +15,8 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::HDR_BUFFER_DIVISOR;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -41,6 +43,8 @@ struct HalationState {
 
 pub struct HalationFX {
     helper: DualTextureBlitHelper,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    compute_dual_blit: ComputeDualBlitHelper,
     states: AHashMap<i64, HalationState>,
     width: u32,
     height: u32,
@@ -53,6 +57,14 @@ impl HalationFX {
                 device,
                 include_str!("shaders/fx_halation.wgsl"),
                 "Halation",
+                std::mem::size_of::<HalationUniforms>() as u64,
+                hal_ctx,
+            ),
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            compute_dual_blit: ComputeDualBlitHelper::new(
+                device,
+                include_str!("shaders/fx_halation_compute.wgsl"),
+                "Halation Compute",
                 std::mem::size_of::<HalationUniforms>() as u64,
                 hal_ctx,
             ),
@@ -126,6 +138,12 @@ impl PostProcessEffect for HalationFX {
             None => return,
         };
 
+        // Check once whether to use compute path for this frame
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let use_compute = gpu.has_hal_encoder();
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        let use_compute = false;
+
         let threshold = fx.param_values.get(1).copied().unwrap_or(0.5);
         let spread = fx.param_values.get(2).copied().unwrap_or(0.5);
         let hue = fx.param_values.get(3).copied().unwrap_or(20.0);
@@ -151,58 +169,69 @@ impl PostProcessEffect for HalationFX {
         let qh = state.buf_a.height;
 
         // Pass 0: Combined ThresholdTint + Horizontal Gaussian blur
-        // Reads source (full-res), applies threshold/tint per sample during
-        // horizontal blur, writes to buf_b (reduced-res).
-        // Texel size is from SOURCE (full-res) since we sample source pixels.
-        self.helper.draw_main_only(
-            gpu,
-            source,
-            &state.buf_b.view,
-            bytemuck::bytes_of(&HalationUniforms {
-                mode: 0,
-                main_texel_size_x: 1.0 / ctx.width as f32,
-                main_texel_size_y: 1.0 / ctx.height as f32,
-                ..base
-            }),
-            "Halation ThresholdTintBlurH",
-            qw, qh,
-            profiler,
-        );
+        let pass0_u = HalationUniforms {
+            mode: 0,
+            main_texel_size_x: 1.0 / ctx.width as f32,
+            main_texel_size_y: 1.0 / ctx.height as f32,
+            ..base
+        };
+        let pass0_uniforms = bytemuck::bytes_of(&pass0_u);
+        if use_compute {
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            self.compute_dual_blit.dispatch_a_only(
+                gpu, source, &state.buf_b.view, pass0_uniforms,
+                "Halation ThresholdTintBlurH", qw, qh, profiler,
+            );
+        } else {
+            self.helper.draw_main_only(
+                gpu, source, &state.buf_b.view, pass0_uniforms,
+                "Halation ThresholdTintBlurH", qw, qh, profiler,
+            );
+        }
 
         // Pass 1: Vertical Gaussian blur — buf_b → buf_a (reduced-res)
-        self.helper.draw_main_only(
-            gpu,
-            &state.buf_b.view,
-            &state.buf_a.view,
-            bytemuck::bytes_of(&HalationUniforms {
-                mode: 1,
-                main_texel_size_x: 1.0 / qw as f32,
-                main_texel_size_y: 1.0 / qh as f32,
-                ..base
-            }),
-            "Halation BlurV",
-            qw, qh,
-            profiler,
-        );
+        let pass1_u = HalationUniforms {
+            mode: 1,
+            main_texel_size_x: 1.0 / qw as f32,
+            main_texel_size_y: 1.0 / qh as f32,
+            ..base
+        };
+        let pass1_uniforms = bytemuck::bytes_of(&pass1_u);
+        if use_compute {
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            self.compute_dual_blit.dispatch_a_only(
+                gpu, &state.buf_b.view, &state.buf_a.view, pass1_uniforms,
+                "Halation BlurV", qw, qh, profiler,
+            );
+        } else {
+            self.helper.draw_main_only(
+                gpu, &state.buf_b.view, &state.buf_a.view, pass1_uniforms,
+                "Halation BlurV", qw, qh, profiler,
+            );
+        }
 
         // Pass 2: Composite — source (full-res) + buf_a (reduced-res) → target
-        self.helper.draw(
-            gpu,
-            source,
-            &state.buf_a.view,
-            target,
-            bytemuck::bytes_of(&HalationUniforms {
-                mode: 2,
-                main_texel_size_x: 1.0 / ctx.width as f32,
-                main_texel_size_y: 1.0 / ctx.height as f32,
-                halo_texel_size_x: 1.0 / qw as f32,
-                halo_texel_size_y: 1.0 / qh as f32,
-                ..base
-            }),
-            "Halation Composite",
-            ctx.width, ctx.height,
-            profiler,
-        );
+        let pass2_u = HalationUniforms {
+            mode: 2,
+            main_texel_size_x: 1.0 / ctx.width as f32,
+            main_texel_size_y: 1.0 / ctx.height as f32,
+            halo_texel_size_x: 1.0 / qw as f32,
+            halo_texel_size_y: 1.0 / qh as f32,
+            ..base
+        };
+        let pass2_uniforms = bytemuck::bytes_of(&pass2_u);
+        if use_compute {
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            self.compute_dual_blit.dispatch(
+                gpu, source, &state.buf_a.view, target, pass2_uniforms,
+                "Halation Composite", ctx.width, ctx.height, profiler,
+            );
+        } else {
+            self.helper.draw(
+                gpu, source, &state.buf_a.view, target, pass2_uniforms,
+                "Halation Composite", ctx.width, ctx.height, profiler,
+            );
+        }
     }
 
     fn clear_state(&mut self) {

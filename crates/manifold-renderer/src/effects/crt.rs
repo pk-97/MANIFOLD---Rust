@@ -8,6 +8,8 @@ use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 
 // CrtFX.cs lines 8-11 — uniforms matching CrtEffect.shader Properties
 #[repr(C)]
@@ -36,6 +38,8 @@ struct CrtState {
 // CrtFX.cs line 13 — CrtFX : SimpleBlitEffect, IStatefulEffect
 pub struct CrtFX {
     helper: DualTextureBlitHelper,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    compute_dual_blit: ComputeDualBlitHelper,
     states: AHashMap<i64, CrtState>, // CrtFX.cs: ownerStates
     width: u32,  // CrtFX.cs: _width
     height: u32, // CrtFX.cs: _height
@@ -48,6 +52,14 @@ impl CrtFX {
                 device,
                 include_str!("shaders/fx_crt.wgsl"),
                 "CRT",
+                std::mem::size_of::<CrtUniforms>() as u64,
+                hal_ctx,
+            ),
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            compute_dual_blit: ComputeDualBlitHelper::new(
+                device,
+                include_str!("shaders/fx_crt_compute.wgsl"),
+                "CRT Compute",
                 std::mem::size_of::<CrtUniforms>() as u64,
                 hal_ctx,
             ),
@@ -107,6 +119,12 @@ impl PostProcessEffect for CrtFX {
             None => return,
         };
 
+        // Check once whether to use compute path for this frame
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let use_compute = gpu.has_hal_encoder();
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        let use_compute = false;
+
         // CrtFX.cs line 61
         let style = fx.param_values.get(4).copied().unwrap_or(0.5);
 
@@ -114,86 +132,100 @@ impl PostProcessEffect for CrtFX {
         let glow_threshold = 0.15_f32 + (0.05 - 0.15) * style; // lerp(0.15, 0.05, style)
 
         // ── Pass 0: Prefilter — source → halfRes ──────────────────────────────
-        // CrtFX.cs line 66: Graphics.Blit(buffer, state.halfRes, material, 0)
-        // _MainTex_TexelSize = 1/source_width, 1/source_height (Unity auto-sets from SOURCE)
-        self.helper.draw_main_only(
-            gpu,
-            source,                       // main_tex = buffer (source)
-            &state.half_res.view,         // target = halfRes
-            bytemuck::bytes_of(&CrtUniforms {
-                mode: 0,
-                amount,
-                scanlines: fx.param_values.get(1).copied().unwrap_or(0.397),
-                glow: fx.param_values.get(2).copied().unwrap_or(0.3),
-                curvature: fx.param_values.get(3).copied().unwrap_or(0.0),
-                style,
-                glow_threshold,
-                screen_height: ctx.height as f32,
-                main_texel_size_x: 1.0 / ctx.width as f32,
-                main_texel_size_y: 1.0 / ctx.height as f32,
-                main_texel_size_z: ctx.width as f32,
-                _pad: 0.0,
-            }),
-            "CRT Prefilter",
-            state.half_res.width, state.half_res.height,
-            profiler,
-        );
+        let pass0_u = CrtUniforms {
+            mode: 0,
+            amount,
+            scanlines: fx.param_values.get(1).copied().unwrap_or(0.397),
+            glow: fx.param_values.get(2).copied().unwrap_or(0.3),
+            curvature: fx.param_values.get(3).copied().unwrap_or(0.0),
+            style,
+            glow_threshold,
+            screen_height: ctx.height as f32,
+            main_texel_size_x: 1.0 / ctx.width as f32,
+            main_texel_size_y: 1.0 / ctx.height as f32,
+            main_texel_size_z: ctx.width as f32,
+            _pad: 0.0,
+        };
+        let pass0_uniforms = bytemuck::bytes_of(&pass0_u);
+        if use_compute {
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            self.compute_dual_blit.dispatch_a_only(
+                gpu, source, &state.half_res.view, pass0_uniforms,
+                "CRT Prefilter",
+                state.half_res.width, state.half_res.height, profiler,
+            );
+        } else {
+            self.helper.draw_main_only(
+                gpu, source, &state.half_res.view, pass0_uniforms,
+                "CRT Prefilter",
+                state.half_res.width, state.half_res.height, profiler,
+            );
+        }
 
         // ── Pass 1: Downsample — halfRes → quarterRes ─────────────────────────
-        // CrtFX.cs line 69: Graphics.Blit(state.halfRes, state.quarterRes, material, 1)
-        // _MainTex_TexelSize = 1/halfRes_width, 1/halfRes_height (SOURCE = halfRes)
         let hw = state.half_res.width;
         let hh = state.half_res.height;
         let qw = state.quarter_res.width;
-        self.helper.draw_main_only(
-            gpu,
-            &state.half_res.view,         // main_tex = halfRes
-            &state.quarter_res.view,      // target = quarterRes
-            bytemuck::bytes_of(&CrtUniforms {
-                mode: 1,
-                amount,
-                scanlines: fx.param_values.get(1).copied().unwrap_or(0.397),
-                glow: fx.param_values.get(2).copied().unwrap_or(0.3),
-                curvature: fx.param_values.get(3).copied().unwrap_or(0.0),
-                style,
-                glow_threshold,
-                screen_height: ctx.height as f32,
-                main_texel_size_x: 1.0 / hw as f32,
-                main_texel_size_y: 1.0 / hh as f32,
-                main_texel_size_z: qw as f32, // not used in downsample, but kept consistent
-                _pad: 0.0,
-            }),
-            "CRT Downsample",
-            state.quarter_res.width, state.quarter_res.height,
-            profiler,
-        );
+        let pass1_u = CrtUniforms {
+            mode: 1,
+            amount,
+            scanlines: fx.param_values.get(1).copied().unwrap_or(0.397),
+            glow: fx.param_values.get(2).copied().unwrap_or(0.3),
+            curvature: fx.param_values.get(3).copied().unwrap_or(0.0),
+            style,
+            glow_threshold,
+            screen_height: ctx.height as f32,
+            main_texel_size_x: 1.0 / hw as f32,
+            main_texel_size_y: 1.0 / hh as f32,
+            main_texel_size_z: qw as f32,
+            _pad: 0.0,
+        };
+        let pass1_uniforms = bytemuck::bytes_of(&pass1_u);
+        if use_compute {
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            self.compute_dual_blit.dispatch_a_only(
+                gpu, &state.half_res.view, &state.quarter_res.view,
+                pass1_uniforms, "CRT Downsample",
+                state.quarter_res.width, state.quarter_res.height, profiler,
+            );
+        } else {
+            self.helper.draw_main_only(
+                gpu, &state.half_res.view, &state.quarter_res.view,
+                pass1_uniforms, "CRT Downsample",
+                state.quarter_res.width, state.quarter_res.height, profiler,
+            );
+        }
 
         // ── Pass 2: CRT Composite — source + quarterRes(glow) → target ────────
-        // CrtFX.cs lines 72-80: material.SetTexture("_GlowTex", state.quarterRes); Blit(buffer, target, 2)
-        // _MainTex_TexelSize = 1/source_width, 1/source_height (SOURCE = buffer)
-        self.helper.draw(
-            gpu,
-            source,                       // main_tex = buffer (source)
-            &state.quarter_res.view,      // glow_tex = quarterRes (_GlowTex)
-            target,                       // output = target
-            bytemuck::bytes_of(&CrtUniforms {
-                mode: 2,
-                amount,
-                scanlines: fx.param_values.get(1).copied().unwrap_or(0.397),
-                glow: fx.param_values.get(2).copied().unwrap_or(0.3),
-                curvature: fx.param_values.get(3).copied().unwrap_or(0.0),
-                style,
-                glow_threshold,
-                screen_height: ctx.height as f32,
-                main_texel_size_x: 1.0 / ctx.width as f32,
-                main_texel_size_y: 1.0 / ctx.height as f32,
-                main_texel_size_z: ctx.width as f32,
-                _pad: 0.0,
-            }),
-            "CRT Composite",
-            ctx.width, ctx.height,
-            profiler,
-        );
+        let pass2_u = CrtUniforms {
+            mode: 2,
+            amount,
+            scanlines: fx.param_values.get(1).copied().unwrap_or(0.397),
+            glow: fx.param_values.get(2).copied().unwrap_or(0.3),
+            curvature: fx.param_values.get(3).copied().unwrap_or(0.0),
+            style,
+            glow_threshold,
+            screen_height: ctx.height as f32,
+            main_texel_size_x: 1.0 / ctx.width as f32,
+            main_texel_size_y: 1.0 / ctx.height as f32,
+            main_texel_size_z: ctx.width as f32,
+            _pad: 0.0,
+        };
+        let pass2_uniforms = bytemuck::bytes_of(&pass2_u);
+        if use_compute {
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            self.compute_dual_blit.dispatch(
+                gpu, source, &state.quarter_res.view, target,
+                pass2_uniforms, "CRT Composite",
+                ctx.width, ctx.height, profiler,
+            );
+        } else {
+            self.helper.draw(
+                gpu, source, &state.quarter_res.view, target,
+                pass2_uniforms, "CRT Composite",
+                ctx.width, ctx.height, profiler,
+            );
+        }
     }
 
     // CrtFX.cs lines 87-94 — ClearState (clears but keeps buffers alive)

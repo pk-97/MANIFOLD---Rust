@@ -8,6 +8,8 @@ use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 
 // StylizedFeedbackFX.cs line 34 — Mathf.Deg2Rad
 const DEG_TO_RAD: f32 = std::f32::consts::PI / 180.0;
@@ -30,6 +32,8 @@ struct StylizedFeedbackState {
 /// Stylized feedback effect — zoom/rotate/blend current frame with previous frame's state buffer.
 pub struct StylizedFeedbackFX {
     helper: DualTextureBlitHelper,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    compute_dual_blit: ComputeDualBlitHelper,
     states: AHashMap<i64, StylizedFeedbackState>,
     width: u32,
     height: u32,
@@ -50,6 +54,14 @@ impl StylizedFeedbackFX {
                 device,
                 include_str!("shaders/fx_stylized_feedback.wgsl"),
                 "StylizedFeedback",
+                std::mem::size_of::<StylizedFeedbackUniforms>() as u64,
+                hal_ctx,
+            ),
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            compute_dual_blit: ComputeDualBlitHelper::new(
+                device,
+                include_str!("shaders/fx_stylized_feedback_compute.wgsl"),
+                "StylizedFeedback Compute",
                 std::mem::size_of::<StylizedFeedbackUniforms>() as u64,
                 hal_ctx,
             ),
@@ -152,15 +164,26 @@ impl PostProcessEffect for StylizedFeedbackFX {
         let mode = fx.param_values.get(3).copied().unwrap_or(0.0).round();
 
         let uniforms = StylizedFeedbackUniforms { feedback_amount, zoom, rotation, mode };
+        let uniform_bytes = bytemuck::bytes_of(&uniforms);
 
-        self.helper.draw(
-            gpu,
-            source, &state.buffer.view, target,
-            bytemuck::bytes_of(&uniforms),
-            "StylizedFeedback Pass",
-            ctx.width, ctx.height,
-            profiler,
-        );
+        // Check once whether to use compute path for this frame
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let use_compute = gpu.has_hal_encoder();
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        let use_compute = false;
+
+        if use_compute {
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            self.compute_dual_blit.dispatch(
+                gpu, source, &state.buffer.view, target, uniform_bytes,
+                "StylizedFeedback Pass", ctx.width, ctx.height, profiler,
+            );
+        } else {
+            self.helper.draw(
+                gpu, source, &state.buffer.view, target, uniform_bytes,
+                "StylizedFeedback Pass", ctx.width, ctx.height, profiler,
+            );
+        }
 
         // PostBlit: copy result → state buffer
         let state = self.states.get(&ctx.owner_key).unwrap();

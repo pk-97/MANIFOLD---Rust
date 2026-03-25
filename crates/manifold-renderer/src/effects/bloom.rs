@@ -9,6 +9,8 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::HDR_BUFFER_DIVISOR;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 
 // BloomFX.cs lines 19-25 — constants
 const MAX_LEVELS: usize = 6;
@@ -47,6 +49,8 @@ struct BloomState {
 // BloomFX.cs line 12 — BloomFX : SimpleBlitEffect, IStatefulEffect
 pub struct BloomFX {
     helper: DualTextureBlitHelper,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    compute_dual_blit: ComputeDualBlitHelper,
     states: AHashMap<i64, BloomState>,
     width: u32,  // BloomFX.cs line 17 — _width
     height: u32, // BloomFX.cs line 17 — _height
@@ -59,6 +63,14 @@ impl BloomFX {
                 device,
                 include_str!("shaders/bloom.wgsl"),
                 "Bloom",
+                std::mem::size_of::<BloomUniforms>() as u64,
+                hal_ctx,
+            ),
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            compute_dual_blit: ComputeDualBlitHelper::new(
+                device,
+                include_str!("shaders/bloom_compute.wgsl"),
+                "Bloom Compute",
                 std::mem::size_of::<BloomUniforms>() as u64,
                 hal_ctx,
             ),
@@ -123,22 +135,34 @@ impl PostProcessEffect for BloomFX {
         self.height = ctx.height;
         self.ensure_state(gpu.device, ctx.owner_key);
 
+        // Check once whether to use compute path for this frame
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let use_compute = gpu.has_hal_encoder();
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        let use_compute = false;
+
         let state = self.states.get(&ctx.owner_key).unwrap();
         if state.count == 0 {
-            self.helper.draw_main_only(
-                gpu,
-                source, target,
-                bytemuck::bytes_of(&BloomUniforms {
-                    mode: 3, threshold: 0.0, knee: 0.0, intensity: 0.0,
-                    radius_scale: 1.0, combine_weight: 0.0,
-                    main_texel_size_x: 0.0, main_texel_size_y: 0.0,
-                    bloom_texel_size_x: 0.0, bloom_texel_size_y: 0.0,
-                    _pad0: 0.0, _pad1: 0.0,
-                }),
-                "Bloom Skip",
-                ctx.width, ctx.height,
-                profiler,
-            );
+            let skip_u = BloomUniforms {
+                mode: 3, threshold: 0.0, knee: 0.0, intensity: 0.0,
+                radius_scale: 1.0, combine_weight: 0.0,
+                main_texel_size_x: 0.0, main_texel_size_y: 0.0,
+                bloom_texel_size_x: 0.0, bloom_texel_size_y: 0.0,
+                _pad0: 0.0, _pad1: 0.0,
+            };
+            let skip_uniforms = bytemuck::bytes_of(&skip_u);
+            if use_compute {
+                #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+                self.compute_dual_blit.dispatch_a_only(
+                    gpu, source, target, skip_uniforms,
+                    "Bloom Skip", ctx.width, ctx.height, profiler,
+                );
+            } else {
+                self.helper.draw_main_only(
+                    gpu, source, target, skip_uniforms,
+                    "Bloom Skip", ctx.width, ctx.height, profiler,
+                );
+            }
             return;
         }
 
@@ -161,37 +185,53 @@ impl PostProcessEffect for BloomFX {
         };
 
         // Pass 0: Prefilter
-        self.helper.draw_main_only(
-            gpu,
-            source, &state.mips_a[0].view,
-            bytemuck::bytes_of(&BloomUniforms {
-                mode: 0,
-                main_texel_size_x: 1.0 / ctx.width as f32,
-                main_texel_size_y: 1.0 / ctx.height as f32,
-                ..base_uniforms
-            }),
-            "Bloom Prefilter",
-            state.mips_a[0].width, state.mips_a[0].height,
-            profiler,
-        );
+        let prefilter_u = BloomUniforms {
+            mode: 0,
+            main_texel_size_x: 1.0 / ctx.width as f32,
+            main_texel_size_y: 1.0 / ctx.height as f32,
+            ..base_uniforms
+        };
+        let prefilter_uniforms = bytemuck::bytes_of(&prefilter_u);
+        if use_compute {
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            self.compute_dual_blit.dispatch_a_only(
+                gpu, source, &state.mips_a[0].view, prefilter_uniforms,
+                "Bloom Prefilter",
+                state.mips_a[0].width, state.mips_a[0].height, profiler,
+            );
+        } else {
+            self.helper.draw_main_only(
+                gpu, source, &state.mips_a[0].view, prefilter_uniforms,
+                "Bloom Prefilter",
+                state.mips_a[0].width, state.mips_a[0].height, profiler,
+            );
+        }
 
         // Downsample chain
         for i in 1..used_levels {
             let src_w = state.mips_a[i - 1].width;
             let src_h = state.mips_a[i - 1].height;
-            self.helper.draw_main_only(
-                gpu,
-                &state.mips_a[i - 1].view, &state.mips_a[i].view,
-                bytemuck::bytes_of(&BloomUniforms {
-                    mode: 1,
-                    main_texel_size_x: 1.0 / src_w as f32,
-                    main_texel_size_y: 1.0 / src_h as f32,
-                    ..base_uniforms
-                }),
-                "Bloom Down",
-                state.mips_a[i].width, state.mips_a[i].height,
-                profiler,
-            );
+            let down_u = BloomUniforms {
+                mode: 1,
+                main_texel_size_x: 1.0 / src_w as f32,
+                main_texel_size_y: 1.0 / src_h as f32,
+                ..base_uniforms
+            };
+            let down_uniforms = bytemuck::bytes_of(&down_u);
+            if use_compute {
+                #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+                self.compute_dual_blit.dispatch_a_only(
+                    gpu, &state.mips_a[i - 1].view, &state.mips_a[i].view,
+                    down_uniforms, "Bloom Down",
+                    state.mips_a[i].width, state.mips_a[i].height, profiler,
+                );
+            } else {
+                self.helper.draw_main_only(
+                    gpu, &state.mips_a[i - 1].view, &state.mips_a[i].view,
+                    down_uniforms, "Bloom Down",
+                    state.mips_a[i].width, state.mips_a[i].height, profiler,
+                );
+            }
         }
 
         // Upsample chain: ping-pong mipsA → mipsB
@@ -203,44 +243,68 @@ impl PostProcessEffect for BloomFX {
             } else {
                 &state.mips_b[i + 1].view
             };
-            let lo_w = if i == used_levels - 2 { state.mips_a[i + 1].width } else { state.mips_b[i + 1].width };
-            let lo_h = if i == used_levels - 2 { state.mips_a[i + 1].height } else { state.mips_b[i + 1].height };
+            let lo_w = if i == used_levels - 2 {
+                state.mips_a[i + 1].width
+            } else {
+                state.mips_b[i + 1].width
+            };
+            let lo_h = if i == used_levels - 2 {
+                state.mips_a[i + 1].height
+            } else {
+                state.mips_b[i + 1].height
+            };
 
-            self.helper.draw(
-                gpu,
-                &state.mips_a[i].view, lo_view, &state.mips_b[i].view,
-                bytemuck::bytes_of(&BloomUniforms {
-                    mode: 2,
-                    main_texel_size_x: 1.0 / hi_w as f32,
-                    main_texel_size_y: 1.0 / hi_h as f32,
-                    bloom_texel_size_x: 1.0 / lo_w as f32,
-                    bloom_texel_size_y: 1.0 / lo_h as f32,
-                    ..base_uniforms
-                }),
-                "Bloom Up",
-                state.mips_b[i].width, state.mips_b[i].height,
-                profiler,
-            );
+            let up_u = BloomUniforms {
+                mode: 2,
+                main_texel_size_x: 1.0 / hi_w as f32,
+                main_texel_size_y: 1.0 / hi_h as f32,
+                bloom_texel_size_x: 1.0 / lo_w as f32,
+                bloom_texel_size_y: 1.0 / lo_h as f32,
+                ..base_uniforms
+            };
+            let up_uniforms = bytemuck::bytes_of(&up_u);
+            if use_compute {
+                #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+                self.compute_dual_blit.dispatch(
+                    gpu, &state.mips_a[i].view, lo_view, &state.mips_b[i].view,
+                    up_uniforms, "Bloom Up",
+                    state.mips_b[i].width, state.mips_b[i].height, profiler,
+                );
+            } else {
+                self.helper.draw(
+                    gpu, &state.mips_a[i].view, lo_view, &state.mips_b[i].view,
+                    up_uniforms, "Bloom Up",
+                    state.mips_b[i].width, state.mips_b[i].height, profiler,
+                );
+            }
         }
 
         // Final composite
         let bloom_w = state.mips_b[0].width;
         let bloom_h = state.mips_b[0].height;
-        self.helper.draw(
-            gpu,
-            source, &state.mips_b[0].view, target,
-            bytemuck::bytes_of(&BloomUniforms {
-                mode: 3,
-                main_texel_size_x: 1.0 / ctx.width as f32,
-                main_texel_size_y: 1.0 / ctx.height as f32,
-                bloom_texel_size_x: 1.0 / bloom_w as f32,
-                bloom_texel_size_y: 1.0 / bloom_h as f32,
-                ..base_uniforms
-            }),
-            "Bloom Composite",
-            ctx.width, ctx.height,
-            profiler,
-        );
+        let composite_u = BloomUniforms {
+            mode: 3,
+            main_texel_size_x: 1.0 / ctx.width as f32,
+            main_texel_size_y: 1.0 / ctx.height as f32,
+            bloom_texel_size_x: 1.0 / bloom_w as f32,
+            bloom_texel_size_y: 1.0 / bloom_h as f32,
+            ..base_uniforms
+        };
+        let composite_uniforms = bytemuck::bytes_of(&composite_u);
+        if use_compute {
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            self.compute_dual_blit.dispatch(
+                gpu, source, &state.mips_b[0].view, target,
+                composite_uniforms, "Bloom Composite",
+                ctx.width, ctx.height, profiler,
+            );
+        } else {
+            self.helper.draw(
+                gpu, source, &state.mips_b[0].view, target,
+                composite_uniforms, "Bloom Composite",
+                ctx.width, ctx.height, profiler,
+            );
+        }
     }
 
     fn clear_state(&mut self) {
