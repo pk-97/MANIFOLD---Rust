@@ -13,6 +13,11 @@ mod inner {
     pub type MetalCommandEncoder = <MetalApi as hal::Api>::CommandEncoder;
     pub type MetalCommandBuffer = <MetalApi as hal::Api>::CommandBuffer;
     pub type MetalFence = <MetalApi as hal::Api>::Fence;
+    pub type MetalTexture = <MetalApi as hal::Api>::Texture;
+    pub type MetalTextureView = <MetalApi as hal::Api>::TextureView;
+    pub type MetalBuffer = <MetalApi as hal::Api>::Buffer;
+    pub type MetalSampler = <MetalApi as hal::Api>::Sampler;
+    pub type MetalBindGroup = <MetalApi as hal::Api>::BindGroup;
 
     /// Cached references to the underlying hal Metal device and queue.
     ///

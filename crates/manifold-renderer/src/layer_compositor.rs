@@ -56,6 +56,57 @@ const _: () = assert!(std::mem::size_of::<BlendUniforms>() == 32);
 /// allocated, so there is no hard limit on project complexity.
 /// Compute-based blend resources. Uses compute dispatches instead of render
 /// passes to bypass Metal TBDR tile overhead (~290us per pass at 4K).
+/// BGL entries for the blend compute pipeline (shared between wgpu and hal paths).
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const BLEND_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 5] = [
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: true,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 4,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::Rgba16Float,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    },
+];
+
 struct BlendResources {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -63,10 +114,25 @@ struct BlendResources {
     /// Compositor width/height — needed for dispatch_workgroups.
     width: u32,
     height: u32,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_sampler: Option<crate::hal_context::MetalSampler>,
 }
 
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+unsafe impl Send for BlendResources {}
+
 impl BlendResources {
-    fn new(device: &wgpu::Device, width: u32, height: u32) -> Self {
+    fn new(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let _ = &hal_ctx;
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Compositor Blend Compute"),
             source: wgpu::ShaderSource::Wgsl(
@@ -155,9 +221,43 @@ impl BlendResources {
             ..Default::default()
         });
 
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (hal_pipeline, hal_sampler) = if let Some(ctx) = hal_ctx {
+            use wgpu::hal::Device as HalDevice;
+            let hal_pipe = crate::hal_pipeline::create_compute_pipeline(
+                ctx,
+                include_str!("generators/shaders/compositor_blend_compute.wgsl"),
+                "cs_main",
+                &BLEND_BGL_ENTRIES,
+                "Blend Compute HAL",
+            );
+            let hal_samp = unsafe {
+                ctx.device()
+                    .create_sampler(&wgpu::hal::SamplerDescriptor {
+                        label: Some("Blend Sampler HAL"),
+                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                        lod_clamp: 0.0..32.0,
+                        compare: None,
+                        anisotropy_clamp: 1,
+                        border_color: None,
+                    })
+                    .expect("Failed to create hal blend sampler")
+            };
+            (Some(hal_pipe), Some(hal_samp))
+        } else {
+            (None, None)
+        };
+
         Self {
             pipeline, bind_group_layout, sampler,
             width, height,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_sampler,
         }
     }
 
@@ -227,6 +327,90 @@ impl BlendResources {
         self.width = width;
         self.height = height;
     }
+
+    /// HAL path: encode a compute blend dispatch via a hal command encoder.
+    /// Uses the arena's shared-memory buffer and pre-extracted hal texture views.
+    ///
+    /// Called from LayerCompositor::render_hal() in Phase 3e.
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    pub(crate) unsafe fn blend_pass_hal(
+        &self,
+        hal_enc: &mut crate::hal_context::MetalCommandEncoder,
+        hal_ctx: &crate::hal_context::HalContext,
+        arena_hal_buf: &crate::hal_context::MetalBuffer,
+        source_hal_view: &crate::hal_context::MetalTextureView,
+        blend_hal_view: &crate::hal_context::MetalTextureView,
+        target_hal_view: &crate::hal_context::MetalTextureView,
+        uniform_offset: u64,
+    ) {
+        use wgpu::hal::{self as hal, CommandEncoder as _, Device as _};
+
+        let hal_pipe = self.hal_pipeline.as_ref().expect("blend hal pipeline");
+        let hal_samp = self.hal_sampler.as_ref().expect("blend hal sampler");
+
+        let hal_bg = unsafe {
+            hal_ctx.device().create_bind_group(
+                &hal::BindGroupDescriptor {
+                    label: None,
+                    layout: &hal_pipe.bind_group_layout,
+                    entries: &[
+                        hal::BindGroupEntry { binding: 0, resource_index: 0, count: 1 },
+                        hal::BindGroupEntry { binding: 1, resource_index: 0, count: 1 },
+                        hal::BindGroupEntry { binding: 2, resource_index: 1, count: 1 },
+                        hal::BindGroupEntry { binding: 3, resource_index: 0, count: 1 },
+                        hal::BindGroupEntry { binding: 4, resource_index: 2, count: 1 },
+                    ],
+                    buffers: &[hal::BufferBinding::new_unchecked(
+                        arena_hal_buf,
+                        0,
+                        std::num::NonZero::new(
+                            std::mem::size_of::<BlendUniforms>() as u64,
+                        ),
+                    )],
+                    samplers: &[hal_samp],
+                    textures: &[
+                        hal::TextureBinding {
+                            view: source_hal_view,
+                            usage: wgpu::wgt::TextureUses::RESOURCE,
+                        },
+                        hal::TextureBinding {
+                            view: blend_hal_view,
+                            usage: wgpu::wgt::TextureUses::RESOURCE,
+                        },
+                        hal::TextureBinding {
+                            view: target_hal_view,
+                            usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
+                        },
+                    ],
+                    acceleration_structures: &[],
+                    external_textures: &[],
+                },
+            )
+            .expect("Failed to create hal blend bind group")
+        };
+
+        unsafe {
+            hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
+                label: Some("Blend Pass"),
+                timestamp_writes: None,
+            });
+            hal_enc.set_compute_pipeline(&hal_pipe.pipeline);
+            hal_enc.set_bind_group(
+                &hal_pipe.pipeline_layout,
+                0,
+                &hal_bg,
+                &[uniform_offset as wgpu::DynamicOffset],
+            );
+            hal_enc.dispatch([
+                self.width.div_ceil(16),
+                self.height.div_ceil(16),
+                1,
+            ]);
+            hal_enc.end_compute_pass();
+            hal_ctx.device().destroy_bind_group(hal_bg);
+        }
+    }
 }
 
 /// Standalone ping-pong buffer pair. Can be borrowed independently
@@ -295,6 +479,50 @@ impl PingPong {
             occlusion_query_set: None,
             multiview_mask: None,
         });
+    }
+
+    /// HAL path: clear source buffer via hal render pass (LOAD_CLEAR, no draw).
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    unsafe fn clear_source_hal(
+        &self,
+        hal_enc: &mut crate::hal_context::MetalCommandEncoder,
+        source_hal_view: &crate::hal_context::MetalTextureView,
+        opaque: bool,
+    ) {
+        use wgpu::hal::{self as hal, CommandEncoder as _};
+
+        let color = if opaque {
+            wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+        } else {
+            wgpu::Color::TRANSPARENT
+        };
+        unsafe {
+            hal_enc.begin_render_pass(&hal::RenderPassDescriptor {
+                label: Some("Clear"),
+                extent: wgpu::Extent3d {
+                    width: self.width(),
+                    height: self.height(),
+                    depth_or_array_layers: 1,
+                },
+                sample_count: 1,
+                color_attachments: &[Some(hal::ColorAttachment {
+                    target: hal::Attachment {
+                        view: source_hal_view,
+                        usage: wgpu::wgt::TextureUses::COLOR_TARGET,
+                    },
+                    resolve_target: None,
+                    ops: hal::AttachmentOps::STORE,
+                    clear_value: color,
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                multiview_mask: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            }).expect("hal begin_render_pass failed");
+            hal_enc.end_render_pass();
+        }
     }
 }
 
@@ -373,12 +601,12 @@ impl LayerCompositor {
         Self {
             main: PingPong::new(device, width, height, "Compositor"),
             layer_buf: None,
-            blend: BlendResources::new(device, width, height),
+            blend: BlendResources::new(device, width, height, hal_ctx),
             uniform_arena: UniformArena::new(device, hal_ctx),
             effect_chain: EffectChain::new(),
             effect_registry: EffectRegistry::new(device, queue, hal_ctx),
-            wet_dry_lerp: WetDryLerpPipeline::new(device),
-            tonemap: TonemapPipeline::new(device, width, height),
+            wet_dry_lerp: WetDryLerpPipeline::new(device, hal_ctx),
+            tonemap: TonemapPipeline::new(device, width, height, hal_ctx),
             led_tap: None,
         }
     }

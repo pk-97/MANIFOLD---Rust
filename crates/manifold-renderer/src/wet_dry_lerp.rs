@@ -7,6 +7,47 @@
 
 use crate::gpu_encoder::GpuEncoder;
 
+/// BGL entries for the wet/dry lerp render pipeline (shared between wgpu and hal paths).
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const WET_DRY_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+];
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct WetDryUniforms {
@@ -19,10 +60,31 @@ pub struct WetDryLerpPipeline {
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     uniform_buffer: wgpu::Buffer,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_pipeline: Option<crate::hal_pipeline::HalRenderPipeline>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_sampler: Option<crate::hal_context::MetalSampler>,
+    /// Persistent mapped pointer to shared-memory uniform buffer.
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_uniform_mapped_ptr: Option<*mut u8>,
+    /// Cached hal pointer to uniform buffer for bind groups.
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_uniform_buf_ptr: Option<*const crate::hal_context::MetalBuffer>,
 }
 
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+unsafe impl Send for WetDryLerpPipeline {}
+
 impl WetDryLerpPipeline {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let _ = &hal_ctx;
         let format = wgpu::TextureFormat::Rgba16Float;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -123,7 +185,90 @@ impl WetDryLerpPipeline {
             mapped_at_creation: false,
         });
 
-        Self { pipeline, bind_group_layout, sampler, uniform_buffer }
+        // --- hal pipeline + shared-memory uniform buffer ---
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (hal_pipeline, hal_sampler, uniform_buffer, hal_uniform_mapped_ptr, hal_uniform_buf_ptr) =
+        if let Some(ctx) = hal_ctx {
+            use wgpu::hal::Device as HalDevice;
+            let hal_pipe = crate::hal_pipeline::create_render_pipeline(
+                ctx,
+                include_str!("effects/shaders/wet_dry_lerp.wgsl"),
+                "vs_main",
+                "fs_main",
+                &WET_DRY_BGL_ENTRIES,
+                format,
+                "WetDry Lerp HAL",
+            );
+            let hal_samp = unsafe {
+                ctx.device()
+                    .create_sampler(&wgpu::hal::SamplerDescriptor {
+                        label: Some("WetDry Lerp Sampler HAL"),
+                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                        lod_clamp: 0.0..32.0,
+                        compare: None,
+                        anisotropy_clamp: 1,
+                        border_color: None,
+                    })
+                    .expect("Failed to create hal wet/dry sampler")
+            };
+            let ubo_size = std::mem::size_of::<WetDryUniforms>() as u64;
+            let hal_buf = unsafe {
+                ctx.device()
+                    .create_buffer(&wgpu::hal::BufferDescriptor {
+                        label: Some("WetDry Lerp Uniforms HAL"),
+                        size: ubo_size,
+                        usage: wgpu::wgt::BufferUses::UNIFORM
+                            | wgpu::wgt::BufferUses::MAP_WRITE,
+                        memory_flags: wgpu::hal::MemoryFlags::PREFER_COHERENT,
+                    })
+                    .expect("Failed to create hal wet/dry uniform buffer")
+            };
+            let mapping = unsafe {
+                ctx.device()
+                    .map_buffer(&hal_buf, 0..ubo_size)
+                    .expect("Failed to map hal wet/dry uniform buffer")
+            };
+            let mapped_ptr = mapping.ptr.as_ptr();
+            let wgpu_buf = unsafe {
+                device.create_buffer_from_hal::<wgpu::hal::api::Metal>(
+                    hal_buf,
+                    &wgpu::BufferDescriptor {
+                        label: Some("WetDry Lerp Uniforms"),
+                        size: ubo_size,
+                        usage: wgpu::BufferUsages::UNIFORM
+                            | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    },
+                )
+            };
+            let buf_hal_ptr = {
+                let guard = unsafe { wgpu_buf.as_hal::<wgpu::hal::api::Metal>() }
+                    .expect("wet/dry ubo not Metal");
+                let ptr: *const _ = &*guard;
+                ptr
+            };
+            (Some(hal_pipe), Some(hal_samp), wgpu_buf, Some(mapped_ptr), Some(buf_hal_ptr))
+        } else {
+            (None, None, uniform_buffer, None, None)
+        };
+
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        let uniform_buffer = uniform_buffer;
+
+        Self {
+            pipeline, bind_group_layout, sampler, uniform_buffer,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_sampler,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_uniform_mapped_ptr,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_uniform_buf_ptr,
+        }
     }
 
     /// Blend dry and wet textures into the target.
@@ -186,5 +331,111 @@ impl WetDryLerpPipeline {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.draw(0..3, 0..1);
+    }
+
+    /// HAL path: encode wet/dry lerp render pass via hal command encoder.
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    pub(crate) unsafe fn apply_hal(
+        &self,
+        hal_enc: &mut crate::hal_context::MetalCommandEncoder,
+        hal_ctx: &crate::hal_context::HalContext,
+        dry_hal_view: &crate::hal_context::MetalTextureView,
+        wet_hal_view: &crate::hal_context::MetalTextureView,
+        target_hal_view: &crate::hal_context::MetalTextureView,
+        target_width: u32,
+        target_height: u32,
+        wet_dry: f32,
+    ) {
+        use wgpu::hal::{self as hal, CommandEncoder as _, Device as _};
+
+        let uniforms = WetDryUniforms {
+            wet_dry,
+            _pad: [0.0; 3],
+        };
+
+        // Direct memcpy to shared-memory uniform buffer
+        if let Some(mapped_ptr) = self.hal_uniform_mapped_ptr {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytemuck::bytes_of(&uniforms).as_ptr(),
+                    mapped_ptr,
+                    std::mem::size_of::<WetDryUniforms>(),
+                );
+            }
+        }
+
+        let hal_pipe = self.hal_pipeline.as_ref().expect("wet/dry hal pipeline");
+        let hal_samp = self.hal_sampler.as_ref().expect("wet/dry hal sampler");
+        let hal_ubo = unsafe {
+            &*self.hal_uniform_buf_ptr.expect("wet/dry hal ubo")
+        };
+
+        let hal_bg = unsafe {
+            hal_ctx.device().create_bind_group(
+                &hal::BindGroupDescriptor {
+                    label: None,
+                    layout: &hal_pipe.bind_group_layout,
+                    entries: &[
+                        hal::BindGroupEntry { binding: 0, resource_index: 0, count: 1 },
+                        hal::BindGroupEntry { binding: 1, resource_index: 0, count: 1 },
+                        hal::BindGroupEntry { binding: 2, resource_index: 1, count: 1 },
+                        hal::BindGroupEntry { binding: 3, resource_index: 0, count: 1 },
+                    ],
+                    buffers: &[hal::BufferBinding::new_unchecked(
+                        hal_ubo,
+                        0,
+                        std::num::NonZero::new(
+                            std::mem::size_of::<WetDryUniforms>() as u64,
+                        ),
+                    )],
+                    samplers: &[hal_samp],
+                    textures: &[
+                        hal::TextureBinding {
+                            view: dry_hal_view,
+                            usage: wgpu::wgt::TextureUses::RESOURCE,
+                        },
+                        hal::TextureBinding {
+                            view: wet_hal_view,
+                            usage: wgpu::wgt::TextureUses::RESOURCE,
+                        },
+                    ],
+                    acceleration_structures: &[],
+                    external_textures: &[],
+                },
+            )
+            .expect("Failed to create hal wet/dry bind group")
+        };
+
+        unsafe {
+            hal_enc.begin_render_pass(&hal::RenderPassDescriptor {
+                label: Some("WetDry Lerp Pass"),
+                extent: wgpu::Extent3d {
+                    width: target_width,
+                    height: target_height,
+                    depth_or_array_layers: 1,
+                },
+                sample_count: 1,
+                color_attachments: &[Some(hal::ColorAttachment {
+                    target: hal::Attachment {
+                        view: target_hal_view,
+                        usage: wgpu::wgt::TextureUses::COLOR_TARGET,
+                    },
+                    resolve_target: None,
+                    ops: hal::AttachmentOps::STORE,
+                    clear_value: wgpu::Color::TRANSPARENT,
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                multiview_mask: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            }).expect("hal begin_render_pass failed");
+            hal_enc.set_render_pipeline(&hal_pipe.pipeline);
+            hal_enc.set_bind_group(&hal_pipe.pipeline_layout, 0, &hal_bg, &[]);
+            hal_enc.draw(0, 3, 0, 1);
+            hal_enc.end_render_pass();
+            hal_ctx.device().destroy_bind_group(hal_bg);
+        }
     }
 }
