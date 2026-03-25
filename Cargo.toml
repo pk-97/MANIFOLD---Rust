@@ -11,6 +11,7 @@ members = [
     "crates/manifold-profiler",
     "crates/manifold-media",
     "crates/manifold-led",
+    "crates/manifold-gpu",
     "crates/manifold-app",
 ]
 

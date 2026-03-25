@@ -1,0 +1,1024 @@
+//! Native Metal backend for macOS content thread.
+//!
+//! Owns metal::Device, metal::CommandQueue, metal::CommandBuffer directly.
+//! Zero wgpu types, zero wgpu submission tracking, zero "(wgpu internal) Signal"
+//! overhead. WGSL→MSL compilation via naga, shader loading via
+//! metal::Device::new_library_with_source().
+
+use crate::types::*;
+
+// Raw ObjC retain/release — avoids dependency on objc::msg_send! macro.
+unsafe extern "C" {
+    fn objc_retain(obj: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn objc_release(obj: *mut std::ffi::c_void);
+}
+
+// ─── Slot mapping ─────────────────────────────────────────────────────
+
+/// Maps WGSL @binding(N) to Metal argument indices.
+/// Built during pipeline creation from naga module introspection.
+#[derive(Clone, Debug)]
+pub struct SlotMap {
+    /// Indexed by WGSL @binding(N). Each entry gives the Metal argument type and index.
+    slots: Vec<Option<Slot>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Slot {
+    pub kind: SlotKind,
+    pub metal_index: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotKind {
+    Buffer,
+    Texture,
+    Sampler,
+}
+
+impl SlotMap {
+    fn new() -> Self {
+        Self { slots: Vec::new() }
+    }
+
+    fn insert(&mut self, binding: u32, slot: Slot) {
+        let idx = binding as usize;
+        if idx >= self.slots.len() {
+            self.slots.resize(idx + 1, None);
+        }
+        self.slots[idx] = Some(slot);
+    }
+
+    /// Look up the Metal argument index for a WGSL @binding(N).
+    #[inline]
+    pub fn get(&self, binding: u32) -> Option<&Slot> {
+        self.slots.get(binding as usize).and_then(|s| s.as_ref())
+    }
+}
+
+// ─── GpuDevice ────────────────────────────────────────────────────────
+
+/// Native Metal device + command queue for the content thread.
+/// Created once at startup. Owns the Metal device and a dedicated command queue
+/// for content-thread GPU work (separate from the UI thread's wgpu queue).
+pub struct GpuDevice {
+    device: metal::Device,
+    queue: metal::CommandQueue,
+}
+
+// Safety: metal::Device and metal::CommandQueue are thread-safe (Metal guarantee).
+unsafe impl Send for GpuDevice {}
+unsafe impl Sync for GpuDevice {}
+
+impl Default for GpuDevice {
+    fn default() -> Self { Self::new() }
+}
+
+impl GpuDevice {
+    /// Create from the system default Metal device.
+    /// Uses a dedicated command queue for content-thread work.
+    pub fn new() -> Self {
+        let device = metal::Device::system_default().expect("No Metal device found");
+        let queue = device.new_command_queue();
+        Self { device, queue }
+    }
+
+    /// Raw Metal device reference (for advanced interop).
+    pub fn raw_device(&self) -> &metal::DeviceRef {
+        &self.device
+    }
+
+    /// Raw Metal command queue reference (for advanced interop).
+    pub fn raw_queue(&self) -> &metal::CommandQueueRef {
+        &self.queue
+    }
+
+    /// Create a GPU texture.
+    pub fn create_texture(&self, desc: &GpuTextureDesc) -> GpuTexture {
+        let mtl_desc = metal::TextureDescriptor::new();
+        mtl_desc.set_pixel_format(to_mtl_pixel_format(desc.format));
+        mtl_desc.set_width(desc.width as u64);
+        mtl_desc.set_height(desc.height as u64);
+        mtl_desc.set_depth(desc.depth as u64);
+        mtl_desc.set_texture_type(to_mtl_texture_type(desc.dimension, desc.depth));
+        mtl_desc.set_usage(to_mtl_texture_usage(desc.usage));
+        mtl_desc.set_storage_mode(metal::MTLStorageMode::Private);
+        mtl_desc.set_mipmap_level_count(1);
+        mtl_desc.set_sample_count(1);
+        let raw = self.device.new_texture(&mtl_desc);
+        GpuTexture {
+            raw,
+            width: desc.width,
+            height: desc.height,
+            depth: desc.depth,
+            format: desc.format,
+        }
+    }
+
+    /// Create a GPU buffer with private storage (GPU-only).
+    pub fn create_buffer(&self, size: u64, _usage: GpuBufferUsage) -> GpuBuffer {
+        let raw = self.device.new_buffer(
+            size,
+            metal::MTLResourceOptions::StorageModePrivate,
+        );
+        GpuBuffer {
+            raw,
+            size,
+            mapped_ptr: None,
+        }
+    }
+
+    /// Create a GPU buffer with shared memory (CPU+GPU coherent).
+    /// Returns a buffer with a persistent mapped pointer for zero-copy writes.
+    pub fn create_buffer_shared(&self, size: u64) -> GpuBuffer {
+        let raw = self.device.new_buffer(
+            size,
+            metal::MTLResourceOptions::StorageModeShared,
+        );
+        let ptr = raw.contents() as *mut u8;
+        GpuBuffer {
+            raw,
+            size,
+            mapped_ptr: if ptr.is_null() { None } else { Some(ptr) },
+        }
+    }
+
+    /// Create a sampler state.
+    pub fn create_sampler(&self, desc: &GpuSamplerDesc) -> GpuSampler {
+        let mtl_desc = metal::SamplerDescriptor::new();
+        mtl_desc.set_min_filter(to_mtl_filter(desc.min_filter));
+        mtl_desc.set_mag_filter(to_mtl_filter(desc.mag_filter));
+        mtl_desc.set_mip_filter(to_mtl_mip_filter(desc.mip_filter));
+        mtl_desc.set_address_mode_s(to_mtl_address(desc.address_mode_u));
+        mtl_desc.set_address_mode_t(to_mtl_address(desc.address_mode_v));
+        mtl_desc.set_address_mode_r(to_mtl_address(desc.address_mode_w));
+        let raw = self.device.new_sampler(&mtl_desc);
+        GpuSampler { raw }
+    }
+
+    /// Create a compute pipeline from WGSL source.
+    ///
+    /// 1. Parse WGSL → naga Module
+    /// 2. Introspect bindings → build slot map
+    /// 3. Compile naga → MSL with slot assignments
+    /// 4. Create MTLLibrary from MSL source
+    /// 5. Create MTLComputePipelineState from entry function
+    pub fn create_compute_pipeline(
+        &self,
+        wgsl_source: &str,
+        entry_point: &str,
+        label: &str,
+    ) -> GpuComputePipeline {
+        let (slot_map, msl_source, msl_entry_name) =
+            compile_wgsl_to_msl(wgsl_source, entry_point, label);
+
+        let compile_opts = metal::CompileOptions::new();
+        compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
+        compile_opts.set_fast_math_enabled(true);
+        let library = self
+            .device
+            .new_library_with_source(&msl_source, &compile_opts)
+            .unwrap_or_else(|e| {
+                panic!("{label}: MTL library compile error: {e}\nMSL source:\n{msl_source}")
+            });
+
+        let function = library
+            .get_function(&msl_entry_name, None)
+            .unwrap_or_else(|e| {
+                let names = library.function_names();
+                panic!(
+                    "{label}: function '{msl_entry_name}' not found: {e}. \
+                     Available: {names:?}"
+                )
+            });
+
+        let state = self
+            .device
+            .new_compute_pipeline_state_with_function(&function)
+            .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {e}"));
+
+        GpuComputePipeline {
+            state,
+            slot_map,
+            label: label.to_string(),
+        }
+    }
+
+    /// Create a render pipeline from WGSL source (fullscreen triangle pattern).
+    ///
+    /// Vertex shader generates a fullscreen triangle from vertex_index.
+    /// No vertex buffers needed. Single color attachment.
+    pub fn create_render_pipeline(
+        &self,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        color_format: GpuTextureFormat,
+        blend: Option<GpuBlendState>,
+        label: &str,
+    ) -> GpuRenderPipeline {
+        // Compile both entry points
+        let (slot_map, msl_source, _) =
+            compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+
+        let compile_opts = metal::CompileOptions::new();
+        compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
+        compile_opts.set_fast_math_enabled(true);
+        let library = self
+            .device
+            .new_library_with_source(&msl_source, &compile_opts)
+            .unwrap_or_else(|e| {
+                panic!("{label}: MTL library compile error: {e}\nMSL source:\n{msl_source}")
+            });
+
+        // Try naga-mangled names first, then original names
+        let available = library.function_names();
+        let vs_func = find_entry_function(&library, vs_entry, &available, label, "vertex");
+        let fs_func = find_entry_function(&library, fs_entry, &available, label, "fragment");
+
+        let desc = metal::RenderPipelineDescriptor::new();
+        desc.set_vertex_function(Some(&vs_func));
+        desc.set_fragment_function(Some(&fs_func));
+
+        let color_attach = desc
+            .color_attachments()
+            .object_at(0)
+            .expect("color attachment 0");
+        color_attach.set_pixel_format(to_mtl_pixel_format(color_format));
+
+        if let Some(blend) = blend {
+            color_attach.set_blending_enabled(true);
+            color_attach.set_rgb_blend_operation(to_mtl_blend_op(blend.operation));
+            color_attach.set_alpha_blend_operation(to_mtl_blend_op(blend.alpha_operation));
+            color_attach.set_source_rgb_blend_factor(to_mtl_blend_factor(blend.src_factor));
+            color_attach
+                .set_destination_rgb_blend_factor(to_mtl_blend_factor(blend.dst_factor));
+            color_attach
+                .set_source_alpha_blend_factor(to_mtl_blend_factor(blend.src_alpha_factor));
+            color_attach
+                .set_destination_alpha_blend_factor(to_mtl_blend_factor(blend.dst_alpha_factor));
+        }
+
+        let state = self
+            .device
+            .new_render_pipeline_state(&desc)
+            .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"));
+
+        GpuRenderPipeline {
+            state,
+            slot_map,
+            label: label.to_string(),
+        }
+    }
+
+    /// Create a new command encoder for one frame's GPU work.
+    pub fn create_encoder(&self, label: &str) -> GpuEncoder {
+        let cmd_buf = self.queue.new_command_buffer_with_unretained_references();
+        cmd_buf.set_label(label);
+        // Retain the command buffer so it outlives the autorelease pool drain.
+        let ptr = cmd_buf as *const metal::CommandBufferRef as *mut std::ffi::c_void;
+        unsafe { objc_retain(ptr); }
+        GpuEncoder {
+            cmd_buf_ptr: ptr,
+            state: EncoderState::None,
+        }
+    }
+
+    /// Create a shared event for CPU↔GPU synchronization.
+    pub fn create_event(&self) -> GpuEvent {
+        let raw = self.device.new_shared_event();
+        GpuEvent {
+            raw,
+            counter: std::cell::Cell::new(0),
+        }
+    }
+}
+
+// ─── GpuTexture ───────────────────────────────────────────────────────
+
+/// GPU texture backed by a native Metal texture.
+pub struct GpuTexture {
+    pub(crate) raw: metal::Texture,
+    pub width: u32,
+    pub height: u32,
+    pub depth: u32,
+    pub format: GpuTextureFormat,
+}
+
+unsafe impl Send for GpuTexture {}
+unsafe impl Sync for GpuTexture {}
+
+impl GpuTexture {
+    /// Wrap an existing metal::Texture (e.g. from IOSurface).
+    pub fn from_raw(
+        raw: metal::Texture,
+        width: u32,
+        height: u32,
+        depth: u32,
+        format: GpuTextureFormat,
+    ) -> Self {
+        Self { raw, width, height, depth, format }
+    }
+
+    /// Raw Metal texture reference.
+    pub fn raw(&self) -> &metal::TextureRef {
+        &self.raw
+    }
+}
+
+// ─── GpuBuffer ────────────────────────────────────────────────────────
+
+/// GPU buffer backed by a native Metal buffer.
+pub struct GpuBuffer {
+    pub(crate) raw: metal::Buffer,
+    pub size: u64,
+    /// Persistent mapped pointer for shared-memory buffers.
+    /// Some for MTLStorageMode::Shared, None for Private.
+    mapped_ptr: Option<*mut u8>,
+}
+
+unsafe impl Send for GpuBuffer {}
+unsafe impl Sync for GpuBuffer {}
+
+impl GpuBuffer {
+    /// Persistent mapped pointer (shared-memory buffers only).
+    /// Direct CPU→GPU writes with zero API overhead.
+    pub fn mapped_ptr(&self) -> Option<*mut u8> {
+        self.mapped_ptr
+    }
+
+    /// Write data at offset via memcpy (shared-memory buffers only).
+    ///
+    /// # Safety
+    /// Caller must ensure offset + data.len() <= buffer size,
+    /// and no GPU reads overlap this write.
+    pub unsafe fn write(&self, offset: u64, data: &[u8]) {
+        let ptr = self.mapped_ptr.expect("write() requires shared-memory buffer");
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                data.as_ptr(),
+                ptr.add(offset as usize),
+                data.len(),
+            );
+        }
+    }
+
+    /// Raw Metal buffer reference.
+    pub fn raw(&self) -> &metal::BufferRef {
+        &self.raw
+    }
+
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+}
+
+// ─── GpuSampler ───────────────────────────────────────────────────────
+
+pub struct GpuSampler {
+    pub(crate) raw: metal::SamplerState,
+}
+
+unsafe impl Send for GpuSampler {}
+unsafe impl Sync for GpuSampler {}
+
+// ─── GpuComputePipeline ───────────────────────────────────────────────
+
+pub struct GpuComputePipeline {
+    pub(crate) state: metal::ComputePipelineState,
+    pub slot_map: SlotMap,
+    pub label: String,
+}
+
+unsafe impl Send for GpuComputePipeline {}
+unsafe impl Sync for GpuComputePipeline {}
+
+// ─── GpuRenderPipeline ───────────────────────────────────────────────
+
+pub struct GpuRenderPipeline {
+    pub(crate) state: metal::RenderPipelineState,
+    pub slot_map: SlotMap,
+    pub label: String,
+}
+
+unsafe impl Send for GpuRenderPipeline {}
+unsafe impl Sync for GpuRenderPipeline {}
+
+// ─── GpuEvent ─────────────────────────────────────────────────────────
+
+/// GPU↔CPU synchronization via MTLSharedEvent.
+/// Near-zero overhead polling (direct counter read).
+pub struct GpuEvent {
+    raw: metal::SharedEvent,
+    counter: std::cell::Cell<u64>,
+}
+
+unsafe impl Send for GpuEvent {}
+unsafe impl Sync for GpuEvent {}
+
+impl GpuEvent {
+    /// Check if the GPU has completed work signaled at `value`.
+    pub fn is_done(&self, value: u64) -> bool {
+        self.raw.signaled_value() >= value
+    }
+
+    /// Current signal counter (store after signal_event).
+    pub fn current_value(&self) -> u64 {
+        self.counter.get()
+    }
+
+    /// Read the GPU-side signaled value directly.
+    pub fn signaled_value(&self) -> u64 {
+        self.raw.signaled_value()
+    }
+
+    /// Raw Metal shared event reference.
+    pub fn raw(&self) -> &metal::SharedEventRef {
+        &self.raw
+    }
+}
+
+// ─── GpuEncoder ───────────────────────────────────────────────────────
+
+/// Encoder state — tracks the current active Metal encoder.
+#[allow(dead_code)]
+enum EncoderState {
+    None,
+    /// Active compute command encoder.
+    Compute(*const metal::ComputeCommandEncoderRef),
+    /// Active render command encoder.
+    Render(*const metal::RenderCommandEncoderRef),
+    /// Active blit command encoder.
+    Blit(*const metal::BlitCommandEncoderRef),
+}
+
+/// Per-frame GPU command encoder. Wraps a retained Metal command buffer.
+///
+/// Automatically manages compute/render/blit encoder transitions.
+/// Compute encoders are kept alive across dispatches for efficiency.
+/// Render/blit encoders are ended after each pass.
+pub struct GpuEncoder {
+    /// Retained MTLCommandBuffer. Released on drop.
+    cmd_buf_ptr: *mut std::ffi::c_void,
+    state: EncoderState,
+}
+
+unsafe impl Send for GpuEncoder {}
+
+impl GpuEncoder {
+    fn cmd_buf(&self) -> &metal::CommandBufferRef {
+        unsafe { &*(self.cmd_buf_ptr as *const metal::CommandBufferRef) }
+    }
+
+    /// Ensure a compute encoder is active. Returns a raw pointer to it.
+    fn ensure_compute(&mut self) -> *const metal::ComputeCommandEncoderRef {
+        if let EncoderState::Compute(ptr) = self.state {
+            return ptr;
+        }
+        self.end_current();
+        let enc = self.cmd_buf().new_compute_command_encoder();
+        let ptr = enc as *const metal::ComputeCommandEncoderRef;
+        self.state = EncoderState::Compute(ptr);
+        ptr
+    }
+
+    /// End the current encoder (if any).
+    fn end_current(&mut self) {
+        match self.state {
+            EncoderState::None => {}
+            EncoderState::Compute(ptr) => {
+                unsafe { &*ptr }.end_encoding();
+            }
+            EncoderState::Render(ptr) => {
+                unsafe { &*ptr }.end_encoding();
+            }
+            EncoderState::Blit(ptr) => {
+                unsafe { &*ptr }.end_encoding();
+            }
+        }
+        self.state = EncoderState::None;
+    }
+
+    /// Dispatch a compute shader.
+    ///
+    /// Automatically manages encoder state — if a compute encoder is already
+    /// active, reuses it. If a render/blit encoder is active, ends it first.
+    ///
+    /// `bindings` use WGSL @binding(N) indices. The pipeline's slot map
+    /// translates to Metal buffer/texture/sampler argument indices.
+    pub fn dispatch_compute(
+        &mut self,
+        pipeline: &GpuComputePipeline,
+        bindings: &[GpuBinding],
+        workgroups: [u32; 3],
+        _label: &str,
+    ) {
+        let enc_ptr = self.ensure_compute();
+        let enc = unsafe { &*enc_ptr };
+        enc.set_compute_pipeline_state(&pipeline.state);
+
+        for binding in bindings {
+            match binding {
+                GpuBinding::Buffer { binding: b, buffer, offset } => {
+                    let slot = pipeline.slot_map.get(*b)
+                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    enc.set_buffer(
+                        slot.metal_index as _,
+                        Some(&buffer.raw),
+                        *offset as _,
+                    );
+                }
+                GpuBinding::Texture { binding: b, texture } => {
+                    let slot = pipeline.slot_map.get(*b)
+                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    enc.set_texture(slot.metal_index as _, Some(&texture.raw));
+                }
+                GpuBinding::Sampler { binding: b, sampler } => {
+                    let slot = pipeline.slot_map.get(*b)
+                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    enc.set_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                }
+                GpuBinding::Bytes { binding: b, data } => {
+                    let slot = pipeline.slot_map.get(*b)
+                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    enc.set_bytes(
+                        slot.metal_index as _,
+                        data.len() as _,
+                        data.as_ptr() as *const _,
+                    );
+                }
+            }
+        }
+
+        enc.dispatch_thread_groups(
+            metal::MTLSize::new(workgroups[0] as _, workgroups[1] as _, workgroups[2] as _),
+            pipeline.state.thread_execution_width_and_height(),
+        );
+    }
+
+    /// Draw a fullscreen triangle with a render pipeline.
+    ///
+    /// Creates a new render encoder for each call (render targets may differ).
+    /// Used by SimpleBlitHelper, DualTextureBlitHelper, etc.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_fullscreen(
+        &mut self,
+        pipeline: &GpuRenderPipeline,
+        target: &GpuTexture,
+        bindings: &[GpuBinding],
+        clear: bool,
+        store: bool,
+        _label: &str,
+    ) {
+        self.end_current();
+
+        let desc = metal::RenderPassDescriptor::new();
+        let color = desc.color_attachments().object_at(0).unwrap();
+        color.set_texture(Some(&target.raw));
+        color.set_load_action(if clear {
+            metal::MTLLoadAction::Clear
+        } else {
+            metal::MTLLoadAction::DontCare
+        });
+        color.set_store_action(if store {
+            metal::MTLStoreAction::Store
+        } else {
+            metal::MTLStoreAction::DontCare
+        });
+        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
+
+        let enc = self.cmd_buf().new_render_command_encoder(desc);
+        enc.set_render_pipeline_state(&pipeline.state);
+
+        for binding in bindings {
+            match binding {
+                GpuBinding::Buffer { binding: b, buffer, offset } => {
+                    let slot = pipeline.slot_map.get(*b)
+                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
+                }
+                GpuBinding::Texture { binding: b, texture } => {
+                    let slot = pipeline.slot_map.get(*b)
+                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
+                }
+                GpuBinding::Sampler { binding: b, sampler } => {
+                    let slot = pipeline.slot_map.get(*b)
+                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                }
+                GpuBinding::Bytes { binding: b, data } => {
+                    let slot = pipeline.slot_map.get(*b)
+                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    enc.set_fragment_bytes(
+                        slot.metal_index as _,
+                        data.len() as _,
+                        data.as_ptr() as *const _,
+                    );
+                }
+            }
+        }
+
+        enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+        enc.end_encoding();
+        // State goes back to None (render encoder consumed).
+    }
+
+    /// Copy texture to texture via blit encoder.
+    pub fn copy_texture_to_texture(
+        &mut self,
+        src: &GpuTexture,
+        dst: &GpuTexture,
+        width: u32,
+        height: u32,
+        depth: u32,
+    ) {
+        self.end_current();
+        let enc = self.cmd_buf().new_blit_command_encoder();
+        enc.copy_from_texture(
+            &src.raw,
+            0, // source_slice
+            0, // source_level
+            metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            metal::MTLSize::new(width as _, height as _, depth as _),
+            &dst.raw,
+            0, // dest_slice
+            0, // dest_level
+            metal::MTLOrigin { x: 0, y: 0, z: 0 },
+        );
+        enc.end_encoding();
+    }
+
+    /// Signal a shared event on the GPU timeline.
+    /// Creates a lightweight command buffer that encodes the signal and commits it.
+    /// The event value is incremented automatically.
+    pub fn signal_event(&mut self, event: &GpuEvent) {
+        let value = event.counter.get() + 1;
+        event.counter.set(value);
+        // Encode signal on current command buffer (after all work).
+        self.end_current();
+        let enc = self.cmd_buf().new_blit_command_encoder();
+        // Use encode_signal_event through the command buffer's blit encoder
+        // to add the signal to this command buffer.
+        enc.end_encoding();
+        // Signal on the command buffer directly
+        self.cmd_buf().encode_signal_event(event.raw(), value);
+    }
+
+    /// Commit the command buffer to the GPU queue.
+    /// Ends any active encoder and commits. Consumes the encoder.
+    pub fn commit(mut self) {
+        self.end_current();
+        self.cmd_buf().commit();
+        // Don't release in commit — Drop handles it
+    }
+}
+
+impl Drop for GpuEncoder {
+    fn drop(&mut self) {
+        if !self.cmd_buf_ptr.is_null() {
+            unsafe { objc_release(self.cmd_buf_ptr); }
+        }
+    }
+}
+
+// ─── WGSL→MSL compilation ─────────────────────────────────────────────
+
+/// Parse WGSL, introspect bindings, compile to MSL for a compute entry point.
+/// Returns (slot_map, msl_source, msl_entry_name).
+fn compile_wgsl_to_msl(
+    wgsl_source: &str,
+    entry_point: &str,
+    label: &str,
+) -> (SlotMap, String, String) {
+    // Step 1: Parse WGSL
+    let module = naga::front::wgsl::parse_str(wgsl_source)
+        .unwrap_or_else(|e| panic!("{label}: WGSL parse error: {e}"));
+
+    // Step 2: Validate
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap_or_else(|e| panic!("{label}: WGSL validation error: {e}"));
+
+    // Step 3: Introspect bindings and build slot map + naga MSL options
+    let (slot_map, entry_resources) = build_slot_map(&module, entry_point);
+
+    let mut per_entry_point_map = naga::back::msl::EntryPointResourceMap::default();
+    per_entry_point_map.insert(entry_point.to_string(), entry_resources);
+
+    let options = naga::back::msl::Options {
+        lang_version: (2, 4),
+        per_entry_point_map,
+        fake_missing_bindings: false,
+        zero_initialize_workgroup_memory: true,
+        ..Default::default()
+    };
+
+    let pipeline_options = naga::back::msl::PipelineOptions {
+        allow_and_force_point_size: false,
+        entry_point: None,
+        vertex_pulling_transform: false,
+        vertex_buffer_mappings: Vec::new(),
+    };
+
+    // Step 4: Compile to MSL
+    let (msl_source, translation_info) =
+        naga::back::msl::write_string(&module, &info, &options, &pipeline_options)
+            .unwrap_or_else(|e| panic!("{label}: MSL compilation error: {e}"));
+
+    // Step 5: Get actual MSL entry point name (naga may mangle it)
+    let entry_idx = module
+        .entry_points
+        .iter()
+        .position(|ep| ep.name == entry_point)
+        .unwrap_or_else(|| panic!("{label}: entry point '{entry_point}' not found in module"));
+    let msl_entry_name = translation_info.entry_point_names[entry_idx]
+        .as_ref()
+        .unwrap_or_else(|e| panic!("{label}: entry point error: {e:?}"))
+        .clone();
+
+    (slot_map, msl_source, msl_entry_name)
+}
+
+/// Parse WGSL, introspect bindings, compile to MSL for render (vertex + fragment).
+/// Returns (slot_map_for_fragment, msl_source, dummy).
+fn compile_wgsl_to_msl_render(
+    wgsl_source: &str,
+    vs_entry: &str,
+    fs_entry: &str,
+    label: &str,
+) -> (SlotMap, String, String) {
+    let module = naga::front::wgsl::parse_str(wgsl_source)
+        .unwrap_or_else(|e| panic!("{label}: WGSL parse error: {e}"));
+    let info = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap_or_else(|e| panic!("{label}: WGSL validation error: {e}"));
+
+    // Build slot maps for both entry points
+    let (slot_map_vs, entry_resources_vs) = build_slot_map(&module, vs_entry);
+    let (slot_map_fs, entry_resources_fs) = build_slot_map(&module, fs_entry);
+    let _ = slot_map_vs; // VS typically has no resource bindings (fullscreen triangle)
+
+    let mut per_entry_point_map = naga::back::msl::EntryPointResourceMap::default();
+    per_entry_point_map.insert(vs_entry.to_string(), entry_resources_vs);
+    per_entry_point_map.insert(fs_entry.to_string(), entry_resources_fs);
+
+    let options = naga::back::msl::Options {
+        lang_version: (2, 4),
+        per_entry_point_map,
+        fake_missing_bindings: false,
+        zero_initialize_workgroup_memory: false,
+        ..Default::default()
+    };
+
+    let pipeline_options = naga::back::msl::PipelineOptions {
+        allow_and_force_point_size: false,
+        entry_point: None,
+        vertex_pulling_transform: false,
+        vertex_buffer_mappings: Vec::new(),
+    };
+
+    let (msl_source, _info) =
+        naga::back::msl::write_string(&module, &info, &options, &pipeline_options)
+            .unwrap_or_else(|e| panic!("{label}: MSL compilation error: {e}"));
+
+    (slot_map_fs, msl_source, String::new())
+}
+
+/// Build a SlotMap and naga EntryPointResources from a naga module.
+///
+/// Iterates over global variables used by the entry point and assigns
+/// sequential Metal argument indices per resource type:
+/// - Buffers (uniform + storage) → buffer(0), buffer(1), ...
+/// - Textures (sampled + storage) → texture(0), texture(1), ...
+/// - Samplers → sampler(0), sampler(1), ...
+fn build_slot_map(
+    module: &naga::Module,
+    entry_point: &str,
+) -> (SlotMap, naga::back::msl::EntryPointResources) {
+    use naga::back::msl;
+
+    let mut slot_map = SlotMap::new();
+    let mut resources = msl::EntryPointResources::default();
+
+    let mut next_buffer: u32 = 0;
+    let mut next_texture: u32 = 0;
+    let mut next_sampler: u32 = 0;
+
+    // Find which global variables are actually used by this entry point
+    let ep = module
+        .entry_points
+        .iter()
+        .find(|ep| ep.name == entry_point);
+
+    // Collect all bindings from global variables
+    let mut bindings: Vec<(u32, naga::ResourceBinding, &naga::GlobalVariable)> = Vec::new();
+    for (_, gv) in module.global_variables.iter() {
+        if let Some(ref binding) = gv.binding {
+            bindings.push((binding.binding, *binding, gv));
+        }
+    }
+    // Sort by binding number for deterministic index assignment
+    bindings.sort_by_key(|(b, _, _)| *b);
+
+    for (binding_num, resource_binding, gv) in &bindings {
+        let ty = &module.types[gv.ty];
+        let is_buffer = matches!(
+            gv.space,
+            naga::AddressSpace::Uniform | naga::AddressSpace::Storage { .. }
+        );
+        let is_sampler = matches!(ty.inner, naga::TypeInner::Sampler { .. });
+        let is_texture = matches!(
+            ty.inner,
+            naga::TypeInner::Image { .. }
+        );
+
+        let is_writable = match gv.space {
+            naga::AddressSpace::Storage { access } => {
+                access.contains(naga::StorageAccess::STORE)
+            }
+            _ => false,
+        } || matches!(
+            ty.inner,
+            naga::TypeInner::Image {
+                class: naga::ImageClass::Storage { access, .. },
+                ..
+            } if access.contains(naga::StorageAccess::STORE)
+        );
+
+        let mut bind_target = msl::BindTarget::default();
+
+        if is_buffer {
+            let idx = next_buffer;
+            next_buffer += 1;
+            bind_target.buffer = Some(idx as u8);
+            bind_target.mutable = is_writable;
+            slot_map.insert(*binding_num, Slot {
+                kind: SlotKind::Buffer,
+                metal_index: idx,
+            });
+        } else if is_sampler {
+            let idx = next_sampler;
+            next_sampler += 1;
+            bind_target.sampler = Some(msl::BindSamplerTarget::Resource(idx as u8));
+            slot_map.insert(*binding_num, Slot {
+                kind: SlotKind::Sampler,
+                metal_index: idx,
+            });
+        } else if is_texture {
+            let idx = next_texture;
+            next_texture += 1;
+            bind_target.texture = Some(idx as u8);
+            bind_target.mutable = is_writable;
+            slot_map.insert(*binding_num, Slot {
+                kind: SlotKind::Texture,
+                metal_index: idx,
+            });
+        }
+
+        resources
+            .resources
+            .insert(*resource_binding, bind_target);
+    }
+
+    // If the entry point uses workgroup memory or has size buffers, handle that
+    let _ = ep; // suppress unused warning
+
+    (slot_map, resources)
+}
+
+/// Find an entry function in a Metal library. Tries the exact name first,
+/// then looks for naga-mangled versions (e.g. "cs_main" → "cs_main_").
+fn find_entry_function(
+    library: &metal::LibraryRef,
+    entry_name: &str,
+    available: &[String],
+    label: &str,
+    stage: &str,
+) -> metal::Function {
+    // Try exact name
+    if let Ok(f) = library.get_function(entry_name, None) {
+        return f;
+    }
+    // Try with underscore suffix (naga sometimes appends)
+    let mangled = format!("{entry_name}_");
+    if let Ok(f) = library.get_function(&mangled, None) {
+        return f;
+    }
+    // Try matching prefix
+    for name in available {
+        if name.starts_with(entry_name)
+            && let Ok(f) = library.get_function(name, None)
+        {
+            return f;
+        }
+    }
+    panic!(
+        "{label}: {stage} function '{entry_name}' not found. Available: {available:?}"
+    );
+}
+
+// ─── Format conversion helpers ────────────────────────────────────────
+
+fn to_mtl_pixel_format(format: GpuTextureFormat) -> metal::MTLPixelFormat {
+    match format {
+        GpuTextureFormat::Rgba16Float => metal::MTLPixelFormat::RGBA16Float,
+        GpuTextureFormat::Rgba32Float => metal::MTLPixelFormat::RGBA32Float,
+        GpuTextureFormat::Rgba8Unorm => metal::MTLPixelFormat::RGBA8Unorm,
+        GpuTextureFormat::R32Float => metal::MTLPixelFormat::R32Float,
+        GpuTextureFormat::Rg32Float => metal::MTLPixelFormat::RG32Float,
+        GpuTextureFormat::R16Float => metal::MTLPixelFormat::R16Float,
+        GpuTextureFormat::Rg16Float => metal::MTLPixelFormat::RG16Float,
+        GpuTextureFormat::R32Uint => metal::MTLPixelFormat::R32Uint,
+    }
+}
+
+fn to_mtl_texture_type(dim: GpuTextureDimension, _depth: u32) -> metal::MTLTextureType {
+    match dim {
+        GpuTextureDimension::D2 => metal::MTLTextureType::D2,
+        GpuTextureDimension::D3 => metal::MTLTextureType::D3,
+    }
+}
+
+fn to_mtl_texture_usage(usage: GpuTextureUsage) -> metal::MTLTextureUsage {
+    let mut mtl = metal::MTLTextureUsage::Unknown;
+    if usage.contains(GpuTextureUsage::SHADER_READ) {
+        mtl |= metal::MTLTextureUsage::ShaderRead;
+    }
+    if usage.contains(GpuTextureUsage::SHADER_WRITE) {
+        mtl |= metal::MTLTextureUsage::ShaderWrite;
+    }
+    if usage.contains(GpuTextureUsage::RENDER_TARGET) {
+        mtl |= metal::MTLTextureUsage::RenderTarget;
+    }
+    mtl
+}
+
+fn to_mtl_filter(filter: GpuFilterMode) -> metal::MTLSamplerMinMagFilter {
+    match filter {
+        GpuFilterMode::Nearest => metal::MTLSamplerMinMagFilter::Nearest,
+        GpuFilterMode::Linear => metal::MTLSamplerMinMagFilter::Linear,
+    }
+}
+
+fn to_mtl_mip_filter(filter: GpuFilterMode) -> metal::MTLSamplerMipFilter {
+    match filter {
+        GpuFilterMode::Nearest => metal::MTLSamplerMipFilter::Nearest,
+        GpuFilterMode::Linear => metal::MTLSamplerMipFilter::Linear,
+    }
+}
+
+fn to_mtl_address(mode: GpuAddressMode) -> metal::MTLSamplerAddressMode {
+    match mode {
+        GpuAddressMode::ClampToEdge => metal::MTLSamplerAddressMode::ClampToEdge,
+        GpuAddressMode::Repeat => metal::MTLSamplerAddressMode::Repeat,
+        GpuAddressMode::MirrorRepeat => metal::MTLSamplerAddressMode::MirrorRepeat,
+        GpuAddressMode::ClampToZero => metal::MTLSamplerAddressMode::ClampToZero,
+    }
+}
+
+fn to_mtl_blend_factor(factor: GpuBlendFactor) -> metal::MTLBlendFactor {
+    match factor {
+        GpuBlendFactor::Zero => metal::MTLBlendFactor::Zero,
+        GpuBlendFactor::One => metal::MTLBlendFactor::One,
+        GpuBlendFactor::SrcAlpha => metal::MTLBlendFactor::SourceAlpha,
+        GpuBlendFactor::OneMinusSrcAlpha => metal::MTLBlendFactor::OneMinusSourceAlpha,
+        GpuBlendFactor::DstAlpha => metal::MTLBlendFactor::DestinationAlpha,
+        GpuBlendFactor::OneMinusDstAlpha => metal::MTLBlendFactor::OneMinusDestinationAlpha,
+        GpuBlendFactor::SrcColor => metal::MTLBlendFactor::SourceColor,
+        GpuBlendFactor::OneMinusSrcColor => metal::MTLBlendFactor::OneMinusSourceColor,
+        GpuBlendFactor::DstColor => metal::MTLBlendFactor::DestinationColor,
+        GpuBlendFactor::OneMinusDstColor => metal::MTLBlendFactor::OneMinusDestinationColor,
+    }
+}
+
+fn to_mtl_blend_op(op: GpuBlendOp) -> metal::MTLBlendOperation {
+    match op {
+        GpuBlendOp::Add => metal::MTLBlendOperation::Add,
+        GpuBlendOp::Subtract => metal::MTLBlendOperation::Subtract,
+        GpuBlendOp::ReverseSubtract => metal::MTLBlendOperation::ReverseSubtract,
+        GpuBlendOp::Min => metal::MTLBlendOperation::Min,
+        GpuBlendOp::Max => metal::MTLBlendOperation::Max,
+    }
+}
+
+// ─── Dispatch helper for thread group size ─────────────────────────────
+
+trait ThreadGroupSize {
+    fn thread_execution_width_and_height(&self) -> metal::MTLSize;
+}
+
+impl ThreadGroupSize for metal::ComputePipelineState {
+    fn thread_execution_width_and_height(&self) -> metal::MTLSize {
+        let w = self.thread_execution_width();
+        let max = self.max_total_threads_per_threadgroup();
+        let h = if w > 0 { max / w } else { 1 };
+        metal::MTLSize::new(w, h.max(1), 1)
+    }
+}

@@ -2021,6 +2021,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "manifold-gpu"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "log",
+ "metal",
+ "naga",
+ "wgpu",
+]
+
+[[package]]
 name = "manifold-io"
 version = "0.1.0"
 dependencies = [
