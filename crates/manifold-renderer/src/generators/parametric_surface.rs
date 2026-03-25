@@ -40,11 +40,18 @@ pub struct ParametricSurfaceGenerator {
     #[allow(dead_code)]
     volume_texture: wgpu::Texture,
     volume_view: wgpu::TextureView,
-    // Raymarch fragment pipeline
+    // Raymarch fragment pipeline (render fallback for non-hal builds)
+    #[allow(dead_code)]
     raymarch_pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     raymarch_bgl: wgpu::BindGroupLayout,
     raymarch_uniform_buffer: wgpu::Buffer,
     volume_sampler: wgpu::Sampler,
+    // Compute raymarch pipeline (eliminates TBDR tile overhead)
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    raymarch_compute_pipeline: wgpu::ComputePipeline,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    raymarch_compute_bgl: wgpu::BindGroupLayout,
     // Dirty tracking: only re-bake when shape or morph changes (matches Unity ShouldRebake)
     last_shape: f32,
     last_morph: f32,
@@ -219,6 +226,56 @@ impl ParametricSurfaceGenerator {
             mapped_at_creation: false,
         });
 
+        // ── Compute raymarch pipeline (eliminates TBDR tile overhead) ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (raymarch_compute_pipeline, raymarch_compute_bgl) = {
+            let cs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("ParametricSurface Raymarch Compute Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/parametric_surface_raymarch_compute.wgsl").into(),
+                ),
+            });
+            let cbgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("ParametricSurface Raymarch Compute BGL"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0, visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1, visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Float { filterable: true }, view_dimension: wgpu::TextureViewDimension::D3, multisampled: false },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2, visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3, visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture { access: wgpu::StorageTextureAccess::WriteOnly, format: wgpu::TextureFormat::Rgba16Float, view_dimension: wgpu::TextureViewDimension::D2 },
+                        count: None,
+                    },
+                ],
+            });
+            let cl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("ParametricSurface Raymarch Compute Layout"),
+                bind_group_layouts: &[&cbgl],
+                immediate_size: 0,
+            });
+            let cp = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("ParametricSurface Raymarch Compute Pipeline"),
+                layout: Some(&cl),
+                module: &cs,
+                entry_point: Some("cs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+            (cp, cbgl)
+        };
+
         Self {
             compute_pipeline,
             compute_bgl,
@@ -229,6 +286,10 @@ impl ParametricSurfaceGenerator {
             raymarch_bgl,
             raymarch_uniform_buffer,
             volume_sampler,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            raymarch_compute_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            raymarch_compute_bgl,
             last_shape: f32::MIN,
             last_morph: f32::MIN,
         }
@@ -321,43 +382,103 @@ impl Generator for ParametricSurfaceGenerator {
         };
         gpu.queue.write_buffer(&self.raymarch_uniform_buffer, 0, bytemuck::bytes_of(&raymarch_uniforms));
 
-        let raymarch_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ParametricSurface Raymarch BG"),
-            layout: &self.raymarch_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.raymarch_uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&self.volume_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.volume_sampler),
-                },
-            ],
-        });
-
+        // Compute raymarch path (eliminates TBDR tile overhead)
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         {
-            let ts = profiler.and_then(|p| p.render_timestamps("ParametricSurface Raymarch", ctx.width, ctx.height));
-            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("ParametricSurface Raymarch Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
+            let cbg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("ParametricSurface Raymarch Compute BG"),
+                layout: &self.raymarch_compute_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.raymarch_uniform_buffer.as_entire_binding(),
                     },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: ts,
-                occlusion_query_set: None,
-                multiview_mask: None,
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&self.volume_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.volume_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(target),
+                    },
+                ],
             });
+            let ts = profiler.and_then(|p| {
+                p.compute_timestamps(
+                    "ParametricSurface Raymarch",
+                    ctx.width,
+                    ctx.height,
+                )
+            });
+            let mut pass =
+                gpu.encoder
+                    .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("ParametricSurface Raymarch Compute"),
+                        timestamp_writes: ts,
+                    });
+            pass.set_pipeline(&self.raymarch_compute_pipeline);
+            pass.set_bind_group(0, &cbg, &[]);
+            pass.dispatch_workgroups(
+                ctx.width.div_ceil(16),
+                ctx.height.div_ceil(16),
+                1,
+            );
+        }
+
+        // Render pass fallback (non-hal-encoding builds)
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        {
+            let raymarch_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("ParametricSurface Raymarch BG"),
+                layout: &self.raymarch_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.raymarch_uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&self.volume_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.volume_sampler),
+                    },
+                ],
+            });
+            let ts = profiler.and_then(|p| {
+                p.render_timestamps(
+                    "ParametricSurface Raymarch",
+                    ctx.width,
+                    ctx.height,
+                )
+            });
+            let mut pass =
+                gpu.encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("ParametricSurface Raymarch Pass"),
+                        color_attachments: &[Some(
+                            wgpu::RenderPassColorAttachment {
+                                view: target,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(
+                                        wgpu::Color::BLACK,
+                                    ),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            },
+                        )],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: ts,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
             pass.set_pipeline(&self.raymarch_pipeline);
             pass.set_bind_group(0, &raymarch_bg, &[]);
             pass.draw(0..3, 0..1);

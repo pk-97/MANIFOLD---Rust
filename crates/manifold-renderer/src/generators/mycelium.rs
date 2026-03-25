@@ -4,12 +4,12 @@
 // 4 passes per frame:
 //   AgentUpdate (compute) → ResolveDeposit (compute) → DiffuseDecay (3× fragment) → Display (fragment)
 
-use manifold_core::GeneratorTypeId;
+use super::compute_common::{FIXED_POINT_SCALE, PhysarumAgent};
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
-use super::compute_common::{PhysarumAgent, FIXED_POINT_SCALE};
+use manifold_core::GeneratorTypeId;
 
 // Parameter indices matching types.rs param_defs
 const SENS_DIST: usize = 0;
@@ -82,11 +82,21 @@ pub struct MyceliumGenerator {
     resolve_pipeline: wgpu::ComputePipeline,
     resolve_bgl: wgpu::BindGroupLayout,
 
-    // Fragment pipelines
+    // Fragment pipelines (render fallback for non-hal builds)
+    #[allow(dead_code)]
     diffuse_pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     diffuse_bgl: wgpu::BindGroupLayout,
+    #[allow(dead_code)]
     display_pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     display_bgl: wgpu::BindGroupLayout,
+
+    // Compute diffuse pipeline (macOS + hal-encoding)
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    diffuse_compute_pipeline: wgpu::ComputePipeline,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    diffuse_compute_bgl: wgpu::BindGroupLayout,
 
     // GPU resources (lazy-init on first render)
     agent_buffer: Option<wgpu::Buffer>,
@@ -185,21 +195,20 @@ impl MyceliumGenerator {
             immediate_size: 0,
         });
 
-        let agent_update_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Mycelium Agent Update Pipeline"),
-            layout: Some(&agent_update_layout),
-            module: &agent_shader,
-            entry_point: Some("main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
+        let agent_update_pipeline =
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Mycelium Agent Update Pipeline"),
+                layout: Some(&agent_update_layout),
+                module: &agent_shader,
+                entry_point: Some("main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
 
         // ── Resolve compute pipeline ──
         let resolve_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Mycelium Resolve Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/mycelium_resolve.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mycelium_resolve.wgsl").into()),
         });
 
         let resolve_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -270,9 +279,7 @@ impl MyceliumGenerator {
         // ── Diffuse fragment pipeline ──
         let diffuse_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Mycelium Diffuse Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/mycelium_diffuse.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mycelium_diffuse.wgsl").into()),
         });
 
         let diffuse_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -342,12 +349,80 @@ impl MyceliumGenerator {
             cache: None,
         });
 
+        // ── Compute diffuse pipeline (macOS + hal-encoding) ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (diffuse_compute_pipeline, diffuse_compute_bgl) = {
+            let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Mycelium Diffuse Compute Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/mycelium_diffuse_compute.wgsl").into(),
+                ),
+            });
+
+            let cbgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Mycelium Diffuse Compute BGL"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: TRAIL_FORMAT,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+            let compute_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Mycelium Diffuse Compute Layout"),
+                bind_group_layouts: &[&cbgl],
+                immediate_size: 0,
+            });
+
+            let cpipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Mycelium Diffuse Compute Pipeline"),
+                layout: Some(&compute_layout),
+                module: &compute_shader,
+                entry_point: Some("cs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
+            (cpipeline, cbgl)
+        };
+
         // ── Display fragment pipeline ──
         let display_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Mycelium Display Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/mycelium_display.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/mycelium_display.wgsl").into()),
         });
 
         let display_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -454,6 +529,10 @@ impl MyceliumGenerator {
             diffuse_bgl,
             display_pipeline,
             display_bgl,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            diffuse_compute_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            diffuse_compute_bgl,
             agent_buffer: None,
             accum_buffer: None,
             trail_a: None,
@@ -472,7 +551,15 @@ impl MyceliumGenerator {
         }
     }
 
-    fn init_resources(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32, agent_count: u32, seeds: u32) {
+    fn init_resources(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        agent_count: u32,
+        seeds: u32,
+    ) {
         let tw = (width / 2).max(1);
         let th = (height / 2).max(1);
         self.trail_width = tw;
@@ -552,48 +639,105 @@ impl MyceliumGenerator {
             texel_x: 1.0 / self.trail_width as f32,
             texel_y: 1.0 / self.trail_height as f32,
         };
-        queue.write_buffer(&self.diffuse_uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(
+            &self.diffuse_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Mycelium Diffuse BG"),
-            layout: &self.diffuse_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.diffuse_uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(source),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         {
-            let ts = profiler.and_then(|p| p.render_timestamps("Mycelium Diffuse", self.trail_width, self.trail_height));
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Mycelium Diffuse Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
+            // Compute dispatch path
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Mycelium Diffuse Compute BG"),
+                layout: &self.diffuse_compute_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.diffuse_uniform_buffer.as_entire_binding(),
                     },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: ts,
-                occlusion_query_set: None,
-                multiview_mask: None,
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(target),
+                    },
+                ],
             });
-            pass.set_pipeline(&self.diffuse_pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
+
+            {
+                let ts = profiler.and_then(|p| {
+                    p.compute_timestamps(
+                        "Mycelium Diffuse Compute",
+                        self.trail_width,
+                        self.trail_height,
+                    )
+                });
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Mycelium Diffuse Compute Pass"),
+                    timestamp_writes: ts,
+                });
+                pass.set_pipeline(&self.diffuse_compute_pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(
+                    self.trail_width.div_ceil(16),
+                    self.trail_height.div_ceil(16),
+                    1,
+                );
+            }
+        }
+
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        {
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Mycelium Diffuse BG"),
+                layout: &self.diffuse_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.diffuse_uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+
+            {
+                let ts = profiler.and_then(|p| {
+                    p.render_timestamps("Mycelium Diffuse", self.trail_width, self.trail_height)
+                });
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Mycelium Diffuse Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: ts,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.diffuse_pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
     }
 }
@@ -620,25 +764,83 @@ impl Generator for MyceliumGenerator {
         ctx: &GeneratorContext,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
-        let sens_dist = if ctx.param_count > SENS_DIST as u32 { ctx.params[SENS_DIST] } else { 0.02 };
-        let sens_angle = if ctx.param_count > SENS_ANGLE as u32 { ctx.params[SENS_ANGLE] } else { 0.8 };
-        let turn = if ctx.param_count > TURN as u32 { ctx.params[TURN] } else { 0.4 };
-        let step = if ctx.param_count > STEP as u32 { ctx.params[STEP] } else { 0.001 };
-        let deposit = if ctx.param_count > DEPOSIT as u32 { ctx.params[DEPOSIT] } else { 1.5 };
-        let decay = if ctx.param_count > DECAY as u32 { ctx.params[DECAY] } else { 0.98 };
-        let color_hue = if ctx.param_count > COLOR as u32 { ctx.params[COLOR] } else { 0.08 };
-        let glow = if ctx.param_count > GLOW as u32 { ctx.params[GLOW] } else { 1.0 };
-        let reactivity = if ctx.param_count > REACTIVITY as u32 { ctx.params[REACTIVITY] } else { 0.5 };
-        let agents_param = if ctx.param_count > AGENTS as u32 { ctx.params[AGENTS] } else { 200.0 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
-        let seeds = if ctx.param_count > SEEDS as u32 { ctx.params[SEEDS] } else { 1.0 };
+        let sens_dist = if ctx.param_count > SENS_DIST as u32 {
+            ctx.params[SENS_DIST]
+        } else {
+            0.02
+        };
+        let sens_angle = if ctx.param_count > SENS_ANGLE as u32 {
+            ctx.params[SENS_ANGLE]
+        } else {
+            0.8
+        };
+        let turn = if ctx.param_count > TURN as u32 {
+            ctx.params[TURN]
+        } else {
+            0.4
+        };
+        let step = if ctx.param_count > STEP as u32 {
+            ctx.params[STEP]
+        } else {
+            0.001
+        };
+        let deposit = if ctx.param_count > DEPOSIT as u32 {
+            ctx.params[DEPOSIT]
+        } else {
+            1.5
+        };
+        let decay = if ctx.param_count > DECAY as u32 {
+            ctx.params[DECAY]
+        } else {
+            0.98
+        };
+        let color_hue = if ctx.param_count > COLOR as u32 {
+            ctx.params[COLOR]
+        } else {
+            0.08
+        };
+        let glow = if ctx.param_count > GLOW as u32 {
+            ctx.params[GLOW]
+        } else {
+            1.0
+        };
+        let reactivity = if ctx.param_count > REACTIVITY as u32 {
+            ctx.params[REACTIVITY]
+        } else {
+            0.5
+        };
+        let agents_param = if ctx.param_count > AGENTS as u32 {
+            ctx.params[AGENTS]
+        } else {
+            200.0
+        };
+        let scale = if ctx.param_count > SCALE as u32 {
+            ctx.params[SCALE]
+        } else {
+            1.0
+        };
+        let seeds = if ctx.param_count > SEEDS as u32 {
+            ctx.params[SEEDS]
+        } else {
+            1.0
+        };
 
         let desired_agents = ((agents_param * 1000.0) as u32).clamp(MIN_AGENTS, MAX_AGENTS);
         let seeds_int = seeds.to_bits();
 
         // Lazy-init or re-seed
-        if !self.initialized || seeds_int != self.current_seeds || desired_agents != self.agent_count {
-            self.init_resources(gpu.device, gpu.queue, ctx.width, ctx.height, desired_agents, seeds_int);
+        if !self.initialized
+            || seeds_int != self.current_seeds
+            || desired_agents != self.agent_count
+        {
+            self.init_resources(
+                gpu.device,
+                gpu.queue,
+                ctx.width,
+                ctx.height,
+                desired_agents,
+                seeds_int,
+            );
         }
 
         let tw = self.trail_width;
@@ -661,7 +863,11 @@ impl Generator for MyceliumGenerator {
             reactivity,
             _pad: 0.0,
         };
-        gpu.queue.write_buffer(&self.agent_uniform_buffer, 0, bytemuck::bytes_of(&agent_uniforms));
+        gpu.queue.write_buffer(
+            &self.agent_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&agent_uniforms),
+        );
 
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
@@ -694,10 +900,12 @@ impl Generator for MyceliumGenerator {
 
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("Mycelium Agent Update", tw, th));
-            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Mycelium Agent Update Pass"),
-                timestamp_writes: ts,
-            });
+            let mut pass = gpu
+                .encoder
+                .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Mycelium Agent Update Pass"),
+                    timestamp_writes: ts,
+                });
             pass.set_pipeline(&self.agent_update_pipeline);
             pass.set_bind_group(0, &agent_bg, &[]);
             pass.dispatch_workgroups(agent_count.div_ceil(256), 1, 1);
@@ -711,7 +919,11 @@ impl Generator for MyceliumGenerator {
             _pad0: 0,
             _pad1: 0,
         };
-        gpu.queue.write_buffer(&self.resolve_uniform_buffer, 0, bytemuck::bytes_of(&resolve_uniforms));
+        gpu.queue.write_buffer(
+            &self.resolve_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&resolve_uniforms),
+        );
 
         let resolve_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Mycelium Resolve BG"),
@@ -738,29 +950,58 @@ impl Generator for MyceliumGenerator {
 
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("Mycelium Resolve", tw, th));
-            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Mycelium Resolve Pass"),
-                timestamp_writes: ts,
-            });
+            let mut pass = gpu
+                .encoder
+                .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("Mycelium Resolve Pass"),
+                    timestamp_writes: ts,
+                });
             pass.set_pipeline(&self.resolve_pipeline);
             pass.set_bind_group(0, &resolve_bg, &[]);
             pass.dispatch_workgroups(tw.div_ceil(16), th.div_ceil(16), 1);
         }
 
-        // ── Pass 3: Diffuse (3 fragment blits) ──
+        // ── Pass 3: Diffuse (3 blits) ──
         // After resolve: trail_b has new data. trail_a is stale.
         // Pass 0: B→A with decay + evaporation
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
-        self.run_diffuse_pass(gpu.device, gpu.queue, gpu.encoder, &trail_b.view, &trail_a.view, decay, 0.003, profiler);
+        self.run_diffuse_pass(
+            gpu.device,
+            gpu.queue,
+            gpu.encoder,
+            &trail_b.view,
+            &trail_a.view,
+            decay,
+            0.003,
+            profiler,
+        );
         // Pass 1: A→B pure blur
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
-        self.run_diffuse_pass(gpu.device, gpu.queue, gpu.encoder, &trail_a.view, &trail_b.view, 1.0, 0.0, profiler);
+        self.run_diffuse_pass(
+            gpu.device,
+            gpu.queue,
+            gpu.encoder,
+            &trail_a.view,
+            &trail_b.view,
+            1.0,
+            0.0,
+            profiler,
+        );
         // Pass 2: B→A pure blur
         let trail_a = self.trail_a.as_ref().unwrap();
         let trail_b = self.trail_b.as_ref().unwrap();
-        self.run_diffuse_pass(gpu.device, gpu.queue, gpu.encoder, &trail_b.view, &trail_a.view, 1.0, 0.0, profiler);
+        self.run_diffuse_pass(
+            gpu.device,
+            gpu.queue,
+            gpu.encoder,
+            &trail_b.view,
+            &trail_a.view,
+            1.0,
+            0.0,
+            profiler,
+        );
 
         // ── Pass 4: Display (fragment) ──
         // trail_a has final diffused result
@@ -771,7 +1012,11 @@ impl Generator for MyceliumGenerator {
             uv_scale,
             time: ctx.time,
         };
-        gpu.queue.write_buffer(&self.display_uniform_buffer, 0, bytemuck::bytes_of(&display_uniforms));
+        gpu.queue.write_buffer(
+            &self.display_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&display_uniforms),
+        );
 
         let trail_a = self.trail_a.as_ref().unwrap();
         let display_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -794,7 +1039,8 @@ impl Generator for MyceliumGenerator {
         });
 
         {
-            let ts = profiler.and_then(|p| p.render_timestamps("Mycelium Display", ctx.width, ctx.height));
+            let ts = profiler
+                .and_then(|p| p.render_timestamps("Mycelium Display", ctx.width, ctx.height));
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Mycelium Display Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

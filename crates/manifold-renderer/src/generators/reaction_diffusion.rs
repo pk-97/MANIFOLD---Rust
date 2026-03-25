@@ -1,8 +1,8 @@
-use manifold_core::GeneratorTypeId;
+use super::stateful_base::StatefulState;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
-use super::stateful_base::StatefulState;
+use manifold_core::GeneratorTypeId;
 
 // Parameter indices matching types.rs param_defs
 const FEED: usize = 0;
@@ -38,13 +38,20 @@ struct DisplayUniforms {
 
 pub struct ReactionDiffusionGenerator {
     state: Option<StatefulState>,
+    #[allow(dead_code)] // render fallback for non-hal builds
     sim_pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     sim_bgl: wgpu::BindGroupLayout,
     sim_uniform_buffer: wgpu::Buffer,
     display_pipeline: wgpu::RenderPipeline,
     display_bgl: wgpu::BindGroupLayout,
     display_uniform_buffer: wgpu::Buffer,
     sampler: wgpu::Sampler,
+    // Compute sim pipeline (macOS + hal-encoding)
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    sim_compute_pipeline: wgpu::ComputePipeline,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    sim_compute_bgl: wgpu::BindGroupLayout,
 }
 
 impl ReactionDiffusionGenerator {
@@ -140,6 +147,81 @@ impl ReactionDiffusionGenerator {
             mapped_at_creation: false,
         });
 
+        // ── Compute simulation pipeline (macOS + hal-encoding) ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (sim_compute_pipeline, sim_compute_bgl) = {
+            let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("RD Sim Compute Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/reaction_diffusion_sim_compute.wgsl").into(),
+                ),
+            });
+
+            let compute_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("RD Sim Compute BGL"),
+                entries: &[
+                    // binding 0: uniforms
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // binding 1: source texture (filterable)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // binding 2: sampler
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // binding 3: output storage texture
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: STATE_FORMAT,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+            let compute_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("RD Sim Compute Layout"),
+                bind_group_layouts: &[&compute_bgl],
+                immediate_size: 0,
+            });
+
+            let compute_pipeline =
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("RD Sim Compute Pipeline"),
+                    layout: Some(&compute_layout),
+                    module: &compute_shader,
+                    entry_point: Some("cs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                });
+
+            (compute_pipeline, compute_bgl)
+        };
+
         // ── Display pipeline ──
         let display_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("RD Display Shader"),
@@ -231,13 +313,21 @@ impl ReactionDiffusionGenerator {
             display_bgl,
             display_uniform_buffer,
             sampler,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            sim_compute_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            sim_compute_bgl,
         }
     }
 
     fn ensure_state(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if self.state.is_none() {
             self.state = Some(StatefulState::new(
-                device, width, height, STATE_FORMAT, "RD",
+                device,
+                width,
+                height,
+                STATE_FORMAT,
+                "RD",
             ));
         }
     }
@@ -261,17 +351,37 @@ impl Generator for ReactionDiffusionGenerator {
         self.ensure_state(gpu.device, w, h);
         let state = self.state.as_mut().unwrap();
 
-        let feed = if ctx.param_count > FEED as u32 { ctx.params[FEED] } else { 0.055 };
-        let kill = if ctx.param_count > KILL as u32 { ctx.params[KILL] } else { 0.062 };
-        let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 1.0 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
+        let feed = if ctx.param_count > FEED as u32 {
+            ctx.params[FEED]
+        } else {
+            0.055
+        };
+        let kill = if ctx.param_count > KILL as u32 {
+            ctx.params[KILL]
+        } else {
+            0.062
+        };
+        let speed = if ctx.param_count > SPEED as u32 {
+            ctx.params[SPEED]
+        } else {
+            1.0
+        };
+        let scale = if ctx.param_count > SCALE as u32 {
+            ctx.params[SCALE]
+        } else {
+            1.0
+        };
         let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
 
         let texel_x = 1.0 / w as f32;
         let texel_y = 1.0 / h as f32;
 
         // Use time=0 for seeding on first frame
-        let effective_time = if state.frame_count() == 0 { 0.0 } else { ctx.time };
+        let effective_time = if state.frame_count() == 0 {
+            0.0
+        } else {
+            ctx.time
+        };
 
         let sim_uniforms = SimUniforms {
             time: effective_time,
@@ -283,53 +393,104 @@ impl Generator for ReactionDiffusionGenerator {
             texel_y,
             _pad: 0.0,
         };
-        gpu.queue.write_buffer(&self.sim_uniform_buffer, 0, bytemuck::bytes_of(&sim_uniforms));
+        gpu.queue.write_buffer(
+            &self.sim_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&sim_uniforms),
+        );
 
         // Run N simulation steps
-        for _ in 0..STEPS_PER_FRAME {
-            let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("RD Sim BG"),
-                layout: &self.sim_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.sim_uniform_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(state.read_view()),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-            });
-
-            {
-                let ts = profiler.and_then(|p| p.render_timestamps("RD Sim", w, h));
-                let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("RD Sim Pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: state.write_view(),
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        {
+            // Compute dispatch path — eliminates TBDR tile overhead per sim step
+            for _ in 0..STEPS_PER_FRAME {
+                let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("RD Sim Compute BG"),
+                    layout: &self.sim_compute_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.sim_uniform_buffer.as_entire_binding(),
                         },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: ts,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(state.read_view()),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(state.write_view()),
+                        },
+                    ],
                 });
-                pass.set_pipeline(&self.sim_pipeline);
-                pass.set_bind_group(0, &bind_group, &[]);
-                pass.draw(0..3, 0..1);
-            }
 
-            state.swap();
+                {
+                    let ts = profiler.and_then(|p| p.compute_timestamps("RD Sim Compute", w, h));
+                    let mut pass = gpu
+                        .encoder
+                        .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                            label: Some("RD Sim Compute Pass"),
+                            timestamp_writes: ts,
+                        });
+                    pass.set_pipeline(&self.sim_compute_pipeline);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.dispatch_workgroups(w.div_ceil(16), h.div_ceil(16), 1);
+                }
+
+                state.swap();
+            }
+        }
+
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        {
+            for _ in 0..STEPS_PER_FRAME {
+                let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("RD Sim BG"),
+                    layout: &self.sim_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.sim_uniform_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(state.read_view()),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                });
+
+                {
+                    let ts = profiler.and_then(|p| p.render_timestamps("RD Sim", w, h));
+                    let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("RD Sim Pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: state.write_view(),
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: ts,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(&self.sim_pipeline);
+                    pass.set_bind_group(0, &bind_group, &[]);
+                    pass.draw(0..3, 0..1);
+                }
+
+                state.swap();
+            }
         }
 
         // Display pass: read final state → write to output target
@@ -337,7 +498,11 @@ impl Generator for ReactionDiffusionGenerator {
             uv_scale,
             _pad: [0.0; 3],
         };
-        gpu.queue.write_buffer(&self.display_uniform_buffer, 0, bytemuck::bytes_of(&display_uniforms));
+        gpu.queue.write_buffer(
+            &self.display_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&display_uniforms),
+        );
 
         let display_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("RD Display BG"),
@@ -359,7 +524,8 @@ impl Generator for ReactionDiffusionGenerator {
         });
 
         {
-            let ts = profiler.and_then(|p| p.render_timestamps("RD Display", ctx.width, ctx.height));
+            let ts =
+                profiler.and_then(|p| p.render_timestamps("RD Display", ctx.width, ctx.height));
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("RD Display Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

@@ -1,9 +1,9 @@
-use manifold_core::GeneratorTypeId;
+use super::stateful_base::StatefulState;
 use crate::blit::BlitPipeline;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
-use super::stateful_base::StatefulState;
+use manifold_core::GeneratorTypeId;
 
 // Parameter indices matching types.rs param_defs
 const NOISE: usize = 0;
@@ -37,11 +37,18 @@ struct FlowfieldUniforms {
 
 pub struct FlowfieldGenerator {
     state: Option<StatefulState>,
+    #[allow(dead_code)] // render fallback for non-hal builds
     pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     bgl: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
     sampler: wgpu::Sampler,
     blit: BlitPipeline,
+    // Compute sim pipeline (macOS + hal-encoding)
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    compute_pipeline: wgpu::ComputePipeline,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    compute_bgl: wgpu::BindGroupLayout,
 }
 
 impl FlowfieldGenerator {
@@ -57,9 +64,7 @@ impl FlowfieldGenerator {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Flowfield Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/flowfield.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/flowfield.wgsl").into()),
         });
 
         let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -137,6 +142,76 @@ impl FlowfieldGenerator {
             mapped_at_creation: false,
         });
 
+        // ── Compute simulation pipeline (macOS + hal-encoding) ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (compute_pipeline, compute_bgl) = {
+            let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Flowfield Compute Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/flowfield_compute.wgsl").into(),
+                ),
+            });
+
+            let cbgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Flowfield Compute BGL"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::StorageTexture {
+                            access: wgpu::StorageTextureAccess::WriteOnly,
+                            format: STATE_FORMAT,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+            let compute_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Flowfield Compute Layout"),
+                bind_group_layouts: &[&cbgl],
+                immediate_size: 0,
+            });
+
+            let cpipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("Flowfield Compute Pipeline"),
+                layout: Some(&compute_layout),
+                module: &compute_shader,
+                entry_point: Some("cs_main"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            });
+
+            (cpipeline, cbgl)
+        };
+
         // Blit pipeline to upscale half-res state to full-res output
         let blit = BlitPipeline::new(device, target_format);
 
@@ -147,6 +222,10 @@ impl FlowfieldGenerator {
             uniform_buffer,
             sampler,
             blit,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            compute_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            compute_bgl,
         }
     }
 
@@ -155,7 +234,11 @@ impl FlowfieldGenerator {
         let ih = (height / 2).max(1);
         if self.state.is_none() {
             self.state = Some(StatefulState::new(
-                device, iw, ih, STATE_FORMAT, "Flowfield",
+                device,
+                iw,
+                ih,
+                STATE_FORMAT,
+                "Flowfield",
             ));
         }
     }
@@ -178,12 +261,36 @@ impl Generator for FlowfieldGenerator {
         self.ensure_state(gpu.device, iw, ih);
         let state = self.state.as_mut().unwrap();
 
-        let mut noise_scale = if ctx.param_count > NOISE as u32 { ctx.params[NOISE] } else { 1.5 };
-        let mut curl_intensity = if ctx.param_count > CURL as u32 { ctx.params[CURL] } else { 0.3 };
-        let decay = if ctx.param_count > DECAY as u32 { ctx.params[DECAY] } else { 0.97 };
-        let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 1.0 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
-        let snap = if ctx.param_count > SNAP as u32 { ctx.params[SNAP] } else { 1.0 };
+        let mut noise_scale = if ctx.param_count > NOISE as u32 {
+            ctx.params[NOISE]
+        } else {
+            1.5
+        };
+        let mut curl_intensity = if ctx.param_count > CURL as u32 {
+            ctx.params[CURL]
+        } else {
+            0.3
+        };
+        let decay = if ctx.param_count > DECAY as u32 {
+            ctx.params[DECAY]
+        } else {
+            0.97
+        };
+        let speed = if ctx.param_count > SPEED as u32 {
+            ctx.params[SPEED]
+        } else {
+            1.0
+        };
+        let scale = if ctx.param_count > SCALE as u32 {
+            ctx.params[SCALE]
+        } else {
+            1.0
+        };
+        let snap = if ctx.param_count > SNAP as u32 {
+            ctx.params[SNAP]
+        } else {
+            1.0
+        };
 
         // Snap presets override noise and curl based on trigger_count
         if snap > 0.5 {
@@ -209,55 +316,102 @@ impl Generator for FlowfieldGenerator {
             texel_y,
             _pad: [0.0; 2],
         };
-        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        gpu.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        // Single simulation step (combined sim+display in shader)
-        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Flowfield BG"),
-            layout: &self.bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(state.read_view()),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
-
+        // Single simulation step
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         {
-            let ts = profiler.and_then(|p| p.render_timestamps("Flowfield Sim", iw, ih));
-            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Flowfield Sim Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: state.write_view(),
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
+            // Compute dispatch path
+            let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Flowfield Compute BG"),
+                layout: &self.compute_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.uniform_buffer.as_entire_binding(),
                     },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: ts,
-                occlusion_query_set: None,
-                multiview_mask: None,
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(state.read_view()),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(state.write_view()),
+                    },
+                ],
             });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
+
+            {
+                let ts =
+                    profiler.and_then(|p| p.compute_timestamps("Flowfield Sim Compute", iw, ih));
+                let mut pass = gpu
+                    .encoder
+                    .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Flowfield Sim Compute Pass"),
+                        timestamp_writes: ts,
+                    });
+                pass.set_pipeline(&self.compute_pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(iw.div_ceil(16), ih.div_ceil(16), 1);
+            }
+        }
+
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        {
+            // Render pass fallback
+            let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Flowfield BG"),
+                layout: &self.bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(state.read_view()),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+
+            {
+                let ts = profiler.and_then(|p| p.render_timestamps("Flowfield Sim", iw, ih));
+                let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Flowfield Sim Pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: state.write_view(),
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: ts,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
 
         state.swap();
 
         // Blit half-res state to full-res output (with bilinear upscale)
-        self.blit.blit(gpu.device, gpu.encoder, state.read_view(), target);
+        self.blit
+            .blit(gpu.device, gpu.encoder, state.read_view(), target);
 
         ctx.anim_progress
     }

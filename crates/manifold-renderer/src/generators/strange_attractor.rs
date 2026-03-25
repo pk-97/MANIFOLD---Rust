@@ -1,9 +1,9 @@
-use manifold_core::GeneratorTypeId;
+use super::stateful_base::StatefulState;
 use crate::blit::BlitPipeline;
 use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
-use super::stateful_base::StatefulState;
+use manifold_core::GeneratorTypeId;
 
 // Parameter indices matching types.rs param_defs
 const TYPE: usize = 0;
@@ -45,7 +45,9 @@ struct AttractorUniforms {
 
 pub struct StrangeAttractorGenerator {
     state: Option<StatefulState>,
+    #[allow(dead_code)] // render fallback for non-hal builds
     pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     bgl: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
     sampler: wgpu::Sampler,
@@ -59,6 +61,11 @@ pub struct StrangeAttractorGenerator {
     position_data: Vec<f32>,
     // Track current attractor type to reinit on change
     current_type: i32,
+    // Compute splat pipeline (macOS + hal-encoding)
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    compute_pipeline: wgpu::ComputePipeline,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    compute_bgl: wgpu::BindGroupLayout,
 }
 
 impl StrangeAttractorGenerator {
@@ -163,6 +170,108 @@ impl StrangeAttractorGenerator {
             mapped_at_creation: false,
         });
 
+        // ── Compute splat pipeline (macOS + hal-encoding) ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (compute_pipeline, compute_bgl) = {
+            let compute_shader =
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("Attractor Splat Compute Shader"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        include_str!(
+                            "shaders/strange_attractor_splat_compute.wgsl"
+                        )
+                        .into(),
+                    ),
+                });
+
+            let cbgl = device.create_bind_group_layout(
+                &wgpu::BindGroupLayoutDescriptor {
+                    label: Some("Attractor Splat Compute BGL"),
+                    entries: &[
+                        // binding 0: uniforms
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // binding 1: state texture (filterable)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float {
+                                    filterable: true,
+                                },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        // binding 2: sampler
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Sampler(
+                                wgpu::SamplerBindingType::Filtering,
+                            ),
+                            count: None,
+                        },
+                        // binding 3: position texture (non-filterable, Rgba32Float)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 3,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type: wgpu::TextureSampleType::Float {
+                                    filterable: false,
+                                },
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        // binding 4: output storage texture
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 4,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::StorageTexture {
+                                access: wgpu::StorageTextureAccess::WriteOnly,
+                                format: STATE_FORMAT,
+                                view_dimension: wgpu::TextureViewDimension::D2,
+                            },
+                            count: None,
+                        },
+                    ],
+                },
+            );
+
+            let compute_layout = device.create_pipeline_layout(
+                &wgpu::PipelineLayoutDescriptor {
+                    label: Some("Attractor Splat Compute Layout"),
+                    bind_group_layouts: &[&cbgl],
+                    immediate_size: 0,
+                },
+            );
+
+            let cpipeline = device.create_compute_pipeline(
+                &wgpu::ComputePipelineDescriptor {
+                    label: Some("Attractor Splat Compute Pipeline"),
+                    layout: Some(&compute_layout),
+                    module: &compute_shader,
+                    entry_point: Some("cs_main"),
+                    compilation_options:
+                        wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                },
+            );
+
+            (cpipeline, cbgl)
+        };
+
         let blit = BlitPipeline::new(device, target_format);
 
         // Initialize trajectories — will be re-seeded properly on first render
@@ -182,6 +291,10 @@ impl StrangeAttractorGenerator {
             position_view: None,
             position_data,
             current_type: -1, // Force reinit on first render
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            compute_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            compute_bgl,
         }
     }
 
@@ -190,7 +303,11 @@ impl StrangeAttractorGenerator {
         let ih = (height / 2).max(1);
         if self.state.is_none() {
             self.state = Some(StatefulState::new(
-                device, iw, ih, STATE_FORMAT, "Attractor",
+                device,
+                iw,
+                ih,
+                STATE_FORMAT,
+                "Attractor",
             ));
         }
     }
@@ -244,11 +361,7 @@ impl StrangeAttractorGenerator {
                     p[2] + dp[2] * dt * 0.5,
                 ];
                 let dp2 = ode(attractor_type, mid, 0.0);
-                p = [
-                    p[0] + dp2[0] * dt,
-                    p[1] + dp2[1] * dt,
-                    p[2] + dp2[2] * dt,
-                ];
+                p = [p[0] + dp2[0] * dt, p[1] + dp2[1] * dt, p[2] + dp2[2] * dt];
             }
 
             self.trajectories[i] = p;
@@ -300,7 +413,11 @@ impl StrangeAttractorGenerator {
         let idx = (attractor_type as usize).min(4);
         let center = CENTERS[idx];
         let att_scale = SCALES[idx];
-        let uv_scale = if scale_param > 0.0 { 1.0 / scale_param } else { 1.0 };
+        let uv_scale = if scale_param > 0.0 {
+            1.0 / scale_param
+        } else {
+            1.0
+        };
 
         // Tilt constant (Unity: const float tilt = 0.3f)
         let tilt = 0.3f32;
@@ -400,8 +517,8 @@ fn ode(attractor_type: i32, p: [f32; 3], chaos: f32) -> [f32; 3] {
 
 // ODE constants matching Unity StrangeAttractorGenerator.cs EXACTLY
 fn lorenz(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let sigma = 10.0 + chaos * 4.0;    // Unity: 10 + c * 4
-    let rho = 28.0 + chaos * 8.0;      // Unity: 28 + c * 8
+    let sigma = 10.0 + chaos * 4.0; // Unity: 10 + c * 4
+    let rho = 28.0 + chaos * 8.0; // Unity: 28 + c * 8
     let beta = 8.0 / 3.0 + chaos * 0.5; // Unity: 8/3 + c * 0.5
     [
         sigma * (p[1] - p[0]),
@@ -411,21 +528,17 @@ fn lorenz(p: [f32; 3], chaos: f32) -> [f32; 3] {
 }
 
 fn rossler(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let a = 0.2 + chaos * 0.15;       // Unity: 0.2 + c * 0.15
-    let b = 0.2 + chaos * 0.1;        // Unity: 0.2 + c * 0.1
-    let c = 5.7 + chaos * 3.0;        // Unity: 5.7 + c * 3
-    [
-        -(p[1] + p[2]),
-        p[0] + a * p[1],
-        b + p[2] * (p[0] - c),
-    ]
+    let a = 0.2 + chaos * 0.15; // Unity: 0.2 + c * 0.15
+    let b = 0.2 + chaos * 0.1; // Unity: 0.2 + c * 0.1
+    let c = 5.7 + chaos * 3.0; // Unity: 5.7 + c * 3
+    [-(p[1] + p[2]), p[0] + a * p[1], b + p[2] * (p[0] - c)]
 }
 
 fn aizawa(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let a = 0.95 + chaos * 0.1;       // Unity: 0.95 + c * 0.1
-    let b = 0.7 + chaos * 0.2;        // Unity: 0.7 + c * 0.2
+    let a = 0.95 + chaos * 0.1; // Unity: 0.95 + c * 0.1
+    let b = 0.7 + chaos * 0.2; // Unity: 0.7 + c * 0.2
     let c = 0.6;
-    let d = 3.5 + chaos * 1.0;        // Unity: 3.5 + c * 1 (NOT 1.5)
+    let d = 3.5 + chaos * 1.0; // Unity: 3.5 + c * 1 (NOT 1.5)
     let e = 0.25;
     let f = 0.1;
     [
@@ -438,7 +551,7 @@ fn aizawa(p: [f32; 3], chaos: f32) -> [f32; 3] {
 }
 
 fn thomas(p: [f32; 3], chaos: f32) -> [f32; 3] {
-    let b = 0.208186 - chaos * 0.05;   // Unity: 0.208186 - c * 0.05 (SUBTRACT, not add)
+    let b = 0.208186 - chaos * 0.05; // Unity: 0.208186 - c * 0.05 (SUBTRACT, not add)
     [
         p[1].sin() - b * p[0],
         p[2].sin() - b * p[1],
@@ -477,12 +590,36 @@ impl Generator for StrangeAttractorGenerator {
         } else {
             0
         };
-        let trail = if ctx.param_count > TRAIL as u32 { ctx.params[TRAIL] } else { 0.98 };
-        let brightness = if ctx.param_count > BRIGHT as u32 { ctx.params[BRIGHT] } else { 2.0 };
-        let chaos = if ctx.param_count > CHAOS as u32 { ctx.params[CHAOS] } else { 0.0 };
-        let size = if ctx.param_count > SIZE as u32 { ctx.params[SIZE] } else { 1.5 };
-        let speed = if ctx.param_count > SPEED as u32 { ctx.params[SPEED] } else { 1.0 };
-        let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
+        let trail = if ctx.param_count > TRAIL as u32 {
+            ctx.params[TRAIL]
+        } else {
+            0.98
+        };
+        let brightness = if ctx.param_count > BRIGHT as u32 {
+            ctx.params[BRIGHT]
+        } else {
+            2.0
+        };
+        let chaos = if ctx.param_count > CHAOS as u32 {
+            ctx.params[CHAOS]
+        } else {
+            0.0
+        };
+        let size = if ctx.param_count > SIZE as u32 {
+            ctx.params[SIZE]
+        } else {
+            1.5
+        };
+        let speed = if ctx.param_count > SPEED as u32 {
+            ctx.params[SPEED]
+        } else {
+            1.0
+        };
+        let scale = if ctx.param_count > SCALE as u32 {
+            ctx.params[SCALE]
+        } else {
+            1.0
+        };
         // SNAP param is at index 7 — handled at app layer (trigger_count cycling)
 
         // Reinitialize trajectories on type change
@@ -513,61 +650,128 @@ impl Generator for StrangeAttractorGenerator {
             texel_y,
             _pad: [0.0; 2],
         };
-        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        gpu.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         // GPU pass: decay + splat
-        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Attractor BG"),
-            layout: &self.bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(state.read_view()),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(
-                        self.position_view.as_ref().unwrap(),
-                    ),
-                },
-            ],
-        });
-
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         {
-            let ts = profiler.and_then(|p| p.render_timestamps("Attractor Splat", iw, ih));
-            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Attractor Splat Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: state.write_view(),
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
+            // Compute dispatch path
+            let bind_group =
+                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Attractor Splat Compute BG"),
+                    layout: &self.compute_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.uniform_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                state.read_view(),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(
+                                self.position_view.as_ref().unwrap(),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: wgpu::BindingResource::TextureView(
+                                state.write_view(),
+                            ),
+                        },
+                    ],
+                });
+
+            {
+                let ts = profiler.and_then(|p| {
+                    p.compute_timestamps("Attractor Splat Compute", iw, ih)
+                });
+                let mut pass = gpu.encoder.begin_compute_pass(
+                    &wgpu::ComputePassDescriptor {
+                        label: Some("Attractor Splat Compute Pass"),
+                        timestamp_writes: ts,
                     },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: ts,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
+                );
+                pass.set_pipeline(&self.compute_pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.dispatch_workgroups(iw.div_ceil(16), ih.div_ceil(16), 1);
+            }
+        }
+
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        {
+            // Render pass fallback
+            let bind_group =
+                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Attractor BG"),
+                    layout: &self.bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.uniform_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                state.read_view(),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(
+                                self.position_view.as_ref().unwrap(),
+                            ),
+                        },
+                    ],
+                });
+
+            {
+                let ts = profiler
+                    .and_then(|p| p.render_timestamps("Attractor Splat", iw, ih));
+                let mut pass = gpu.encoder.begin_render_pass(
+                    &wgpu::RenderPassDescriptor {
+                        label: Some("Attractor Splat Pass"),
+                        color_attachments: &[Some(
+                            wgpu::RenderPassColorAttachment {
+                                view: state.write_view(),
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            },
+                        )],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: ts,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    },
+                );
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &bind_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
         }
 
         state.swap();
 
         // Blit half-res state to full-res output
-        self.blit.blit(gpu.device, gpu.encoder, state.read_view(), target);
+        self.blit
+            .blit(gpu.device, gpu.encoder, state.read_view(), target);
 
         ctx.anim_progress
     }

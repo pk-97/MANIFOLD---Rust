@@ -1016,7 +1016,9 @@ impl ContentPipeline {
         // Lazy init PQ encoder
         if self.pq_encoder.is_none() {
             self.pq_encoder =
-                Some(manifold_renderer::pq_encoder::PqEncoder::new(&gpu.device, w, h));
+                Some(manifold_renderer::pq_encoder::PqEncoder::new(
+                    &gpu.device, w, h, self.hal_ctx.as_ref(),
+                ));
             log::info!("[ContentPipeline] Created PQ encoder {}x{}", w, h);
         }
         let pq = self.pq_encoder.as_ref().unwrap();
