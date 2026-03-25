@@ -90,6 +90,69 @@ impl ReadbackRequest {
         self.map_rx = None; // Reset — map_async will be called on first try_read()
     }
 
+    /// HAL path: same as submit but encodes copy_texture_to_buffer via hal encoder.
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    pub fn submit_hal(
+        &mut self,
+        gpu: &mut crate::gpu_encoder::GpuEncoder,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) {
+        use wgpu::hal::CommandEncoder as _;
+        type MetalApi = wgpu::hal::api::Metal;
+
+        let bytes_per_row = align_to_256(width * 4);
+        let buffer_size = (bytes_per_row * height) as u64;
+
+        let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Readback Staging"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Extract hal pointers for the copy
+        let hal_tex_ptr = {
+            let g = unsafe { texture.as_hal::<MetalApi>() }
+                .expect("readback texture not Metal");
+            &*g as *const _
+        };
+        let hal_buf_ptr = {
+            let g = unsafe { staging.as_hal::<MetalApi>() }
+                .expect("readback staging not Metal");
+            &*g as *const _
+        };
+        let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+        unsafe {
+            hal_enc.copy_texture_to_buffer(
+                &*hal_tex_ptr,
+                wgpu::wgt::TextureUses::COPY_SRC,
+                &*hal_buf_ptr,
+                std::iter::once(wgpu::hal::BufferTextureCopy {
+                    buffer_layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bytes_per_row),
+                        rows_per_image: None,
+                    },
+                    texture_base: wgpu::hal::TextureCopyBase {
+                        mip_level: 0,
+                        array_layer: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::hal::FormatAspects::COLOR,
+                    },
+                    size: wgpu::hal::CopyExtent { width, height, depth: 1 },
+                }),
+            );
+        }
+
+        self.staging_buffer = Some(staging);
+        self.width = width;
+        self.height = height;
+        self.pending = true;
+        self.map_rx = None;
+    }
+
     /// Try to read pixel data from the staging buffer.
     /// Returns Some(pixels) if the GPU has finished writing, None otherwise.
     /// On success, clears the pending flag and returns tightly-packed RGBA8 rows

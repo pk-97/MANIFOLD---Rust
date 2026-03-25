@@ -1103,12 +1103,13 @@ impl PostProcessEffect for BlobTrackingFX {
                     hal_ctx.device().destroy_bind_group(bg);
                 }
 
-                // Readback copy — use wgpu encoder (readback is throttled, rare)
-                // The dummy encoder won't be submitted in the hal path, so we
-                // encode the readback copy via hal copy_texture_to_buffer instead.
-                // For simplicity, skip readback in hal path — blob data uses
-                // previous frame's results (readback is already 1+ frame behind).
-                // TODO: add hal copy_texture_to_buffer for readback
+                // Readback via hal copy_texture_to_buffer
+                state.readback.submit_hal(
+                    gpu,
+                    &state.downsample_rt.texture,
+                    READBACK_WIDTH,
+                    READBACK_HEIGHT,
+                );
                 state.pending_threshold = threshold;
                 state.pending_sensitivity = sensitivity;
                 state.last_readback_frame = frame;
