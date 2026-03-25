@@ -410,8 +410,14 @@ impl Generator for FlowfieldGenerator {
         state.swap();
 
         // Blit half-res state to full-res output (with bilinear upscale)
-        self.blit
-            .blit(gpu.device, gpu.encoder, state.read_view(), target);
+        self.blit.blit(
+            gpu.device,
+            gpu.encoder,
+            state.read_view(),
+            target,
+            ctx.width,
+            ctx.height,
+        );
 
         ctx.anim_progress
     }

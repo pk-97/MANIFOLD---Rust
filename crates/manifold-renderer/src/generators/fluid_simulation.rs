@@ -178,14 +178,35 @@ pub struct FluidSimulationGenerator {
     seed_pipeline: wgpu::ComputePipeline,
     seed_bgl: wgpu::BindGroupLayout,
 
-    // Fragment pipelines
+    // Fragment pipelines (render fallback for non-hal builds)
+    #[allow(dead_code)]
     blur_pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     blur_vector_pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     blur_bgl: wgpu::BindGroupLayout,
+    #[allow(dead_code)]
     gradient_rotate_pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     gradient_rotate_bgl: wgpu::BindGroupLayout,
+    #[allow(dead_code)]
     display_pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     display_bgl: wgpu::BindGroupLayout,
+
+    // Compute pipelines for blur/gradient/display (macOS + hal-encoding)
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    blur_compute_pipeline: wgpu::ComputePipeline,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    blur_compute_bgl: wgpu::BindGroupLayout,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    gradient_compute_pipeline: wgpu::ComputePipeline,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    gradient_compute_bgl: wgpu::BindGroupLayout,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    display_compute_pipeline: wgpu::ComputePipeline,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    display_compute_bgl: wgpu::BindGroupLayout,
 
     // GPU resources (lazy-init)
     particle_buffer: Option<wgpu::Buffer>,
@@ -447,6 +468,129 @@ impl FluidSimulationGenerator {
             device, &display_shader, &display_layout, target_format, "FluidSim Display",
         );
 
+        // ── Compute pipelines for blur/gradient/display (macOS + hal-encoding) ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (
+            blur_compute_pipeline,
+            blur_compute_bgl,
+            gradient_compute_pipeline,
+            gradient_compute_bgl,
+            display_compute_pipeline,
+            display_compute_bgl,
+        ) = {
+            // Blur compute: uniform + source texture + sampler + output storage
+            let blur_cs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("FluidSim Blur Compute Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/gaussian_blur_compute.wgsl").into(),
+                ),
+            });
+            let bc_bgl =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("FluidSim Blur Compute BGL"),
+                    entries: &[
+                        bgl_uniform(0, wgpu::ShaderStages::COMPUTE),
+                        bgl_texture_filterable(1, wgpu::ShaderStages::COMPUTE),
+                        bgl_sampler(2, wgpu::ShaderStages::COMPUTE),
+                        bgl_storage_texture_write(
+                            3,
+                            wgpu::ShaderStages::COMPUTE,
+                            DENSITY_FORMAT,
+                        ),
+                    ],
+                });
+            let bc_layout =
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("FluidSim Blur Compute Layout"),
+                    bind_group_layouts: &[&bc_bgl],
+                    immediate_size: 0,
+                });
+            let bc_pipeline =
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("FluidSim Blur Compute Pipeline"),
+                    layout: Some(&bc_layout),
+                    module: &blur_cs,
+                    entry_point: Some("cs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                });
+
+            // Gradient compute: uniform + density texture (unfilterable) + output storage
+            let gradient_cs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("FluidSim GradientRotate Compute Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/fluid_gradient_rotate_compute.wgsl").into(),
+                ),
+            });
+            let gc_bgl =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("FluidSim GradientRotate Compute BGL"),
+                    entries: &[
+                        bgl_uniform(0, wgpu::ShaderStages::COMPUTE),
+                        bgl_texture_unfilterable(1, wgpu::ShaderStages::COMPUTE),
+                        bgl_storage_texture_write(
+                            2,
+                            wgpu::ShaderStages::COMPUTE,
+                            VECTOR_FORMAT,
+                        ),
+                    ],
+                });
+            let gc_layout =
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("FluidSim GradientRotate Compute Layout"),
+                    bind_group_layouts: &[&gc_bgl],
+                    immediate_size: 0,
+                });
+            let gc_pipeline =
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("FluidSim GradientRotate Compute Pipeline"),
+                    layout: Some(&gc_layout),
+                    module: &gradient_cs,
+                    entry_point: Some("cs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                });
+
+            // Display compute: uniform + density texture + sampler + output storage
+            let display_cs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("FluidSim Display Compute Shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("shaders/fluid_display_compute.wgsl").into(),
+                ),
+            });
+            let dc_bgl =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("FluidSim Display Compute BGL"),
+                    entries: &[
+                        bgl_uniform(0, wgpu::ShaderStages::COMPUTE),
+                        bgl_texture_filterable(1, wgpu::ShaderStages::COMPUTE),
+                        bgl_sampler(2, wgpu::ShaderStages::COMPUTE),
+                        bgl_storage_texture_write(
+                            3,
+                            wgpu::ShaderStages::COMPUTE,
+                            wgpu::TextureFormat::Rgba16Float,
+                        ),
+                    ],
+                });
+            let dc_layout =
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("FluidSim Display Compute Layout"),
+                    bind_group_layouts: &[&dc_bgl],
+                    immediate_size: 0,
+                });
+            let dc_pipeline =
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("FluidSim Display Compute Pipeline"),
+                    layout: Some(&dc_layout),
+                    module: &display_cs,
+                    entry_point: Some("cs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                });
+
+            (bc_pipeline, bc_bgl, gc_pipeline, gc_bgl, dc_pipeline, dc_bgl)
+        };
+
         // ── Uniform buffers ──
         let splat_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<SplatUniforms>(), "FluidSim Splat Uniforms");
         let resolve_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<ResolveUniforms>(), "FluidSim Resolve Uniforms");
@@ -474,6 +618,18 @@ impl FluidSimulationGenerator {
             gradient_rotate_bgl,
             display_pipeline,
             display_bgl,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            blur_compute_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            blur_compute_bgl,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            gradient_compute_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            gradient_compute_bgl,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            display_compute_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            display_compute_bgl,
             particle_buffer: None,
             scatter_accum: None,
             density_rt: None,
@@ -623,6 +779,7 @@ impl FluidSimulationGenerator {
         pass.dispatch_workgroups(self.active_count.div_ceil(256), 1, 1);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn run_blur_pass(
         &self,
         device: &wgpu::Device,
@@ -636,6 +793,8 @@ impl FluidSimulationGenerator {
         texel_x: f32,
         texel_y: f32,
         buf_index: usize,
+        target_w: u32,
+        target_h: u32,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let uniforms = BlurUniforms {
@@ -649,36 +808,113 @@ impl FluidSimulationGenerator {
         };
         queue.write_buffer(&self.blur_uniform_bufs[buf_index], 0, bytemuck::bytes_of(&uniforms));
 
-        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("FluidSim Blur BG"),
-            layout: &self.blur_bgl,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.blur_uniform_bufs[buf_index].as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(source) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-            ],
-        });
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        {
+            let _ = pipeline;
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("FluidSim Blur Compute BG"),
+                layout: &self.blur_compute_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.blur_uniform_bufs[buf_index]
+                            .as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(
+                            &self.sampler,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(target),
+                    },
+                ],
+            });
 
-        let ts = profiler.and_then(|p| p.render_timestamps("FluidSim Blur", self.scatter_width, self.scatter_height));
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("FluidSim Blur Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: ts,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &bg, &[]);
-        pass.draw(0..3, 0..1);
+            let ts = profiler.and_then(|p| {
+                p.compute_timestamps(
+                    "FluidSim Blur Compute",
+                    target_w,
+                    target_h,
+                )
+            });
+            let mut pass =
+                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("FluidSim Blur Compute Pass"),
+                    timestamp_writes: ts,
+                });
+            pass.set_pipeline(&self.blur_compute_pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(
+                target_w.div_ceil(16),
+                target_h.div_ceil(16),
+                1,
+            );
+        }
+
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        {
+            let _ = (target_w, target_h);
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("FluidSim Blur BG"),
+                layout: &self.blur_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.blur_uniform_bufs[buf_index]
+                            .as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(
+                            &self.sampler,
+                        ),
+                    },
+                ],
+            });
+
+            let ts = profiler.and_then(|p| {
+                p.render_timestamps(
+                    "FluidSim Blur",
+                    self.scatter_width,
+                    self.scatter_height,
+                )
+            });
+            let mut pass =
+                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("FluidSim Blur Pass"),
+                    color_attachments: &[Some(
+                        wgpu::RenderPassColorAttachment {
+                            view: target,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(
+                                    wgpu::Color::TRANSPARENT,
+                                ),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        },
+                    )],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: ts,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
     }
 }
 
@@ -917,19 +1153,19 @@ impl Generator for FluidSimulationGenerator {
         let density_rt = self.density_rt.as_ref().unwrap();
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         self.run_blur_pass(gpu.device, gpu.queue, gpu.encoder, &density_rt.view, &blur_density_rt.view,
-            &self.blur_pipeline, [0.0, 0.0], 0.0, blur_texel_x, blur_texel_y, 0, profiler);
+            &self.blur_pipeline, [0.0, 0.0], 0.0, blur_texel_x, blur_texel_y, 0, bw, bh, profiler);
 
         // Step 2: H blur: blur_density_rt → blur_temp_rt
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(gpu.device, gpu.queue, gpu.encoder, &blur_density_rt.view, &blur_temp_rt.view,
-            &self.blur_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, 1, profiler);
+            &self.blur_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, 1, bw, bh, profiler);
 
         // Step 3: V blur: blur_temp_rt → blur_density_rt (in-place result)
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(gpu.device, gpu.queue, gpu.encoder, &blur_temp_rt.view, &blur_density_rt.view,
-            &self.blur_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, 2, profiler);
+            &self.blur_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, 2, bw, bh, profiler);
 
         // Gradient + Rotate: blurredDensity → vector field
         // Unity: densityAreaScale = (trailWidth * trailHeight) / SCATTER_REFERENCE_AREA
@@ -951,32 +1187,104 @@ impl Generator for FluidSimulationGenerator {
         // Unity: Graphics.Blit(blurredDensityRT, vectorFieldRT, gradientMat)
         let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
-        let gradient_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("FluidSim GradientRotate BG"),
-            layout: &self.gradient_rotate_bgl,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.gradient_uniform_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&blur_density_rt.view) },
-            ],
-        });
+
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         {
-            let ts = profiler.and_then(|p| p.render_timestamps("FluidSim GradientRotate", bw, bh));
-            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("FluidSim GradientRotate Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &vector_field_rt.view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: ts,
-                occlusion_query_set: None,
-                multiview_mask: None,
+            let gradient_bg =
+                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("FluidSim GradientRotate Compute BG"),
+                    layout: &self.gradient_compute_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self
+                                .gradient_uniform_buf
+                                .as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                &blur_density_rt.view,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(
+                                &vector_field_rt.view,
+                            ),
+                        },
+                    ],
+                });
+            let ts = profiler.and_then(|p| {
+                p.compute_timestamps(
+                    "FluidSim GradientRotate Compute",
+                    bw,
+                    bh,
+                )
             });
+            let mut pass =
+                gpu.encoder
+                    .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some(
+                            "FluidSim GradientRotate Compute Pass",
+                        ),
+                        timestamp_writes: ts,
+                    });
+            pass.set_pipeline(&self.gradient_compute_pipeline);
+            pass.set_bind_group(0, &gradient_bg, &[]);
+            pass.dispatch_workgroups(
+                bw.div_ceil(16),
+                bh.div_ceil(16),
+                1,
+            );
+        }
+
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        {
+            let gradient_bg =
+                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("FluidSim GradientRotate BG"),
+                    layout: &self.gradient_rotate_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self
+                                .gradient_uniform_buf
+                                .as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                &blur_density_rt.view,
+                            ),
+                        },
+                    ],
+                });
+            let ts = profiler.and_then(|p| {
+                p.render_timestamps("FluidSim GradientRotate", bw, bh)
+            });
+            let mut pass =
+                gpu.encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("FluidSim GradientRotate Pass"),
+                        color_attachments: &[Some(
+                            wgpu::RenderPassColorAttachment {
+                                view: &vector_field_rt.view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(
+                                        wgpu::Color::TRANSPARENT,
+                                    ),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            },
+                        )],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: ts,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
             pass.set_pipeline(&self.gradient_rotate_pipeline);
             pass.set_bind_group(0, &gradient_bg, &[]);
             pass.draw(0..3, 0..1);
@@ -987,11 +1295,11 @@ impl Generator for FluidSimulationGenerator {
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(gpu.device, gpu.queue, gpu.encoder, &vector_field_rt.view, &blur_temp_rt.view,
-            &self.blur_vector_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, 3, profiler);
+            &self.blur_vector_pipeline, [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, 3, bw, bh, profiler);
         let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
         let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
         self.run_blur_pass(gpu.device, gpu.queue, gpu.encoder, &blur_temp_rt.view, &vector_field_rt.view,
-            &self.blur_vector_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, 4, profiler);
+            &self.blur_vector_pipeline, [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, 4, bw, bh, profiler);
 
         // ================================================================
         // PHASE 3: Position Integration — simulate shader
@@ -1071,33 +1379,117 @@ impl Generator for FluidSimulationGenerator {
 
         let density_rt = self.density_rt.as_ref().unwrap();
 
-        let display_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("FluidSim Display BG"),
-            layout: &self.display_bgl,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.display_uniform_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&density_rt.view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-            ],
-        });
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         {
-            let ts = profiler.and_then(|p| p.render_timestamps("FluidSim Display", ctx.width, ctx.height));
-            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("FluidSim Display Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: ts,
-                occlusion_query_set: None,
-                multiview_mask: None,
+            let display_bg =
+                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("FluidSim Display Compute BG"),
+                    layout: &self.display_compute_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self
+                                .display_uniform_buf
+                                .as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                &density_rt.view,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(
+                                &self.sampler,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(
+                                target,
+                            ),
+                        },
+                    ],
+                });
+            let ts = profiler.and_then(|p| {
+                p.compute_timestamps(
+                    "FluidSim Display Compute",
+                    ctx.width,
+                    ctx.height,
+                )
             });
+            let mut pass =
+                gpu.encoder
+                    .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("FluidSim Display Compute Pass"),
+                        timestamp_writes: ts,
+                    });
+            pass.set_pipeline(&self.display_compute_pipeline);
+            pass.set_bind_group(0, &display_bg, &[]);
+            pass.dispatch_workgroups(
+                ctx.width.div_ceil(16),
+                ctx.height.div_ceil(16),
+                1,
+            );
+        }
+
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        {
+            let display_bg =
+                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("FluidSim Display BG"),
+                    layout: &self.display_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self
+                                .display_uniform_buf
+                                .as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                &density_rt.view,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(
+                                &self.sampler,
+                            ),
+                        },
+                    ],
+                });
+            let ts = profiler.and_then(|p| {
+                p.render_timestamps(
+                    "FluidSim Display",
+                    ctx.width,
+                    ctx.height,
+                )
+            });
+            let mut pass =
+                gpu.encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("FluidSim Display Pass"),
+                        color_attachments: &[Some(
+                            wgpu::RenderPassColorAttachment {
+                                view: target,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(
+                                        wgpu::Color::TRANSPARENT,
+                                    ),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            },
+                        )],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: ts,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
             pass.set_pipeline(&self.display_pipeline);
             pass.set_bind_group(0, &display_bg, &[]);
             pass.draw(0..3, 0..1);
@@ -1202,6 +1594,24 @@ fn bgl_sampler(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupL
         binding,
         visibility,
         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+fn bgl_storage_texture_write(
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+    format: wgpu::TextureFormat,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
         count: None,
     }
 }

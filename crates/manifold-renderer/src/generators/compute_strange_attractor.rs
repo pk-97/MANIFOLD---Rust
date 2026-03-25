@@ -133,8 +133,16 @@ pub struct ComputeStrangeAttractorGenerator {
     resolve_bgl: wgpu::BindGroupLayout,
 
     // Display pipeline — fragment shader reads density texture
+    #[allow(dead_code)] // render fallback for non-hal builds
     display_pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     display_bgl: wgpu::BindGroupLayout,
+
+    // Compute display pipeline (macOS + hal-encoding)
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    display_compute_pipeline: wgpu::ComputePipeline,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    display_compute_bgl: wgpu::BindGroupLayout,
 
     // Uniform buffers
     sim_uniform_buf: wgpu::Buffer,
@@ -319,6 +327,62 @@ impl ComputeStrangeAttractorGenerator {
             cache: None,
         });
 
+        // ── Compute display pipeline (macOS + hal-encoding) ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (display_compute_pipeline, display_compute_bgl) = {
+            let compute_shader =
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("AttractorDisplay Compute Shader"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        include_str!(
+                            "shaders/compute_strange_attractor_compute.wgsl"
+                        )
+                        .into(),
+                    ),
+                });
+
+            let cbgl =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("AttractorDisplay Compute BGL"),
+                    entries: &[
+                        bgl_uniform(0, wgpu::ShaderStages::COMPUTE),
+                        bgl_texture_filterable(1, wgpu::ShaderStages::COMPUTE),
+                        bgl_sampler(2, wgpu::ShaderStages::COMPUTE),
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 3,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::StorageTexture {
+                                access: wgpu::StorageTextureAccess::WriteOnly,
+                                format: wgpu::TextureFormat::Rgba16Float,
+                                view_dimension:
+                                    wgpu::TextureViewDimension::D2,
+                            },
+                            count: None,
+                        },
+                    ],
+                });
+
+            let clayout =
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("AttractorDisplay Compute Layout"),
+                    bind_group_layouts: &[&cbgl],
+                    immediate_size: 0,
+                });
+
+            let cpipeline =
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("AttractorDisplay Compute Pipeline"),
+                    layout: Some(&clayout),
+                    module: &compute_shader,
+                    entry_point: Some("cs_main"),
+                    compilation_options:
+                        wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                });
+
+            (cpipeline, cbgl)
+        };
+
         // ── Uniform buffers ──
         let sim_uniform_buf     = create_uniform_buf(device, std::mem::size_of::<SimUniforms>(),     "Attractor Sim Uniforms");
         let splat_uniform_buf   = create_uniform_buf(device, std::mem::size_of::<SplatUniforms>(),   "Attractor Splat Uniforms");
@@ -344,6 +408,10 @@ impl ComputeStrangeAttractorGenerator {
             resolve_bgl,
             display_pipeline,
             display_bgl,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            display_compute_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            display_compute_bgl,
             sim_uniform_buf,
             splat_uniform_buf,
             resolve_uniform_buf,
@@ -635,34 +703,119 @@ impl Generator for ComputeStrangeAttractorGenerator {
             uv_scale: scale,  // display uses raw scale, not 1/scale
         }));
 
-        let display_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Attractor Display BG"),
-            layout: &self.display_bgl,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.display_uniform_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&density_rt.view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-            ],
-        });
-
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         {
-            let ts = profiler.and_then(|p| p.render_timestamps("Attractor Display", ctx.width, ctx.height));
-            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Attractor Display"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: ts,
-                occlusion_query_set: None,
-                multiview_mask: None,
+            let display_bg =
+                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Attractor Display Compute BG"),
+                    layout: &self.display_compute_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self
+                                .display_uniform_buf
+                                .as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                &density_rt.view,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(
+                                &self.sampler,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(
+                                target,
+                            ),
+                        },
+                    ],
+                });
+
+            let ts = profiler.and_then(|p| {
+                p.compute_timestamps(
+                    "Attractor Display Compute",
+                    ctx.width,
+                    ctx.height,
+                )
             });
+            let mut pass =
+                gpu.encoder
+                    .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("Attractor Display Compute Pass"),
+                        timestamp_writes: ts,
+                    });
+            pass.set_pipeline(&self.display_compute_pipeline);
+            pass.set_bind_group(0, &display_bg, &[]);
+            pass.dispatch_workgroups(
+                ctx.width.div_ceil(16),
+                ctx.height.div_ceil(16),
+                1,
+            );
+        }
+
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        {
+            let display_bg =
+                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Attractor Display BG"),
+                    layout: &self.display_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self
+                                .display_uniform_buf
+                                .as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                &density_rt.view,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(
+                                &self.sampler,
+                            ),
+                        },
+                    ],
+                });
+
+            let ts = profiler.and_then(|p| {
+                p.render_timestamps(
+                    "Attractor Display",
+                    ctx.width,
+                    ctx.height,
+                )
+            });
+            let mut pass =
+                gpu.encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Attractor Display"),
+                        color_attachments: &[Some(
+                            wgpu::RenderPassColorAttachment {
+                                view: target,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Clear(
+                                        wgpu::Color::TRANSPARENT,
+                                    ),
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            },
+                        )],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: ts,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
             pass.set_pipeline(&self.display_pipeline);
             pass.set_bind_group(0, &display_bg, &[]);
             pass.draw(0..3, 0..1);

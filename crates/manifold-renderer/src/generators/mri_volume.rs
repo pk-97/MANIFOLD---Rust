@@ -38,10 +38,17 @@ struct SliceUniforms {
 
 pub struct MriVolumeGenerator {
     // Pipeline
+    #[allow(dead_code)] // render fallback for non-hal builds
     slice_pipeline: wgpu::RenderPipeline,
+    #[allow(dead_code)]
     slice_bgl: wgpu::BindGroupLayout,
     slice_uniform_buf: wgpu::Buffer,
     sampler: wgpu::Sampler,
+    // Compute slice pipeline (macOS + hal-encoding)
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    slice_compute_pipeline: wgpu::ComputePipeline,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    slice_compute_bgl: wgpu::BindGroupLayout,
     // Current slice texture (R8Unorm 2D)
     slice_texture: Option<wgpu::Texture>,
     slice_view: Option<wgpu::TextureView>,
@@ -152,6 +159,96 @@ impl MriVolumeGenerator {
             ..Default::default()
         });
 
+        // ── Compute slice pipeline (macOS + hal-encoding) ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (slice_compute_pipeline, slice_compute_bgl) = {
+            let compute_shader =
+                device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("MRI Slice Compute Shader"),
+                    source: wgpu::ShaderSource::Wgsl(
+                        include_str!("shaders/mri_slice_compute.wgsl").into(),
+                    ),
+                });
+
+            let cbgl = device.create_bind_group_layout(
+                &wgpu::BindGroupLayoutDescriptor {
+                    label: Some("MRI Slice Compute BGL"),
+                    entries: &[
+                        // binding 0: uniforms
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 0,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Uniform,
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        // binding 1: slice texture (filterable)
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 1,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Texture {
+                                sample_type:
+                                    wgpu::TextureSampleType::Float {
+                                        filterable: true,
+                                    },
+                                view_dimension:
+                                    wgpu::TextureViewDimension::D2,
+                                multisampled: false,
+                            },
+                            count: None,
+                        },
+                        // binding 2: sampler
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Sampler(
+                                wgpu::SamplerBindingType::Filtering,
+                            ),
+                            count: None,
+                        },
+                        // binding 3: output storage texture
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 3,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::StorageTexture {
+                                access:
+                                    wgpu::StorageTextureAccess::WriteOnly,
+                                format: wgpu::TextureFormat::Rgba16Float,
+                                view_dimension:
+                                    wgpu::TextureViewDimension::D2,
+                            },
+                            count: None,
+                        },
+                    ],
+                },
+            );
+
+            let clayout = device.create_pipeline_layout(
+                &wgpu::PipelineLayoutDescriptor {
+                    label: Some("MRI Slice Compute Layout"),
+                    bind_group_layouts: &[&cbgl],
+                    immediate_size: 0,
+                },
+            );
+
+            let cpipeline = device.create_compute_pipeline(
+                &wgpu::ComputePipelineDescriptor {
+                    label: Some("MRI Slice Compute Pipeline"),
+                    layout: Some(&clayout),
+                    module: &compute_shader,
+                    entry_point: Some("cs_main"),
+                    compilation_options:
+                        wgpu::PipelineCompilationOptions::default(),
+                    cache: None,
+                },
+            );
+
+            (cpipeline, cbgl)
+        };
+
         let scans = discover_scans(&PathBuf::from("assets/mri-data/volumes"));
         if scans.is_empty() {
             log::warn!("MRI Volume: no scan directories found");
@@ -198,6 +295,10 @@ impl MriVolumeGenerator {
             slice_bgl,
             slice_uniform_buf,
             sampler,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            slice_compute_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            slice_compute_bgl,
             slice_texture: None,
             slice_view: None,
             current_tex_dims: (0, 0),
@@ -421,55 +522,122 @@ impl Generator for MriVolumeGenerator {
             bytemuck::bytes_of(&uniforms),
         );
 
-        let bind_group =
-            gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("MRI Slice BG"),
-                layout: &self.slice_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self
-                            .slice_uniform_buf
-                            .as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(
-                            &self.sampler,
-                        ),
-                    },
-                ],
-            });
-
-        let ts = profiler.and_then(|p| {
-            p.render_timestamps("MRI Slice", ctx.width, ctx.height)
-        });
-        let mut pass =
-            gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("MRI Slice Pass"),
-                color_attachments: &[Some(
-                    wgpu::RenderPassColorAttachment {
-                        view: target,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: wgpu::StoreOp::Store,
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        {
+            let bind_group = gpu.device.create_bind_group(
+                &wgpu::BindGroupDescriptor {
+                    label: Some("MRI Slice Compute BG"),
+                    layout: &self.slice_compute_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self
+                                .slice_uniform_buf
+                                .as_entire_binding(),
                         },
-                    },
-                )],
-                depth_stencil_attachment: None,
-                timestamp_writes: ts,
-                occlusion_query_set: None,
-                multiview_mask: None,
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource:
+                                wgpu::BindingResource::TextureView(view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(
+                                &self.sampler,
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource:
+                                wgpu::BindingResource::TextureView(target),
+                        },
+                    ],
+                },
+            );
+
+            let ts = profiler.and_then(|p| {
+                p.compute_timestamps(
+                    "MRI Slice Compute",
+                    ctx.width,
+                    ctx.height,
+                )
             });
-        pass.set_pipeline(&self.slice_pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.draw(0..3, 0..1);
+            let mut pass = gpu.encoder.begin_compute_pass(
+                &wgpu::ComputePassDescriptor {
+                    label: Some("MRI Slice Compute Pass"),
+                    timestamp_writes: ts,
+                },
+            );
+            pass.set_pipeline(&self.slice_compute_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(
+                ctx.width.div_ceil(16),
+                ctx.height.div_ceil(16),
+                1,
+            );
+        }
+
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        {
+            let bind_group = gpu.device.create_bind_group(
+                &wgpu::BindGroupDescriptor {
+                    label: Some("MRI Slice BG"),
+                    layout: &self.slice_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self
+                                .slice_uniform_buf
+                                .as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource:
+                                wgpu::BindingResource::TextureView(view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(
+                                &self.sampler,
+                            ),
+                        },
+                    ],
+                },
+            );
+
+            let ts = profiler.and_then(|p| {
+                p.render_timestamps(
+                    "MRI Slice",
+                    ctx.width,
+                    ctx.height,
+                )
+            });
+            let mut pass = gpu.encoder.begin_render_pass(
+                &wgpu::RenderPassDescriptor {
+                    label: Some("MRI Slice Pass"),
+                    color_attachments: &[Some(
+                        wgpu::RenderPassColorAttachment {
+                            view: target,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(
+                                    wgpu::Color::BLACK,
+                                ),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        },
+                    )],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: ts,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                },
+            );
+            pass.set_pipeline(&self.slice_pipeline);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
 
         ctx.anim_progress
     }
