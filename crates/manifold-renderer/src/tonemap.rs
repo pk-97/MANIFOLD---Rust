@@ -306,6 +306,27 @@ impl TonemapPipeline {
         settings: &TonemapSettings,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
+        // --- hal path: encode via hal command encoder ---
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if gpu.has_hal_encoder() {
+            type MetalApi = wgpu::hal::api::Metal;
+            let src_ptr = {
+                let g = unsafe { hdr_source.as_hal::<MetalApi>() }
+                    .expect("hdr_source not Metal");
+                &*g as *const _
+            };
+            let out_ptr = {
+                let g = unsafe { self.output.view.as_hal::<MetalApi>() }
+                    .expect("tonemap output not Metal");
+                &*g as *const _
+            };
+            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+            unsafe {
+                self.apply_hal(hal_enc, hal_ctx, &*src_ptr, &*out_ptr, settings);
+            }
+            return;
+        }
+
         // Realtime HDR preview uses EDR passthrough (3) — no ACES compression,
         // linear values passed directly to macOS EDR with soft-clip at display peak.
         // Mode 2 (ACES EDR) retained for explicit use. Mode 1 reserved for PQ export.

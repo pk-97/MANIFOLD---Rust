@@ -383,6 +383,31 @@ impl SimpleBlitHelper {
         self.ring_index.set(self.ring_index.get() + 1);
         let byte_offset = slot * self.slot_stride;
 
+        // --- hal path: encode via hal command encoder ---
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if gpu.has_hal_encoder() {
+            type MetalApi = wgpu::hal::api::Metal;
+            let src_ptr = {
+                let g = unsafe { source_view.as_hal::<MetalApi>() }
+                    .expect("source not Metal");
+                &*g as *const _
+            };
+            let tgt_ptr = {
+                let g = unsafe { target_view.as_hal::<MetalApi>() }
+                    .expect("target not Metal");
+                &*g as *const _
+            };
+            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+            unsafe {
+                self.draw_hal(
+                    hal_enc, hal_ctx, &*src_ptr, &*tgt_ptr,
+                    uniform_bytes, width, height,
+                    store_op == wgpu::StoreOp::Store,
+                );
+            }
+            return;
+        }
+
         gpu.queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
 
         // Update cached bind group if source texture changed (mutation done

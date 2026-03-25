@@ -273,6 +273,7 @@ impl WetDryLerpPipeline {
 
     /// Blend dry and wet textures into the target.
     /// wet_dry = 1.0 means fully wet (effects applied), 0.0 means fully dry (bypass).
+    // TODO(3e): wire hal branch when dimensions are available
     pub fn apply(
         &self,
         gpu: &mut GpuEncoder,

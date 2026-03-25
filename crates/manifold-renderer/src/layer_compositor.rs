@@ -276,6 +276,39 @@ impl BlendResources {
     ) {
         let offset = arena.push(uniforms);
 
+        // --- hal path: encode via hal command encoder ---
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if gpu.has_hal_encoder() {
+            type MetalApi = wgpu::hal::api::Metal;
+            // Extract hal texture view pointers (sequential snatch lock)
+            let src_ptr = {
+                let g = unsafe { source_view.as_hal::<MetalApi>() }
+                    .expect("source not Metal");
+                &*g as *const _
+            };
+            let blend_ptr = {
+                let g = unsafe { blend_view.as_hal::<MetalApi>() }
+                    .expect("blend not Metal");
+                &*g as *const _
+            };
+            let tgt_ptr = {
+                let g = unsafe { target_view.as_hal::<MetalApi>() }
+                    .expect("target not Metal");
+                &*g as *const _
+            };
+            let arena_buf_ptr = arena.hal_buffer_ptr().expect("arena hal buffer");
+            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+            unsafe {
+                self.blend_pass_hal(
+                    hal_enc, hal_ctx,
+                    &*arena_buf_ptr,
+                    &*src_ptr, &*blend_ptr, &*tgt_ptr,
+                    offset,
+                );
+            }
+            return;
+        }
+
         let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Blend Compute BG"),
             layout: &self.bind_group_layout,
@@ -670,6 +703,20 @@ impl LayerCompositor {
         self.uniform_arena.reset();
 
         // Clear main to opaque black
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if gpu.has_hal_encoder() {
+            type MetalApi = wgpu::hal::api::Metal;
+            let view_ptr = {
+                let g = unsafe { self.main.source_view().as_hal::<MetalApi>() }
+                    .expect("main source not Metal");
+                &*g as *const _
+            };
+            let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+            unsafe { self.main.clear_source_hal(hal_enc, &*view_ptr, true); }
+        } else {
+            self.main.clear_source(gpu.encoder, true);
+        }
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
         self.main.clear_source(gpu.encoder, true);
 
         // Check for any solo layer
@@ -762,6 +809,20 @@ impl LayerCompositor {
                 let layer_buf = self.layer_buf.as_mut().unwrap();
 
                 // Clear layer buffer to transparent
+                #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+                if gpu.has_hal_encoder() {
+                    type MetalApi = wgpu::hal::api::Metal;
+                    let view_ptr = {
+                        let g = unsafe { layer_buf.source_view().as_hal::<MetalApi>() }
+                            .expect("layer source not Metal");
+                        &*g as *const _
+                    };
+                    let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+                    unsafe { layer_buf.clear_source_hal(hal_enc, &*view_ptr, false); }
+                } else {
+                    layer_buf.clear_source(gpu.encoder, false);
+                }
+                #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
                 layer_buf.clear_source(gpu.encoder, false);
 
                 // Composite each clip into layer buffer with Normal blend
@@ -883,6 +944,27 @@ impl Compositor for LayerCompositor {
             // Unity: CompositorStack.cs returns immediately for empty playback.
             // Clear to black + return tonemap output (already cleared from previous frame).
             // Skips ALL master effects, tonemap, and LED tap — zero GPU draw calls.
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            if gpu.has_hal_encoder() {
+                type MetalApi = wgpu::hal::api::Metal;
+                let main_view_ptr = {
+                    let g = unsafe { self.main.source_view().as_hal::<MetalApi>() }
+                        .expect("main source not Metal");
+                    &*g as *const _
+                };
+                let tonemap_view_ptr = {
+                    let g = unsafe { self.tonemap.output.view.as_hal::<MetalApi>() }
+                        .expect("tonemap output not Metal");
+                    &*g as *const _
+                };
+                let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+                unsafe {
+                    self.main.clear_source_hal(hal_enc, &*main_view_ptr, true);
+                    self.tonemap.clear_hal(hal_enc, &*tonemap_view_ptr);
+                }
+                return &self.tonemap.output.view;
+            }
+
             self.main.clear_source(gpu.encoder, true);
             self.tonemap.clear(gpu.encoder);
             return &self.tonemap.output.view;
@@ -905,6 +987,65 @@ impl Compositor for LayerCompositor {
                     gpu.device, w, h, wgpu::TextureFormat::Rgba16Float, "LED_Tap",
                 );
             }
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            if gpu.has_hal_encoder() {
+                type MetalApi = wgpu::hal::api::Metal;
+                use wgpu::hal::CommandEncoder as _;
+                let src_tex_ptr = {
+                    let g = unsafe { self.main.source_texture().as_hal::<MetalApi>() }
+                        .expect("main source tex not Metal");
+                    &*g as *const _
+                };
+                let dst_tex_ptr = {
+                    let g = unsafe { tap.texture.as_hal::<MetalApi>() }
+                        .expect("led tap tex not Metal");
+                    &*g as *const _
+                };
+                let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+                unsafe {
+                    hal_enc.copy_texture_to_texture(
+                        &*src_tex_ptr,
+                        wgpu::wgt::TextureUses::COPY_SRC,
+                        &*dst_tex_ptr,
+                        std::iter::once(wgpu::hal::TextureCopy {
+                            src_base: wgpu::hal::TextureCopyBase {
+                                mip_level: 0,
+                                array_layer: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::hal::FormatAspects::COLOR,
+                            },
+                            dst_base: wgpu::hal::TextureCopyBase {
+                                mip_level: 0,
+                                array_layer: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::hal::FormatAspects::COLOR,
+                            },
+                            size: wgpu::hal::CopyExtent {
+                                width: w,
+                                height: h,
+                                depth: 1,
+                            },
+                        }),
+                    );
+                }
+            } else {
+                gpu.encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: self.main.source_texture(),
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &tap.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                );
+            }
+            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
             gpu.encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: self.main.source_texture(),
@@ -969,6 +1110,71 @@ impl Compositor for LayerCompositor {
                 // Copy processed result back into tonemap output via GPU memcpy.
                 // Replaces the old Opaque compute blend pass — same result, zero
                 // shader cost. Unity ref: same pattern as Graphics.CopyTexture.
+                #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+                if gpu.has_hal_encoder() {
+                    type MetalApi = wgpu::hal::api::Metal;
+                    use wgpu::hal::CommandEncoder as _;
+                    let src_tex_ptr = {
+                        let g = unsafe {
+                            self.effect_chain.source_texture().as_hal::<MetalApi>()
+                        }.expect("effect chain source tex not Metal");
+                        &*g as *const _
+                    };
+                    let dst_tex_ptr = {
+                        let g = unsafe {
+                            self.tonemap.output.texture.as_hal::<MetalApi>()
+                        }.expect("tonemap output tex not Metal");
+                        &*g as *const _
+                    };
+                    let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+                    unsafe {
+                        hal_enc.copy_texture_to_texture(
+                            &*src_tex_ptr,
+                            wgpu::wgt::TextureUses::COPY_SRC,
+                            &*dst_tex_ptr,
+                            std::iter::once(wgpu::hal::TextureCopy {
+                                src_base: wgpu::hal::TextureCopyBase {
+                                    mip_level: 0,
+                                    array_layer: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::hal::FormatAspects::COLOR,
+                                },
+                                dst_base: wgpu::hal::TextureCopyBase {
+                                    mip_level: 0,
+                                    array_layer: 0,
+                                    origin: wgpu::Origin3d::ZERO,
+                                    aspect: wgpu::hal::FormatAspects::COLOR,
+                                },
+                                size: wgpu::hal::CopyExtent {
+                                    width,
+                                    height,
+                                    depth: 1,
+                                },
+                            }),
+                        );
+                    }
+                } else {
+                    gpu.encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: self.effect_chain.source_texture(),
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &self.tonemap.output.texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width,
+                            height,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
                 gpu.encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: self.effect_chain.source_texture(),

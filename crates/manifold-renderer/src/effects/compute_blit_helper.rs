@@ -362,15 +362,16 @@ impl ComputeBlitHelper {
         self.ring_index.set(self.ring_index.get() + 1);
         let byte_offset = slot * self.slot_stride;
 
-        // --- hal dispatch path (via as_hal_mut on wgpu encoder) ---
+        // --- hal dispatch path (uses separate hal command encoder) ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if let (Some(hal_pipe), Some(mapped_ptr), Some(hal_ctx)) = (
+        if let (Some(hal_pipe), Some(mapped_ptr), true) = (
             &self.hal_pipeline,
             self.ring_mapped_ptr,
-            gpu.hal_ctx,
+            gpu.has_hal_encoder(),
         ) {
             use wgpu::hal::{self as hal, CommandEncoder as HalCmdEnc, Device as HalDevice};
             type MetalApi = hal::api::Metal;
+            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
 
             // Direct memcpy to shared-memory buffer (no API call, no staging)
             unsafe {
@@ -440,25 +441,21 @@ impl ComputeBlitHelper {
                 .expect("Failed to create hal bind group")
             };
 
-            // Encode into wgpu's command buffer via as_hal_mut — correct interleaving,
-            // zero validation overhead, single command buffer submission.
+            // Encode directly into the hal command encoder — zero validation overhead.
             unsafe {
-                gpu.encoder.as_hal_mut::<MetalApi, _, _>(|hal_enc| {
-                    let enc = hal_enc.expect("encoder not Metal");
-                    enc.begin_compute_pass(&hal::ComputePassDescriptor {
-                        label: Some(label),
-                        timestamp_writes: None,
-                    });
-                    enc.set_compute_pipeline(&hal_pipe.pipeline);
-                    enc.set_bind_group(
-                        &hal_pipe.pipeline_layout,
-                        0,
-                        &hal_bg,
-                        &[byte_offset as u32],
-                    );
-                    enc.dispatch([width.div_ceil(16), height.div_ceil(16), 1]);
-                    enc.end_compute_pass();
+                hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
+                    label: Some(label),
+                    timestamp_writes: None,
                 });
+                hal_enc.set_compute_pipeline(&hal_pipe.pipeline);
+                hal_enc.set_bind_group(
+                    &hal_pipe.pipeline_layout,
+                    0,
+                    &hal_bg,
+                    &[byte_offset as u32],
+                );
+                hal_enc.dispatch([width.div_ceil(16), height.div_ceil(16), 1]);
+                hal_enc.end_compute_pass();
             }
 
             // Clean up the ephemeral bind group

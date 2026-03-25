@@ -405,6 +405,32 @@ impl DualTextureBlitHelper {
         self.ring_index.set(self.ring_index.get() + 1);
         let byte_offset = slot * self.slot_stride;
 
+        // --- hal path: encode via hal command encoder ---
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if gpu.has_hal_encoder() {
+            type MetalApi = wgpu::hal::api::Metal;
+            let main_ptr = {
+                let g = unsafe { main_view.as_hal::<MetalApi>() }
+                    .expect("main not Metal");
+                &*g as *const _
+            };
+            let tgt_ptr = {
+                let g = unsafe { target_view.as_hal::<MetalApi>() }
+                    .expect("target not Metal");
+                &*g as *const _
+            };
+            let dummy_ptr = self.hal_dummy_view_ptr
+                .expect("hal dummy view not cached");
+            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+            unsafe {
+                self.draw_hal(
+                    hal_enc, hal_ctx, &*main_ptr, &*dummy_ptr, &*tgt_ptr,
+                    uniform_bytes, width, height, true,
+                );
+            }
+            return;
+        }
+
         gpu.queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
 
         // Inline ensure_bind_group with split borrows — avoids &mut self +
@@ -538,6 +564,36 @@ impl DualTextureBlitHelper {
         let slot = self.ring_index.get() % RING_SLOTS;
         self.ring_index.set(self.ring_index.get() + 1);
         let byte_offset = slot * self.slot_stride;
+
+        // --- hal path: encode via hal command encoder ---
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if gpu.has_hal_encoder() {
+            type MetalApi = wgpu::hal::api::Metal;
+            let main_ptr = {
+                let g = unsafe { main_view.as_hal::<MetalApi>() }
+                    .expect("main not Metal");
+                &*g as *const _
+            };
+            let sec_ptr = {
+                let g = unsafe { secondary_view.as_hal::<MetalApi>() }
+                    .expect("secondary not Metal");
+                &*g as *const _
+            };
+            let tgt_ptr = {
+                let g = unsafe { target_view.as_hal::<MetalApi>() }
+                    .expect("target not Metal");
+                &*g as *const _
+            };
+            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+            unsafe {
+                self.draw_hal(
+                    hal_enc, hal_ctx, &*main_ptr, &*sec_ptr, &*tgt_ptr,
+                    uniform_bytes, width, height,
+                    store_op == wgpu::StoreOp::Store,
+                );
+            }
+            return;
+        }
 
         gpu.queue.write_buffer(&self.ring_buffer, byte_offset, uniform_bytes);
 
