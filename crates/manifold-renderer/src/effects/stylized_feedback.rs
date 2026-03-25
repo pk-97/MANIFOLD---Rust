@@ -74,6 +74,7 @@ impl StylizedFeedbackFX {
 
     /// Create state buffer and clear to black.
     /// Unity ref: GetOrCreateState + RenderTextureUtil.Clear()
+    #[allow(dead_code)]
     fn ensure_state(&mut self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, owner_key: i64) {
         if !self.states.contains_key(&owner_key) && self.width > 0 && self.height > 0 {
             let format = wgpu::TextureFormat::Rgba16Float;
@@ -105,11 +106,59 @@ impl PostProcessEffect for StylizedFeedbackFX {
     ) {
         self.width = ctx.width;
         self.height = ctx.height;
-        self.ensure_state(gpu.device, gpu.encoder, ctx.owner_key);
+
+        // Ensure state buffer exists — hal clear or wgpu clear
+        if !self.states.contains_key(&ctx.owner_key) && self.width > 0 && self.height > 0 {
+            let format = wgpu::TextureFormat::Rgba16Float;
+            let buffer = RenderTarget::new(
+                gpu.device, self.width, self.height, format, "StylizedFeedback State",
+            );
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            if gpu.has_hal_encoder() {
+                type MetalApi = wgpu::hal::api::Metal;
+                use wgpu::hal::{self as hal, CommandEncoder as _};
+                let view_ptr = {
+                    let g = unsafe { buffer.view.as_hal::<MetalApi>() }
+                        .expect("state view not Metal");
+                    &*g as *const _
+                };
+                let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+                unsafe {
+                    hal_enc.begin_render_pass(&hal::RenderPassDescriptor {
+                        label: Some("Clear StylizedFeedback State"),
+                        extent: wgpu::Extent3d {
+                            width: self.width, height: self.height,
+                            depth_or_array_layers: 1,
+                        },
+                        sample_count: 1,
+                        color_attachments: &[Some(hal::ColorAttachment {
+                            target: hal::Attachment {
+                                view: &*view_ptr,
+                                usage: wgpu::wgt::TextureUses::COLOR_TARGET,
+                            },
+                            resolve_target: None,
+                            ops: hal::AttachmentOps::LOAD_CLEAR
+                                | hal::AttachmentOps::STORE,
+                            clear_value: wgpu::Color::TRANSPARENT,
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        multiview_mask: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    }).expect("hal begin_render_pass failed");
+                    hal_enc.end_render_pass();
+                }
+            } else {
+                clear_render_target(gpu.encoder, &buffer.view);
+            }
+            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+            clear_render_target(gpu.encoder, &buffer.view);
+            self.states.insert(ctx.owner_key, StylizedFeedbackState { buffer });
+        }
 
         let state = self.states.get(&ctx.owner_key).unwrap();
 
-        // StylizedFeedbackFX.cs lines 34-37
         let feedback_amount = fx.param_values.first().copied().unwrap_or(0.5).min(0.98);
         let zoom = fx.param_values.get(1).copied().unwrap_or(0.95);
         let rotation = fx.param_values.get(2).copied().unwrap_or(0.0) * DEG_TO_RAD;
@@ -117,7 +166,6 @@ impl PostProcessEffect for StylizedFeedbackFX {
 
         let uniforms = StylizedFeedbackUniforms { feedback_amount, zoom, rotation, mode };
 
-        // main_tex = source (current frame), secondary_tex = state buffer (previous frame)
         self.helper.draw(
             gpu,
             source, &state.buffer.view, target,
@@ -127,27 +175,73 @@ impl PostProcessEffect for StylizedFeedbackFX {
             profiler,
         );
 
-        // PostBlit: copy result → state buffer via GPU memcpy.
-        // Unity ref: Graphics.CopyTexture(result, stateBuffer) — zero-cost memcpy.
+        // PostBlit: copy result → state buffer
         let state = self.states.get(&ctx.owner_key).unwrap();
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if gpu.has_hal_encoder() {
+            type MetalApi = wgpu::hal::api::Metal;
+            use wgpu::hal::CommandEncoder as _;
+            let src_ptr = {
+                let g = unsafe { target_texture.as_hal::<MetalApi>() }
+                    .expect("target tex not Metal");
+                &*g as *const _
+            };
+            let dst_ptr = {
+                let g = unsafe { state.buffer.texture.as_hal::<MetalApi>() }
+                    .expect("state tex not Metal");
+                &*g as *const _
+            };
+            let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+            unsafe {
+                hal_enc.copy_texture_to_texture(
+                    &*src_ptr,
+                    wgpu::wgt::TextureUses::COPY_SRC,
+                    &*dst_ptr,
+                    std::iter::once(wgpu::hal::TextureCopy {
+                        src_base: wgpu::hal::TextureCopyBase {
+                            mip_level: 0, array_layer: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::hal::FormatAspects::COLOR,
+                        },
+                        dst_base: wgpu::hal::TextureCopyBase {
+                            mip_level: 0, array_layer: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::hal::FormatAspects::COLOR,
+                        },
+                        size: wgpu::hal::CopyExtent {
+                            width: ctx.width, height: ctx.height, depth: 1,
+                        },
+                    }),
+                );
+            }
+        } else {
+            gpu.encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: target_texture,
+                    mip_level: 0, origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &state.buffer.texture,
+                    mip_level: 0, origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d { width: ctx.width, height: ctx.height, depth_or_array_layers: 1 },
+            );
+        }
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
         gpu.encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: target_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
+                mip_level: 0, origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyTextureInfo {
                 texture: &state.buffer.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
+                mip_level: 0, origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::Extent3d {
-                width: ctx.width,
-                height: ctx.height,
-                depth_or_array_layers: 1,
-            },
+            wgpu::Extent3d { width: ctx.width, height: ctx.height, depth_or_array_layers: 1 },
         );
     }
 
