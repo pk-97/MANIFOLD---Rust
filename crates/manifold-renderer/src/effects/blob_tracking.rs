@@ -1103,9 +1103,12 @@ impl PostProcessEffect for BlobTrackingFX {
                     hal_ctx.device().destroy_bind_group(bg);
                 }
 
-                // Readback via hal copy_texture_to_buffer
-                state.readback.submit_hal(
-                    gpu,
+                // Readback via wgpu aux encoder (not hal) — map_async needs
+                // wgpu tracking to fire. The aux encoder is submitted after
+                // the hal encoder, so the downsample data is available.
+                state.readback.submit(
+                    gpu.device,
+                    gpu.encoder,
                     &state.downsample_rt.texture,
                     READBACK_WIDTH,
                     READBACK_HEIGHT,

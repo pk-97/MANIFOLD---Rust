@@ -746,23 +746,25 @@ impl ContentPipeline {
                 .expect("hal begin_encoding failed");
         }
 
-        // Dummy wgpu encoder for GpuEncoder struct (never used for encoding —
-        // all components branch to hal via gpu.has_hal_encoder()).
-        let mut dummy_enc = gpu.device.create_command_encoder(
+        // Auxiliary wgpu encoder — handles wgpu-tracked operations during
+        // hal compositing (readback copy_texture_to_buffer, etc.). Submitted
+        // AFTER the hal encoder so Metal in-order execution ensures hal
+        // writes complete before readback copies run. This allows map_async
+        // to fire correctly (wgpu tracks this encoder's submissions).
+        let mut aux_enc = gpu.device.create_command_encoder(
             &wgpu::CommandEncoderDescriptor {
-                label: Some("HAL Compositor (dummy)"),
+                label: Some("HAL Compositor (aux wgpu)"),
             },
         );
         {
             let mut gpu_comp = GpuEncoder::new(
-                &gpu.device, &gpu.queue, &mut dummy_enc, Some(hal_ctx),
+                &gpu.device, &gpu.queue, &mut aux_enc, Some(hal_ctx),
             );
             gpu_comp.hal_enc =
                 Some(&mut hal_enc as *mut manifold_renderer::hal_context::MetalCommandEncoder);
 
-            // Compositor render — all sub-components encode via hal.
-            // No queue.write_buffer() allowed in hal path — all uniform
-            // writes use shared-memory mapped pointers (direct memcpy).
+            // Compositor render — render/compute passes go to hal encoder,
+            // wgpu-tracked operations (readbacks) go to aux_enc.
             let _compositor_view =
                 self.compositor.render(&mut gpu_comp, &frame, None);
         }
@@ -775,6 +777,9 @@ impl ContentPipeline {
         unsafe {
             hal_ctx.submit(&[&hal_cmd_buf]);
         }
+        // Submit aux wgpu encoder — readback copies + any queue.write_buffer
+        // staging. Metal in-order queue guarantees hal work completes first.
+        gpu.queue.submit(std::iter::once(aux_enc.finish()));
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
         // ── Encoder 3: copy + fence (wgpu) ───────────────────────────────

@@ -1849,13 +1849,8 @@ impl WireframeDepthFX {
 
         let aw = state.analysis_width;
         let ah = state.analysis_height;
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            state.readback.submit_hal(gpu, &state.dnn_input_tex.texture, aw, ah);
-        } else {
-            state.readback.submit(gpu.device, gpu.encoder, &state.dnn_input_tex.texture, aw, ah);
-        }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        // Readback via gpu.encoder (wgpu aux encoder in hal mode) — map_async
+        // needs wgpu tracking to fire the callback.
         state.readback.submit(gpu.device, gpu.encoder, &state.dnn_input_tex.texture, aw, ah);
         state.dnn_readback_pending = true;
     }
