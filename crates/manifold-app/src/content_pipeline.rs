@@ -294,9 +294,12 @@ impl ContentPipeline {
                     label: Some("Frame Encoder"),
                 });
 
+        // hal_ctx is NOT passed to GpuEncoder until Phase 3 completes.
+        // Reason: wgpu 28 forbids mixing wgpu and as_hal_mut encoding on the
+        // same command encoder. Phase 3 splits generators (wgpu encoder) from
+        // compositor (hal encoder) so the entire compositor is pure hal.
         let mut gpu_enc = GpuEncoder::new(
-            &gpu.device, &gpu.queue, &mut wgpu_encoder,
-            self.hal_ctx.as_ref(),
+            &gpu.device, &gpu.queue, &mut wgpu_encoder, None,
         );
 
         // Split borrow: get renderers + project from engine simultaneously.
