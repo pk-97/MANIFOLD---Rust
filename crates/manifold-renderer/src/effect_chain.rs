@@ -282,11 +282,14 @@ impl EffectChain {
         };
 
         // Lerp: dry_snapshot (dry) + source (wet) → target
+        let target = self.target();
         lerp.apply(
             gpu,
             &dry_snap.view,
             self.source_view(),
-            self.target_view(),
+            &target.view,
+            target.width,
+            target.height,
             wet_dry,
             profiler,
         );
