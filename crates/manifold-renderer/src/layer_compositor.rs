@@ -374,7 +374,7 @@ impl LayerCompositor {
             main: PingPong::new(device, width, height, "Compositor"),
             layer_buf: None,
             blend: BlendResources::new(device, width, height),
-            uniform_arena: UniformArena::new(device),
+            uniform_arena: UniformArena::new(device, hal_ctx),
             effect_chain: EffectChain::new(),
             effect_registry: EffectRegistry::new(device, queue, hal_ctx),
             wet_dry_lerp: WetDryLerpPipeline::new(device),

@@ -127,6 +127,137 @@ mod inner {
             bind_group_layout: bgl,
         }
     }
+
+    /// A hal render pipeline with its layout and bind group layout.
+    /// Created once per render-pass effect/helper at init time.
+    pub struct HalRenderPipeline {
+        pub pipeline: <MetalApi as hal::Api>::RenderPipeline,
+        pub pipeline_layout: <MetalApi as hal::Api>::PipelineLayout,
+        pub bind_group_layout: <MetalApi as hal::Api>::BindGroupLayout,
+    }
+
+    /// Create a hal render pipeline from WGSL source.
+    ///
+    /// For fullscreen triangle effects — no vertex buffers, single color target.
+    /// Vertex shader generates triangle from vertex_index.
+    pub fn create_render_pipeline(
+        hal_ctx: &HalContext,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        bind_group_entries: &[wgpu::wgt::BindGroupLayoutEntry],
+        color_format: wgpu::TextureFormat,
+        label: &str,
+    ) -> HalRenderPipeline {
+        // Step 1-2: Parse + validate (same as compute)
+        let module = naga::front::wgsl::parse_str(wgsl_source)
+            .unwrap_or_else(|e| panic!("{label}: WGSL parse error: {e}"));
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::all(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{label}: WGSL validation error: {e}"));
+
+        // Step 3: Create hal BGL + PipelineLayout
+        let bgl = unsafe {
+            hal_ctx
+                .device()
+                .create_bind_group_layout(&hal::BindGroupLayoutDescriptor {
+                    label: None,
+                    flags: hal::BindGroupLayoutFlags::empty(),
+                    entries: bind_group_entries,
+                })
+                .unwrap_or_else(|e| panic!("{label}: BGL creation error: {e:?}"))
+        };
+
+        let pipeline_layout = unsafe {
+            hal_ctx
+                .device()
+                .create_pipeline_layout(&hal::PipelineLayoutDescriptor {
+                    label: None,
+                    flags: hal::PipelineLayoutFlags::empty(),
+                    bind_group_layouts: &[&bgl],
+                    immediate_size: 0,
+                })
+                .unwrap_or_else(|e| panic!("{label}: PipelineLayout creation error: {e:?}"))
+        };
+
+        // Step 4-5: Create shader module (handles naga→MSL→MTL internally)
+        let naga_shader = hal::NagaShader {
+            module: std::borrow::Cow::Owned(module),
+            info,
+            debug_source: None,
+        };
+        let shader_desc = hal::ShaderModuleDescriptor {
+            label: Some(label),
+            runtime_checks: wgpu::wgt::ShaderRuntimeChecks::unchecked(),
+        };
+        let hal_shader = unsafe {
+            hal_ctx
+                .device()
+                .create_shader_module(&shader_desc, hal::ShaderInput::Naga(naga_shader))
+                .unwrap_or_else(|e| panic!("{label}: ShaderModule creation error: {e}"))
+        };
+
+        // Step 6: Create render pipeline
+        let pipeline = unsafe {
+            hal_ctx
+                .device()
+                .create_render_pipeline(&hal::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: &pipeline_layout,
+                    vertex_processor: hal::VertexProcessor::Standard {
+                        vertex_buffers: &[],
+                        vertex_stage: hal::ProgrammableStage {
+                            module: &hal_shader,
+                            entry_point: vs_entry,
+                            constants: &Default::default(),
+                            zero_initialize_workgroup_memory: false,
+                        },
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        strip_index_format: None,
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode: None,
+                        unclipped_depth: false,
+                        polygon_mode: wgpu::PolygonMode::Fill,
+                        conservative: false,
+                    },
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState {
+                        count: 1,
+                        mask: !0,
+                        alpha_to_coverage_enabled: false,
+                    },
+                    fragment_stage: Some(hal::ProgrammableStage {
+                        module: &hal_shader,
+                        entry_point: fs_entry,
+                        constants: &Default::default(),
+                        zero_initialize_workgroup_memory: false,
+                    }),
+                    color_targets: &[Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    multiview_mask: None,
+                    cache: None,
+                })
+                .unwrap_or_else(|e| panic!("{label}: RenderPipeline creation error: {e}"))
+        };
+
+        unsafe {
+            hal_ctx.device().destroy_shader_module(hal_shader);
+        }
+
+        HalRenderPipeline {
+            pipeline,
+            pipeline_layout,
+            bind_group_layout: bgl,
+        }
+    }
 }
 
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
