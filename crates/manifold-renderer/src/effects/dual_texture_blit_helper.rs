@@ -702,9 +702,9 @@ impl DualTextureBlitHelper {
         };
 
         let ops = if store {
-            hal::AttachmentOps::STORE
+            hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE
         } else {
-            hal::AttachmentOps::empty()
+            hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE_DISCARD
         };
 
         unsafe {

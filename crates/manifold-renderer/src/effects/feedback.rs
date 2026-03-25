@@ -409,7 +409,7 @@ impl FeedbackFX {
                         usage: wgpu::wgt::TextureUses::COLOR_TARGET,
                     },
                     resolve_target: None,
-                    ops: hal::AttachmentOps::STORE,
+                    ops: hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE,
                     clear_value: wgpu::Color::TRANSPARENT,
                     depth_slice: None,
                 })],
