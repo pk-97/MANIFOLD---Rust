@@ -29,6 +29,10 @@ pub struct GpuEncoder<'a> {
     /// Valid for the duration of the compositor's render call.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     pub hal_enc: Option<*mut crate::hal_context::MetalCommandEncoder>,
+    /// Shared-memory uniform arena for generator uniform data.
+    /// Owned by GeneratorRenderer, set during render_all().
+    /// Generators push uniform data here instead of calling queue.write_buffer().
+    pub uniform_arena: Option<*mut crate::uniform_arena::UniformArena>,
 }
 
 // Safety: hal_enc points to a hal encoder on the content thread's stack.
@@ -50,6 +54,7 @@ impl<'a> GpuEncoder<'a> {
             hal_ctx,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_enc: None,
+            uniform_arena: None,
         }
     }
 
@@ -58,6 +63,17 @@ impl<'a> GpuEncoder<'a> {
     #[inline]
     pub fn has_hal_encoder(&self) -> bool {
         self.hal_enc.is_some() && self.hal_ctx.is_some()
+    }
+
+    /// Get mutable reference to the shared uniform arena (if set).
+    /// Generators use this instead of queue.write_buffer() for uniforms.
+    ///
+    /// # Safety
+    /// Caller must ensure no other mutable reference to the arena exists.
+    #[inline]
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn uniform_arena_mut(&self) -> Option<&mut crate::uniform_arena::UniformArena> {
+        self.uniform_arena.map(|p| unsafe { &mut *p })
     }
 
     /// Get mutable reference to the hal encoder and context.

@@ -1054,6 +1054,22 @@ impl ApplicationHandler for Application {
                 self.shared_texture_bridge = Some(Arc::clone(&bridge));
             }
 
+            // Create hal context for zero-overhead GPU encoding (macOS + hal-encoding feature).
+            // Must be created before renderers so GeneratorRenderer can create hal resources.
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            let hal_ctx = {
+                let ctx = unsafe {
+                    manifold_renderer::hal_context::HalContext::new(
+                        &content_gpu.device,
+                        &content_gpu.queue,
+                    )
+                };
+                log::info!("[HAL] HalContext created — hal encoding active");
+                Some(ctx)
+            };
+            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+            let hal_ctx: Option<manifold_renderer::hal_context::HalContext> = None;
+
             let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
                 #[cfg(target_os = "macos")]
                 Box::new(manifold_media::video_renderer::VideoRenderer::new(
@@ -1071,25 +1087,11 @@ impl ApplicationHandler for Application {
                     output_h,
                     compositor_format,
                     8,
+                    hal_ctx.as_ref(),
                 )),
             ];
             let mut engine = PlaybackEngine::new(renderers);
             engine.initialize(self.local_project.clone());
-
-            // Create hal context for zero-overhead GPU encoding (macOS + hal-encoding feature)
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            let hal_ctx = {
-                let ctx = unsafe {
-                    manifold_renderer::hal_context::HalContext::new(
-                        &content_gpu.device,
-                        &content_gpu.queue,
-                    )
-                };
-                log::info!("[HAL] HalContext created — hal encoding active");
-                Some(ctx)
-            };
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            let hal_ctx: Option<manifold_renderer::hal_context::HalContext> = None;
 
             let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(
                 Box::new(LayerCompositor::new(

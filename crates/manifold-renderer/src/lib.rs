@@ -4,6 +4,8 @@ pub mod gpu_encoder;
 pub mod hal_context;
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
 pub mod hal_pipeline;
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+pub mod hal_dispatch;
 pub mod gpu_profiler;
 pub mod render_target;
 pub mod render_target_pool;

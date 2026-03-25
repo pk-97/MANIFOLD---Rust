@@ -10,6 +10,7 @@ use crate::render_target::RenderTarget;
 use crate::generator::Generator;
 use crate::generator_context::{GeneratorContext, MAX_GEN_PARAMS};
 use crate::generators::registry::GeneratorRegistry;
+use crate::uniform_arena::UniformArena;
 
 /// Per-clip active state.
 struct ActiveClip {
@@ -42,6 +43,9 @@ pub struct GeneratorRenderer {
     available_rts: Vec<RenderTarget>,
     /// Pre-allocated scratch buffer for render iteration (avoids per-frame alloc).
     render_scratch: Vec<String>,
+    /// Shared-memory uniform arena for generator uniform data.
+    /// Eliminates per-generator queue.write_buffer() calls.
+    uniform_arena: UniformArena,
 }
 
 impl GeneratorRenderer {
@@ -51,6 +55,7 @@ impl GeneratorRenderer {
         height: u32,
         format: wgpu::TextureFormat,
         pool_size: usize,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
     ) -> Self {
         let mut available_rts = Vec::with_capacity(pool_size);
         for i in 0..pool_size {
@@ -63,6 +68,8 @@ impl GeneratorRenderer {
             ));
         }
 
+        let uniform_arena = UniformArena::new(&device, hal_ctx);
+
         Self {
             device,
             width,
@@ -73,6 +80,7 @@ impl GeneratorRenderer {
             layer_generators: AHashMap::with_capacity(8),
             available_rts,
             render_scratch: Vec::with_capacity(16),
+            uniform_arena,
         }
     }
 
@@ -153,6 +161,11 @@ impl GeneratorRenderer {
         layers: &[Layer],
         gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
+        // Reset uniform arena for this frame and set on GpuEncoder.
+        self.uniform_arena.reset();
+        gpu.uniform_arena =
+            Some(&mut self.uniform_arena as *mut UniformArena);
+
         // Refresh positional cache on active clips — layer_index may have changed
         // after reorder, but layer_id stays stable so generator state follows.
         for active in self.active_clips.values_mut() {
@@ -225,6 +238,11 @@ impl GeneratorRenderer {
                     active.anim_progress = new_progress;
                 }
         }
+
+        // Flush uniform arena staging for wgpu path (no-op on hal shared-memory path).
+        self.uniform_arena.flush(gpu.device, gpu.queue);
+        // Clear the arena pointer from GpuEncoder.
+        gpu.uniform_arena = None;
     }
 
     /// Get the animation progress for a rendered clip (for profiling).
