@@ -1187,6 +1187,13 @@ impl PostProcessEffect for BlobTrackingFX {
             blob_connections: blob_connections_arr,
         };
 
+        if ctx.frame_count % 60 == 0 {
+            eprintln!(
+                "[BlobTracking] PRE-OVERLAY frame={} blob_count={} tracked={} has_data={}",
+                ctx.frame_count, state.blob_count, state.tracked_count, state.has_blob_data,
+            );
+        }
+
         // --- hal path for overlay ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         if gpu.has_hal_encoder() {
