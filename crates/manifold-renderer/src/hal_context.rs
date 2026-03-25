@@ -29,6 +29,9 @@ mod inner {
     pub struct HalContext {
         device_ptr: *const MetalDevice,
         queue_ptr: *const MetalQueue,
+        /// Fence used for hal queue submissions. Monotonically incrementing value.
+        submit_fence: std::cell::UnsafeCell<MetalFence>,
+        submit_fence_value: std::cell::Cell<u64>,
     }
 
     // Safety: the underlying Metal device/queue are Send+Sync.
@@ -61,7 +64,18 @@ mod inner {
             };
             let queue_ptr: *const MetalQueue = &*queue_guard;
 
-            Self { device_ptr, queue_ptr }
+            let fence = unsafe {
+                (&*device_ptr)
+                    .create_fence()
+                    .expect("Failed to create hal fence")
+            };
+
+            Self {
+                device_ptr,
+                queue_ptr,
+                submit_fence: std::cell::UnsafeCell::new(fence),
+                submit_fence_value: std::cell::Cell::new(0),
+            }
         }
 
         pub fn device(&self) -> &MetalDevice {
@@ -87,12 +101,26 @@ mod inner {
             }
         }
 
-        /// Create a hal fence for GPU-CPU synchronization.
-        pub fn create_fence(&self) -> MetalFence {
+        /// Submit hal command buffers to the GPU queue.
+        ///
+        /// Uses an internal fence with monotonically incrementing values.
+        /// Metal command queue guarantees in-order execution.
+        ///
+        /// # Safety
+        ///
+        /// Command buffers must be valid and fully encoded.
+        pub unsafe fn submit(
+            &self,
+            command_buffers: &[&MetalCommandBuffer],
+        ) {
+            use wgpu::hal::Queue as HalQueue;
+            let value = self.submit_fence_value.get() + 1;
+            self.submit_fence_value.set(value);
+            let fence = unsafe { &mut *self.submit_fence.get() };
             unsafe {
-                self.device()
-                    .create_fence()
-                    .expect("Failed to create hal fence")
+                self.queue()
+                    .submit(command_buffers, &[], (fence, value))
+                    .expect("hal submit failed");
             }
         }
     }

@@ -288,16 +288,25 @@ impl ContentPipeline {
         let time = engine.current_time();
         let beat = engine.current_beat();
 
+        // === HAL THREE-ENCODER SPLIT ===
+        // When hal-encoding is active, split the frame into 3 separate encoders:
+        // 1. wgpu encoder → generators → submit
+        // 2. hal encoder → compositor → hal submit
+        // 3. wgpu encoder → IOSurface copy + fence → submit
+        // Metal command queue guarantees in-order execution.
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if self.hal_ctx.is_some() {
+            self.render_content_hal(gpu, engine, tick_result, dt, frame_count,
+                                    time, beat, _t_frame, _poll_ms);
+            return;
+        }
+
         let mut wgpu_encoder =
             gpu.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("Frame Encoder"),
                 });
 
-        // hal_ctx is NOT passed to GpuEncoder until Phase 3 completes.
-        // Reason: wgpu 28 forbids mixing wgpu and as_hal_mut encoding on the
-        // same command encoder. Phase 3 splits generators (wgpu encoder) from
-        // compositor (hal encoder) so the entire compositor is pure hal.
         let mut gpu_enc = GpuEncoder::new(
             &gpu.device, &gpu.queue, &mut wgpu_encoder, None,
         );
@@ -578,6 +587,281 @@ impl ContentPipeline {
         }
 
         // Update shared dimensions for UI aspect ratio (only when changed).
+        let (old_w, old_h) = self.shared_output.get_dimensions();
+        if old_w != comp_w || old_h != comp_h {
+            self.shared_output.set_dimensions(comp_w, comp_h);
+        }
+    }
+
+    /// HAL three-encoder split: generators (wgpu) → compositor (hal) → copy+fence (wgpu).
+    /// Called when hal-encoding feature is active. Metal command queue guarantees
+    /// in-order execution across all three submissions.
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(clippy::too_many_arguments)]
+    fn render_content_hal(
+        &mut self,
+        gpu: &GpuContext,
+        engine: &mut PlaybackEngine,
+        tick_result: &TickResult,
+        dt: f64,
+        frame_count: u64,
+        time: f32,
+        beat: f32,
+        _t_frame: std::time::Instant,
+        _poll_ms: f64,
+    ) {
+        use wgpu::hal::CommandEncoder as HalCmdEnc;
+
+        let hal_ctx = self.hal_ctx.as_ref().unwrap();
+
+        // Split borrow: get renderers + project from engine simultaneously.
+        let (renderers, project) = engine.split_renderer_project();
+        let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
+
+        // ── Encoder 1: generators (wgpu) ─────────────────────────────────
+        let _t0 = std::time::Instant::now();
+        let mut gen_encoder = gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("Generator Encoder") },
+        );
+        {
+            let mut gpu_gen = GpuEncoder::new(
+                &gpu.device, &gpu.queue, &mut gen_encoder, None,
+            );
+            for renderer in renderers.iter_mut() {
+                if let Some(gen_renderer) =
+                    renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
+                {
+                    gen_renderer.render_all(
+                        &mut gpu_gen, time, beat, dt as f32, layers, None,
+                    );
+                    break;
+                }
+            }
+        }
+        gpu.queue.submit(std::iter::once(gen_encoder.finish()));
+        let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+        // ── Build clip + layer descriptors (CPU only) ────────────────────
+        let _t0 = std::time::Instant::now();
+        let empty_effects: &[EffectInstance] = &[];
+        let empty_groups: &[EffectGroup] = &[];
+
+        let mut clip_descs: Vec<CompositeClipDescriptor> =
+            Vec::with_capacity(tick_result.ready_clips.len());
+        for clip in &tick_result.ready_clips {
+            let clip_textures = renderers.iter().find_map(|r| {
+                if let Some(gen_r) = r.as_any().downcast_ref::<GeneratorRenderer>()
+                    && let (Some(v), Some(t)) = (
+                        gen_r.get_clip_texture_view(&clip.id),
+                        gen_r.get_clip_texture(&clip.id),
+                    )
+                {
+                    return Some((v, t));
+                }
+                #[cfg(target_os = "macos")]
+                if let Some(vid_r) = r.as_any().downcast_ref::<VideoRenderer>()
+                    && let (Some(v), Some(t)) = (
+                        vid_r.get_clip_texture_view(&clip.id),
+                        vid_r.get_clip_texture(&clip.id),
+                    )
+                {
+                    return Some((v, t));
+                }
+                None
+            });
+            if let Some((view, texture)) = clip_textures {
+                let clip_li = project
+                    .and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
+                    .unwrap_or(0);
+                let layer = layers.get(clip_li);
+                clip_descs.push(CompositeClipDescriptor {
+                    clip_id: &clip.id,
+                    texture_view: view,
+                    texture,
+                    layer_index: clip_li as i32,
+                    blend_mode: layer
+                        .map_or(BlendMode::Normal, |l| l.default_blend_mode),
+                    opacity: layer.map_or(1.0, |l| l.opacity),
+                    translate_x: clip.translate_x,
+                    translate_y: clip.translate_y,
+                    scale: clip.scale,
+                    rotation: clip.rotation,
+                    invert_colors: clip.invert_colors,
+                    effects: &clip.effects,
+                    effect_groups: clip.effect_groups.as_deref().unwrap_or(&[]),
+                });
+            }
+        }
+
+        let layer_descs: Vec<CompositeLayerDescriptor> = layers
+            .iter()
+            .map(|layer| CompositeLayerDescriptor {
+                layer_index: layer.index,
+                layer_id: layer.layer_id.clone(),
+                blend_mode: layer.default_blend_mode,
+                opacity: layer.opacity,
+                is_muted: layer.is_muted,
+                is_solo: layer.is_solo,
+                effects: layer.effects.as_deref().unwrap_or(empty_effects),
+                effect_groups: layer
+                    .effect_groups
+                    .as_deref()
+                    .unwrap_or(empty_groups),
+            })
+            .collect();
+
+        let master_effects =
+            project.map_or(empty_effects, |p| &p.settings.master_effects);
+        let master_effect_groups = project
+            .and_then(|p| p.settings.master_effect_groups.as_deref())
+            .unwrap_or(empty_groups);
+        let led_exit_index = project.map_or(-1, |p| p.settings.led_exit_index);
+
+        let frame = CompositorFrame {
+            time,
+            beat,
+            dt: dt as f32,
+            frame_count,
+            compositor_dirty: tick_result.compositor_dirty,
+            clips: &clip_descs,
+            layers: &layer_descs,
+            master_effects,
+            master_effect_groups,
+            led_exit_index,
+            tonemap: TonemapSettings {
+                exposure: 1.0,
+                hdr_output_enabled: self.edr_headroom > 1.0,
+                paper_white_nits: 200.0,
+                max_display_nits: (200.0 * self.edr_headroom as f32).min(10000.0),
+            },
+        };
+        let _desc_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+        // ── Encoder 2: compositor (hal) ──────────────────────────────────
+        let _t0 = std::time::Instant::now();
+        let mut hal_enc = hal_ctx.create_command_encoder();
+        unsafe {
+            hal_enc
+                .begin_encoding(Some("Compositor"))
+                .expect("hal begin_encoding failed");
+        }
+
+        // Dummy wgpu encoder for GpuEncoder struct (never used — all
+        // components branch to hal via gpu.has_hal_encoder()).
+        let mut dummy_enc = gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("HAL Compositor (dummy)"),
+            },
+        );
+        {
+            let mut gpu_comp = GpuEncoder::new(
+                &gpu.device, &gpu.queue, &mut dummy_enc, Some(hal_ctx),
+            );
+            gpu_comp.hal_enc =
+                Some(&mut hal_enc as *mut manifold_renderer::hal_context::MetalCommandEncoder);
+
+            // Compositor render — all sub-components detect hal_enc and
+            // encode via hal. No wgpu encoding happens.
+            let _compositor_view =
+                self.compositor.render(&mut gpu_comp, &frame, None);
+        }
+
+        let hal_cmd_buf = unsafe {
+            hal_enc
+                .end_encoding()
+                .expect("hal end_encoding failed")
+        };
+        unsafe {
+            hal_ctx.submit(&[&hal_cmd_buf]);
+        }
+        let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+        // ── Encoder 3: copy + fence (wgpu) ───────────────────────────────
+        let _t0 = std::time::Instant::now();
+        let (comp_w, comp_h) = self.compositor.dimensions();
+        let mut copy_encoder = gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("Copy + Fence Encoder"),
+            },
+        );
+
+        // Copy compositor output to IOSurface
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(ref shared_tex) =
+                self.shared_textures[self.write_surface_index]
+                && shared_tex.width() == comp_w
+                && shared_tex.height() == comp_h
+            {
+                copy_encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: self.compositor.output_texture(),
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: shared_tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: comp_w,
+                        height: comp_h,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
+
+        // Fence copy
+        if let (Some(staging), Some(fence)) =
+            (&self.fence_staging, &self.fence_buffer)
+        {
+            copy_encoder.copy_buffer_to_buffer(staging, 0, fence, 0, 4);
+        }
+
+        gpu.queue.submit(std::iter::once(copy_encoder.finish()));
+        let _submit_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+        // Start async fence
+        if let Some(ref fence) = self.fence_buffer {
+            let ready = Arc::clone(&self.fence_ready);
+            fence.slice(..).map_async(wgpu::MapMode::Read, move |_| {
+                ready.store(true, Ordering::Release);
+            });
+            self.fence_pending = true;
+        }
+
+        // Surface swap
+        #[cfg(target_os = "macos")]
+        {
+            self.last_write_surface = self.write_surface_index;
+            self.write_surface_index = 1 - self.write_surface_index;
+        }
+
+        // Periodic perf dump
+        let _total_ms = _t_frame.elapsed().as_secs_f64() * 1000.0;
+        if frame_count > 0 && frame_count.is_multiple_of(60) {
+            eprintln!(
+                "[PERF/HAL] frame={} clips={} res={}x{} | gen={:.1}ms desc={:.1}ms \
+                 comp={:.1}ms copy+fence={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
+                frame_count,
+                tick_result.ready_clips.len(),
+                comp_w,
+                comp_h,
+                _gen_ms,
+                _desc_ms,
+                _comp_ms,
+                _submit_ms,
+                _poll_ms,
+                _total_ms,
+                1000.0 / _total_ms.max(0.001),
+            );
+        }
+
+        // Update shared dimensions
         let (old_w, old_h) = self.shared_output.get_dimensions();
         if old_w != comp_w || old_h != comp_h {
             self.shared_output.set_dimensions(comp_w, comp_h);
