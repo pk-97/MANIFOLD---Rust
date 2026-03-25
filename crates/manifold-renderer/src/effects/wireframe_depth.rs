@@ -1400,7 +1400,7 @@ impl WireframeDepthFX {
             .expect("Failed to create hal wireframe-depth compute bind group");
 
             hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
-                label: None,
+                label: Some("WireframeDepth Compute"),
                 timestamp_writes: None,
             });
             hal_enc.set_compute_pipeline(&hal_cs_pipe.pipeline);

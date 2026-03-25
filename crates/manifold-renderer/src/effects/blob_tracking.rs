@@ -1232,7 +1232,7 @@ impl PostProcessEffect for BlobTrackingFX {
                 };
                 unsafe {
                     hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
-                        label: None,
+                        label: Some("BlobTracking Downsample"),
                         timestamp_writes: None,
                     });
                     hal_enc.set_compute_pipeline(&hal_cs_ds.pipeline);
@@ -1411,7 +1411,7 @@ impl PostProcessEffect for BlobTrackingFX {
 
             unsafe {
                 hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
-                    label: None,
+                    label: Some("BlobTracking Overlay"),
                     timestamp_writes: None,
                 });
                 hal_enc.set_compute_pipeline(&hal_cs_overlay.pipeline);
