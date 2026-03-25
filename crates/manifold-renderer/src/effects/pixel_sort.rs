@@ -669,6 +669,8 @@ impl PostProcessEffect for PixelSortFX {
         &EffectTypeId::PIXEL_SORT
     }
 
+    fn supports_hal(&self) -> bool { false }
+
     // ComputeSortEffect.cs line 66 — ShouldSkip: param0 <= 0
     fn should_skip(&self, fx: &EffectInstance) -> bool {
         fx.param_values.first().copied().unwrap_or(0.0) <= 0.0

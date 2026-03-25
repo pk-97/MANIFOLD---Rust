@@ -208,8 +208,18 @@ impl EffectChain {
 
             // Apply the effect (skip if ShouldSkip — no GPU work, no swap)
             // Unity ref: CompositorStack checks ShouldSkip before Apply + buffer swap.
+            //
+            // When hal encoding is active, skip effects that don't support hal —
+            // their render passes would go to the dummy wgpu encoder (never submitted),
+            // corrupting the effect chain output.
             if let Some(processor) = registry.get_mut(fx.effect_type())
-                && !processor.should_skip(fx) {
+                && !processor.should_skip(fx)
+                && {
+                    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+                    { !gpu.has_hal_encoder() || processor.supports_hal() }
+                    #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+                    { true }
+                } {
                     // First effect reads directly from input_view (no copy).
                     let source_v = if first_effect_pending {
                         input_view

@@ -1950,6 +1950,8 @@ impl PostProcessEffect for WireframeDepthFX {
         &EffectTypeId::WIREFRAME_DEPTH
     }
 
+    fn supports_hal(&self) -> bool { false }
+
     // WireframeDepthFX.cs line 279-361 — Apply
     fn apply(
         &mut self,

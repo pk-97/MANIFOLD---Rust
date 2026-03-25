@@ -870,6 +870,8 @@ impl PostProcessEffect for BlobTrackingFX {
         &EffectTypeId::BLOB_TRACKING
     }
 
+    fn supports_hal(&self) -> bool { false }
+
     // BlobTrackingFX.cs line 127: if (amount <= 0f || material == null) return;
     fn should_skip(&self, fx: &EffectInstance) -> bool {
         fx.param_values.first().copied().unwrap_or(0.0) <= 0.0

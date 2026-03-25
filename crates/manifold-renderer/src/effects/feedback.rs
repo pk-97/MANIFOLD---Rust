@@ -435,6 +435,8 @@ impl PostProcessEffect for FeedbackFX {
         &EffectTypeId::FEEDBACK
     }
 
+    fn supports_hal(&self) -> bool { false }
+
     // ShouldSkip: default (param[0] <= 0) — matches Unity SimpleBlitEffect.ShouldSkip.
 
     fn apply(

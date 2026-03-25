@@ -59,6 +59,12 @@ pub trait PostProcessEffect: Send {
         should_skip_default(fx)
     }
 
+    /// Whether this effect supports hal encoding. Effects that don't
+    /// support hal are skipped when the compositor uses a hal encoder,
+    /// preventing their render passes from going to the dummy wgpu encoder.
+    /// Default: true (ComputeBlitHelper + blit helpers have hal branches).
+    fn supports_hal(&self) -> bool { true }
+
     /// Apply the effect. Reads source, writes to target.
     /// The caller swaps buffers after each effect.
     ///
