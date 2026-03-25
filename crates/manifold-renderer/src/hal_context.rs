@@ -32,6 +32,12 @@ mod inner {
         /// Fence used for hal queue submissions. Monotonically incrementing value.
         submit_fence: std::cell::UnsafeCell<MetalFence>,
         submit_fence_value: std::cell::Cell<u64>,
+        /// MTLSharedEvent for frame completion signaling.
+        /// CPU reads signaled_value() to check if a frame's GPU work is done —
+        /// near-zero overhead vs device.poll() which goes through wgpu machinery.
+        frame_event: metal::SharedEvent,
+        /// Monotonically increasing value. Incremented each time we signal.
+        frame_event_value: std::cell::Cell<u64>,
     }
 
     // Safety: the underlying Metal device/queue are Send+Sync.
@@ -70,11 +76,15 @@ mod inner {
                     .expect("Failed to create hal fence")
             };
 
+            let frame_event = unsafe { &*device_ptr }.raw_device().new_shared_event();
+
             Self {
                 device_ptr,
                 queue_ptr,
                 submit_fence: std::cell::UnsafeCell::new(fence),
                 submit_fence_value: std::cell::Cell::new(0),
+                frame_event,
+                frame_event_value: std::cell::Cell::new(0),
             }
         }
 
@@ -122,6 +132,36 @@ mod inner {
                     .submit(command_buffers, &[], (fence, value))
                     .expect("hal submit failed");
             }
+        }
+
+        /// Signal frame completion via MTLSharedEvent.
+        ///
+        /// Creates a lightweight command buffer that encodes a signal event and
+        /// commits it. Metal in-order queue execution guarantees the signal fires
+        /// after all preceding work (compositor, IOSurface copy, readbacks).
+        ///
+        /// # Safety
+        ///
+        /// Must be called AFTER all encoder submissions for the frame.
+        pub unsafe fn signal_frame_completion(&self) {
+            let value = self.frame_event_value.get() + 1;
+            self.frame_event_value.set(value);
+            let raw_queue = self.queue().as_raw().lock();
+            let cmd_buf = raw_queue.new_command_buffer_with_unretained_references();
+            cmd_buf.set_label("frame signal");
+            cmd_buf.encode_signal_event(&self.frame_event, value);
+            cmd_buf.commit();
+        }
+
+        /// Check if the GPU has completed the frame at the given signal value.
+        /// Direct GPU counter read — near-zero overhead.
+        pub fn is_frame_done(&self, value: u64) -> bool {
+            self.frame_event.signaled_value() >= value
+        }
+
+        /// Current signal value (store after signal_frame_completion).
+        pub fn current_signal_value(&self) -> u64 {
+            self.frame_event_value.get()
         }
     }
 }

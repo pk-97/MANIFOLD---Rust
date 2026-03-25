@@ -2112,6 +2112,7 @@ dependencies = [
  "manifold-native",
  "manifold-playback",
  "manifold-ui",
+ "metal",
  "naga",
  "serde_json",
  "tiff",

@@ -124,6 +124,10 @@ pub struct ContentPipeline {
     last_gpu_pass_results: Vec<manifold_renderer::gpu_profiler::GpuPassTiming>,
     /// HAL context for zero-overhead GPU encoding (macOS + hal-encoding feature).
     hal_ctx: Option<manifold_renderer::hal_context::HalContext>,
+    /// Signal value from the previous frame's MTLSharedEvent.
+    /// Checked by wait_previous_frame() to detect GPU completion without device.poll().
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_signal_value: u64,
 }
 
 impl ContentPipeline {
@@ -164,6 +168,8 @@ impl ContentPipeline {
             #[cfg(feature = "profiling")]
             last_gpu_pass_results: Vec::new(),
             hal_ctx,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_signal_value: 0,
         }
     }
 
@@ -230,6 +236,28 @@ impl ContentPipeline {
     /// Called at the START of each frame before encoding new work.
     /// Publishes the completed IOSurface so the UI can read it.
     fn wait_previous_frame(&mut self, device: &wgpu::Device) {
+        // ── HAL path: MTLSharedEvent sync ────────────────────────────────
+        // signaled_value() is a direct GPU counter read — microsecond latency
+        // vs device.poll() which goes through wgpu's internal machinery and
+        // wgpu-hal's 1ms sleep loop.
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if let Some(ref hal_ctx) = self.hal_ctx {
+            if self.hal_signal_value > 0 {
+                while !hal_ctx.is_frame_done(self.hal_signal_value) {
+                    std::thread::yield_now();
+                }
+                // Publish the completed IOSurface for the UI thread.
+                if let Some(ref bridge) = self.shared_bridge {
+                    bridge.publish_front(self.last_write_surface as u32);
+                }
+            }
+            // Non-blocking poll for wgpu bookkeeping (readback map_async
+            // callbacks, internal resource reclamation).
+            let _ = device.poll(wgpu::PollType::Poll);
+            return;
+        }
+
+        // ── Non-hal fallback: map_async + device.poll fence ──────────────
         if !self.fence_pending {
             return;
         }
@@ -769,6 +797,60 @@ impl ContentPipeline {
                 self.compositor.render(&mut gpu_comp, &frame, None);
         }
 
+        // IOSurface copy via hal — merged into compositor encoder.
+        // Replaces the old wgpu encoder 3 copy. Same hal blit pattern as
+        // layer_compositor.rs effect_chain→tonemap copy.
+        #[cfg(target_os = "macos")]
+        {
+            let (comp_w, comp_h) = self.compositor.dimensions();
+            if let Some(ref shared_tex) =
+                self.shared_textures[self.write_surface_index]
+                && shared_tex.width() == comp_w
+                && shared_tex.height() == comp_h
+            {
+                type MetalApi = wgpu::hal::api::Metal;
+                use wgpu::hal::CommandEncoder as HalCopyEnc;
+                let src_tex_ptr = {
+                    let g = unsafe {
+                        self.compositor.output_texture().as_hal::<MetalApi>()
+                    }
+                    .expect("compositor output not Metal");
+                    &*g as *const _
+                };
+                let dst_tex_ptr = {
+                    let g = unsafe { shared_tex.as_hal::<MetalApi>() }
+                        .expect("shared tex not Metal");
+                    &*g as *const _
+                };
+                unsafe {
+                    hal_enc.copy_texture_to_texture(
+                        &*src_tex_ptr,
+                        wgpu::wgt::TextureUses::COPY_SRC,
+                        &*dst_tex_ptr,
+                        std::iter::once(wgpu::hal::TextureCopy {
+                            src_base: wgpu::hal::TextureCopyBase {
+                                mip_level: 0,
+                                array_layer: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::hal::FormatAspects::COLOR,
+                            },
+                            dst_base: wgpu::hal::TextureCopyBase {
+                                mip_level: 0,
+                                array_layer: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::hal::FormatAspects::COLOR,
+                            },
+                            size: wgpu::hal::CopyExtent {
+                                width: comp_w,
+                                height: comp_h,
+                                depth: 1,
+                            },
+                        }),
+                    );
+                }
+            }
+        }
+
         let hal_cmd_buf = unsafe {
             hal_enc
                 .end_encoding()
@@ -780,65 +862,14 @@ impl ContentPipeline {
         // Submit aux wgpu encoder — readback copies + any queue.write_buffer
         // staging. Metal in-order queue guarantees hal work completes first.
         gpu.queue.submit(std::iter::once(aux_enc.finish()));
+
+        // Signal frame completion via MTLSharedEvent. The lightweight signal
+        // command buffer is committed after all other submissions — Metal
+        // in-order execution guarantees it fires after compositor + copy +
+        // readbacks all complete.
+        unsafe { hal_ctx.signal_frame_completion(); }
+        self.hal_signal_value = hal_ctx.current_signal_value();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-
-        // ── Encoder 3: copy + fence (wgpu) ───────────────────────────────
-        let _t0 = std::time::Instant::now();
-        let (comp_w, comp_h) = self.compositor.dimensions();
-        let mut copy_encoder = gpu.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor {
-                label: Some("Copy + Fence Encoder"),
-            },
-        );
-
-        // Copy compositor output to IOSurface
-        #[cfg(target_os = "macos")]
-        {
-            if let Some(ref shared_tex) =
-                self.shared_textures[self.write_surface_index]
-                && shared_tex.width() == comp_w
-                && shared_tex.height() == comp_h
-            {
-                copy_encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: self.compositor.output_texture(),
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: shared_tex,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width: comp_w,
-                        height: comp_h,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
-        }
-
-        // Fence copy
-        if let (Some(staging), Some(fence)) =
-            (&self.fence_staging, &self.fence_buffer)
-        {
-            copy_encoder.copy_buffer_to_buffer(staging, 0, fence, 0, 4);
-        }
-
-        gpu.queue.submit(std::iter::once(copy_encoder.finish()));
-        let _submit_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-
-        // Start async fence
-        if let Some(ref fence) = self.fence_buffer {
-            let ready = Arc::clone(&self.fence_ready);
-            fence.slice(..).map_async(wgpu::MapMode::Read, move |_| {
-                ready.store(true, Ordering::Release);
-            });
-            self.fence_pending = true;
-        }
 
         // Surface swap
         #[cfg(target_os = "macos")]
@@ -848,11 +879,12 @@ impl ContentPipeline {
         }
 
         // Periodic perf dump
+        let (comp_w, comp_h) = self.compositor.dimensions();
         let _total_ms = _t_frame.elapsed().as_secs_f64() * 1000.0;
         if frame_count > 0 && frame_count.is_multiple_of(60) {
             eprintln!(
                 "[PERF/HAL] frame={} clips={} res={}x{} | gen={:.1}ms desc={:.1}ms \
-                 comp={:.1}ms copy+fence={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
+                 comp={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
                 frame_count,
                 tick_result.ready_clips.len(),
                 comp_w,
@@ -860,7 +892,6 @@ impl ContentPipeline {
                 _gen_ms,
                 _desc_ms,
                 _comp_ms,
-                _submit_ms,
                 _poll_ms,
                 _total_ms,
                 1000.0 / _total_ms.max(0.001),
