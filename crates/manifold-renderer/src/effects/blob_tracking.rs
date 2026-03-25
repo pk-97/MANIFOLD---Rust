@@ -707,7 +707,11 @@ impl BlobTrackingFX {
 
         let pixels = match state.readback.try_read(device) {
             Some(p) => {
-                eprintln!("[BlobTracking] readback data received! {} bytes", p.len());
+                let nonzero = p.iter().filter(|&&b| b != 0).count();
+                eprintln!(
+                    "[BlobTracking] readback data received! {} bytes, nonzero={}",
+                    p.len(), nonzero,
+                );
                 p
             }
             None => return,
