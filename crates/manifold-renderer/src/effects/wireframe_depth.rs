@@ -346,6 +346,163 @@ const WIREFRAME_DEPTH_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 14] = [
     },
 ];
 
+/// BGL entries for the wireframe-depth **compute** pipelines (hal path).
+/// Same as render BGL (bindings 0–13) plus binding 14: storage texture (write-only).
+/// Visibility is COMPUTE instead of VERTEX_FRAGMENT/FRAGMENT.
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const WIREFRAME_DEPTH_COMPUTE_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 15] = [
+    // 0: uniforms
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    // 1–12: texture_2d<f32> (filterable float)
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 4,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 5,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 6,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 7,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 8,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 9,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 10,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 11,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 12,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    // 13: sampler
+    wgpu::BindGroupLayoutEntry {
+        binding: 13,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+    // 14: output storage texture (write-only, rgba16float)
+    wgpu::BindGroupLayoutEntry {
+        binding: 14,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::Rgba16Float,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    },
+];
+
 // WireframeDepthFX.cs line 16 — WireframeDepthFX : SimpleBlitEffect, IStatefulEffect
 pub struct WireframeDepthFX {
     // 15 render pipelines — one per shader pass
@@ -382,6 +539,9 @@ pub struct WireframeDepthFX {
     hal_pipelines: Option<Vec<crate::hal_pipeline::HalRenderPipeline>>,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_sampler: Option<crate::hal_context::MetalSampler>,
+    /// 15 hal compute pipelines (one per entry point) for TBDR-bypass dispatch.
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_compute_pipelines: Option<Vec<crate::hal_pipeline::HalComputePipeline>>,
     /// Persistent mapped pointer to shared-memory ring buffer (hal path).
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_uniform_mapped_ptr: Option<*mut u8>,
@@ -735,7 +895,7 @@ impl WireframeDepthFX {
 
         // --- hal pipeline creation (one per pass × 15 output formats) ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let (hal_pipelines, hal_sampler) = if let Some(ctx) = hal_ctx {
+        let (hal_pipelines, hal_sampler, hal_compute_pipelines) = if let Some(ctx) = hal_ctx {
             use wgpu::hal::Device as HalDevice;
 
             let wgsl_source = include_str!("shaders/fx_wireframe_depth.wgsl");
@@ -772,9 +932,42 @@ impl WireframeDepthFX {
                     .expect("Failed to create hal wireframe-depth sampler")
             };
 
-            (Some(hal_pipes), Some(hal_samp))
+            // --- hal compute pipelines (15 entry points, TBDR-bypass) ---
+            let compute_wgsl = include_str!("shaders/fx_wireframe_depth_compute.wgsl");
+            let cs_entry_points = [
+                "cs_analysis",              // 0
+                "cs_heuristic_depth",       // 1
+                "cs_wire_mask",             // 2
+                "cs_update_history",        // 3
+                "cs_composite",             // 4
+                "cs_dnn_depth_post",        // 5
+                "cs_flow_estimate",         // 6
+                "cs_flow_advect_coord",     // 7
+                "cs_init_mesh_coord",       // 8
+                "cs_mesh_regularize",       // 9
+                "cs_mesh_cell_affine",      // 10
+                "cs_semantic_mask",         // 11
+                "cs_mesh_face_warp",        // 12
+                "cs_surface_cache_update",  // 13
+                "cs_flow_hygiene",          // 14
+            ];
+            let hal_cs_pipes: Vec<crate::hal_pipeline::HalComputePipeline> = cs_entry_points
+                .iter()
+                .enumerate()
+                .map(|(i, ep)| {
+                    crate::hal_pipeline::create_compute_pipeline(
+                        ctx,
+                        compute_wgsl,
+                        ep,
+                        &WIREFRAME_DEPTH_COMPUTE_BGL_ENTRIES,
+                        &format!("WireframeDepth CS HAL P{i}"),
+                    )
+                })
+                .collect();
+
+            (Some(hal_pipes), Some(hal_samp), Some(hal_cs_pipes))
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
@@ -803,6 +996,8 @@ impl WireframeDepthFX {
             hal_pipelines,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_sampler,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_compute_pipelines,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_uniform_mapped_ptr: _wd_hal_ubo_mapped,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -1036,6 +1231,189 @@ impl WireframeDepthFX {
         }
     }
 
+    /// HAL compute path: dispatch a compute shader instead of a render pass.
+    /// Eliminates TBDR tile load/store overhead (~290us per pass at 4K).
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(clippy::too_many_arguments)]
+    fn run_pass_compute_hal(
+        &self,
+        gpu: &mut GpuEncoder,
+        pass_idx: usize,
+        uniforms: &WireUniforms,
+        main_view: &wgpu::TextureView,
+        prev_analysis_view: &wgpu::TextureView,
+        prev_depth_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
+        history_view: &wgpu::TextureView,
+        flow_view: &wgpu::TextureView,
+        mesh_coord_view: &wgpu::TextureView,
+        prev_mesh_coord_view: &wgpu::TextureView,
+        semantic_view: &wgpu::TextureView,
+        surface_cache_view: &wgpu::TextureView,
+        prev_surface_cache_view: &wgpu::TextureView,
+        subject_mask_view: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        w: u32,
+        h: u32,
+    ) {
+        type MetalApi = wgpu::hal::api::Metal;
+        use wgpu::hal::{self as hal, CommandEncoder as _, Device as _};
+
+        let hal_cs_pipes = self.hal_compute_pipelines.as_ref().expect("hal_compute_pipelines");
+        let hal_samp = self.hal_sampler.as_ref().expect("hal_sampler");
+        let hal_cs_pipe = &hal_cs_pipes[pass_idx];
+
+        // Write uniforms to ring buffer slot (same mechanism as render path)
+        let ubo_size = std::mem::size_of::<WireUniforms>();
+        let slot = self.hal_ring_offset.get();
+        self.hal_ring_offset.set(slot + 1);
+        let byte_offset = slot as usize * ubo_size;
+        let ring_mapped = self.hal_uniform_mapped_ptr.expect("hal ring mapped");
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytemuck::bytes_of(uniforms).as_ptr(),
+                ring_mapped.add(byte_offset),
+                ubo_size,
+            );
+        }
+        let ubo_ptr = self.hal_ring_buf_ptr.expect("hal ring buf ptr");
+
+        // Extract hal texture view pointers (sequential snatch lock)
+        let main_ptr = {
+            let g = unsafe { main_view.as_hal::<MetalApi>() }
+                .expect("main_view not Metal");
+            &*g as *const _
+        };
+        let prev_analysis_ptr = {
+            let g = unsafe { prev_analysis_view.as_hal::<MetalApi>() }
+                .expect("prev_analysis not Metal");
+            &*g as *const _
+        };
+        let prev_depth_ptr = {
+            let g = unsafe { prev_depth_view.as_hal::<MetalApi>() }
+                .expect("prev_depth not Metal");
+            &*g as *const _
+        };
+        let depth_ptr = {
+            let g = unsafe { depth_view.as_hal::<MetalApi>() }
+                .expect("depth not Metal");
+            &*g as *const _
+        };
+        let history_ptr = {
+            let g = unsafe { history_view.as_hal::<MetalApi>() }
+                .expect("history not Metal");
+            &*g as *const _
+        };
+        let flow_ptr = {
+            let g = unsafe { flow_view.as_hal::<MetalApi>() }
+                .expect("flow not Metal");
+            &*g as *const _
+        };
+        let mesh_coord_ptr = {
+            let g = unsafe { mesh_coord_view.as_hal::<MetalApi>() }
+                .expect("mesh_coord not Metal");
+            &*g as *const _
+        };
+        let prev_mesh_coord_ptr = {
+            let g = unsafe { prev_mesh_coord_view.as_hal::<MetalApi>() }
+                .expect("prev_mesh_coord not Metal");
+            &*g as *const _
+        };
+        let semantic_ptr = {
+            let g = unsafe { semantic_view.as_hal::<MetalApi>() }
+                .expect("semantic not Metal");
+            &*g as *const _
+        };
+        let surface_cache_ptr = {
+            let g = unsafe { surface_cache_view.as_hal::<MetalApi>() }
+                .expect("surface_cache not Metal");
+            &*g as *const _
+        };
+        let prev_surface_cache_ptr = {
+            let g = unsafe { prev_surface_cache_view.as_hal::<MetalApi>() }
+                .expect("prev_surface_cache not Metal");
+            &*g as *const _
+        };
+        let subject_mask_ptr = {
+            let g = unsafe { subject_mask_view.as_hal::<MetalApi>() }
+                .expect("subject_mask not Metal");
+            &*g as *const _
+        };
+        let target_ptr = {
+            let g = unsafe { target.as_hal::<MetalApi>() }
+                .expect("target not Metal");
+            &*g as *const _
+        };
+
+        let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+        unsafe {
+            // Compute BGL: 0=uniform, 1-12=textures (RESOURCE), 13=sampler,
+            // 14=output storage texture (STORAGE_READ_WRITE)
+            let hal_bg = hal_ctx.device().create_bind_group(
+                &hal::BindGroupDescriptor {
+                    label: None,
+                    layout: &hal_cs_pipe.bind_group_layout,
+                    entries: &[
+                        hal::BindGroupEntry { binding: 0, resource_index: 0, count: 1 },
+                        hal::BindGroupEntry { binding: 1, resource_index: 0, count: 1 },
+                        hal::BindGroupEntry { binding: 2, resource_index: 1, count: 1 },
+                        hal::BindGroupEntry { binding: 3, resource_index: 2, count: 1 },
+                        hal::BindGroupEntry { binding: 4, resource_index: 3, count: 1 },
+                        hal::BindGroupEntry { binding: 5, resource_index: 4, count: 1 },
+                        hal::BindGroupEntry { binding: 6, resource_index: 5, count: 1 },
+                        hal::BindGroupEntry { binding: 7, resource_index: 6, count: 1 },
+                        hal::BindGroupEntry { binding: 8, resource_index: 7, count: 1 },
+                        hal::BindGroupEntry { binding: 9, resource_index: 8, count: 1 },
+                        hal::BindGroupEntry { binding: 10, resource_index: 9, count: 1 },
+                        hal::BindGroupEntry { binding: 11, resource_index: 10, count: 1 },
+                        hal::BindGroupEntry { binding: 12, resource_index: 11, count: 1 },
+                        hal::BindGroupEntry { binding: 13, resource_index: 0, count: 1 },
+                        hal::BindGroupEntry { binding: 14, resource_index: 12, count: 1 },
+                    ],
+                    buffers: &[hal::BufferBinding::new_unchecked(
+                        &*ubo_ptr,
+                        byte_offset as u64,
+                        std::num::NonZero::new(
+                            std::mem::size_of::<WireUniforms>() as u64,
+                        ),
+                    )],
+                    samplers: &[hal_samp],
+                    textures: &[
+                        hal::TextureBinding { view: &*main_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
+                        hal::TextureBinding { view: &*prev_analysis_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
+                        hal::TextureBinding { view: &*prev_depth_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
+                        hal::TextureBinding { view: &*depth_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
+                        hal::TextureBinding { view: &*history_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
+                        hal::TextureBinding { view: &*flow_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
+                        hal::TextureBinding { view: &*mesh_coord_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
+                        hal::TextureBinding { view: &*prev_mesh_coord_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
+                        hal::TextureBinding { view: &*semantic_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
+                        hal::TextureBinding { view: &*surface_cache_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
+                        hal::TextureBinding { view: &*prev_surface_cache_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
+                        hal::TextureBinding { view: &*subject_mask_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
+                        hal::TextureBinding { view: &*target_ptr, usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE },
+                    ],
+                    acceleration_structures: &[],
+                    external_textures: &[],
+                },
+            )
+            .expect("Failed to create hal wireframe-depth compute bind group");
+
+            hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
+                label: None,
+                timestamp_writes: None,
+            });
+            hal_enc.set_compute_pipeline(&hal_cs_pipe.pipeline);
+            hal_enc.set_bind_group(
+                &hal_cs_pipe.pipeline_layout, 0, &hal_bg,
+                &[],
+            );
+            hal_enc.dispatch([w.div_ceil(16), h.div_ceil(16), 1]);
+            hal_enc.end_compute_pass();
+            hal_ctx.device().destroy_bind_group(hal_bg);
+        }
+    }
+
     /// HAL path: copy texture to texture via hal command encoder.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     fn copy_texture_hal(
@@ -1126,8 +1504,8 @@ impl WireframeDepthFX {
         }
     }
 
-    /// Unified encode: render pass via hal or wgpu, dispatching automatically.
-    /// Replaces the `make_bind_group + run_pass` pattern everywhere.
+    /// Unified encode: compute dispatch (preferred) → hal render pass → wgpu render pass.
+    /// Compute dispatch eliminates TBDR tile overhead (~290us/pass at 4K).
     #[allow(clippy::too_many_arguments)]
     fn encode_pass(
         &self,
@@ -1153,6 +1531,18 @@ impl WireframeDepthFX {
     ) {
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         if gpu.has_hal_encoder() {
+            // Prefer compute dispatch (eliminates TBDR tile overhead)
+            if self.hal_compute_pipelines.is_some() {
+                self.run_pass_compute_hal(
+                    gpu, pass_idx, uniforms,
+                    main_view, prev_analysis_view, prev_depth_view, depth_view,
+                    history_view, flow_view, mesh_coord_view, prev_mesh_coord_view,
+                    semantic_view, surface_cache_view, prev_surface_cache_view,
+                    subject_mask_view, target, w, h,
+                );
+                return;
+            }
+            // Fallback: hal render pass
             self.run_pass_hal(
                 gpu, pass_idx, uniforms,
                 main_view, prev_analysis_view, prev_depth_view, depth_view,
