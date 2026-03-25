@@ -50,8 +50,6 @@ fn build_effect_categories() -> HashMap<EffectTypeId, &'static str> {
     m.insert(EffectTypeId::TRANSFORM, SPATIAL);
     m.insert(EffectTypeId::INVERT_COLORS, SPATIAL);
     // Post-Process
-    m.insert(EffectTypeId::FEEDBACK, POST_PROCESS);
-    m.insert(EffectTypeId::PIXEL_SORT, POST_PROCESS);
     m.insert(EffectTypeId::BLOOM, POST_PROCESS);
     m.insert(EffectTypeId::INFINITE_ZOOM, POST_PROCESS);
     m.insert(EffectTypeId::KALEIDOSCOPE, POST_PROCESS);
@@ -63,7 +61,6 @@ fn build_effect_categories() -> HashMap<EffectTypeId, &'static str> {
     m.insert(EffectTypeId::STYLIZED_FEEDBACK, POST_PROCESS);
     m.insert(EffectTypeId::MIRROR, POST_PROCESS);
     m.insert(EffectTypeId::BLOB_TRACKING, POST_PROCESS);
-    m.insert(EffectTypeId::CRT, POST_PROCESS);
     m.insert(EffectTypeId::FLUID_DISTORTION, POST_PROCESS);
     m.insert(EffectTypeId::EDGE_GLOW, POST_PROCESS);
     m.insert(EffectTypeId::DATAMOSH, POST_PROCESS);
@@ -91,17 +88,11 @@ fn build_generator_categories() -> HashMap<GeneratorTypeId, &'static str> {
     m.insert(GeneratorTypeId::CONCENTRIC_TUNNEL, GENERATORS);
     m.insert(GeneratorTypeId::PLASMA, GENERATORS);
     m.insert(GeneratorTypeId::LISSAJOUS, GENERATORS);
-    m.insert(GeneratorTypeId::FRACTAL_ZOOM, GENERATORS);
     m.insert(GeneratorTypeId::OSCILLOSCOPE_XY, GENERATORS);
     m.insert(GeneratorTypeId::WIREFRAME_ZOO, GENERATORS);
-    m.insert(GeneratorTypeId::REACTION_DIFFUSION, GENERATORS);
-    m.insert(GeneratorTypeId::FLOWFIELD, GENERATORS);
     m.insert(GeneratorTypeId::PARAMETRIC_SURFACE, GENERATORS);
-    m.insert(GeneratorTypeId::STRANGE_ATTRACTOR, GENERATORS);
     m.insert(GeneratorTypeId::FLUID_SIMULATION, GENERATORS);
-    m.insert(GeneratorTypeId::NUMBER_STATION, GENERATORS);
     m.insert(GeneratorTypeId::MYCELIUM, GENERATORS);
-    m.insert(GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR, GENERATORS);
     m.insert(GeneratorTypeId::FLUID_SIMULATION_3D, GENERATORS);
     m
 }

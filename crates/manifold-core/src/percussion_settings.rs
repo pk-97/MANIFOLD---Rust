@@ -140,7 +140,7 @@ pub struct PercSettings {
 impl Default for PercSettings {
     fn default() -> Self {
         Self {
-            generator: GeneratorTypeId::FLOWFIELD,
+            generator: GeneratorTypeId::PLASMA,
             layer_index: 3,
             clip_duration_beats: 0.50,
             min_confidence: 0.0,
@@ -660,7 +660,7 @@ impl PercussionImportOptionsFactory {
         ));
         // Perc — groove accents.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Perc, 3, None, GeneratorTypeId::FLOWFIELD, 0.50, 0.0,
+            PercussionTriggerType::Perc, 3, None, GeneratorTypeId::PLASMA, 0.50, 0.0,
         ));
         // Hat — high-frequency shimmer.
         options.bindings.push(PercussionClipBinding::new(

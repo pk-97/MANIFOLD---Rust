@@ -486,7 +486,7 @@ fn change_effect_param_undo_roundtrip() {
 fn reorder_effect_undo_roundtrip() {
     let mut project = make_test_project();
     project.settings.master_effects.push(make_effect(&EffectTypeId::BLOOM));
-    project.settings.master_effects.push(make_effect(&EffectTypeId::FEEDBACK));
+    project.settings.master_effects.push(make_effect(&EffectTypeId::GLITCH));
 
     let target = EffectTarget::Master;
     // to_index uses pre-removal indexing: to=2 means "insert after the last element"
@@ -494,12 +494,12 @@ fn reorder_effect_undo_roundtrip() {
     let mut cmd = ReorderEffectCommand::new(target, 0, 2);
 
     cmd.execute(&mut project);
-    assert_eq!(*project.settings.master_effects[0].effect_type(), EffectTypeId::FEEDBACK);
+    assert_eq!(*project.settings.master_effects[0].effect_type(), EffectTypeId::GLITCH);
     assert_eq!(*project.settings.master_effects[1].effect_type(), EffectTypeId::BLOOM);
 
     cmd.undo(&mut project);
     assert_eq!(*project.settings.master_effects[0].effect_type(), EffectTypeId::BLOOM);
-    assert_eq!(*project.settings.master_effects[1].effect_type(), EffectTypeId::FEEDBACK);
+    assert_eq!(*project.settings.master_effects[1].effect_type(), EffectTypeId::GLITCH);
 }
 
 #[test]
@@ -541,7 +541,7 @@ fn effect_on_layer_undo_roundtrip() {
 fn group_effects_undo_roundtrip() {
     let mut project = make_test_project();
     project.settings.master_effects.push(make_effect(&EffectTypeId::BLOOM));
-    project.settings.master_effects.push(make_effect(&EffectTypeId::FEEDBACK));
+    project.settings.master_effects.push(make_effect(&EffectTypeId::GLITCH));
 
     let target = EffectTarget::Master;
     let mut cmd = GroupEffectsCommand::new(target, vec![0, 1], "My Group".into());
@@ -958,7 +958,7 @@ fn reorder_effect_group_undo_roundtrip() {
     let mut project = make_test_project();
     // Add 3 master effects
     let fx_a = EffectInstance::new(EffectTypeId::BLOOM);
-    let fx_b = EffectInstance::new(EffectTypeId::CRT);
+    let fx_b = EffectInstance::new(EffectTypeId::HALATION);
     let fx_c = EffectInstance::new(EffectTypeId::GLITCH);
     project.settings.master_effects = vec![fx_a.clone(), fx_b.clone(), fx_c.clone()];
 
@@ -972,13 +972,13 @@ fn reorder_effect_group_undo_roundtrip() {
         new_effects,
     );
     cmd.execute(&mut project);
-    assert_eq!(*project.settings.master_effects[0].effect_type(), EffectTypeId::CRT);
+    assert_eq!(*project.settings.master_effects[0].effect_type(), EffectTypeId::HALATION);
     assert_eq!(*project.settings.master_effects[1].effect_type(), EffectTypeId::GLITCH);
     assert_eq!(*project.settings.master_effects[2].effect_type(), EffectTypeId::BLOOM);
 
     cmd.undo(&mut project);
     assert_eq!(*project.settings.master_effects[0].effect_type(), EffectTypeId::BLOOM);
-    assert_eq!(*project.settings.master_effects[1].effect_type(), EffectTypeId::CRT);
+    assert_eq!(*project.settings.master_effects[1].effect_type(), EffectTypeId::HALATION);
     assert_eq!(*project.settings.master_effects[2].effect_type(), EffectTypeId::GLITCH);
 }
 

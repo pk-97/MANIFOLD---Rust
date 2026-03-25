@@ -225,26 +225,6 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
         osc_prefix: Some("invert"),
     });
 
-    // Feedback
-    m.insert(EffectTypeId::FEEDBACK, EffectDef {
-        display_name: "Feedback",
-        param_count: 1,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-        ],
-        osc_prefix: Some("feedback"),
-    });
-
-    // PixelSort
-    m.insert(EffectTypeId::PIXEL_SORT, EffectDef {
-        display_name: "Pixel Sort",
-        param_count: 1,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 0.0),
-        ],
-        osc_prefix: Some("pixelSort"),
-    });
-
     // Bloom
     m.insert(EffectTypeId::BLOOM, EffectDef {
         display_name: "Bloom",
@@ -382,19 +362,6 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
     });
 
     // CRT
-    m.insert(EffectTypeId::CRT, EffectDef {
-        display_name: "CRT",
-        param_count: 5,
-        param_defs: vec![
-            pd("Amount", 0.0, 1.0, 1.0),
-            pd_osc("Scanlines", 0.0, 1.0, 0.397, "Scanlines"),
-            pd_osc("Glow", 0.0, 1.0, 0.3, "Glow"),
-            pd_osc("Curvature", 0.0, 1.0, 0.0, "Curvature"),
-            pd_osc("Style", 0.0, 1.0, 0.5, "Style"),
-        ],
-        osc_prefix: Some("crt"),
-    });
-
     // FluidDistortion
     m.insert(EffectTypeId::FLUID_DISTORTION, EffectDef {
         display_name: "Fluid Distortion",

@@ -182,10 +182,6 @@ fn generator_param_count_basic_shapes() { assert_eq!(generator_definition_regist
 #[test]
 fn generator_param_count_concentric_tunnel() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::CONCENTRIC_TUNNEL).param_count, 6); }
 #[test]
-fn generator_param_count_fractal_zoom() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FRACTAL_ZOOM).param_count, 2); }
-#[test]
-fn generator_param_count_number_station() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::NUMBER_STATION).param_count, 8); }
-#[test]
 fn generator_param_count_tesseract() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::TESSERACT).param_count, 11); }
 #[test]
 fn generator_param_count_duocylinder() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::DUOCYLINDER).param_count, 11); }
@@ -196,17 +192,9 @@ fn generator_param_count_wireframe_zoo() { assert_eq!(generator_definition_regis
 #[test]
 fn generator_param_count_oscilloscope_xy() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::OSCILLOSCOPE_XY).param_count, 9); }
 #[test]
-fn generator_param_count_reaction_diffusion() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::REACTION_DIFFUSION).param_count, 4); }
-#[test]
-fn generator_param_count_flowfield() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FLOWFIELD).param_count, 6); }
-#[test]
 fn generator_param_count_parametric_surface() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::PARAMETRIC_SURFACE).param_count, 5); }
 #[test]
-fn generator_param_count_strange_attractor() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::STRANGE_ATTRACTOR).param_count, 8); }
-#[test]
 fn generator_param_count_mycelium() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::MYCELIUM).param_count, 12); }
-#[test]
-fn generator_param_count_compute_attractor() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR).param_count, 11); }
 #[test]
 fn generator_param_count_fluid_sim() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION).param_count, 20); }
 #[test]

@@ -4,7 +4,6 @@ use crate::effect::PostProcessEffect;
 use crate::effects::invert_colors::InvertColorsFX;
 use crate::effects::color_grade::ColorGradeFX;
 use crate::effects::mirror::MirrorFX;
-use crate::effects::feedback::FeedbackFX;
 use crate::effects::bloom::BloomFX;
 use crate::effects::chromatic_aberration::ChromaticAberrationFX;
 use crate::effects::glitch::GlitchFX;
@@ -14,13 +13,11 @@ use crate::effects::kaleidoscope::KaleidoscopeFX;
 use crate::effects::edge_stretch::EdgeStretchFX;
 use crate::effects::quad_mirror::QuadMirrorFX;
 use crate::effects::strobe::StrobeFX;
-use crate::effects::crt::CrtFX;
 use crate::effects::stylized_feedback::StylizedFeedbackFX;
 use crate::effects::edge_glow::EdgeGlowFX;
 use crate::effects::transform::TransformFX;
 use crate::effects::infrared::InfraredFX;
 use crate::effects::voronoi_prism::VoronoiPrismFX;
-use crate::effects::pixel_sort::PixelSortFX;
 use crate::effects::blob_tracking::BlobTrackingFX;
 use crate::effects::wireframe_depth::WireframeDepthFX;
 
@@ -36,7 +33,6 @@ impl EffectRegistry {
         processors.insert(EffectTypeId::INVERT_COLORS, Box::new(InvertColorsFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::COLOR_GRADE, Box::new(ColorGradeFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::MIRROR, Box::new(MirrorFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::FEEDBACK, Box::new(FeedbackFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::BLOOM, Box::new(BloomFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::CHROMATIC_ABERRATION, Box::new(ChromaticAberrationFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::GLITCH, Box::new(GlitchFX::new(device, hal_ctx)));
@@ -46,13 +42,11 @@ impl EffectRegistry {
         processors.insert(EffectTypeId::EDGE_STRETCH, Box::new(EdgeStretchFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::QUAD_MIRROR, Box::new(QuadMirrorFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::STROBE, Box::new(StrobeFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::CRT, Box::new(CrtFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::STYLIZED_FEEDBACK, Box::new(StylizedFeedbackFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::EDGE_GLOW, Box::new(EdgeGlowFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::TRANSFORM, Box::new(TransformFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::INFRARED, Box::new(InfraredFX::new(device, hal_ctx)));
         processors.insert(EffectTypeId::VORONOI_PRISM, Box::new(VoronoiPrismFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::PIXEL_SORT, Box::new(PixelSortFX::new(device, hal_ctx)));
         // BlobTrackingFX needs queue for font atlas upload
         processors.insert(EffectTypeId::BLOB_TRACKING, Box::new(BlobTrackingFX::new(device, queue, hal_ctx)));
         // WireframeDepthFX needs queue for dummy texture uploads

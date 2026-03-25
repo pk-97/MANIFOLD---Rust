@@ -36,8 +36,6 @@ fn build_registry() -> Vec<EffectTypeRegistration> {
         reg(E::TRANSFORM,            "Transform",            SPATIAL,       true),
         reg(E::INVERT_COLORS,        "Invert Colors",        SPATIAL,       true),
         // Post-Process
-        reg(E::FEEDBACK,             "Feedback",             POST_PROCESS,  true),
-        reg(E::PIXEL_SORT,           "Pixel Sort",           POST_PROCESS,  true),
         reg(E::BLOOM,                "Bloom",                POST_PROCESS,  true),
         reg(E::INFINITE_ZOOM,        "Infinite Zoom",        POST_PROCESS,  false),
         reg(E::KALEIDOSCOPE,         "Kaleidoscope",         POST_PROCESS,  true),
@@ -49,7 +47,6 @@ fn build_registry() -> Vec<EffectTypeRegistration> {
         reg(E::STYLIZED_FEEDBACK,    "Stylized Feedback",    POST_PROCESS,  true),
         reg(E::MIRROR,               "Mirror",               POST_PROCESS,  true),
         reg(E::BLOB_TRACKING,        "Blob Tracking",        POST_PROCESS,  true),
-        reg(E::CRT,                  "CRT",                  POST_PROCESS,  true),
         reg(E::FLUID_DISTORTION,     "Fluid Distortion",     POST_PROCESS,  false),
         reg(E::EDGE_GLOW,            "Edge Glow",            POST_PROCESS,  true),
         reg(E::DATAMOSH,             "Datamosh",             POST_PROCESS,  false),

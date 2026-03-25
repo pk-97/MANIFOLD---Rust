@@ -329,33 +329,6 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
     ];
     m.insert(GeneratorTypeId::PLASMA, create_def("Plasma", false, "generator/plasma", params));
 
-    // ── FractalZoom ──
-    let params = vec![
-        pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
-        pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
-    ];
-    m.insert(GeneratorTypeId::FRACTAL_ZOOM, create_def("Fractal Zoom", false, "generator/fractalZoom", params));
-
-    // ── ReactionDiffusion ──
-    let params = vec![
-        pd("Feed", 0.01, 0.08, 0.055, Some("F3"), "feed"),
-        pd("Kill", 0.03, 0.07, 0.062, Some("F3"), "kill"),
-        pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
-        pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
-    ];
-    m.insert(GeneratorTypeId::REACTION_DIFFUSION, create_def("Reaction-Diffusion", false, "generator/reactionDiffusion", params));
-
-    // ── Flowfield ──
-    let params = vec![
-        pd("Noise", 0.5, 10.0, 1.5, Some("F1"), "noise"),
-        pd("Curl", 0.0, 2.0, 0.3, Some("F2"), "curl"),
-        pd("Decay", 0.90, 0.999, 0.97, Some("F3"), "decay"),
-        pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
-        pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
-        pd_toggle("Snap", 0.0, 1.0, 1.0, "snap"),
-    ];
-    m.insert(GeneratorTypeId::FLOWFIELD, create_def("Flowfield", false, "generator/flowfield", params));
-
     // ── ParametricSurface ──
     let params = vec![
         pd_whole_labels("Shape", 0.0, 4.0, 0.0, &["Gyroid", "Schwarz P", "Schwarz D", "Torus Knot", "Klein"], "shape"),
@@ -365,19 +338,6 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd_toggle("Snap", 0.0, 1.0, 1.0, "snap"),
     ];
     m.insert(GeneratorTypeId::PARAMETRIC_SURFACE, create_def("Parametric Surface", false, "generator/parametricSurface", params));
-
-    // ── StrangeAttractor ──
-    let params = vec![
-        pd_whole_labels("Type", 0.0, 4.0, 0.0, &["Lorenz", "Rossler", "Aizawa", "Thomas", "Halvorsen"], "type"),
-        pd("Trail", 0.90, 0.999, 0.98, Some("F3"), "trail"),
-        pd("Bright", 0.5, 5.0, 2.0, Some("F1"), "bright"),
-        pd("Chaos", 0.0, 1.0, 0.0, Some("F2"), "chaos"),
-        pd("Size", 0.2, 5.0, 1.5, Some("F1"), "size"),
-        pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
-        pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
-        pd_toggle("Snap", 0.0, 1.0, 0.0, "snap"),
-    ];
-    m.insert(GeneratorTypeId::STRANGE_ATTRACTOR, create_def("Strange Attractor", false, "generator/strangeAttractor", params));
 
     // ── FluidSimulation ──
     let params = vec![
@@ -404,19 +364,6 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
     ];
     m.insert(GeneratorTypeId::FLUID_SIMULATION, create_def("Fluid Simulation", false, "generator/fluidSimulation", params));
 
-    // ── NumberStation ──
-    let params = vec![
-        pd_whole_labels("Mode", 0.0, 3.0, 0.0, &["Hex", "Binary", "Coords", "Mixed"], "mode"),
-        pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
-        pd("Density", 0.2, 1.0, 0.6, Some("F2"), "density"),
-        pd("Font", 0.5, 3.0, 1.0, Some("F1"), "fontSize"),
-        pd("Glow", 0.0, 1.0, 0.3, Some("F2"), "glow"),
-        pd("Flicker", 0.0, 1.0, 0.2, Some("F2"), "flicker"),
-        pd_whole_labels("Color", 0.0, 3.0, 0.0, &["Green", "Amber", "White", "Cyan"], "color"),
-        pd_whole("Columns", 4.0, 32.0, 16.0, "columns"),
-    ];
-    m.insert(GeneratorTypeId::NUMBER_STATION, create_def("Number Station", false, "generator/numberStation", params));
-
     // ── Mycelium ──
     let params = vec![
         pd("SensDist", 0.005, 0.1, 0.02, Some("F3"), "sensdist"),
@@ -433,22 +380,6 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd_whole("Seeds", 1.0, 5.0, 1.0, "seeds"),
     ];
     m.insert(GeneratorTypeId::MYCELIUM, create_def("Mycelium", false, "generator/mycelium", params));
-
-    // ── ComputeStrangeAttractor ──
-    let params = vec![
-        pd_whole_labels("Type", 0.0, 4.0, 0.0, &["Lorenz", "Rossler", "Aizawa", "Thomas", "Halvorsen"], "type"),
-        pd("Contrast", 1.0, 8.0, 3.5, Some("F1"), "contrast"),
-        pd("Chaos", 0.0, 1.0, 0.0, Some("F2"), "chaos"),
-        pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
-        pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
-        pd_toggle("Snap", 0.0, 1.0, 0.0, "snap"),
-        pd("Particles (M)", 0.1, 2.0, 0.5, Some("F1"), "particles"),
-        pd("Diffusion", 0.0, 0.05, 0.0, Some("F3"), "diffusion"),
-        pd("Tilt", -1.0, 1.0, 0.3, Some("F2"), "tilt"),
-        pd("Splat Size", 1.0, 8.0, 3.0, Some("F1"), "splatSize"),
-        pd_toggle("Invert", 0.0, 1.0, 0.0, "invert"),
-    ];
-    m.insert(GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR, create_def("Strange Attractor (GPU)", false, "generator/computeStrangeAttractor", params));
 
     // ── FluidSimulation3D ──
     let params = vec![
