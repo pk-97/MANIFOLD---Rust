@@ -435,7 +435,7 @@ impl PostProcessEffect for FeedbackFX {
         &EffectTypeId::FEEDBACK
     }
 
-    fn supports_hal(&self) -> bool { false }
+    fn supports_hal(&self) -> bool { true }
 
     // ShouldSkip: default (param[0] <= 0) — matches Unity SimpleBlitEffect.ShouldSkip.
 
@@ -451,6 +451,127 @@ impl PostProcessEffect for FeedbackFX {
     ) {
         self.width = ctx.width;
         self.height = ctx.height;
+
+        // --- hal path ---
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if gpu.has_hal_encoder() {
+            type MetalApi = wgpu::hal::api::Metal;
+            use wgpu::hal::CommandEncoder as _;
+
+            // Ensure state buffer exists (clear via hal)
+            if !self.states.contains_key(&ctx.owner_key) && self.width > 0 && self.height > 0 {
+                let format = wgpu::TextureFormat::Rgba16Float;
+                let buffer = RenderTarget::new(
+                    gpu.device, self.width, self.height, format, "Feedback State",
+                );
+                // Clear via hal render pass
+                let view_ptr = {
+                    let g = unsafe { buffer.view.as_hal::<MetalApi>() }
+                        .expect("feedback state not Metal");
+                    &*g as *const _
+                };
+                let (hal_enc, _hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+                unsafe {
+                    use wgpu::hal as hal;
+                    hal_enc.begin_render_pass(&hal::RenderPassDescriptor {
+                        label: Some("Clear Feedback State"),
+                        extent: wgpu::Extent3d {
+                            width: self.width, height: self.height,
+                            depth_or_array_layers: 1,
+                        },
+                        sample_count: 1,
+                        color_attachments: &[Some(hal::ColorAttachment {
+                            target: hal::Attachment {
+                                view: &*view_ptr,
+                                usage: wgpu::wgt::TextureUses::COLOR_TARGET,
+                            },
+                            resolve_target: None,
+                            ops: hal::AttachmentOps::LOAD_CLEAR
+                                | hal::AttachmentOps::STORE,
+                            clear_value: wgpu::Color::TRANSPARENT,
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: None,
+                        multiview_mask: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    }).expect("hal begin_render_pass failed");
+                    hal_enc.end_render_pass();
+                }
+                self.states.insert(ctx.owner_key, FeedbackState { buffer });
+            }
+
+            let state = self.states.get(&ctx.owner_key).unwrap();
+            let feedback_amount =
+                fx.param_values.first().copied().unwrap_or(0.0).min(0.98);
+
+            // Extract hal texture view pointers (sequential snatch lock)
+            let source_ptr = {
+                let g = unsafe { source.as_hal::<MetalApi>() }
+                    .expect("source not Metal");
+                &*g as *const _
+            };
+            let prev_ptr = {
+                let g = unsafe { state.buffer.view.as_hal::<MetalApi>() }
+                    .expect("prev not Metal");
+                &*g as *const _
+            };
+            let target_ptr = {
+                let g = unsafe { target.as_hal::<MetalApi>() }
+                    .expect("target not Metal");
+                &*g as *const _
+            };
+
+            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+            unsafe {
+                self.apply_hal(
+                    hal_enc, hal_ctx,
+                    &*source_ptr, &*prev_ptr, &*target_ptr,
+                    ctx.width, ctx.height, feedback_amount,
+                );
+            }
+
+            // PostBlit copy via hal: target → state buffer
+            let target_tex_ptr = {
+                let g = unsafe { target_texture.as_hal::<MetalApi>() }
+                    .expect("target tex not Metal");
+                &*g as *const _
+            };
+            let state_tex_ptr = {
+                let g = unsafe { state.buffer.texture.as_hal::<MetalApi>() }
+                    .expect("state tex not Metal");
+                &*g as *const _
+            };
+            let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+            unsafe {
+                hal_enc.copy_texture_to_texture(
+                    &*target_tex_ptr,
+                    wgpu::wgt::TextureUses::COPY_SRC,
+                    &*state_tex_ptr,
+                    std::iter::once(wgpu::hal::TextureCopy {
+                        src_base: wgpu::hal::TextureCopyBase {
+                            mip_level: 0,
+                            array_layer: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::hal::FormatAspects::COLOR,
+                        },
+                        dst_base: wgpu::hal::TextureCopyBase {
+                            mip_level: 0,
+                            array_layer: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::hal::FormatAspects::COLOR,
+                        },
+                        size: wgpu::hal::CopyExtent {
+                            width: ctx.width,
+                            height: ctx.height,
+                            depth: 1,
+                        },
+                    }),
+                );
+            }
+            return;
+        }
+
         self.ensure_state(gpu.device, gpu.encoder, ctx.owner_key);
 
         let state = self.states.get(&ctx.owner_key).unwrap();
