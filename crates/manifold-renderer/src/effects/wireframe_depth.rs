@@ -201,6 +201,151 @@ struct WireUniforms {
 
 const _: () = assert!(std::mem::size_of::<WireUniforms>() == 80);
 
+/// BGL entries for the wireframe-depth render pipelines (shared between wgpu and hal).
+/// All 15 passes share a single BGL: binding 0 = uniforms, 1–12 = textures, 13 = sampler.
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const WIREFRAME_DEPTH_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 14] = [
+    // 0: uniforms
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    // 1–12: texture_2d<f32> (filterable float)
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 4,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 5,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 6,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 7,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 8,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 9,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 10,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 11,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 12,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    // 13: sampler
+    wgpu::BindGroupLayoutEntry {
+        binding: 13,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+];
+
 // WireframeDepthFX.cs line 16 — WireframeDepthFX : SimpleBlitEffect, IStatefulEffect
 pub struct WireframeDepthFX {
     // 15 render pipelines — one per shader pass
@@ -231,10 +376,23 @@ pub struct WireframeDepthFX {
     dnn_subject_api_available: bool,
     // WireframeDepthFX.cs line 102 — static ompEnvConfigured
     // Handled in FfiDepthEstimator::new() — KMP_DUPLICATE_LIB_OK set there.
+    // --- hal dual-path resources (pipeline + sampler for each of 15 passes) ---
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_pipelines: Option<Vec<crate::hal_pipeline::HalRenderPipeline>>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[allow(dead_code)]
+    hal_sampler: Option<crate::hal_context::MetalSampler>,
 }
 
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+unsafe impl Send for WireframeDepthFX {}
+
 impl WireframeDepthFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("WireframeDepth"),
             source: wgpu::ShaderSource::Wgsl(
@@ -516,6 +674,53 @@ impl WireframeDepthFX {
         let dnn_backend_available = workers.is_some();
         let dnn_backend_initialized = workers.is_some();
 
+        // --- hal pipeline creation (one per pass × 15 output formats) ---
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (hal_pipelines, hal_sampler) = if let Some(ctx) = hal_ctx {
+            use wgpu::hal::Device as HalDevice;
+
+            let wgsl_source = include_str!("shaders/fx_wireframe_depth.wgsl");
+            let hal_pipes: Vec<crate::hal_pipeline::HalRenderPipeline> = entry_points
+                .iter()
+                .zip(output_formats.iter())
+                .enumerate()
+                .map(|(i, (fs_ep, &fmt))| {
+                    crate::hal_pipeline::create_render_pipeline(
+                        ctx,
+                        wgsl_source,
+                        "vs_main",
+                        fs_ep,
+                        &WIREFRAME_DEPTH_BGL_ENTRIES,
+                        fmt,
+                        &format!("WireframeDepth HAL P{i}"),
+                    )
+                })
+                .collect();
+
+            let hal_samp = unsafe {
+                ctx.device()
+                    .create_sampler(&wgpu::hal::SamplerDescriptor {
+                        label: Some("WireframeDepth HAL"),
+                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                        lod_clamp: 0.0..32.0,
+                        compare: None,
+                        anisotropy_clamp: 1,
+                        border_color: None,
+                    })
+                    .expect("Failed to create hal wireframe-depth sampler")
+            };
+
+            (Some(hal_pipes), Some(hal_samp))
+        } else {
+            (None, None)
+        };
+
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        let _ = &hal_ctx;
+
         Self {
             pipelines,
             bind_group_layout,
@@ -535,6 +740,10 @@ impl WireframeDepthFX {
             dnn_next_retry_frame: 0,
             warned_missing_dnn: false,
             dnn_subject_api_available: true,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_pipelines,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_sampler,
         }
     }
 

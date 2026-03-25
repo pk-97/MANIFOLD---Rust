@@ -25,8 +25,14 @@ use crate::gpu_encoder::GpuEncoder;
 const SORT_ROWS: bool = false;             // SortRows = false → vertical (sort columns)
 const SORT_RESOLUTION_SCALE: f32 = 0.5;   // SortResolutionScale = 0.5
 
+// --- ComputeSortEffect.cs lines 157-158 — effective dimension clamp ---
+const MIN_SORT_DIM: u32 = 16;
+
+// --- ComputeSortEffect.cs line 157 — clamp for SortResolutionScale ---
+const SCALE_MIN: f32 = 0.25;
+const SCALE_MAX: f32 = 1.0;
+
 // ── BGL entry constants for hal pipeline creation ────────────────────────────
-// These mirror the wgpu BGL entries and are passed to hal pipeline builders.
 
 /// Key extraction compute pipeline BGL entries.
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -144,13 +150,6 @@ const VIZ_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
         count: None,
     },
 ];
-
-// --- ComputeSortEffect.cs lines 157-158 — effective dimension clamp ---
-const MIN_SORT_DIM: u32 = 16;
-
-// --- ComputeSortEffect.cs line 157 — clamp for SortResolutionScale ---
-const SCALE_MIN: f32 = 0.25;
-const SCALE_MAX: f32 = 1.0;
 
 // ── Key extraction uniform struct ─────────────────────────────────────────────
 // Matches PixelSortKeys.compute uniforms in declaration order, 16-byte aligned.
