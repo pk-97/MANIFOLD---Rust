@@ -124,3 +124,31 @@ impl<'a> GpuEncoder<'a> {
         }
     }
 }
+
+/// Extract a raw Metal texture from a wgpu Texture and wrap as GpuTexture.
+///
+/// Uses wgpu's `as_hal()` for resource extraction only (NOT for encoding).
+/// The returned GpuTexture holds a retained reference to the underlying Metal
+/// texture. Safe as long as the wgpu Texture is alive.
+///
+/// # Safety
+/// The Texture must be backed by the Metal backend.
+#[cfg(target_os = "macos")]
+pub unsafe fn extract_native_texture(
+    texture: &wgpu::Texture,
+) -> manifold_gpu::GpuTexture {
+    type MetalApi = wgpu::hal::api::Metal;
+    let guard = unsafe {
+        texture.as_hal::<MetalApi>()
+            .expect("Texture not Metal")
+    };
+    let raw_tex = unsafe { (*guard).raw_handle().to_owned() };
+    let w = texture.width();
+    let h = texture.height();
+    let d = texture.depth_or_array_layers();
+    manifold_gpu::GpuTexture::from_raw(
+        raw_tex, w, h, d,
+        manifold_gpu::GpuTextureFormat::Rgba16Float,
+    )
+}
+

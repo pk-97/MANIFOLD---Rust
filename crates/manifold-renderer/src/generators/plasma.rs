@@ -52,12 +52,18 @@ const HAL_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 2] = [
     },
 ];
 
+const SHADER_SOURCE: &str = include_str!("shaders/plasma_compute.wgsl");
+
 pub struct PlasmaGenerator {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
+    /// Native Metal compute pipeline from manifold-gpu.
+    /// Used when native_enc is set on GpuEncoder.
+    #[cfg(target_os = "macos")]
+    native_pipeline: Option<manifold_gpu::GpuComputePipeline>,
 }
 
 impl PlasmaGenerator {
@@ -65,14 +71,13 @@ impl PlasmaGenerator {
         device: &wgpu::Device,
         _target_format: wgpu::TextureFormat,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
 
-        let shader_source = include_str!("shaders/plasma_compute.wgsl");
-
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Plasma Generator"),
-            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
+            source: wgpu::ShaderSource::Wgsl(SHADER_SOURCE.into()),
         });
 
         let bind_group_layout =
@@ -131,11 +136,17 @@ impl PlasmaGenerator {
         let hal_pipeline = hal_ctx.map(|ctx| {
             crate::hal_pipeline::create_compute_pipeline(
                 ctx,
-                shader_source,
+                SHADER_SOURCE,
                 "cs_main",
                 &HAL_BGL_ENTRIES,
                 "Plasma HAL",
             )
+        });
+
+        // Create native Metal pipeline from manifold-gpu
+        #[cfg(target_os = "macos")]
+        let native_pipeline = native_device.map(|dev| {
+            dev.create_compute_pipeline(SHADER_SOURCE, "cs_main", "Plasma Native")
         });
 
         Self {
@@ -144,6 +155,8 @@ impl PlasmaGenerator {
             uniform_buffer,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_pipeline,
+            #[cfg(target_os = "macos")]
+            native_pipeline,
         }
     }
 }
@@ -205,7 +218,35 @@ impl Generator for PlasmaGenerator {
             _pad: [0.0; 3],
         };
 
-        // ── HAL dispatch path ──────────────────────────────────────────
+        // ── NATIVE METAL dispatch path ─────────────────────────────────
+        // Zero wgpu — dispatches through manifold_gpu::GpuEncoder directly.
+        // Uses set_bytes for uniforms (inline, no buffer allocation).
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_pipe) = self.native_pipeline
+            && gpu.has_native_encoder()
+            && let Some(native_target_ptr) = ctx.native_target
+        {
+            let native_target = unsafe { &*native_target_ptr };
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            native_enc.dispatch_compute(
+                native_pipe,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: native_target,
+                    },
+                ],
+                [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+                "Plasma Compute",
+            );
+            return ctx.anim_progress;
+        }
+
+        // ── HAL dispatch path (legacy — will be removed) ─────────────
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         if let Some(ref hal_pipe) = self.hal_pipeline
             && gpu.has_hal_encoder()
@@ -213,7 +254,6 @@ impl Generator for PlasmaGenerator {
             use wgpu::hal::{self, Device as HalDevice};
             use crate::hal_dispatch::*;
 
-            // Push uniforms to shared-memory arena (zero staging)
             let offset = unsafe { gpu.uniform_arena_mut() }
                 .expect("uniform_arena not set")
                 .push(&uniforms);
@@ -221,7 +261,6 @@ impl Generator for PlasmaGenerator {
             let (hal_enc, hal_ctx) =
                 unsafe { gpu.hal_encoder_mut() }.unwrap();
 
-            // Extract hal pointers
             let arena_buf_ptr = unsafe { gpu.uniform_arena_mut() }
                 .unwrap()
                 .hal_buffer_ptr()
@@ -230,7 +269,6 @@ impl Generator for PlasmaGenerator {
 
             let uniform_size = std::mem::size_of::<PlasmaUniforms>() as u64;
 
-            // Create ephemeral hal bind group
             let bg = unsafe {
                 hal_ctx.device().create_bind_group(
                     &hal::BindGroupDescriptor {

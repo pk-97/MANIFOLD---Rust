@@ -341,6 +341,16 @@ unsafe impl Send for GpuBuffer {}
 unsafe impl Sync for GpuBuffer {}
 
 impl GpuBuffer {
+    /// Wrap an existing metal::Buffer (e.g. extracted from wgpu).
+    pub fn from_raw(raw: metal::Buffer, size: u64) -> Self {
+        let ptr = raw.contents() as *mut u8;
+        Self {
+            raw,
+            size,
+            mapped_ptr: if ptr.is_null() { None } else { Some(ptr) },
+        }
+    }
+
     /// Persistent mapped pointer (shared-memory buffers only).
     /// Direct CPU→GPU writes with zero API overhead.
     pub fn mapped_ptr(&self) -> Option<*mut u8> {

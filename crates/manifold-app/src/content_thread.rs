@@ -90,11 +90,13 @@ impl ContentThread {
     ) {
         log::info!("[ContentThread] started");
 
-        // Set stable hal_ctx pointer on GeneratorRenderer. This must happen here
-        // (after all moves into ContentThread are complete) so the pointer targets
-        // the final heap location of hal_ctx inside content_pipeline.
+        // Set stable hal_ctx and native_device pointers on GeneratorRenderer.
+        // This must happen here (after all moves into ContentThread are complete)
+        // so the pointers target the final heap locations inside content_pipeline.
         {
             let hal_ctx_ref = self.content_pipeline.hal_ctx();
+            #[cfg(target_os = "macos")]
+            let native_device_ref = self.content_pipeline.native_device();
             let (renderers, _) = self.engine.split_renderer_project();
             for renderer in renderers.iter_mut() {
                 if let Some(gen_renderer) = renderer
@@ -102,6 +104,8 @@ impl ContentThread {
                     .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
                 {
                     gen_renderer.set_hal_ctx(hal_ctx_ref);
+                    #[cfg(target_os = "macos")]
+                    gen_renderer.set_native_device(native_device_ref);
                 }
             }
         }

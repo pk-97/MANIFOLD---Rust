@@ -49,6 +49,10 @@ pub struct GeneratorRenderer {
     /// Cached hal context pointer for creating hal pipelines at generator creation time.
     /// Points to HalContext owned by ContentPipeline (same thread, same lifetime).
     hal_ctx_ptr: Option<*const crate::hal_context::HalContext>,
+    /// Cached native GPU device pointer for creating native Metal pipelines.
+    /// Points to GpuDevice owned by ContentPipeline (same thread, same lifetime).
+    #[cfg(target_os = "macos")]
+    native_device_ptr: Option<*const manifold_gpu::GpuDevice>,
 }
 
 // Safety: hal_ctx_ptr points to HalContext on the content thread.
@@ -93,7 +97,15 @@ impl GeneratorRenderer {
             render_scratch: Vec::with_capacity(16),
             uniform_arena,
             hal_ctx_ptr,
+            #[cfg(target_os = "macos")]
+            native_device_ptr: None,
         }
+    }
+
+    /// Set the native GPU device pointer (called after ContentPipeline is at its final location).
+    #[cfg(target_os = "macos")]
+    pub fn set_native_device(&mut self, device: Option<&manifold_gpu::GpuDevice>) {
+        self.native_device_ptr = device.map(|d| d as *const manifold_gpu::GpuDevice);
     }
 
     /// Internal: acquire a clip with generator type and layer identity.
@@ -120,6 +132,8 @@ impl GeneratorRenderer {
                     &self.device,
                     &gen_type,
                     self.hal_ctx_ptr.map(|p| unsafe { &*p }),
+                    #[cfg(target_os = "macos")]
+                    self.native_device_ptr.map(|p| unsafe { &*p }),
                 ) {
                 self.layer_generators.insert(
                     layer_id.clone(),
@@ -228,6 +242,25 @@ impl GeneratorRenderer {
                 .get(&layer_id)
                 .map_or(0, |ls| ls.trigger_count);
 
+            // Extract native Metal texture for the render target (if native path active).
+            #[cfg(target_os = "macos")]
+            let _native_tex_storage;
+            #[cfg(target_os = "macos")]
+            let native_target = if gpu.has_native_encoder() {
+                if let Some(active) = self.active_clips.get(id) {
+                    _native_tex_storage = unsafe {
+                        crate::gpu_encoder::extract_native_texture(
+                            &active.render_target.texture,
+                        )
+                    };
+                    Some(&_native_tex_storage as *const manifold_gpu::GpuTexture)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
             let ctx = GeneratorContext {
                 time,
                 beat,
@@ -239,6 +272,8 @@ impl GeneratorRenderer {
                 trigger_count,
                 params,
                 param_count,
+                #[cfg(target_os = "macos")]
+                native_target,
             };
 
             // Split borrows: get generator and active clip's RT view separately
@@ -322,6 +357,8 @@ impl GeneratorRenderer {
                 &self.device,
                 &new_type,
                 self.hal_ctx_ptr.map(|p| unsafe { &*p }),
+                #[cfg(target_os = "macos")]
+                self.native_device_ptr.map(|p| unsafe { &*p }),
             ) {
                 self.layer_generators.insert(
                     layer_id.clone(),

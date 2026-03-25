@@ -37,11 +37,16 @@ impl GeneratorRegistry {
         device: &wgpu::Device,
         gen_type: &GeneratorTypeId,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Option<Box<dyn Generator>> {
         let fmt = self.target_format;
         let _ = &hal_ctx; // suppress unused warning when hal-encoding off
         if *gen_type == GeneratorTypeId::PLASMA {
-            Some(Box::new(PlasmaGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(PlasmaGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")]
+                native_device,
+            )))
         } else if *gen_type == GeneratorTypeId::FRACTAL_ZOOM {
             Some(Box::new(FractalZoomGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::BASIC_SHAPES_SNAP {
