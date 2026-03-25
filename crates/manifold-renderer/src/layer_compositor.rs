@@ -491,27 +491,38 @@ impl PingPong {
     /// Clear source buffer. `opaque` = true clears to opaque black (a=1),
     /// false clears to transparent black (a=0).
     fn clear_source(&self, encoder: &mut wgpu::CommandEncoder, opaque: bool) {
-        let color = if opaque {
-            wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+        if !opaque {
+            // Transparent black = all zeros — use clear_texture() to avoid a
+            // full TBDR tile load/store cycle for what is just a memset-to-zero.
+            encoder.clear_texture(
+                self.source_texture(),
+                &wgpu::ImageSubresourceRange::default(),
+            );
         } else {
-            wgpu::Color::TRANSPARENT
-        };
-        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: self.source_view(),
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(color),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+            // Opaque black has alpha=1, which clear_texture() cannot express
+            // (it only writes zeros). Keep the render pass for this case.
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Clear"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: self.source_view(),
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.0,
+                            g: 0.0,
+                            b: 0.0,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
     }
 
     /// HAL path: clear source buffer via hal render pass (LOAD_CLEAR, no draw).

@@ -85,25 +85,12 @@ pub struct FeedbackFX {
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
 unsafe impl Send for FeedbackFX {}
 
-/// Clear a RenderTarget to transparent black via a render pass.
+/// Clear a RenderTarget to transparent black (all zeros).
 /// Unity ref: RenderTextureUtil.Clear() — zeros texture contents.
-fn clear_render_target(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
-    let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("Clear RT"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view,
-            resolve_target: None,
-            depth_slice: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
+/// Uses `clear_texture()` instead of a render pass — avoids a full TBDR
+/// tile load/store cycle for what is just a memset-to-zero.
+fn clear_render_target(encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Texture) {
+    encoder.clear_texture(texture, &wgpu::ImageSubresourceRange::default());
 }
 
 impl FeedbackFX {
@@ -317,7 +304,7 @@ impl FeedbackFX {
             let buffer = RenderTarget::new(device, self.width, self.height, format, "Feedback State");
             // Clear to black so first-frame shader reads black prev buffer,
             // producing mix(current, black, amount) — matching Unity behavior.
-            clear_render_target(encoder, &buffer.view);
+            clear_render_target(encoder, &buffer.texture);
             self.states.insert(owner_key, FeedbackState { buffer });
         }
     }
