@@ -47,13 +47,14 @@ pub struct HalationFX {
 }
 
 impl HalationFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         Self {
             helper: DualTextureBlitHelper::new(
                 device,
                 include_str!("shaders/fx_halation.wgsl"),
                 "Halation",
                 std::mem::size_of::<HalationUniforms>() as u64,
+                hal_ctx,
             ),
             states: AHashMap::new(),
             width: 0,

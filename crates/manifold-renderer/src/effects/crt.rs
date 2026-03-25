@@ -42,13 +42,14 @@ pub struct CrtFX {
 }
 
 impl CrtFX {
-    pub fn new(device: &wgpu::Device) -> Self {
+    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
         Self {
             helper: DualTextureBlitHelper::new(
                 device,
                 include_str!("shaders/fx_crt.wgsl"),
                 "CRT",
                 std::mem::size_of::<CrtUniforms>() as u64,
+                hal_ctx,
             ),
             states: AHashMap::new(),
             width: 0,
