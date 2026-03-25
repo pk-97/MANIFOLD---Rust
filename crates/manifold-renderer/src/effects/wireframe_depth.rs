@@ -352,6 +352,7 @@ pub struct WireframeDepthFX {
     pipelines: [wgpu::RenderPipeline; 15],
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+    #[allow(dead_code)] // Keeps hal ring buffer alive; wgpu path creates per-call UBOs
     uniform_buffer: wgpu::Buffer,
     // 1×1 dummy texture for texture slots unused by a given pass
     _dummy_tex: wgpu::Texture,
@@ -381,9 +382,15 @@ pub struct WireframeDepthFX {
     hal_pipelines: Option<Vec<crate::hal_pipeline::HalRenderPipeline>>,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_sampler: Option<crate::hal_context::MetalSampler>,
-    /// Persistent mapped pointer to shared-memory main uniform buffer (hal path).
+    /// Persistent mapped pointer to shared-memory ring buffer (hal path).
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_uniform_mapped_ptr: Option<*mut u8>,
+    /// Cached hal buffer pointer for the ring buffer (hal path).
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_ring_buf_ptr: Option<*const crate::hal_context::MetalBuffer>,
+    /// Frame-local slot counter for the ring buffer (Cell so encode_pass can stay &self).
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_ring_offset: std::cell::Cell<u32>,
 }
 
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -652,38 +659,45 @@ impl WireframeDepthFX {
 
         let ubo_size = std::mem::size_of::<WireUniforms>() as u64;
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let (uniform_buffer, _wd_hal_ubo_mapped) = if let Some(ctx) = hal_ctx {
+        let (uniform_buffer, _wd_hal_ubo_mapped, _wd_hal_ring_buf_ptr) = if let Some(ctx) = hal_ctx {
             use wgpu::hal::Device as HalDevice;
+            // 20 slots: enough for all passes per frame (15 pass max + sub-function calls).
+            let ring_size = 20 * ubo_size;
             let hal_buf = unsafe {
                 ctx.device()
                     .create_buffer(&wgpu::hal::BufferDescriptor {
-                        label: Some("WireframeDepth UBO HAL"),
-                        size: ubo_size,
+                        label: Some("WireframeDepth Ring HAL"),
+                        size: ring_size,
                         usage: wgpu::wgt::BufferUses::UNIFORM
                             | wgpu::wgt::BufferUses::MAP_WRITE,
                         memory_flags: wgpu::hal::MemoryFlags::PREFER_COHERENT,
                     })
-                    .expect("Failed to create hal WD uniform buffer")
+                    .expect("Failed to create hal WD ring buffer")
             };
             let mapping = unsafe {
                 ctx.device()
-                    .map_buffer(&hal_buf, 0..ubo_size)
-                    .expect("Failed to map hal WD uniform buffer")
+                    .map_buffer(&hal_buf, 0..ring_size)
+                    .expect("Failed to map hal WD ring buffer")
             };
             let mapped_ptr = mapping.ptr.as_ptr();
             let wgpu_buf = unsafe {
                 device.create_buffer_from_hal::<wgpu::hal::api::Metal>(
                     hal_buf,
                     &wgpu::BufferDescriptor {
-                        label: Some("WireframeDepth UBO"),
-                        size: ubo_size,
+                        label: Some("WireframeDepth Ring UBO"),
+                        size: ring_size,
                         usage: wgpu::BufferUsages::UNIFORM
                             | wgpu::BufferUsages::COPY_DST,
                         mapped_at_creation: false,
                     },
                 )
             };
-            (wgpu_buf, Some(mapped_ptr))
+            let hal_ring_buf_ptr = {
+                let g = unsafe { wgpu_buf.as_hal::<wgpu::hal::api::Metal>() }
+                    .expect("ring buf not Metal");
+                &*g as *const _
+            };
+            (wgpu_buf, Some(mapped_ptr), Some(hal_ring_buf_ptr))
         } else {
             let wgpu_buf = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("WireframeDepth UBO"),
@@ -691,7 +705,7 @@ impl WireframeDepthFX {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            (wgpu_buf, None)
+            (wgpu_buf, None, None)
         };
         #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -791,6 +805,10 @@ impl WireframeDepthFX {
             hal_sampler,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_uniform_mapped_ptr: _wd_hal_ubo_mapped,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_ring_buf_ptr: _wd_hal_ring_buf_ptr,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_ring_offset: std::cell::Cell::new(0),
         }
     }
 
@@ -832,7 +850,7 @@ impl WireframeDepthFX {
         &self,
         gpu: &mut GpuEncoder,
         pass_idx: usize,
-        ubo: &wgpu::Buffer,
+        uniforms: &WireUniforms,
         main_view: &wgpu::TextureView,
         prev_analysis_view: &wgpu::TextureView,
         prev_depth_view: &wgpu::TextureView,
@@ -856,12 +874,20 @@ impl WireframeDepthFX {
         let hal_samp = self.hal_sampler.as_ref().expect("hal_sampler");
         let hal_pipe = &hal_pipes[pass_idx];
 
-        // Extract hal buffer pointer from UBO
-        let ubo_ptr = {
-            let g = unsafe { ubo.as_hal::<MetalApi>() }
-                .expect("ubo not Metal");
-            &*g as *const _
-        };
+        // Write uniforms to ring buffer slot
+        let ubo_size = std::mem::size_of::<WireUniforms>();
+        let slot = self.hal_ring_offset.get();
+        self.hal_ring_offset.set(slot + 1);
+        let byte_offset = slot as usize * ubo_size;
+        let ring_mapped = self.hal_uniform_mapped_ptr.expect("hal ring mapped");
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytemuck::bytes_of(uniforms).as_ptr(),
+                ring_mapped.add(byte_offset),
+                ubo_size,
+            );
+        }
+        let ubo_ptr = self.hal_ring_buf_ptr.expect("hal ring buf ptr");
 
         // Extract hal texture view pointers (sequential snatch lock)
         let main_ptr = {
@@ -954,7 +980,7 @@ impl WireframeDepthFX {
                     ],
                     buffers: &[hal::BufferBinding::new_unchecked(
                         &*ubo_ptr,
-                        0,
+                        byte_offset as u64,
                         std::num::NonZero::new(
                             std::mem::size_of::<WireUniforms>() as u64,
                         ),
@@ -1107,7 +1133,7 @@ impl WireframeDepthFX {
         &self,
         gpu: &mut GpuEncoder,
         pass_idx: usize,
-        ubo: &wgpu::Buffer,
+        uniforms: &WireUniforms,
         main_view: &wgpu::TextureView,
         prev_analysis_view: &wgpu::TextureView,
         prev_depth_view: &wgpu::TextureView,
@@ -1128,7 +1154,7 @@ impl WireframeDepthFX {
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         if gpu.has_hal_encoder() {
             self.run_pass_hal(
-                gpu, pass_idx, ubo,
+                gpu, pass_idx, uniforms,
                 main_view, prev_analysis_view, prev_depth_view, depth_view,
                 history_view, flow_view, mesh_coord_view, prev_mesh_coord_view,
                 semantic_view, surface_cache_view, prev_surface_cache_view,
@@ -1136,8 +1162,14 @@ impl WireframeDepthFX {
             );
             return;
         }
+        // wgpu path: create per-call buffer from uniforms
+        let ubo = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("WD Pass UBO"),
+            contents: bytemuck::bytes_of(uniforms),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
         let bg = self.make_bind_group(
-            gpu.device, ubo,
+            gpu.device, &ubo,
             main_view, prev_analysis_view, prev_depth_view, depth_view,
             history_view, flow_view, mesh_coord_view, prev_mesh_coord_view,
             semantic_view, surface_cache_view, prev_surface_cache_view,
@@ -1375,28 +1407,17 @@ impl WireframeDepthFX {
             surface_persistence: 0.9,
             ..bytemuck::Zeroable::zeroed()
         };
-        gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
 
         // PASS_INIT_MESH_COORD: null → meshCoordTex
         // In Unity: Graphics.Blit(null, state.meshCoordTex, material, PASS_INIT_MESH_COORD)
         // We bind dummy for all textures.
-        let temp_ubo = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("WD Init UBO"),
-            contents: bytemuck::bytes_of(&uniforms),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-
-        self.encode_pass(gpu, PASS_INIT_MESH_COORD, &temp_ubo,
+        self.encode_pass(gpu, PASS_INIT_MESH_COORD, &uniforms,
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &state.mesh_coord_tex.view, aw, ah, profiler);
         // PASS_SURFACE_CACHE_UPDATE from fresh mesh coord
-        self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, &temp_ubo,
+        self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, &uniforms,
             &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
@@ -1897,7 +1918,7 @@ impl WireframeDepthFX {
         analysis_view: &wgpu::TextureView,
         state: &mut OwnerState,
         _temporal_smooth: f32,
-        ubo: &wgpu::Buffer,
+        uniforms: &WireUniforms,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let aw = state.analysis_width;
@@ -1905,7 +1926,7 @@ impl WireframeDepthFX {
         let depth_next = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD DepthNext");
 
         // PASS_HEURISTIC_DEPTH: analysis → depthNext
-        self.encode_pass(gpu, PASS_HEURISTIC_DEPTH, ubo,
+        self.encode_pass(gpu, PASS_HEURISTIC_DEPTH, uniforms,
             analysis_view, &state.previous_analysis_tex.view, &state.depth_tex.view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view,
@@ -1922,7 +1943,7 @@ impl WireframeDepthFX {
         gpu: &mut GpuEncoder,
         state: &mut OwnerState,
         _temporal_smooth: f32,
-        ubo: &wgpu::Buffer,
+        uniforms: &WireUniforms,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> bool {
         // dnnBackendAvailable checked by caller (ensure_dnn_backend_available)
@@ -1938,7 +1959,7 @@ impl WireframeDepthFX {
         let depth_next = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD DnnDepthNext");
 
         // PASS_DNN_DEPTH_POST: dnnDepthTexture → depthNext
-        self.encode_pass(gpu, PASS_DNN_DEPTH_POST, ubo,
+        self.encode_pass(gpu, PASS_DNN_DEPTH_POST, uniforms,
             &state.dnn_depth_texture_view, &self.dummy_view, &state.depth_tex.view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view,
@@ -1962,7 +1983,7 @@ impl WireframeDepthFX {
         native_flow_enabled: bool,
         face_warp_enabled: bool,
         frame_count: i64,
-        ubo: &wgpu::Buffer,
+        uniforms: &WireUniforms,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // WireframeDepthFX.cs line 738-740
@@ -1985,7 +2006,7 @@ impl WireframeDepthFX {
             Self::encode_clear(gpu, &state.line_history_tex);
             Self::encode_clear(gpu, &state.semantic_tex);
             // Re-initialize mesh coord
-            let uniforms = WireUniforms {
+            let cut_uniforms = WireUniforms {
                 surface_persistence: 0.9,
                 texel_x: 1.0 / aw as f32,
                 texel_y: 1.0 / ah as f32,
@@ -1993,17 +2014,12 @@ impl WireframeDepthFX {
                 depth_texel_y: 1.0 / ah as f32,
                 ..bytemuck::Zeroable::zeroed()
             };
-            let temp_ubo = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("WD Cut UBO"),
-                contents: bytemuck::bytes_of(&uniforms),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-            self.encode_pass(gpu, PASS_INIT_MESH_COORD, &temp_ubo,
+            self.encode_pass(gpu, PASS_INIT_MESH_COORD, &cut_uniforms,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &state.mesh_coord_tex.view, aw, ah, profiler);
-            self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, &temp_ubo,
+            self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, &cut_uniforms,
                 &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
@@ -2038,7 +2054,7 @@ impl WireframeDepthFX {
             &state.native_flow_texture_view
         } else {
             // PASS_FLOW_ESTIMATE: analysis → flowTex
-            self.encode_pass(gpu, PASS_FLOW_ESTIMATE, ubo,
+            self.encode_pass(gpu, PASS_FLOW_ESTIMATE, uniforms,
                 analysis_view, &state.previous_analysis_tex.view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view,
@@ -2050,7 +2066,7 @@ impl WireframeDepthFX {
         // WireframeDepthFX.cs line 792-826 — flowFiltered, temp RTs
         let flow_filtered = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD FlowFiltered");
         // PASS_FLOW_HYGIENE: flowInput → flowFiltered
-        self.encode_pass(gpu, PASS_FLOW_HYGIENE, ubo,
+        self.encode_pass(gpu, PASS_FLOW_HYGIENE, uniforms,
             flow_input_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
@@ -2059,7 +2075,7 @@ impl WireframeDepthFX {
 
         // WireframeDepthFX.cs line 808-826: semantic mask
         // PASS_SEMANTIC_MASK: analysis → semanticTex
-        self.encode_pass(gpu, PASS_SEMANTIC_MASK, ubo,
+        self.encode_pass(gpu, PASS_SEMANTIC_MASK, uniforms,
             analysis_view, &state.previous_analysis_tex.view,
             &self.dummy_view, &state.depth_tex.view,
             &self.dummy_view, flow_stable_view,
@@ -2074,7 +2090,7 @@ impl WireframeDepthFX {
         let surface_next     = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD SurfaceNext");
 
         // WireframeDepthFX.cs line 829-835: PASS_FLOW_ADVECT_COORD
-        self.encode_pass(gpu, PASS_FLOW_ADVECT_COORD, ubo,
+        self.encode_pass(gpu, PASS_FLOW_ADVECT_COORD, uniforms,
             analysis_view, &state.previous_analysis_tex.view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view,
             flow_stable_view, &self.dummy_view, &state.mesh_coord_tex.view,
@@ -2082,7 +2098,7 @@ impl WireframeDepthFX {
             &coord_next.view, aw, ah, profiler);
 
         // WireframeDepthFX.cs line 837-841: PASS_MESH_CELL_AFFINE
-        self.encode_pass(gpu, PASS_MESH_CELL_AFFINE, ubo,
+        self.encode_pass(gpu, PASS_MESH_CELL_AFFINE, uniforms,
             &coord_next.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
@@ -2098,7 +2114,7 @@ impl WireframeDepthFX {
             } else {
                 &state.semantic_tex.view
             };
-            self.encode_pass(gpu, PASS_MESH_FACE_WARP, ubo,
+            self.encode_pass(gpu, PASS_MESH_FACE_WARP, uniforms,
                 &coord_affine.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
                 edge_follow_mask_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
@@ -2111,7 +2127,7 @@ impl WireframeDepthFX {
         }
 
         // WireframeDepthFX.cs line 863-871: PASS_MESH_REGULARIZE
-        self.encode_pass(gpu, PASS_MESH_REGULARIZE, ubo,
+        self.encode_pass(gpu, PASS_MESH_REGULARIZE, uniforms,
             pre_regularize_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, flow_stable_view, &self.dummy_view,
             &state.mesh_coord_tex.view,
@@ -2120,7 +2136,7 @@ impl WireframeDepthFX {
         Self::encode_copy(gpu, &coord_regularized.texture, &state.mesh_coord_tex.texture, aw, ah);
 
         // WireframeDepthFX.cs line 873-879: PASS_SURFACE_CACHE_UPDATE
-        self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, ubo,
+        self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, uniforms,
             &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &state.surface_cache_tex.view, &self.dummy_view,
@@ -2391,42 +2407,16 @@ impl PostProcessEffect for WireframeDepthFX {
             ..uniforms_analysis
         };
 
-        // Write main UBO — shared-memory memcpy when hal active, queue.write_buffer otherwise
+        // Reset ring buffer slot counter at frame start (hal path).
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if let Some(mapped_ptr) = self.hal_uniform_mapped_ptr {
-            let bytes = bytemuck::bytes_of(&uniforms_analysis);
-            unsafe {
-                std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapped_ptr, bytes.len());
-            }
-        } else {
-            gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms_analysis));
-        }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms_analysis));
-
-        // Build per-call UBOs (analysis + wire + source resolution)
-        let ubo_analysis = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("WD UBO analysis"),
-            contents: bytemuck::bytes_of(&uniforms_analysis),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let ubo_wire = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("WD UBO wire"),
-            contents: bytemuck::bytes_of(&uniforms_wire),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let ubo_source = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("WD UBO source"),
-            contents: bytemuck::bytes_of(&uniforms_source),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        self.hal_ring_offset.set(0);
 
         // --- EstimateDepth ---
         // WireframeDepthFX.cs line 363-418
 
         // PASS_ANALYSIS: source → analysis (temp RT at analysis resolution)
         let analysis_rt = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba8Unorm, "WD Analysis");
-        self.encode_pass(gpu, PASS_ANALYSIS, &ubo_analysis,
+        self.encode_pass(gpu, PASS_ANALYSIS, &uniforms_analysis,
             source, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
             &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
@@ -2453,7 +2443,7 @@ impl PostProcessEffect for WireframeDepthFX {
         // Temporarily remove state to avoid borrow conflict (self.method + self.owner_states)
         let dnn_used = if depth_mode == DepthSourceMode::Dnn && dnn_available {
             let mut state = self.owner_states.remove(&owner_key).unwrap();
-            let result = self.try_estimate_depth_dnn(gpu, &mut state, temporal_smooth, &ubo_analysis, profiler);
+            let result = self.try_estimate_depth_dnn(gpu, &mut state, temporal_smooth, &uniforms_analysis, profiler);
             self.owner_states.insert(owner_key, state);
             result
         } else {
@@ -2466,7 +2456,7 @@ impl PostProcessEffect for WireframeDepthFX {
                 self.warned_missing_dnn = true;
             }
             let mut state = self.owner_states.remove(&owner_key).unwrap();
-            self.estimate_depth_heuristic(gpu, &analysis_rt.view, &mut state, temporal_smooth, &ubo_analysis, profiler);
+            self.estimate_depth_heuristic(gpu, &analysis_rt.view, &mut state, temporal_smooth, &uniforms_analysis, profiler);
             self.owner_states.insert(owner_key, state);
         }
 
@@ -2477,7 +2467,7 @@ impl PostProcessEffect for WireframeDepthFX {
                 gpu,
                 &analysis_rt.view, &mut state,
                 temporal_smooth, mesh_rate, native_flow_enabled, face_warp_enabled,
-                ctx.frame_count, &ubo_analysis,
+                ctx.frame_count, &uniforms_analysis,
                 profiler,
             );
             self.owner_states.insert(owner_key, state);
@@ -2510,7 +2500,7 @@ impl PostProcessEffect for WireframeDepthFX {
             } else {
                 &self.dummy_view
             };
-            self.encode_pass(gpu, PASS_WIREFRAME_MASK, &ubo_wire,
+            self.encode_pass(gpu, PASS_WIREFRAME_MASK, &uniforms_wire,
                 source, &self.dummy_view, &self.dummy_view,
                 &state.depth_tex.view, &self.dummy_view, &self.dummy_view,
                 &state.mesh_coord_tex.view, &self.dummy_view,
@@ -2524,7 +2514,7 @@ impl PostProcessEffect for WireframeDepthFX {
         let history_next = RenderTarget::new(gpu.device, ww, wh, wgpu::TextureFormat::Rgba8Unorm, "WD HistoryNext");
         {
             let state = self.owner_states.get(&owner_key).unwrap();
-            self.encode_pass(gpu, PASS_UPDATE_HISTORY, &ubo_wire,
+            self.encode_pass(gpu, PASS_UPDATE_HISTORY, &uniforms_wire,
                 &line_mask.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &state.line_history_tex.view, &self.dummy_view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view,
@@ -2537,7 +2527,7 @@ impl PostProcessEffect for WireframeDepthFX {
         // WireframeDepthFX.cs line 349-355
         {
             let state = self.owner_states.get(&owner_key).unwrap();
-            self.encode_pass(gpu, PASS_COMPOSITE, &ubo_source,
+            self.encode_pass(gpu, PASS_COMPOSITE, &uniforms_source,
                 source, &self.dummy_view, &self.dummy_view, &self.dummy_view,
                 &state.line_history_tex.view, &self.dummy_view,
                 &self.dummy_view, &self.dummy_view, &self.dummy_view,
