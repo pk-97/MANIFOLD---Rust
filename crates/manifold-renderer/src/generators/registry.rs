@@ -32,18 +32,24 @@ impl GeneratorRegistry {
     }
 
     /// Create a new generator instance for the given type.
-    pub fn create(&self, device: &wgpu::Device, gen_type: &GeneratorTypeId) -> Option<Box<dyn Generator>> {
+    pub fn create(
+        &self,
+        device: &wgpu::Device,
+        gen_type: &GeneratorTypeId,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Option<Box<dyn Generator>> {
         let fmt = self.target_format;
+        let _ = &hal_ctx; // suppress unused warning when hal-encoding off
         if *gen_type == GeneratorTypeId::PLASMA {
-            Some(Box::new(PlasmaGenerator::new(device, fmt)))
+            Some(Box::new(PlasmaGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::FRACTAL_ZOOM {
-            Some(Box::new(FractalZoomGenerator::new(device, fmt)))
+            Some(Box::new(FractalZoomGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::BASIC_SHAPES_SNAP {
-            Some(Box::new(BasicShapesSnapGenerator::new(device, fmt)))
+            Some(Box::new(BasicShapesSnapGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::CONCENTRIC_TUNNEL {
-            Some(Box::new(ConcentricTunnelGenerator::new(device, fmt)))
+            Some(Box::new(ConcentricTunnelGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::NUMBER_STATION {
-            Some(Box::new(NumberStationGenerator::new(device, fmt)))
+            Some(Box::new(NumberStationGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::TESSERACT {
             Some(Box::new(TesseractGenerator::new(device, fmt)))
         } else if *gen_type == GeneratorTypeId::DUOCYLINDER {
@@ -71,7 +77,7 @@ impl GeneratorRegistry {
         } else if *gen_type == GeneratorTypeId::FLUID_SIMULATION_3D {
             Some(Box::new(FluidSimulation3DGenerator::new(device, fmt)))
         } else if *gen_type == GeneratorTypeId::MRI_VOLUME {
-            Some(Box::new(MriVolumeGenerator::new(device, fmt)))
+            Some(Box::new(MriVolumeGenerator::new(device, fmt, hal_ctx)))
         } else {
             log::warn!("Generator type {:?} not yet implemented", gen_type);
             None

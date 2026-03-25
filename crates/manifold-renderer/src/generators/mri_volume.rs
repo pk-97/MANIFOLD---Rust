@@ -36,6 +36,51 @@ struct SliceUniforms {
     tex_height: f32,
 }
 
+/// BGL entries for the hal pipeline:
+///   binding 0: uniform (dynamic offset)
+///   binding 1: texture_2d (slice input)
+///   binding 2: sampler (filtering)
+///   binding 3: storage_texture (output)
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const HAL_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: true,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::Rgba16Float,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    },
+];
+
 pub struct MriVolumeGenerator {
     // Pipeline
     #[allow(dead_code)] // render fallback for non-hal builds
@@ -49,6 +94,11 @@ pub struct MriVolumeGenerator {
     slice_compute_pipeline: wgpu::ComputePipeline,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     slice_compute_bgl: wgpu::BindGroupLayout,
+    // HAL compute pipeline for zero-overhead dispatch
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_sampler: Option<crate::hal_context::MetalSampler>,
     // Current slice texture (R8Unorm 2D)
     slice_texture: Option<wgpu::Texture>,
     slice_view: Option<wgpu::TextureView>,
@@ -62,7 +112,13 @@ pub struct MriVolumeGenerator {
 }
 
 impl MriVolumeGenerator {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
+
         let slice_bgl =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("MRI Slice BGL"),
@@ -249,6 +305,40 @@ impl MriVolumeGenerator {
             (cpipeline, cbgl)
         };
 
+        // ── HAL pipeline for zero-overhead dispatch ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (hal_pipeline, hal_sampler) = if let Some(ctx) = hal_ctx {
+            use wgpu::hal::Device as HalDevice;
+
+            let hal_pipe = crate::hal_pipeline::create_compute_pipeline(
+                ctx,
+                include_str!("shaders/mri_slice_compute.wgsl"),
+                "cs_main",
+                &HAL_BGL_ENTRIES,
+                "MRI Slice HAL",
+            );
+
+            let hal_samp = unsafe {
+                ctx.device()
+                    .create_sampler(&wgpu::hal::SamplerDescriptor {
+                        label: Some("MRI Slice Sampler HAL"),
+                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                        lod_clamp: 0.0..32.0,
+                        compare: None,
+                        anisotropy_clamp: 1,
+                        border_color: None,
+                    })
+                    .expect("Failed to create MRI hal sampler")
+            };
+
+            (Some(hal_pipe), Some(hal_samp))
+        } else {
+            (None, None)
+        };
+
         let scans = discover_scans(&PathBuf::from("assets/mri-data/volumes"));
         if scans.is_empty() {
             log::warn!("MRI Volume: no scan directories found");
@@ -299,6 +389,10 @@ impl MriVolumeGenerator {
             slice_compute_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             slice_compute_bgl,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_sampler,
             slice_texture: None,
             slice_view: None,
             current_tex_dims: (0, 0),
@@ -516,14 +610,109 @@ impl Generator for MriVolumeGenerator {
             tex_width: self.current_tex_dims.0 as f32,
             tex_height: self.current_tex_dims.1 as f32,
         };
-        gpu.queue.write_buffer(
-            &self.slice_uniform_buf,
-            0,
-            bytemuck::bytes_of(&uniforms),
-        );
 
+        // ── HAL dispatch path ──────────────────────────────────────────
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if let Some(ref hal_pipe) = self.hal_pipeline
+            && let Some(ref hal_samp) = self.hal_sampler
+            && gpu.has_hal_encoder()
+        {
+            use wgpu::hal::{self, Device as HalDevice};
+            use crate::hal_dispatch::*;
+
+            let offset = unsafe { gpu.uniform_arena_mut() }
+                .expect("uniform_arena not set")
+                .push(&uniforms);
+
+            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+
+            let arena_buf_ptr = unsafe { gpu.uniform_arena_mut() }
+                .unwrap()
+                .hal_buffer_ptr()
+                .expect("arena hal buffer not available");
+            let slice_ptr = unsafe { extract_hal_view(view) };
+            let target_ptr = unsafe { extract_hal_view(target) };
+
+            let uniform_size = std::mem::size_of::<SliceUniforms>() as u64;
+
+            let bg = unsafe {
+                hal_ctx.device().create_bind_group(
+                    &hal::BindGroupDescriptor {
+                        label: None,
+                        layout: &hal_pipe.bind_group_layout,
+                        entries: &[
+                            // binding 0: uniform buffer (dynamic offset)
+                            hal::BindGroupEntry {
+                                binding: 0,
+                                resource_index: 0,
+                                count: 1,
+                            },
+                            // binding 1: slice texture → textures[0]
+                            hal::BindGroupEntry {
+                                binding: 1,
+                                resource_index: 0,
+                                count: 1,
+                            },
+                            // binding 2: sampler → samplers[0]
+                            hal::BindGroupEntry {
+                                binding: 2,
+                                resource_index: 0,
+                                count: 1,
+                            },
+                            // binding 3: output storage texture → textures[1]
+                            hal::BindGroupEntry {
+                                binding: 3,
+                                resource_index: 1,
+                                count: 1,
+                            },
+                        ],
+                        buffers: &[hal::BufferBinding::new_unchecked(
+                            &*arena_buf_ptr,
+                            0,
+                            std::num::NonZero::new(uniform_size),
+                        )],
+                        samplers: &[hal_samp],
+                        textures: &[
+                            hal::TextureBinding {
+                                view: &*slice_ptr,
+                                usage: wgpu::wgt::TextureUses::RESOURCE,
+                            },
+                            hal::TextureBinding {
+                                view: &*target_ptr,
+                                usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
+                            },
+                        ],
+                        acceleration_structures: &[],
+                        external_textures: &[],
+                    },
+                )
+                .expect("Failed to create MRI hal bind group")
+            };
+
+            unsafe {
+                dispatch_hal_compute(
+                    hal_enc,
+                    hal_ctx,
+                    hal_pipe,
+                    bg,
+                    &[offset as u32],
+                    [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+                    "MRI Slice Compute",
+                );
+            }
+
+            return ctx.anim_progress;
+        }
+
+        // ── wgpu compute path (macOS fallback) ─────────────────────────
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         {
+            gpu.queue.write_buffer(
+                &self.slice_uniform_buf,
+                0,
+                bytemuck::bytes_of(&uniforms),
+            );
+
             let bind_group = gpu.device.create_bind_group(
                 &wgpu::BindGroupDescriptor {
                     label: Some("MRI Slice Compute BG"),
@@ -577,8 +766,15 @@ impl Generator for MriVolumeGenerator {
             );
         }
 
+        // ── wgpu render path (non-macOS fallback) ──────────────────────
         #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
         {
+            gpu.queue.write_buffer(
+                &self.slice_uniform_buf,
+                0,
+                bytemuck::bytes_of(&uniforms),
+            );
+
             let bind_group = gpu.device.create_bind_group(
                 &wgpu::BindGroupDescriptor {
                     label: Some("MRI Slice BG"),

@@ -31,19 +31,52 @@ struct NumberStationUniforms {
     _pad: [f32; 4],
 }
 
+/// BGL entries for the hal pipeline (dynamic offset uniform + storage texture).
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const HAL_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 2] = [
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: true,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: wgpu::TextureFormat::Rgba16Float,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    },
+];
+
 pub struct NumberStationGenerator {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     uniform_buffer: wgpu::Buffer,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
 }
 
 impl NumberStationGenerator {
-    pub fn new(device: &wgpu::Device, _target_format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        _target_format: wgpu::TextureFormat,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
+
+        let shader_source = include_str!("shaders/number_station_compute.wgsl");
+
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("NumberStation Compute Generator"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/number_station_compute.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -94,10 +127,24 @@ impl NumberStationGenerator {
             mapped_at_creation: false,
         });
 
+        // Create hal pipeline for zero-overhead dispatch
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let hal_pipeline = hal_ctx.map(|ctx| {
+            crate::hal_pipeline::create_compute_pipeline(
+                ctx,
+                shader_source,
+                "cs_main",
+                &HAL_BGL_ENTRIES,
+                "NumberStation HAL",
+            )
+        });
+
         Self {
             pipeline,
             bind_group_layout,
             uniform_buffer,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_pipeline,
         }
     }
 }
@@ -154,6 +201,71 @@ impl Generator for NumberStationGenerator {
             trigger_count: ctx.trigger_count as f32,
             _pad: [0.0; 4],
         };
+
+        // ── HAL dispatch path ──────────────────────────────────────────
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if let Some(ref hal_pipe) = self.hal_pipeline
+            && gpu.has_hal_encoder()
+        {
+            use wgpu::hal::{self, Device as HalDevice};
+            use crate::hal_dispatch::*;
+
+            let offset = unsafe { gpu.uniform_arena_mut() }
+                .expect("uniform_arena not set")
+                .push(&uniforms);
+
+            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+
+            let arena_buf_ptr = unsafe { gpu.uniform_arena_mut() }
+                .unwrap()
+                .hal_buffer_ptr()
+                .expect("arena hal buffer not available");
+            let target_ptr = unsafe { extract_hal_view(target) };
+
+            let uniform_size = std::mem::size_of::<NumberStationUniforms>() as u64;
+
+            let bg = unsafe {
+                hal_ctx.device().create_bind_group(
+                    &hal::BindGroupDescriptor {
+                        label: None,
+                        layout: &hal_pipe.bind_group_layout,
+                        entries: &[
+                            hal::BindGroupEntry { binding: 0, resource_index: 0, count: 1 },
+                            hal::BindGroupEntry { binding: 1, resource_index: 0, count: 1 },
+                        ],
+                        buffers: &[hal::BufferBinding::new_unchecked(
+                            &*arena_buf_ptr,
+                            0,
+                            std::num::NonZero::new(uniform_size),
+                        )],
+                        samplers: &[],
+                        textures: &[hal::TextureBinding {
+                            view: &*target_ptr,
+                            usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
+                        }],
+                        acceleration_structures: &[],
+                        external_textures: &[],
+                    },
+                )
+                .expect("Failed to create NumberStation hal bind group")
+            };
+
+            unsafe {
+                dispatch_hal_compute(
+                    hal_enc,
+                    hal_ctx,
+                    hal_pipe,
+                    bg,
+                    &[offset as u32],
+                    [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+                    "NumberStation Compute",
+                );
+            }
+
+            return ctx.anim_progress;
+        }
+
+        // ── wgpu dispatch path (fallback) ──────────────────────────────
         gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
