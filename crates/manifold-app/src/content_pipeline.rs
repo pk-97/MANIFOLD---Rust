@@ -652,14 +652,29 @@ impl ContentPipeline {
         let (renderers, project) = engine.split_renderer_project();
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
 
-        // ── Encoder 1: generators (wgpu) ─────────────────────────────────
+        // ── Single hal encoder for generators + compositor ───────────────
+        // Phase 4.5: generators that support hal encode directly into the hal
+        // encoder. LinePipeline generators (wgpu-only) fall back to gen_encoder.
+        // The gen_encoder submit also flushes queue.write_buffer() staging.
         let _t0 = std::time::Instant::now();
+        let mut hal_enc = hal_ctx.create_command_encoder();
+        unsafe {
+            hal_enc
+                .begin_encoding(Some("Frame"))
+                .expect("hal begin_encoding failed");
+        }
         let mut gen_encoder = gpu.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor { label: Some("Generator Encoder") },
+            &wgpu::CommandEncoderDescriptor {
+                label: Some("Generator Encoder (wgpu fallback)"),
+            },
         );
         {
             let mut gpu_gen = GpuEncoder::new(
-                &gpu.device, &gpu.queue, &mut gen_encoder, None,
+                &gpu.device, &gpu.queue, &mut gen_encoder, Some(hal_ctx),
+            );
+            gpu_gen.hal_enc = Some(
+                &mut hal_enc
+                    as *mut manifold_renderer::hal_context::MetalCommandEncoder,
             );
             for renderer in renderers.iter_mut() {
                 if let Some(gen_renderer) =
@@ -672,6 +687,8 @@ impl ContentPipeline {
                 }
             }
         }
+        // Submit wgpu fallback encoder (LinePipeline render passes + staging flush).
+        // Metal in-order queue: this completes before the hal encoder executes.
         gpu.queue.submit(std::iter::once(gen_encoder.finish()));
         let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -771,14 +788,9 @@ impl ContentPipeline {
         };
         let _desc_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
-        // ── Encoder 2: compositor (hal) ──────────────────────────────────
+        // ── Compositor (same hal encoder as generators) ──────────────────
         let _t0 = std::time::Instant::now();
-        let mut hal_enc = hal_ctx.create_command_encoder();
-        unsafe {
-            hal_enc
-                .begin_encoding(Some("Compositor"))
-                .expect("hal begin_encoding failed");
-        }
+        // hal_enc already created and encoding — generators dispatched into it above.
 
         // Auxiliary wgpu encoder — handles wgpu-tracked operations during
         // hal compositing (readback copy_texture_to_buffer, etc.). Submitted
