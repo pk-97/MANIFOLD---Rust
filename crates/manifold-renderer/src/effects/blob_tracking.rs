@@ -706,14 +706,7 @@ impl BlobTrackingFX {
         let Some(state) = self.owner_states.get_mut(&owner_key) else { return };
 
         let pixels = match state.readback.try_read(device) {
-            Some(p) => {
-                let nonzero = p.iter().filter(|&&b| b != 0).count();
-                eprintln!(
-                    "[BlobTracking] readback data received! {} bytes, nonzero={}",
-                    p.len(), nonzero,
-                );
-                p
-            }
+            Some(p) => p,
             None => return,
         };
 
@@ -1037,18 +1030,6 @@ impl PostProcessEffect for BlobTrackingFX {
 
         let state = self.owner_states.get_mut(&ctx.owner_key).unwrap();
 
-        if ctx.frame_count % 60 == 0 {
-            eprintln!(
-                "[BlobTracking] frame={} has_hal={} pending={} blob_count={} last_rb_frame={} tracked={}",
-                ctx.frame_count,
-                gpu.hal_ctx.is_some(),
-                state.readback.is_pending(),
-                state.blob_count,
-                state.last_readback_frame,
-                state.tracked_count,
-            );
-        }
-
         // ---- Phase 1: Blit to downsample RT and request readback (throttled) ----
         let frame = ctx.frame_count;
         if !state.readback.is_pending()
@@ -1132,7 +1113,6 @@ impl PostProcessEffect for BlobTrackingFX {
                     READBACK_WIDTH,
                     READBACK_HEIGHT,
                 );
-                eprintln!("[BlobTracking] HAL blit + readback submitted frame={}", frame);
                 state.pending_threshold = threshold;
                 state.pending_sensitivity = sensitivity;
                 state.last_readback_frame = frame;
@@ -1190,13 +1170,6 @@ impl PostProcessEffect for BlobTrackingFX {
             blob_center_size,
             blob_connections: blob_connections_arr,
         };
-
-        if ctx.frame_count % 60 == 0 {
-            eprintln!(
-                "[BlobTracking] PRE-OVERLAY frame={} blob_count={} tracked={} has_data={}",
-                ctx.frame_count, state.blob_count, state.tracked_count, state.has_blob_data,
-            );
-        }
 
         // --- hal path for overlay ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
