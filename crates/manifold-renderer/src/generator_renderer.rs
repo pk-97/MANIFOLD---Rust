@@ -46,6 +46,14 @@ pub struct GeneratorRenderer {
     /// Shared-memory uniform arena for generator uniform data.
     /// Eliminates per-generator queue.write_buffer() calls.
     uniform_arena: UniformArena,
+    /// Cached hal context pointer for creating hal pipelines at generator creation time.
+    /// Points to HalContext owned by ContentPipeline (same thread, same lifetime).
+    hal_ctx_ptr: Option<*const crate::hal_context::HalContext>,
+}
+
+// Safety: hal_ctx_ptr points to HalContext on the content thread.
+// GeneratorRenderer is only used on the content thread.
+unsafe impl Send for GeneratorRenderer {
 }
 
 impl GeneratorRenderer {
@@ -69,6 +77,7 @@ impl GeneratorRenderer {
         }
 
         let uniform_arena = UniformArena::new(&device, hal_ctx);
+        let hal_ctx_ptr = hal_ctx.map(|ctx| ctx as *const _);
 
         Self {
             device,
@@ -81,6 +90,7 @@ impl GeneratorRenderer {
             available_rts,
             render_scratch: Vec::with_capacity(16),
             uniform_arena,
+            hal_ctx_ptr,
         }
     }
 
@@ -104,7 +114,11 @@ impl GeneratorRenderer {
             .is_none_or(|ls| ls.generator_type != gen_type);
 
         if needs_create {
-            if let Some(generator) = self.registry.create(&self.device, &gen_type) {
+            if let Some(generator) = self.registry.create(
+                    &self.device,
+                    &gen_type,
+                    self.hal_ctx_ptr.map(|p| unsafe { &*p }),
+                ) {
                 self.layer_generators.insert(
                     layer_id.clone(),
                     LayerGeneratorState {
@@ -296,7 +310,11 @@ impl GeneratorRenderer {
                 .layer_generators
                 .get(layer_id)
                 .map_or(0, |ls| ls.trigger_count);
-            if let Some(generator) = self.registry.create(&self.device, &new_type) {
+            if let Some(generator) = self.registry.create(
+                &self.device,
+                &new_type,
+                self.hal_ctx_ptr.map(|p| unsafe { &*p }),
+            ) {
                 self.layer_generators.insert(
                     layer_id.clone(),
                     LayerGeneratorState {
