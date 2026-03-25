@@ -278,6 +278,7 @@ impl WetDryLerpPipeline {
                 "fs_main",
                 &WET_DRY_BGL_ENTRIES,
                 format,
+                None,
                 "WetDry Lerp HAL",
             );
 

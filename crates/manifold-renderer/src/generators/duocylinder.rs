@@ -29,8 +29,13 @@ pub struct DuocylinderGenerator {
 }
 
 impl DuocylinderGenerator {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let line_pipeline = LinePipeline::new(device, target_format, "Duocylinder");
+    pub fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let line_pipeline =
+            LinePipeline::new(device, target_format, "Duocylinder", hal_ctx);
         let mut helper = LineGeneratorHelper::new(VERTEX_COUNT, EDGE_COUNT);
 
         // Parametric 4D torus: (cos(u), sin(u), cos(v), sin(v))
@@ -125,7 +130,7 @@ impl Generator for DuocylinderGenerator {
             );
 
         self.line_pipeline.draw(
-            gpu.device, gpu.queue, gpu.encoder, target,
+            gpu, target,
             positions, instances, num_edges,
             edge_half_thick, dot_half_thick,
             ctx.beat, profiler, "Duocylinder", ctx.width, ctx.height,

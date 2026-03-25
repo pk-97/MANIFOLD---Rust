@@ -229,7 +229,7 @@ impl DualTextureBlitHelper {
             let hal_pipe = crate::hal_pipeline::create_render_pipeline(
                 ctx, shader_source, "vs_main", "fs_main",
                 &DUAL_BLIT_BGL_ENTRIES,
-                wgpu::TextureFormat::Rgba16Float, label,
+                wgpu::TextureFormat::Rgba16Float, None, label,
             );
             let hal_samp = unsafe {
                 ctx.device()

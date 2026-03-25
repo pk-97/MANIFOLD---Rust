@@ -911,6 +911,7 @@ impl WireframeDepthFX {
                         fs_ep,
                         &WIREFRAME_DEPTH_BGL_ENTRIES,
                         fmt,
+                        None,
                         &format!("WireframeDepth HAL P{i}"),
                     )
                 })
@@ -2261,9 +2262,19 @@ impl WireframeDepthFX {
 
         let aw = state.analysis_width;
         let ah = state.analysis_height;
-        // Readback via gpu.encoder (wgpu aux encoder in hal mode) — map_async
-        // needs wgpu tracking to fire the callback.
-        state.readback.submit(gpu.device, gpu.encoder, &state.dnn_input_tex.texture, aw, ah);
+        // Shared-memory readback via hal when available — no wgpu submit needed.
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if gpu.has_hal_encoder() {
+            state.readback.submit_shared(
+                gpu, &state.dnn_input_tex.texture, aw, ah,
+            );
+            state.dnn_readback_pending = true;
+            return;
+        }
+        state.readback.submit(
+            gpu.device, gpu.encoder,
+            &state.dnn_input_tex.texture, aw, ah,
+        );
         state.dnn_readback_pending = true;
     }
 
@@ -2674,12 +2685,32 @@ impl PostProcessEffect for WireframeDepthFX {
         }
 
         // ── Poll GPU readback → submit to background worker(s) ──
-        if let Some(state) = self.owner_states.get_mut(&owner_key)
+        // Shared-memory path checks SharedEvent; wgpu path uses map_async.
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let readback_pixels = if let Some(state) = self.owner_states.get_mut(&owner_key)
             && state.dnn_readback_pending
-                && let Some(pixels) = state.readback.try_read(gpu.device) {
-                    state.dnn_readback_pending = false;
-                    let aw = state.analysis_width as i32;
-                    let ah = state.analysis_height as i32;
+        {
+            if let Some(ctx) = gpu.hal_ctx {
+                state.readback.try_read_shared(ctx)
+            } else {
+                state.readback.try_read(gpu.device)
+            }
+        } else {
+            None
+        };
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        let readback_pixels = if let Some(state) = self.owner_states.get_mut(&owner_key)
+            && state.dnn_readback_pending
+        {
+            state.readback.try_read(gpu.device)
+        } else {
+            None
+        };
+        if let Some(pixels) = readback_pixels
+            && let Some(state) = self.owner_states.get_mut(&owner_key) {
+                state.dnn_readback_pending = false;
+                let aw = state.analysis_width as i32;
+                let ah = state.analysis_height as i32;
 
                     match &mut self.workers {
                         Some(WorkerMode::Parallel { depth_worker, flow_worker, subject_worker }) => {

@@ -140,6 +140,7 @@ mod inner {
     ///
     /// For fullscreen triangle effects — no vertex buffers, single color target.
     /// Vertex shader generates triangle from vertex_index.
+    /// Pass `blend_state` for custom blending (e.g. Max blend for line rendering).
     pub fn create_render_pipeline(
         hal_ctx: &HalContext,
         wgsl_source: &str,
@@ -147,6 +148,7 @@ mod inner {
         fs_entry: &str,
         bind_group_entries: &[wgpu::wgt::BindGroupLayoutEntry],
         color_format: wgpu::TextureFormat,
+        blend_state: Option<wgpu::BlendState>,
         label: &str,
     ) -> HalRenderPipeline {
         // Step 1-2: Parse + validate (same as compute)
@@ -239,7 +241,7 @@ mod inner {
                     }),
                     color_targets: &[Some(wgpu::ColorTargetState {
                         format: color_format,
-                        blend: None,
+                        blend: blend_state,
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     multiview_mask: None,

@@ -608,6 +608,7 @@ impl BlobTrackingFX {
                 "fs_main",
                 &OVERLAY_BGL_ENTRIES,
                 wgpu::TextureFormat::Rgba16Float,
+                None,
                 "BlobTracking",
             );
             let blit_pipe = crate::hal_pipeline::create_render_pipeline(
@@ -617,6 +618,7 @@ impl BlobTrackingFX {
                 "fs_main",
                 &BLIT_BGL_ENTRIES,
                 wgpu::TextureFormat::Rgba8Unorm,
+                None,
                 "BlobTracking Blit",
             );
             let hal_samp = unsafe {
@@ -814,7 +816,13 @@ impl BlobTrackingFX {
     // Split into two non-blocking phases:
     //   1. Poll worker for completed blob detection result
     //   2. Poll GPU readback for new pixel data → submit to worker
-    fn poll_readback(&mut self, device: &wgpu::Device, owner_key: i64) {
+    fn poll_readback(
+        &mut self,
+        device: &wgpu::Device,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+        owner_key: i64,
+    ) {
+        let _ = &hal_ctx; // suppress unused when hal-encoding off
         // ── Phase 1: check if the background worker has a result ──
         if let Some(worker) = &mut self.worker
             && let Some(response) = worker.try_recv() {
@@ -828,6 +836,20 @@ impl BlobTrackingFX {
         // ── Phase 2: check for new pixel data from GPU readback ──
         let Some(state) = self.owner_states.get_mut(&owner_key) else { return };
 
+        // Shared-memory path: check SharedEvent, read directly from mapped ptr.
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let pixels = if let Some(ctx) = hal_ctx {
+            match state.readback.try_read_shared(ctx) {
+                Some(p) => p,
+                None => return,
+            }
+        } else {
+            match state.readback.try_read(device) {
+                Some(p) => p,
+                None => return,
+            }
+        };
+        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
         let pixels = match state.readback.try_read(device) {
             Some(p) => p,
             None => return,
@@ -1169,7 +1191,7 @@ impl PostProcessEffect for BlobTrackingFX {
         self.get_or_create_owner(gpu.device, ctx.owner_key);
 
         // ---- Phase 0: poll any pending readback from a previous frame ----
-        self.poll_readback(gpu.device, ctx.owner_key);
+        self.poll_readback(gpu.device, gpu.hal_ctx, ctx.owner_key);
 
         let state = self.owner_states.get_mut(&ctx.owner_key).unwrap();
 
@@ -1248,12 +1270,11 @@ impl PostProcessEffect for BlobTrackingFX {
                     hal_ctx.device().destroy_bind_group(bg);
                 }
 
-                // Readback via wgpu aux encoder (not hal) — map_async needs
-                // wgpu tracking to fire. The aux encoder is submitted after
-                // the hal encoder, so the downsample data is available.
-                state.readback.submit(
-                    gpu.device,
-                    gpu.encoder,
+                // Shared-memory readback via hal — no wgpu submit needed.
+                // GPU writes to shared-memory staging, CPU reads after
+                // SharedEvent confirms completion on a subsequent frame.
+                state.readback.submit_shared(
+                    gpu,
                     &state.downsample_rt.texture,
                     READBACK_WIDTH,
                     READBACK_HEIGHT,

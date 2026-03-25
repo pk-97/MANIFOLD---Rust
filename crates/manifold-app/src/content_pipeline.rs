@@ -627,9 +627,10 @@ impl ContentPipeline {
         }
     }
 
-    /// HAL three-encoder split: generators (wgpu) → compositor (hal) → copy+fence (wgpu).
-    /// Called when hal-encoding feature is active. Metal command queue guarantees
-    /// in-order execution across all three submissions.
+    /// Phase 4.6: Single hal submission — zero wgpu on content hot path.
+    /// All generators (compute + LinePipeline), compositor, IOSurface copy,
+    /// and readback copies encode into one hal command encoder.
+    /// No wgpu::Queue::submit() on the content thread.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     #[allow(clippy::too_many_arguments)]
     fn render_content_hal(
@@ -652,10 +653,11 @@ impl ContentPipeline {
         let (renderers, project) = engine.split_renderer_project();
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
 
-        // ── Single hal encoder for generators + compositor ───────────────
-        // Phase 4.5: generators that support hal encode directly into the hal
-        // encoder. LinePipeline generators (wgpu-only) fall back to gen_encoder.
-        // The gen_encoder submit also flushes queue.write_buffer() staging.
+        // ── Single hal encoder for ALL GPU work ──────────────────────────
+        // Phase 4.6: generators (compute + LinePipeline render passes),
+        // compositor, IOSurface copy, and readback copies all encode here.
+        // A dummy wgpu encoder is created but never submitted — it exists
+        // only to satisfy GpuEncoder's signature for fallback paths.
         let _t0 = std::time::Instant::now();
         let mut hal_enc = hal_ctx.create_command_encoder();
         unsafe {
@@ -663,14 +665,14 @@ impl ContentPipeline {
                 .begin_encoding(Some("Frame"))
                 .expect("hal begin_encoding failed");
         }
-        let mut gen_encoder = gpu.device.create_command_encoder(
+        let mut dummy_encoder = gpu.device.create_command_encoder(
             &wgpu::CommandEncoderDescriptor {
-                label: Some("Generator Encoder (wgpu fallback)"),
+                label: Some("Dummy (unused in hal path)"),
             },
         );
         {
             let mut gpu_gen = GpuEncoder::new(
-                &gpu.device, &gpu.queue, &mut gen_encoder, Some(hal_ctx),
+                &gpu.device, &gpu.queue, &mut dummy_encoder, Some(hal_ctx),
             );
             gpu_gen.hal_enc = Some(
                 &mut hal_enc
@@ -687,9 +689,8 @@ impl ContentPipeline {
                 }
             }
         }
-        // Submit wgpu fallback encoder (LinePipeline render passes + staging flush).
-        // Metal in-order queue: this completes before the hal encoder executes.
-        gpu.queue.submit(std::iter::once(gen_encoder.finish()));
+        // No wgpu submit — all generators encoded via hal (including
+        // LinePipeline render passes via shared-memory buffers).
         let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
         // ── Build clip + layer descriptors (CPU only) ────────────────────
@@ -790,27 +791,18 @@ impl ContentPipeline {
 
         // ── Compositor (same hal encoder as generators) ──────────────────
         let _t0 = std::time::Instant::now();
-        // hal_enc already created and encoding — generators dispatched into it above.
-
-        // Auxiliary wgpu encoder — handles wgpu-tracked operations during
-        // hal compositing (readback copy_texture_to_buffer, etc.). Submitted
-        // AFTER the hal encoder so Metal in-order execution ensures hal
-        // writes complete before readback copies run. This allows map_async
-        // to fire correctly (wgpu tracks this encoder's submissions).
-        let mut aux_enc = gpu.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor {
-                label: Some("HAL Compositor (aux wgpu)"),
-            },
-        );
+        // hal_enc already encoding — generators dispatched into it above.
+        // Readback copies now go through hal (shared-memory path), so no
+        // auxiliary wgpu encoder is needed.
         {
             let mut gpu_comp = GpuEncoder::new(
-                &gpu.device, &gpu.queue, &mut aux_enc, Some(hal_ctx),
+                &gpu.device, &gpu.queue, &mut dummy_encoder, Some(hal_ctx),
             );
             gpu_comp.hal_enc =
                 Some(&mut hal_enc as *mut manifold_renderer::hal_context::MetalCommandEncoder);
 
-            // Compositor render — render/compute passes go to hal encoder,
-            // wgpu-tracked operations (readbacks) go to aux_enc.
+            // Compositor render — all passes (render, compute, readback
+            // copies) encode into the single hal encoder.
             let _compositor_view =
                 self.compositor.render(&mut gpu_comp, &frame, None);
         }
@@ -869,6 +861,9 @@ impl ContentPipeline {
             }
         }
 
+        // Drop the dummy encoder without submitting — nothing was encoded on it.
+        drop(dummy_encoder);
+
         let hal_cmd_buf = unsafe {
             hal_enc
                 .end_encoding()
@@ -877,14 +872,12 @@ impl ContentPipeline {
         unsafe {
             hal_ctx.submit(&[&hal_cmd_buf]);
         }
-        // Submit aux wgpu encoder — readback copies + any queue.write_buffer
-        // staging. Metal in-order queue guarantees hal work completes first.
-        gpu.queue.submit(std::iter::once(aux_enc.finish()));
+        // Zero wgpu::Queue::submit() on the content thread.
+        // All work encoded via hal — no aux encoder, no staging flush.
 
         // Signal frame completion via MTLSharedEvent. The lightweight signal
-        // command buffer is committed after all other submissions — Metal
-        // in-order execution guarantees it fires after compositor + copy +
-        // readbacks all complete.
+        // command buffer is committed after the single hal submission — Metal
+        // in-order execution guarantees it fires after all work completes.
         unsafe { hal_ctx.signal_frame_completion(); }
         self.hal_signal_value = hal_ctx.current_signal_value();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;

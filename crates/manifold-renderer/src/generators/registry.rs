@@ -51,15 +51,15 @@ impl GeneratorRegistry {
         } else if *gen_type == GeneratorTypeId::NUMBER_STATION {
             Some(Box::new(NumberStationGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::TESSERACT {
-            Some(Box::new(TesseractGenerator::new(device, fmt)))
+            Some(Box::new(TesseractGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::DUOCYLINDER {
-            Some(Box::new(DuocylinderGenerator::new(device, fmt)))
+            Some(Box::new(DuocylinderGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::LISSAJOUS {
-            Some(Box::new(LissajousGenerator::new(device, fmt)))
+            Some(Box::new(LissajousGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::WIREFRAME_ZOO {
-            Some(Box::new(WireframeZooGenerator::new(device, fmt)))
+            Some(Box::new(WireframeZooGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::OSCILLOSCOPE_XY {
-            Some(Box::new(OscilloscopeXYGenerator::new(device, fmt)))
+            Some(Box::new(OscilloscopeXYGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::REACTION_DIFFUSION {
             Some(Box::new(ReactionDiffusionGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::FLOWFIELD {

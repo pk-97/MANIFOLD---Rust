@@ -30,8 +30,13 @@ pub struct LissajousGenerator {
 }
 
 impl LissajousGenerator {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let line_pipeline = LinePipeline::new(device, target_format, "Lissajous");
+    pub fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let line_pipeline =
+            LinePipeline::new(device, target_format, "Lissajous", hal_ctx);
         let mut helper = LineGeneratorHelper::new(VERTEX_COUNT, VERTEX_COUNT);
 
         // Closed loop: i -> (i+1) % 256
@@ -134,7 +139,7 @@ impl Generator for LissajousGenerator {
             );
 
         self.line_pipeline.draw(
-            gpu.device, gpu.queue, gpu.encoder, target,
+            gpu, target,
             positions, instances, num_edges,
             edge_half_thick, dot_half_thick,
             ctx.beat, profiler, "Lissajous", ctx.width, ctx.height,

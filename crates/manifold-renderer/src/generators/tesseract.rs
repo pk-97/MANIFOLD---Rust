@@ -29,8 +29,13 @@ pub struct TesseractGenerator {
 }
 
 impl TesseractGenerator {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let line_pipeline = LinePipeline::new(device, target_format, "Tesseract");
+    pub fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let line_pipeline =
+            LinePipeline::new(device, target_format, "Tesseract", hal_ctx);
         let mut helper = LineGeneratorHelper::new(VERTEX_COUNT, EDGE_COUNT);
 
         // 16 vertices from 4-bit patterns
@@ -117,7 +122,7 @@ impl Generator for TesseractGenerator {
             );
 
         self.line_pipeline.draw(
-            gpu.device, gpu.queue, gpu.encoder, target,
+            gpu, target,
             positions, instances, num_edges,
             edge_half_thick, dot_half_thick,
             ctx.beat, profiler, "Tesseract", ctx.width, ctx.height,

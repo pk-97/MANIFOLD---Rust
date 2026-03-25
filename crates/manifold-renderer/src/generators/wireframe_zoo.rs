@@ -131,8 +131,13 @@ pub struct WireframeZooGenerator {
 }
 
 impl WireframeZooGenerator {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let line_pipeline = LinePipeline::new(device, target_format, "WireframeZoo");
+    pub fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let line_pipeline =
+            LinePipeline::new(device, target_format, "WireframeZoo", hal_ctx);
         let helper = LineGeneratorHelper::new(MAX_VERTS, MAX_EDGES);
 
         Self {
@@ -226,7 +231,7 @@ impl Generator for WireframeZooGenerator {
             );
 
         self.line_pipeline.draw(
-            gpu.device, gpu.queue, gpu.encoder, target,
+            gpu, target,
             positions, instances, num_edges,
             edge_half_thick, dot_half_thick,
             ctx.beat, profiler, "WireframeZoo", ctx.width, ctx.height,

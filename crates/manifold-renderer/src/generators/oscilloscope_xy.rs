@@ -30,8 +30,13 @@ pub struct OscilloscopeXYGenerator {
 }
 
 impl OscilloscopeXYGenerator {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let line_pipeline = LinePipeline::new(device, target_format, "OscilloscopeXY");
+    pub fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let line_pipeline =
+            LinePipeline::new(device, target_format, "OscilloscopeXY", hal_ctx);
         let mut helper = LineGeneratorHelper::new(SAMPLES, SAMPLES);
 
         // Closed loop: i -> (i+1) % 256
@@ -163,7 +168,7 @@ impl Generator for OscilloscopeXYGenerator {
             );
 
         self.line_pipeline.draw(
-            gpu.device, gpu.queue, gpu.encoder, target,
+            gpu, target,
             positions, instances, num_edges,
             edge_half_thick, dot_half_thick,
             ctx.beat, profiler, "OscilloscopeXY", ctx.width, ctx.height,
