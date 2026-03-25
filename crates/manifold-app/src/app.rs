@@ -183,13 +183,13 @@ pub struct Application {
     /// Content device writes compositor output to the IOSurface; UI device reads it.
     #[cfg(target_os = "macos")]
     pub(crate) shared_texture_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
-    /// UI-side wgpu::Textures imported from the triple-buffered IOSurfaces.
+    /// UI-side wgpu::Textures imported from the double-buffered IOSurfaces.
     /// The UI reads from whichever surface the content thread has published
     /// via `bridge.front_index()`.
     #[cfg(target_os = "macos")]
-    pub(crate) ui_shared_textures: [Option<wgpu::Texture>; 3],
+    pub(crate) ui_shared_textures: [Option<wgpu::Texture>; 2],
     #[cfg(target_os = "macos")]
-    pub(crate) ui_shared_views: [Option<wgpu::TextureView>; 3],
+    pub(crate) ui_shared_views: [Option<wgpu::TextureView>; 2],
     /// Last seen bridge generation — detects resize (not per-frame).
     #[cfg(target_os = "macos")]
     pub(crate) last_bridge_generation: u64,
@@ -310,9 +310,9 @@ impl Application {
             #[cfg(target_os = "macos")]
             shared_texture_bridge: None,
             #[cfg(target_os = "macos")]
-            ui_shared_textures: [None, None, None],
+            ui_shared_textures: [None, None],
             #[cfg(target_os = "macos")]
-            ui_shared_views: [None, None, None],
+            ui_shared_views: [None, None],
             #[cfg(target_os = "macos")]
             last_bridge_generation: 0,
             blit_pipeline: None,
@@ -1044,15 +1044,13 @@ impl ApplicationHandler for Application {
                     output_w, output_h,
                 );
                 let bridge = Arc::new(bridge);
-                // Import all IOSurface textures on the UI device (triple-buffered).
+                // Import both IOSurface textures on the UI device (double-buffered).
                 let ui_tex_a = unsafe { bridge.import_texture(&gpu.device, 0) };
                 let ui_tex_b = unsafe { bridge.import_texture(&gpu.device, 1) };
-                let ui_tex_c = unsafe { bridge.import_texture(&gpu.device, 2) };
                 let view_a = ui_tex_a.create_view(&wgpu::TextureViewDescriptor::default());
                 let view_b = ui_tex_b.create_view(&wgpu::TextureViewDescriptor::default());
-                let view_c = ui_tex_c.create_view(&wgpu::TextureViewDescriptor::default());
-                self.ui_shared_textures = [Some(ui_tex_a), Some(ui_tex_b), Some(ui_tex_c)];
-                self.ui_shared_views = [Some(view_a), Some(view_b), Some(view_c)];
+                self.ui_shared_textures = [Some(ui_tex_a), Some(ui_tex_b)];
+                self.ui_shared_views = [Some(view_a), Some(view_b)];
                 self.shared_texture_bridge = Some(Arc::clone(&bridge));
             }
 
@@ -1107,10 +1105,7 @@ impl ApplicationHandler for Application {
             if let Some(ref bridge) = self.shared_texture_bridge {
                 let content_tex_a = unsafe { bridge.import_texture(&content_gpu.device, 0) };
                 let content_tex_b = unsafe { bridge.import_texture(&content_gpu.device, 1) };
-                let content_tex_c = unsafe { bridge.import_texture(&content_gpu.device, 2) };
-                content_pipeline.set_shared_textures(
-                    content_tex_a, content_tex_b, content_tex_c, Arc::clone(bridge),
-                );
+                content_pipeline.set_shared_textures(content_tex_a, content_tex_b, Arc::clone(bridge));
             }
             self.content_pipeline_output = Some(content_pipeline.shared_output());
 

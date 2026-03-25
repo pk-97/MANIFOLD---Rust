@@ -756,12 +756,10 @@ impl Application {
                     self.last_bridge_generation = bridge_gen;
                     let ui_tex_a = unsafe { bridge.import_texture(&gpu.device, 0) };
                     let ui_tex_b = unsafe { bridge.import_texture(&gpu.device, 1) };
-                    let ui_tex_c = unsafe { bridge.import_texture(&gpu.device, 2) };
                     let view_a = ui_tex_a.create_view(&wgpu::TextureViewDescriptor::default());
                     let view_b = ui_tex_b.create_view(&wgpu::TextureViewDescriptor::default());
-                    let view_c = ui_tex_c.create_view(&wgpu::TextureViewDescriptor::default());
-                    self.ui_shared_textures = [Some(ui_tex_a), Some(ui_tex_b), Some(ui_tex_c)];
-                    self.ui_shared_views = [Some(view_a), Some(view_b), Some(view_c)];
+                    self.ui_shared_textures = [Some(ui_tex_a), Some(ui_tex_b)];
+                    self.ui_shared_views = [Some(view_a), Some(view_b)];
                     log::info!("[UI] re-imported both IOSurface textures after resize (gen={})", bridge_gen);
                 }
             }
