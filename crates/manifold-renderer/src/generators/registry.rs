@@ -61,15 +61,15 @@ impl GeneratorRegistry {
         } else if *gen_type == GeneratorTypeId::OSCILLOSCOPE_XY {
             Some(Box::new(OscilloscopeXYGenerator::new(device, fmt)))
         } else if *gen_type == GeneratorTypeId::REACTION_DIFFUSION {
-            Some(Box::new(ReactionDiffusionGenerator::new(device, fmt)))
+            Some(Box::new(ReactionDiffusionGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::FLOWFIELD {
-            Some(Box::new(FlowfieldGenerator::new(device, fmt)))
+            Some(Box::new(FlowfieldGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::STRANGE_ATTRACTOR {
-            Some(Box::new(StrangeAttractorGenerator::new(device, fmt)))
+            Some(Box::new(StrangeAttractorGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::PARAMETRIC_SURFACE {
-            Some(Box::new(ParametricSurfaceGenerator::new(device, fmt)))
+            Some(Box::new(ParametricSurfaceGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::MYCELIUM {
-            Some(Box::new(MyceliumGenerator::new(device, fmt)))
+            Some(Box::new(MyceliumGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::COMPUTE_STRANGE_ATTRACTOR {
             Some(Box::new(ComputeStrangeAttractorGenerator::new(device, fmt)))
         } else if *gen_type == GeneratorTypeId::FLUID_SIMULATION {

@@ -10,6 +10,51 @@ const KILL: usize = 1;
 const SPEED: usize = 2;
 const SCALE: usize = 3;
 
+/// BGL entries for the hal sim pipeline:
+///   binding 0: uniform (dynamic offset)
+///   binding 1: texture_2d filterable (read state)
+///   binding 2: sampler (filtering)
+///   binding 3: storage_texture (write state)
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const HAL_SIM_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: true,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: STATE_FORMAT,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    },
+];
+
 const STEPS_PER_FRAME: u32 = 8;
 // Unity: ARGBFloat (Rgba32Float), but Rgba32Float is NOT filterable on Metal.
 // textureSample requires filterable; Rgba16Float is the approved Metal fallback.
@@ -52,10 +97,21 @@ pub struct ReactionDiffusionGenerator {
     sim_compute_pipeline: wgpu::ComputePipeline,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     sim_compute_bgl: wgpu::BindGroupLayout,
+    // HAL pipeline for zero-overhead dispatch
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_sim_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_sampler: Option<crate::hal_context::MetalSampler>,
 }
 
 impl ReactionDiffusionGenerator {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("RD Sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -304,6 +360,40 @@ impl ReactionDiffusionGenerator {
             mapped_at_creation: false,
         });
 
+        // ── HAL pipeline for zero-overhead dispatch ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (hal_sim_pipeline, hal_sampler) = if let Some(ctx) = hal_ctx {
+            use wgpu::hal::Device as HalDevice;
+
+            let hal_pipe = crate::hal_pipeline::create_compute_pipeline(
+                ctx,
+                include_str!("shaders/reaction_diffusion_sim_compute.wgsl"),
+                "cs_main",
+                &HAL_SIM_BGL_ENTRIES,
+                "RD Sim HAL",
+            );
+
+            let hal_samp = unsafe {
+                ctx.device()
+                    .create_sampler(&wgpu::hal::SamplerDescriptor {
+                        label: Some("RD Sampler HAL"),
+                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                        lod_clamp: 0.0..32.0,
+                        compare: None,
+                        anisotropy_clamp: 1,
+                        border_color: None,
+                    })
+                    .expect("Failed to create RD hal sampler")
+            };
+
+            (Some(hal_pipe), Some(hal_samp))
+        } else {
+            (None, None)
+        };
+
         Self {
             state: None,
             sim_pipeline,
@@ -317,6 +407,10 @@ impl ReactionDiffusionGenerator {
             sim_compute_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             sim_compute_bgl,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_sim_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_sampler,
         }
     }
 
@@ -393,59 +487,165 @@ impl Generator for ReactionDiffusionGenerator {
             texel_y,
             _pad: 0.0,
         };
-        gpu.queue.write_buffer(
-            &self.sim_uniform_buffer,
-            0,
-            bytemuck::bytes_of(&sim_uniforms),
-        );
 
-        // Run N simulation steps
+        // ── HAL dispatch path for sim loop ────────────────────────────
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if let Some(ref hal_pipe) = self.hal_sim_pipeline
+            && let Some(ref hal_samp) = self.hal_sampler
+            && gpu.has_hal_encoder()
         {
-            // Compute dispatch path — eliminates TBDR tile overhead per sim step
-            for _ in 0..STEPS_PER_FRAME {
-                let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("RD Sim Compute BG"),
-                    layout: &self.sim_compute_bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: self.sim_uniform_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(state.read_view()),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::TextureView(state.write_view()),
-                        },
-                    ],
-                });
+            use wgpu::hal::{self, Device as HalDevice};
+            use crate::hal_dispatch::*;
 
-                {
-                    let ts = profiler.and_then(|p| p.compute_timestamps("RD Sim Compute", w, h));
-                    let mut pass = gpu
-                        .encoder
-                        .begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("RD Sim Compute Pass"),
-                            timestamp_writes: ts,
-                        });
-                    pass.set_pipeline(&self.sim_compute_pipeline);
-                    pass.set_bind_group(0, &bind_group, &[]);
-                    pass.dispatch_workgroups(w.div_ceil(16), h.div_ceil(16), 1);
+            let uniform_size = std::mem::size_of::<SimUniforms>() as u64;
+
+            for _ in 0..STEPS_PER_FRAME {
+                let offset = unsafe { gpu.uniform_arena_mut() }
+                    .expect("uniform_arena not set")
+                    .push(&sim_uniforms);
+
+                let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+
+                let arena_buf_ptr = unsafe { gpu.uniform_arena_mut() }
+                    .unwrap()
+                    .hal_buffer_ptr()
+                    .expect("arena hal buffer not available");
+                // Re-extract views every iteration because swap() changes read/write
+                let read_ptr = unsafe { extract_hal_view(state.read_view()) };
+                let write_ptr = unsafe { extract_hal_view(state.write_view()) };
+
+                let bg = unsafe {
+                    hal_ctx.device().create_bind_group(
+                        &hal::BindGroupDescriptor {
+                            label: None,
+                            layout: &hal_pipe.bind_group_layout,
+                            entries: &[
+                                hal::BindGroupEntry {
+                                    binding: 0,
+                                    resource_index: 0,
+                                    count: 1,
+                                },
+                                hal::BindGroupEntry {
+                                    binding: 1,
+                                    resource_index: 0,
+                                    count: 1,
+                                },
+                                hal::BindGroupEntry {
+                                    binding: 2,
+                                    resource_index: 0,
+                                    count: 1,
+                                },
+                                hal::BindGroupEntry {
+                                    binding: 3,
+                                    resource_index: 1,
+                                    count: 1,
+                                },
+                            ],
+                            buffers: &[hal::BufferBinding::new_unchecked(
+                                &*arena_buf_ptr,
+                                0,
+                                std::num::NonZero::new(uniform_size),
+                            )],
+                            samplers: &[hal_samp],
+                            textures: &[
+                                hal::TextureBinding {
+                                    view: &*read_ptr,
+                                    usage: wgpu::wgt::TextureUses::RESOURCE,
+                                },
+                                hal::TextureBinding {
+                                    view: &*write_ptr,
+                                    usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
+                                },
+                            ],
+                            acceleration_structures: &[],
+                            external_textures: &[],
+                        },
+                    )
+                    .expect("Failed to create RD Sim hal bind group")
+                };
+
+                unsafe {
+                    dispatch_hal_compute(
+                        hal_enc,
+                        hal_ctx,
+                        hal_pipe,
+                        bg,
+                        &[offset as u32],
+                        [w.div_ceil(16), h.div_ceil(16), 1],
+                        "RD Sim Compute",
+                    );
                 }
 
                 state.swap();
+            }
+
+            // Display pass runs unconditionally below (wgpu render pass — left as-is)
+        } else {
+            // ── wgpu compute path (macOS fallback) ─────────────────────
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            {
+                gpu.queue.write_buffer(
+                    &self.sim_uniform_buffer,
+                    0,
+                    bytemuck::bytes_of(&sim_uniforms),
+                );
+
+                for _ in 0..STEPS_PER_FRAME {
+                    let bind_group =
+                        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("RD Sim Compute BG"),
+                            layout: &self.sim_compute_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: self.sim_uniform_buffer.as_entire_binding(),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::TextureView(
+                                        state.read_view(),
+                                    ),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
+                                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 3,
+                                    resource: wgpu::BindingResource::TextureView(
+                                        state.write_view(),
+                                    ),
+                                },
+                            ],
+                        });
+
+                    {
+                        let ts =
+                            profiler.and_then(|p| p.compute_timestamps("RD Sim Compute", w, h));
+                        let mut pass = gpu
+                            .encoder
+                            .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                                label: Some("RD Sim Compute Pass"),
+                                timestamp_writes: ts,
+                            });
+                        pass.set_pipeline(&self.sim_compute_pipeline);
+                        pass.set_bind_group(0, &bind_group, &[]);
+                        pass.dispatch_workgroups(w.div_ceil(16), h.div_ceil(16), 1);
+                    }
+
+                    state.swap();
+                }
             }
         }
 
         #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
         {
+            gpu.queue.write_buffer(
+                &self.sim_uniform_buffer,
+                0,
+                bytemuck::bytes_of(&sim_uniforms),
+            );
+
             for _ in 0..STEPS_PER_FRAME {
                 let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("RD Sim BG"),

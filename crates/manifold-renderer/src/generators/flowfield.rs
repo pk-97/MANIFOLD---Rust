@@ -19,6 +19,51 @@ const STATE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const PRESET_NOISE: [f32; 6] = [2.0, 4.0, 7.0, 1.5, 8.0, 10.0];
 const PRESET_CURL: [f32; 6] = [0.8, 0.4, 1.6, 0.3, 1.0, 1.8];
 
+/// BGL entries for the hal pipeline:
+///   binding 0: uniform (dynamic offset)
+///   binding 1: texture_2d filterable (read state)
+///   binding 2: sampler (filtering)
+///   binding 3: storage_texture (write state)
+#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+const HAL_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
+    wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: true,
+            min_binding_size: None,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 2,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+        count: None,
+    },
+    wgpu::BindGroupLayoutEntry {
+        binding: 3,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::StorageTexture {
+            access: wgpu::StorageTextureAccess::WriteOnly,
+            format: STATE_FORMAT,
+            view_dimension: wgpu::TextureViewDimension::D2,
+        },
+        count: None,
+    },
+];
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct FlowfieldUniforms {
@@ -49,10 +94,21 @@ pub struct FlowfieldGenerator {
     compute_pipeline: wgpu::ComputePipeline,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     compute_bgl: wgpu::BindGroupLayout,
+    // HAL pipeline for zero-overhead dispatch
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
+    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    hal_sampler: Option<crate::hal_context::MetalSampler>,
 }
 
 impl FlowfieldGenerator {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        target_format: wgpu::TextureFormat,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+    ) -> Self {
+        let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
+
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("Flowfield Sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -212,6 +268,40 @@ impl FlowfieldGenerator {
             (cpipeline, cbgl)
         };
 
+        // ── HAL pipeline for zero-overhead dispatch ──
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        let (hal_pipeline, hal_sampler) = if let Some(ctx) = hal_ctx {
+            use wgpu::hal::Device as HalDevice;
+
+            let hal_pipe = crate::hal_pipeline::create_compute_pipeline(
+                ctx,
+                include_str!("shaders/flowfield_compute.wgsl"),
+                "cs_main",
+                &HAL_BGL_ENTRIES,
+                "Flowfield HAL",
+            );
+
+            let hal_samp = unsafe {
+                ctx.device()
+                    .create_sampler(&wgpu::hal::SamplerDescriptor {
+                        label: Some("Flowfield Sampler HAL"),
+                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                        lod_clamp: 0.0..32.0,
+                        compare: None,
+                        anisotropy_clamp: 1,
+                        border_color: None,
+                    })
+                    .expect("Failed to create Flowfield hal sampler")
+            };
+
+            (Some(hal_pipe), Some(hal_samp))
+        } else {
+            (None, None)
+        };
+
         // Blit pipeline to upscale half-res state to full-res output
         let blit = BlitPipeline::new(device, target_format);
 
@@ -226,6 +316,10 @@ impl FlowfieldGenerator {
             compute_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             compute_bgl,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_pipeline,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_sampler,
         }
     }
 
@@ -316,13 +410,114 @@ impl Generator for FlowfieldGenerator {
             texel_y,
             _pad: [0.0; 2],
         };
-        gpu.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        // Single simulation step
+        // ── HAL dispatch path ──────────────────────────────────────────
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if let Some(ref hal_pipe) = self.hal_pipeline
+            && let Some(ref hal_samp) = self.hal_sampler
+            && gpu.has_hal_encoder()
+        {
+            use wgpu::hal::{self, Device as HalDevice};
+            use crate::hal_dispatch::*;
+
+            let offset = unsafe { gpu.uniform_arena_mut() }
+                .expect("uniform_arena not set")
+                .push(&uniforms);
+
+            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
+
+            let arena_buf_ptr = unsafe { gpu.uniform_arena_mut() }
+                .unwrap()
+                .hal_buffer_ptr()
+                .expect("arena hal buffer not available");
+            let read_ptr = unsafe { extract_hal_view(state.read_view()) };
+            let write_ptr = unsafe { extract_hal_view(state.write_view()) };
+
+            let uniform_size = std::mem::size_of::<FlowfieldUniforms>() as u64;
+
+            let bg = unsafe {
+                hal_ctx.device().create_bind_group(
+                    &hal::BindGroupDescriptor {
+                        label: None,
+                        layout: &hal_pipe.bind_group_layout,
+                        entries: &[
+                            hal::BindGroupEntry {
+                                binding: 0,
+                                resource_index: 0,
+                                count: 1,
+                            },
+                            hal::BindGroupEntry {
+                                binding: 1,
+                                resource_index: 0,
+                                count: 1,
+                            },
+                            hal::BindGroupEntry {
+                                binding: 2,
+                                resource_index: 0,
+                                count: 1,
+                            },
+                            hal::BindGroupEntry {
+                                binding: 3,
+                                resource_index: 1,
+                                count: 1,
+                            },
+                        ],
+                        buffers: &[hal::BufferBinding::new_unchecked(
+                            &*arena_buf_ptr,
+                            0,
+                            std::num::NonZero::new(uniform_size),
+                        )],
+                        samplers: &[hal_samp],
+                        textures: &[
+                            hal::TextureBinding {
+                                view: &*read_ptr,
+                                usage: wgpu::wgt::TextureUses::RESOURCE,
+                            },
+                            hal::TextureBinding {
+                                view: &*write_ptr,
+                                usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
+                            },
+                        ],
+                        acceleration_structures: &[],
+                        external_textures: &[],
+                    },
+                )
+                .expect("Failed to create Flowfield hal bind group")
+            };
+
+            unsafe {
+                dispatch_hal_compute(
+                    hal_enc,
+                    hal_ctx,
+                    hal_pipe,
+                    bg,
+                    &[offset as u32],
+                    [iw.div_ceil(16), ih.div_ceil(16), 1],
+                    "Flowfield Sim Compute",
+                );
+            }
+
+            state.swap();
+
+            // Blit half-res state to full-res output (with bilinear upscale)
+            self.blit.blit(
+                gpu.device,
+                gpu.encoder,
+                state.read_view(),
+                target,
+                ctx.width,
+                ctx.height,
+            );
+
+            return ctx.anim_progress;
+        }
+
+        // ── wgpu compute path (macOS fallback) ─────────────────────────
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         {
-            // Compute dispatch path
+            gpu.queue
+                .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
             let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Flowfield Compute BG"),
                 layout: &self.compute_bgl,
@@ -359,10 +554,15 @@ impl Generator for FlowfieldGenerator {
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.dispatch_workgroups(iw.div_ceil(16), ih.div_ceil(16), 1);
             }
+
+            state.swap();
         }
 
         #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
         {
+            gpu.queue
+                .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+
             // Render pass fallback
             let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("Flowfield BG"),
@@ -405,9 +605,9 @@ impl Generator for FlowfieldGenerator {
                 pass.set_bind_group(0, &bind_group, &[]);
                 pass.draw(0..3, 0..1);
             }
-        }
 
-        state.swap();
+            state.swap();
+        }
 
         // Blit half-res state to full-res output (with bilinear upscale)
         self.blit.blit(
