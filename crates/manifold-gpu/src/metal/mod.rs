@@ -5,6 +5,9 @@
 //! overhead. WGSL→MSL compilation via naga, shader loading via
 //! metal::Device::new_library_with_source().
 
+#[allow(unexpected_cfgs)]
+pub mod mps;
+
 use crate::types::*;
 
 // Raw ObjC retain/release — avoids dependency on objc::msg_send! macro.

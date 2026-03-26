@@ -2029,6 +2029,7 @@ dependencies = [
  "log",
  "metal",
  "naga",
+ "objc",
 ]
 
 [[package]]
