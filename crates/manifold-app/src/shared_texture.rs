@@ -1,16 +1,16 @@
 //! Cross-device GPU texture sharing via IOSurface (macOS).
 //!
-//! The content thread renders on its own native Metal device (manifold-gpu).
-//! The UI thread renders on a separate wgpu Device. IOSurface provides
-//! kernel-managed GPU memory that both can bind to — zero copy.
+//! The content thread renders on its own wgpu Device. The UI thread renders on
+//! a separate Device. Textures can't cross wgpu Devices, but both Devices share
+//! the same underlying MTLDevice. IOSurface provides kernel-managed GPU memory
+//! that multiple MTLTextures (from any Device) can bind to — zero copy.
 //!
 //! Architecture:
 //!   Content Device ──render──▶ IOSurface-backed texture ◀──read── UI Device
 //!                              (same kernel GPU memory)
 //!
-//! Triple-buffered: 3 IOSurfaces allow 2 frames in flight. While the GPU
-//! executes frame N and the UI presents frame N-1, the content thread encodes
-//! frame N+1 into a third surface without stalling.
+//! Note: `io_surface` crate is deprecated in favor of `objc2-io-surface`.
+//! Migration planned but deferred — too risky for this pass.
 #![allow(deprecated)]
 #![allow(dead_code)]
 
@@ -25,22 +25,22 @@ use foreign_types::ForeignType;
 #[allow(unused_imports)]
 use objc::{msg_send, sel, sel_impl};
 
-/// Number of IOSurface buffers. 3 = triple buffering (2 frames in flight).
-pub const SURFACE_COUNT: usize = 3;
-
 /// Shared state between content and UI threads for the IOSurface bridge.
 /// Created once during init, Arc-shared between both threads.
+/// Uses interior mutability (RwLock) so resize works through Arc.
 ///
-/// Triple-buffered: 3 IOSurfaces allow the content thread to have 2 frames
-/// in flight — while GPU executes frame N, content encodes frame N+1 into
-/// a different surface, and UI presents frame N-1.
+/// Double-buffered: two IOSurfaces allow the content thread to write frame N+1
+/// while the UI thread reads frame N. An atomic front_index tracks which surface
+/// is safe to read. This eliminates the synchronous GPU poll that was serializing
+/// CPU and GPU work.
 pub struct SharedTextureBridge {
-    /// IOSurface kernel objects — triple-buffered for async pipeline.
-    io_surfaces: RwLock<[io_surface::IOSurface; SURFACE_COUNT]>,
+    /// Two IOSurface kernel objects — double-buffered for async pipeline.
+    /// Behind RwLock for resize (rare write, frequent read via import_texture).
+    io_surfaces: RwLock<[io_surface::IOSurface; 2]>,
     /// Texture dimensions (atomic for lock-free dimension checks).
     width: AtomicU32,
     height: AtomicU32,
-    /// Which surface the UI thread should read (0, 1, or 2).
+    /// Which surface the UI thread should read (0 or 1).
     /// Content thread calls `publish_front()` after confirming GPU completion.
     front_index: AtomicU32,
     /// Generation counter — incremented on resize so both sides detect stale textures.
@@ -58,19 +58,18 @@ const BPP: u32 = 8;
 const PIXEL_FORMAT_RGBA16_FLOAT: i32 = 0x52476841u32 as i32;
 
 impl SharedTextureBridge {
-    /// Create a new triple-buffered IOSurface bridge at the given dimensions.
+    /// Create a new double-buffered IOSurface bridge at the given dimensions.
     pub fn new(width: u32, height: u32) -> Self {
         let surface_a = Self::create_io_surface(width, height);
         let surface_b = Self::create_io_surface(width, height);
-        let surface_c = Self::create_io_surface(width, height);
 
         log::info!(
-            "[SharedTextureBridge] created {}x IOSurface {}x{} Rgba16Float ({} bytes each)",
-            SURFACE_COUNT, width, height, width * height * BPP,
+            "[SharedTextureBridge] created 2x IOSurface {}x{} Rgba16Float ({} bytes each)",
+            width, height, width * height * BPP,
         );
 
         Self {
-            io_surfaces: RwLock::new([surface_a, surface_b, surface_c]),
+            io_surfaces: RwLock::new([surface_a, surface_b]),
             width: AtomicU32::new(width),
             height: AtomicU32::new(height),
             front_index: AtomicU32::new(0),
@@ -117,6 +116,10 @@ impl SharedTextureBridge {
     /// Create an MTLTexture backed by one of the IOSurfaces, then import it
     /// into the given wgpu Device as a wgpu::Texture.
     ///
+    /// `surface_index` selects which of the two double-buffered surfaces (0 or 1).
+    /// Both the content and UI devices call this — each gets their own
+    /// MTLTexture handle backed by the same IOSurface memory.
+    ///
     /// # Safety
     /// `wgpu_device` must be from the same adapter (same underlying MTLDevice).
     pub unsafe fn import_texture(
@@ -124,15 +127,17 @@ impl SharedTextureBridge {
         wgpu_device: &wgpu::Device,
         surface_index: usize,
     ) -> wgpu::Texture { unsafe {
-        assert!(surface_index < SURFACE_COUNT, "surface_index out of range");
+        assert!(surface_index < 2, "surface_index must be 0 or 1");
         let width = self.width.load(Ordering::Acquire);
         let height = self.height.load(Ordering::Acquire);
 
+        // 1. Get the raw MTLDevice from wgpu
         let hal_device_guard = wgpu_device
             .as_hal::<wgpu_hal::api::Metal>()
             .expect("Not a Metal backend");
         let raw_device: &metal::DeviceRef = hal_device_guard.raw_device();
 
+        // 2. Create an MTLTextureDescriptor
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
         descriptor.set_width(width as u64);
@@ -148,6 +153,7 @@ impl SharedTextureBridge {
         );
         descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
 
+        // 3. Call [MTLDevice newTextureWithDescriptor:iosurface:plane:]
         let io_surfaces_guard = self.io_surfaces.read();
         let io_surface_ref = io_surfaces_guard[surface_index].as_concrete_TypeRef();
         let raw_mtl_texture: *mut objc::runtime::Object = objc::msg_send![
@@ -156,29 +162,44 @@ impl SharedTextureBridge {
             iosurface:io_surface_ref
             plane:0usize
         ];
-        drop(io_surfaces_guard);
+        drop(io_surfaces_guard); // Release read lock before wgpu calls
         assert!(
             !raw_mtl_texture.is_null(),
             "newTextureWithDescriptor:iosurface:plane: failed"
         );
 
+        // 4. Wrap as metal::Texture (takes ownership of the +1 retain from newTexture)
         let mtl_texture = metal::Texture::from_ptr(raw_mtl_texture as *mut _);
 
+        // 5. Create wgpu-hal texture from the raw Metal texture
         let hal_texture = wgpu_hal::metal::Device::texture_from_raw(
             mtl_texture,
             wgpu_types::TextureFormat::Rgba16Float,
             metal::MTLTextureType::D2,
-            1,
-            1,
-            wgpu_hal::CopyExtent { width, height, depth: 1 },
+            1, // array_layers
+            1, // mip_levels
+            wgpu_hal::CopyExtent {
+                width,
+                height,
+                depth: 1,
+            },
         );
 
-        let labels = ["IOSurface A", "IOSurface B", "IOSurface C"];
+        // 6. Import into wgpu
+        let label = if surface_index == 0 {
+            "IOSurface Shared Texture A"
+        } else {
+            "IOSurface Shared Texture B"
+        };
         wgpu_device.create_texture_from_hal::<wgpu_hal::api::Metal>(
             hal_texture,
             &wgpu::TextureDescriptor {
-                label: Some(labels[surface_index]),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -192,6 +213,10 @@ impl SharedTextureBridge {
     }}
 
     /// Create a native `manifold_gpu::GpuTexture` backed by one of the IOSurfaces.
+    /// Used by the content thread which uses `manifold_gpu::GpuDevice` directly
+    /// (no wgpu on the content hot path).
+    ///
+    /// `surface_index` selects which of the two double-buffered surfaces (0 or 1).
     ///
     /// # Safety
     /// The returned GpuTexture is backed by the IOSurface — caller must ensure
@@ -201,12 +226,13 @@ impl SharedTextureBridge {
         native_device: &manifold_gpu::GpuDevice,
         surface_index: usize,
     ) -> manifold_gpu::GpuTexture { unsafe {
-        assert!(surface_index < SURFACE_COUNT, "surface_index out of range");
+        assert!(surface_index < 2, "surface_index must be 0 or 1");
         let width = self.width.load(Ordering::Acquire);
         let height = self.height.load(Ordering::Acquire);
 
         let raw_device: &metal::DeviceRef = native_device.raw_device();
 
+        // Create an MTLTextureDescriptor
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
         descriptor.set_width(width as u64);
@@ -222,6 +248,7 @@ impl SharedTextureBridge {
         );
         descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
 
+        // Call [MTLDevice newTextureWithDescriptor:iosurface:plane:]
         let io_surfaces_guard = self.io_surfaces.read();
         let io_surface_ref = io_surfaces_guard[surface_index].as_concrete_TypeRef();
         let raw_mtl_texture: *mut objc::runtime::Object = objc::msg_send![
@@ -236,8 +263,10 @@ impl SharedTextureBridge {
             "newTextureWithDescriptor:iosurface:plane: failed"
         );
 
+        // Wrap as metal::Texture (takes ownership of the +1 retain from newTexture)
         let mtl_texture = metal::Texture::from_ptr(raw_mtl_texture as *mut _);
 
+        // Wrap as GpuTexture
         manifold_gpu::GpuTexture::from_raw(
             mtl_texture,
             width,
@@ -247,36 +276,40 @@ impl SharedTextureBridge {
         )
     }}
 
-    /// Resize the bridge. Creates 3 new IOSurfaces at the new dimensions.
-    /// Both devices must re-import their textures after this call.
+    /// Resize the bridge. Creates two new IOSurfaces at the new dimensions.
+    /// Both devices must re-import their textures after this call
+    /// (detected via generation counter).
     pub fn resize(&self, width: u32, height: u32) {
         let surface_a = Self::create_io_surface(width, height);
         let surface_b = Self::create_io_surface(width, height);
-        let surface_c = Self::create_io_surface(width, height);
         {
             let mut guard = self.io_surfaces.write();
-            *guard = [surface_a, surface_b, surface_c];
+            *guard = [surface_a, surface_b];
         }
         self.width.store(width, Ordering::Release);
         self.height.store(height, Ordering::Release);
         self.front_index.store(0, Ordering::Release);
         self.generation.fetch_add(1, Ordering::Release);
         log::info!(
-            "[SharedTextureBridge] resized {}x IOSurface to {}x{}",
-            SURFACE_COUNT, width, height,
+            "[SharedTextureBridge] resized 2x IOSurface to {}x{}",
+            width, height,
         );
     }
 
     /// Which surface index the UI thread should read from.
+    /// Updated by the content thread after confirming GPU completion.
     pub fn front_index(&self) -> u32 {
         self.front_index.load(Ordering::Acquire)
     }
 
     /// Publish a completed surface as the new front buffer.
+    /// Called by the content thread after confirming the GPU finished
+    /// writing to this surface (fence ready).
     pub fn publish_front(&self, index: u32) {
         self.front_index.store(index, Ordering::Release);
     }
 
+    /// Current dimensions.
     pub fn width(&self) -> u32 {
         self.width.load(Ordering::Acquire)
     }
@@ -285,6 +318,8 @@ impl SharedTextureBridge {
         self.height.load(Ordering::Acquire)
     }
 
+    /// Generation counter — changes on resize. Both sides compare against
+    /// their last-seen generation to know when to re-import.
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
     }
