@@ -296,9 +296,9 @@ impl ContentPipeline {
                     bridge.publish_front(self.last_write_surface as u32);
                 }
             }
-            // Non-blocking poll for wgpu bookkeeping (readback map_async,
-            // resource reclamation for wgpu-created textures still alive).
-            let _ = device.poll(wgpu::PollType::Poll);
+            // No device.poll() — native path uses MTLSharedEvent for sync
+            // and shared-memory readback. Polling would flush wgpu's internal
+            // Transit:Blit commands to the GPU for no reason.
             return;
         }
 
