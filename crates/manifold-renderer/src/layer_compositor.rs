@@ -740,7 +740,10 @@ impl LayerCompositor {
             effect_chain: EffectChain::new(),
             effect_registry: EffectRegistry::new(device, queue, hal_ctx),
             wet_dry_lerp: WetDryLerpPipeline::new(device, hal_ctx),
-            tonemap: TonemapPipeline::new(device, width, height, hal_ctx),
+            tonemap: TonemapPipeline::new(
+                device, width, height, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            ),
             led_tap: None,
         }
     }
@@ -1223,6 +1226,8 @@ impl Compositor for LayerCompositor {
             self.main.source_view(),
             &frame.tonemap,
             gpu_profiler,
+            #[cfg(target_os = "macos")]
+            Some(self.main.source_texture()),
         );
 
         // Apply master effects (bloom, halation, CRT) AFTER tonemapping.

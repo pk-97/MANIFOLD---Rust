@@ -121,9 +121,12 @@ pub struct TonemapPipeline {
     /// Cached hal pointer to uniform buffer for bind groups.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_uniform_buf_ptr: Option<*const crate::hal_context::MetalBuffer>,
+    #[cfg(target_os = "macos")]
+    native_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_sampler: Option<manifold_gpu::GpuSampler>,
 }
 
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
 unsafe impl Send for TonemapPipeline {}
 
 impl TonemapPipeline {
@@ -132,6 +135,7 @@ impl TonemapPipeline {
         width: u32,
         height: u32,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx;
         let format = wgpu::TextureFormat::Rgba16Float;
@@ -393,6 +397,18 @@ impl TonemapPipeline {
             hal_uniform_mapped_ptr,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_uniform_buf_ptr,
+            #[cfg(target_os = "macos")]
+            native_pipeline: native_device.map(|dev| {
+                dev.create_compute_pipeline(
+                    include_str!("effects/shaders/aces_tonemap_compute.wgsl"),
+                    "cs_main",
+                    "Tonemap Native",
+                )
+            }),
+            #[cfg(target_os = "macos")]
+            native_sampler: native_device.map(|dev| {
+                dev.create_sampler(&manifold_gpu::GpuSamplerDesc::default())
+            }),
         }
     }
 
@@ -407,7 +423,55 @@ impl TonemapPipeline {
         hdr_source: &wgpu::TextureView,
         settings: &TonemapSettings,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
+        #[cfg(target_os = "macos")] hdr_source_texture: Option<&wgpu::Texture>,
     ) {
+        // --- native Metal path: zero wgpu ---
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_pipe) = self.native_pipeline
+            && let Some(ref native_samp) = self.native_sampler
+            && gpu.has_native_encoder()
+            && let Some(src_tex) = hdr_source_texture
+        {
+            let mode = if settings.hdr_output_enabled { 3u32 } else { 0u32 };
+            let uniforms = TonemapUniforms {
+                exposure: settings.exposure,
+                paper_white: settings.paper_white_nits,
+                max_nits: settings.max_display_nits,
+                mode,
+            };
+            let src_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(src_tex)
+            };
+            let out_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(&self.output.texture)
+            };
+            let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            enc.dispatch_compute(
+                native_pipe,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: &src_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3,
+                        texture: &out_gpu,
+                    },
+                ],
+                [self.output.width.div_ceil(16), self.output.height.div_ceil(16), 1],
+                "Tonemap Compute",
+            );
+            return;
+        }
+
         // --- hal path: compute dispatch via hal command encoder ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         if gpu.has_hal_encoder() {

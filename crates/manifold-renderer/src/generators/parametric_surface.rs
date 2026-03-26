@@ -131,6 +131,12 @@ pub struct ParametricSurfaceGenerator {
     hal_raymarch_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_sampler: Option<crate::hal_context::MetalSampler>,
+    #[cfg(target_os = "macos")]
+    native_bake_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_raymarch_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_sampler: Option<manifold_gpu::GpuSampler>,
     // Dirty tracking: only re-bake when shape or morph changes (matches Unity ShouldRebake)
     last_shape: f32,
     last_morph: f32,
@@ -141,6 +147,7 @@ impl ParametricSurfaceGenerator {
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
 
@@ -464,6 +471,26 @@ impl ParametricSurfaceGenerator {
                 (None, None, None)
             };
 
+        #[cfg(target_os = "macos")]
+        let (native_bake_pipeline, native_raymarch_pipeline, native_sampler) =
+            if let Some(nd) = native_device {
+                let nb = nd.create_compute_pipeline(
+                    include_str!("shaders/parametric_surface_bake.wgsl"),
+                    "cs_main", "ParametricSurface Bake Native",
+                );
+                let nr = nd.create_compute_pipeline(
+                    include_str!("shaders/parametric_surface_raymarch_compute.wgsl"),
+                    "cs_main", "ParametricSurface Raymarch Native",
+                );
+                let ns = nd.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                    address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
+                    ..Default::default()
+                });
+                (Some(nb), Some(nr), Some(ns))
+            } else {
+                (None, None, None)
+            };
+
         Self {
             compute_pipeline,
             compute_bgl,
@@ -484,6 +511,12 @@ impl ParametricSurfaceGenerator {
             hal_raymarch_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_sampler,
+            #[cfg(target_os = "macos")]
+            native_bake_pipeline,
+            #[cfg(target_os = "macos")]
+            native_raymarch_pipeline,
+            #[cfg(target_os = "macos")]
+            native_sampler,
             last_shape: f32::MIN,
             last_morph: f32::MIN,
         }
@@ -543,6 +576,83 @@ impl Generator for ParametricSurfaceGenerator {
 
         // UV scale: matches Unity base class — rawScale > 0 ? 1/rawScale : 1
         let uv_scale = if scale > 0.0 { 1.0 / scale } else { 1.0 };
+
+        // ── NATIVE METAL full dispatch path ────────────────────────────
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_bake) = self.native_bake_pipeline
+            && let Some(ref native_rm) = self.native_raymarch_pipeline
+            && let Some(ref native_samp) = self.native_sampler
+            && gpu.has_native_encoder()
+            && let Some(native_target_ptr) = ctx.native_target
+        {
+            let native_target = unsafe { &*native_target_ptr };
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+
+            // Bake if needed
+            if self.needs_rebake(shape, morph) {
+                let bake_uniforms = BakeUniforms {
+                    shape: shape.clamp(0.0, 4.0),
+                    morph: morph.clamp(0.0, 1.0),
+                    vol_res: VOL_SIZE as f32,
+                    _pad0: 0.0,
+                };
+                let vol_gpu = unsafe {
+                    crate::gpu_encoder::extract_native_texture(&self.volume_texture)
+                };
+                native_enc.dispatch_compute(
+                    native_bake,
+                    &[
+                        manifold_gpu::GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&bake_uniforms),
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 1,
+                            texture: &vol_gpu,
+                        },
+                    ],
+                    [VOL_SIZE.div_ceil(32), VOL_SIZE.div_ceil(32), VOL_SIZE.div_ceil(32)],
+                    "ParametricSurface Bake",
+                );
+                self.last_shape = shape;
+                self.last_morph = morph;
+            }
+
+            // Raymarch
+            let rm_uniforms = RaymarchUniforms {
+                time_val: ctx.time * speed,
+                speed,
+                aspect_ratio: ctx.aspect,
+                uv_scale,
+            };
+            let vol_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(&self.volume_texture)
+            };
+            native_enc.dispatch_compute(
+                native_rm,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&rm_uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: &vol_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3,
+                        texture: native_target,
+                    },
+                ],
+                [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+                "ParametricSurface Raymarch",
+            );
+            return ctx.anim_progress;
+        }
 
         // Compute bake pass — only when shape or morph change (static per shape/morph)
         if self.needs_rebake(shape, morph) {

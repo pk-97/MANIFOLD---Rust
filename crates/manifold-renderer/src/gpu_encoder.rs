@@ -152,3 +152,31 @@ pub unsafe fn extract_native_texture(
     )
 }
 
+/// Extract the native Metal buffer from a wgpu::Buffer for native Metal dispatch.
+///
+/// Uses wgpu's `as_hal()` for resource extraction only (NOT for encoding).
+/// The returned GpuBuffer holds a retained reference to the underlying Metal
+/// buffer. Safe as long as the wgpu Buffer is alive.
+///
+/// # Safety
+/// The Buffer must be backed by the Metal backend.
+/// Relies on wgpu-hal 28's `metal::Buffer` struct layout: `{ raw: metal::Buffer, size: u64 }`.
+#[cfg(target_os = "macos")]
+pub unsafe fn extract_native_buffer(
+    buffer: &wgpu::Buffer,
+) -> manifold_gpu::GpuBuffer {
+    type MetalApi = wgpu::hal::api::Metal;
+    let guard = unsafe {
+        buffer.as_hal::<MetalApi>()
+            .expect("Buffer not Metal")
+    };
+    // wgpu-hal metal::Buffer has private `raw: metal::Buffer` as first field.
+    // metal::Buffer is a foreign_type wrapping *mut MTLBuffer (ObjC id pointer).
+    // Read the ObjC id pointer at offset 0, then retain via BufferRef::to_owned().
+    let hal_buf_ptr = &*guard as *const _ as *const *mut std::ffi::c_void;
+    let mtl_id = unsafe { *hal_buf_ptr };
+    let buf_ref: &metal::BufferRef = unsafe { &*(mtl_id as *const _) };
+    let raw_buf = buf_ref.to_owned();
+    manifold_gpu::GpuBuffer::from_raw(raw_buf, buffer.size())
+}
+

@@ -374,6 +374,33 @@ pub struct FluidSimulation3DGenerator {
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_sampler_display: Option<crate::hal_context::MetalSampler>,
 
+    // Native Metal pipelines for zero-wgpu content hot path
+    #[cfg(target_os = "macos")]
+    native_splat_3d_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_resolve_3d_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_blur_scalar_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_blur_vector_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_gradient_curl_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_simulate_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    #[allow(dead_code)] // infrastructure for future native seed dispatch
+    native_seed_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_splat_projected_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_resolve_display_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_display_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_sampler: Option<manifold_gpu::GpuSampler>,
+    #[cfg(target_os = "macos")]
+    native_blur_sampler: Option<manifold_gpu::GpuSampler>,
+
     // GPU resources (lazy-init, released on vol_res change)
     particle_buffer:   Option<wgpu::Buffer>,
     accum_3d:          Option<wgpu::Buffer>,
@@ -454,6 +481,7 @@ impl FluidSimulation3DGenerator {
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
         // Sampler for 3D textures (linear clamp — matches Unity filterMode=Bilinear, wrapMode=Clamp)
@@ -760,6 +788,78 @@ impl FluidSimulation3DGenerator {
             (None, None)
         };
 
+        // ── Native Metal pipelines for zero-wgpu content hot path ──
+        #[cfg(target_os = "macos")]
+        let (
+            native_splat_3d_pipeline,
+            native_resolve_3d_pipeline,
+            native_blur_scalar_pipeline,
+            native_blur_vector_pipeline,
+            native_gradient_curl_pipeline,
+            native_simulate_pipeline,
+            native_seed_pipeline,
+            native_splat_projected_pipeline,
+            native_resolve_display_pipeline,
+            native_display_pipeline,
+            native_sampler,
+            native_blur_sampler,
+        ) = if let Some(nd) = native_device {
+            let ns3 = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_scatter_3d.wgsl"),
+                "splat_3d", "FluidSim3D Splat3D Native",
+            );
+            let nr3 = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_scatter_3d.wgsl"),
+                "resolve_3d", "FluidSim3D Resolve3D Native",
+            );
+            let nbs = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_blur_3d.wgsl"),
+                "blur_scalar", "FluidSim3D BlurScalar Native",
+            );
+            let nbv = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_blur_3d.wgsl"),
+                "blur_vector", "FluidSim3D BlurVector Native",
+            );
+            let ngc = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_gradient_curl_3d.wgsl"),
+                "main", "FluidSim3D GradientCurl3D Native",
+            );
+            let nsim = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_simulate_3d.wgsl"),
+                "main", "FluidSim3D Simulate3D Native",
+            );
+            let nseed = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_simulate_3d.wgsl"),
+                "seed_pattern", "FluidSim3D SeedPattern Native",
+            );
+            let nsp = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_scatter_3d.wgsl"),
+                "splat_projected", "FluidSim3D SplatProjected Native",
+            );
+            let nrd = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_scatter_3d.wgsl"),
+                "resolve_display", "FluidSim3D ResolveDisplay Native",
+            );
+            let ndisp = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_display_compute.wgsl"),
+                "cs_main", "FluidSim3D Display Native",
+            );
+            let ns = nd.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
+            let nbs_samp = nd.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                address_mode_u: manifold_gpu::GpuAddressMode::Repeat,
+                address_mode_v: manifold_gpu::GpuAddressMode::Repeat,
+                address_mode_w: manifold_gpu::GpuAddressMode::Repeat,
+                ..Default::default()
+            });
+            (
+                Some(ns3), Some(nr3), Some(nbs), Some(nbv), Some(ngc),
+                Some(nsim), Some(nseed), Some(nsp), Some(nrd), Some(ndisp),
+                Some(ns), Some(nbs_samp),
+            )
+        } else {
+            (None, None, None, None, None, None, None, None, None, None, None, None)
+        };
+
         // ── Uniform buffers ──
         let splat_3d_uniform_buf         = create_uniform_buffer(device, std::mem::size_of::<Splat3DUniforms>(), "FluidSim3D Splat3D Uniforms");
         let resolve_3d_uniform_buf       = create_uniform_buffer(device, std::mem::size_of::<Resolve3DUniforms>(), "FluidSim3D Resolve3D Uniforms");
@@ -802,6 +902,30 @@ impl FluidSimulation3DGenerator {
             hal_display_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_sampler_display,
+            #[cfg(target_os = "macos")]
+            native_splat_3d_pipeline,
+            #[cfg(target_os = "macos")]
+            native_resolve_3d_pipeline,
+            #[cfg(target_os = "macos")]
+            native_blur_scalar_pipeline,
+            #[cfg(target_os = "macos")]
+            native_blur_vector_pipeline,
+            #[cfg(target_os = "macos")]
+            native_gradient_curl_pipeline,
+            #[cfg(target_os = "macos")]
+            native_simulate_pipeline,
+            #[cfg(target_os = "macos")]
+            native_seed_pipeline,
+            #[cfg(target_os = "macos")]
+            native_splat_projected_pipeline,
+            #[cfg(target_os = "macos")]
+            native_resolve_display_pipeline,
+            #[cfg(target_os = "macos")]
+            native_display_pipeline,
+            #[cfg(target_os = "macos")]
+            native_sampler,
+            #[cfg(target_os = "macos")]
+            native_blur_sampler,
             particle_buffer:      None,
             accum_3d:             None,
             display_accum:        None,
@@ -1225,6 +1349,472 @@ impl Generator for FluidSimulation3DGenerator {
 
         // Ortho when no container (Unity line 613)
         let ortho: u32 = if container_type == 0 { 1 } else { 0 };
+
+        // ── NATIVE METAL full dispatch path ────────────────────────────
+        #[cfg(target_os = "macos")]
+        if gpu.has_native_encoder()
+            && let Some(native_target_ptr) = ctx.native_target
+            && self.native_splat_3d_pipeline.is_some()
+            && self.native_resolve_3d_pipeline.is_some()
+            && self.native_simulate_pipeline.is_some()
+            && self.native_display_pipeline.is_some()
+            && self.native_sampler.is_some()
+        {
+            let native_target = unsafe { &*native_target_ptr };
+
+            // Extract all GPU resources
+            let particle_buffer = self.particle_buffer.as_ref().unwrap();
+            let particle_gpu = unsafe {
+                crate::gpu_encoder::extract_native_buffer(particle_buffer)
+            };
+
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            let native_splat3d = self.native_splat_3d_pipeline.as_ref().unwrap();
+            let native_resolve3d = self.native_resolve_3d_pipeline.as_ref().unwrap();
+            let native_blur_s = self.native_blur_scalar_pipeline.as_ref().unwrap();
+            let native_blur_v = self.native_blur_vector_pipeline.as_ref().unwrap();
+            let native_gc = self.native_gradient_curl_pipeline.as_ref().unwrap();
+            let native_sim = self.native_simulate_pipeline.as_ref().unwrap();
+            let native_sp = self.native_splat_projected_pipeline.as_ref().unwrap();
+            let native_rd = self.native_resolve_display_pipeline.as_ref().unwrap();
+            let native_disp = self.native_display_pipeline.as_ref().unwrap();
+            let native_samp = self.native_sampler.as_ref().unwrap();
+            let native_blur_samp = self.native_blur_sampler.as_ref().unwrap();
+
+            // STEP 1-4: Volume pipeline (alternate frames)
+            if update_volume {
+                let accum_3d = self.accum_3d.as_ref().unwrap();
+                let density_vol = self.density_volume.as_ref().unwrap();
+                let density_temp = self.density_blur_temp.as_ref().unwrap();
+                let vector_vol = self.vector_volume.as_ref().unwrap();
+                let vector_temp = self.vector_blur_temp.as_ref().unwrap();
+
+                let accum_gpu = unsafe {
+                    crate::gpu_encoder::extract_native_buffer(accum_3d)
+                };
+                let density_vol_gpu = unsafe {
+                    crate::gpu_encoder::extract_native_texture(
+                        &density_vol._texture,
+                    )
+                };
+                let density_temp_gpu = unsafe {
+                    crate::gpu_encoder::extract_native_texture(
+                        &density_temp._texture,
+                    )
+                };
+                let vector_vol_gpu = unsafe {
+                    crate::gpu_encoder::extract_native_texture(
+                        &vector_vol._texture,
+                    )
+                };
+                let vector_temp_gpu = unsafe {
+                    crate::gpu_encoder::extract_native_texture(
+                        &vector_temp._texture,
+                    )
+                };
+
+                let wg3d = vol_res.div_ceil(BAKE_GROUP_SIZE);
+
+                // Pass 1a: Splat 3D
+                let splat_uni = Splat3DUniforms {
+                    active_count, vol_res, vol_depth: vol_res,
+                    scaled_energy: scaled_energy_3d,
+                    _pad: [0; 24],
+                };
+                native_enc.dispatch_compute(
+                    native_splat3d,
+                    &[
+                        manifold_gpu::GpuBinding::Buffer {
+                            binding: 0, buffer: &particle_gpu, offset: 0,
+                        },
+                        manifold_gpu::GpuBinding::Buffer {
+                            binding: 1, buffer: &accum_gpu, offset: 0,
+                        },
+                        manifold_gpu::GpuBinding::Bytes {
+                            binding: 2,
+                            data: bytemuck::bytes_of(&splat_uni),
+                        },
+                    ],
+                    [active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1],
+                    "FluidSim3D Splat3D",
+                );
+
+                // Pass 1b: Resolve 3D
+                let resolve_uni = Resolve3DUniforms {
+                    vol_res, vol_depth: vol_res,
+                    _pad0: 0, _pad1: 0, _pad: [0; 24],
+                };
+                native_enc.dispatch_compute(
+                    native_resolve3d,
+                    &[
+                        manifold_gpu::GpuBinding::Buffer {
+                            binding: 0, buffer: &accum_gpu, offset: 0,
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 1, texture: &density_vol_gpu,
+                        },
+                        manifold_gpu::GpuBinding::Bytes {
+                            binding: 2,
+                            data: bytemuck::bytes_of(&resolve_uni),
+                        },
+                    ],
+                    [wg3d, wg3d, wg3d],
+                    "FluidSim3D Resolve3D",
+                );
+
+                // Pass 2: Blur Density (X, Y, Z)
+                let wg_blur = vol_res.div_ceil(4);
+                // X: density -> density_temp
+                let blur_x = Blur3DUniforms {
+                    vol_res, axis: 0, radius: scaled_radius as f32, _pad: 0,
+                };
+                native_enc.dispatch_compute(
+                    native_blur_s,
+                    &[
+                        manifold_gpu::GpuBinding::Bytes {
+                            binding: 0, data: bytemuck::bytes_of(&blur_x),
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 1, texture: &density_vol_gpu,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 2, sampler: native_blur_samp,
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 3, texture: &density_temp_gpu,
+                        },
+                    ],
+                    [wg_blur, wg_blur, wg_blur],
+                    "FluidSim3D BlurScalar X",
+                );
+                // Y: density_temp -> density_vol
+                let blur_y = Blur3DUniforms {
+                    vol_res, axis: 1, radius: scaled_radius as f32, _pad: 0,
+                };
+                native_enc.dispatch_compute(
+                    native_blur_s,
+                    &[
+                        manifold_gpu::GpuBinding::Bytes {
+                            binding: 0, data: bytemuck::bytes_of(&blur_y),
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 1, texture: &density_temp_gpu,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 2, sampler: native_blur_samp,
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 3, texture: &density_vol_gpu,
+                        },
+                    ],
+                    [wg_blur, wg_blur, wg_blur],
+                    "FluidSim3D BlurScalar Y",
+                );
+                if vol_res >= 8 {
+                    // Z: density_vol -> density_temp (result in temp)
+                    let blur_z = Blur3DUniforms {
+                        vol_res, axis: 2,
+                        radius: scaled_radius as f32, _pad: 0,
+                    };
+                    native_enc.dispatch_compute(
+                        native_blur_s,
+                        &[
+                            manifold_gpu::GpuBinding::Bytes {
+                                binding: 0,
+                                data: bytemuck::bytes_of(&blur_z),
+                            },
+                            manifold_gpu::GpuBinding::Texture {
+                                binding: 1, texture: &density_vol_gpu,
+                            },
+                            manifold_gpu::GpuBinding::Sampler {
+                                binding: 2, sampler: native_blur_samp,
+                            },
+                            manifold_gpu::GpuBinding::Texture {
+                                binding: 3, texture: &density_temp_gpu,
+                            },
+                        ],
+                        [wg_blur, wg_blur, wg_blur],
+                        "FluidSim3D BlurScalar Z",
+                    );
+                }
+
+                // Pass 3: GradientCurl
+                let blurred_density_tex = if vol_res >= 8 {
+                    &density_temp_gpu
+                } else {
+                    &density_vol_gpu
+                };
+                let gc_uni = GradientCurl3DUniforms {
+                    vol_res, vol_depth: vol_res,
+                    _pad0: 0, _pad1: 0,
+                    curl_strength, slope_strength,
+                    ref_axis_x: ref_axis[0],
+                    ref_axis_y: ref_axis[1],
+                    ref_axis_z: ref_axis[2],
+                    _pad2: 0.0, _pad3: 0.0, _pad4: 0.0,
+                };
+                native_enc.dispatch_compute(
+                    native_gc,
+                    &[
+                        manifold_gpu::GpuBinding::Bytes {
+                            binding: 0,
+                            data: bytemuck::bytes_of(&gc_uni),
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 1, texture: blurred_density_tex,
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 2, texture: &vector_vol_gpu,
+                        },
+                    ],
+                    [wg3d, wg3d, wg3d],
+                    "FluidSim3D GradientCurl3D",
+                );
+
+                // Pass 4: Blur Vector Field (X, Y, Z)
+                // X: vector_vol -> vector_temp
+                native_enc.dispatch_compute(
+                    native_blur_v,
+                    &[
+                        manifold_gpu::GpuBinding::Bytes {
+                            binding: 0, data: bytemuck::bytes_of(&blur_x),
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 1, texture: &vector_vol_gpu,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 2, sampler: native_blur_samp,
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 3, texture: &vector_temp_gpu,
+                        },
+                    ],
+                    [wg_blur, wg_blur, wg_blur],
+                    "FluidSim3D BlurVector X",
+                );
+                // Y: vector_temp -> vector_vol
+                native_enc.dispatch_compute(
+                    native_blur_v,
+                    &[
+                        manifold_gpu::GpuBinding::Bytes {
+                            binding: 0, data: bytemuck::bytes_of(&blur_y),
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 1, texture: &vector_temp_gpu,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 2, sampler: native_blur_samp,
+                        },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 3, texture: &vector_vol_gpu,
+                        },
+                    ],
+                    [wg_blur, wg_blur, wg_blur],
+                    "FluidSim3D BlurVector Y",
+                );
+                if vol_res >= 8 {
+                    let blur_z = Blur3DUniforms {
+                        vol_res, axis: 2,
+                        radius: scaled_radius as f32, _pad: 0,
+                    };
+                    native_enc.dispatch_compute(
+                        native_blur_v,
+                        &[
+                            manifold_gpu::GpuBinding::Bytes {
+                                binding: 0,
+                                data: bytemuck::bytes_of(&blur_z),
+                            },
+                            manifold_gpu::GpuBinding::Texture {
+                                binding: 1, texture: &vector_vol_gpu,
+                            },
+                            manifold_gpu::GpuBinding::Sampler {
+                                binding: 2, sampler: native_blur_samp,
+                            },
+                            manifold_gpu::GpuBinding::Texture {
+                                binding: 3, texture: &vector_temp_gpu,
+                            },
+                        ],
+                        [wg_blur, wg_blur, wg_blur],
+                        "FluidSim3D BlurVector Z",
+                    );
+                }
+            }
+
+            // STEP 5: Simulate
+            let vector_field_tex = if vol_res >= 8 {
+                unsafe {
+                    crate::gpu_encoder::extract_native_texture(
+                        &self.vector_blur_temp.as_ref().unwrap()._texture,
+                    )
+                }
+            } else {
+                unsafe {
+                    crate::gpu_encoder::extract_native_texture(
+                        &self.vector_volume.as_ref().unwrap()._texture,
+                    )
+                }
+            };
+            let density_tex = if vol_res >= 8 {
+                unsafe {
+                    crate::gpu_encoder::extract_native_texture(
+                        &self.density_blur_temp.as_ref().unwrap()._texture,
+                    )
+                }
+            } else {
+                unsafe {
+                    crate::gpu_encoder::extract_native_texture(
+                        &self.density_volume.as_ref().unwrap()._texture,
+                    )
+                }
+            };
+
+            let sim_uni = Sim3DUniforms {
+                active_count,
+                frame_count: self.frame_count,
+                use_vector_field: 1,
+                container: container_type,
+                ctr_scale, speed, turbulence, anti_clump, wander,
+                respawn_rate: respawn,
+                dense_respawn, flatten,
+                cam_fwd_x: cam_fwd_sim[0],
+                cam_fwd_y: cam_fwd_sim[1],
+                cam_fwd_z: cam_fwd_sim[2],
+                color_mode,
+                inject_index: self.inject_zone_index,
+                inject_force: inject_force_val,
+                inject_phase,
+                time2: ctx.time,
+                _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
+            };
+            native_enc.dispatch_compute(
+                native_sim,
+                &[
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 0, buffer: &particle_gpu, offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1, texture: &vector_field_tex,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2, sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3, texture: &density_tex,
+                    },
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 4,
+                        data: bytemuck::bytes_of(&sim_uni),
+                    },
+                ],
+                [active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1],
+                "FluidSim3D Simulate",
+            );
+
+            // STEP 6: Projected scatter
+            let display_accum = self.display_accum.as_ref().unwrap();
+            let display_density_rt = self.display_density_rt.as_ref().unwrap();
+            let display_accum_gpu = unsafe {
+                crate::gpu_encoder::extract_native_buffer(display_accum)
+            };
+            let display_density_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(
+                    &display_density_rt.texture,
+                )
+            };
+
+            // Pass 6a: Splat Projected
+            let proj_uni = ProjectedUniforms {
+                active_count,
+                disp_w: dw, disp_h: dh, ortho,
+                scaled_energy: scaled_energy_proj,
+                _pad0: 0, _pad1: 0, _pad2: 0,
+                cam_pos_x: cam_pos[0], cam_pos_y: cam_pos[1],
+                cam_pos_z: cam_pos[2], _pad3: 0.0,
+                cam_fwd_x: cam_fwd[0], cam_fwd_y: cam_fwd[1],
+                cam_fwd_z: cam_fwd[2], _pad4: 0.0,
+                cam_right_x: cam_right[0], cam_right_y: cam_right[1],
+                cam_right_z: cam_right[2], _pad5: 0.0,
+                cam_up_x: cam_up[0], cam_up_y: cam_up[1],
+                cam_up_z: cam_up[2], _pad6: 0.0,
+                aspect: ctx.aspect,
+                _pad7: 0.0, _pad8: 0.0, _pad9: 0.0,
+            };
+            native_enc.dispatch_compute(
+                native_sp,
+                &[
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 0, buffer: &particle_gpu, offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 1, buffer: &display_accum_gpu, offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 2,
+                        data: bytemuck::bytes_of(&proj_uni),
+                    },
+                ],
+                [active_count.div_ceil(THREAD_GROUP_SIZE), 1, 1],
+                "FluidSim3D SplatProjected",
+            );
+
+            // Pass 6b: Resolve Display
+            let resolve_disp_uni = Resolve3DUniforms {
+                vol_res: dw, vol_depth: dh,
+                _pad0: 0, _pad1: 0, _pad: [0; 24],
+            };
+            native_enc.dispatch_compute(
+                native_rd,
+                &[
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 0, buffer: &display_accum_gpu, offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1, texture: &display_density_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 2,
+                        data: bytemuck::bytes_of(&resolve_disp_uni),
+                    },
+                ],
+                [dw.div_ceil(16), dh.div_ceil(16), 1],
+                "FluidSim3D ResolveDisplay",
+            );
+
+            // STEP 7: Display
+            let area_scale =
+                (dw as f32 * dh as f32) / SCATTER_REFERENCE_AREA;
+            let intensity = 3.0 * area_scale;
+            let display_uni = DisplayUniforms {
+                intensity, contrast, invert,
+                uv_scale: 1.0,
+                color_mode: color_mode as f32,
+                color_bright,
+                _pad0: 0.0, _pad1: 0.0,
+            };
+            native_enc.dispatch_compute(
+                native_disp,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&display_uni),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1, texture: &display_density_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2, sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3, texture: native_target,
+                    },
+                ],
+                [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+                "FluidSim3D Display",
+            );
+
+            self.frame_count += 1;
+            return ctx.anim_progress;
+        }
 
         // ════════════════════════════════════════════════════════════════
         // STEP 1+2+3+4: Volume pipeline (alternate frames + snap force)

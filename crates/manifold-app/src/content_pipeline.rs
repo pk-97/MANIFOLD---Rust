@@ -1191,13 +1191,10 @@ impl ContentPipeline {
                 // This uses wgpu's as_hal() for resource extraction only
                 // (NOT for encoding). The actual copy goes through native Metal.
                 type MetalApi = wgpu::hal::api::Metal;
-                // Use pre-tonemap output: tonemap isn't migrated to native yet,
-                // so output_texture() (tonemap output) is empty.
-                // pre_tonemap_texture() is the main compositor buffer written
-                // by the native blend passes.
+                // Tonemap is now native — copy from the tonemapped output.
                 let src_raw = {
                     let g = unsafe {
-                        self.compositor.pre_tonemap_texture().as_hal::<MetalApi>()
+                        self.compositor.output_texture().as_hal::<MetalApi>()
                     }
                     .expect("compositor output not Metal");
                     unsafe { (*g).raw_handle().to_owned() }

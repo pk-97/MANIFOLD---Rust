@@ -65,6 +65,8 @@ pub struct ConcentricTunnelGenerator {
     uniform_buffer: wgpu::Buffer,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_pipeline: Option<manifold_gpu::GpuComputePipeline>,
 }
 
 impl ConcentricTunnelGenerator {
@@ -72,6 +74,7 @@ impl ConcentricTunnelGenerator {
         device: &wgpu::Device,
         _target_format: wgpu::TextureFormat,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
 
@@ -142,12 +145,19 @@ impl ConcentricTunnelGenerator {
             )
         });
 
+        #[cfg(target_os = "macos")]
+        let native_pipeline = native_device.map(|dev| {
+            dev.create_compute_pipeline(shader_source, "cs_main", "ConcentricTunnel Native")
+        });
+
         Self {
             pipeline,
             bind_group_layout,
             uniform_buffer,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_pipeline,
+            #[cfg(target_os = "macos")]
+            native_pipeline,
         }
     }
 }
@@ -211,6 +221,32 @@ impl Generator for ConcentricTunnelGenerator {
             trigger_count: ctx.trigger_count as f32,
             _pad: [0.0; 3],
         };
+
+        // ── NATIVE METAL dispatch path ─────────────────────────────────
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_pipe) = self.native_pipeline
+            && gpu.has_native_encoder()
+            && let Some(native_target_ptr) = ctx.native_target
+        {
+            let native_target = unsafe { &*native_target_ptr };
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            native_enc.dispatch_compute(
+                native_pipe,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: native_target,
+                    },
+                ],
+                [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+                "ConcentricTunnel Compute",
+            );
+            return ctx.anim_progress;
+        }
 
         // ── HAL dispatch path ──────────────────────────────────────────
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]

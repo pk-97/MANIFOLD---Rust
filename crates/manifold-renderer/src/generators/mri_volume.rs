@@ -99,6 +99,11 @@ pub struct MriVolumeGenerator {
     hal_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_sampler: Option<crate::hal_context::MetalSampler>,
+    // Native Metal pipeline
+    #[cfg(target_os = "macos")]
+    native_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_sampler: Option<manifold_gpu::GpuSampler>,
     // Current slice texture (R8Unorm 2D)
     slice_texture: Option<wgpu::Texture>,
     slice_view: Option<wgpu::TextureView>,
@@ -116,6 +121,7 @@ impl MriVolumeGenerator {
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
 
@@ -380,6 +386,19 @@ impl MriVolumeGenerator {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        let (native_pipeline, native_sampler) = if let Some(nd) = native_device {
+            let np = nd.create_compute_pipeline(
+                include_str!("shaders/mri_slice_compute.wgsl"),
+                "cs_main",
+                "MRI Slice Native",
+            );
+            let ns = nd.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
+            (Some(np), Some(ns))
+        } else {
+            (None, None)
+        };
+
         Self {
             slice_pipeline,
             slice_bgl,
@@ -393,6 +412,10 @@ impl MriVolumeGenerator {
             hal_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_sampler,
+            #[cfg(target_os = "macos")]
+            native_pipeline,
+            #[cfg(target_os = "macos")]
+            native_sampler,
             slice_texture: None,
             slice_view: None,
             current_tex_dims: (0, 0),
@@ -610,6 +633,45 @@ impl Generator for MriVolumeGenerator {
             tex_width: self.current_tex_dims.0 as f32,
             tex_height: self.current_tex_dims.1 as f32,
         };
+
+        // ── NATIVE METAL dispatch path ─────────────────────────────────
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_pipe) = self.native_pipeline
+            && let Some(ref native_samp) = self.native_sampler
+            && gpu.has_native_encoder()
+            && let Some(native_target_ptr) = ctx.native_target
+            && let Some(ref slice_tex) = self.slice_texture
+        {
+            let native_target = unsafe { &*native_target_ptr };
+            let slice_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(slice_tex)
+            };
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            native_enc.dispatch_compute(
+                native_pipe,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: &slice_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3,
+                        texture: native_target,
+                    },
+                ],
+                [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+                "MRI Slice Compute",
+            );
+            return ctx.anim_progress;
+        }
 
         // ── HAL dispatch path ──────────────────────────────────────────
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]

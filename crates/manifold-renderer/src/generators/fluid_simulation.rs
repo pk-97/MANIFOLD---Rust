@@ -220,6 +220,25 @@ pub struct FluidSimulationGenerator {
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_sampler: Option<crate::hal_context::MetalSampler>,
 
+    // Native Metal pipelines for zero-wgpu content hot path
+    #[cfg(target_os = "macos")]
+    native_splat_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_resolve_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    #[allow(dead_code)] // infrastructure for future native seed dispatch
+    native_seed_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_simulate_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_blur_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_gradient_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_display_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_sampler: Option<manifold_gpu::GpuSampler>,
+
     // GPU resources (lazy-init)
     particle_buffer: Option<wgpu::Buffer>,
     scatter_accum: Option<wgpu::Buffer>,
@@ -268,6 +287,7 @@ impl FluidSimulationGenerator {
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -788,6 +808,67 @@ impl FluidSimulationGenerator {
                 (None, None, None, None)
             };
 
+        // ── Native Metal pipelines for zero-wgpu content hot path ──
+        #[cfg(target_os = "macos")]
+        let (
+            native_splat_pipeline,
+            native_resolve_pipeline,
+            native_seed_pipeline,
+            native_simulate_pipeline,
+            native_blur_pipeline,
+            native_gradient_pipeline,
+            native_display_pipeline,
+            native_sampler,
+        ) = if let Some(nd) = native_device {
+            let nsplat = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_scatter.wgsl"),
+                "splat_main",
+                "FluidSim Splat Native",
+            );
+            let nresolve = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_scatter.wgsl"),
+                "resolve_main",
+                "FluidSim Resolve Native",
+            );
+            let nseed = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_seed.wgsl"),
+                "main",
+                "FluidSim Seed Native",
+            );
+            let nsim = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_simulate.wgsl"),
+                "main",
+                "FluidSim Simulate Native",
+            );
+            let nblur = nd.create_compute_pipeline(
+                include_str!("shaders/gaussian_blur_compute.wgsl"),
+                "cs_main",
+                "FluidSim Blur Native",
+            );
+            let ngrad = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_gradient_rotate_compute.wgsl"),
+                "cs_main",
+                "FluidSim Gradient Native",
+            );
+            let ndisp = nd.create_compute_pipeline(
+                include_str!("shaders/fluid_display_compute.wgsl"),
+                "cs_main",
+                "FluidSim Display Native",
+            );
+            let ns = nd.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                address_mode_u: manifold_gpu::GpuAddressMode::Repeat,
+                address_mode_v: manifold_gpu::GpuAddressMode::Repeat,
+                address_mode_w: manifold_gpu::GpuAddressMode::Repeat,
+                ..Default::default()
+            });
+            (
+                Some(nsplat), Some(nresolve), Some(nseed), Some(nsim),
+                Some(nblur), Some(ngrad), Some(ndisp), Some(ns),
+            )
+        } else {
+            (None, None, None, None, None, None, None, None)
+        };
+
         // ── Uniform buffers ──
         let splat_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<SplatUniforms>(), "FluidSim Splat Uniforms");
         let resolve_uniform_buf = create_uniform_buffer(device, std::mem::size_of::<ResolveUniforms>(), "FluidSim Resolve Uniforms");
@@ -835,6 +916,22 @@ impl FluidSimulationGenerator {
             hal_display_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_sampler,
+            #[cfg(target_os = "macos")]
+            native_splat_pipeline,
+            #[cfg(target_os = "macos")]
+            native_resolve_pipeline,
+            #[cfg(target_os = "macos")]
+            native_seed_pipeline,
+            #[cfg(target_os = "macos")]
+            native_simulate_pipeline,
+            #[cfg(target_os = "macos")]
+            native_blur_pipeline,
+            #[cfg(target_os = "macos")]
+            native_gradient_pipeline,
+            #[cfg(target_os = "macos")]
+            native_display_pipeline,
+            #[cfg(target_os = "macos")]
+            native_sampler,
             particle_buffer: None,
             scatter_accum: None,
             density_rt: None,
@@ -1327,6 +1424,373 @@ impl Generator for FluidSimulationGenerator {
         // Unity: energy = 0.005 * splatSize/3 * (1_000_000/activeCount)
         let energy = 0.005 * splat_size / 3.0 * (1_000_000.0 / active_count as f32);
         let scaled_energy = (energy * 4096.0 + 0.5) as u32;
+
+        // ── NATIVE METAL full dispatch path ────────────────────────────
+        #[cfg(target_os = "macos")]
+        if gpu.has_native_encoder()
+            && let Some(native_target_ptr) = ctx.native_target
+            && self.native_splat_pipeline.is_some()
+            && self.native_resolve_pipeline.is_some()
+            && self.native_simulate_pipeline.is_some()
+            && self.native_blur_pipeline.is_some()
+            && self.native_gradient_pipeline.is_some()
+            && self.native_display_pipeline.is_some()
+            && self.native_sampler.is_some()
+        {
+            // Clear scatter accum via wgpu encoder before native dispatch
+            let scatter_accum = self.scatter_accum.as_ref().unwrap();
+            gpu.encoder.clear_buffer(scatter_accum, 0, None);
+
+            let native_target = unsafe { &*native_target_ptr };
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            let native_splat = self.native_splat_pipeline.as_ref().unwrap();
+            let native_resolve = self.native_resolve_pipeline.as_ref().unwrap();
+            let native_sim = self.native_simulate_pipeline.as_ref().unwrap();
+            let native_blur = self.native_blur_pipeline.as_ref().unwrap();
+            let native_grad = self.native_gradient_pipeline.as_ref().unwrap();
+            let native_disp = self.native_display_pipeline.as_ref().unwrap();
+            let native_samp = self.native_sampler.as_ref().unwrap();
+
+            let particle_buffer = self.particle_buffer.as_ref().unwrap();
+            let scatter_accum = self.scatter_accum.as_ref().unwrap();
+            let density_rt = self.density_rt.as_ref().unwrap();
+            let blur_density_rt = self.blur_density_rt.as_ref().unwrap();
+            let vector_field_rt = self.vector_field_rt.as_ref().unwrap();
+            let blur_temp_rt = self.blur_temp_rt.as_ref().unwrap();
+
+            let particle_gpu = unsafe {
+                crate::gpu_encoder::extract_native_buffer(particle_buffer)
+            };
+            let accum_gpu = unsafe {
+                crate::gpu_encoder::extract_native_buffer(scatter_accum)
+            };
+            let density_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(&density_rt.texture)
+            };
+            let blur_density_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(
+                    &blur_density_rt.texture,
+                )
+            };
+            let vector_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(
+                    &vector_field_rt.texture,
+                )
+            };
+            let blur_temp_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(
+                    &blur_temp_rt.texture,
+                )
+            };
+
+            // PHASE 1: Scatter
+            let splat_uniforms = SplatUniforms {
+                active_count,
+                width: sw,
+                height: sh,
+                scaled_energy,
+                color_mode: color_mode as u32,
+                _pad0: 0, _pad1: 0, _pad2: 0,
+            };
+            native_enc.dispatch_compute(
+                native_splat,
+                &[
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 0, buffer: &particle_gpu, offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 1, buffer: &accum_gpu, offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 2,
+                        data: bytemuck::bytes_of(&splat_uniforms),
+                    },
+                ],
+                [active_count.div_ceil(256), 1, 1],
+                "FluidSim Splat",
+            );
+
+            // Resolve
+            let resolve_uniforms = ResolveUniforms {
+                width: sw, height: sh,
+                _pad0: 0, _pad1: 0, _pad2: 0, _pad3: 0, _pad4: 0, _pad5: 0,
+            };
+            native_enc.dispatch_compute(
+                native_resolve,
+                &[
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 0, buffer: &accum_gpu, offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1, texture: &density_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 2,
+                        data: bytemuck::bytes_of(&resolve_uniforms),
+                    },
+                ],
+                [sw.div_ceil(16), sh.div_ceil(16), 1],
+                "FluidSim Resolve",
+            );
+
+            // PHASE 2: Vector Field
+            let base_blur_radius = blur_radius_param.round() as i32;
+            let res_scale = bw as f32 / 640.0;
+            let scaled_radius =
+                (base_blur_radius as f32 * res_scale).round().max(1.0);
+            let blur_texel_x = 1.0 / bw as f32;
+            let blur_texel_y = 1.0 / bh as f32;
+
+            // Downsample: density -> blur_density (radius=0)
+            let blur0 = BlurUniforms {
+                direction: [0.0, 0.0],
+                radius: 0.0,
+                texel_x: blur_texel_x,
+                texel_y: blur_texel_y,
+                _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
+            };
+            native_enc.dispatch_compute(
+                native_blur,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0, data: bytemuck::bytes_of(&blur0),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1, texture: &density_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2, sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3, texture: &blur_density_gpu,
+                    },
+                ],
+                [bw.div_ceil(16), bh.div_ceil(16), 1],
+                "FluidSim Blur Downsample",
+            );
+
+            // H blur: blur_density -> blur_temp
+            let blur_h = BlurUniforms {
+                direction: [1.0, 0.0],
+                radius: scaled_radius,
+                texel_x: blur_texel_x,
+                texel_y: blur_texel_y,
+                _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
+            };
+            native_enc.dispatch_compute(
+                native_blur,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0, data: bytemuck::bytes_of(&blur_h),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1, texture: &blur_density_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2, sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3, texture: &blur_temp_gpu,
+                    },
+                ],
+                [bw.div_ceil(16), bh.div_ceil(16), 1],
+                "FluidSim Blur H",
+            );
+
+            // V blur: blur_temp -> blur_density
+            let blur_v = BlurUniforms {
+                direction: [0.0, 1.0],
+                radius: scaled_radius,
+                texel_x: blur_texel_x,
+                texel_y: blur_texel_y,
+                _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
+            };
+            native_enc.dispatch_compute(
+                native_blur,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0, data: bytemuck::bytes_of(&blur_v),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1, texture: &blur_temp_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2, sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3, texture: &blur_density_gpu,
+                    },
+                ],
+                [bw.div_ceil(16), bh.div_ceil(16), 1],
+                "FluidSim Blur V",
+            );
+
+            // Gradient + Rotate
+            let density_area_scale =
+                (sw as f32 * sh as f32) / SCATTER_REFERENCE_AREA;
+            let rot_rad =
+                rotation_deg_snap * std::f32::consts::PI / 180.0;
+            let gradient_uniforms = GradientUniforms {
+                texel_x: blur_texel_x,
+                texel_y: blur_texel_y,
+                slope_strength: slope_snap * density_area_scale,
+                rot_cos: rot_rad.cos(),
+                rot_sin: rot_rad.sin(),
+                _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
+            };
+            native_enc.dispatch_compute(
+                native_grad,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&gradient_uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1, texture: &blur_density_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 2, texture: &vector_gpu,
+                    },
+                ],
+                [bw.div_ceil(16), bh.div_ceil(16), 1],
+                "FluidSim GradientRotate",
+            );
+
+            // Blur vector field H: vector -> blur_temp
+            native_enc.dispatch_compute(
+                native_blur,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0, data: bytemuck::bytes_of(&blur_h),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1, texture: &vector_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2, sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3, texture: &blur_temp_gpu,
+                    },
+                ],
+                [bw.div_ceil(16), bh.div_ceil(16), 1],
+                "FluidSim Blur Vector H",
+            );
+
+            // Blur vector field V: blur_temp -> vector
+            native_enc.dispatch_compute(
+                native_blur,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0, data: bytemuck::bytes_of(&blur_v),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1, texture: &blur_temp_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2, sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3, texture: &vector_gpu,
+                    },
+                ],
+                [bw.div_ceil(16), bh.div_ceil(16), 1],
+                "FluidSim Blur Vector V",
+            );
+
+            // PHASE 3: Simulate
+            let sim_uniforms = SimUniforms {
+                active_count,
+                field_width: bw,
+                field_height: bh,
+                speed,
+                noise_amplitude,
+                density_noise_gain: density_noise,
+                diffusion,
+                refresh_rate: refresh,
+                density_refresh_scale: density_refresh,
+                color_mode: color_mode as u32,
+                frame_count: self.frame_count,
+                inject_point_x: if self.inject_active {
+                    self.inject_point[0]
+                } else {
+                    0.0
+                },
+                inject_point_y: if self.inject_active {
+                    self.inject_point[1]
+                } else {
+                    0.0
+                },
+                inject_force: active_inject_force,
+                inject_phase,
+                time_val: ctx.time,
+                inject_color_index: self.inject_color_counter + 1,
+                _pad0: 0, _pad1: 0, _pad2: 0,
+            };
+            native_enc.dispatch_compute(
+                native_sim,
+                &[
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 0, buffer: &particle_gpu, offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1, texture: &vector_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2, sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3, texture: &blur_density_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 4, sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 5,
+                        data: bytemuck::bytes_of(&sim_uniforms),
+                    },
+                ],
+                [active_count.div_ceil(256), 1, 1],
+                "FluidSim Simulate",
+            );
+
+            // PHASE 4: Display
+            let area_scale =
+                (sw as f32 * sh as f32) / SCATTER_REFERENCE_AREA;
+            let intensity = 3.0 * area_scale;
+            let display_uniforms = DisplayUniforms {
+                intensity,
+                contrast,
+                invert,
+                uv_scale: scale,
+                color_mode: color_mode as f32,
+                color_bright,
+                _pad0: 0.0, _pad1: 0.0,
+            };
+            native_enc.dispatch_compute(
+                native_disp,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&display_uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1, texture: &density_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2, sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3, texture: native_target,
+                    },
+                ],
+                [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+                "FluidSim Display",
+            );
+
+            self.frame_count += 1;
+            return ctx.anim_progress;
+        }
 
         // ================================================================
         // PHASE 1: Scatter — splat particles into accumulator

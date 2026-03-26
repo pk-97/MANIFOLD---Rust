@@ -149,6 +149,18 @@ pub struct MyceliumGenerator {
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_sampler: Option<crate::hal_context::MetalSampler>,
 
+    // Native Metal pipelines for zero-wgpu content hot path
+    #[cfg(target_os = "macos")]
+    native_agent_update_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_resolve_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_diffuse_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_display_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_sampler: Option<manifold_gpu::GpuSampler>,
+
     // GPU resources (lazy-init on first render)
     agent_buffer: Option<wgpu::Buffer>,
     accum_buffer: Option<wgpu::Buffer>,
@@ -176,6 +188,7 @@ impl MyceliumGenerator {
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -610,6 +623,46 @@ impl MyceliumGenerator {
             (None, None)
         };
 
+        // ── Native Metal pipelines for zero-wgpu content hot path ──
+        #[cfg(target_os = "macos")]
+        let (
+            native_agent_update_pipeline,
+            native_resolve_pipeline,
+            native_diffuse_pipeline,
+            native_display_pipeline,
+            native_sampler,
+        ) = if let Some(nd) = native_device {
+            let nau = nd.create_compute_pipeline(
+                include_str!("shaders/mycelium_agent_update.wgsl"),
+                "main",
+                "Mycelium AgentUpdate Native",
+            );
+            let nre = nd.create_compute_pipeline(
+                include_str!("shaders/mycelium_resolve.wgsl"),
+                "main",
+                "Mycelium Resolve Native",
+            );
+            let ndi = nd.create_compute_pipeline(
+                include_str!("shaders/mycelium_diffuse_compute.wgsl"),
+                "cs_main",
+                "Mycelium Diffuse Native",
+            );
+            let nds = nd.create_compute_pipeline(
+                include_str!("shaders/mycelium_display_compute.wgsl"),
+                "cs_main",
+                "Mycelium Display Native",
+            );
+            let ns = nd.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                address_mode_u: manifold_gpu::GpuAddressMode::Repeat,
+                address_mode_v: manifold_gpu::GpuAddressMode::Repeat,
+                address_mode_w: manifold_gpu::GpuAddressMode::Repeat,
+                ..Default::default()
+            });
+            (Some(nau), Some(nre), Some(ndi), Some(nds), Some(ns))
+        } else {
+            (None, None, None, None, None)
+        };
+
         Self {
             agent_update_pipeline,
             agent_update_bgl,
@@ -627,6 +680,16 @@ impl MyceliumGenerator {
             hal_diffuse_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_sampler,
+            #[cfg(target_os = "macos")]
+            native_agent_update_pipeline,
+            #[cfg(target_os = "macos")]
+            native_resolve_pipeline,
+            #[cfg(target_os = "macos")]
+            native_diffuse_pipeline,
+            #[cfg(target_os = "macos")]
+            native_display_pipeline,
+            #[cfg(target_os = "macos")]
+            native_sampler,
             agent_buffer: None,
             accum_buffer: None,
             trail_a: None,
@@ -1055,6 +1118,240 @@ impl Generator for MyceliumGenerator {
         let tw = self.trail_width;
         let th = self.trail_height;
         let agent_count = self.agent_count;
+
+        // UV scale: matches Unity base class
+        let uv_scale = if scale > 0.0 { scale } else { 1.0 };
+
+        // ── NATIVE METAL full dispatch path ────────────────────────────
+        #[cfg(target_os = "macos")]
+        if gpu.has_native_encoder()
+            && let Some(native_target_ptr) = ctx.native_target
+            && self.native_agent_update_pipeline.is_some()
+            && self.native_resolve_pipeline.is_some()
+            && self.native_diffuse_pipeline.is_some()
+            && self.native_display_pipeline.is_some()
+            && self.native_sampler.is_some()
+        {
+            let native_target = unsafe { &*native_target_ptr };
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            let native_au = self.native_agent_update_pipeline.as_ref().unwrap();
+            let native_re = self.native_resolve_pipeline.as_ref().unwrap();
+            let native_di = self.native_diffuse_pipeline.as_ref().unwrap();
+            let native_ds = self.native_display_pipeline.as_ref().unwrap();
+            let native_samp = self.native_sampler.as_ref().unwrap();
+
+            let trail_a = self.trail_a.as_ref().unwrap();
+            let trail_b = self.trail_b.as_ref().unwrap();
+            let agent_buffer = self.agent_buffer.as_ref().unwrap();
+            let accum_buffer = self.accum_buffer.as_ref().unwrap();
+
+            let trail_a_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(&trail_a.texture)
+            };
+            let trail_b_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(&trail_b.texture)
+            };
+            let agent_buf_gpu = unsafe {
+                crate::gpu_encoder::extract_native_buffer(agent_buffer)
+            };
+            let accum_buf_gpu = unsafe {
+                crate::gpu_encoder::extract_native_buffer(accum_buffer)
+            };
+
+            // Pass 1: Agent Update
+            let deposit_scaled = (deposit * FIXED_POINT_SCALE * 0.01) as u32;
+            let agent_uniforms = AgentUniforms {
+                agent_count,
+                width: tw,
+                height: th,
+                sensor_dist: sens_dist,
+                sensor_angle: sens_angle,
+                rotation_angle: turn,
+                step_size: step,
+                deposit_scaled: deposit_scaled as f32,
+                frame_count: self.frame_count,
+                beat: ctx.beat,
+                reactivity,
+                _pad: 0.0,
+            };
+            native_enc.dispatch_compute(
+                native_au,
+                &[
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &agent_buf_gpu,
+                        offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: &trail_a_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: &accum_buf_gpu,
+                        offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 3,
+                        data: bytemuck::bytes_of(&agent_uniforms),
+                    },
+                ],
+                [agent_count.div_ceil(256), 1, 1],
+                "Mycelium Agent Update",
+            );
+
+            // Pass 2: Resolve — trail_a + accum -> trail_b
+            let resolve_uniforms = ResolveUniforms {
+                width: tw,
+                height: th,
+                _pad0: 0,
+                _pad1: 0,
+            };
+            native_enc.dispatch_compute(
+                native_re,
+                &[
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 0,
+                        texture: &trail_a_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: &trail_b_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: &accum_buf_gpu,
+                        offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 3,
+                        data: bytemuck::bytes_of(&resolve_uniforms),
+                    },
+                ],
+                [tw.div_ceil(16), th.div_ceil(16), 1],
+                "Mycelium Resolve",
+            );
+
+            // Pass 3: Diffuse (3 blits) — trail_b -> trail_a -> trail_b -> trail_a
+            // Pass 0: B->A with decay + evaporation
+            let diffuse0 = DiffuseUniforms {
+                decay,
+                sub_decay: 0.003,
+                texel_x: 1.0 / tw as f32,
+                texel_y: 1.0 / th as f32,
+            };
+            native_enc.dispatch_compute(
+                native_di,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&diffuse0),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: &trail_b_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3,
+                        texture: &trail_a_gpu,
+                    },
+                ],
+                [tw.div_ceil(16), th.div_ceil(16), 1],
+                "Mycelium Diffuse 0",
+            );
+            // Pass 1: A->B pure blur
+            let diffuse1 = DiffuseUniforms {
+                decay: 1.0,
+                sub_decay: 0.0,
+                texel_x: 1.0 / tw as f32,
+                texel_y: 1.0 / th as f32,
+            };
+            native_enc.dispatch_compute(
+                native_di,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&diffuse1),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: &trail_a_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3,
+                        texture: &trail_b_gpu,
+                    },
+                ],
+                [tw.div_ceil(16), th.div_ceil(16), 1],
+                "Mycelium Diffuse 1",
+            );
+            // Pass 2: B->A pure blur
+            native_enc.dispatch_compute(
+                native_di,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&diffuse1),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: &trail_b_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3,
+                        texture: &trail_a_gpu,
+                    },
+                ],
+                [tw.div_ceil(16), th.div_ceil(16), 1],
+                "Mycelium Diffuse 2",
+            );
+
+            // Pass 4: Display — trail_a has final diffused result
+            let display_uniforms = DisplayUniforms {
+                hue: color_hue,
+                glow,
+                uv_scale,
+                time: ctx.time,
+            };
+            native_enc.dispatch_compute(
+                native_ds,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&display_uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: &trail_a_gpu,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3,
+                        texture: native_target,
+                    },
+                ],
+                [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+                "Mycelium Display",
+            );
+
+            self.frame_count += 1;
+            return ctx.anim_progress;
+        }
 
         // ── Pass 1: Agent Update (compute) ──
         let deposit_scaled = (deposit * FIXED_POINT_SCALE * 0.01) as u32;

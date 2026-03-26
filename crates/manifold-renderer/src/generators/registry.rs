@@ -42,9 +42,15 @@ impl GeneratorRegistry {
                 native_device,
             )))
         } else if *gen_type == GeneratorTypeId::BASIC_SHAPES_SNAP {
-            Some(Box::new(BasicShapesSnapGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(BasicShapesSnapGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            )))
         } else if *gen_type == GeneratorTypeId::CONCENTRIC_TUNNEL {
-            Some(Box::new(ConcentricTunnelGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(ConcentricTunnelGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            )))
         } else if *gen_type == GeneratorTypeId::TESSERACT {
             Some(Box::new(TesseractGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::DUOCYLINDER {
@@ -56,15 +62,30 @@ impl GeneratorRegistry {
         } else if *gen_type == GeneratorTypeId::OSCILLOSCOPE_XY {
             Some(Box::new(OscilloscopeXYGenerator::new(device, fmt, hal_ctx)))
         } else if *gen_type == GeneratorTypeId::PARAMETRIC_SURFACE {
-            Some(Box::new(ParametricSurfaceGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(ParametricSurfaceGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            )))
         } else if *gen_type == GeneratorTypeId::MYCELIUM {
-            Some(Box::new(MyceliumGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(MyceliumGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            )))
         } else if *gen_type == GeneratorTypeId::FLUID_SIMULATION {
-            Some(Box::new(FluidSimulationGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(FluidSimulationGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            )))
         } else if *gen_type == GeneratorTypeId::FLUID_SIMULATION_3D {
-            Some(Box::new(FluidSimulation3DGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(FluidSimulation3DGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            )))
         } else if *gen_type == GeneratorTypeId::MRI_VOLUME {
-            Some(Box::new(MriVolumeGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(MriVolumeGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            )))
         } else {
             log::warn!("Generator type {:?} not yet implemented", gen_type);
             None
