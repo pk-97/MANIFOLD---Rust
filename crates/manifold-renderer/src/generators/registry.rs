@@ -5,9 +5,7 @@ use super::basic_shapes_snap::BasicShapesSnapGenerator;
 use super::concentric_tunnel::ConcentricTunnelGenerator;
 use super::duocylinder::DuocylinderGenerator;
 use super::fluid_simulation::FluidSimulationGenerator;
-// TODO: FluidSimulation3DGenerator still uses wgpu types internally.
-// Re-enable after it is migrated to manifold_gpu types.
-// use super::fluid_simulation_3d::FluidSimulation3DGenerator;
+use super::fluid_simulation_3d::FluidSimulation3DGenerator;
 use super::lissajous::LissajousGenerator;
 use super::mycelium::MyceliumGenerator;
 use super::oscilloscope_xy::OscilloscopeXYGenerator;
@@ -57,9 +55,8 @@ impl GeneratorRegistry {
             Some(Box::new(MyceliumGenerator::new(device)))
         } else if *gen_type == GeneratorTypeId::FLUID_SIMULATION {
             Some(Box::new(FluidSimulationGenerator::new(device)))
-        // TODO: Re-enable after FluidSimulation3DGenerator is migrated to manifold_gpu types.
-        // } else if *gen_type == GeneratorTypeId::FLUID_SIMULATION_3D {
-        //     Some(Box::new(FluidSimulation3DGenerator::new(device)))
+        } else if *gen_type == GeneratorTypeId::FLUID_SIMULATION_3D {
+            Some(Box::new(FluidSimulation3DGenerator::new(device)))
         } else if *gen_type == GeneratorTypeId::MRI_VOLUME {
             Some(Box::new(MriVolumeGenerator::new(device)))
         } else {

@@ -155,7 +155,7 @@ impl Generator for ParametricSurfaceGenerator {
                         texture: &self.volume_texture,
                     },
                 ],
-                [VOL_SIZE.div_ceil(32), VOL_SIZE.div_ceil(32), VOL_SIZE.div_ceil(32)],
+                [VOL_SIZE / 4, VOL_SIZE / 4, VOL_SIZE / 4],
                 "ParametricSurface Bake",
             );
             self.last_shape = shape;
