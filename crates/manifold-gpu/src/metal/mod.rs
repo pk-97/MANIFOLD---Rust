@@ -969,16 +969,25 @@ fn build_slot_map(
         .iter()
         .find(|ep| ep.name == entry_point);
 
-    // Scan entry point function for GlobalVariable references.
+    // Scan entry point AND all reachable functions for GlobalVariable references.
+    // The entry point's function body may call helper functions that reference
+    // globals (e.g. bloom_compute.wgsl: cs_main → blur13 → source_tex_b).
+    // We must include globals from called functions too, or bindings get dropped.
     let used_globals: std::collections::HashSet<naga::Handle<naga::GlobalVariable>> =
         if let Some(ep) = ep {
-            ep.function.expressions.iter().filter_map(|(_, expr)| {
-                if let naga::Expression::GlobalVariable(handle) = *expr {
-                    Some(handle)
-                } else {
-                    None
-                }
-            }).collect()
+            // First collect all functions called from the entry point (transitively).
+            let mut called_fns: std::collections::HashSet<naga::Handle<naga::Function>> =
+                std::collections::HashSet::new();
+            collect_called_functions(&ep.function, module, &mut called_fns);
+
+            // Scan entry point + all called functions for GlobalVariable refs.
+            let mut globals: std::collections::HashSet<naga::Handle<naga::GlobalVariable>> =
+                std::collections::HashSet::new();
+            collect_globals_from_function(&ep.function, &mut globals);
+            for &fn_handle in &called_fns {
+                collect_globals_from_function(&module.functions[fn_handle], &mut globals);
+            }
+            globals
         } else {
             // Fallback: include all globals if entry point not found
             module.global_variables.iter().map(|(h, _)| h).collect()
@@ -1096,6 +1105,69 @@ fn build_slot_map(
     let _ = (ep, next_buffer); // suppress unused warnings
 
     (slot_map, resources)
+}
+
+/// Collect GlobalVariable handles referenced in a function's expressions.
+fn collect_globals_from_function(
+    func: &naga::Function,
+    out: &mut std::collections::HashSet<naga::Handle<naga::GlobalVariable>>,
+) {
+    for (_, expr) in func.expressions.iter() {
+        if let naga::Expression::GlobalVariable(handle) = *expr {
+            out.insert(handle);
+        }
+    }
+}
+
+/// Recursively collect all functions called from `func` (transitive closure).
+fn collect_called_functions(
+    func: &naga::Function,
+    module: &naga::Module,
+    out: &mut std::collections::HashSet<naga::Handle<naga::Function>>,
+) {
+    for (_, expr) in func.expressions.iter() {
+        if let naga::Expression::CallResult(fn_handle) = *expr
+            && out.insert(fn_handle)
+        {
+            collect_called_functions(&module.functions[fn_handle], module, out);
+        }
+    }
+    // Also scan block statements for Call statements (not all calls have results)
+    collect_calls_from_block(&func.body, module, out);
+}
+
+/// Scan a naga Block for Call statements and collect called function handles.
+fn collect_calls_from_block(
+    block: &naga::Block,
+    module: &naga::Module,
+    out: &mut std::collections::HashSet<naga::Handle<naga::Function>>,
+) {
+    for stmt in block.iter() {
+        match *stmt {
+            naga::Statement::Call { function, .. } => {
+                if out.insert(function) {
+                    collect_called_functions(&module.functions[function], module, out);
+                }
+            }
+            naga::Statement::Block(ref inner) => {
+                collect_calls_from_block(inner, module, out);
+            }
+            naga::Statement::If { ref accept, ref reject, .. } => {
+                collect_calls_from_block(accept, module, out);
+                collect_calls_from_block(reject, module, out);
+            }
+            naga::Statement::Switch { ref cases, .. } => {
+                for case in cases {
+                    collect_calls_from_block(&case.body, module, out);
+                }
+            }
+            naga::Statement::Loop { ref body, ref continuing, .. } => {
+                collect_calls_from_block(body, module, out);
+                collect_calls_from_block(continuing, module, out);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Find an entry function in a Metal library. Tries the exact name first,
