@@ -94,18 +94,6 @@ struct ResolveUniforms {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct BlurUniforms {
-    direction: [f32; 2],
-    radius: f32,
-    texel_x: f32,
-    texel_y: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct GradientUniforms {
     texel_x: f32,
     texel_y: f32,
@@ -172,7 +160,6 @@ pub struct FluidSimulationGenerator {
     resolve_pipeline: manifold_gpu::GpuComputePipeline,
     simulate_pipeline: manifold_gpu::GpuComputePipeline,
     seed_pipeline: manifold_gpu::GpuComputePipeline,
-    blur_pipeline: manifold_gpu::GpuComputePipeline,
     gradient_pipeline: manifold_gpu::GpuComputePipeline,
     display_pipeline: manifold_gpu::GpuComputePipeline,
     sampler: manifold_gpu::GpuSampler,
@@ -228,11 +215,6 @@ impl FluidSimulationGenerator {
             "main",
             "FluidSim Simulate",
         );
-        let blur_pipeline = device.create_compute_pipeline(
-            include_str!("shaders/gaussian_blur_compute.wgsl"),
-            "cs_main",
-            "FluidSim Blur",
-        );
         let gradient_pipeline = device.create_compute_pipeline(
             include_str!("shaders/fluid_gradient_rotate_compute.wgsl"),
             "cs_main",
@@ -256,7 +238,6 @@ impl FluidSimulationGenerator {
             resolve_pipeline,
             simulate_pipeline,
             seed_pipeline,
-            blur_pipeline,
             gradient_pipeline,
             display_pipeline,
             sampler,
@@ -400,51 +381,35 @@ impl FluidSimulationGenerator {
         );
     }
 
-    fn dispatch_blur(
-        &self,
+    /// Dispatch MPS Gaussian blur (replaces separable H+V compute passes).
+    /// MPS does separable blur internally — one call replaces two dispatches.
+    /// Result lands in `temp_tex`; caller must copy back if needed.
+    fn dispatch_mps_blur(
         gpu: &mut GpuEncoder,
-        source: &manifold_gpu::GpuTexture,
-        target_tex: &manifold_gpu::GpuTexture,
-        direction: [f32; 2],
+        src: &manifold_gpu::GpuTexture,
+        temp: &manifold_gpu::GpuTexture,
+        dest: &manifold_gpu::GpuTexture,
         radius: f32,
-        texel_x: f32,
-        texel_y: f32,
-        target_w: u32,
-        target_h: u32,
-        label: &str,
     ) {
-        let uniforms = BlurUniforms {
-            direction,
-            radius,
-            texel_x,
-            texel_y,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
-        };
-        gpu.native_enc.dispatch_compute(
-            &self.blur_pipeline,
-            &[
-                manifold_gpu::GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&uniforms),
-                },
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 1,
-                    texture: source,
-                },
-                manifold_gpu::GpuBinding::Sampler {
-                    binding: 2,
-                    sampler: &self.sampler,
-                },
-                manifold_gpu::GpuBinding::Texture {
-                    binding: 3,
-                    texture: target_tex,
-                },
-            ],
-            [target_w.div_ceil(16), target_h.div_ceil(16), 1],
-            label,
-        );
+        if radius < 0.5 {
+            return;
+        }
+        // Match custom shader: sigma = max(radius / 3.0, 1.0)
+        let sigma = (radius / 3.0).max(1.0);
+        gpu.native_enc.mps_gaussian_blur(src, temp, sigma, gpu.device.raw_device());
+        // Copy result back to dest (MPS wrote to temp).
+        let w = temp.width.min(dest.width);
+        let h = temp.height.min(dest.height);
+        gpu.native_enc.copy_texture_to_texture(temp, dest, w, h, 1);
+    }
+
+    /// Bilinear downsample via MPS scale (replaces radius=0 blur dispatch).
+    fn dispatch_mps_downsample(
+        gpu: &mut GpuEncoder,
+        src: &manifold_gpu::GpuTexture,
+        dst: &manifold_gpu::GpuTexture,
+    ) {
+        gpu.native_enc.mps_bilinear_scale(src, dst, gpu.device.raw_device());
     }
 }
 
@@ -655,22 +620,13 @@ impl Generator for FluidSimulationGenerator {
         let blur_texel_x = 1.0 / bw as f32;
         let blur_texel_y = 1.0 / bh as f32;
 
-        // Downsample: density -> blur_density (radius=0)
-        self.dispatch_blur(
-            gpu, density_tex, blur_density_tex,
-            [0.0, 0.0], 0.0, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur Downsample",
-        );
+        // Downsample: density -> blur_density via MPS bilinear scale
+        Self::dispatch_mps_downsample(gpu, density_tex, blur_density_tex);
 
-        // H blur: blur_density -> blur_temp
-        self.dispatch_blur(
-            gpu, blur_density_tex, blur_temp_tex,
-            [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur H",
-        );
-
-        // V blur: blur_temp -> blur_density
-        self.dispatch_blur(
-            gpu, blur_temp_tex, blur_density_tex,
-            [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur V",
+        // Gaussian blur density field: MPS replaces separable H+V compute passes.
+        // blur_density → blur_temp → blur_density (single MPS call + blit copy).
+        Self::dispatch_mps_blur(
+            gpu, blur_density_tex, blur_temp_tex, blur_density_tex, scaled_radius,
         );
 
         // Gradient + Rotate
@@ -702,16 +658,10 @@ impl Generator for FluidSimulationGenerator {
             "FluidSim GradientRotate",
         );
 
-        // Blur vector field H: vector -> blur_temp
-        self.dispatch_blur(
-            gpu, vector_field_tex, blur_temp_tex,
-            [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur Vector H",
-        );
-
-        // Blur vector field V: blur_temp -> vector
-        self.dispatch_blur(
-            gpu, blur_temp_tex, vector_field_tex,
-            [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur Vector V",
+        // Gaussian blur vector field: MPS replaces separable H+V compute passes.
+        // vector_field → blur_temp → vector_field (single MPS call + blit copy).
+        Self::dispatch_mps_blur(
+            gpu, vector_field_tex, blur_temp_tex, vector_field_tex, scaled_radius,
         );
 
         // ================================================================
