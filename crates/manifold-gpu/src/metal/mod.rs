@@ -380,10 +380,11 @@ impl GpuDevice {
         }
     }
 
-    /// Create a texture pool backed by an MTLHeap.
-    /// `heap_size` is the initial heap size in bytes (256MB recommended).
-    pub fn create_texture_pool(&self, heap_size: u64) -> TexturePool {
-        TexturePool::new(self, heap_size)
+    /// Create a texture pool with frame-stamped recycling.
+    /// `frames_in_flight` is the number of frames that can be executing
+    /// concurrently on the GPU (typically 3 for triple buffering).
+    pub fn create_texture_pool(&self, frames_in_flight: u64) -> TexturePool {
+        TexturePool::new(self, frames_in_flight)
     }
 }
 
@@ -595,11 +596,19 @@ impl GpuHeap {
 
 // ─── TexturePool ──────────────────────────────────────────────────────
 
-/// Texture pool backed by MTLHeap. Recycles textures by (width, height, format).
+/// Frame-stamped texture recycling pool.
 ///
 /// Matches Unity's `RenderTexture.GetTemporary()` / `ReleaseTemporary()` pattern.
-/// Textures acquired from the pool are sub-allocated from a pre-reserved MTLHeap,
-/// avoiding per-allocation kernel calls. Released textures are cached for reuse.
+/// Textures are recycled by (width, height, format) key, but only after enough
+/// frames have passed to guarantee the GPU is done reading them.
+///
+/// **Frame-stamped lifetime:** each released texture is tagged with the frame
+/// it was released on. `acquire()` only recycles textures released at least
+/// `frames_in_flight` frames ago. This prevents inter-frame GPU aliasing —
+/// the same protection Unity/Unreal use internally.
+///
+/// After a warmup period (= frames_in_flight), allocation count drops to zero
+/// at steady state. All textures are recycled, no kernel calls.
 ///
 /// Uses interior mutability (UnsafeCell) — safe because TexturePool is only
 /// used on the content thread (single-threaded).
@@ -609,13 +618,24 @@ pub struct TexturePool {
 
 type PoolKey = (u32, u32, GpuTextureFormat);
 
+/// A released texture waiting to be recycled, tagged with the frame it was
+/// released on. Only eligible for reuse after `frames_in_flight` frames.
+struct PoolEntry {
+    texture: GpuTexture,
+    release_frame: u64,
+}
+
 struct TexturePoolInner {
-    available: std::collections::HashMap<PoolKey, Vec<GpuTexture>>,
-    heap: GpuHeap,
-    /// Owned clone of the Metal device for fallback allocation when heap is full.
+    available: std::collections::HashMap<PoolKey, Vec<PoolEntry>>,
+    /// Owned clone of the Metal device for allocation.
     /// metal::Device is a refcounted ObjC object — clone is just a retain.
-    fallback_device: metal::Device,
-    /// New allocations (heap or device fallback).
+    device: metal::Device,
+    /// Current frame number, incremented by begin_frame().
+    current_frame: u64,
+    /// Number of frames that can execute concurrently on the GPU.
+    /// Textures are only recycled after this many frames have passed.
+    frames_in_flight: u64,
+    /// New allocations via device.create_texture().
     stats_allocated: u64,
     /// Textures recycled from pool (avoided allocation).
     stats_recycled: u64,
@@ -626,50 +646,60 @@ unsafe impl Send for TexturePool {}
 unsafe impl Sync for TexturePool {}
 
 impl TexturePool {
-    /// Create a new texture pool with the given heap size.
-    /// `heap_size` in bytes — 256MB is a good starting point.
-    pub fn new(device: &GpuDevice, heap_size: u64) -> Self {
-        let heap = device.create_heap(heap_size, GpuStorageMode::Private);
-        // Clone the Metal device (ObjC retain) for fallback allocation.
-        // This avoids storing a raw pointer that could dangle after the
-        // GpuDevice moves (e.g. into ContentPipeline's Option field).
-        let fallback_device = device.raw_device().to_owned();
+    /// Create a new texture pool with frame-stamped recycling.
+    /// `frames_in_flight` = max concurrent GPU frames (typically 3).
+    pub fn new(device: &GpuDevice, frames_in_flight: u64) -> Self {
+        let mtl_device = device.raw_device().to_owned();
         log::info!(
-            "TexturePool: created {}MB MTLHeap (private storage)",
-            heap_size / (1024 * 1024),
+            "TexturePool: frame-stamped recycling, {} frames in flight",
+            frames_in_flight,
         );
         Self {
             inner: std::cell::UnsafeCell::new(TexturePoolInner {
                 available: std::collections::HashMap::new(),
-                heap,
-                fallback_device,
+                device: mtl_device,
+                current_frame: 0,
+                frames_in_flight,
                 stats_allocated: 0,
                 stats_recycled: 0,
             }),
         }
     }
 
-    /// Acquire a texture from the pool, recycling if a matching one is available.
-    /// Falls back to heap sub-allocation, then device allocation if heap is full.
+    /// Mark the start of a new frame. Must be called once per frame before
+    /// any acquire/release calls. Drives the frame-stamp recycling clock.
+    pub fn begin_frame(&self) {
+        let inner = unsafe { &mut *self.inner.get() };
+        inner.current_frame += 1;
+    }
+
+    /// Acquire a texture, recycling one if a safe match is available.
+    /// Only recycles textures released >= `frames_in_flight` frames ago,
+    /// guaranteeing the GPU has finished reading them.
+    /// Falls back to `device.create_texture()` if no safe match exists.
     pub fn acquire(
         &self,
         width: u32,
         height: u32,
         format: GpuTextureFormat,
         usage: GpuTextureUsage,
-        label: &str,
+        _label: &str,
     ) -> GpuTexture {
         let inner = unsafe { &mut *self.inner.get() };
         let key = (width, height, format);
 
-        // Try recycled texture first (zero allocation cost).
+        // Try to recycle a texture that's old enough to be safe.
         if let Some(vec) = inner.available.get_mut(&key)
-            && let Some(tex) = vec.pop()
+            && let Some(idx) = vec.iter().position(|entry| {
+                inner.current_frame.saturating_sub(entry.release_frame)
+                    >= inner.frames_in_flight
+            })
         {
             inner.stats_recycled += 1;
-            return tex;
+            return vec.swap_remove(idx).texture;
         }
 
+        // No safe recycled texture — allocate fresh via device.
         inner.stats_allocated += 1;
         let desc = GpuTextureDesc {
             width,
@@ -678,33 +708,29 @@ impl TexturePool {
             format,
             dimension: GpuTextureDimension::D2,
             usage,
-            label,
+            label: _label,
         };
-
-        // Try heap sub-allocation (no kernel call).
-        if let Some(tex) = inner.heap.new_texture(&desc) {
-            return tex;
-        }
-
-        // Heap full — fall back to device allocation (kernel call).
         let mtl_desc = GpuDevice::build_mtl_texture_desc(&desc);
-        let raw = inner.fallback_device.new_texture(&mtl_desc);
+        let raw = inner.device.new_texture(&mtl_desc);
         GpuTexture {
             raw,
-            width: desc.width,
-            height: desc.height,
-            depth: desc.depth,
-            format: desc.format,
+            width,
+            height,
+            depth: 1,
+            format,
         }
     }
 
     /// Return a texture to the pool for future reuse.
-    /// The texture is NOT freed — it stays in the heap/device memory and will
-    /// be returned by the next `acquire()` with matching dimensions and format.
+    /// Tagged with the current frame — won't be recycled until
+    /// `frames_in_flight` frames have passed.
     pub fn release(&self, texture: GpuTexture) {
         let inner = unsafe { &mut *self.inner.get() };
         let key = (texture.width, texture.height, texture.format);
-        inner.available.entry(key).or_default().push(texture);
+        inner.available.entry(key).or_default().push(PoolEntry {
+            texture,
+            release_frame: inner.current_frame,
+        });
     }
 
     /// Release all cached textures. Call on resolution change or shutdown.
@@ -725,16 +751,10 @@ impl TexturePool {
         inner.available.values().map(|v| v.len()).sum()
     }
 
-    /// Heap utilization: (used_bytes, total_bytes).
-    pub fn heap_usage(&self) -> (u64, u64) {
+    /// Current frame number.
+    pub fn current_frame(&self) -> u64 {
         let inner = unsafe { &*self.inner.get() };
-        (inner.heap.used_size(), inner.heap.size())
-    }
-
-    /// Reset per-frame statistics. Called at the start of each frame.
-    pub fn clear_frame_stats(&self) {
-        // Currently a no-op — stats are cumulative.
-        // Can be extended for per-frame tracking if needed.
+        inner.current_frame
     }
 }
 

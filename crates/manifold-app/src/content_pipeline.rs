@@ -157,8 +157,8 @@ impl ContentPipeline {
     pub fn init_native_gpu(&mut self) {
         let device = manifold_gpu::GpuDevice::new();
         let event = device.create_event();
-        // 256MB heap — typical project uses ~100-200MB of transient textures.
-        let pool = device.create_texture_pool(256 * 1024 * 1024);
+        // 3 frames in flight (triple buffering).
+        let pool = device.create_texture_pool(3);
         self.native_device = Some(device);
         self.native_event = Some(event);
         self.texture_pool = Some(pool);
@@ -170,7 +170,8 @@ impl ContentPipeline {
     #[cfg(target_os = "macos")]
     pub fn set_native_gpu(&mut self, device: manifold_gpu::GpuDevice) {
         let event = device.create_event();
-        let pool = device.create_texture_pool(256 * 1024 * 1024);
+        // 3 frames in flight (triple buffering).
+        let pool = device.create_texture_pool(3);
         self.native_device = Some(device);
         self.native_event = Some(event);
         self.texture_pool = Some(pool);
@@ -282,12 +283,7 @@ impl ContentPipeline {
         _poll_ms: f64,
     ) {
         let native_device = self.native_device.as_ref().unwrap();
-        // Pool disabled — heap-allocated textures cause GPU corruption.
-        // Root cause: MTLHeap sub-allocated textures alias memory regions
-        // when textures are dropped and re-allocated within the same heap.
-        // Proper fix requires deferred release (wait for fence before freeing
-        // heap regions) or per-frame heaps. Re-enable after implementing that.
-        let texture_pool: Option<&manifold_gpu::TexturePool> = None;
+        let texture_pool = self.texture_pool.as_ref();
 
         // Split borrow: get renderers + project from engine simultaneously.
         let (renderers, project) = engine.split_renderer_project();
@@ -297,9 +293,9 @@ impl ContentPipeline {
         let _t0 = std::time::Instant::now();
         let mut native_enc = native_device.create_encoder("Frame");
 
-        // Mark frame boundary for texture pool lifetime tracking.
+        // Advance the pool's frame counter — drives frame-stamped recycling.
         if let Some(pool) = texture_pool {
-            pool.clear_frame_stats();
+            pool.begin_frame();
         }
 
         // Generators render via native encoder (no wgpu encoder needed)
