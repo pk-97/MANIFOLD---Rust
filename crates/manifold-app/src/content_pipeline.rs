@@ -155,13 +155,18 @@ impl ContentPipeline {
     /// Called once at startup after the content pipeline is created.
     #[cfg(target_os = "macos")]
     pub fn init_native_gpu(&mut self) {
+        eprintln!("[DIAG] ContentPipeline::init_native_gpu START");
         let device = manifold_gpu::GpuDevice::new();
+        eprintln!("[DIAG] ContentPipeline::init_native_gpu device created");
         let event = device.create_event();
+        eprintln!("[DIAG] ContentPipeline::init_native_gpu event created");
         // 256MB heap — typical project uses ~100-200MB of transient textures.
         let pool = device.create_texture_pool(256 * 1024 * 1024);
+        eprintln!("[DIAG] ContentPipeline::init_native_gpu pool created");
         self.native_device = Some(device);
         self.native_event = Some(event);
         self.texture_pool = Some(pool);
+        eprintln!("[DIAG] ContentPipeline::init_native_gpu DONE");
     }
 
     /// Set a pre-created native GPU device (transfers ownership).
@@ -169,11 +174,13 @@ impl ContentPipeline {
     /// compositor native pipeline creation).
     #[cfg(target_os = "macos")]
     pub fn set_native_gpu(&mut self, device: manifold_gpu::GpuDevice) {
+        eprintln!("[DIAG] ContentPipeline::set_native_gpu START");
         let event = device.create_event();
         let pool = device.create_texture_pool(256 * 1024 * 1024);
         self.native_device = Some(device);
         self.native_event = Some(event);
         self.texture_pool = Some(pool);
+        eprintln!("[DIAG] ContentPipeline::set_native_gpu DONE");
     }
 
     /// Reference to the native GPU device (if initialized).
@@ -283,6 +290,11 @@ impl ContentPipeline {
     ) {
         let native_device = self.native_device.as_ref().unwrap();
         let texture_pool = self.texture_pool.as_ref();
+
+        if frame_count <= 3 || frame_count.is_multiple_of(60) {
+            eprintln!("[DIAG] render_content_native frame={} pool={}", frame_count,
+                if texture_pool.is_some() { "YES" } else { "NO" });
+        }
 
         // Split borrow: get renderers + project from engine simultaneously.
         let (renderers, project) = engine.split_renderer_project();
