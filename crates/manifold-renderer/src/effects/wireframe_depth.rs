@@ -2650,23 +2650,26 @@ impl PostProcessEffect for WireframeDepthFX {
         }
 
         // ── Poll GPU readback → submit to background worker(s) ──
-        // Shared-memory path checks SharedEvent; wgpu path uses map_async.
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        // Native path reads directly from shared-memory buffer.
+        // Hal path checks SharedEvent; wgpu path uses map_async.
         let readback_pixels = if let Some(state) = self.owner_states.get_mut(&owner_key)
             && state.dnn_readback_pending
         {
-            if let Some(ctx) = gpu.hal_ctx {
-                state.readback.try_read_shared(ctx)
+            // Try native shared-memory readback first
+            #[cfg(target_os = "macos")]
+            if let Some(p) = state.readback.try_read_native() {
+                Some(p)
             } else {
+                #[cfg(feature = "hal-encoding")]
+                if let Some(ctx) = gpu.hal_ctx {
+                    state.readback.try_read_shared(ctx)
+                } else {
+                    state.readback.try_read(gpu.device)
+                }
+                #[cfg(not(feature = "hal-encoding"))]
                 state.readback.try_read(gpu.device)
             }
-        } else {
-            None
-        };
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        let readback_pixels = if let Some(state) = self.owner_states.get_mut(&owner_key)
-            && state.dnn_readback_pending
-        {
+            #[cfg(not(target_os = "macos"))]
             state.readback.try_read(gpu.device)
         } else {
             None

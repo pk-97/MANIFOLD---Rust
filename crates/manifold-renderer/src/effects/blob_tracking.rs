@@ -882,7 +882,19 @@ impl BlobTrackingFX {
         // ── Phase 2: check for new pixel data from GPU readback ──
         let Some(state) = self.owner_states.get_mut(&owner_key) else { return };
 
-        // Shared-memory path: check SharedEvent, read directly from mapped ptr.
+        // Try native shared-memory readback first (zero wgpu overhead).
+        #[cfg(target_os = "macos")]
+        if let Some(p) = state.readback.try_read_native() {
+            let Some(worker) = &mut self.worker else { return };
+            worker.submit(BlobRequest {
+                pixel_buffer: p,
+                threshold: state.pending_threshold,
+                sensitivity: state.pending_sensitivity,
+            });
+            self.pending_worker_owner = Some(owner_key);
+            return;
+        }
+        // Shared-memory path (hal): check SharedEvent, read from mapped ptr.
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         let pixels = if let Some(ctx) = hal_ctx {
             match state.readback.try_read_shared(ctx) {

@@ -32,12 +32,21 @@ pub struct ReadbackRequest {
     /// when hal_ctx.is_frame_done(hal_submit_signal + 1).
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_submit_signal: u64,
+    /// Native Metal shared-memory buffer for zero-copy readback.
+    /// Created via GpuDevice::create_buffer_shared(), contents() gives
+    /// a persistent CPU pointer. Blit copy encoded on the native encoder.
+    #[cfg(target_os = "macos")]
+    native_readback_buf: Option<manifold_gpu::GpuBuffer>,
+    /// Persistent CPU pointer into the native shared-memory buffer.
+    /// Valid after wait_previous_frame() confirms GPU completion.
+    #[cfg(target_os = "macos")]
+    native_shared_ptr: Option<*const u8>,
 }
 
-// Safety: shared_mapped_ptr points to GPU shared memory (Metal
-// MTLStorageMode::Shared). Only read from the content thread after GPU
-// completion is confirmed via SharedEvent.
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+// Safety: native_shared_ptr / shared_mapped_ptr point to GPU shared memory
+// (Metal MTLStorageMode::Shared). Only read from the content thread after
+// GPU completion is confirmed via SharedEvent / wait_previous_frame().
+#[cfg(target_os = "macos")]
 unsafe impl Send for ReadbackRequest {}
 
 impl Default for ReadbackRequest {
@@ -58,6 +67,10 @@ impl ReadbackRequest {
             shared_mapped_ptr: None,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_submit_signal: 0,
+            #[cfg(target_os = "macos")]
+            native_readback_buf: None,
+            #[cfg(target_os = "macos")]
+            native_shared_ptr: None,
         }
     }
 
@@ -123,9 +136,14 @@ impl ReadbackRequest {
         }
     }
 
-    /// Submit a readback via the unified GpuEncoder (routes to native or wgpu).
-    /// Same as submit() but uses GpuEncoder's copy_texture_to_buffer method
-    /// which handles native Metal dispatch automatically.
+    /// Submit a readback via the unified GpuEncoder.
+    ///
+    /// Native Metal path: creates a shared-memory buffer via manifold_gpu,
+    /// encodes a blit copy on the native encoder, stores the mapped pointer.
+    /// Read via `try_read_native()` after GPU completion (next frame).
+    /// Zero wgpu involvement — no map_async, no Queue::submit.
+    ///
+    /// wgpu path: falls back to standard submit() with wgpu encoder.
     pub fn submit_via_gpu_encoder(
         &mut self,
         gpu: &mut crate::gpu_encoder::GpuEncoder,
@@ -133,28 +151,83 @@ impl ReadbackRequest {
         width: u32,
         height: u32,
     ) {
-        let bytes_per_row = align_to_256(width * 4);
-        let buffer_size = (bytes_per_row * height) as u64;
+        // ── Native Metal path: shared-memory readback ─────────────
+        #[cfg(target_os = "macos")]
+        if let (Some(enc_ptr), Some(dev_ptr)) = (gpu.native_enc, gpu.native_device) {
+            let bytes_per_row = align_to_256(width * 4);
+            let buffer_size = (bytes_per_row * height) as u64;
 
-        let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Readback Staging"),
-            size: buffer_size,
-            usage: wgpu::BufferUsages::COPY_DST
-                | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+            let native_dev = unsafe { &*dev_ptr };
+            let shared_buf = native_dev.create_buffer_shared(buffer_size);
+            let mapped_ptr = shared_buf.mapped_ptr()
+                .expect("shared buffer must have mapped pointer") as *const u8;
 
-        gpu.copy_texture_to_buffer(texture, &staging, width, height, bytes_per_row);
+            // Extract the source texture for native blit
+            let src_gpu = unsafe {
+                crate::gpu_encoder::extract_native_texture(texture)
+            };
+            let enc = unsafe { &mut *enc_ptr };
+            enc.copy_texture_to_buffer(
+                &src_gpu, &shared_buf, width, height, bytes_per_row,
+            );
 
-        self.staging_buffer = Some(staging);
-        self.width = width;
-        self.height = height;
-        self.pending = true;
-        self.map_rx = None;
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        {
-            self.shared_mapped_ptr = None;
+            self.native_readback_buf = Some(shared_buf);
+            self.native_shared_ptr = Some(mapped_ptr);
+            self.staging_buffer = None;
+            self.width = width;
+            self.height = height;
+            self.pending = true;
+            self.map_rx = None;
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            {
+                self.shared_mapped_ptr = None;
+            }
+            return;
         }
+
+        // ── wgpu fallback ─────────────────────────────────────────
+        let encoder = gpu.encoder.as_mut()
+            .expect("wgpu encoder required on non-native path");
+        self.submit(gpu.device, encoder, texture, width, height);
+    }
+
+    /// Try to read pixel data from native shared-memory buffer.
+    /// Returns Some(pixels) if the readback was submitted via the native path
+    /// and the GPU has completed (guaranteed by wait_previous_frame on the
+    /// next frame). Returns None if not pending or not a native readback.
+    #[cfg(target_os = "macos")]
+    pub fn try_read_native(&mut self) -> Option<Vec<u8>> {
+        if !self.pending {
+            return None;
+        }
+        let ptr = self.native_shared_ptr?;
+
+        // GPU work is complete — wait_previous_frame() in the content pipeline
+        // spins on MTLSharedEvent before any new frame encoding. By the time
+        // this is called (during the next frame's apply()), the blit is done.
+        let bytes_per_row = align_to_256(self.width * 4) as usize;
+        let row_bytes = (self.width * 4) as usize;
+
+        let mut out = vec![0u8; row_bytes * self.height as usize];
+        for row in 0..self.height as usize {
+            let src_start = row * bytes_per_row;
+            let dst_start = row * row_bytes;
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    ptr.add(src_start),
+                    out[dst_start..dst_start + row_bytes].as_mut_ptr(),
+                    row_bytes,
+                );
+            }
+        }
+
+        // Clean up
+        self.native_readback_buf = None;
+        self.native_shared_ptr = None;
+        self.map_rx = None;
+        self.pending = false;
+
+        Some(out)
     }
 
     /// Shared-memory readback: creates a shared-memory staging buffer,
