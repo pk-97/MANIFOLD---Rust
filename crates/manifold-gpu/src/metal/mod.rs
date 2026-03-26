@@ -321,15 +321,11 @@ impl GpuDevice {
         size: u64,
         storage_mode: GpuStorageMode,
     ) -> GpuHeap {
-        eprintln!("[DIAG] GpuDevice::create_heap size={}MB mode={:?}", size / (1024*1024), storage_mode);
         let desc = metal::HeapDescriptor::new();
         desc.set_size(size as _);
         desc.set_storage_mode(to_mtl_storage_mode(storage_mode));
-        eprintln!("[DIAG] GpuDevice::create_heap calling device.new_heap...");
         let heap = self.device.new_heap(&desc);
-        eprintln!("[DIAG] GpuDevice::create_heap got heap, size={}", heap.size());
         heap.set_label("MANIFOLD TexturePool Heap");
-        eprintln!("[DIAG] GpuDevice::create_heap done");
         GpuHeap { heap }
     }
 
@@ -572,11 +568,7 @@ impl GpuHeap {
         let mtl_desc = GpuDevice::build_mtl_texture_desc(desc);
         // Override storage mode to match heap's storage mode.
         mtl_desc.set_storage_mode(self.heap.storage_mode());
-        eprintln!("[DIAG] GpuHeap::new_texture {}x{} {:?} calling heap.new_texture...",
-            desc.width, desc.height, desc.format);
-        let result = self.heap.new_texture(&mtl_desc);
-        eprintln!("[DIAG] GpuHeap::new_texture result={}", if result.is_some() { "OK" } else { "NONE (heap full)" });
-        result.map(|raw| GpuTexture {
+        self.heap.new_texture(&mtl_desc).map(|raw| GpuTexture {
             raw,
             width: desc.width,
             height: desc.height,
@@ -637,18 +629,16 @@ impl TexturePool {
     /// Create a new texture pool with the given heap size.
     /// `heap_size` in bytes — 256MB is a good starting point.
     pub fn new(device: &GpuDevice, heap_size: u64) -> Self {
-        eprintln!("[DIAG] TexturePool::new heap_size={}MB", heap_size / (1024 * 1024));
         let heap = device.create_heap(heap_size, GpuStorageMode::Private);
         // Clone the Metal device (ObjC retain) for fallback allocation.
         // This avoids storing a raw pointer that could dangle after the
         // GpuDevice moves (e.g. into ContentPipeline's Option field).
         let fallback_device = device.raw_device().to_owned();
-        eprintln!("[DIAG] TexturePool::new heap created, fallback device cloned");
         log::info!(
             "TexturePool: created {}MB MTLHeap (private storage)",
             heap_size / (1024 * 1024),
         );
-        let pool = Self {
+        Self {
             inner: std::cell::UnsafeCell::new(TexturePoolInner {
                 available: std::collections::HashMap::new(),
                 heap,
@@ -656,9 +646,7 @@ impl TexturePool {
                 stats_allocated: 0,
                 stats_recycled: 0,
             }),
-        };
-        eprintln!("[DIAG] TexturePool::new done");
-        pool
+        }
     }
 
     /// Acquire a texture from the pool, recycling if a matching one is available.
@@ -679,7 +667,6 @@ impl TexturePool {
             && let Some(tex) = vec.pop()
         {
             inner.stats_recycled += 1;
-            eprintln!("[DIAG] TexturePool::acquire RECYCLED {}x{} {:?} '{}'", width, height, format, label);
             return tex;
         }
 
@@ -695,16 +682,11 @@ impl TexturePool {
         };
 
         // Try heap sub-allocation (no kernel call).
-        eprintln!("[DIAG] TexturePool::acquire HEAP-ALLOC {}x{} {:?} '{}' (heap used={}KB/{}KB)",
-            width, height, format, label,
-            inner.heap.used_size() / 1024, inner.heap.size() / 1024);
         if let Some(tex) = inner.heap.new_texture(&desc) {
-            eprintln!("[DIAG] TexturePool::acquire heap alloc OK");
             return tex;
         }
 
         // Heap full — fall back to device allocation (kernel call).
-        eprintln!("[DIAG] TexturePool::acquire HEAP FULL, falling back to device alloc");
         let mtl_desc = GpuDevice::build_mtl_texture_desc(&desc);
         let raw = inner.fallback_device.new_texture(&mtl_desc);
         GpuTexture {
