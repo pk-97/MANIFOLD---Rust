@@ -1218,6 +1218,13 @@ impl Compositor for LayerCompositor {
         }
 
         // Flush all accumulated blend uniforms to the GPU in a single write.
+        // Skip on native path — blend_pass uses GpuBinding::Bytes (inline
+        // set_bytes) so the arena buffer is never read by GPU dispatches.
+        #[cfg(target_os = "macos")]
+        if !gpu.has_native_encoder() {
+            self.uniform_arena.flush(gpu.device, gpu.queue);
+        }
+        #[cfg(not(target_os = "macos"))]
         self.uniform_arena.flush(gpu.device, gpu.queue);
 
         &self.tonemap.output.view
