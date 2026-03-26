@@ -546,8 +546,11 @@ impl GpuEncoder {
         for binding in bindings {
             match binding {
                 GpuBinding::Buffer { binding: b, buffer, offset } => {
-                    let slot = pipeline.slot_map.get(*b)
-                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    // Skip bindings not used by this entry point. Metal ignores
+                    // unused argument slots, so this is safe. Multi-entry-point
+                    // shaders have per-entry slot maps that may exclude globals
+                    // not referenced by the specific entry point.
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     enc.set_buffer(
                         slot.metal_index as _,
                         Some(&buffer.raw),
@@ -562,18 +565,15 @@ impl GpuEncoder {
                     buffer_sizes[idx] = buffer.size as u32;
                 }
                 GpuBinding::Texture { binding: b, texture } => {
-                    let slot = pipeline.slot_map.get(*b)
-                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     enc.set_texture(slot.metal_index as _, Some(&texture.raw));
                 }
                 GpuBinding::Sampler { binding: b, sampler } => {
-                    let slot = pipeline.slot_map.get(*b)
-                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     enc.set_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
-                    let slot = pipeline.slot_map.get(*b)
-                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     enc.set_bytes(
                         slot.metal_index as _,
                         data.len() as _,
@@ -638,23 +638,19 @@ impl GpuEncoder {
         for binding in bindings {
             match binding {
                 GpuBinding::Buffer { binding: b, buffer, offset } => {
-                    let slot = pipeline.slot_map.get(*b)
-                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
                 }
                 GpuBinding::Texture { binding: b, texture } => {
-                    let slot = pipeline.slot_map.get(*b)
-                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
                 GpuBinding::Sampler { binding: b, sampler } => {
-                    let slot = pipeline.slot_map.get(*b)
-                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
-                    let slot = pipeline.slot_map.get(*b)
-                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     enc.set_fragment_bytes(
                         slot.metal_index as _,
                         data.len() as _,
@@ -704,27 +700,23 @@ impl GpuEncoder {
         for binding in bindings {
             match binding {
                 GpuBinding::Buffer { binding: b, buffer, offset } => {
-                    let slot = pipeline.slot_map.get(*b)
-                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     // Set on both vertex and fragment stages
                     enc.set_vertex_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
                     enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
                 }
                 GpuBinding::Texture { binding: b, texture } => {
-                    let slot = pipeline.slot_map.get(*b)
-                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
                 GpuBinding::Sampler { binding: b, sampler } => {
-                    let slot = pipeline.slot_map.get(*b)
-                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
-                    let slot = pipeline.slot_map.get(*b)
-                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     enc.set_vertex_bytes(
                         slot.metal_index as _, data.len() as _,
                         data.as_ptr() as *const _,
