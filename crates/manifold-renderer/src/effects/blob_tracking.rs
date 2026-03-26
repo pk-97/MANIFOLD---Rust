@@ -8,6 +8,11 @@
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
+use manifold_gpu::{
+    GpuBinding, GpuComputePipeline, GpuDevice, GpuFilterMode, GpuSampler,
+    GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension,
+    GpuTextureFormat, GpuTextureUsage,
+};
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
@@ -99,182 +104,18 @@ struct BlobUniforms {
 
 const _: () = assert!(std::mem::size_of::<BlobUniforms>() == 544);
 
-/// BGL entries for the overlay render pipeline (shared between wgpu and hal).
-/// Bindings: 0=uniforms, 1=_MainTex, 2=sampler, 3=_FontTex, 4=point_sampler
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-const OVERLAY_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 5] = [
-    wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 1,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 2,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 3,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 4,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-        count: None,
-    },
-];
-
-/// BGL entries for the blit/downsample pipeline (shared between wgpu and hal).
-/// Bindings: 0=source texture, 1=filtering sampler
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-const BLIT_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 2] = [
-    wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 1,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    },
-];
-
-/// BGL entries for the overlay COMPUTE pipeline (hal path).
-/// Bindings: 0=uniforms, 1=_MainTex, 2=sampler, 3=_FontTex, 4=point_sampler,
-///           5=output storage texture (rgba16float, write)
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-const OVERLAY_COMPUTE_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 6] = [
-    wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 1,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 2,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 3,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 4,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 5,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::StorageTexture {
-            access: wgpu::StorageTextureAccess::WriteOnly,
-            format: wgpu::TextureFormat::Rgba16Float,
-            view_dimension: wgpu::TextureViewDimension::D2,
-        },
-        count: None,
-    },
-];
-
-/// BGL entries for the downsample COMPUTE pipeline (hal path).
-/// Bindings: 0=source texture, 1=sampler, 2=output storage texture (rgba8unorm, write)
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-const DOWNSAMPLE_COMPUTE_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 3] = [
-    wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 1,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 2,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::StorageTexture {
-            access: wgpu::StorageTextureAccess::WriteOnly,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            view_dimension: wgpu::TextureViewDimension::D2,
-        },
-        count: None,
-    },
-];
-
 // BlobTrackingFX.cs line 10 — BlobTrackingFX : IPostProcessEffect, IStatefulEffect
 pub struct BlobTrackingFX {
-    // Overlay shader pipeline (single pass — BlobTrackingEffect.shader has 1 pass)
-    pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    // Point sampler for font atlas (filterMode = FilterMode.Point)
-    point_sampler: wgpu::Sampler,
-    // Simple blit pipeline for downsample pass (Graphics.Blit to 320x180)
-    blit_pipeline: wgpu::RenderPipeline,
-    blit_bgl: wgpu::BindGroupLayout,
-    uniform_buffer: wgpu::Buffer,
+    // Compute pipeline for overlay pass (blob visualization).
+    compute_overlay: GpuComputePipeline,
+    // Compute pipeline for downsample pass (bilinear blit to readback size).
+    compute_downsample: GpuComputePipeline,
+    // Bilinear sampler for source texture.
+    sampler: GpuSampler,
+    // Point sampler for font atlas (filterMode = FilterMode.Point).
+    point_sampler: GpuSampler,
     // BlobTrackingFX.cs line 24 — fontAtlas
-    _font_atlas: wgpu::Texture,
-    font_atlas_view: wgpu::TextureView,
+    font_atlas: GpuTexture,
     // BlobTrackingFX.cs line 22 — nativeHandle (native blob detector)
     // Native processing runs on a background thread via BackgroundWorker.
     worker: Option<BackgroundWorker<BlobRequest, BlobResponse>>,
@@ -282,62 +123,19 @@ pub struct BlobTrackingFX {
     pending_worker_owner: Option<i64>,
     // BlobTrackingFX.cs line 70 — ownerStates
     owner_states: AHashMap<i64, OwnerState>,
-    // --- hal dual-path fields ---
-    /// hal render pipeline for overlay (fallback if compute unavailable).
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(dead_code)]
-    hal_overlay: Option<crate::hal_pipeline::HalRenderPipeline>,
-    /// hal render pipeline for downsample blit (fallback if compute unavailable).
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(dead_code)]
-    hal_blit: Option<crate::hal_pipeline::HalRenderPipeline>,
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_sampler: Option<crate::hal_context::MetalSampler>,
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_point_sampler: Option<crate::hal_context::MetalSampler>,
-    /// hal compute pipeline for overlay pass (eliminates TBDR tile overhead).
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_compute_overlay: Option<crate::hal_pipeline::HalComputePipeline>,
-    /// hal compute pipeline for downsample pass (eliminates TBDR tile overhead).
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_compute_downsample: Option<crate::hal_pipeline::HalComputePipeline>,
-    /// Persistent mapped pointer to shared-memory uniform buffer (hal path).
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_uniform_mapped_ptr: Option<*mut u8>,
-    /// Cached hal pointer to uniform buffer for bind groups.
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_uniform_buf_ptr: Option<*const crate::hal_context::MetalBuffer>,
-    /// Native Metal compute pipeline for overlay (blob visualization).
-    #[cfg(target_os = "macos")]
-    native_compute_overlay: Option<manifold_gpu::GpuComputePipeline>,
-    /// Native Metal compute pipeline for downsample.
-    #[cfg(target_os = "macos")]
-    native_compute_downsample: Option<manifold_gpu::GpuComputePipeline>,
-    /// Native Metal sampler (bilinear).
-    #[cfg(target_os = "macos")]
-    native_sampler: Option<manifold_gpu::GpuSampler>,
-    /// Native Metal sampler (point).
-    #[cfg(target_os = "macos")]
-    native_point_sampler: Option<manifold_gpu::GpuSampler>,
 }
 
-#[cfg(target_os = "macos")]
 unsafe impl Send for BlobTrackingFX {}
 
 impl BlobTrackingFX {
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-        #[cfg(target_os = "macos")] _native_device: Option<&manifold_gpu::GpuDevice>,
-    ) -> Self {
-        let _ = &hal_ctx;
+    pub fn new(device: &GpuDevice) -> Self {
         // BlobTrackingFX.cs line 108-117 — try to create native detector
         // Plugin is created on the worker thread (single creation, no probe).
         // try_new returns None if the plugin isn't available.
         let worker = BackgroundWorker::try_new(|| {
             use manifold_native::blob_detector::BlobDetector;
-            let detector = manifold_native::ffi::blob_ffi::FfiBlobDetector::new(MAX_BLOBS as i32)?;
+            let detector =
+                manifold_native::ffi::blob_ffi::FfiBlobDetector::new(MAX_BLOBS as i32)?;
             Some(move |req: BlobRequest| -> BlobResponse {
                 let mut blob_data = vec![0f32; MAX_BLOBS * 4];
                 let blob_count = detector.process(
@@ -352,409 +150,55 @@ impl BlobTrackingFX {
             })
         });
         if worker.is_none() {
-            log::warn!("[BlobTrackingFX] BlobDetector native plugin not found. \
-                       Build it with Assets/Plugins/BlobDetector/build.sh");
+            log::warn!(
+                "[BlobTrackingFX] BlobDetector native plugin not found. \
+                 Build it with Assets/Plugins/BlobDetector/build.sh"
+            );
         }
 
-        let format = wgpu::TextureFormat::Rgba16Float;
-
-        // ---- Overlay shader pipeline ----
-        // BlobTrackingEffect.shader: 1 pass, reads _MainTex + _FontTex
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("BlobTracking"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/fx_blob_tracking.wgsl").into(),
-            ),
-        });
-
-        // Bindings: 0=uniforms, 1=_MainTex, 2=sampler, 3=_FontTex, 4=point_sampler
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("BlobTracking BGL"),
-            entries: &[
-                // binding 0: uniforms (BlobUniforms)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // binding 1: _MainTex (source frame)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // binding 2: bilinear sampler (for _MainTex)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                // binding 3: _FontTex
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // binding 4: point sampler (for _FontTex — filterMode = Point)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
-                    count: None,
-                },
-            ],
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("BlobTracking Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            immediate_size: 0,
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("BlobTracking Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        // ---- Simple blit pipeline (for downsample pass) ----
-        // Unity: Graphics.Blit(buffer, state.downsampleRT)
-        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("BlobTracking Downsample"),
-            source: wgpu::ShaderSource::Wgsl(BLIT_SHADER.into()),
-        });
-
-        let blit_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("BlobTracking Blit BGL"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("BlobTracking Blit Layout"),
-            bind_group_layouts: &[&blit_bgl],
-            immediate_size: 0,
-        });
-
-        // Downsample RT is Rgba8Unorm (Unity: RenderTextureUtil.Create → RGBA32)
-        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("BlobTracking Blit Pipeline"),
-            layout: Some(&blit_layout),
-            vertex: wgpu::VertexState {
-                module: &blit_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &blit_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        // ---- Compute pipelines ----
+        let compute_overlay = device.create_compute_pipeline(
+            include_str!("shaders/fx_blob_tracking_compute.wgsl"),
+            "cs_main",
+            "BlobTracking Overlay",
+        );
+        let compute_downsample = device.create_compute_pipeline(
+            DOWNSAMPLE_COMPUTE_SHADER,
+            "cs_downsample",
+            "BlobTracking Downsample",
+        );
 
         // ---- Samplers ----
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("BlobTracking Bilinear"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
+        let sampler = device.create_sampler(&GpuSamplerDesc::default());
         // BlobTrackingFX.cs line 417: filterMode = FilterMode.Point
-        let point_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("BlobTracking Point"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            // wgpu 28: mipmap_filter is MipmapFilterMode, not FilterMode
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            // BlobTrackingFX.cs line 418: wrapMode = TextureWrapMode.Clamp
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            ..Default::default()
-        });
-
-        // ---- Uniform buffer (shared-memory when hal active) ----
-        let ubo_size = std::mem::size_of::<BlobUniforms>() as u64;
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let (uniform_buffer, hal_uniform_mapped_ptr, hal_uniform_buf_ptr) =
-        if let Some(ctx) = hal_ctx {
-            use wgpu::hal::Device as HalDevice;
-            let hal_buf = unsafe {
-                ctx.device()
-                    .create_buffer(&wgpu::hal::BufferDescriptor {
-                        label: Some("BlobTracking Uniforms HAL"),
-                        size: ubo_size,
-                        usage: wgpu::wgt::BufferUses::UNIFORM
-                            | wgpu::wgt::BufferUses::MAP_WRITE,
-                        memory_flags: wgpu::hal::MemoryFlags::PREFER_COHERENT,
-                    })
-                    .expect("Failed to create hal blob uniform buffer")
-            };
-            let mapping = unsafe {
-                ctx.device()
-                    .map_buffer(&hal_buf, 0..ubo_size)
-                    .expect("Failed to map hal blob uniform buffer")
-            };
-            let mapped_ptr = mapping.ptr.as_ptr();
-            let wgpu_buf = unsafe {
-                device.create_buffer_from_hal::<wgpu::hal::api::Metal>(
-                    hal_buf,
-                    &wgpu::BufferDescriptor {
-                        label: Some("BlobTracking Uniforms"),
-                        size: ubo_size,
-                        usage: wgpu::BufferUsages::UNIFORM
-                            | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    },
-                )
-            };
-            let buf_hal_ptr = {
-                let guard = unsafe { wgpu_buf.as_hal::<wgpu::hal::api::Metal>() }
-                    .expect("blob ubo not Metal");
-                let ptr: *const _ = &*guard;
-                ptr
-            };
-            (wgpu_buf, Some(mapped_ptr), Some(buf_hal_ptr))
-        } else {
-            let wgpu_buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("BlobTracking Uniforms"),
-                size: ubo_size,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            (wgpu_buf, None, None)
-        };
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("BlobTracking Uniforms"),
-            size: ubo_size,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+        let point_sampler = device.create_sampler(&GpuSamplerDesc {
+            min_filter: GpuFilterMode::Nearest,
+            mag_filter: GpuFilterMode::Nearest,
+            ..GpuSamplerDesc::default()
         });
 
         // ---- Font atlas ----
         // BlobTrackingFX.cs lines 385-442 — CreateFontAtlas()
-        let (font_atlas, font_atlas_view) = create_font_atlas(device, queue);
-
-        // --- hal pipelines ---
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let (
-            hal_overlay, hal_blit, hal_sampler, hal_point_sampler,
-            hal_compute_overlay, hal_compute_downsample,
-        ) =
-        if let Some(ctx) = hal_ctx {
-            use wgpu::hal::Device as HalDevice;
-            let overlay_pipe = crate::hal_pipeline::create_render_pipeline(
-                ctx,
-                include_str!("shaders/fx_blob_tracking.wgsl"),
-                "vs_main",
-                "fs_main",
-                &OVERLAY_BGL_ENTRIES,
-                wgpu::TextureFormat::Rgba16Float,
-                None,
-                "BlobTracking",
-            );
-            let blit_pipe = crate::hal_pipeline::create_render_pipeline(
-                ctx,
-                BLIT_SHADER,
-                "vs_main",
-                "fs_main",
-                &BLIT_BGL_ENTRIES,
-                wgpu::TextureFormat::Rgba8Unorm,
-                None,
-                "BlobTracking Blit",
-            );
-            let hal_samp = unsafe {
-                ctx.device()
-                    .create_sampler(&wgpu::hal::SamplerDescriptor {
-                        label: Some("BlobTracking Bilinear"),
-                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
-                        mag_filter: wgpu::FilterMode::Linear,
-                        min_filter: wgpu::FilterMode::Linear,
-                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-                        lod_clamp: 0.0..32.0,
-                        compare: None,
-                        anisotropy_clamp: 1,
-                        border_color: None,
-                    })
-                    .expect("Failed to create hal blob tracking bilinear sampler")
-            };
-            let hal_pt_samp = unsafe {
-                ctx.device()
-                    .create_sampler(&wgpu::hal::SamplerDescriptor {
-                        label: Some("BlobTracking Point"),
-                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
-                        mag_filter: wgpu::FilterMode::Nearest,
-                        min_filter: wgpu::FilterMode::Nearest,
-                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-                        lod_clamp: 0.0..32.0,
-                        compare: None,
-                        anisotropy_clamp: 1,
-                        border_color: None,
-                    })
-                    .expect("Failed to create hal blob tracking point sampler")
-            };
-            // Compute pipelines (eliminate TBDR tile overhead)
-            let cs_overlay = crate::hal_pipeline::create_compute_pipeline(
-                ctx,
-                include_str!("shaders/fx_blob_tracking_compute.wgsl"),
-                "cs_main",
-                &OVERLAY_COMPUTE_BGL_ENTRIES,
-                "BlobTracking Overlay CS",
-            );
-            let cs_downsample = crate::hal_pipeline::create_compute_pipeline(
-                ctx,
-                DOWNSAMPLE_COMPUTE_SHADER,
-                "cs_downsample",
-                &DOWNSAMPLE_COMPUTE_BGL_ENTRIES,
-                "BlobTracking Downsample CS",
-            );
-            (
-                Some(overlay_pipe), Some(blit_pipe),
-                Some(hal_samp), Some(hal_pt_samp),
-                Some(cs_overlay), Some(cs_downsample),
-            )
-        } else {
-            (None, None, None, None, None, None)
-        };
-
-        // --- Native Metal compute pipelines ---
-        #[cfg(target_os = "macos")]
-        let (native_compute_overlay, native_compute_downsample, native_sampler_out, native_point_sampler_out) =
-        if let Some(dev) = _native_device {
-            let cs_overlay = dev.create_compute_pipeline(
-                include_str!("shaders/fx_blob_tracking_compute.wgsl"),
-                "cs_main",
-                "BlobTracking Overlay Native",
-            );
-            let cs_downsample = dev.create_compute_pipeline(
-                DOWNSAMPLE_COMPUTE_SHADER,
-                "cs_downsample",
-                "BlobTracking Downsample Native",
-            );
-            let samp = dev.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
-            let pt_samp = dev.create_sampler(&manifold_gpu::GpuSamplerDesc {
-                min_filter: manifold_gpu::GpuFilterMode::Nearest,
-                mag_filter: manifold_gpu::GpuFilterMode::Nearest,
-                ..manifold_gpu::GpuSamplerDesc::default()
-            });
-            (Some(cs_overlay), Some(cs_downsample), Some(samp), Some(pt_samp))
-        } else {
-            (None, None, None, None)
-        };
+        let font_atlas = create_font_atlas(device);
 
         Self {
-            pipeline,
-            bind_group_layout,
+            compute_overlay,
+            compute_downsample,
             sampler,
             point_sampler,
-            blit_pipeline,
-            blit_bgl,
-            uniform_buffer,
-            _font_atlas: font_atlas,
-            font_atlas_view,
+            font_atlas,
             worker,
             pending_worker_owner: None,
             owner_states: AHashMap::new(),
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_overlay,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_blit,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_sampler,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_point_sampler,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_compute_overlay,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_compute_downsample,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_uniform_mapped_ptr,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_uniform_buf_ptr,
-            #[cfg(target_os = "macos")]
-            native_compute_overlay,
-            #[cfg(target_os = "macos")]
-            native_compute_downsample,
-            #[cfg(target_os = "macos")]
-            native_sampler: native_sampler_out,
-            #[cfg(target_os = "macos")]
-            native_point_sampler: native_point_sampler_out,
         }
     }
 
     // BlobTrackingFX.cs lines 72-95 — GetOrCreateOwner
-    fn get_or_create_owner(&mut self, device: &wgpu::Device, owner_key: i64) -> &mut OwnerState {
+    fn get_or_create_owner(
+        &mut self,
+        device: &GpuDevice,
+        owner_key: i64,
+    ) -> &mut OwnerState {
         self.owner_states.entry(owner_key).or_insert_with(|| {
             // BlobTrackingFX.cs line 78: RenderTextureUtil.Create(320, 180, name)
             // Unity creates an RGBA32 RT; we use Rgba8Unorm for readback compatibility.
@@ -762,12 +206,13 @@ impl BlobTrackingFX {
                 device,
                 READBACK_WIDTH,
                 READBACK_HEIGHT,
-                wgpu::TextureFormat::Rgba8Unorm,
+                GpuTextureFormat::Rgba8Unorm,
                 &format!("BlobAnalysis_{owner_key}"),
             );
 
             // BlobTrackingFX.cs lines 80-84
-            let pixel_buffer = vec![0u8; (READBACK_WIDTH * READBACK_HEIGHT * 4) as usize];
+            let pixel_buffer =
+                vec![0u8; (READBACK_WIDTH * READBACK_HEIGHT * 4) as usize];
             let native_blob_output = vec![0f32; MAX_BLOBS * 4];
             let blob_data_for_shader = vec![[0f32; 4]; MAX_BLOBS];
             let connection_lines = vec![[0f32; 4]; MAX_BLOBS];
@@ -794,121 +239,29 @@ impl BlobTrackingFX {
         })
     }
 
-    /// wgpu path: downsample blit + readback submit.
-    /// Takes individual fields to avoid borrow conflict with owner_states.
-    #[allow(clippy::too_many_arguments)]
-    fn blit_and_readback_wgpu(
-        blit_bgl: &wgpu::BindGroupLayout,
-        blit_pipeline: &wgpu::RenderPipeline,
-        sampler: &wgpu::Sampler,
-        gpu: &mut GpuEncoder,
-        source: &wgpu::TextureView,
-        state: &mut OwnerState,
-        threshold: f32,
-        sensitivity: f32,
-        frame: i64,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
-        ctx: &EffectContext,
-    ) {
-        let blit_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("BlobTracking Downsample BG"),
-            layout: blit_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(source),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        });
-        {
-            let ts = profiler.and_then(|p| {
-                p.render_timestamps("BlobTracking Downsample", ctx.width, ctx.height)
-            });
-            let mut pass = gpu.encoder.as_mut().unwrap().begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("BlobTracking Downsample"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &state.downsample_rt.view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: ts,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(blit_pipeline);
-            pass.set_bind_group(0, &blit_bg, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        state.readback.submit(
-            gpu.device, gpu.encoder.as_mut().unwrap(),
-            &state.downsample_rt.texture,
-            READBACK_WIDTH, READBACK_HEIGHT,
-        );
-        state.pending_threshold = threshold;
-        state.pending_sensitivity = sensitivity;
-        state.last_readback_frame = frame;
-    }
-
     // BlobTrackingFX.cs lines 184-256 — OnReadbackComplete
     // Split into two non-blocking phases:
     //   1. Poll worker for completed blob detection result
     //   2. Poll GPU readback for new pixel data → submit to worker
-    fn poll_readback(
-        &mut self,
-        device: &wgpu::Device,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-        owner_key: i64,
-    ) {
-        let _ = &hal_ctx; // suppress unused when hal-encoding off
+    fn poll_readback(&mut self, owner_key: i64) {
         // ── Phase 1: check if the background worker has a result ──
         if let Some(worker) = &mut self.worker
-            && let Some(response) = worker.try_recv() {
-                // Route result to the owner that submitted it.
-                let result_owner = self.pending_worker_owner.take().unwrap_or(owner_key);
-                if let Some(state) = self.owner_states.get_mut(&result_owner) {
-                    Self::apply_blob_response(state, &response);
-                }
+            && let Some(response) = worker.try_recv()
+        {
+            // Route result to the owner that submitted it.
+            let result_owner =
+                self.pending_worker_owner.take().unwrap_or(owner_key);
+            if let Some(state) = self.owner_states.get_mut(&result_owner) {
+                Self::apply_blob_response(state, &response);
             }
+        }
 
         // ── Phase 2: check for new pixel data from GPU readback ──
-        let Some(state) = self.owner_states.get_mut(&owner_key) else { return };
-
-        // Try native shared-memory readback first (zero wgpu overhead).
-        #[cfg(target_os = "macos")]
-        if let Some(p) = state.readback.try_read_native() {
-            let Some(worker) = &mut self.worker else { return };
-            worker.submit(BlobRequest {
-                pixel_buffer: p,
-                threshold: state.pending_threshold,
-                sensitivity: state.pending_sensitivity,
-            });
-            self.pending_worker_owner = Some(owner_key);
+        let Some(state) = self.owner_states.get_mut(&owner_key) else {
             return;
-        }
-        // Shared-memory path (hal): check SharedEvent, read from mapped ptr.
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let pixels = if let Some(ctx) = hal_ctx {
-            match state.readback.try_read_shared(ctx) {
-                Some(p) => p,
-                None => return,
-            }
-        } else {
-            match state.readback.try_read(device) {
-                Some(p) => p,
-                None => return,
-            }
         };
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        let pixels = match state.readback.try_read(device) {
+
+        let pixels = match state.readback.try_read() {
             Some(p) => p,
             None => return,
         };
@@ -929,8 +282,10 @@ impl BlobTrackingFX {
     // BlobTrackingFX.cs lines 204-252 — greedy nearest-neighbour matching
     fn apply_blob_response(state: &mut OwnerState, response: &BlobResponse) {
         // Copy raw blob output into state for matching
-        let copy_len = response.blob_data.len().min(state.native_blob_output.len());
-        state.native_blob_output[..copy_len].copy_from_slice(&response.blob_data[..copy_len]);
+        let copy_len =
+            response.blob_data.len().min(state.native_blob_output.len());
+        state.native_blob_output[..copy_len]
+            .copy_from_slice(&response.blob_data[..copy_len]);
 
         // Mark all existing tracked blobs as unmatched
         for i in 0..state.tracked_count {
@@ -951,7 +306,9 @@ impl BlobTrackingFX {
             let mut best_idx: i32 = -1;
 
             for t in 0..state.tracked_count {
-                if state.tracked[t].matched { continue; }
+                if state.tracked[t].matched {
+                    continue;
+                }
                 let ex = state.tracked[t].raw_pos[0] - dx;
                 let ey = state.tracked[t].raw_pos[1] - dy;
                 let dist_sq = ex * ex + ey * ey;
@@ -991,7 +348,8 @@ impl BlobTrackingFX {
         // Mathf.Lerp clamps t to [0,1]
         let lerp_speed = 60.0 + (2.0 - 60.0) * smoothing.clamp(0.0, 1.0);
         let pos_alpha = 1.0 - (-lerp_speed * dt).exp();
-        let size_alpha = 1.0 - (-lerp_speed * SIZE_SMOOTH_FACTOR * dt).exp();
+        let size_alpha =
+            1.0 - (-lerp_speed * SIZE_SMOOTH_FACTOR * dt).exp();
 
         // BlobTrackingFX.cs lines 268-281 — remove unmatched blobs on new detection
         if state.has_new_detection {
@@ -1013,12 +371,16 @@ impl BlobTrackingFX {
             let t = state.tracked[i];
             // Vector2.Lerp(a, b, t) = a + (b-a)*clamp(t,0,1) — but alpha is already [0,1]
             state.tracked[i].smooth_pos = [
-                t.smooth_pos[0] + (t.raw_pos[0] - t.smooth_pos[0]) * pos_alpha,
-                t.smooth_pos[1] + (t.raw_pos[1] - t.smooth_pos[1]) * pos_alpha,
+                t.smooth_pos[0]
+                    + (t.raw_pos[0] - t.smooth_pos[0]) * pos_alpha,
+                t.smooth_pos[1]
+                    + (t.raw_pos[1] - t.smooth_pos[1]) * pos_alpha,
             ];
             state.tracked[i].smooth_size = [
-                t.smooth_size[0] + (t.raw_size[0] - t.smooth_size[0]) * size_alpha,
-                t.smooth_size[1] + (t.raw_size[1] - t.smooth_size[1]) * size_alpha,
+                t.smooth_size[0]
+                    + (t.raw_size[0] - t.smooth_size[0]) * size_alpha,
+                t.smooth_size[1]
+                    + (t.raw_size[1] - t.smooth_size[1]) * size_alpha,
             ];
         }
     }
@@ -1069,7 +431,7 @@ impl BlobTrackingFX {
 
 // BlobTrackingFX.cs lines 385-442 — CreateFontAtlas()
 // 5x7 glyphs, 16 cols x 2 rows = 80x14 texture, RGBA32, Point filter, Clamp
-fn create_font_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Texture, wgpu::TextureView) {
+fn create_font_atlas(device: &GpuDevice) -> GpuTexture {
     const GW: usize = 5;
     const GH: usize = 7;
     const COLS: usize = 16;
@@ -1116,59 +478,34 @@ fn create_font_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Textu
             for col in 0..GW {
                 if col < line.len() && line.as_bytes()[col] == b'#' {
                     // BlobTrackingFX.cs line 434: new Color32(255, 255, 255, 255)
-                    pixels[tex_y * tex_w + base_x + col] = [255, 255, 255, 255];
+                    pixels[tex_y * tex_w + base_x + col] =
+                        [255, 255, 255, 255];
                 }
             }
         }
     }
 
     // BlobTrackingFX.cs line 416: new Texture2D(texW, texH, TextureFormat.RGBA32, false)
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("BlobTracking FontAtlas"),
-        size: wgpu::Extent3d {
-            width: tex_w as u32,
-            height: tex_h as u32,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        // RGBA32 → Rgba8Unorm
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
+    // RGBA32 → Rgba8Unorm. SHADER_READ + COPY_DST for upload.
+    let texture = device.create_texture(&GpuTextureDesc {
+        width: tex_w as u32,
+        height: tex_h as u32,
+        depth: 1,
+        format: GpuTextureFormat::Rgba8Unorm,
+        dimension: GpuTextureDimension::D2,
+        usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_DST,
+        label: "BlobTracking FontAtlas",
     });
 
-    // Upload pixel data
-    // wgpu 28: ImageCopyTexture → TexelCopyTextureInfo, ImageDataLayout → TexelCopyBufferLayout
+    // Upload pixel data via GpuDevice::upload_texture (Metal replace_region).
     let flat: Vec<u8> = pixels.iter().flat_map(|p| p.iter().copied()).collect();
-    queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &flat,
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some((tex_w * 4) as u32),
-            rows_per_image: None,
-        },
-        wgpu::Extent3d {
-            width: tex_w as u32,
-            height: tex_h as u32,
-            depth_or_array_layers: 1,
-        },
-    );
+    device.upload_texture(&texture, &flat);
 
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    (texture, view)
+    texture
 }
 
 // Compute variant of the downsample blit — bilinear sample, write to storage texture.
 // Eliminates TBDR tile overhead for the downsample pass.
-#[cfg(target_os = "macos")]
 const DOWNSAMPLE_COMPUTE_SHADER: &str = r#"
 @group(0) @binding(0) var source_tex: texture_2d<f32>;
 @group(0) @binding(1) var tex_sampler: sampler;
@@ -1186,39 +523,10 @@ fn cs_downsample(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 "#;
 
-// Minimal passthrough blit shader — used for the downsample pass.
-// Unity: Graphics.Blit(buffer, state.downsampleRT) — bilinear blit.
-const BLIT_SHADER: &str = r#"
-@group(0) @binding(0) var source_tex: texture_2d<f32>;
-@group(0) @binding(1) var tex_sampler: sampler;
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
-    let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-    let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-    var out: VertexOutput;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(source_tex, tex_sampler, in.uv);
-}
-"#;
-
 impl PostProcessEffect for BlobTrackingFX {
     fn effect_type(&self) -> &EffectTypeId {
         &EffectTypeId::BLOB_TRACKING
     }
-
-    fn supports_hal(&self) -> bool { true }
 
     // BlobTrackingFX.cs line 127: if (amount <= 0f || material == null) return;
     fn should_skip(&self, fx: &EffectInstance) -> bool {
@@ -1228,28 +536,28 @@ impl PostProcessEffect for BlobTrackingFX {
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,
-        source: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-        _target_texture: &wgpu::Texture,
+        source: &GpuTexture,
+        target: &GpuTexture,
         fx: &EffectInstance,
         ctx: &EffectContext,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // BlobTrackingFX.cs line 126-127
         let amount = fx.param_values.first().copied().unwrap_or(0.0);
-        if amount <= 0.0 { return; }
+        if amount <= 0.0 {
+            return;
+        }
 
         // BlobTrackingFX.cs lines 129-131
-        let threshold    = fx.param_values.get(1).copied().unwrap_or(0.65);
-        let sensitivity  = fx.param_values.get(2).copied().unwrap_or(0.85);
-        let smoothing    = fx.param_values.get(3).copied().unwrap_or(0.7);
+        let threshold = fx.param_values.get(1).copied().unwrap_or(0.65);
+        let sensitivity = fx.param_values.get(2).copied().unwrap_or(0.85);
+        let smoothing = fx.param_values.get(3).copied().unwrap_or(0.7);
         let connect_dist = fx.param_values.get(4).copied().unwrap_or(0.35);
 
         // BlobTrackingFX.cs line 133
         self.get_or_create_owner(gpu.device, ctx.owner_key);
 
         // ---- Phase 0: poll any pending readback from a previous frame ----
-        self.poll_readback(gpu.device, gpu.hal_ctx, ctx.owner_key);
+        self.poll_readback(ctx.owner_key);
 
         let state = self.owner_states.get_mut(&ctx.owner_key).unwrap();
 
@@ -1258,141 +566,41 @@ impl PostProcessEffect for BlobTrackingFX {
         if !state.readback.is_pending()
             && frame - state.last_readback_frame >= READBACK_INTERVAL_FRAMES
         {
-            // --- native Metal path for downsample ---
-            #[cfg(target_os = "macos")]
-            let mut downsample_done = false;
-            #[cfg(target_os = "macos")]
-            if let Some(ref native_ds) = self.native_compute_downsample
-                && gpu.has_native_encoder()
-            {
-                let native_samp = self.native_sampler.as_ref().unwrap();
-                let n_source = unsafe {
-                    crate::gpu_encoder::extract_native_texture_from_view(source)
-                };
-                let n_ds_target = unsafe {
-                    crate::gpu_encoder::extract_native_texture_from_view(&state.downsample_rt.view)
-                };
-                let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
-                enc.dispatch_compute(
-                    native_ds,
-                    &[
-                        manifold_gpu::GpuBinding::Texture { binding: 0, texture: &n_source },
-                        manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: native_samp },
-                        manifold_gpu::GpuBinding::Texture { binding: 2, texture: &n_ds_target },
-                    ],
-                    [READBACK_WIDTH.div_ceil(16), READBACK_HEIGHT.div_ceil(16), 1],
-                    "BlobTracking Downsample Native",
-                );
-                // Readback via native copy_texture_to_buffer
-                state.readback.submit_via_gpu_encoder(
-                    gpu,
-                    &state.downsample_rt.texture,
-                    READBACK_WIDTH, READBACK_HEIGHT,
-                );
-                state.pending_threshold = threshold;
-                state.pending_sensitivity = sensitivity;
-                state.last_readback_frame = frame;
-                downsample_done = true;
-            }
-            // --- hal path for downsample (compute dispatch) ---
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if !downsample_done && gpu.has_hal_encoder() {
-                type MetalApi = wgpu::hal::api::Metal;
-                use wgpu::hal::{self as hal, CommandEncoder as _, Device as _};
+            // Compute downsample dispatch
+            gpu.native_enc.dispatch_compute(
+                &self.compute_downsample,
+                &[
+                    GpuBinding::Texture {
+                        binding: 0,
+                        texture: source,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 1,
+                        sampler: &self.sampler,
+                    },
+                    GpuBinding::Texture {
+                        binding: 2,
+                        texture: &state.downsample_rt.texture,
+                    },
+                ],
+                [
+                    READBACK_WIDTH.div_ceil(16),
+                    READBACK_HEIGHT.div_ceil(16),
+                    1,
+                ],
+                "BlobTracking Downsample",
+            );
 
-                let source_ptr = {
-                    let g = unsafe { source.as_hal::<MetalApi>() }
-                        .expect("source not Metal");
-                    &*g as *const _
-                };
-                let ds_view_ptr = {
-                    let g = unsafe { state.downsample_rt.view.as_hal::<MetalApi>() }
-                        .expect("downsample view not Metal");
-                    &*g as *const _
-                };
-                let hal_samp = self.hal_sampler.as_ref().expect("hal sampler");
-                let hal_cs_ds = self.hal_compute_downsample.as_ref()
-                    .expect("hal compute downsample");
-                let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-
-                let bg = unsafe {
-                    hal_ctx.device().create_bind_group(&hal::BindGroupDescriptor {
-                        label: None,
-                        layout: &hal_cs_ds.bind_group_layout,
-                        entries: &[
-                            hal::BindGroupEntry {
-                                binding: 0, resource_index: 0, count: 1,
-                            },
-                            hal::BindGroupEntry {
-                                binding: 1, resource_index: 0, count: 1,
-                            },
-                            hal::BindGroupEntry {
-                                binding: 2, resource_index: 1, count: 1,
-                            },
-                        ],
-                        buffers: &[],
-                        samplers: &[hal_samp],
-                        textures: &[
-                            hal::TextureBinding {
-                                view: &*source_ptr,
-                                usage: wgpu::wgt::TextureUses::RESOURCE,
-                            },
-                            hal::TextureBinding {
-                                view: &*ds_view_ptr,
-                                usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
-                            },
-                        ],
-                        acceleration_structures: &[],
-                        external_textures: &[],
-                    }).expect("hal downsample compute bg")
-                };
-                unsafe {
-                    hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
-                        label: Some("BlobTracking Downsample"),
-                        timestamp_writes: None,
-                    });
-                    hal_enc.set_compute_pipeline(&hal_cs_ds.pipeline);
-                    hal_enc.set_bind_group(
-                        &hal_cs_ds.pipeline_layout, 0, &bg, &[],
-                    );
-                    hal_enc.dispatch([
-                        READBACK_WIDTH.div_ceil(16),
-                        READBACK_HEIGHT.div_ceil(16),
-                        1,
-                    ]);
-                    hal_enc.end_compute_pass();
-                    hal_ctx.device().destroy_bind_group(bg);
-                }
-
-                // Shared-memory readback via hal — no wgpu submit needed.
-                // GPU writes to shared-memory staging, CPU reads after
-                // SharedEvent confirms completion on a subsequent frame.
-                state.readback.submit_shared(
-                    gpu,
-                    &state.downsample_rt.texture,
-                    READBACK_WIDTH,
-                    READBACK_HEIGHT,
-                );
-                state.pending_threshold = threshold;
-                state.pending_sensitivity = sensitivity;
-                state.last_readback_frame = frame;
-            }
-
-            // --- wgpu path for downsample blit + readback ---
-            #[cfg(target_os = "macos")]
-            if !downsample_done {
-                Self::blit_and_readback_wgpu(
-                    &self.blit_bgl, &self.blit_pipeline, &self.sampler,
-                    gpu, source, state, threshold, sensitivity, frame, profiler, ctx,
-                );
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                Self::blit_and_readback_wgpu(
-                    &self.blit_bgl, &self.blit_pipeline, &self.sampler,
-                    gpu, source, state, threshold, sensitivity, frame, profiler, ctx,
-                );
-            }
+            // Readback via native copy_texture_to_buffer
+            state.readback.submit(
+                gpu,
+                &state.downsample_rt.texture,
+                READBACK_WIDTH,
+                READBACK_HEIGHT,
+            );
+            state.pending_threshold = threshold;
+            state.pending_sensitivity = sensitivity;
+            state.last_readback_frame = frame;
         }
 
         // ---- Phase 2: Per-frame temporal smoothing ----
@@ -1404,8 +612,10 @@ impl PostProcessEffect for BlobTrackingFX {
         for i in 0..state.tracked_count {
             let t = state.tracked[i];
             state.blob_data_for_shader[i] = [
-                t.smooth_pos[0], t.smooth_pos[1],
-                t.smooth_size[0], t.smooth_size[1],
+                t.smooth_pos[0],
+                t.smooth_pos[1],
+                t.smooth_size[0],
+                t.smooth_size[1],
             ];
         }
         for i in state.tracked_count..MAX_BLOBS {
@@ -1417,8 +627,10 @@ impl PostProcessEffect for BlobTrackingFX {
 
         let mut blob_center_size = [[0f32; 4]; 16];
         let mut blob_connections_arr = [[0f32; 4]; 16];
-        blob_center_size[..MAX_BLOBS].copy_from_slice(&state.blob_data_for_shader[..MAX_BLOBS]);
-        blob_connections_arr[..MAX_BLOBS].copy_from_slice(&state.connection_lines[..MAX_BLOBS]);
+        blob_center_size[..MAX_BLOBS]
+            .copy_from_slice(&state.blob_data_for_shader[..MAX_BLOBS]);
+        blob_connections_arr[..MAX_BLOBS]
+            .copy_from_slice(&state.connection_lines[..MAX_BLOBS]);
 
         let uniforms = BlobUniforms {
             amount,
@@ -1431,204 +643,39 @@ impl PostProcessEffect for BlobTrackingFX {
             blob_connections: blob_connections_arr,
         };
 
-        // --- native Metal path for overlay (compute dispatch) ---
-        #[cfg(target_os = "macos")]
-        if let Some(ref native_cs) = self.native_compute_overlay
-            && gpu.has_native_encoder()
-        {
-            let native_samp = self.native_sampler.as_ref().unwrap();
-            let native_pt = self.native_point_sampler.as_ref().unwrap();
-            let uniform_bytes = bytemuck::bytes_of(&uniforms);
-            let n_source = unsafe {
-                crate::gpu_encoder::extract_native_texture_from_view(source)
-            };
-            let n_font = unsafe {
-                crate::gpu_encoder::extract_native_texture_from_view(&self.font_atlas_view)
-            };
-            let n_target = unsafe {
-                crate::gpu_encoder::extract_native_texture_from_view(target)
-            };
-            let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
-            enc.dispatch_compute(
-                native_cs,
-                &[
-                    manifold_gpu::GpuBinding::Bytes { binding: 0, data: uniform_bytes },
-                    manifold_gpu::GpuBinding::Texture { binding: 1, texture: &n_source },
-                    manifold_gpu::GpuBinding::Sampler { binding: 2, sampler: native_samp },
-                    manifold_gpu::GpuBinding::Texture { binding: 3, texture: &n_font },
-                    manifold_gpu::GpuBinding::Sampler { binding: 4, sampler: native_pt },
-                    manifold_gpu::GpuBinding::Texture { binding: 5, texture: &n_target },
-                ],
-                [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
-                "BlobTracking Overlay Native",
-            );
-            return;
-        }
-
-        // --- hal path for overlay (compute dispatch) ---
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            type MetalApi = wgpu::hal::api::Metal;
-            use wgpu::hal::{self as hal, CommandEncoder as _, Device as _};
-
-            // Direct memcpy to shared-memory uniform buffer
-            if let Some(mapped_ptr) = self.hal_uniform_mapped_ptr {
-                let bytes = bytemuck::bytes_of(&uniforms);
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        bytes.as_ptr(),
-                        mapped_ptr,
-                        bytes.len(),
-                    );
-                }
-            }
-
-            let source_ptr = {
-                let g = unsafe { source.as_hal::<MetalApi>() }
-                    .expect("source not Metal");
-                &*g as *const _
-            };
-            let target_ptr = {
-                let g = unsafe { target.as_hal::<MetalApi>() }
-                    .expect("target not Metal");
-                &*g as *const _
-            };
-            let font_ptr = {
-                let g = unsafe { self.font_atlas_view.as_hal::<MetalApi>() }
-                    .expect("font atlas not Metal");
-                &*g as *const _
-            };
-            let ubo_ptr = self.hal_uniform_buf_ptr
-                .expect("blob hal ubo ptr");
-
-            let hal_cs_overlay = self.hal_compute_overlay.as_ref()
-                .expect("hal compute overlay");
-            let hal_samp = self.hal_sampler.as_ref().expect("hal sampler");
-            let hal_point = self.hal_point_sampler.as_ref()
-                .expect("hal point sampler");
-            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-
-            let bg = unsafe {
-                hal_ctx.device().create_bind_group(&hal::BindGroupDescriptor {
-                    label: None,
-                    layout: &hal_cs_overlay.bind_group_layout,
-                    entries: &[
-                        hal::BindGroupEntry {
-                            binding: 0, resource_index: 0, count: 1,
-                        },
-                        hal::BindGroupEntry {
-                            binding: 1, resource_index: 0, count: 1,
-                        },
-                        hal::BindGroupEntry {
-                            binding: 2, resource_index: 0, count: 1,
-                        },
-                        hal::BindGroupEntry {
-                            binding: 3, resource_index: 1, count: 1,
-                        },
-                        hal::BindGroupEntry {
-                            binding: 4, resource_index: 1, count: 1,
-                        },
-                        hal::BindGroupEntry {
-                            binding: 5, resource_index: 2, count: 1,
-                        },
-                    ],
-                    buffers: &[hal::BufferBinding::new_unchecked(
-                        &*ubo_ptr, 0,
-                        std::num::NonZero::new(
-                            std::mem::size_of::<BlobUniforms>() as u64,
-                        ),
-                    )],
-                    samplers: &[hal_samp, hal_point],
-                    textures: &[
-                        hal::TextureBinding {
-                            view: &*source_ptr,
-                            usage: wgpu::wgt::TextureUses::RESOURCE,
-                        },
-                        hal::TextureBinding {
-                            view: &*font_ptr,
-                            usage: wgpu::wgt::TextureUses::RESOURCE,
-                        },
-                        hal::TextureBinding {
-                            view: &*target_ptr,
-                            usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
-                        },
-                    ],
-                    acceleration_structures: &[],
-                    external_textures: &[],
-                }).expect("hal overlay compute bg")
-            };
-
-            unsafe {
-                hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
-                    label: Some("BlobTracking Overlay"),
-                    timestamp_writes: None,
-                });
-                hal_enc.set_compute_pipeline(&hal_cs_overlay.pipeline);
-                hal_enc.set_bind_group(
-                    &hal_cs_overlay.pipeline_layout, 0, &bg, &[],
-                );
-                hal_enc.dispatch([
-                    ctx.width.div_ceil(16),
-                    ctx.height.div_ceil(16),
-                    1,
-                ]);
-                hal_enc.end_compute_pass();
-                hal_ctx.device().destroy_bind_group(bg);
-            }
-            return;
-        }
-
-        gpu.queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-
-        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("BlobTracking BG"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
+        // Overlay compute dispatch with inline uniform bytes
+        let uniform_bytes = bytemuck::bytes_of(&uniforms);
+        gpu.native_enc.dispatch_compute(
+            &self.compute_overlay,
+            &[
+                GpuBinding::Bytes {
                     binding: 0,
-                    resource: self.uniform_buffer.as_entire_binding(),
+                    data: uniform_bytes,
                 },
-                wgpu::BindGroupEntry {
+                GpuBinding::Texture {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(source),
+                    texture: source,
                 },
-                wgpu::BindGroupEntry {
+                GpuBinding::Sampler {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    sampler: &self.sampler,
                 },
-                wgpu::BindGroupEntry {
+                GpuBinding::Texture {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&self.font_atlas_view),
+                    texture: &self.font_atlas,
                 },
-                wgpu::BindGroupEntry {
+                GpuBinding::Sampler {
                     binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&self.point_sampler),
+                    sampler: &self.point_sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 5,
+                    texture: target,
                 },
             ],
-        });
-
-        {
-            let ts = profiler.and_then(|p| p.render_timestamps("BlobTracking Overlay", ctx.width, ctx.height));
-            let mut pass = gpu.encoder.as_mut().unwrap().begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("BlobTracking Overlay"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: ts,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
+            [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+            "BlobTracking Overlay",
+        );
     }
 
     // BlobTrackingFX.cs lines 329-333 — ClearState() (all owners)
@@ -1638,7 +685,12 @@ impl PostProcessEffect for BlobTrackingFX {
         }
     }
 
-    fn resize(&mut self, _device: &wgpu::Device, _width: u32, _height: u32) {
+    fn resize(
+        &mut self,
+        _device: &GpuDevice,
+        _width: u32,
+        _height: u32,
+    ) {
         // BlobTrackingFX.cs lines 366-368:
         // "Downsample RT is fixed size, no resize needed"
     }
@@ -1663,7 +715,7 @@ impl StatefulEffect for BlobTrackingFX {
     }
 
     // BlobTrackingFX.cs lines 359-364 — CleanupAllOwners
-    fn cleanup_all_owners(&mut self, _device: &wgpu::Device) {
+    fn cleanup_all_owners(&mut self, _device: &GpuDevice) {
         self.owner_states.clear();
     }
 }

@@ -156,6 +156,27 @@ impl GpuDevice {
         GpuSampler { raw }
     }
 
+    /// Upload pixel data to a texture synchronously (CPU → GPU).
+    /// Uses Metal `replace_region` which works on all storage modes on macOS.
+    /// Best for one-time uploads during initialization (font atlases, LUTs).
+    pub fn upload_texture(
+        &self,
+        texture: &GpuTexture,
+        data: &[u8],
+    ) {
+        let bpp = texture.format.bytes_per_pixel();
+        let bytes_per_row = texture.width as u64 * bpp as u64;
+        let region = metal::MTLRegion::new_2d(
+            0, 0, texture.width as _, texture.height as _,
+        );
+        texture.raw.replace_region(
+            region,
+            0, // mipmap level
+            data.as_ptr() as *const _,
+            bytes_per_row,
+        );
+    }
+
     /// Create a compute pipeline from WGSL source.
     ///
     /// 1. Parse WGSL → naga Module
@@ -818,6 +839,28 @@ impl GpuEncoder {
         enc.end_encoding();
     }
 
+    /// Upload CPU data to a 2D texture region via blit encoder.
+    /// `bytes_per_pixel` is inferred from the texture format.
+    pub fn upload_texture(
+        &mut self,
+        texture: &GpuTexture,
+        width: u32,
+        height: u32,
+        _depth: u32,
+        data: &[u8],
+    ) {
+        self.end_current();
+        let bpp = texture.format.bytes_per_pixel();
+        let bytes_per_row = width as u64 * bpp as u64;
+        let region = metal::MTLRegion::new_2d(0, 0, width as _, height as _);
+        texture.raw.replace_region(
+            region,
+            0, // mipmap level
+            data.as_ptr() as *const _,
+            bytes_per_row,
+        );
+    }
+
     /// Signal a shared event on the GPU timeline.
     /// Creates a lightweight command buffer that encodes the signal and commits it.
     /// The event value is incremented automatically.
@@ -1359,6 +1402,9 @@ fn to_mtl_pixel_format(format: GpuTextureFormat) -> metal::MTLPixelFormat {
         GpuTextureFormat::R16Float => metal::MTLPixelFormat::R16Float,
         GpuTextureFormat::Rg16Float => metal::MTLPixelFormat::RG16Float,
         GpuTextureFormat::R32Uint => metal::MTLPixelFormat::R32Uint,
+        GpuTextureFormat::Rgba8UnormSrgb => metal::MTLPixelFormat::RGBA8Unorm_sRGB,
+        GpuTextureFormat::Bgra8Unorm => metal::MTLPixelFormat::BGRA8Unorm,
+        GpuTextureFormat::R8Unorm => metal::MTLPixelFormat::R8Unorm,
     }
 }
 
