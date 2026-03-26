@@ -90,22 +90,18 @@ impl ContentThread {
     ) {
         log::info!("[ContentThread] started");
 
-        // Set stable hal_ctx and native_device pointers on GeneratorRenderer.
+        // Set stable device pointer on GeneratorRenderer.
         // This must happen here (after all moves into ContentThread are complete)
-        // so the pointers target the final heap locations inside content_pipeline.
+        // so the pointer targets the final heap location inside content_pipeline.
         {
-            let hal_ctx_ref = self.content_pipeline.hal_ctx();
-            #[cfg(target_os = "macos")]
-            let native_device_ref = self.content_pipeline.native_device();
+            let native_device_ref = self.content_pipeline.native_device().unwrap();
             let (renderers, _) = self.engine.split_renderer_project();
             for renderer in renderers.iter_mut() {
                 if let Some(gen_renderer) = renderer
                     .as_any_mut()
                     .downcast_mut::<manifold_renderer::generator_renderer::GeneratorRenderer>()
                 {
-                    gen_renderer.set_hal_ctx(hal_ctx_ref);
-                    #[cfg(target_os = "macos")]
-                    gen_renderer.set_native_device(native_device_ref);
+                    gen_renderer.set_device(native_device_ref);
                 }
             }
         }
@@ -285,33 +281,12 @@ impl ContentThread {
             // 7c. LED output — blit compositor output through edge-extend shader
             // and submit readback. Uses a separate encoder since render_content
             // already submitted its own.
+            // TODO: LED output needs migration to manifold_gpu types.
+            // For now, LED processing is disabled in the native Metal path.
+            // The LED controller (led_source_texture -> wgpu process_frame)
+            // requires its own migration pass.
             if let Some(ref mut led) = self.led_controller {
-                // Poll previous frame's readback first (now that GPU has been polled).
                 led.poll_readback(&self.gpu.device);
-
-                // LED source routed by compositor based on led_exit_index:
-                //   0  = pre-tonemap composite (clean, no master FX)
-                //   -1 = final output (default, post-tonemap + master FX)
-                let source_view = self.content_pipeline.led_source_view();
-
-                let active_count = tick_result.ready_clips.len();
-                let brightness = self.engine.project()
-                    .map(|p| p.settings.led_brightness)
-                    .unwrap_or(1.0);
-                let mut led_encoder = self.gpu.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor {
-                        label: Some("LED Encoder"),
-                    },
-                );
-                led.process_frame(
-                    &self.gpu.device,
-                    &self.gpu.queue,
-                    &mut led_encoder,
-                    source_view,
-                    active_count,
-                    brightness,
-                );
-                self.gpu.queue.submit(std::iter::once(led_encoder.finish()));
             }
 
             #[cfg(feature = "profiling")]
@@ -954,7 +929,7 @@ impl ContentThread {
                 if let (Some((pre_w, pre_h, pre_fps)), Some((post_w, post_h, post_fps))) = (pre, post) {
                     if post_w != pre_w || post_h != pre_h {
                         self.content_pipeline.resize(
-                            &self.gpu.device, &mut self.engine,
+                            &mut self.engine,
                             post_w as u32, post_h as u32,
                         );
                     }
@@ -980,7 +955,7 @@ impl ContentThread {
                 if let (Some((pre_w, pre_h, pre_fps)), Some((post_w, post_h, post_fps))) = (pre, post) {
                     if post_w != pre_w || post_h != pre_h {
                         self.content_pipeline.resize(
-                            &self.gpu.device, &mut self.engine,
+                            &mut self.engine,
                             post_w as u32, post_h as u32,
                         );
                     }
@@ -1013,7 +988,7 @@ impl ContentThread {
                 if let Some(p) = self.engine.project() {
                     let w = p.settings.output_width.max(1) as u32;
                     let h = p.settings.output_height.max(1) as u32;
-                    self.content_pipeline.resize(&self.gpu.device, &mut self.engine, w, h);
+                    self.content_pipeline.resize(&mut self.engine, w, h);
                 }
                 // Sync frame timer to loaded project's frame rate.
                 if let Some(p) = self.engine.project() {
@@ -1055,7 +1030,7 @@ impl ContentThread {
 
             // ── GPU ────────────────────────────────────────────────
             ContentCommand::ResizeContent(w, h) => {
-                self.content_pipeline.resize(&self.gpu.device, &mut self.engine, w, h);
+                self.content_pipeline.resize(&mut self.engine, w, h);
             }
 
             // ── Transport/sync ─────────────────────────────────────
@@ -1529,14 +1504,14 @@ impl ContentThread {
                 frame_idx as u64,
             );
 
-            // Get Metal texture pointer via wgpu as_hal.
+            // Get Metal texture pointer from native GpuTexture.
             // SDR: capture compositor output directly.
             // HDR: run PQ encoder on compositor output, capture PQ result.
             let texture = if export_config.hdr {
                 let paper_white = 200.0f32; // TODO: from project settings
                 let max_nits = 10000.0f32;
                 self.content_pipeline.pq_encode_for_export(
-                    &self.gpu, paper_white, max_nits,
+                    paper_white, max_nits,
                 )
             } else {
                 self.content_pipeline.export_output_texture()
@@ -1619,17 +1594,16 @@ impl ContentThread {
         }
     }
 
-    /// Extract the raw Metal texture pointer from a wgpu Texture.
+    /// Extract the raw Metal texture pointer from a native GpuTexture.
     /// Returns `id<MTLTexture>` as `*mut c_void` for the native encoder.
     #[cfg(target_os = "macos")]
-    unsafe fn get_metal_texture_ptr(texture: &wgpu::Texture) -> Option<*mut std::ffi::c_void> {
-        use foreign_types::ForeignType;
+    unsafe fn get_metal_texture_ptr(texture: &manifold_gpu::GpuTexture) -> Option<*mut std::ffi::c_void> {
+        use objc::runtime::Object;
         use std::ffi::c_void;
-        let hal_texture = unsafe { texture.as_hal::<wgpu_hal::api::Metal>() };
-        hal_texture.map(|tex| {
-            let raw = unsafe { tex.raw_handle() };
-            raw.as_ptr() as *mut c_void
-        })
+        // metal::TextureRef is an objc object — cast to raw pointer.
+        let raw_ref: &metal::TextureRef = texture.raw();
+        let ptr = raw_ref as *const metal::TextureRef as *const Object as *mut c_void;
+        Some(ptr)
     }
 
     /// Send export progress to the UI thread.

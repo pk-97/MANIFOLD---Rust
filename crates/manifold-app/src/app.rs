@@ -1070,7 +1070,7 @@ impl ApplicationHandler for Application {
                 #[cfg(not(target_os = "macos"))]
                 Box::new(StubRenderer::new_video()),
                 Box::new(GeneratorRenderer::new(
-                    native_device.clone(),
+                    &native_device,
                     output_w,
                     output_h,
                     gen_format,
@@ -1081,19 +1081,18 @@ impl ApplicationHandler for Application {
             engine.initialize(self.local_project.clone());
 
             let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(
-                Box::new(LayerCompositor::new(
-                    &native_device,
-                    output_w, output_h,
-                )),
+                Box::new(LayerCompositor::new(&native_device, output_w, output_h)),
             );
             content_pipeline.edr_headroom = self.edr_headroom;
             // Transfer native device ownership to content pipeline.
             content_pipeline.set_native_gpu(native_device);
             // Give the content pipeline both IOSurface textures for double-buffered async output.
+            // Content textures are native GpuTexture (imported via native device).
             #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.shared_texture_bridge {
-                let content_tex_a = unsafe { bridge.import_texture(&gpu.device, 0) };
-                let content_tex_b = unsafe { bridge.import_texture(&gpu.device, 1) };
+                let native_dev = content_pipeline.native_device().unwrap();
+                let content_tex_a = unsafe { bridge.import_texture_native(native_dev, 0) };
+                let content_tex_b = unsafe { bridge.import_texture_native(native_dev, 1) };
                 content_pipeline.set_shared_textures(content_tex_a, content_tex_b, Arc::clone(bridge));
             }
             self.content_pipeline_output = Some(content_pipeline.shared_output());
@@ -1134,8 +1133,8 @@ impl ApplicationHandler for Application {
                 gpu: GpuContext {
                     instance: gpu.instance.clone(),
                     adapter: gpu.adapter.clone(),
-                    device: content_gpu.device,
-                    queue: content_gpu.queue,
+                    device: Arc::clone(&gpu.device),
+                    queue: Arc::clone(&gpu.queue),
                 },
                 frame_count: 0,
                 time_since_start: 0.0,

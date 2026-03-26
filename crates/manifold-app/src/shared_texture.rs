@@ -212,6 +212,70 @@ impl SharedTextureBridge {
         )
     }}
 
+    /// Create a native `manifold_gpu::GpuTexture` backed by one of the IOSurfaces.
+    /// Used by the content thread which uses `manifold_gpu::GpuDevice` directly
+    /// (no wgpu on the content hot path).
+    ///
+    /// `surface_index` selects which of the two double-buffered surfaces (0 or 1).
+    ///
+    /// # Safety
+    /// The returned GpuTexture is backed by the IOSurface — caller must ensure
+    /// the bridge outlives the texture.
+    pub unsafe fn import_texture_native(
+        &self,
+        native_device: &manifold_gpu::GpuDevice,
+        surface_index: usize,
+    ) -> manifold_gpu::GpuTexture { unsafe {
+        assert!(surface_index < 2, "surface_index must be 0 or 1");
+        let width = self.width.load(Ordering::Acquire);
+        let height = self.height.load(Ordering::Acquire);
+
+        let raw_device: &metal::DeviceRef = native_device.raw_device();
+
+        // Create an MTLTextureDescriptor
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
+        descriptor.set_width(width as u64);
+        descriptor.set_height(height as u64);
+        descriptor.set_depth(1);
+        descriptor.set_mipmap_level_count(1);
+        descriptor.set_sample_count(1);
+        descriptor.set_texture_type(metal::MTLTextureType::D2);
+        descriptor.set_usage(
+            metal::MTLTextureUsage::ShaderRead
+                | metal::MTLTextureUsage::ShaderWrite
+                | metal::MTLTextureUsage::RenderTarget,
+        );
+        descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
+
+        // Call [MTLDevice newTextureWithDescriptor:iosurface:plane:]
+        let io_surfaces_guard = self.io_surfaces.read();
+        let io_surface_ref = io_surfaces_guard[surface_index].as_concrete_TypeRef();
+        let raw_mtl_texture: *mut objc::runtime::Object = objc::msg_send![
+            raw_device,
+            newTextureWithDescriptor:descriptor.as_ref()
+            iosurface:io_surface_ref
+            plane:0usize
+        ];
+        drop(io_surfaces_guard);
+        assert!(
+            !raw_mtl_texture.is_null(),
+            "newTextureWithDescriptor:iosurface:plane: failed"
+        );
+
+        // Wrap as metal::Texture (takes ownership of the +1 retain from newTexture)
+        let mtl_texture = metal::Texture::from_ptr(raw_mtl_texture as *mut _);
+
+        // Wrap as GpuTexture
+        manifold_gpu::GpuTexture::from_raw(
+            mtl_texture,
+            width,
+            height,
+            1,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+        )
+    }}
+
     /// Resize the bridge. Creates two new IOSurfaces at the new dimensions.
     /// Both devices must re-import their textures after this call
     /// (detected via generation counter).

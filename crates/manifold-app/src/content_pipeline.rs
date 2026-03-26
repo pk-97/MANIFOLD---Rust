@@ -1,19 +1,15 @@
 #![allow(dead_code)]
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::RwLock;
 
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_core::types::BlendMode;
 use manifold_renderer::compositor::{Compositor, CompositeLayerDescriptor, CompositorFrame};
 use manifold_renderer::generator_renderer::GeneratorRenderer;
-use manifold_renderer::gpu::GpuContext;
 use manifold_renderer::gpu_encoder::GpuEncoder;
 use manifold_renderer::layer_compositor::CompositeClipDescriptor;
 #[cfg(target_os = "macos")]
 use manifold_media::video_renderer::VideoRenderer;
-#[cfg(not(target_os = "macos"))]
-use manifold_renderer::render_target::RenderTarget;
 use manifold_renderer::tonemap::TonemapSettings;
 use manifold_playback::engine::{PlaybackEngine, TickResult};
 
@@ -56,19 +52,13 @@ impl SharedOutputView {
     }
 }
 
-/// Output format for double-buffered compositor output (non-macOS fallback).
-/// Matches compositor's tonemap output format.
-#[cfg(not(target_os = "macos"))]
-const OUTPUT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-
 /// Self-contained content rendering pipeline.
 ///
 /// Owns the compositor and orchestrates GPU rendering of generators + compositing.
 /// The PlaybackEngine (which owns GeneratorRenderer) is borrowed for each frame.
 ///
-/// Double-buffered output: content writes to back buffer, swaps on completion.
-/// UI always reads from the stable front buffer via SharedOutputView (zero copy —
-/// both threads share the same wgpu Device).
+/// On macOS, uses native Metal encoding via manifold-gpu.
+/// IOSurface double-buffering for zero-copy cross-device sharing with the UI thread.
 pub struct ContentPipeline {
     compositor: Box<dyn Compositor>,
     /// EDR headroom from the display (1.0 = SDR, e.g. 2.0 = 2x SDR white).
@@ -76,22 +66,15 @@ pub struct ContentPipeline {
     pub edr_headroom: f64,
     /// PQ encoder for HDR export. Lazily created on first HDR export frame.
     pq_encoder: Option<manifold_renderer::pq_encoder::PqEncoder>,
-    /// Double-buffered output textures. UI reads front, content writes to back.
-    /// NOT used on macOS (IOSurface path bypasses double-buffering).
-    #[cfg(not(target_os = "macos"))]
-    output_buffers: Option<[RenderTarget; 2]>,
-    /// Which buffer is the front (0 or 1). Back is always `1 - front_index`.
-    #[cfg(not(target_os = "macos"))]
-    front_index: usize,
     /// Content frame rate tracking (for separate cadence mode).
     content_interval_secs: f64,
     last_content_time: f64,
     /// Shared output view for cross-thread access (fallback for non-macOS).
     shared_output: Arc<SharedOutputView>,
-    /// Double-buffered IOSurface textures on the content device. Content writes
-    /// to shared_textures[write_surface_index]; UI reads the other surface.
+    /// Double-buffered IOSurface textures on the content device (native GpuTexture).
+    /// Content writes to shared_textures[write_surface_index]; UI reads the other surface.
     #[cfg(target_os = "macos")]
-    shared_textures: [Option<wgpu::Texture>; 2],
+    shared_textures: [Option<manifold_gpu::GpuTexture>; 2],
     /// Which surface we're writing to THIS frame (0 or 1).
     #[cfg(target_os = "macos")]
     write_surface_index: usize,
@@ -101,14 +84,6 @@ pub struct ContentPipeline {
     /// Last seen bridge generation — used to detect resize and re-import.
     #[cfg(target_os = "macos")]
     shared_generation: u64,
-    /// GPU fence: tiny buffer copied at end of each frame. When map_async
-    /// callback fires, we know the GPU finished this frame's work.
-    fence_buffer: Option<wgpu::Buffer>,
-    fence_staging: Option<wgpu::Buffer>,
-    /// Set to true by map_async callback when GPU finishes the frame.
-    fence_ready: Arc<AtomicBool>,
-    /// True when a frame has been submitted but fence hasn't been checked yet.
-    fence_pending: bool,
     /// Which IOSurface the PREVIOUS frame wrote to (published after fence ready).
     #[cfg(target_os = "macos")]
     last_write_surface: usize,
@@ -122,12 +97,6 @@ pub struct ContentPipeline {
     /// GPU pass timing results from the last frame.
     #[cfg(feature = "profiling")]
     last_gpu_pass_results: Vec<manifold_renderer::gpu_profiler::GpuPassTiming>,
-    /// HAL context for zero-overhead GPU encoding (macOS + hal-encoding feature).
-    hal_ctx: Option<manifold_renderer::hal_context::HalContext>,
-    /// Signal value from the previous frame's MTLSharedEvent.
-    /// Checked by wait_previous_frame() to detect GPU completion without device.poll().
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_signal_value: u64,
     /// Native Metal GPU device from manifold-gpu (macOS only).
     /// Owns metal::Device + metal::CommandQueue for zero-wgpu encoding.
     #[cfg(target_os = "macos")]
@@ -135,7 +104,7 @@ pub struct ContentPipeline {
     /// Native Metal shared event for frame completion (macOS only).
     #[cfg(target_os = "macos")]
     native_event: Option<manifold_gpu::GpuEvent>,
-    /// Signal value from the native event (replaces hal_signal_value).
+    /// Signal value from the native event.
     #[cfg(target_os = "macos")]
     native_signal_value: u64,
 }
@@ -143,17 +112,12 @@ pub struct ContentPipeline {
 impl ContentPipeline {
     pub fn new(
         compositor: Box<dyn Compositor>,
-        hal_ctx: Option<manifold_renderer::hal_context::HalContext>,
     ) -> Self {
         let shared = Arc::new(SharedOutputView::new());
         Self {
             compositor,
             edr_headroom: 1.0,
             pq_encoder: None,
-            #[cfg(not(target_os = "macos"))]
-            output_buffers: None,
-            #[cfg(not(target_os = "macos"))]
-            front_index: 0,
             content_interval_secs: 1.0 / 60.0,
             last_content_time: 0.0,
             shared_output: shared,
@@ -165,10 +129,6 @@ impl ContentPipeline {
             shared_bridge: None,
             #[cfg(target_os = "macos")]
             shared_generation: 0,
-            fence_buffer: None,
-            fence_staging: None,
-            fence_ready: Arc::new(AtomicBool::new(false)),
-            fence_pending: false,
             #[cfg(target_os = "macos")]
             last_write_surface: 0,
             #[cfg(feature = "profiling")]
@@ -177,9 +137,6 @@ impl ContentPipeline {
             gpu_profiler: None,
             #[cfg(feature = "profiling")]
             last_gpu_pass_results: Vec::new(),
-            hal_ctx,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_signal_value: 0,
             #[cfg(target_os = "macos")]
             native_device: None,
             #[cfg(target_os = "macos")]
@@ -215,13 +172,13 @@ impl ContentPipeline {
         self.native_device.as_ref()
     }
 
-    /// Set the double-buffered IOSurface shared textures and bridge.
+    /// Set the double-buffered IOSurface shared textures (native GpuTexture) and bridge.
     /// Called during init after the bridge imports both textures on the content device.
     #[cfg(target_os = "macos")]
     pub fn set_shared_textures(
         &mut self,
-        tex_a: wgpu::Texture,
-        tex_b: wgpu::Texture,
+        tex_a: manifold_gpu::GpuTexture,
+        tex_b: manifold_gpu::GpuTexture,
         bridge: Arc<crate::shared_texture::SharedTextureBridge>,
     ) {
         self.shared_textures = [Some(tex_a), Some(tex_b)];
@@ -234,132 +191,31 @@ impl ContentPipeline {
         Arc::clone(&self.shared_output)
     }
 
-    /// Get a reference to the hal context (if hal-encoding is active).
-    /// Used by content_thread to set stable hal_ctx pointers after all moves.
-    pub fn hal_ctx(&self) -> Option<&manifold_renderer::hal_context::HalContext> {
-        self.hal_ctx.as_ref()
-    }
-
-    /// Lazily create the double-buffer pair at compositor dimensions.
-    /// Only used on non-macOS (macOS uses IOSurface zero-copy path).
-    #[cfg(not(target_os = "macos"))]
-    fn ensure_output_buffers(&mut self, device: &wgpu::Device) {
-        if self.output_buffers.is_some() {
-            return;
-        }
-        let (w, h) = self.compositor.dimensions();
-        self.output_buffers = Some([
-            RenderTarget::new(device, w, h, OUTPUT_FORMAT, "ContentOutput_Front"),
-            RenderTarget::new(device, w, h, OUTPUT_FORMAT, "ContentOutput_Back"),
-        ]);
-        self.front_index = 0;
-    }
-
-    /// Lazily create the GPU fence buffers used for async frame completion.
-    fn ensure_fence_buffers(&mut self, device: &wgpu::Device) {
-        if self.fence_buffer.is_some() {
-            return;
-        }
-        self.fence_buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Frame Fence"),
-            size: 4,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
-        // Staging buffer with sentinel value — copied to fence at end of each frame.
-        let staging = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Frame Fence Staging"),
-            size: 4,
-            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::MAP_WRITE,
-            mapped_at_creation: true,
-        });
-        // Write sentinel so the copy is always valid.
-        staging.slice(..).get_mapped_range_mut()[..4]
-            .copy_from_slice(&0xDEADBEEFu32.to_ne_bytes());
-        staging.unmap();
-        self.fence_staging = Some(staging);
-    }
-
     /// Wait for the previous frame's GPU work to finish (if pending).
     /// Called at the START of each frame before encoding new work.
     /// Publishes the completed IOSurface so the UI can read it.
-    fn wait_previous_frame(&mut self, device: &wgpu::Device) {
+    fn wait_previous_frame(&mut self) {
         // ── Native Metal path: GpuEvent sync ────────────────────────────
         // Direct GPU counter read via MTLSharedEvent — microsecond latency.
-        #[cfg(target_os = "macos")]
-        if let Some(ref native_event) = self.native_event {
-            if self.native_signal_value > 0 {
-                while !native_event.is_done(self.native_signal_value) {
-                    std::thread::yield_now();
-                }
-                if let Some(ref bridge) = self.shared_bridge {
-                    bridge.publish_front(self.last_write_surface as u32);
-                }
+        if let Some(ref native_event) = self.native_event
+            && self.native_signal_value > 0
+        {
+            while !native_event.is_done(self.native_signal_value) {
+                std::thread::yield_now();
             }
-            // No device.poll() — native path uses MTLSharedEvent for sync
-            // and shared-memory readback. Polling would flush wgpu's internal
-            // Transit:Blit commands to the GPU for no reason.
-            return;
-        }
-
-        // ── HAL path: MTLSharedEvent sync ────────────────────────────────
-        // signaled_value() is a direct GPU counter read — microsecond latency
-        // vs device.poll() which goes through wgpu's internal machinery and
-        // wgpu-hal's 1ms sleep loop.
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if let Some(ref hal_ctx) = self.hal_ctx {
-            if self.hal_signal_value > 0 {
-                while !hal_ctx.is_frame_done(self.hal_signal_value) {
-                    std::thread::yield_now();
-                }
-                // Publish the completed IOSurface for the UI thread.
-                if let Some(ref bridge) = self.shared_bridge {
-                    bridge.publish_front(self.last_write_surface as u32);
-                }
+            if let Some(ref bridge) = self.shared_bridge {
+                bridge.publish_front(self.last_write_surface as u32);
             }
-            // Non-blocking poll for wgpu bookkeeping (readback map_async
-            // callbacks, internal resource reclamation).
-            let _ = device.poll(wgpu::PollType::Poll);
-            return;
-        }
-
-        // ── Non-hal fallback: map_async + device.poll fence ──────────────
-        if !self.fence_pending {
-            return;
-        }
-
-        // Non-blocking check first — if the GPU finished between frames, no wait.
-        if !self.fence_ready.load(Ordering::Acquire) {
-            let _ = device.poll(wgpu::PollType::Poll);
-        }
-
-        // If still not ready, the GPU is truly behind — must block.
-        if !self.fence_ready.load(Ordering::Acquire) {
-            let _ = device.poll(wgpu::PollType::wait_indefinitely());
-        }
-
-        // Fence is ready — unmap and reset.
-        if let Some(ref fence) = self.fence_buffer {
-            fence.unmap();
-        }
-        self.fence_ready.store(false, Ordering::Release);
-        self.fence_pending = false;
-
-        // Publish the completed surface for the UI to read.
-        #[cfg(target_os = "macos")]
-        if let Some(ref bridge) = self.shared_bridge {
-            bridge.publish_front(self.last_write_surface as u32);
         }
     }
 
     /// Render all generators and composite, then submit asynchronously.
     ///
-    /// Uses double-buffered output: content writes to one surface while
-    /// the UI reads the other. A fence buffer detects GPU completion so
-    /// we only block if the GPU is truly behind (2 frames in flight).
+    /// Uses native Metal encoding on macOS via manifold-gpu.
+    /// IOSurface double-buffering for zero-copy cross-device sharing.
     pub fn render_content(
         &mut self,
-        gpu: &GpuContext,
+        gpu: &manifold_renderer::gpu::GpuContext,
         engine: &mut PlaybackEngine,
         tick_result: &TickResult,
         dt: f64,
@@ -367,16 +223,11 @@ impl ContentPipeline {
     ) {
         let _t_frame = std::time::Instant::now();
 
-        self.ensure_fence_buffers(&gpu.device);
-
         // Wait for PREVIOUS frame's GPU work before encoding this frame.
         // If the GPU finished quickly (likely), this returns immediately.
         let _poll_start = std::time::Instant::now();
-        self.wait_previous_frame(&gpu.device);
+        self.wait_previous_frame();
         let _poll_ms = _poll_start.elapsed().as_secs_f64() * 1000.0;
-
-        #[cfg(not(target_os = "macos"))]
-        self.ensure_output_buffers(&gpu.device);
 
         // Extract timing values before split borrow
         let time = engine.current_time();
@@ -391,566 +242,13 @@ impl ContentPipeline {
                 gpu, engine, tick_result, dt, frame_count,
                 time, beat, _t_frame, _poll_ms,
             );
-            return;
         }
 
-        // === HAL THREE-ENCODER SPLIT (legacy, removed once native path is complete) ===
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if self.hal_ctx.is_some() {
-            self.render_content_hal(gpu, engine, tick_result, dt, frame_count,
-                                    time, beat, _t_frame, _poll_ms);
-            return;
-        }
-
-        let mut wgpu_encoder =
-            gpu.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Frame Encoder"),
-                });
-
-        let mut gpu_enc = GpuEncoder::new(
-            &gpu.device, &gpu.queue, &mut wgpu_encoder, None,
-        );
-
-        // Split borrow: get renderers + project from engine simultaneously.
-        let (renderers, project) = engine.split_renderer_project();
-        let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
-
-        // GPU profiler: begin frame and lazily create profiler
-        #[cfg(feature = "profiling")]
-        {
-            if self.gpu_profiler.is_none() {
-                self.gpu_profiler =
-                    manifold_renderer::gpu_profiler::GpuProfiler::new(&gpu.device, &gpu.queue, &gpu.adapter);
-            }
-            if let Some(ref mut profiler) = self.gpu_profiler {
-                profiler.begin_frame();
-            }
-        }
-
-        let _t0 = std::time::Instant::now();
-        // Render generators via downcast (GPU rendering needs queue + encoder)
-        for renderer in renderers.iter_mut() {
-            if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
-                #[cfg(feature = "profiling")]
-                let gpu_prof = self.gpu_profiler.as_ref();
-                #[cfg(not(feature = "profiling"))]
-                let gpu_prof: Option<&manifold_renderer::gpu_profiler::GpuProfiler> = None;
-                gen_renderer.render_all(
-                    &mut gpu_enc, time, beat, dt as f32, layers, gpu_prof,
-                );
-                break;
-            }
-        }
-
-        let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-
-        let _t0 = std::time::Instant::now();
-        // Build clip descriptors for compositor
-        let mut clip_descs: Vec<CompositeClipDescriptor> =
-            Vec::with_capacity(tick_result.ready_clips.len());
-
-        for clip in &tick_result.ready_clips {
-            let clip_textures = renderers.iter().find_map(|r| {
-                if let Some(gen_r) = r.as_any().downcast_ref::<GeneratorRenderer>()
-                    && let (Some(v), Some(t)) = (
-                        gen_r.get_clip_texture_view(&clip.id),
-                        gen_r.get_clip_texture(&clip.id),
-                    )
-                {
-                    return Some((v, t));
-                }
-                #[cfg(target_os = "macos")]
-                if let Some(vid_r) = r.as_any().downcast_ref::<VideoRenderer>()
-                    && let (Some(v), Some(t)) = (
-                        vid_r.get_clip_texture_view(&clip.id),
-                        vid_r.get_clip_texture(&clip.id),
-                    )
-                {
-                    return Some((v, t));
-                }
-                None
-            });
-            if let Some((view, texture)) = clip_textures {
-                let clip_li = project.and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
-                    .unwrap_or(0);
-                let layer = layers.get(clip_li);
-                clip_descs.push(CompositeClipDescriptor {
-                    clip_id: &clip.id,
-                    texture_view: view,
-                    texture,
-                    layer_index: clip_li as i32,
-                    blend_mode: layer.map_or(BlendMode::Normal, |l| l.default_blend_mode),
-                    opacity: layer.map_or(1.0, |l| l.opacity),
-                    translate_x: clip.translate_x,
-                    translate_y: clip.translate_y,
-                    scale: clip.scale,
-                    rotation: clip.rotation,
-                    invert_colors: clip.invert_colors,
-                    effects: &clip.effects,
-                    effect_groups: clip.effect_groups.as_deref().unwrap_or(&[]),
-                });
-            }
-        }
-
-        // Build layer descriptors for compositor
-        // Use static empty slices instead of per-frame Vec allocations.
-        let empty_effects: &[EffectInstance] = &[];
-        let empty_groups: &[EffectGroup] = &[];
-        let layer_descs: Vec<CompositeLayerDescriptor> = layers.iter().map(|layer| {
-            CompositeLayerDescriptor {
-                layer_index: layer.index,
-                layer_id: layer.layer_id.clone(),
-                blend_mode: layer.default_blend_mode,
-                opacity: layer.opacity,
-                is_muted: layer.is_muted,
-                is_solo: layer.is_solo,
-                effects: layer.effects.as_deref().unwrap_or(empty_effects),
-                effect_groups: layer.effect_groups.as_deref().unwrap_or(empty_groups),
-            }
-        }).collect();
-
-        // Composite
-        let master_effects = project.map_or(empty_effects, |p| &p.settings.master_effects);
-        let master_effect_groups = project
-            .and_then(|p| p.settings.master_effect_groups.as_deref())
-            .unwrap_or(empty_groups);
-
-        let led_exit_index = project.map_or(-1, |p| p.settings.led_exit_index);
-
-        let frame = CompositorFrame {
-            time,
-            beat,
-            dt: dt as f32,
-            frame_count,
-            compositor_dirty: tick_result.compositor_dirty,
-            clips: &clip_descs,
-            layers: &layer_descs,
-            master_effects,
-            master_effect_groups,
-            led_exit_index,
-            tonemap: TonemapSettings {
-                exposure: 1.0,
-                hdr_output_enabled: self.edr_headroom > 1.0,
-                paper_white_nits: 200.0,
-                // Dynamic max nits from actual display EDR headroom.
-                // headroom=1.0 (SDR) → 200 nits, headroom=2.0 → 400 nits, etc.
-                // Unity: MonitorOutput.cs reads HDROutputSettings.maxFullFrameToneMapLuminance.
-                max_display_nits: (200.0 * self.edr_headroom as f32).min(10000.0),
-            },
-        };
-
-        let _desc_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-
-        let _t0 = std::time::Instant::now();
-        // Render compositor (records into encoder, returns view into tonemap output)
-        #[cfg(feature = "profiling")]
-        let gpu_prof = self.gpu_profiler.as_ref();
-        #[cfg(not(feature = "profiling"))]
-        let gpu_prof: Option<&manifold_renderer::gpu_profiler::GpuProfiler> = None;
-        let _compositor_view = self.compositor.render(
-            &mut gpu_enc, &frame, gpu_prof,
-        );
-        let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-
-        let (comp_w, comp_h) = self.compositor.dimensions();
-
-        // Copy compositor output to the appropriate destination.
-        // macOS: IOSurface shared texture (double-buffered, write to current surface).
-        // Other: double-buffered output textures (UI reads via SharedOutputView).
-        #[cfg(target_os = "macos")]
-        {
-            if let Some(ref shared_tex) = self.shared_textures[self.write_surface_index]
-                && shared_tex.width() == comp_w && shared_tex.height() == comp_h {
-                    gpu_enc.copy_texture_to_texture(
-                        self.compositor.output_texture(), shared_tex,
-                        comp_w, comp_h,
-                    );
-                }
-        }
-
+        // Non-macOS: not yet supported (native Metal path required).
         #[cfg(not(target_os = "macos"))]
         {
-            let back_index = 1 - self.front_index;
-            let bufs = self.output_buffers.as_ref().unwrap();
-            let copy_w = comp_w.min(bufs[back_index].width);
-            let copy_h = comp_h.min(bufs[back_index].height);
-            gpu_enc.copy_texture_to_texture(
-                self.compositor.output_texture(), &bufs[back_index].texture,
-                copy_w, copy_h,
-            );
-        }
-
-        // GPU profiler: resolve timestamp queries before submission
-        #[cfg(feature = "profiling")]
-        if let Some(ref profiler) = self.gpu_profiler {
-            profiler.resolve(gpu_enc.encoder);
-        }
-
-        // Append fence copy at the end of the encoder — when the GPU executes
-        // this copy, we know all preceding work is done.
-        if let (Some(staging), Some(fence)) =
-            (&self.fence_staging, &self.fence_buffer)
-        {
-            gpu_enc.encoder.as_mut().unwrap().copy_buffer_to_buffer(staging, 0, fence, 0, 4);
-        }
-
-        // Drop GpuEncoder to release mutable borrow on wgpu_encoder before finish().
-        #[allow(clippy::drop_non_drop)]
-        drop(gpu_enc);
-
-        // Submit all GPU work — single command buffer containing both wgpu and
-        // hal-encoded (via as_hal_mut) work in correct interleaved order.
-        let _t0 = std::time::Instant::now();
-        gpu.queue.submit(std::iter::once(wgpu_encoder.finish()));
-        let _submit_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-
-        // Start async fence: map_async fires when GPU finishes this frame.
-        // We check fence_ready at the START of the NEXT frame — if the GPU
-        // finished between frames (likely), no blocking occurs at all.
-        if let Some(ref fence) = self.fence_buffer {
-            let ready = Arc::clone(&self.fence_ready);
-            fence.slice(..).map_async(wgpu::MapMode::Read, move |_| {
-                ready.store(true, Ordering::Release);
-            });
-            self.fence_pending = true;
-        }
-
-        // Remember which surface we wrote to so we can publish it next frame.
-        #[cfg(target_os = "macos")]
-        {
-            self.last_write_surface = self.write_surface_index;
-            self.write_surface_index = 1 - self.write_surface_index;
-        }
-
-        // GPU profiler: read PREVIOUS frame's results (deferred readback).
-        // The fence check at frame start guaranteed the previous frame completed.
-        #[cfg(feature = "profiling")]
-        {
-            self.gpu_poll_ms = _poll_ms;
-            self.last_gpu_pass_results = self.gpu_profiler
-                .as_ref()
-                .map_or_else(Vec::new, |p| p.read_results(&gpu.device));
-        }
-
-        // Periodic stderr dump — independent of profiling feature
-        let _total_ms = _t_frame.elapsed().as_secs_f64() * 1000.0;
-        let (comp_w, comp_h) = self.compositor.dimensions();
-        if frame_count > 0 && frame_count.is_multiple_of(60) {
-            eprintln!(
-                "[PERF] frame={} clips={} res={}x{} | gen={:.1}ms desc={:.1}ms comp={:.1}ms \
-                 submit={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
-                frame_count,
-                tick_result.ready_clips.len(),
-                comp_w, comp_h,
-                _gen_ms, _desc_ms, _comp_ms, _submit_ms, _poll_ms, _total_ms,
-                1000.0 / _total_ms.max(0.001),
-            );
-        }
-
-        // Swap + update shared output view (non-macOS fallback path)
-        #[cfg(not(target_os = "macos"))]
-        {
-            let back_index = 1 - self.front_index;
-            self.front_index = back_index;
-            let bufs = self.output_buffers.as_ref().unwrap();
-            let front_view = bufs[self.front_index].texture.create_view(&wgpu::TextureViewDescriptor::default());
-            self.shared_output.set_view(front_view);
-        }
-
-        // Update shared dimensions for UI aspect ratio (only when changed).
-        let (old_w, old_h) = self.shared_output.get_dimensions();
-        if old_w != comp_w || old_h != comp_h {
-            self.shared_output.set_dimensions(comp_w, comp_h);
-        }
-    }
-
-    /// Phase 4.6: Single hal submission — zero wgpu on content hot path.
-    /// All generators (compute + LinePipeline), compositor, IOSurface copy,
-    /// and readback copies encode into one hal command encoder.
-    /// No wgpu::Queue::submit() on the content thread.
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(clippy::too_many_arguments)]
-    fn render_content_hal(
-        &mut self,
-        gpu: &GpuContext,
-        engine: &mut PlaybackEngine,
-        tick_result: &TickResult,
-        dt: f64,
-        frame_count: u64,
-        time: f32,
-        beat: f32,
-        _t_frame: std::time::Instant,
-        _poll_ms: f64,
-    ) {
-        use wgpu::hal::CommandEncoder as HalCmdEnc;
-
-        let hal_ctx = self.hal_ctx.as_ref().unwrap();
-
-        // Split borrow: get renderers + project from engine simultaneously.
-        let (renderers, project) = engine.split_renderer_project();
-        let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
-
-        // ── Single hal encoder for ALL GPU work ──────────────────────────
-        // Phase 4.6: generators (compute + LinePipeline render passes),
-        // compositor, IOSurface copy, and readback copies all encode here.
-        // A dummy wgpu encoder is created but never submitted — it exists
-        // only to satisfy GpuEncoder's signature for fallback paths.
-        let _t0 = std::time::Instant::now();
-        let mut hal_enc = hal_ctx.create_command_encoder();
-        unsafe {
-            hal_enc
-                .begin_encoding(Some("Frame"))
-                .expect("hal begin_encoding failed");
-        }
-        let mut dummy_encoder = gpu.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor {
-                label: Some("Dummy (unused in hal path)"),
-            },
-        );
-        {
-            let mut gpu_gen = GpuEncoder::new(
-                &gpu.device, &gpu.queue, &mut dummy_encoder, Some(hal_ctx),
-            );
-            gpu_gen.hal_enc = Some(
-                &mut hal_enc
-                    as *mut manifold_renderer::hal_context::MetalCommandEncoder,
-            );
-            for renderer in renderers.iter_mut() {
-                if let Some(gen_renderer) =
-                    renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
-                {
-                    gen_renderer.render_all(
-                        &mut gpu_gen, time, beat, dt as f32, layers, None,
-                    );
-                    break;
-                }
-            }
-        }
-        // No wgpu submit — all generators encoded via hal (including
-        // LinePipeline render passes via shared-memory buffers).
-        let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-
-        // ── Build clip + layer descriptors (CPU only) ────────────────────
-        let _t0 = std::time::Instant::now();
-        let empty_effects: &[EffectInstance] = &[];
-        let empty_groups: &[EffectGroup] = &[];
-
-        let mut clip_descs: Vec<CompositeClipDescriptor> =
-            Vec::with_capacity(tick_result.ready_clips.len());
-        for clip in &tick_result.ready_clips {
-            let clip_textures = renderers.iter().find_map(|r| {
-                if let Some(gen_r) = r.as_any().downcast_ref::<GeneratorRenderer>()
-                    && let (Some(v), Some(t)) = (
-                        gen_r.get_clip_texture_view(&clip.id),
-                        gen_r.get_clip_texture(&clip.id),
-                    )
-                {
-                    return Some((v, t));
-                }
-                #[cfg(target_os = "macos")]
-                if let Some(vid_r) = r.as_any().downcast_ref::<VideoRenderer>()
-                    && let (Some(v), Some(t)) = (
-                        vid_r.get_clip_texture_view(&clip.id),
-                        vid_r.get_clip_texture(&clip.id),
-                    )
-                {
-                    return Some((v, t));
-                }
-                None
-            });
-            if let Some((view, texture)) = clip_textures {
-                let clip_li = project
-                    .and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
-                    .unwrap_or(0);
-                let layer = layers.get(clip_li);
-                clip_descs.push(CompositeClipDescriptor {
-                    clip_id: &clip.id,
-                    texture_view: view,
-                    texture,
-                    layer_index: clip_li as i32,
-                    blend_mode: layer
-                        .map_or(BlendMode::Normal, |l| l.default_blend_mode),
-                    opacity: layer.map_or(1.0, |l| l.opacity),
-                    translate_x: clip.translate_x,
-                    translate_y: clip.translate_y,
-                    scale: clip.scale,
-                    rotation: clip.rotation,
-                    invert_colors: clip.invert_colors,
-                    effects: &clip.effects,
-                    effect_groups: clip.effect_groups.as_deref().unwrap_or(&[]),
-                });
-            }
-        }
-
-        let layer_descs: Vec<CompositeLayerDescriptor> = layers
-            .iter()
-            .map(|layer| CompositeLayerDescriptor {
-                layer_index: layer.index,
-                layer_id: layer.layer_id.clone(),
-                blend_mode: layer.default_blend_mode,
-                opacity: layer.opacity,
-                is_muted: layer.is_muted,
-                is_solo: layer.is_solo,
-                effects: layer.effects.as_deref().unwrap_or(empty_effects),
-                effect_groups: layer
-                    .effect_groups
-                    .as_deref()
-                    .unwrap_or(empty_groups),
-            })
-            .collect();
-
-        let master_effects =
-            project.map_or(empty_effects, |p| &p.settings.master_effects);
-        let master_effect_groups = project
-            .and_then(|p| p.settings.master_effect_groups.as_deref())
-            .unwrap_or(empty_groups);
-        let led_exit_index = project.map_or(-1, |p| p.settings.led_exit_index);
-
-        let frame = CompositorFrame {
-            time,
-            beat,
-            dt: dt as f32,
-            frame_count,
-            compositor_dirty: tick_result.compositor_dirty,
-            clips: &clip_descs,
-            layers: &layer_descs,
-            master_effects,
-            master_effect_groups,
-            led_exit_index,
-            tonemap: TonemapSettings {
-                exposure: 1.0,
-                hdr_output_enabled: self.edr_headroom > 1.0,
-                paper_white_nits: 200.0,
-                max_display_nits: (200.0 * self.edr_headroom as f32).min(10000.0),
-            },
-        };
-        let _desc_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-
-        // ── Compositor (same hal encoder as generators) ──────────────────
-        let _t0 = std::time::Instant::now();
-        // hal_enc already encoding — generators dispatched into it above.
-        // Readback copies now go through hal (shared-memory path), so no
-        // auxiliary wgpu encoder is needed.
-        {
-            let mut gpu_comp = GpuEncoder::new(
-                &gpu.device, &gpu.queue, &mut dummy_encoder, Some(hal_ctx),
-            );
-            gpu_comp.hal_enc =
-                Some(&mut hal_enc as *mut manifold_renderer::hal_context::MetalCommandEncoder);
-
-            // Compositor render — all passes (render, compute, readback
-            // copies) encode into the single hal encoder.
-            let _compositor_view =
-                self.compositor.render(&mut gpu_comp, &frame, None);
-        }
-
-        // IOSurface copy via hal — merged into compositor encoder.
-        // Replaces the old wgpu encoder 3 copy. Same hal blit pattern as
-        // layer_compositor.rs effect_chain→tonemap copy.
-        #[cfg(target_os = "macos")]
-        {
-            let (comp_w, comp_h) = self.compositor.dimensions();
-            if let Some(ref shared_tex) =
-                self.shared_textures[self.write_surface_index]
-                && shared_tex.width() == comp_w
-                && shared_tex.height() == comp_h
-            {
-                type MetalApi = wgpu::hal::api::Metal;
-                use wgpu::hal::CommandEncoder as HalCopyEnc;
-                let src_tex_ptr = {
-                    let g = unsafe {
-                        self.compositor.output_texture().as_hal::<MetalApi>()
-                    }
-                    .expect("compositor output not Metal");
-                    &*g as *const _
-                };
-                let dst_tex_ptr = {
-                    let g = unsafe { shared_tex.as_hal::<MetalApi>() }
-                        .expect("shared tex not Metal");
-                    &*g as *const _
-                };
-                unsafe {
-                    hal_enc.copy_texture_to_texture(
-                        &*src_tex_ptr,
-                        wgpu::wgt::TextureUses::COPY_SRC,
-                        &*dst_tex_ptr,
-                        std::iter::once(wgpu::hal::TextureCopy {
-                            src_base: wgpu::hal::TextureCopyBase {
-                                mip_level: 0,
-                                array_layer: 0,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::hal::FormatAspects::COLOR,
-                            },
-                            dst_base: wgpu::hal::TextureCopyBase {
-                                mip_level: 0,
-                                array_layer: 0,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::hal::FormatAspects::COLOR,
-                            },
-                            size: wgpu::hal::CopyExtent {
-                                width: comp_w,
-                                height: comp_h,
-                                depth: 1,
-                            },
-                        }),
-                    );
-                }
-            }
-        }
-
-        // Drop the dummy encoder without submitting — nothing was encoded on it.
-        drop(dummy_encoder);
-
-        let hal_cmd_buf = unsafe {
-            hal_enc
-                .end_encoding()
-                .expect("hal end_encoding failed")
-        };
-        unsafe {
-            hal_ctx.submit(&[&hal_cmd_buf]);
-        }
-        // Zero wgpu::Queue::submit() on the content thread.
-        // All work encoded via hal — no aux encoder, no staging flush.
-
-        // Signal frame completion via MTLSharedEvent. The lightweight signal
-        // command buffer is committed after the single hal submission — Metal
-        // in-order execution guarantees it fires after all work completes.
-        unsafe { hal_ctx.signal_frame_completion(); }
-        self.hal_signal_value = hal_ctx.current_signal_value();
-        let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
-
-        // Surface swap
-        #[cfg(target_os = "macos")]
-        {
-            self.last_write_surface = self.write_surface_index;
-            self.write_surface_index = 1 - self.write_surface_index;
-        }
-
-        // Periodic perf dump
-        let (comp_w, comp_h) = self.compositor.dimensions();
-        let _total_ms = _t_frame.elapsed().as_secs_f64() * 1000.0;
-        if frame_count > 0 && frame_count.is_multiple_of(60) {
-            eprintln!(
-                "[PERF/HAL] frame={} clips={} res={}x{} | gen={:.1}ms desc={:.1}ms \
-                 comp={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
-                frame_count,
-                tick_result.ready_clips.len(),
-                comp_w,
-                comp_h,
-                _gen_ms,
-                _desc_ms,
-                _comp_ms,
-                _poll_ms,
-                _total_ms,
-                1000.0 / _total_ms.max(0.001),
-            );
-        }
-
-        // Update shared dimensions
-        let (old_w, old_h) = self.shared_output.get_dimensions();
-        if old_w != comp_w || old_h != comp_h {
-            self.shared_output.set_dimensions(comp_w, comp_h);
+            let _ = (gpu, engine, tick_result, dt, frame_count, time, beat);
+            eprintln!("[ContentPipeline] Non-macOS render path not available");
         }
     }
 
@@ -963,7 +261,7 @@ impl ContentPipeline {
     #[allow(clippy::too_many_arguments)]
     fn render_content_native(
         &mut self,
-        gpu: &GpuContext,
+        _gpu: &manifold_renderer::gpu::GpuContext,
         engine: &mut PlaybackEngine,
         tick_result: &TickResult,
         dt: f64,
@@ -985,14 +283,9 @@ impl ContentPipeline {
 
         // Generators render via native encoder (no wgpu encoder needed)
         {
-            let mut gpu_gen = GpuEncoder::new_native(
-                &gpu.device,
-                &gpu.queue,
-                self.hal_ctx.as_ref(),
-            );
-            gpu_gen.native_enc = Some(&mut native_enc as *mut manifold_gpu::GpuEncoder);
-            gpu_gen.native_device = Some(
-                native_device as *const manifold_gpu::GpuDevice,
+            let mut gpu_gen = GpuEncoder::new(
+                &mut native_enc,
+                native_device,
             );
 
             for renderer in renderers.iter_mut() {
@@ -1000,7 +293,7 @@ impl ContentPipeline {
                     renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
                 {
                     gen_renderer.render_all(
-                        &mut gpu_gen, time, beat, dt as f32, layers, None,
+                        &mut gpu_gen, time, beat, dt as f32, layers,
                     );
                     break;
                 }
@@ -1016,36 +309,32 @@ impl ContentPipeline {
         let mut clip_descs: Vec<CompositeClipDescriptor> =
             Vec::with_capacity(tick_result.ready_clips.len());
         for clip in &tick_result.ready_clips {
-            let clip_textures = renderers.iter().find_map(|r| {
+            let clip_texture = renderers.iter().find_map(|r| {
                 if let Some(gen_r) =
                     r.as_any().downcast_ref::<GeneratorRenderer>()
-                    && let (Some(v), Some(t)) = (
-                        gen_r.get_clip_texture_view(&clip.id),
-                        gen_r.get_clip_texture(&clip.id),
-                    )
+                    && let Some(t) = gen_r.get_clip_texture(&clip.id)
                 {
-                    return Some((v, t));
+                    return Some(t);
                 }
                 #[cfg(target_os = "macos")]
                 if let Some(vid_r) =
                     r.as_any().downcast_ref::<VideoRenderer>()
-                    && let (Some(v), Some(t)) = (
-                        vid_r.get_clip_texture_view(&clip.id),
-                        vid_r.get_clip_texture(&clip.id),
-                    )
+                    && let Some(t) = vid_r.get_clip_texture(&clip.id)
                 {
-                    return Some((v, t));
+                    // VideoRenderer still returns &wgpu::Texture — skip for now.
+                    // TODO: Port VideoRenderer to manifold-gpu types.
+                    let _ = t;
+                    return None;
                 }
                 None
             });
-            if let Some((view, texture)) = clip_textures {
+            if let Some(texture) = clip_texture {
                 let clip_li = project
                     .and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
                     .unwrap_or(0);
                 let layer = layers.get(clip_li);
                 clip_descs.push(CompositeClipDescriptor {
                     clip_id: &clip.id,
-                    texture_view: view,
                     texture,
                     layer_index: clip_li as i32,
                     blend_mode: layer
@@ -1112,20 +401,13 @@ impl ContentPipeline {
         // ── Compositor (same native encoder) ─────────────────────────
         let _t0 = std::time::Instant::now();
         {
-            let mut gpu_comp = GpuEncoder::new_native(
-                &gpu.device,
-                &gpu.queue,
-                self.hal_ctx.as_ref(),
-            );
-            gpu_comp.native_enc = Some(
-                &mut native_enc as *mut manifold_gpu::GpuEncoder,
-            );
-            gpu_comp.native_device = Some(
-                native_device as *const manifold_gpu::GpuDevice,
+            let mut gpu_comp = GpuEncoder::new(
+                &mut native_enc,
+                native_device,
             );
 
-            let _compositor_view =
-                self.compositor.render(&mut gpu_comp, &frame, None);
+            let _compositor_tex =
+                self.compositor.render(&mut gpu_comp, &frame);
         }
 
         // IOSurface copy via native blit
@@ -1133,43 +415,15 @@ impl ContentPipeline {
             let (comp_w, comp_h) = self.compositor.dimensions();
             if let Some(ref shared_tex) =
                 self.shared_textures[self.write_surface_index]
-                && shared_tex.width() == comp_w
-                && shared_tex.height() == comp_h
+                && shared_tex.width == comp_w
+                && shared_tex.height == comp_h
             {
-                // Extract raw Metal textures for the copy.
-                // This uses wgpu's as_hal() for resource extraction only
-                // (NOT for encoding). The actual copy goes through native Metal.
-                type MetalApi = wgpu::hal::api::Metal;
-                // Tonemap is now native — copy from the tonemapped output.
-                let src_raw = {
-                    let g = unsafe {
-                        self.compositor.output_texture().as_hal::<MetalApi>()
-                    }
-                    .expect("compositor output not Metal");
-                    unsafe { (*g).raw_handle().to_owned() }
-                };
-                let dst_raw = {
-                    let g = unsafe { shared_tex.as_hal::<MetalApi>() }
-                        .expect("shared tex not Metal");
-                    unsafe { (*g).raw_handle().to_owned() }
-                };
-                let src_gpu = manifold_gpu::GpuTexture::from_raw(
-                    src_raw,
-                    comp_w,
-                    comp_h,
-                    1,
-                    manifold_gpu::GpuTextureFormat::Rgba16Float,
-                );
-                let dst_gpu = manifold_gpu::GpuTexture::from_raw(
-                    dst_raw,
-                    comp_w,
-                    comp_h,
-                    1,
-                    manifold_gpu::GpuTextureFormat::Rgba16Float,
-                );
+                // Compositor output is already a native GpuTexture.
+                // Copy directly via the native encoder.
+                let src = self.compositor.output_texture();
                 native_enc.copy_texture_to_texture(
-                    &src_gpu,
-                    &dst_gpu,
+                    src,
+                    shared_tex,
                     comp_w,
                     comp_h,
                     1,
@@ -1217,14 +471,12 @@ impl ContentPipeline {
         if old_w != comp_w || old_h != comp_h {
             self.shared_output.set_dimensions(comp_w, comp_h);
         }
-    }
 
-    /// The stable output texture view. UI reads this for blitting.
-    /// Returns None only before the first render.
-    /// Only used on non-macOS (macOS reads via IOSurface).
-    #[cfg(not(target_os = "macos"))]
-    pub fn output_view(&self) -> Option<&wgpu::TextureView> {
-        self.output_buffers.as_ref().map(|bufs| &bufs[self.front_index].view)
+        // GPU profiler (if active): store poll timing
+        #[cfg(feature = "profiling")]
+        {
+            self.gpu_poll_ms = _poll_ms;
+        }
     }
 
     /// Whether it's time for a content frame (for separate cadence mode).
@@ -1243,37 +495,37 @@ impl ContentPipeline {
         self.content_interval_secs = 1.0 / fps.max(1.0);
     }
 
-    /// Resize compositor, generators, and output buffers to new project resolution.
-    pub fn resize(&mut self, device: &wgpu::Device, engine: &mut PlaybackEngine, width: u32, height: u32) {
-        self.compositor.resize(device, width, height);
+    /// Resize compositor, generators, and IOSurface bridge to new project resolution.
+    pub fn resize(&mut self, engine: &mut PlaybackEngine, width: u32, height: u32) {
+        #[cfg(target_os = "macos")]
+        let native_device = self.native_device.as_ref()
+            .expect("native device required for resize");
+        #[cfg(target_os = "macos")]
+        self.compositor.resize(native_device, width, height);
+
         // Resize generator renderer via engine downcast
         let (renderers, _) = engine.split_renderer_project();
         for renderer in renderers.iter_mut() {
-            if let Some(gen_renderer) = renderer.as_any_mut().downcast_mut::<GeneratorRenderer>() {
+            if let Some(gen_renderer) =
+                renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
+            {
                 gen_renderer.resize_gpu(width, height);
                 break;
             }
         }
-        // Recreate output buffers at new dimensions (non-macOS only)
-        #[cfg(not(target_os = "macos"))]
-        if self.output_buffers.is_some() {
-            self.output_buffers = Some([
-                RenderTarget::new(device, width, height, OUTPUT_FORMAT, "ContentOutput_Front"),
-                RenderTarget::new(device, width, height, OUTPUT_FORMAT, "ContentOutput_Back"),
-            ]);
-            self.front_index = 0;
-        }
+
         // Resize IOSurface bridge and re-import both content textures
         #[cfg(target_os = "macos")]
         if let Some(ref bridge) = self.shared_bridge {
             bridge.resize(width, height);
             self.shared_textures = [
-                Some(unsafe { bridge.import_texture(device, 0) }),
-                Some(unsafe { bridge.import_texture(device, 1) }),
+                Some(unsafe { bridge.import_texture_native(native_device, 0) }),
+                Some(unsafe { bridge.import_texture_native(native_device, 1) }),
             ];
             self.write_surface_index = 0;
             self.shared_generation = bridge.generation();
         }
+
         // Update shared dimensions for UI thread
         self.shared_output.set_dimensions(width, height);
     }
@@ -1294,44 +546,44 @@ impl ContentPipeline {
 
     /// Pre-tonemap HDR output for export pipeline.
     #[allow(dead_code)]
-    pub fn pre_tonemap_output(&self) -> &wgpu::TextureView {
+    pub fn pre_tonemap_output(&self) -> &manifold_gpu::GpuTexture {
         self.compositor.pre_tonemap_output()
     }
 
-    /// Underlying GPU texture of the compositor output for SDR export.
-    /// Used to extract the raw Metal texture pointer via `as_hal`.
-    pub fn export_output_texture(&self) -> &wgpu::Texture {
+    /// Export output texture (post-tonemap, post-effects).
+    pub fn export_output_texture(&self) -> &manifold_gpu::GpuTexture {
         self.compositor.output_texture()
     }
 
-    /// Compositor output view (post-tonemap). Used by LED output to blit
-    /// through the edge-extend shader. The texture has TEXTURE_BINDING usage.
-    pub fn compositor_output_view(&self) -> &wgpu::TextureView {
-        self.compositor.output_view()
+    /// Compositor output texture (post-tonemap). Used by LED output.
+    pub fn compositor_output_texture(&self) -> &manifold_gpu::GpuTexture {
+        self.compositor.output_texture()
     }
 
-    /// LED tap view: pre-tonemap composite captured when led_exit_index == 0.
+    /// LED tap texture: pre-tonemap composite captured when led_exit_index == 0.
     /// Returns the tap if available, otherwise falls back to the final output.
-    pub fn led_source_view(&self) -> &wgpu::TextureView {
-        self.compositor.led_tap_view().unwrap_or_else(|| self.compositor.output_view())
+    pub fn led_source_texture(&self) -> &manifold_gpu::GpuTexture {
+        self.compositor.led_tap_texture()
+            .unwrap_or_else(|| self.compositor.output_texture())
     }
 
     /// Run the PQ encoder on the final compositor output for HDR export.
-    /// Returns the PQ-encoded texture for the Metal encoder.
+    /// Returns the PQ-encoded texture.
     /// Lazily creates the PQ encoder pipeline on first call.
     pub fn pq_encode_for_export(
         &mut self,
-        gpu: &manifold_renderer::gpu::GpuContext,
         paper_white_nits: f32,
         max_nits: f32,
-    ) -> &wgpu::Texture {
+    ) -> &manifold_gpu::GpuTexture {
+        let native_device = self.native_device.as_ref()
+            .expect("native device required for PQ encoding");
         let (w, h) = self.compositor.dimensions();
 
         // Lazy init PQ encoder
         if self.pq_encoder.is_none() {
             self.pq_encoder =
                 Some(manifold_renderer::pq_encoder::PqEncoder::new(
-                    &gpu.device, w, h, self.hal_ctx.as_ref(),
+                    native_device, w, h,
                 ));
             log::info!("[ContentPipeline] Created PQ encoder {}x{}", w, h);
         }
@@ -1339,26 +591,23 @@ impl ContentPipeline {
 
         // Resize if needed
         if pq.output.width != w || pq.output.height != h {
-            self.pq_encoder.as_mut().unwrap().resize(&gpu.device, w, h);
+            self.pq_encoder.as_mut().unwrap().resize(native_device, w, h);
         }
 
         // Encode: take the final compositor output (post-tonemap, post-effects)
         // and apply the ST.2084 PQ transfer function.
-        let edr_view = self.compositor.output_view();
-        let mut encoder =
-            gpu.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("PQ Encode"),
-                });
-        self.pq_encoder.as_ref().unwrap().encode(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            edr_view,
-            paper_white_nits,
-            max_nits,
-        );
-        gpu.queue.submit(std::iter::once(encoder.finish()));
+        let source = self.compositor.output_texture();
+        let mut enc = native_device.create_encoder("PQ Encode");
+        {
+            let mut gpu_enc = GpuEncoder::new(&mut enc, native_device);
+            self.pq_encoder.as_ref().unwrap().encode(
+                &mut gpu_enc,
+                source,
+                paper_white_nits,
+                max_nits,
+            );
+        }
+        enc.commit();
 
         &self.pq_encoder.as_ref().unwrap().output.texture
     }
@@ -1373,7 +622,9 @@ impl ContentPipeline {
     /// Per-pass GPU timing results from the last frame.
     /// Only available with the `profiling` feature.
     #[cfg(feature = "profiling")]
-    pub fn last_gpu_pass_results(&self) -> &[manifold_renderer::gpu_profiler::GpuPassTiming] {
+    pub fn last_gpu_pass_results(
+        &self,
+    ) -> &[manifold_renderer::gpu_profiler::GpuPassTiming] {
         &self.last_gpu_pass_results
     }
 

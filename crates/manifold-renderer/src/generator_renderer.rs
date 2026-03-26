@@ -33,7 +33,8 @@ struct LayerGeneratorState {
 /// Manages per-layer Generator instances and per-clip RenderTargets.
 /// Port of C# GeneratorRenderer : IClipRenderer.
 pub struct GeneratorRenderer {
-    device: GpuDevice,
+    /// Cached pointer to GpuDevice owned by ContentPipeline (same thread, same lifetime).
+    device_ptr: *const GpuDevice,
     width: u32,
     height: u32,
     format: GpuTextureFormat,
@@ -48,9 +49,13 @@ pub struct GeneratorRenderer {
     uniform_arena: UniformArena,
 }
 
+// Safety: device_ptr points to GpuDevice on the content thread.
+// GeneratorRenderer is only used on the content thread.
+unsafe impl Send for GeneratorRenderer {}
+
 impl GeneratorRenderer {
     pub fn new(
-        device: GpuDevice,
+        device: &GpuDevice,
         width: u32,
         height: u32,
         format: GpuTextureFormat,
@@ -59,7 +64,7 @@ impl GeneratorRenderer {
         let mut available_rts = Vec::with_capacity(pool_size);
         for i in 0..pool_size {
             available_rts.push(RenderTarget::new(
-                &device,
+                device,
                 width,
                 height,
                 format,
@@ -67,10 +72,10 @@ impl GeneratorRenderer {
             ));
         }
 
-        let uniform_arena = UniformArena::new(&device);
+        let uniform_arena = UniformArena::new(device);
 
         Self {
-            device,
+            device_ptr: device as *const GpuDevice,
             width,
             height,
             format,
@@ -81,6 +86,18 @@ impl GeneratorRenderer {
             render_scratch: Vec::with_capacity(16),
             uniform_arena,
         }
+    }
+
+    /// Set the device pointer after the GpuDevice has been moved to its
+    /// final location (inside ContentPipeline). Must be called before any
+    /// generator is created.
+    pub fn set_device(&mut self, device: &GpuDevice) {
+        self.device_ptr = device as *const GpuDevice;
+    }
+
+    /// Get a reference to the GpuDevice.
+    fn device(&self) -> &GpuDevice {
+        unsafe { &*self.device_ptr }
     }
 
     /// Internal: acquire a clip with generator type and layer identity.
@@ -103,7 +120,7 @@ impl GeneratorRenderer {
             .is_none_or(|ls| ls.generator_type != gen_type);
 
         if needs_create {
-            if let Some(generator) = self.registry.create(&self.device, &gen_type) {
+            if let Some(generator) = self.registry.create(self.device(), &gen_type) {
                 self.layer_generators.insert(
                     layer_id.clone(),
                     LayerGeneratorState {
@@ -126,7 +143,7 @@ impl GeneratorRenderer {
             rt
         } else {
             RenderTarget::new(
-                &self.device,
+                self.device(),
                 self.width,
                 self.height,
                 self.format,
@@ -261,14 +278,17 @@ impl GeneratorRenderer {
     pub fn resize_gpu(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
+        // Safety: device_ptr points to GpuDevice owned by ContentPipeline,
+        // which outlives GeneratorRenderer. No aliasing with active_clips/generators.
+        let device = unsafe { &*self.device_ptr };
         for active in self.active_clips.values_mut() {
-            active.render_target.resize(&self.device, width, height);
+            active.render_target.resize(device, width, height);
         }
         for rt in &mut self.available_rts {
-            rt.resize(&self.device, width, height);
+            rt.resize(device, width, height);
         }
         for layer_state in self.layer_generators.values_mut() {
-            layer_state.generator.resize(&self.device, width, height);
+            layer_state.generator.resize(device, width, height);
         }
     }
 
@@ -297,7 +317,7 @@ impl GeneratorRenderer {
                 .layer_generators
                 .get(layer_id)
                 .map_or(0, |ls| ls.trigger_count);
-            if let Some(generator) = self.registry.create(&self.device, &new_type) {
+            if let Some(generator) = self.registry.create(self.device(), &new_type) {
                 self.layer_generators.insert(
                     layer_id.clone(),
                     LayerGeneratorState {
