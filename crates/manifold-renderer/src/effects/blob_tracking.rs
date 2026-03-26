@@ -197,18 +197,25 @@ impl BlobTrackingFX {
     fn get_or_create_owner(
         &mut self,
         device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
         owner_key: i64,
     ) -> &mut OwnerState {
         self.owner_states.entry(owner_key).or_insert_with(|| {
             // BlobTrackingFX.cs line 78: RenderTextureUtil.Create(320, 180, name)
             // Unity creates an RGBA32 RT; we use Rgba8Unorm for readback compatibility.
-            let downsample_rt = RenderTarget::new(
-                device,
-                READBACK_WIDTH,
-                READBACK_HEIGHT,
-                GpuTextureFormat::Rgba8Unorm,
-                &format!("BlobAnalysis_{owner_key}"),
-            );
+            let downsample_rt = if let Some(p) = pool {
+                RenderTarget::new_pooled(
+                    p, READBACK_WIDTH, READBACK_HEIGHT,
+                    GpuTextureFormat::Rgba8Unorm,
+                    &format!("BlobAnalysis_{owner_key}"),
+                )
+            } else {
+                RenderTarget::new(
+                    device, READBACK_WIDTH, READBACK_HEIGHT,
+                    GpuTextureFormat::Rgba8Unorm,
+                    &format!("BlobAnalysis_{owner_key}"),
+                )
+            };
 
             // BlobTrackingFX.cs lines 80-84
             let pixel_buffer =
@@ -554,7 +561,7 @@ impl PostProcessEffect for BlobTrackingFX {
         let connect_dist = fx.param_values.get(4).copied().unwrap_or(0.35);
 
         // BlobTrackingFX.cs line 133
-        self.get_or_create_owner(gpu.device, ctx.owner_key);
+        self.get_or_create_owner(gpu.device, gpu.pool, ctx.owner_key);
 
         // ---- Phase 0: poll any pending readback from a previous frame ----
         self.poll_readback(ctx.owner_key);

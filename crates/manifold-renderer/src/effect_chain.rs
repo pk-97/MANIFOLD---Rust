@@ -37,24 +37,42 @@ impl EffectChain {
     }
 
     /// Ensure internal ping-pong buffers exist at the given dimensions.
-    fn ensure_buffers(&mut self, device: &GpuDevice, width: u32, height: u32) {
+    fn ensure_buffers(
+        &mut self,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        width: u32,
+        height: u32,
+    ) {
         let format = GpuTextureFormat::Rgba16Float;
         if self.ping.is_none() {
-            self.ping = Some(RenderTarget::new(
-                device, width, height, format, "EffectChain Ping",
-            ));
-            self.pong = Some(RenderTarget::new(
-                device, width, height, format, "EffectChain Pong",
-            ));
+            self.ping = Some(if let Some(p) = pool {
+                RenderTarget::new_pooled(p, width, height, format, "EffectChain Ping")
+            } else {
+                RenderTarget::new(device, width, height, format, "EffectChain Ping")
+            });
+            self.pong = Some(if let Some(p) = pool {
+                RenderTarget::new_pooled(p, width, height, format, "EffectChain Pong")
+            } else {
+                RenderTarget::new(device, width, height, format, "EffectChain Pong")
+            });
         }
     }
 
-    fn ensure_dry_snapshot(&mut self, device: &GpuDevice, width: u32, height: u32) {
+    fn ensure_dry_snapshot(
+        &mut self,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        width: u32,
+        height: u32,
+    ) {
         let format = GpuTextureFormat::Rgba16Float;
         if self.dry_snapshot.is_none() {
-            self.dry_snapshot = Some(RenderTarget::new(
-                device, width, height, format, "EffectChain DrySnapshot",
-            ));
+            self.dry_snapshot = Some(if let Some(p) = pool {
+                RenderTarget::new_pooled(p, width, height, format, "EffectChain DrySnapshot")
+            } else {
+                RenderTarget::new(device, width, height, format, "EffectChain DrySnapshot")
+            });
         }
     }
 
@@ -131,7 +149,7 @@ impl EffectChain {
             return None;
         }
 
-        self.ensure_buffers(gpu.device, ctx.width, ctx.height);
+        self.ensure_buffers(gpu.device, gpu.pool, ctx.width, ctx.height);
         self.use_ping_as_source = true;
 
         // Precompute cross-chain params for effects that need them.
@@ -187,7 +205,7 @@ impl EffectChain {
                             );
                             first_effect_pending = false;
                         }
-                        self.ensure_dry_snapshot(gpu.device, ctx.width, ctx.height);
+                        self.ensure_dry_snapshot(gpu.device, gpu.pool, ctx.width, ctx.height);
                         // GPU copy source -> dry_snapshot
                         gpu.copy_texture_to_texture(
                             self.source_texture(),

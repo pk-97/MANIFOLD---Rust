@@ -67,7 +67,12 @@ impl BloomFX {
     }
 
     // BloomFX.cs lines 42-68 — GetOrCreatePyramid
-    fn ensure_state(&mut self, device: &manifold_gpu::GpuDevice, owner_key: i64) {
+    fn ensure_state(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        owner_key: i64,
+    ) {
         if self.states.contains_key(&owner_key) {
             return;
         }
@@ -88,8 +93,18 @@ impl BloomFX {
             if pw < MIN_SIZE || ph < MIN_SIZE {
                 break;
             }
-            mips_a.push(RenderTarget::new(device, pw, ph, format, &format!("BloomMipA_{i}")));
-            mips_b.push(RenderTarget::new(device, pw, ph, format, &format!("BloomMipB_{i}")));
+            let a = if let Some(p) = pool {
+                RenderTarget::new_pooled(p, pw, ph, format, &format!("BloomMipA_{i}"))
+            } else {
+                RenderTarget::new(device, pw, ph, format, &format!("BloomMipA_{i}"))
+            };
+            let b = if let Some(p) = pool {
+                RenderTarget::new_pooled(p, pw, ph, format, &format!("BloomMipB_{i}"))
+            } else {
+                RenderTarget::new(device, pw, ph, format, &format!("BloomMipB_{i}"))
+            };
+            mips_a.push(a);
+            mips_b.push(b);
             count += 1;
             pw = (pw / 2).max(1);
             ph = (ph / 2).max(1);
@@ -116,7 +131,7 @@ impl PostProcessEffect for BloomFX {
 
         self.width = ctx.width;
         self.height = ctx.height;
-        self.ensure_state(gpu.device, ctx.owner_key);
+        self.ensure_state(gpu.device, gpu.pool, ctx.owner_key);
 
         let state = self.states.get(&ctx.owner_key).unwrap();
         if state.count == 0 {

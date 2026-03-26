@@ -73,13 +73,15 @@ impl PostProcessEffect for StylizedFeedbackFX {
             && self.height > 0
         {
             let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
-            let buffer = RenderTarget::new(
-                gpu.device,
-                self.width,
-                self.height,
-                format,
-                "StylizedFeedback State",
-            );
+            let buffer = if let Some(pool) = gpu.pool {
+                RenderTarget::new_pooled(
+                    pool, self.width, self.height, format, "StylizedFeedback State",
+                )
+            } else {
+                RenderTarget::new(
+                    gpu.device, self.width, self.height, format, "StylizedFeedback State",
+                )
+            };
             gpu.clear_texture(&buffer.texture, 0.0, 0.0, 0.0, 0.0);
             self.states
                 .insert(ctx.owner_key, StylizedFeedbackState { buffer });

@@ -136,23 +136,27 @@ struct PingPong {
 }
 
 impl PingPong {
-    fn new(device: &GpuDevice, width: u32, height: u32, label_prefix: &str) -> Self {
+    fn new(
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        width: u32,
+        height: u32,
+        label_prefix: &str,
+    ) -> Self {
         let format = GpuTextureFormat::Rgba16Float;
+        let ping = if let Some(p) = pool {
+            RenderTarget::new_pooled(p, width, height, format, &format!("{label_prefix} Ping"))
+        } else {
+            RenderTarget::new(device, width, height, format, &format!("{label_prefix} Ping"))
+        };
+        let pong = if let Some(p) = pool {
+            RenderTarget::new_pooled(p, width, height, format, &format!("{label_prefix} Pong"))
+        } else {
+            RenderTarget::new(device, width, height, format, &format!("{label_prefix} Pong"))
+        };
         Self {
-            ping: RenderTarget::new(
-                device,
-                width,
-                height,
-                format,
-                &format!("{label_prefix} Ping"),
-            ),
-            pong: RenderTarget::new(
-                device,
-                width,
-                height,
-                format,
-                &format!("{label_prefix} Pong"),
-            ),
+            ping,
+            pong,
             use_ping_as_source: true,
         }
     }
@@ -268,7 +272,7 @@ pub struct LayerCompositor {
 impl LayerCompositor {
     pub fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
         Self {
-            main: PingPong::new(device, width, height, "Compositor"),
+            main: PingPong::new(device, None, width, height, "Compositor"),
             layer_buf: None,
             blend: BlendResources::new(device, width, height),
             uniform_arena: UniformArena::new(device),
@@ -285,7 +289,7 @@ impl LayerCompositor {
         if self.layer_buf.is_none() {
             let w = self.main.width();
             let h = self.main.height();
-            self.layer_buf = Some(PingPong::new(device, w, h, "Layer Scratch"));
+            self.layer_buf = Some(PingPong::new(device, None, w, h, "Layer Scratch"));
         }
     }
 

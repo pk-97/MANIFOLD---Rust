@@ -60,7 +60,12 @@ impl HalationFX {
         }
     }
 
-    fn ensure_state(&mut self, device: &manifold_gpu::GpuDevice, owner_key: i64) {
+    fn ensure_state(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+        owner_key: i64,
+    ) {
         if self.states.contains_key(&owner_key) {
             return;
         }
@@ -70,8 +75,16 @@ impl HalationFX {
         let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
         let qw = (self.width / HDR_BUFFER_DIVISOR).max(1);
         let qh = (self.height / HDR_BUFFER_DIVISOR).max(1);
-        let buf_a = RenderTarget::new(device, qw, qh, format, &format!("HalationA_{owner_key}"));
-        let buf_b = RenderTarget::new(device, qw, qh, format, &format!("HalationB_{owner_key}"));
+        let buf_a = if let Some(p) = pool {
+            RenderTarget::new_pooled(p, qw, qh, format, &format!("HalationA_{owner_key}"))
+        } else {
+            RenderTarget::new(device, qw, qh, format, &format!("HalationA_{owner_key}"))
+        };
+        let buf_b = if let Some(p) = pool {
+            RenderTarget::new_pooled(p, qw, qh, format, &format!("HalationB_{owner_key}"))
+        } else {
+            RenderTarget::new(device, qw, qh, format, &format!("HalationB_{owner_key}"))
+        };
         self.states.insert(owner_key, HalationState { buf_a, buf_b });
     }
 
@@ -115,7 +128,7 @@ impl PostProcessEffect for HalationFX {
 
         self.width = ctx.width;
         self.height = ctx.height;
-        self.ensure_state(gpu.device, ctx.owner_key);
+        self.ensure_state(gpu.device, gpu.pool, ctx.owner_key);
 
         let state = match self.states.get(&ctx.owner_key) {
             Some(s) => s,

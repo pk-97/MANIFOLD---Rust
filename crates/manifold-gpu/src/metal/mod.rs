@@ -334,7 +334,7 @@ impl GpuDevice {
     pub fn heap_texture_size_and_align(&self, desc: &GpuTextureDesc) -> (u64, u64) {
         let mtl_desc = Self::build_mtl_texture_desc(desc);
         let sa = self.device.heap_texture_size_and_align(&mtl_desc);
-        (sa.size as u64, sa.align as u64)
+        (sa.size, sa.align)
     }
 
     /// Build a Metal TextureDescriptor from GpuTextureDesc (shared helper).
@@ -555,17 +555,17 @@ impl GpuHeap {
 
     /// Total heap size in bytes.
     pub fn size(&self) -> u64 {
-        self.heap.size() as u64
+        self.heap.size()
     }
 
     /// Currently used heap memory in bytes.
     pub fn used_size(&self) -> u64 {
-        self.heap.used_size() as u64
+        self.heap.used_size()
     }
 
     /// Maximum available contiguous allocation size with given alignment.
     pub fn max_available_size(&self, alignment: u64) -> u64 {
-        self.heap.max_available_size_with_alignment(alignment as _) as u64
+        self.heap.max_available_size_with_alignment(alignment)
     }
 }
 
@@ -633,11 +633,11 @@ impl TexturePool {
         let key = (width, height, format);
 
         // Try recycled texture first (zero allocation cost).
-        if let Some(vec) = inner.available.get_mut(&key) {
-            if let Some(tex) = vec.pop() {
-                inner.stats_recycled += 1;
-                return tex;
-            }
+        if let Some(vec) = inner.available.get_mut(&key)
+            && let Some(tex) = vec.pop()
+        {
+            inner.stats_recycled += 1;
+            return tex;
         }
 
         inner.stats_allocated += 1;

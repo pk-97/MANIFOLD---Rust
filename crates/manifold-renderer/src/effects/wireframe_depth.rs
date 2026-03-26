@@ -299,15 +299,45 @@ impl WireframeDepthFX {
         }
     }
 
-    // WireframeDepthFX.cs line 259-268 — CreateRenderTexture helper
+    // WireframeDepthFX.cs line 259-268 — CreateRenderTexture helper.
+    // Uses TexturePool when available (heap sub-allocation, zero kernel calls).
     fn create_rt(
+        pool: Option<&manifold_gpu::TexturePool>,
         device: &manifold_gpu::GpuDevice,
         w: u32,
         h: u32,
         format: manifold_gpu::GpuTextureFormat,
         label: &str,
     ) -> RenderTarget {
-        RenderTarget::new(device, w, h, format, label)
+        if let Some(pool) = pool {
+            RenderTarget::new_pooled(pool, w, h, format, label)
+        } else {
+            RenderTarget::new(device, w, h, format, label)
+        }
+    }
+
+    /// Create a transient RenderTarget for per-frame intermediate use.
+    /// Returns to pool on drop via release_transient().
+    fn create_transient(
+        gpu: &GpuEncoder,
+        w: u32,
+        h: u32,
+        format: manifold_gpu::GpuTextureFormat,
+        label: &str,
+    ) -> RenderTarget {
+        if let Some(pool) = gpu.pool {
+            RenderTarget::new_pooled(pool, w, h, format, label)
+        } else {
+            RenderTarget::new(gpu.device, w, h, format, label)
+        }
+    }
+
+    /// Release a transient RenderTarget back to the pool.
+    fn release_transient(gpu: &GpuEncoder, rt: RenderTarget) {
+        if let Some(pool) = gpu.pool {
+            rt.release_to_pool(pool);
+        }
+        // If no pool, rt is dropped normally (Metal frees the texture).
     }
 
     /// Dispatch a compute pass via native Metal encoder.
@@ -422,7 +452,7 @@ impl WireframeDepthFX {
                 state.wire_width = wire_w;
                 state.wire_height = wire_h;
                 state.line_history_tex = Self::create_rt(
-                    gpu.device, wire_w, wire_h,
+                    gpu.pool, gpu.device, wire_w, wire_h,
                     manifold_gpu::GpuTextureFormat::Rgba8Unorm,
                     &format!("WireframeDepthHistory_{owner_key}"),
                 );
@@ -448,28 +478,28 @@ impl WireframeDepthFX {
         let pixel_count = (aw * ah) as usize;
 
         let previous_analysis_tex = Self::create_rt(
-            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
             &format!("WireframeDepthPrev_{owner_key}"));
         let depth_tex = Self::create_rt(
-            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
+            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
             &format!("WireframeDepthDepth_{owner_key}"));
         let line_history_tex = Self::create_rt(
-            gpu.device, wire_w, wire_h, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            gpu.pool, gpu.device, wire_w, wire_h, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
             &format!("WireframeDepthHistory_{owner_key}"));
         let flow_tex = Self::create_rt(
-            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
+            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
             &format!("WireframeDepthFlow_{owner_key}"));
         let mesh_coord_tex = Self::create_rt(
-            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
+            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
             &format!("WireframeDepthMeshCoord_{owner_key}"));
         let semantic_tex = Self::create_rt(
-            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
+            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
             &format!("WireframeDepthSemantic_{owner_key}"));
         let surface_cache_tex = Self::create_rt(
-            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
+            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
             &format!("WireframeDepthSurface_{owner_key}"));
         let dnn_input_tex = Self::create_rt(
-            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            gpu.pool, gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
             &format!("WireframeDepthDnnInput_{owner_key}"));
 
         // WireframeDepthFX.cs line 205-222 — CPU upload textures
@@ -992,8 +1022,8 @@ impl WireframeDepthFX {
     ) {
         let aw = state.analysis_width;
         let ah = state.analysis_height;
-        let depth_next = RenderTarget::new(
-            gpu.device, aw, ah,
+        let depth_next = Self::create_transient(
+            gpu, aw, ah,
             manifold_gpu::GpuTextureFormat::Rgba16Float, "WD DepthNext",
         );
 
@@ -1008,6 +1038,7 @@ impl WireframeDepthFX {
 
         // Graphics.Blit(depthNext, state.depthTex) — copy
         Self::encode_copy(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
+        Self::release_transient(gpu, depth_next);
     }
 
     // WireframeDepthFX.cs line 420-453 — TryEstimateDepthDnn
@@ -1028,8 +1059,8 @@ impl WireframeDepthFX {
 
         let aw = state.analysis_width;
         let ah = state.analysis_height;
-        let depth_next = RenderTarget::new(
-            gpu.device, aw, ah,
+        let depth_next = Self::create_transient(
+            gpu, aw, ah,
             manifold_gpu::GpuTextureFormat::Rgba16Float, "WD DnnDepthNext",
         );
 
@@ -1043,6 +1074,7 @@ impl WireframeDepthFX {
 
         // Graphics.Blit(depthNext, state.depthTex)
         Self::encode_copy(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
+        Self::release_transient(gpu, depth_next);
 
         true
     }
@@ -1142,8 +1174,8 @@ impl WireframeDepthFX {
         };
 
         // WireframeDepthFX.cs line 792-826 — flowFiltered, temp RTs
-        let flow_filtered = RenderTarget::new(
-            gpu.device, aw, ah,
+        let flow_filtered = Self::create_transient(
+            gpu, aw, ah,
             manifold_gpu::GpuTextureFormat::Rgba16Float, "WD FlowFiltered",
         );
         // PASS_FLOW_HYGIENE: flowInput → flowFiltered
@@ -1165,20 +1197,20 @@ impl WireframeDepthFX {
             &state.semantic_tex.texture, aw, ah);
 
         // WireframeDepthFX.cs line 811-826: temp coord RTs
-        let coord_next = RenderTarget::new(
-            gpu.device, aw, ah,
+        let coord_next = Self::create_transient(
+            gpu, aw, ah,
             manifold_gpu::GpuTextureFormat::Rgba16Float, "WD CoordNext",
         );
-        let coord_affine = RenderTarget::new(
-            gpu.device, aw, ah,
+        let coord_affine = Self::create_transient(
+            gpu, aw, ah,
             manifold_gpu::GpuTextureFormat::Rgba16Float, "WD CoordAffine",
         );
-        let coord_regularized = RenderTarget::new(
-            gpu.device, aw, ah,
+        let coord_regularized = Self::create_transient(
+            gpu, aw, ah,
             manifold_gpu::GpuTextureFormat::Rgba16Float, "WD CoordReg",
         );
-        let surface_next = RenderTarget::new(
-            gpu.device, aw, ah,
+        let surface_next = Self::create_transient(
+            gpu, aw, ah,
             manifold_gpu::GpuTextureFormat::Rgba16Float, "WD SurfaceNext",
         );
 
@@ -1203,8 +1235,8 @@ impl WireframeDepthFX {
         let pre_regularize_tex: &manifold_gpu::GpuTexture;
         let coord_face_opt: Option<RenderTarget>;
         if face_warp_enabled {
-            let coord_face = RenderTarget::new(
-                gpu.device, aw, ah,
+            let coord_face = Self::create_transient(
+                gpu, aw, ah,
                 manifold_gpu::GpuTextureFormat::Rgba16Float, "WD CoordFace",
             );
             let edge_follow_mask_tex = if state.dnn_has_subject_mask {
@@ -1255,8 +1287,15 @@ impl WireframeDepthFX {
             &state.surface_cache_tex.texture,
             aw, ah,
         );
-        // coord_face_opt drops here (ReleaseTemporary equivalent)
-        let _ = coord_face_opt;
+        // Release transient textures back to pool (ReleaseTemporary equivalent).
+        if let Some(cf) = coord_face_opt {
+            Self::release_transient(gpu, cf);
+        }
+        Self::release_transient(gpu, flow_filtered);
+        Self::release_transient(gpu, coord_next);
+        Self::release_transient(gpu, coord_affine);
+        Self::release_transient(gpu, coord_regularized);
+        Self::release_transient(gpu, surface_next);
     }
 
     // WireframeDepthFX.cs line 927-978 — ClearOwnerState
@@ -1571,8 +1610,8 @@ impl PostProcessEffect for WireframeDepthFX {
         // WireframeDepthFX.cs line 363-418
 
         // PASS_ANALYSIS: source → analysis (temp RT at analysis resolution)
-        let analysis_rt = RenderTarget::new(
-            gpu.device, aw, ah,
+        let analysis_rt = Self::create_transient(
+            gpu, aw, ah,
             manifold_gpu::GpuTextureFormat::Rgba8Unorm, "WD Analysis",
         );
         self.encode_pass(gpu, PASS_ANALYSIS, &uniforms_analysis,
@@ -1669,8 +1708,8 @@ impl PostProcessEffect for WireframeDepthFX {
 
         // --- Wire mask pass (Pass 2) ---
         // WireframeDepthFX.cs line 305-328
-        let line_mask = RenderTarget::new(
-            gpu.device, ww, wh,
+        let line_mask = Self::create_transient(
+            gpu, ww, wh,
             manifold_gpu::GpuTextureFormat::Rgba8Unorm, "WD LineMask",
         );
         {
@@ -1695,8 +1734,8 @@ impl PostProcessEffect for WireframeDepthFX {
 
         // --- Update history pass (Pass 3) + copy → lineHistoryTex ---
         // WireframeDepthFX.cs line 330-347
-        let history_next = RenderTarget::new(
-            gpu.device, ww, wh,
+        let history_next = Self::create_transient(
+            gpu, ww, wh,
             manifold_gpu::GpuTextureFormat::Rgba8Unorm, "WD HistoryNext",
         );
         {
@@ -1728,6 +1767,11 @@ impl PostProcessEffect for WireframeDepthFX {
                 &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
                 target, self.width, self.height);
         }
+
+        // Release transient textures back to pool.
+        Self::release_transient(gpu, analysis_rt);
+        Self::release_transient(gpu, line_mask);
+        Self::release_transient(gpu, history_next);
     }
 
     // WireframeDepthFX.cs line 915-919 — ClearState (all owners)
