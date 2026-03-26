@@ -1,12 +1,7 @@
 name: Security Audit
 
 on:
-  schedule:
-    - cron: '0 0 * * 1'  # Weekly on Monday
-  push:
-    paths:
-      - '**/Cargo.toml'
-      - '**/Cargo.lock'
+  workflow_dispatch:  # Manual only — automatic runs disabled
 
 jobs:
   audit:
