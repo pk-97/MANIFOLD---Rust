@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-/// Central GPU resource holder. Created once, shared across all windows and render targets.
+/// Central GPU resource holder for the UI thread. Created once, shared across
+/// all windows and render targets. The content thread uses `manifold_gpu::GpuDevice`
+/// directly — it does not go through this struct.
 pub struct GpuContext {
     pub instance: wgpu::Instance,
     pub adapter: wgpu::Adapter,
@@ -27,21 +29,18 @@ impl GpuContext {
             .expect("Failed to find a suitable GPU adapter");
 
         let info = adapter.get_info();
-        eprintln!("[GPU] adapter={:?} backend={:?} driver={:?}", info.name, info.backend, info.driver);
+        eprintln!(
+            "[GPU] adapter={:?} backend={:?} driver={:?}",
+            info.name, info.backend, info.driver
+        );
         log::info!("GPU adapter: {:?}", info.name);
 
-        let (device, queue) = Self::create_device_from_adapter(&adapter, "MANIFOLD Device").await;
+        let (device, queue) =
+            Self::create_device_from_adapter(&adapter, "MANIFOLD Device").await;
 
-        Self { instance, adapter, device: Arc::new(device), queue: Arc::new(queue) }
-    }
-
-    /// Request an additional device from the same adapter.
-    /// Used to create a separate device+queue for the content thread so
-    /// heavy GPU compute cannot block UI rendering.
-    pub async fn create_secondary_device(&self, label: &str) -> GpuDevice {
-        let (device, queue) = Self::create_device_from_adapter(&self.adapter, label).await;
-        log::info!("Created secondary GPU device: {}", label);
-        GpuDevice {
+        Self {
+            instance,
+            adapter,
             device: Arc::new(device),
             queue: Arc::new(queue),
         }
@@ -53,10 +52,16 @@ impl GpuContext {
     ) -> (wgpu::Device, wgpu::Queue) {
         // Request timestamp query features if the adapter supports them (for GPU profiling).
         let mut features = wgpu::Features::empty();
-        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+        if adapter
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+        {
             features |= wgpu::Features::TIMESTAMP_QUERY;
         }
-        if adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS) {
+        if adapter
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
+        {
             features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
         }
 
@@ -72,11 +77,4 @@ impl GpuContext {
             .await
             .expect("Failed to create GPU device")
     }
-}
-
-/// Standalone device+queue pair. Used by the content thread to isolate
-/// heavy GPU compute from the UI thread's rendering.
-pub struct GpuDevice {
-    pub device: Arc<wgpu::Device>,
-    pub queue: Arc<wgpu::Queue>,
 }

@@ -10,9 +10,10 @@
 ///   // ... use rt ...
 ///   pool.release(rt);  // returns to pool for reuse
 use ahash::AHashMap;
+use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use crate::render_target::RenderTarget;
 
-type PoolKey = (u32, u32, wgpu::TextureFormat);
+type PoolKey = (u32, u32, GpuTextureFormat);
 
 pub struct RenderTargetPool {
     available: AHashMap<PoolKey, Vec<RenderTarget>>,
@@ -28,10 +29,10 @@ impl RenderTargetPool {
     /// Get a RenderTarget from the pool, or create a new one if none available.
     pub fn get(
         &mut self,
-        device: &wgpu::Device,
+        device: &GpuDevice,
         width: u32,
         height: u32,
-        format: wgpu::TextureFormat,
+        format: GpuTextureFormat,
         label: &str,
     ) -> RenderTarget {
         let key = (width, height, format);

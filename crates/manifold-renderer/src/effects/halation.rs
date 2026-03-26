@@ -4,7 +4,7 @@
 //
 // 3 passes: ThresholdTintBlurH → BlurV → Composite.
 // Pass 0 combines threshold extraction + tinting + horizontal Gaussian blur
-// into a single render pass, applying threshold/tint per sample.
+// into a single dispatch, applying threshold/tint per sample.
 // Effective coverage: 17×17 = 289 unique positions vs Unity's 13-point cross.
 
 use ahash::AHashMap;
@@ -14,8 +14,6 @@ use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::HDR_BUFFER_DIVISOR;
-use super::dual_texture_blit_helper::DualTextureBlitHelper;
-#[cfg(target_os = "macos")]
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 
 #[repr(C)]
@@ -42,36 +40,19 @@ struct HalationState {
 }
 
 pub struct HalationFX {
-    helper: DualTextureBlitHelper,
-    #[cfg(target_os = "macos")]
-    compute_dual_blit: ComputeDualBlitHelper,
+    helper: ComputeDualBlitHelper,
     states: AHashMap<i64, HalationState>,
     width: u32,
     height: u32,
 }
 
 impl HalationFX {
-    pub fn new(
-        device: &wgpu::Device,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
-    ) -> Self {
+    pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: DualTextureBlitHelper::new(
-                device,
-                include_str!("shaders/fx_halation.wgsl"),
-                "Halation",
-                std::mem::size_of::<HalationUniforms>() as u64,
-                hal_ctx,
-            ),
-            #[cfg(target_os = "macos")]
-            compute_dual_blit: ComputeDualBlitHelper::new(
+            helper: ComputeDualBlitHelper::new(
                 device,
                 include_str!("shaders/fx_halation_compute.wgsl"),
                 "Halation Compute",
-                std::mem::size_of::<HalationUniforms>() as u64,
-                hal_ctx,
-                #[cfg(target_os = "macos")] native_device,
             ),
             states: AHashMap::new(),
             width: 0,
@@ -79,14 +60,14 @@ impl HalationFX {
         }
     }
 
-    fn ensure_state(&mut self, device: &wgpu::Device, owner_key: i64) {
+    fn ensure_state(&mut self, device: &manifold_gpu::GpuDevice, owner_key: i64) {
         if self.states.contains_key(&owner_key) {
             return;
         }
         if self.width == 0 || self.height == 0 {
             return;
         }
-        let format = wgpu::TextureFormat::Rgba16Float;
+        let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
         let qw = (self.width / HDR_BUFFER_DIVISOR).max(1);
         let qh = (self.height / HDR_BUFFER_DIVISOR).max(1);
         let buf_a = RenderTarget::new(device, qw, qh, format, &format!("HalationA_{owner_key}"));
@@ -125,12 +106,10 @@ impl PostProcessEffect for HalationFX {
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,
-        source: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-        _target_texture: &wgpu::Texture,
+        source: &manifold_gpu::GpuTexture,
+        target: &manifold_gpu::GpuTexture,
         fx: &EffectInstance,
         ctx: &EffectContext,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let amount = fx.param_values.first().copied().unwrap_or(0.0);
 
@@ -142,17 +121,6 @@ impl PostProcessEffect for HalationFX {
             Some(s) => s,
             None => return,
         };
-
-        // Check once whether to use compute path for this frame
-        #[cfg(target_os = "macos")]
-        let use_compute = gpu.has_native_encoder() || {
-            #[cfg(feature = "hal-encoding")]
-            { gpu.has_hal_encoder() }
-            #[cfg(not(feature = "hal-encoding"))]
-            { false }
-        };
-        #[cfg(not(target_os = "macos"))]
-        let use_compute = false;
 
         let threshold = fx.param_values.get(1).copied().unwrap_or(0.5);
         let spread = fx.param_values.get(2).copied().unwrap_or(0.5);
@@ -185,19 +153,10 @@ impl PostProcessEffect for HalationFX {
             main_texel_size_y: 1.0 / ctx.height as f32,
             ..base
         };
-        let pass0_uniforms = bytemuck::bytes_of(&pass0_u);
-        if use_compute {
-            #[cfg(target_os = "macos")]
-            self.compute_dual_blit.dispatch_a_only(
-                gpu, source, &state.buf_b.view, pass0_uniforms,
-                "Halation ThresholdTintBlurH", qw, qh, profiler,
-            );
-        } else {
-            self.helper.draw_main_only(
-                gpu, source, &state.buf_b.view, pass0_uniforms,
-                "Halation ThresholdTintBlurH", qw, qh, profiler,
-            );
-        }
+        self.helper.dispatch_a_only(
+            gpu, source, &state.buf_b.texture, bytemuck::bytes_of(&pass0_u),
+            "Halation ThresholdTintBlurH", qw, qh,
+        );
 
         // Pass 1: Vertical Gaussian blur — buf_b → buf_a (reduced-res)
         let pass1_u = HalationUniforms {
@@ -206,19 +165,11 @@ impl PostProcessEffect for HalationFX {
             main_texel_size_y: 1.0 / qh as f32,
             ..base
         };
-        let pass1_uniforms = bytemuck::bytes_of(&pass1_u);
-        if use_compute {
-            #[cfg(target_os = "macos")]
-            self.compute_dual_blit.dispatch_a_only(
-                gpu, &state.buf_b.view, &state.buf_a.view, pass1_uniforms,
-                "Halation BlurV", qw, qh, profiler,
-            );
-        } else {
-            self.helper.draw_main_only(
-                gpu, &state.buf_b.view, &state.buf_a.view, pass1_uniforms,
-                "Halation BlurV", qw, qh, profiler,
-            );
-        }
+        self.helper.dispatch_a_only(
+            gpu, &state.buf_b.texture, &state.buf_a.texture,
+            bytemuck::bytes_of(&pass1_u),
+            "Halation BlurV", qw, qh,
+        );
 
         // Pass 2: Composite — source (full-res) + buf_a (reduced-res) → target
         let pass2_u = HalationUniforms {
@@ -229,34 +180,30 @@ impl PostProcessEffect for HalationFX {
             halo_texel_size_y: 1.0 / qh as f32,
             ..base
         };
-        let pass2_uniforms = bytemuck::bytes_of(&pass2_u);
-        if use_compute {
-            #[cfg(target_os = "macos")]
-            self.compute_dual_blit.dispatch(
-                gpu, source, &state.buf_a.view, target, pass2_uniforms,
-                "Halation Composite", ctx.width, ctx.height, profiler,
-            );
-        } else {
-            self.helper.draw(
-                gpu, source, &state.buf_a.view, target, pass2_uniforms,
-                "Halation Composite", ctx.width, ctx.height, profiler,
-            );
-        }
+        self.helper.dispatch(
+            gpu, source, &state.buf_a.texture, target,
+            bytemuck::bytes_of(&pass2_u),
+            "Halation Composite", ctx.width, ctx.height,
+        );
     }
 
     fn clear_state(&mut self) {
         self.states.clear();
     }
 
-    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    fn resize(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        let format = wgpu::TextureFormat::Rgba16Float;
+        let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
         let qw = (width / HDR_BUFFER_DIVISOR).max(1);
         let qh = (height / HDR_BUFFER_DIVISOR).max(1);
         for (key, state) in &mut self.states {
-            state.buf_a = RenderTarget::new(device, qw, qh, format, &format!("HalationA_{key}"));
-            state.buf_b = RenderTarget::new(device, qw, qh, format, &format!("HalationB_{key}"));
+            state.buf_a = RenderTarget::new(
+                device, qw, qh, format, &format!("HalationA_{key}"),
+            );
+            state.buf_b = RenderTarget::new(
+                device, qw, qh, format, &format!("HalationB_{key}"),
+            );
         }
     }
 
@@ -273,5 +220,8 @@ impl StatefulEffect for HalationFX {
     fn cleanup_owner(&mut self, owner_key: i64) {
         self.states.remove(&owner_key);
     }
-    fn cleanup_all_owners(&mut self, _device: &wgpu::Device) { self.states.clear(); }
+
+    fn cleanup_all_owners(&mut self, _device: &manifold_gpu::GpuDevice) {
+        self.states.clear();
+    }
 }

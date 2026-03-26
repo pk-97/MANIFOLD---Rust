@@ -18,9 +18,4 @@ pub struct GeneratorContext {
     /// Generator params copied from Layer.gen_params.param_values.
     pub params: [f32; MAX_GEN_PARAMS],
     pub param_count: u32,
-    /// Native Metal texture for the render target (macOS only).
-    /// Set by GeneratorRenderer when native encoding is active.
-    /// Raw pointer avoids lifetime issues; valid for the frame duration.
-    #[cfg(target_os = "macos")]
-    pub native_target: Option<*const manifold_gpu::GpuTexture>,
 }

@@ -2,6 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use manifold_core::{BlendMode, EffectTypeId};
 use manifold_core::effects::{EffectGroup, EffectInstance};
+use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
 use crate::effect::EffectContext;
 use crate::effect_chain::EffectChain;
 use crate::effect_registry::EffectRegistry;
@@ -15,8 +16,7 @@ use crate::compositor::{Compositor, CompositorFrame};
 /// Descriptor for a single clip to composite.
 pub struct CompositeClipDescriptor<'a> {
     pub clip_id: &'a str,
-    pub texture_view: &'a wgpu::TextureView,
-    pub texture: &'a wgpu::Texture,
+    pub texture: &'a GpuTexture,
     pub layer_index: i32,
     pub blend_mode: BlendMode,
     pub opacity: f32,
@@ -44,496 +44,86 @@ struct BlendUniforms {
 
 const _: () = assert!(std::mem::size_of::<BlendUniforms>() == 32);
 
-/// Shared GPU resources for blend operations. Extracted from the compositor
-/// so they can be borrowed independently from ping-pong buffers.
-///
-/// Uses a ring buffer with dynamic uniform offsets so each blend pass within
-/// a frame reads its own uniforms. Without this, `queue.write_buffer` batches
-/// all writes before GPU execution, causing every pass to read the LAST
-/// written value — breaking per-layer blend modes.
-///
-/// The buffer grows dynamically when a frame needs more slots than currently
-/// allocated, so there is no hard limit on project complexity.
-/// Compute-based blend resources. Uses compute dispatches instead of render
-/// passes to bypass Metal TBDR tile overhead (~290us per pass at 4K).
-/// BGL entries for the blend compute pipeline (shared between wgpu and hal paths).
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-const BLEND_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 5] = [
-    wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: true,
-            min_binding_size: None,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 1,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 2,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 3,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 4,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::StorageTexture {
-            access: wgpu::StorageTextureAccess::WriteOnly,
-            format: wgpu::TextureFormat::Rgba16Float,
-            view_dimension: wgpu::TextureViewDimension::D2,
-        },
-        count: None,
-    },
-];
-
+/// GPU resources for blend operations using native Metal compute.
 struct BlendResources {
-    pipeline: wgpu::ComputePipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
+    pipeline: manifold_gpu::GpuComputePipeline,
+    sampler: manifold_gpu::GpuSampler,
     /// Compositor width/height — needed for dispatch_workgroups.
     width: u32,
     height: u32,
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(dead_code)]
-    hal_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(dead_code)]
-    hal_sampler: Option<crate::hal_context::MetalSampler>,
-    /// Native Metal compute pipeline for blend dispatch.
-    #[cfg(target_os = "macos")]
-    native_pipeline: Option<manifold_gpu::GpuComputePipeline>,
-    /// Native Metal sampler for blend texture sampling.
-    #[cfg(target_os = "macos")]
-    native_sampler: Option<manifold_gpu::GpuSampler>,
 }
 
-unsafe impl Send for BlendResources {}
-
 impl BlendResources {
-    fn new(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
-    ) -> Self {
-        let _ = &hal_ctx;
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Compositor Blend Compute"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("generators/shaders/compositor_blend_compute.wgsl").into(),
-            ),
+    fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
+        let pipeline = device.create_compute_pipeline(
+            include_str!("generators/shaders/compositor_blend_compute.wgsl"),
+            "cs_main",
+            "Blend Compute Native",
+        );
+        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            mip_filter: manifold_gpu::GpuFilterMode::Nearest,
+            address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
+            address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
+            address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
         });
-
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Blend Compute BGL"),
-            entries: &[
-                // binding 0: uniforms (dynamic offset)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(
-                            std::mem::size_of::<BlendUniforms>() as u64,
-                        ),
-                    },
-                    count: None,
-                },
-                // binding 1: base texture
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // binding 2: blend texture
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // binding 3: sampler
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                // binding 4: output storage texture (write-only)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba16Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Blend Compute Pipeline Layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            immediate_size: 0,
-        });
-
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Blend Compute Pipeline"),
-            layout: Some(&pipeline_layout),
-            module: &shader,
-            entry_point: Some("cs_main"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Blend Sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let (hal_pipeline, hal_sampler) = if let Some(ctx) = hal_ctx {
-            use wgpu::hal::Device as HalDevice;
-            let hal_pipe = crate::hal_pipeline::create_compute_pipeline(
-                ctx,
-                include_str!("generators/shaders/compositor_blend_compute.wgsl"),
-                "cs_main",
-                &BLEND_BGL_ENTRIES,
-                "Blend Compute HAL",
-            );
-            let hal_samp = unsafe {
-                ctx.device()
-                    .create_sampler(&wgpu::hal::SamplerDescriptor {
-                        label: Some("Blend Sampler HAL"),
-                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
-                        mag_filter: wgpu::FilterMode::Linear,
-                        min_filter: wgpu::FilterMode::Linear,
-                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-                        lod_clamp: 0.0..32.0,
-                        compare: None,
-                        anisotropy_clamp: 1,
-                        border_color: None,
-                    })
-                    .expect("Failed to create hal blend sampler")
-            };
-            (Some(hal_pipe), Some(hal_samp))
-        } else {
-            (None, None)
-        };
-
-        #[cfg(target_os = "macos")]
-        let (native_pipeline, native_sampler) = if let Some(nd) = native_device {
-            let np = nd.create_compute_pipeline(
-                include_str!("generators/shaders/compositor_blend_compute.wgsl"),
-                "cs_main",
-                "Blend Compute Native",
-            );
-            let ns = nd.create_sampler(&manifold_gpu::GpuSamplerDesc {
-                min_filter: manifold_gpu::GpuFilterMode::Linear,
-                mag_filter: manifold_gpu::GpuFilterMode::Linear,
-                mip_filter: manifold_gpu::GpuFilterMode::Nearest,
-                address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
-                address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
-                address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
-            });
-            (Some(np), Some(ns))
-        } else {
-            (None, None)
-        };
 
         Self {
-            pipeline, bind_group_layout, sampler,
-            width, height,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_pipeline,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_sampler,
-            #[cfg(target_os = "macos")]
-            native_pipeline,
-            #[cfg(target_os = "macos")]
-            native_sampler,
+            pipeline,
+            sampler,
+            width,
+            height,
         }
     }
 
     /// Execute a compute blend: reads source + blend textures, writes to target storage texture.
-    /// Pushes uniforms into the shared arena (flushed once per frame) instead of
-    /// calling queue.write_buffer per pass — reduces wgpu staging overhead.
+    /// Pushes uniforms into the shared arena (for offset tracking) and uses
+    /// GpuBinding::Bytes for inline set_bytes dispatch.
     fn blend_pass(
         &self,
         gpu: &mut GpuEncoder,
         arena: &mut UniformArena,
-        source_view: &wgpu::TextureView,
-        blend_view: &wgpu::TextureView,
-        target_view: &wgpu::TextureView,
+        source_texture: &GpuTexture,
+        blend_texture: &GpuTexture,
+        target_texture: &GpuTexture,
         uniforms: &BlendUniforms,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
-        #[cfg(target_os = "macos")] source_tex: Option<&wgpu::Texture>,
-        #[cfg(target_os = "macos")] blend_tex: Option<&wgpu::Texture>,
-        #[cfg(target_os = "macos")] target_tex: Option<&wgpu::Texture>,
     ) {
-        let offset = arena.push(uniforms);
+        // Push to arena for offset tracking (arena buffer not read on native path)
+        let _offset = arena.push(uniforms);
 
-        // --- native Metal path: zero wgpu ---
-        #[cfg(target_os = "macos")]
-        if let Some(ref native_pipe) = self.native_pipeline
-            && let Some(ref native_samp) = self.native_sampler
-            && gpu.has_native_encoder()
-        {
-            let src_gpu = unsafe {
-                if let Some(t) = source_tex {
-                    crate::gpu_encoder::extract_native_texture(t)
-                } else {
-                    crate::gpu_encoder::extract_native_texture_from_view(source_view)
-                }
-            };
-            let blend_gpu = unsafe {
-                if let Some(t) = blend_tex {
-                    crate::gpu_encoder::extract_native_texture(t)
-                } else {
-                    crate::gpu_encoder::extract_native_texture_from_view(blend_view)
-                }
-            };
-            let tgt_gpu = unsafe {
-                if let Some(t) = target_tex {
-                    crate::gpu_encoder::extract_native_texture(t)
-                } else {
-                    crate::gpu_encoder::extract_native_texture_from_view(target_view)
-                }
-            };
-            let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
-            enc.dispatch_compute(
-                native_pipe,
-                &[
-                    manifold_gpu::GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(uniforms),
-                    },
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 1,
-                        texture: &src_gpu,
-                    },
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 2,
-                        texture: &blend_gpu,
-                    },
-                    manifold_gpu::GpuBinding::Sampler {
-                        binding: 3,
-                        sampler: native_samp,
-                    },
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 4,
-                        texture: &tgt_gpu,
-                    },
-                ],
-                [self.width.div_ceil(16), self.height.div_ceil(16), 1],
-                "Blend Pass",
-            );
-            return;
-        }
-
-        // --- hal path: encode via hal command encoder ---
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            type MetalApi = wgpu::hal::api::Metal;
-            // Extract hal texture view pointers (sequential snatch lock)
-            let src_ptr = {
-                let g = unsafe { source_view.as_hal::<MetalApi>() }
-                    .expect("source not Metal");
-                &*g as *const _
-            };
-            let blend_ptr = {
-                let g = unsafe { blend_view.as_hal::<MetalApi>() }
-                    .expect("blend not Metal");
-                &*g as *const _
-            };
-            let tgt_ptr = {
-                let g = unsafe { target_view.as_hal::<MetalApi>() }
-                    .expect("target not Metal");
-                &*g as *const _
-            };
-            let arena_buf_ptr = arena.hal_buffer_ptr().expect("arena hal buffer");
-            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-            unsafe {
-                self.blend_pass_hal(
-                    hal_enc, hal_ctx,
-                    &*arena_buf_ptr,
-                    &*src_ptr, &*blend_ptr, &*tgt_ptr,
-                    offset,
-                );
-            }
-            return;
-        }
-
-        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Blend Compute BG"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
+        gpu.native_enc.dispatch_compute(
+            &self.pipeline,
+            &[
+                manifold_gpu::GpuBinding::Bytes {
                     binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: arena.buffer(),
-                        offset: 0,
-                        size: wgpu::BufferSize::new(
-                            std::mem::size_of::<BlendUniforms>() as u64,
-                        ),
-                    }),
+                    data: bytemuck::bytes_of(uniforms),
                 },
-                wgpu::BindGroupEntry {
+                manifold_gpu::GpuBinding::Texture {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(source_view),
+                    texture: source_texture,
                 },
-                wgpu::BindGroupEntry {
+                manifold_gpu::GpuBinding::Texture {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(blend_view),
+                    texture: blend_texture,
                 },
-                wgpu::BindGroupEntry {
+                manifold_gpu::GpuBinding::Sampler {
                     binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    sampler: &self.sampler,
                 },
-                wgpu::BindGroupEntry {
+                manifold_gpu::GpuBinding::Texture {
                     binding: 4,
-                    resource: wgpu::BindingResource::TextureView(target_view),
+                    texture: target_texture,
                 },
             ],
-        });
-
-        let ts = profiler.and_then(|p| p.compute_timestamps("Blend Pass", self.width, self.height));
-        let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("Blend Pass"),
-            timestamp_writes: ts,
-        });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &bind_group, &[offset as u32]);
-        pass.dispatch_workgroups(
-            self.width.div_ceil(16),
-            self.height.div_ceil(16),
-            1,
+            [self.width.div_ceil(16), self.height.div_ceil(16), 1],
+            "Blend Pass",
         );
     }
 
     fn resize(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-    }
-
-    /// HAL path: encode a compute blend dispatch via a hal command encoder.
-    /// Uses the arena's shared-memory buffer and pre-extracted hal texture views.
-    ///
-    /// Called from LayerCompositor::render_hal() in Phase 3e.
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(dead_code)]
-    pub(crate) unsafe fn blend_pass_hal(
-        &self,
-        hal_enc: &mut crate::hal_context::MetalCommandEncoder,
-        hal_ctx: &crate::hal_context::HalContext,
-        arena_hal_buf: &crate::hal_context::MetalBuffer,
-        source_hal_view: &crate::hal_context::MetalTextureView,
-        blend_hal_view: &crate::hal_context::MetalTextureView,
-        target_hal_view: &crate::hal_context::MetalTextureView,
-        uniform_offset: u64,
-    ) {
-        use wgpu::hal::{self as hal, CommandEncoder as _, Device as _};
-
-        let hal_pipe = self.hal_pipeline.as_ref().expect("blend hal pipeline");
-        let hal_samp = self.hal_sampler.as_ref().expect("blend hal sampler");
-
-        let hal_bg = unsafe {
-            hal_ctx.device().create_bind_group(
-                &hal::BindGroupDescriptor {
-                    label: None,
-                    layout: &hal_pipe.bind_group_layout,
-                    entries: &[
-                        hal::BindGroupEntry { binding: 0, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 1, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 2, resource_index: 1, count: 1 },
-                        hal::BindGroupEntry { binding: 3, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 4, resource_index: 2, count: 1 },
-                    ],
-                    buffers: &[hal::BufferBinding::new_unchecked(
-                        arena_hal_buf,
-                        0,
-                        std::num::NonZero::new(
-                            std::mem::size_of::<BlendUniforms>() as u64,
-                        ),
-                    )],
-                    samplers: &[hal_samp],
-                    textures: &[
-                        hal::TextureBinding {
-                            view: source_hal_view,
-                            usage: wgpu::wgt::TextureUses::RESOURCE,
-                        },
-                        hal::TextureBinding {
-                            view: blend_hal_view,
-                            usage: wgpu::wgt::TextureUses::RESOURCE,
-                        },
-                        hal::TextureBinding {
-                            view: target_hal_view,
-                            usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
-                        },
-                    ],
-                    acceleration_structures: &[],
-                    external_textures: &[],
-                },
-            )
-            .expect("Failed to create hal blend bind group")
-        };
-
-        unsafe {
-            hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
-                label: Some("Blend Pass"),
-                timestamp_writes: None,
-            });
-            hal_enc.set_compute_pipeline(&hal_pipe.pipeline);
-            hal_enc.set_bind_group(
-                &hal_pipe.pipeline_layout,
-                0,
-                &hal_bg,
-                &[uniform_offset as wgpu::DynamicOffset],
-            );
-            hal_enc.dispatch([
-                self.width.div_ceil(16),
-                self.height.div_ceil(16),
-                1,
-            ]);
-            hal_enc.end_compute_pass();
-            hal_ctx.device().destroy_bind_group(hal_bg);
-        }
     }
 }
 
@@ -546,121 +136,66 @@ struct PingPong {
 }
 
 impl PingPong {
-    fn new(device: &wgpu::Device, width: u32, height: u32, label_prefix: &str) -> Self {
-        let format = wgpu::TextureFormat::Rgba16Float;
+    fn new(device: &GpuDevice, width: u32, height: u32, label_prefix: &str) -> Self {
+        let format = GpuTextureFormat::Rgba16Float;
         Self {
-            ping: RenderTarget::new(device, width, height, format, &format!("{label_prefix} Ping")),
-            pong: RenderTarget::new(device, width, height, format, &format!("{label_prefix} Pong")),
+            ping: RenderTarget::new(
+                device,
+                width,
+                height,
+                format,
+                &format!("{label_prefix} Ping"),
+            ),
+            pong: RenderTarget::new(
+                device,
+                width,
+                height,
+                format,
+                &format!("{label_prefix} Pong"),
+            ),
             use_ping_as_source: true,
         }
     }
 
-    fn source_view(&self) -> &wgpu::TextureView {
-        if self.use_ping_as_source { &self.ping.view } else { &self.pong.view }
+    fn source_texture(&self) -> &GpuTexture {
+        if self.use_ping_as_source {
+            &self.ping.texture
+        } else {
+            &self.pong.texture
+        }
     }
 
-    fn target_view(&self) -> &wgpu::TextureView {
-        if self.use_ping_as_source { &self.pong.view } else { &self.ping.view }
-    }
-
-    fn source_texture(&self) -> &wgpu::Texture {
-        if self.use_ping_as_source { &self.ping.texture } else { &self.pong.texture }
-    }
-
-    fn target_texture(&self) -> &wgpu::Texture {
-        if self.use_ping_as_source { &self.pong.texture } else { &self.ping.texture }
+    fn target_texture(&self) -> &GpuTexture {
+        if self.use_ping_as_source {
+            &self.pong.texture
+        } else {
+            &self.ping.texture
+        }
     }
 
     fn swap(&mut self) {
         self.use_ping_as_source = !self.use_ping_as_source;
     }
 
-    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
         self.ping.resize(device, width, height);
         self.pong.resize(device, width, height);
     }
 
-    fn width(&self) -> u32 { self.ping.width }
-    fn height(&self) -> u32 { self.ping.height }
-
-    /// Clear source buffer. `opaque` = true clears to opaque black (a=1),
-    /// false clears to transparent black (a=0).
-    fn clear_source(&self, encoder: &mut wgpu::CommandEncoder, opaque: bool) {
-        if !opaque {
-            // Transparent black = all zeros — use clear_texture() to avoid a
-            // full TBDR tile load/store cycle for what is just a memset-to-zero.
-            encoder.clear_texture(
-                self.source_texture(),
-                &wgpu::ImageSubresourceRange::default(),
-            );
-        } else {
-            // Opaque black has alpha=1, which clear_texture() cannot express
-            // (it only writes zeros). Keep the render pass for this case.
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: self.source_view(),
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
+    fn width(&self) -> u32 {
+        self.ping.width
+    }
+    fn height(&self) -> u32 {
+        self.ping.height
     }
 
-    /// HAL path: clear source buffer via hal render pass (LOAD_CLEAR, no draw).
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(dead_code)]
-    unsafe fn clear_source_hal(
-        &self,
-        hal_enc: &mut crate::hal_context::MetalCommandEncoder,
-        source_hal_view: &crate::hal_context::MetalTextureView,
-        opaque: bool,
-    ) {
-        use wgpu::hal::{self as hal, CommandEncoder as _};
-
-        let color = if opaque {
-            wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }
+    /// Clear source buffer via native encoder.
+    /// `opaque` = true clears to opaque black (a=1), false clears to transparent black (a=0).
+    fn clear_source(&self, gpu: &mut GpuEncoder, opaque: bool) {
+        if opaque {
+            gpu.clear_texture(self.source_texture(), 0.0, 0.0, 0.0, 1.0);
         } else {
-            wgpu::Color::TRANSPARENT
-        };
-        unsafe {
-            hal_enc.begin_render_pass(&hal::RenderPassDescriptor {
-                label: Some("Clear"),
-                extent: wgpu::Extent3d {
-                    width: self.width(),
-                    height: self.height(),
-                    depth_or_array_layers: 1,
-                },
-                sample_count: 1,
-                color_attachments: &[Some(hal::ColorAttachment {
-                    target: hal::Attachment {
-                        view: source_hal_view,
-                        usage: wgpu::wgt::TextureUses::COLOR_TARGET,
-                    },
-                    resolve_target: None,
-                    ops: hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE,
-                    clear_value: color,
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                multiview_mask: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            }).expect("hal begin_render_pass failed");
-            hal_enc.end_render_pass();
+            gpu.clear_texture(self.source_texture(), 0.0, 0.0, 0.0, 0.0);
         }
     }
 }
@@ -709,10 +244,11 @@ pub struct LayerCompositor {
     main: PingPong,
     /// Shared per-layer scratch buffers (lazy, transparent black init).
     layer_buf: Option<PingPong>,
-    /// GPU resources for blend operations (pipeline, sampler, uniforms).
+    /// GPU resources for blend operations (pipeline, sampler).
     blend: BlendResources,
     /// Per-frame uniform sub-allocator — batches all blend uniform writes into
-    /// a single `queue.write_buffer()` call, reducing wgpu staging overhead.
+    /// a single buffer. On native path, arena buffer is not read (uses inline
+    /// set_bytes), but offset tracking is preserved.
     uniform_arena: UniformArena,
     /// Effect chain processor (owns its own ping-pong for effect processing).
     effect_chain: EffectChain,
@@ -726,45 +262,26 @@ pub struct LayerCompositor {
     /// LED tap: dedicated copy of the pre-tonemap composite, populated when
     /// led_exit_index == 0. Avoids the main buffer being overwritten by tonemap
     /// and master effects before the LED pipeline reads it.
-    led_tap: Option<crate::render_target::RenderTarget>,
+    led_tap: Option<RenderTarget>,
 }
 
 impl LayerCompositor {
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        width: u32,
-        height: u32,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
-    ) -> Self {
+    pub fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
         Self {
             main: PingPong::new(device, width, height, "Compositor"),
             layer_buf: None,
-            blend: BlendResources::new(
-                device, width, height, hal_ctx,
-                #[cfg(target_os = "macos")] native_device,
-            ),
-            uniform_arena: UniformArena::new(device, hal_ctx),
+            blend: BlendResources::new(device, width, height),
+            uniform_arena: UniformArena::new(device),
             effect_chain: EffectChain::new(),
-            effect_registry: EffectRegistry::new(
-                device, queue, hal_ctx,
-                #[cfg(target_os = "macos")] native_device,
-            ),
-            wet_dry_lerp: WetDryLerpPipeline::new(
-                device, hal_ctx,
-                #[cfg(target_os = "macos")] native_device,
-            ),
-            tonemap: TonemapPipeline::new(
-                device, width, height, hal_ctx,
-                #[cfg(target_os = "macos")] native_device,
-            ),
+            effect_registry: EffectRegistry::new(device),
+            wet_dry_lerp: WetDryLerpPipeline::new(device),
+            tonemap: TonemapPipeline::new(device, width, height),
             led_tap: None,
         }
     }
 
     /// Ensure lazy layer scratch buffers exist.
-    fn ensure_layer_buffers(&mut self, device: &wgpu::Device) {
+    fn ensure_layer_buffers(&mut self, device: &GpuDevice) {
         if self.layer_buf.is_none() {
             let w = self.main.width();
             let h = self.main.height();
@@ -772,82 +289,47 @@ impl LayerCompositor {
         }
     }
 
-    /// Apply effect chain to the given input view, returning the processed view
+    /// Apply effect chain to the given input texture, returning the processed texture
     /// if any effects were applied, or None if the input should be used as-is.
     fn apply_effects<'a>(
         effect_chain: &'a mut EffectChain,
         registry: &mut EffectRegistry,
         wet_dry_lerp: &WetDryLerpPipeline,
         gpu: &mut GpuEncoder,
-        input_view: &'a wgpu::TextureView,
-        input_texture: &wgpu::Texture,
+        input_texture: &'a GpuTexture,
         effects: &[EffectInstance],
         groups: &[EffectGroup],
         ctx: &EffectContext,
-        gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
-    ) -> Option<&'a wgpu::TextureView> {
+    ) -> Option<&'a GpuTexture> {
         effect_chain.apply_chain(
             gpu,
             registry,
-            input_view,
             input_texture,
             effects,
             groups,
             ctx,
             Some(wet_dry_lerp),
-            gpu_profiler,
         )
     }
 
     /// Clean up per-owner effect state for a stopped clip.
-    pub fn cleanup_clip_owner(&mut self, clip_id: &str) {
+    pub fn cleanup_clip_owner_internal(&mut self, clip_id: &str) {
         let owner_key = clip_id_owner_key(clip_id);
         self.effect_registry.cleanup_clip_owner(owner_key);
     }
 
     /// Composite all clips into main buffer, grouping by layer.
-    fn composite(
-        &mut self,
-        gpu: &mut GpuEncoder,
-        frame: &CompositorFrame,
-        gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
-    ) {
+    fn composite(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
         let clips = frame.clips;
         let width = self.main.width();
         let height = self.main.height();
         let aspect = width as f32 / height as f32;
 
-        // Reset uniform arena for this frame — all blend uniform writes
-        // will be batched into a single queue.write_buffer at frame end.
+        // Reset uniform arena for this frame
         self.uniform_arena.reset();
 
         // Clear main to opaque black
-        #[cfg(target_os = "macos")]
-        if gpu.has_native_encoder() {
-            let src_gpu = unsafe {
-                crate::gpu_encoder::extract_native_texture(self.main.source_texture())
-            };
-            let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
-            enc.clear_texture(&src_gpu, 0.0, 0.0, 0.0, 1.0);
-        } else {
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
-                type MetalApi = wgpu::hal::api::Metal;
-                let view_ptr = {
-                    let g = unsafe { self.main.source_view().as_hal::<MetalApi>() }
-                        .expect("main source not Metal");
-                    &*g as *const _
-                };
-                let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-                unsafe { self.main.clear_source_hal(hal_enc, &*view_ptr, true); }
-            } else {
-                self.main.clear_source(gpu.encoder.as_mut().unwrap(), true);
-            }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            self.main.clear_source(gpu.encoder.as_mut().unwrap(), true);
-        }
-        #[cfg(not(target_os = "macos"))]
-        self.main.clear_source(gpu.encoder.as_mut().unwrap(), true);
+        self.main.clear_source(gpu, true);
 
         // Check for any solo layer
         let any_solo = frame.layers.iter().any(|l| l.is_solo);
@@ -863,12 +345,13 @@ impl LayerCompositor {
 
             // Check mute/solo
             if let Some(ld) = layer_desc
-                && (ld.is_muted || (any_solo && !ld.is_solo)) {
-                    while i < clips.len() && clips[i].layer_index == layer_idx {
-                        i += 1;
-                    }
-                    continue;
+                && (ld.is_muted || (any_solo && !ld.is_solo))
+            {
+                while i < clips.len() && clips[i].layer_index == layer_idx {
+                    i += 1;
                 }
+                continue;
+            }
 
             // Count clips in this layer group
             let group_start = i;
@@ -881,9 +364,9 @@ impl LayerCompositor {
             let layer_blend = layer_desc.map_or(BlendMode::Normal, |l| l.blend_mode);
             let layer_opacity = layer_desc.map_or(1.0, |l| l.opacity);
 
-            // Check if this layer has layer-level effects (Unity: CompositorStack.cs lines 414-449)
-            let has_layer_effects = layer_desc
-                .is_some_and(|ld| has_enabled_effects(ld.effects));
+            // Check if this layer has layer-level effects
+            let has_layer_effects =
+                layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
 
             if group.len() == 1 && !has_layer_effects {
                 // Single clip with NO layer effects: blit directly into main with layer blend mode
@@ -898,20 +381,24 @@ impl LayerCompositor {
                         width,
                         height,
                         owner_key: clip_id_owner_key(clip.clip_id),
-                        is_clip_level: true, edge_stretch_width: 0.5625,
+                        is_clip_level: true,
+                        edge_stretch_width: 0.5625,
                         frame_count: frame.frame_count as i64,
                     };
                     Self::apply_effects(
-                        &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
+                        &mut self.effect_chain,
+                        &mut self.effect_registry,
+                        &self.wet_dry_lerp,
                         gpu,
-                        clip.texture_view, clip.texture,
-                        clip.effects, clip.effect_groups, &ctx,
-                        gpu_profiler,
+                        clip.texture,
+                        clip.effects,
+                        clip.effect_groups,
+                        &ctx,
                     )
                 } else {
                     None
                 };
-                let effective_blend_view = blend_input.unwrap_or(clip.texture_view);
+                let effective_blend_tex = blend_input.unwrap_or(clip.texture);
 
                 let uniforms = BlendUniforms {
                     blend_mode: layer_blend as u32,
@@ -925,18 +412,12 @@ impl LayerCompositor {
                 };
 
                 self.blend.blend_pass(
-                    gpu, &mut self.uniform_arena,
-                    self.main.source_view(),
-                    effective_blend_view,
-                    self.main.target_view(),
+                    gpu,
+                    &mut self.uniform_arena,
+                    self.main.source_texture(),
+                    effective_blend_tex,
+                    self.main.target_texture(),
                     &uniforms,
-                    gpu_profiler,
-                    #[cfg(target_os = "macos")]
-                    Some(self.main.source_texture()),
-                    #[cfg(target_os = "macos")]
-                    if blend_input.is_none() { Some(clip.texture) } else { None },
-                    #[cfg(target_os = "macos")]
-                    Some(self.main.target_texture()),
                 );
                 self.main.swap();
             } else {
@@ -945,32 +426,7 @@ impl LayerCompositor {
                 let layer_buf = self.layer_buf.as_mut().unwrap();
 
                 // Clear layer buffer to transparent
-                #[cfg(target_os = "macos")]
-                if gpu.has_native_encoder() {
-                    let src_gpu = unsafe {
-                        crate::gpu_encoder::extract_native_texture(layer_buf.source_texture())
-                    };
-                    let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
-                    enc.clear_texture(&src_gpu, 0.0, 0.0, 0.0, 0.0);
-                } else {
-                #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-                if gpu.has_hal_encoder() {
-                    type MetalApi = wgpu::hal::api::Metal;
-                    let view_ptr = {
-                        let g = unsafe { layer_buf.source_view().as_hal::<MetalApi>() }
-                            .expect("layer source not Metal");
-                        &*g as *const _
-                    };
-                    let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-                    unsafe { layer_buf.clear_source_hal(hal_enc, &*view_ptr, false); }
-                } else {
-                    layer_buf.clear_source(gpu.encoder.as_mut().unwrap(), false);
-                }
-                #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-                layer_buf.clear_source(gpu.encoder.as_mut().unwrap(), false);
-                }
-                #[cfg(not(target_os = "macos"))]
-                layer_buf.clear_source(gpu.encoder.as_mut().unwrap(), false);
+                layer_buf.clear_source(gpu, false);
 
                 // Composite each clip into layer buffer with Normal blend
                 for clip in group {
@@ -983,20 +439,24 @@ impl LayerCompositor {
                             width,
                             height,
                             owner_key: clip_id_owner_key(clip.clip_id),
-                            is_clip_level: true, edge_stretch_width: 0.5625,
+                            is_clip_level: true,
+                            edge_stretch_width: 0.5625,
                             frame_count: frame.frame_count as i64,
                         };
                         Self::apply_effects(
-                            &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
+                            &mut self.effect_chain,
+                            &mut self.effect_registry,
+                            &self.wet_dry_lerp,
                             gpu,
-                            clip.texture_view, clip.texture,
-                            clip.effects, clip.effect_groups, &ctx,
-                            gpu_profiler,
+                            clip.texture,
+                            clip.effects,
+                            clip.effect_groups,
+                            &ctx,
                         )
                     } else {
                         None
                     };
-                    let effective_blend_view = blend_input.unwrap_or(clip.texture_view);
+                    let effective_blend_tex = blend_input.unwrap_or(clip.texture);
 
                     let uniforms = BlendUniforms {
                         blend_mode: BlendMode::Normal as u32,
@@ -1010,18 +470,12 @@ impl LayerCompositor {
                     };
 
                     self.blend.blend_pass(
-                        gpu, &mut self.uniform_arena,
-                        layer_buf.source_view(),
-                        effective_blend_view,
-                        layer_buf.target_view(),
+                        gpu,
+                        &mut self.uniform_arena,
+                        layer_buf.source_texture(),
+                        effective_blend_tex,
+                        layer_buf.target_texture(),
                         &uniforms,
-                        gpu_profiler,
-                        #[cfg(target_os = "macos")]
-                        Some(layer_buf.source_texture()),
-                        #[cfg(target_os = "macos")]
-                        if blend_input.is_none() { Some(clip.texture) } else { None },
-                        #[cfg(target_os = "macos")]
-                        Some(layer_buf.target_texture()),
                     );
                     layer_buf.swap();
                 }
@@ -1035,17 +489,22 @@ impl LayerCompositor {
                             dt: frame.dt,
                             width,
                             height,
-                            owner_key: layer_desc.map_or(0, |ld| layer_id_owner_key(&ld.layer_id)),
-                            is_clip_level: false, edge_stretch_width: 0.5625,
+                            owner_key: layer_desc
+                                .map_or(0, |ld| layer_id_owner_key(&ld.layer_id)),
+                            is_clip_level: false,
+                            edge_stretch_width: 0.5625,
                             frame_count: frame.frame_count as i64,
                         };
                         let layer_buf = self.layer_buf.as_ref().unwrap();
                         Self::apply_effects(
-                            &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
+                            &mut self.effect_chain,
+                            &mut self.effect_registry,
+                            &self.wet_dry_lerp,
                             gpu,
-                            layer_buf.source_view(), layer_buf.source_texture(),
-                            ld.effects, ld.effect_groups, &ctx,
-                            gpu_profiler,
+                            layer_buf.source_texture(),
+                            ld.effects,
+                            ld.effect_groups,
+                            &ctx,
                         )
                     } else {
                         None
@@ -1054,7 +513,8 @@ impl LayerCompositor {
                     None
                 };
                 let layer_buf = self.layer_buf.as_ref().unwrap();
-                let effective_layer_view = layer_source.unwrap_or(layer_buf.source_view());
+                let effective_layer_tex =
+                    layer_source.unwrap_or(layer_buf.source_texture());
 
                 // Blit layer result into main with layer blend mode (no transforms)
                 let uniforms = BlendUniforms {
@@ -1069,18 +529,12 @@ impl LayerCompositor {
                 };
 
                 self.blend.blend_pass(
-                    gpu, &mut self.uniform_arena,
-                    self.main.source_view(),
-                    effective_layer_view,
-                    self.main.target_view(),
+                    gpu,
+                    &mut self.uniform_arena,
+                    self.main.source_texture(),
+                    effective_layer_tex,
+                    self.main.target_texture(),
                     &uniforms,
-                    gpu_profiler,
-                    #[cfg(target_os = "macos")]
-                    Some(self.main.source_texture()),
-                    #[cfg(target_os = "macos")]
-                    None, // layer buffer texture — TODO: extract
-                    #[cfg(target_os = "macos")]
-                    Some(self.main.target_texture()),
                 );
                 self.main.swap();
             }
@@ -1097,49 +551,17 @@ impl Compositor for LayerCompositor {
         &mut self,
         gpu: &mut GpuEncoder,
         frame: &CompositorFrame,
-        gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
-    ) -> &wgpu::TextureView {
+    ) -> &GpuTexture {
         if frame.clips.is_empty() {
             // Unity: CompositorStack.cs returns immediately for empty playback.
             // Clear to black + return tonemap output (already cleared from previous frame).
             // Skips ALL master effects, tonemap, and LED tap — zero GPU draw calls.
-            #[cfg(target_os = "macos")]
-            if gpu.has_native_encoder() {
-                let src_gpu = unsafe {
-                    crate::gpu_encoder::extract_native_texture(self.main.source_texture())
-                };
-                let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
-                enc.clear_texture(&src_gpu, 0.0, 0.0, 0.0, 1.0);
-                // Skip tonemap clear — native path bypasses tonemap
-                return self.main.source_view();
-            }
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
-                type MetalApi = wgpu::hal::api::Metal;
-                let main_view_ptr = {
-                    let g = unsafe { self.main.source_view().as_hal::<MetalApi>() }
-                        .expect("main source not Metal");
-                    &*g as *const _
-                };
-                let tonemap_view_ptr = {
-                    let g = unsafe { self.tonemap.output.view.as_hal::<MetalApi>() }
-                        .expect("tonemap output not Metal");
-                    &*g as *const _
-                };
-                let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-                unsafe {
-                    self.main.clear_source_hal(hal_enc, &*main_view_ptr, true);
-                    self.tonemap.clear_hal(hal_enc, &*tonemap_view_ptr);
-                }
-                return &self.tonemap.output.view;
-            }
-
-            self.main.clear_source(gpu.encoder.as_mut().unwrap(), true);
-            self.tonemap.clear(gpu.encoder.as_mut().unwrap());
-            return &self.tonemap.output.view;
+            gpu.clear_texture(self.main.source_texture(), 0.0, 0.0, 0.0, 1.0);
+            self.tonemap.clear(gpu);
+            return &self.tonemap.output.texture;
         }
 
-        self.composite(gpu, frame, gpu_profiler);
+        self.composite(gpu, frame);
 
         // LED tap: capture pre-tonemap composite when exit index is 0.
         // main.source holds the all-layers composite at this point, before
@@ -1147,38 +569,45 @@ impl Compositor for LayerCompositor {
         if frame.led_exit_index == 0 {
             let (w, h) = (self.main.width(), self.main.height());
             let tap = self.led_tap.get_or_insert_with(|| {
-                crate::render_target::RenderTarget::new(
-                    gpu.device, w, h, wgpu::TextureFormat::Rgba16Float, "LED_Tap",
+                RenderTarget::new(
+                    gpu.device,
+                    w,
+                    h,
+                    GpuTextureFormat::Rgba16Float,
+                    "LED_Tap",
                 )
             });
             if tap.width != w || tap.height != h {
-                *tap = crate::render_target::RenderTarget::new(
-                    gpu.device, w, h, wgpu::TextureFormat::Rgba16Float, "LED_Tap",
+                *tap = RenderTarget::new(
+                    gpu.device,
+                    w,
+                    h,
+                    GpuTextureFormat::Rgba16Float,
+                    "LED_Tap",
                 );
             }
-            gpu.copy_texture_to_texture(self.main.source_texture(), &tap.texture, w, h);
+            gpu.copy_texture_to_texture(
+                self.main.source_texture(),
+                &tap.texture,
+                w,
+                h,
+            );
         } else {
             // Free the tap buffer when not needed
             self.led_tap = None;
         }
 
         // Tonemap the composited scene (before master glow effects).
-        self.tonemap.apply(
-            gpu,
-            self.main.source_view(),
-            &frame.tonemap,
-            gpu_profiler,
-            #[cfg(target_os = "macos")]
-            Some(self.main.source_texture()),
-        );
+        self.tonemap
+            .apply(gpu, self.main.source_texture(), &frame.tonemap);
 
         // Apply master effects (bloom, halation, CRT) AFTER tonemapping.
         // Glow contribution pushes values > 1.0 for HDR/EDR displays.
         // On SDR displays, values > 1.0 clip to white — same visual result.
         //
         // The effect chain reads directly from tonemap.output (no copy into main)
-        // and blits the processed result back to tonemap.output via Opaque blend.
-        // Saves 2× full-resolution texture copies per frame.
+        // and blits the processed result back to tonemap.output via copy.
+        // Saves 2x full-resolution texture copies per frame.
         if has_enabled_effects(frame.master_effects) {
             let width = self.main.width();
             let height = self.main.height();
@@ -1198,18 +627,18 @@ impl Compositor for LayerCompositor {
             // Feed tonemap output directly into the effect chain — the first
             // effect reads from tonemap.output without copying.
             if let Some(_processed) = Self::apply_effects(
-                &mut self.effect_chain, &mut self.effect_registry, &self.wet_dry_lerp,
+                &mut self.effect_chain,
+                &mut self.effect_registry,
+                &self.wet_dry_lerp,
                 gpu,
-                &self.tonemap.output.view, &self.tonemap.output.texture,
+                &self.tonemap.output.texture,
                 frame.master_effects,
-                frame.master_effect_groups, &ctx,
-                gpu_profiler,
+                frame.master_effect_groups,
+                &ctx,
             ) {
                 // Copy processed result back into tonemap output via GPU memcpy.
-                // Replaces the old Opaque compute blend pass — same result, zero
-                // shader cost. Unity ref: same pattern as Graphics.CopyTexture.
                 gpu.copy_texture_to_texture(
-                    self.effect_chain.source_texture(),
+                    self.effect_chain.source_texture_pub(),
                     &self.tonemap.output.texture,
                     width,
                     height,
@@ -1217,20 +646,15 @@ impl Compositor for LayerCompositor {
             }
         }
 
-        // Flush all accumulated blend uniforms to the GPU in a single write.
-        // Skip on native path — blend_pass uses GpuBinding::Bytes (inline
-        // set_bytes) so the arena buffer is never read by GPU dispatches.
-        #[cfg(target_os = "macos")]
-        if !gpu.has_native_encoder() {
-            self.uniform_arena.flush(gpu.device, gpu.queue);
-        }
-        #[cfg(not(target_os = "macos"))]
-        self.uniform_arena.flush(gpu.device, gpu.queue);
+        // Flush uniform arena (recreates buffer if capacity grew).
+        // On native path, arena buffer is not read by GPU dispatches (uses inline
+        // set_bytes), but we still flush to handle capacity growth.
+        self.uniform_arena.flush(gpu.device);
 
-        &self.tonemap.output.view
+        &self.tonemap.output.texture
     }
 
-    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
         self.main.resize(device, width, height);
         if let Some(lb) = &mut self.layer_buf {
             lb.resize(device, width, height);
@@ -1247,27 +671,19 @@ impl Compositor for LayerCompositor {
         (self.main.width(), self.main.height())
     }
 
-    fn pre_tonemap_output(&self) -> &wgpu::TextureView {
-        self.main.source_view()
-    }
-
-    fn pre_tonemap_texture(&self) -> &wgpu::Texture {
+    fn pre_tonemap_output(&self) -> &GpuTexture {
         self.main.source_texture()
     }
 
-    fn output_texture(&self) -> &wgpu::Texture {
+    fn output_texture(&self) -> &GpuTexture {
         &self.tonemap.output.texture
     }
 
-    fn output_view(&self) -> &wgpu::TextureView {
-        &self.tonemap.output.view
-    }
-
-    fn led_tap_view(&self) -> Option<&wgpu::TextureView> {
-        self.led_tap.as_ref().map(|t| &t.view)
-    }
-
     fn cleanup_clip_owner(&mut self, clip_id: &str) {
-        self.cleanup_clip_owner(clip_id);
+        self.cleanup_clip_owner_internal(clip_id);
+    }
+
+    fn led_tap_texture(&self) -> Option<&GpuTexture> {
+        self.led_tap.as_ref().map(|t| &t.texture)
     }
 }

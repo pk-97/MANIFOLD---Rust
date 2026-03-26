@@ -59,35 +59,23 @@ pub trait PostProcessEffect: Send {
         should_skip_default(fx)
     }
 
-    /// Whether this effect supports hal encoding. Effects that don't
-    /// support hal are skipped when the compositor uses a hal encoder,
-    /// preventing their render passes from going to the dummy wgpu encoder.
-    /// Default: true (ComputeBlitHelper + blit helpers have hal branches).
-    fn supports_hal(&self) -> bool { true }
-
     /// Apply the effect. Reads source, writes to target.
     /// The caller swaps buffers after each effect.
-    ///
-    /// `target_texture` is the raw `wgpu::Texture` backing `target`. Stateful
-    /// effects (Feedback, StylizedFeedback) use it for `copy_texture_to_texture`
-    /// to copy the result into their state buffer — much cheaper than a blit pass.
     #[allow(clippy::too_many_arguments)]
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,
-        source: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-        target_texture: &wgpu::Texture,
+        source: &manifold_gpu::GpuTexture,
+        target: &manifold_gpu::GpuTexture,
         fx: &EffectInstance,
         ctx: &EffectContext,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     );
 
     /// Clear all temporal state (called on seek to prevent stale trails/feedback).
     fn clear_state(&mut self) {}
 
     /// Recreate resolution-dependent resources.
-    fn resize(&mut self, _device: &wgpu::Device, _width: u32, _height: u32) {}
+    fn resize(&mut self, _device: &manifold_gpu::GpuDevice, _width: u32, _height: u32) {}
 
     /// Clean up per-owner GPU state for a specific owner.
     /// No-op for non-stateful effects. Stateful effects override to release
@@ -108,5 +96,5 @@ pub trait StatefulEffect: PostProcessEffect {
     /// Release ALL per-owner GPU state. Called during Clear() (stop playback),
     /// ResizeBuffers(), and WarmupShaders().
     /// Unity ref: IStatefulEffect.cs line 18
-    fn cleanup_all_owners(&mut self, device: &wgpu::Device);
+    fn cleanup_all_owners(&mut self, device: &manifold_gpu::GpuDevice);
 }

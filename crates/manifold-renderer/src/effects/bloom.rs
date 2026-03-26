@@ -8,8 +8,6 @@ use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::HDR_BUFFER_DIVISOR;
-use super::dual_texture_blit_helper::DualTextureBlitHelper;
-#[cfg(target_os = "macos")]
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 
 // BloomFX.cs lines 19-25 — constants
@@ -42,42 +40,25 @@ struct BloomUniforms {
 // BloomFX.cs lines 27-32 — OwnerPyramid
 struct BloomState {
     mips_a: Vec<RenderTarget>, // Primary mip chain (downsample target, upsample source)
-    mips_b: Vec<RenderTarget>, // Secondary mip chain (upsample target, avoids read-write hazard)
+    mips_b: Vec<RenderTarget>, // Secondary mip chain (upsample target)
     count: usize,
 }
 
 // BloomFX.cs line 12 — BloomFX : SimpleBlitEffect, IStatefulEffect
 pub struct BloomFX {
-    helper: DualTextureBlitHelper,
-    #[cfg(target_os = "macos")]
-    compute_dual_blit: ComputeDualBlitHelper,
+    helper: ComputeDualBlitHelper,
     states: AHashMap<i64, BloomState>,
-    width: u32,  // BloomFX.cs line 17 — _width
-    height: u32, // BloomFX.cs line 17 — _height
+    width: u32,
+    height: u32,
 }
 
 impl BloomFX {
-    pub fn new(
-        device: &wgpu::Device,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
-    ) -> Self {
+    pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: DualTextureBlitHelper::new(
-                device,
-                include_str!("shaders/bloom.wgsl"),
-                "Bloom",
-                std::mem::size_of::<BloomUniforms>() as u64,
-                hal_ctx,
-            ),
-            #[cfg(target_os = "macos")]
-            compute_dual_blit: ComputeDualBlitHelper::new(
+            helper: ComputeDualBlitHelper::new(
                 device,
                 include_str!("shaders/bloom_compute.wgsl"),
                 "Bloom Compute",
-                std::mem::size_of::<BloomUniforms>() as u64,
-                hal_ctx,
-                #[cfg(target_os = "macos")] native_device,
             ),
             states: AHashMap::new(),
             width: 0,
@@ -86,14 +67,14 @@ impl BloomFX {
     }
 
     // BloomFX.cs lines 42-68 — GetOrCreatePyramid
-    fn ensure_state(&mut self, device: &wgpu::Device, owner_key: i64) {
+    fn ensure_state(&mut self, device: &manifold_gpu::GpuDevice, owner_key: i64) {
         if self.states.contains_key(&owner_key) {
             return;
         }
         if self.width == 0 || self.height == 0 {
             return;
         }
-        let format = wgpu::TextureFormat::Rgba16Float;
+        let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
         let mut mips_a = Vec::new();
         let mut mips_b = Vec::new();
         let mut count = 0;
@@ -126,30 +107,16 @@ impl PostProcessEffect for BloomFX {
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,
-        source: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-        _target_texture: &wgpu::Texture,
+        source: &manifold_gpu::GpuTexture,
+        target: &manifold_gpu::GpuTexture,
         fx: &EffectInstance,
         ctx: &EffectContext,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        // ShouldSkip handles the amount <= 0 check at the chain level now.
         let amount = fx.param_values.first().copied().unwrap_or(0.187);
 
         self.width = ctx.width;
         self.height = ctx.height;
         self.ensure_state(gpu.device, ctx.owner_key);
-
-        // Check once whether to use compute path for this frame
-        #[cfg(target_os = "macos")]
-        let use_compute = gpu.has_native_encoder() || {
-            #[cfg(feature = "hal-encoding")]
-            { gpu.has_hal_encoder() }
-            #[cfg(not(feature = "hal-encoding"))]
-            { false }
-        };
-        #[cfg(not(target_os = "macos"))]
-        let use_compute = false;
 
         let state = self.states.get(&ctx.owner_key).unwrap();
         if state.count == 0 {
@@ -160,19 +127,10 @@ impl PostProcessEffect for BloomFX {
                 bloom_texel_size_x: 0.0, bloom_texel_size_y: 0.0,
                 _pad0: 0.0, _pad1: 0.0,
             };
-            let skip_uniforms = bytemuck::bytes_of(&skip_u);
-            if use_compute {
-                #[cfg(target_os = "macos")]
-                self.compute_dual_blit.dispatch_a_only(
-                    gpu, source, target, skip_uniforms,
-                    "Bloom Skip", ctx.width, ctx.height, profiler,
-                );
-            } else {
-                self.helper.draw_main_only(
-                    gpu, source, target, skip_uniforms,
-                    "Bloom Skip", ctx.width, ctx.height, profiler,
-                );
-            }
+            self.helper.dispatch_a_only(
+                gpu, source, target, bytemuck::bytes_of(&skip_u),
+                "Bloom Skip", ctx.width, ctx.height,
+            );
             return;
         }
 
@@ -201,21 +159,11 @@ impl PostProcessEffect for BloomFX {
             main_texel_size_y: 1.0 / ctx.height as f32,
             ..base_uniforms
         };
-        let prefilter_uniforms = bytemuck::bytes_of(&prefilter_u);
-        if use_compute {
-            #[cfg(target_os = "macos")]
-            self.compute_dual_blit.dispatch_a_only(
-                gpu, source, &state.mips_a[0].view, prefilter_uniforms,
-                "Bloom Prefilter",
-                state.mips_a[0].width, state.mips_a[0].height, profiler,
-            );
-        } else {
-            self.helper.draw_main_only(
-                gpu, source, &state.mips_a[0].view, prefilter_uniforms,
-                "Bloom Prefilter",
-                state.mips_a[0].width, state.mips_a[0].height, profiler,
-            );
-        }
+        self.helper.dispatch_a_only(
+            gpu, source, &state.mips_a[0].texture, bytemuck::bytes_of(&prefilter_u),
+            "Bloom Prefilter",
+            state.mips_a[0].width, state.mips_a[0].height,
+        );
 
         // Downsample chain
         for i in 1..used_levels {
@@ -227,41 +175,21 @@ impl PostProcessEffect for BloomFX {
                 main_texel_size_y: 1.0 / src_h as f32,
                 ..base_uniforms
             };
-            let down_uniforms = bytemuck::bytes_of(&down_u);
-            if use_compute {
-                #[cfg(target_os = "macos")]
-                self.compute_dual_blit.dispatch_a_only(
-                    gpu, &state.mips_a[i - 1].view, &state.mips_a[i].view,
-                    down_uniforms, "Bloom Down",
-                    state.mips_a[i].width, state.mips_a[i].height, profiler,
-                );
-            } else {
-                self.helper.draw_main_only(
-                    gpu, &state.mips_a[i - 1].view, &state.mips_a[i].view,
-                    down_uniforms, "Bloom Down",
-                    state.mips_a[i].width, state.mips_a[i].height, profiler,
-                );
-            }
+            self.helper.dispatch_a_only(
+                gpu, &state.mips_a[i - 1].texture, &state.mips_a[i].texture,
+                bytemuck::bytes_of(&down_u), "Bloom Down",
+                state.mips_a[i].width, state.mips_a[i].height,
+            );
         }
 
         // Upsample chain: ping-pong mipsA → mipsB
         for i in (0..used_levels - 1).rev() {
             let hi_w = state.mips_a[i].width;
             let hi_h = state.mips_a[i].height;
-            let lo_view = if i == used_levels - 2 {
-                &state.mips_a[i + 1].view
+            let (lo_tex, lo_w, lo_h) = if i == used_levels - 2 {
+                (&state.mips_a[i + 1].texture, state.mips_a[i + 1].width, state.mips_a[i + 1].height)
             } else {
-                &state.mips_b[i + 1].view
-            };
-            let lo_w = if i == used_levels - 2 {
-                state.mips_a[i + 1].width
-            } else {
-                state.mips_b[i + 1].width
-            };
-            let lo_h = if i == used_levels - 2 {
-                state.mips_a[i + 1].height
-            } else {
-                state.mips_b[i + 1].height
+                (&state.mips_b[i + 1].texture, state.mips_b[i + 1].width, state.mips_b[i + 1].height)
             };
 
             let up_u = BloomUniforms {
@@ -272,21 +200,11 @@ impl PostProcessEffect for BloomFX {
                 bloom_texel_size_y: 1.0 / lo_h as f32,
                 ..base_uniforms
             };
-            let up_uniforms = bytemuck::bytes_of(&up_u);
-            if use_compute {
-                #[cfg(target_os = "macos")]
-                self.compute_dual_blit.dispatch(
-                    gpu, &state.mips_a[i].view, lo_view, &state.mips_b[i].view,
-                    up_uniforms, "Bloom Up",
-                    state.mips_b[i].width, state.mips_b[i].height, profiler,
-                );
-            } else {
-                self.helper.draw(
-                    gpu, &state.mips_a[i].view, lo_view, &state.mips_b[i].view,
-                    up_uniforms, "Bloom Up",
-                    state.mips_b[i].width, state.mips_b[i].height, profiler,
-                );
-            }
+            self.helper.dispatch(
+                gpu, &state.mips_a[i].texture, lo_tex, &state.mips_b[i].texture,
+                bytemuck::bytes_of(&up_u), "Bloom Up",
+                state.mips_b[i].width, state.mips_b[i].height,
+            );
         }
 
         // Final composite
@@ -300,31 +218,21 @@ impl PostProcessEffect for BloomFX {
             bloom_texel_size_y: 1.0 / bloom_h as f32,
             ..base_uniforms
         };
-        let composite_uniforms = bytemuck::bytes_of(&composite_u);
-        if use_compute {
-            #[cfg(target_os = "macos")]
-            self.compute_dual_blit.dispatch(
-                gpu, source, &state.mips_b[0].view, target,
-                composite_uniforms, "Bloom Composite",
-                ctx.width, ctx.height, profiler,
-            );
-        } else {
-            self.helper.draw(
-                gpu, source, &state.mips_b[0].view, target,
-                composite_uniforms, "Bloom Composite",
-                ctx.width, ctx.height, profiler,
-            );
-        }
+        self.helper.dispatch(
+            gpu, source, &state.mips_b[0].texture, target,
+            bytemuck::bytes_of(&composite_u), "Bloom Composite",
+            ctx.width, ctx.height,
+        );
     }
 
     fn clear_state(&mut self) {
         self.states.clear();
     }
 
-    fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    fn resize(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        let format = wgpu::TextureFormat::Rgba16Float;
+        let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
         for state in self.states.values_mut() {
             let mut pw = (width / HDR_BUFFER_DIVISOR).max(1);
             let mut ph = (height / HDR_BUFFER_DIVISOR).max(1);
@@ -347,10 +255,7 @@ impl PostProcessEffect for BloomFX {
 }
 
 impl StatefulEffect for BloomFX {
-    fn clear_state_for_owner(&mut self, _owner_key: i64) {
-        // Bloom mips are fully overwritten each frame (prefilter → downsample → upsample).
-        // No temporal accumulation, so clearing contents is a no-op. Keep entry alive.
-    }
+    fn clear_state_for_owner(&mut self, _owner_key: i64) {}
     fn cleanup_owner(&mut self, owner_key: i64) { self.states.remove(&owner_key); }
-    fn cleanup_all_owners(&mut self, _device: &wgpu::Device) { self.states.clear(); }
+    fn cleanup_all_owners(&mut self, _device: &manifold_gpu::GpuDevice) { self.states.clear(); }
 }

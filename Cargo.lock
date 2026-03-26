@@ -2029,7 +2029,6 @@ dependencies = [
  "log",
  "metal",
  "naga",
- "wgpu",
 ]
 
 [[package]]

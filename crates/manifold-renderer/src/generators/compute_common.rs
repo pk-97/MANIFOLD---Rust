@@ -1,29 +1,7 @@
 //! Shared compute infrastructure for particle and agent-based generators.
 //!
-//! Provides buffer creation helpers and the shared Particle struct layout
-//! that matches Unity's ParticleCommon.cginc (48 bytes per particle).
-
-/// Create a storage buffer with the given byte size.
-pub fn create_storage_buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    })
-}
-
-/// Create a storage buffer initialized with zeroes (for atomic accumulators).
-pub fn create_zero_buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: true,
-    })
-    // Note: mapped_at_creation=true + zero-init is handled by wgpu (zeroed memory).
-    // We need to unmap after creation — caller must call buffer.unmap().
-}
+//! Provides the shared Particle struct layout that matches Unity's
+//! ParticleCommon.cginc (48 bytes per particle).
 
 /// Particle struct matching WGSL layout of ParticleCommon (vec3 alignment = 16).
 /// WGSL pads vec3<f32> to 16-byte alignment, so the struct is 64 bytes, not 48.

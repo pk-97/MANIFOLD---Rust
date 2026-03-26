@@ -30,17 +30,8 @@ pub struct OscilloscopeXYGenerator {
 }
 
 impl OscilloscopeXYGenerator {
-    pub fn new(
-        device: &wgpu::Device,
-        target_format: wgpu::TextureFormat,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
-    ) -> Self {
-        let line_pipeline =
-            LinePipeline::new(
-            device, target_format, "OscilloscopeXY", hal_ctx,
-            #[cfg(target_os = "macos")] native_device,
-        );
+    pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
+        let line_pipeline = LinePipeline::new(device, "OscilloscopeXY");
         let mut helper = LineGeneratorHelper::new(SAMPLES, SAMPLES);
 
         // Closed loop: i -> (i+1) % 256
@@ -66,9 +57,8 @@ impl Generator for OscilloscopeXYGenerator {
     fn render(
         &mut self,
         gpu: &mut GpuEncoder,
-        target: &wgpu::TextureView,
+        target: &manifold_gpu::GpuTexture,
         ctx: &GeneratorContext,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         // Unity defaults from LineGeneratorBase virtual properties
         let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.002 };
@@ -175,10 +165,10 @@ impl Generator for OscilloscopeXYGenerator {
             gpu, target,
             positions, instances, num_edges,
             edge_half_thick, dot_half_thick,
-            ctx.beat, profiler, "OscilloscopeXY", ctx.width, ctx.height,
+            ctx.beat, "OscilloscopeXY", ctx.width, ctx.height,
         );
         self.helper.anim_progress
     }
 
-    fn resize(&mut self, _device: &wgpu::Device, _width: u32, _height: u32) {}
+    fn resize(&mut self, _device: &manifold_gpu::GpuDevice, _width: u32, _height: u32) {}
 }

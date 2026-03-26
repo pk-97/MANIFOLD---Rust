@@ -23,19 +23,12 @@ pub struct StrobeFX {
 }
 
 impl StrobeFX {
-    pub fn new(
-        device: &wgpu::Device,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
-    ) -> Self {
+    pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/fx_strobe_compute.wgsl"),
                 "Strobe",
-                std::mem::size_of::<StrobeUniforms>() as u64,
-                hal_ctx,
-                #[cfg(target_os = "macos")] native_device,
             ),
         }
     }
@@ -49,12 +42,10 @@ impl PostProcessEffect for StrobeFX {
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,
-        source: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-        _target_texture: &wgpu::Texture,
+        source: &manifold_gpu::GpuTexture,
+        target: &manifold_gpu::GpuTexture,
         fx: &EffectInstance,
         ctx: &EffectContext,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let p = &fx.param_values;
         // Map rate index through NoteRates lookup table (Unity: StrobeFX.cs lines 24-26)
@@ -73,7 +64,6 @@ impl PostProcessEffect for StrobeFX {
             bytemuck::bytes_of(&uniforms),
             "Strobe Pass",
             ctx.width, ctx.height,
-            profiler,
         );
     }
 }

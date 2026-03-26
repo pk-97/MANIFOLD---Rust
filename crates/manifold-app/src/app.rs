@@ -1028,9 +1028,8 @@ impl ApplicationHandler for Application {
             let (cmd_tx, cmd_rx) = crossbeam_channel::bounded::<ContentCommand>(64);
             let (state_tx, state_rx) = crossbeam_channel::bounded::<ContentState>(4);
 
-            // Create a secondary GPU device for the content thread.
-            // Same adapter, independent queue — heavy compute can't block UI rendering.
-            let content_gpu = pollster::block_on(gpu.create_secondary_device("Content Device"));
+            // Content thread uses its own native Metal device from manifold-gpu.
+            // No wgpu device needed for content — all encoding goes through native Metal.
 
             let output_w = self.local_project.settings.output_width.max(1) as u32;
             let output_h = self.local_project.settings.output_height.max(1) as u32;
@@ -1054,26 +1053,15 @@ impl ApplicationHandler for Application {
                 self.shared_texture_bridge = Some(Arc::clone(&bridge));
             }
 
-            // Create hal context for zero-overhead GPU encoding (macOS + hal-encoding feature).
-            // Must be created before renderers so GeneratorRenderer can create hal resources.
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            let hal_ctx = {
-                let ctx = unsafe {
-                    manifold_renderer::hal_context::HalContext::new(
-                        &content_gpu.device,
-                        &content_gpu.queue,
-                    )
-                };
-                log::info!("[HAL] HalContext created — hal encoding active");
-                Some(ctx)
-            };
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            let hal_ctx: Option<manifold_renderer::hal_context::HalContext> = None;
+            // Create native Metal device BEFORE renderers so they can build native pipelines.
+            let native_device = manifold_gpu::GpuDevice::new();
+
+            let gen_format = manifold_gpu::GpuTextureFormat::Rgba16Float;
 
             let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
                 #[cfg(target_os = "macos")]
                 Box::new(manifold_media::video_renderer::VideoRenderer::new(
-                    Arc::clone(&content_gpu.device),
+                    Arc::clone(&gpu.device),
                     output_w,
                     output_h,
                     compositor_format,
@@ -1082,40 +1070,30 @@ impl ApplicationHandler for Application {
                 #[cfg(not(target_os = "macos"))]
                 Box::new(StubRenderer::new_video()),
                 Box::new(GeneratorRenderer::new(
-                    Arc::clone(&content_gpu.device),
+                    native_device.clone(),
                     output_w,
                     output_h,
-                    compositor_format,
+                    gen_format,
                     8,
-                    hal_ctx.as_ref(),
                 )),
             ];
             let mut engine = PlaybackEngine::new(renderers);
             engine.initialize(self.local_project.clone());
 
-            // Create native Metal device BEFORE compositor so it can build native pipelines.
-            #[cfg(target_os = "macos")]
-            let native_device = manifold_gpu::GpuDevice::new();
-
             let mut content_pipeline = crate::content_pipeline::ContentPipeline::new(
                 Box::new(LayerCompositor::new(
-                    &content_gpu.device, &content_gpu.queue,
+                    &native_device,
                     output_w, output_h,
-                    hal_ctx.as_ref(),
-                    #[cfg(target_os = "macos")]
-                    Some(&native_device),
                 )),
-                hal_ctx,
             );
             content_pipeline.edr_headroom = self.edr_headroom;
             // Transfer native device ownership to content pipeline.
-            #[cfg(target_os = "macos")]
             content_pipeline.set_native_gpu(native_device);
             // Give the content pipeline both IOSurface textures for double-buffered async output.
             #[cfg(target_os = "macos")]
             if let Some(ref bridge) = self.shared_texture_bridge {
-                let content_tex_a = unsafe { bridge.import_texture(&content_gpu.device, 0) };
-                let content_tex_b = unsafe { bridge.import_texture(&content_gpu.device, 1) };
+                let content_tex_a = unsafe { bridge.import_texture(&gpu.device, 0) };
+                let content_tex_b = unsafe { bridge.import_texture(&gpu.device, 1) };
                 content_pipeline.set_shared_textures(content_tex_a, content_tex_b, Arc::clone(bridge));
             }
             self.content_pipeline_output = Some(content_pipeline.shared_output());

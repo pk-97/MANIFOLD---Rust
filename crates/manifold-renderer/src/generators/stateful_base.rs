@@ -1,4 +1,5 @@
 use crate::render_target::RenderTarget;
+use manifold_gpu::GpuTextureFormat;
 
 /// Ping-pong state management for simulation generators.
 /// Owns two RenderTargets and alternates read/write roles each step.
@@ -11,14 +12,18 @@ pub struct StatefulState {
 
 impl StatefulState {
     pub fn new(
-        device: &wgpu::Device,
+        device: &manifold_gpu::GpuDevice,
         width: u32,
         height: u32,
-        format: wgpu::TextureFormat,
+        format: GpuTextureFormat,
         label: &str,
     ) -> Self {
-        let state_a = RenderTarget::new(device, width, height, format, &format!("{} State A", label));
-        let state_b = RenderTarget::new(device, width, height, format, &format!("{} State B", label));
+        let state_a = RenderTarget::new(
+            device, width, height, format, &format!("{} State A", label),
+        );
+        let state_b = RenderTarget::new(
+            device, width, height, format, &format!("{} State B", label),
+        );
         Self {
             state_a,
             state_b,
@@ -27,14 +32,22 @@ impl StatefulState {
         }
     }
 
-    /// The texture view to sample from (previous frame's output).
-    pub fn read_view(&self) -> &wgpu::TextureView {
-        if self.use_a { &self.state_a.view } else { &self.state_b.view }
+    /// The texture to sample from (previous frame's output).
+    pub fn read_texture(&self) -> &manifold_gpu::GpuTexture {
+        if self.use_a {
+            &self.state_a.texture
+        } else {
+            &self.state_b.texture
+        }
     }
 
-    /// The texture view to render into (current frame's output).
-    pub fn write_view(&self) -> &wgpu::TextureView {
-        if self.use_a { &self.state_b.view } else { &self.state_a.view }
+    /// The texture to render into (current frame's output).
+    pub fn write_texture(&self) -> &manifold_gpu::GpuTexture {
+        if self.use_a {
+            &self.state_b.texture
+        } else {
+            &self.state_a.texture
+        }
     }
 
     /// Swap read/write roles after a simulation step.
@@ -44,7 +57,7 @@ impl StatefulState {
     }
 
     /// Recreate both state textures at a new resolution.
-    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    pub fn resize(&mut self, device: &manifold_gpu::GpuDevice, width: u32, height: u32) {
         self.state_a.resize(device, width, height);
         self.state_b.resize(device, width, height);
         self.frame_count = 0;

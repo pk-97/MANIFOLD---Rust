@@ -4,55 +4,12 @@
 //! Owned by the compositor. Applied as the final step after master effects,
 //! before the blit to the display surface.
 //!
-//! When `hal-encoding` is enabled, uses a compute dispatch instead of a render
-//! pass. This eliminates Metal TBDR tile alloc/load/store overhead (~290us at
-//! 4K per pass). The compute shader produces identical output — same ACES math,
-//! same modes, same uniform struct.
+//! Uses a native Metal compute dispatch via manifold-gpu. This eliminates
+//! Metal TBDR tile alloc/load/store overhead (~290us at 4K per pass).
 
+use manifold_gpu::{GpuDevice, GpuTexture};
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
-
-/// BGL entries for the tonemap compute pipeline (hal path).
-/// 4 bindings: uniform, source texture, sampler, output storage texture.
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-const TONEMAP_COMPUTE_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 4] = [
-    wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 1,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 2,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 3,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::StorageTexture {
-            access: wgpu::StorageTextureAccess::WriteOnly,
-            format: wgpu::TextureFormat::Rgba16Float,
-            view_dimension: wgpu::TextureViewDimension::D2,
-        },
-        count: None,
-    },
-];
 
 /// Per-frame tonemap settings. Matches Unity CompositorStack properties:
 /// TonemapExposure, HDROutputEnabled, PaperWhiteNits, MaxDisplayNits.
@@ -95,320 +52,32 @@ struct TonemapUniforms {
 }
 
 /// GPU pipeline for ACES tonemapping.
-/// Follows the exact pattern of WetDryLerpPipeline.
 pub struct TonemapPipeline {
-    pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    uniform_buffer: wgpu::Buffer,
+    pipeline: manifold_gpu::GpuComputePipeline,
+    sampler: manifold_gpu::GpuSampler,
     /// Tonemap output buffer. Matches Unity's tonemappedOutput RenderTexture.
     /// Separate from the compositor's main buffer so PreTonemapOutput survives.
     pub output: RenderTarget,
-    /// Compute pipeline for hal-encoding path (eliminates TBDR tile overhead).
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    compute_pipeline: Option<wgpu::ComputePipeline>,
-    /// BGL for the compute pipeline (4 bindings: uniform, texture, sampler, storage).
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    compute_bind_group_layout: Option<wgpu::BindGroupLayout>,
-    /// HAL compute pipeline for zero-overhead encoding.
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_compute_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_sampler: Option<crate::hal_context::MetalSampler>,
-    /// Persistent mapped pointer to shared-memory uniform buffer.
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_uniform_mapped_ptr: Option<*mut u8>,
-    /// Cached hal pointer to uniform buffer for bind groups.
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_uniform_buf_ptr: Option<*const crate::hal_context::MetalBuffer>,
-    #[cfg(target_os = "macos")]
-    native_pipeline: Option<manifold_gpu::GpuComputePipeline>,
-    #[cfg(target_os = "macos")]
-    native_sampler: Option<manifold_gpu::GpuSampler>,
 }
 
-unsafe impl Send for TonemapPipeline {}
-
 impl TonemapPipeline {
-    pub fn new(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
-    ) -> Self {
-        let _ = &hal_ctx;
-        let format = wgpu::TextureFormat::Rgba16Float;
+    pub fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
+        let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
 
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("ACES Tonemap Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("effects/shaders/aces_tonemap.wgsl").into(),
-            ),
-        });
-
-        let bind_group_layout = device.create_bind_group_layout(
-            &wgpu::BindGroupLayoutDescriptor {
-                label: Some("Tonemap BGL"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float {
-                                filterable: true,
-                            },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(
-                            wgpu::SamplerBindingType::Filtering,
-                        ),
-                        count: None,
-                    },
-                ],
-            },
+        let pipeline = device.create_compute_pipeline(
+            include_str!("effects/shaders/aces_tonemap_compute.wgsl"),
+            "cs_main",
+            "Tonemap Native",
         );
 
-        let pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Tonemap Layout"),
-                bind_group_layouts: &[&bind_group_layout],
-                immediate_size: 0,
-            });
-
-        let pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Tonemap Pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Tonemap Sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Tonemap Uniforms"),
-            size: std::mem::size_of::<TonemapUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
 
         let output = RenderTarget::new(device, width, height, format, "TonemappedOutput");
 
-        // --- hal compute pipeline + shared-memory uniform buffer ---
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let (
-            compute_pipeline,
-            compute_bind_group_layout,
-            hal_compute_pipeline,
-            hal_sampler,
-            uniform_buffer,
-            hal_uniform_mapped_ptr,
-            hal_uniform_buf_ptr,
-        ) = if let Some(ctx) = hal_ctx {
-            use wgpu::hal::Device as HalDevice;
-
-            // wgpu compute pipeline (fallback when hal encoder isn't active)
-            let compute_shader =
-                device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("ACES Tonemap Compute Shader"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        include_str!("effects/shaders/aces_tonemap_compute.wgsl")
-                            .into(),
-                    ),
-                });
-
-            let compute_bgl = device.create_bind_group_layout(
-                &wgpu::BindGroupLayoutDescriptor {
-                    label: Some("Tonemap Compute BGL"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Uniform,
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        TONEMAP_COMPUTE_BGL_ENTRIES[1],
-                        TONEMAP_COMPUTE_BGL_ENTRIES[2],
-                        TONEMAP_COMPUTE_BGL_ENTRIES[3],
-                    ],
-                },
-            );
-
-            let compute_layout =
-                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                    label: Some("Tonemap Compute Layout"),
-                    bind_group_layouts: &[&compute_bgl],
-                    immediate_size: 0,
-                });
-
-            let compute_pipe =
-                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("Tonemap Compute Pipeline"),
-                    layout: Some(&compute_layout),
-                    module: &compute_shader,
-                    entry_point: Some("cs_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    cache: None,
-                });
-
-            // hal compute pipeline
-            let hal_comp_pipe = crate::hal_pipeline::create_compute_pipeline(
-                ctx,
-                include_str!("effects/shaders/aces_tonemap_compute.wgsl"),
-                "cs_main",
-                &TONEMAP_COMPUTE_BGL_ENTRIES,
-                "Tonemap Compute HAL",
-            );
-
-            // hal sampler
-            let hal_samp = unsafe {
-                ctx.device()
-                    .create_sampler(&wgpu::hal::SamplerDescriptor {
-                        label: Some("Tonemap Sampler HAL"),
-                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
-                        mag_filter: wgpu::FilterMode::Linear,
-                        min_filter: wgpu::FilterMode::Linear,
-                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-                        lod_clamp: 0.0..32.0,
-                        compare: None,
-                        anisotropy_clamp: 1,
-                        border_color: None,
-                    })
-                    .expect("Failed to create hal tonemap sampler")
-            };
-
-            // Shared-memory uniform buffer
-            let ubo_size = std::mem::size_of::<TonemapUniforms>() as u64;
-            let hal_buf = unsafe {
-                ctx.device()
-                    .create_buffer(&wgpu::hal::BufferDescriptor {
-                        label: Some("Tonemap Uniforms HAL"),
-                        size: ubo_size,
-                        usage: wgpu::wgt::BufferUses::UNIFORM
-                            | wgpu::wgt::BufferUses::MAP_WRITE,
-                        memory_flags: wgpu::hal::MemoryFlags::PREFER_COHERENT,
-                    })
-                    .expect("Failed to create hal tonemap uniform buffer")
-            };
-            let mapping = unsafe {
-                ctx.device()
-                    .map_buffer(&hal_buf, 0..ubo_size)
-                    .expect("Failed to map hal tonemap uniform buffer")
-            };
-            let mapped_ptr = mapping.ptr.as_ptr();
-            let wgpu_buf = unsafe {
-                device.create_buffer_from_hal::<wgpu::hal::api::Metal>(
-                    hal_buf,
-                    &wgpu::BufferDescriptor {
-                        label: Some("Tonemap Uniforms"),
-                        size: ubo_size,
-                        usage: wgpu::BufferUsages::UNIFORM
-                            | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    },
-                )
-            };
-            let buf_hal_ptr = {
-                let guard =
-                    unsafe { wgpu_buf.as_hal::<wgpu::hal::api::Metal>() }
-                        .expect("tonemap ubo not Metal");
-                let ptr: *const _ = &*guard;
-                ptr
-            };
-            (
-                Some(compute_pipe),
-                Some(compute_bgl),
-                Some(hal_comp_pipe),
-                Some(hal_samp),
-                wgpu_buf,
-                Some(mapped_ptr),
-                Some(buf_hal_ptr),
-            )
-        } else {
-            (None, None, None, None, uniform_buffer, None, None)
-        };
-
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        let uniform_buffer = uniform_buffer;
-
         Self {
             pipeline,
-            bind_group_layout,
             sampler,
-            uniform_buffer,
             output,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            compute_pipeline,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            compute_bind_group_layout,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_compute_pipeline,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_sampler,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_uniform_mapped_ptr,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_uniform_buf_ptr,
-            #[cfg(target_os = "macos")]
-            native_pipeline: native_device.map(|dev| {
-                dev.create_compute_pipeline(
-                    include_str!("effects/shaders/aces_tonemap_compute.wgsl"),
-                    "cs_main",
-                    "Tonemap Native",
-                )
-            }),
-            #[cfg(target_os = "macos")]
-            native_sampler: native_device.map(|dev| {
-                dev.create_sampler(&manifold_gpu::GpuSamplerDesc::default())
-            }),
         }
     }
 
@@ -420,88 +89,11 @@ impl TonemapPipeline {
     pub fn apply(
         &self,
         gpu: &mut GpuEncoder,
-        hdr_source: &wgpu::TextureView,
+        hdr_source: &GpuTexture,
         settings: &TonemapSettings,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
-        #[cfg(target_os = "macos")] hdr_source_texture: Option<&wgpu::Texture>,
     ) {
-        // --- native Metal path: zero wgpu ---
-        #[cfg(target_os = "macos")]
-        if let Some(ref native_pipe) = self.native_pipeline
-            && let Some(ref native_samp) = self.native_sampler
-            && gpu.has_native_encoder()
-            && let Some(src_tex) = hdr_source_texture
-        {
-            let mode = if settings.hdr_output_enabled { 3u32 } else { 0u32 };
-            let uniforms = TonemapUniforms {
-                exposure: settings.exposure,
-                paper_white: settings.paper_white_nits,
-                max_nits: settings.max_display_nits,
-                mode,
-            };
-            let src_gpu = unsafe {
-                crate::gpu_encoder::extract_native_texture(src_tex)
-            };
-            let out_gpu = unsafe {
-                crate::gpu_encoder::extract_native_texture(&self.output.texture)
-            };
-            let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
-            enc.dispatch_compute(
-                native_pipe,
-                &[
-                    manifold_gpu::GpuBinding::Bytes {
-                        binding: 0,
-                        data: bytemuck::bytes_of(&uniforms),
-                    },
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 1,
-                        texture: &src_gpu,
-                    },
-                    manifold_gpu::GpuBinding::Sampler {
-                        binding: 2,
-                        sampler: native_samp,
-                    },
-                    manifold_gpu::GpuBinding::Texture {
-                        binding: 3,
-                        texture: &out_gpu,
-                    },
-                ],
-                [self.output.width.div_ceil(16), self.output.height.div_ceil(16), 1],
-                "Tonemap Compute",
-            );
-            return;
-        }
-
-        // --- hal path: compute dispatch via hal command encoder ---
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            type MetalApi = wgpu::hal::api::Metal;
-            let src_ptr = {
-                let g = unsafe { hdr_source.as_hal::<MetalApi>() }
-                    .expect("hdr_source not Metal");
-                &*g as *const _
-            };
-            let out_ptr = {
-                let g = unsafe { self.output.view.as_hal::<MetalApi>() }
-                    .expect("tonemap output not Metal");
-                &*g as *const _
-            };
-            let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-            unsafe {
-                self.apply_hal_compute(
-                    hal_enc,
-                    hal_ctx,
-                    &*src_ptr,
-                    &*out_ptr,
-                    settings,
-                );
-            }
-            return;
-        }
-
         // Realtime HDR preview uses EDR passthrough (3) — no ACES compression,
         // linear values passed directly to macOS EDR with soft-clip at display peak.
-        // Mode 2 (ACES EDR) retained for explicit use. Mode 1 reserved for PQ export.
         let mode = if settings.hdr_output_enabled { 3u32 } else { 0u32 };
 
         let uniforms = TonemapUniforms {
@@ -510,298 +102,46 @@ impl TonemapPipeline {
             max_nits: settings.max_display_nits,
             mode,
         };
-        gpu.queue
-            .write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
 
-        // When compute pipeline is available (hal-encoding feature) and no hal
-        // encoder is active, use wgpu compute dispatch as fallback.
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if let (Some(compute_pipe), Some(compute_bgl)) =
-            (&self.compute_pipeline, &self.compute_bind_group_layout)
-        {
-            let bind_group =
-                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Tonemap Compute BG"),
-                    layout: compute_bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: self.uniform_buffer.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(
-                                hdr_source,
-                            ),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&self.sampler),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::TextureView(
-                                &self.output.view,
-                            ),
-                        },
-                    ],
-                });
-
-            let ts = profiler.and_then(|p| {
-                p.compute_timestamps(
-                    "Tonemap",
-                    self.output.width,
-                    self.output.height,
-                )
-            });
-            let mut pass =
-                gpu.encoder.as_mut().unwrap()
-                    .begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("Tonemap Compute Pass"),
-                        timestamp_writes: ts,
-                    });
-            pass.set_pipeline(compute_pipe);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(
+        gpu.native_enc.dispatch_compute(
+            &self.pipeline,
+            &[
+                manifold_gpu::GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&uniforms),
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 1,
+                    texture: hdr_source,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &self.sampler,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 3,
+                    texture: &self.output.texture,
+                },
+            ],
+            [
                 self.output.width.div_ceil(16),
                 self.output.height.div_ceil(16),
                 1,
-            );
-            return;
-        }
-
-        // --- render pass fallback (non-hal-encoding builds) ---
-        let bind_group =
-            gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Tonemap BG"),
-                layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.uniform_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(hdr_source),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-            });
-
-        let ts = profiler.and_then(|p| {
-            p.render_timestamps(
-                "Tonemap",
-                self.output.width,
-                self.output.height,
-            )
-        });
-        let mut pass =
-            gpu.encoder.as_mut().unwrap()
-                .begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Tonemap Pass"),
-                    color_attachments: &[Some(
-                        wgpu::RenderPassColorAttachment {
-                            view: &self.output.view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        },
-                    )],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: ts,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.draw(0..3, 0..1);
+            ],
+            "Tonemap Compute",
+        );
     }
 
     /// Clear the tonemap output to black. Used when no clips are active
     /// to skip the full tonemap + master effect chain (Unity parity:
     /// CompositorStack returns immediately for empty playback).
-    pub fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
-        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Tonemap Clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.output.view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
+    pub fn clear(&self, gpu: &mut GpuEncoder) {
+        gpu.clear_texture(&self.output.texture, 0.0, 0.0, 0.0, 0.0);
     }
 
     /// Resize the tonemap output buffer. Matches Unity's lazy reallocation in
     /// ApplyTonemap() when hdrSource dimensions change.
-    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    pub fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
         self.output.resize(device, width, height);
-    }
-
-    /// HAL path: encode tonemap as compute dispatch via hal command encoder.
-    /// Writes uniforms directly to shared-memory buffer (no API call).
-    /// Eliminates TBDR tile overhead vs the render pass path.
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    pub(crate) unsafe fn apply_hal_compute(
-        &self,
-        hal_enc: &mut crate::hal_context::MetalCommandEncoder,
-        hal_ctx: &crate::hal_context::HalContext,
-        hdr_source_hal_view: &crate::hal_context::MetalTextureView,
-        output_hal_view: &crate::hal_context::MetalTextureView,
-        settings: &TonemapSettings,
-    ) {
-        use wgpu::hal::{self as hal, CommandEncoder as _, Device as _};
-
-        let mode = if settings.hdr_output_enabled { 3u32 } else { 0u32 };
-        let uniforms = TonemapUniforms {
-            exposure: settings.exposure,
-            paper_white: settings.paper_white_nits,
-            max_nits: settings.max_display_nits,
-            mode,
-        };
-
-        // Direct memcpy to shared-memory uniform buffer
-        if let Some(mapped_ptr) = self.hal_uniform_mapped_ptr {
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    bytemuck::bytes_of(&uniforms).as_ptr(),
-                    mapped_ptr,
-                    std::mem::size_of::<TonemapUniforms>(),
-                );
-            }
-        }
-
-        let hal_pipe = self
-            .hal_compute_pipeline
-            .as_ref()
-            .expect("tonemap hal compute pipeline");
-        let hal_samp = self.hal_sampler.as_ref().expect("tonemap hal sampler");
-        let hal_ubo =
-            unsafe { &*self.hal_uniform_buf_ptr.expect("tonemap hal ubo") };
-
-        let hal_bg = unsafe {
-            hal_ctx
-                .device()
-                .create_bind_group(&hal::BindGroupDescriptor {
-                    label: None,
-                    layout: &hal_pipe.bind_group_layout,
-                    entries: &[
-                        hal::BindGroupEntry {
-                            binding: 0,
-                            resource_index: 0,
-                            count: 1,
-                        },
-                        hal::BindGroupEntry {
-                            binding: 1,
-                            resource_index: 0,
-                            count: 1,
-                        },
-                        hal::BindGroupEntry {
-                            binding: 2,
-                            resource_index: 0,
-                            count: 1,
-                        },
-                        hal::BindGroupEntry {
-                            binding: 3,
-                            resource_index: 1,
-                            count: 1,
-                        },
-                    ],
-                    buffers: &[hal::BufferBinding::new_unchecked(
-                        hal_ubo,
-                        0,
-                        std::num::NonZero::new(
-                            std::mem::size_of::<TonemapUniforms>() as u64,
-                        ),
-                    )],
-                    samplers: &[hal_samp],
-                    textures: &[
-                        hal::TextureBinding {
-                            view: hdr_source_hal_view,
-                            usage: wgpu::wgt::TextureUses::RESOURCE,
-                        },
-                        hal::TextureBinding {
-                            view: output_hal_view,
-                            usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE,
-                        },
-                    ],
-                    acceleration_structures: &[],
-                    external_textures: &[],
-                })
-                .expect("Failed to create hal tonemap compute bind group")
-        };
-
-        unsafe {
-            hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
-                label: Some("Tonemap Compute"),
-                timestamp_writes: None,
-            });
-            hal_enc.set_compute_pipeline(&hal_pipe.pipeline);
-            hal_enc
-                .set_bind_group(&hal_pipe.pipeline_layout, 0, &hal_bg, &[]);
-            hal_enc.dispatch([
-                self.output.width.div_ceil(16),
-                self.output.height.div_ceil(16),
-                1,
-            ]);
-            hal_enc.end_compute_pass();
-        }
-
-        unsafe {
-            hal_ctx.device().destroy_bind_group(hal_bg);
-        }
-    }
-
-    /// HAL path: clear tonemap output to black.
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(dead_code)]
-    pub(crate) unsafe fn clear_hal(
-        &self,
-        hal_enc: &mut crate::hal_context::MetalCommandEncoder,
-        output_hal_view: &crate::hal_context::MetalTextureView,
-    ) {
-        use wgpu::hal::{self as hal, CommandEncoder as _};
-        unsafe {
-            hal_enc
-                .begin_render_pass(&hal::RenderPassDescriptor {
-                    label: Some("Tonemap Clear"),
-                    extent: wgpu::Extent3d {
-                        width: self.output.width,
-                        height: self.output.height,
-                        depth_or_array_layers: 1,
-                    },
-                    sample_count: 1,
-                    color_attachments: &[Some(hal::ColorAttachment {
-                        target: hal::Attachment {
-                            view: output_hal_view,
-                            usage: wgpu::wgt::TextureUses::COLOR_TARGET,
-                        },
-                        resolve_target: None,
-                        ops: hal::AttachmentOps::LOAD_CLEAR
-                            | hal::AttachmentOps::STORE,
-                        clear_value: wgpu::Color::BLACK,
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: None,
-                    multiview_mask: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                })
-                .expect("hal begin_render_pass failed");
-            hal_enc.end_render_pass();
-        }
     }
 }

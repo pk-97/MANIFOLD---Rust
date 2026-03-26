@@ -1,9 +1,9 @@
 use std::any::Any;
 use ahash::AHashMap;
-use std::sync::Arc;
 use manifold_core::{GeneratorTypeId, LayerId};
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
+use manifold_gpu::{GpuDevice, GpuTextureFormat};
 use manifold_playback::renderer::ClipRenderer;
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
@@ -33,10 +33,10 @@ struct LayerGeneratorState {
 /// Manages per-layer Generator instances and per-clip RenderTargets.
 /// Port of C# GeneratorRenderer : IClipRenderer.
 pub struct GeneratorRenderer {
-    device: Arc<wgpu::Device>,
+    device: GpuDevice,
     width: u32,
     height: u32,
-    format: wgpu::TextureFormat,
+    format: GpuTextureFormat,
     registry: GeneratorRegistry,
     active_clips: AHashMap<String, ActiveClip>,
     layer_generators: AHashMap<LayerId, LayerGeneratorState>,
@@ -46,28 +46,15 @@ pub struct GeneratorRenderer {
     /// Shared-memory uniform arena for generator uniform data.
     /// Eliminates per-generator queue.write_buffer() calls.
     uniform_arena: UniformArena,
-    /// Cached hal context pointer for creating hal pipelines at generator creation time.
-    /// Points to HalContext owned by ContentPipeline (same thread, same lifetime).
-    hal_ctx_ptr: Option<*const crate::hal_context::HalContext>,
-    /// Cached native GPU device pointer for creating native Metal pipelines.
-    /// Points to GpuDevice owned by ContentPipeline (same thread, same lifetime).
-    #[cfg(target_os = "macos")]
-    native_device_ptr: Option<*const manifold_gpu::GpuDevice>,
-}
-
-// Safety: hal_ctx_ptr points to HalContext on the content thread.
-// GeneratorRenderer is only used on the content thread.
-unsafe impl Send for GeneratorRenderer {
 }
 
 impl GeneratorRenderer {
     pub fn new(
-        device: Arc<wgpu::Device>,
+        device: GpuDevice,
         width: u32,
         height: u32,
-        format: wgpu::TextureFormat,
+        format: GpuTextureFormat,
         pool_size: usize,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
     ) -> Self {
         let mut available_rts = Vec::with_capacity(pool_size);
         for i in 0..pool_size {
@@ -80,10 +67,7 @@ impl GeneratorRenderer {
             ));
         }
 
-        let uniform_arena = UniformArena::new(&device, hal_ctx);
-        // Don't store hal_ctx_ptr here — it points to the stack and will be
-        // moved into ContentPipeline. set_hal_ctx() must be called after the move.
-        let hal_ctx_ptr = None;
+        let uniform_arena = UniformArena::new(&device);
 
         Self {
             device,
@@ -96,16 +80,7 @@ impl GeneratorRenderer {
             available_rts,
             render_scratch: Vec::with_capacity(16),
             uniform_arena,
-            hal_ctx_ptr,
-            #[cfg(target_os = "macos")]
-            native_device_ptr: None,
         }
-    }
-
-    /// Set the native GPU device pointer (called after ContentPipeline is at its final location).
-    #[cfg(target_os = "macos")]
-    pub fn set_native_device(&mut self, device: Option<&manifold_gpu::GpuDevice>) {
-        self.native_device_ptr = device.map(|d| d as *const manifold_gpu::GpuDevice);
     }
 
     /// Internal: acquire a clip with generator type and layer identity.
@@ -128,13 +103,7 @@ impl GeneratorRenderer {
             .is_none_or(|ls| ls.generator_type != gen_type);
 
         if needs_create {
-            if let Some(generator) = self.registry.create(
-                    &self.device,
-                    &gen_type,
-                    self.hal_ctx_ptr.map(|p| unsafe { &*p }),
-                    #[cfg(target_os = "macos")]
-                    self.native_device_ptr.map(|p| unsafe { &*p }),
-                ) {
+            if let Some(generator) = self.registry.create(&self.device, &gen_type) {
                 self.layer_generators.insert(
                     layer_id.clone(),
                     LayerGeneratorState {
@@ -179,14 +148,8 @@ impl GeneratorRenderer {
         true
     }
 
-    /// Set the hal context pointer after it has been moved to its final location
-    /// (inside ContentPipeline). Must be called before any generator is created.
-    pub fn set_hal_ctx(&mut self, ctx: Option<&crate::hal_context::HalContext>) {
-        self.hal_ctx_ptr = ctx.map(|c| c as *const _);
-    }
-
     /// Render all active generator clips.
-    /// Called from app layer with full GPU context (queue + encoder).
+    /// Called from app layer with full GPU context (encoder).
     /// Port of C# GeneratorRenderer.RenderAll().
     pub fn render_all(
         &mut self,
@@ -195,7 +158,6 @@ impl GeneratorRenderer {
         beat: f32,
         dt: f32,
         layers: &[Layer],
-        gpu_profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // Reset uniform arena for this frame and set on GpuEncoder.
         self.uniform_arena.reset();
@@ -223,43 +185,30 @@ impl GeneratorRenderer {
                     Some(a) => a,
                     None => continue,
                 };
-                (active.layer_id.clone(), active.layer_index, active.generator_type.clone(), active.anim_progress)
+                (
+                    active.layer_id.clone(),
+                    active.layer_index,
+                    active.generator_type.clone(),
+                    active.anim_progress,
+                )
             };
 
             // Build GeneratorContext from layer params (zero allocation)
             let mut params = [0.0f32; MAX_GEN_PARAMS];
             let mut param_count = 0u32;
             if let Some(layer) = layers.get(layer_index as usize)
-                && let Some(gp) = layer.gen_params() {
-                    param_count = gp.param_values.len().min(MAX_GEN_PARAMS) as u32;
-                    for (i, val) in gp.param_values.iter().take(MAX_GEN_PARAMS).enumerate() {
-                        params[i] = *val;
-                    }
+                && let Some(gp) = layer.gen_params()
+            {
+                param_count = gp.param_values.len().min(MAX_GEN_PARAMS) as u32;
+                for (i, val) in gp.param_values.iter().take(MAX_GEN_PARAMS).enumerate() {
+                    params[i] = *val;
                 }
+            }
 
             let trigger_count = self
                 .layer_generators
                 .get(&layer_id)
                 .map_or(0, |ls| ls.trigger_count);
-
-            // Extract native Metal texture for the render target (if native path active).
-            #[cfg(target_os = "macos")]
-            let _native_tex_storage;
-            #[cfg(target_os = "macos")]
-            let native_target = if gpu.has_native_encoder() {
-                if let Some(active) = self.active_clips.get(id) {
-                    _native_tex_storage = unsafe {
-                        crate::gpu_encoder::extract_native_texture(
-                            &active.render_target.texture,
-                        )
-                    };
-                    Some(&_native_tex_storage as *const manifold_gpu::GpuTexture)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
 
             let ctx = GeneratorContext {
                 time,
@@ -272,49 +221,40 @@ impl GeneratorRenderer {
                 trigger_count,
                 params,
                 param_count,
-                #[cfg(target_os = "macos")]
-                native_target,
             };
 
-            // Split borrows: get generator and active clip's RT view separately
+            // Split borrows: get generator and active clip's RT separately
             let _ = gen_type; // used for type matching if needed
             if let Some(layer_state) = self.layer_generators.get_mut(&layer_id)
-                && let Some(active) = self.active_clips.get_mut(id) {
-                    if let Some(profiler) = gpu_profiler {
-                        profiler.set_scope(&format!("clip:{}:", id));
-                    }
-                    let new_progress = layer_state.generator.render(
-                        gpu,
-                        &active.render_target.view,
-                        &ctx,
-                        gpu_profiler,
-                    );
-                    if let Some(profiler) = gpu_profiler {
-                        profiler.clear_scope();
-                    }
-                    active.anim_progress = new_progress;
-                }
+                && let Some(active) = self.active_clips.get_mut(id)
+            {
+                let new_progress = layer_state.generator.render(
+                    gpu,
+                    &active.render_target.texture,
+                    &ctx,
+                );
+                active.anim_progress = new_progress;
+            }
         }
 
-        // Flush uniform arena staging for wgpu path (no-op on hal shared-memory path).
-        self.uniform_arena.flush(gpu.device, gpu.queue);
+        // Flush uniform arena (recreates buffer if capacity grew).
+        self.uniform_arena.flush(gpu.device);
         // Clear the arena pointer from GpuEncoder.
         gpu.uniform_arena = None;
     }
 
     /// Get the animation progress for a rendered clip (for profiling).
     pub fn get_clip_anim_progress(&self, clip_id: &str) -> f32 {
-        self.active_clips.get(clip_id).map_or(0.0, |a| a.anim_progress)
+        self.active_clips
+            .get(clip_id)
+            .map_or(0.0, |a| a.anim_progress)
     }
 
-    /// Get the texture view for a rendered clip (used by compositor).
-    pub fn get_clip_texture_view(&self, clip_id: &str) -> Option<&wgpu::TextureView> {
-        self.active_clips.get(clip_id).map(|a| &a.render_target.view)
-    }
-
-    /// Get the texture for a rendered clip (used for copy_texture_to_texture).
-    pub fn get_clip_texture(&self, clip_id: &str) -> Option<&wgpu::Texture> {
-        self.active_clips.get(clip_id).map(|a| &a.render_target.texture)
+    /// Get the texture for a rendered clip (used by compositor).
+    pub fn get_clip_texture(&self, clip_id: &str) -> Option<&manifold_gpu::GpuTexture> {
+        self.active_clips
+            .get(clip_id)
+            .map(|a| &a.render_target.texture)
     }
 
     /// Resize all render targets and generators.
@@ -334,7 +274,11 @@ impl GeneratorRenderer {
 
     /// Update active clip types for a layer after generator type change.
     /// Port of C# GeneratorRenderer.UpdateActiveTypesForLayer().
-    pub fn update_active_types_for_layer(&mut self, layer_id: &LayerId, new_type: GeneratorTypeId) {
+    pub fn update_active_types_for_layer(
+        &mut self,
+        layer_id: &LayerId,
+        new_type: GeneratorTypeId,
+    ) {
         // Update clip type tracking
         for active in self.active_clips.values_mut() {
             if active.layer_id == *layer_id {
@@ -353,13 +297,7 @@ impl GeneratorRenderer {
                 .layer_generators
                 .get(layer_id)
                 .map_or(0, |ls| ls.trigger_count);
-            if let Some(generator) = self.registry.create(
-                &self.device,
-                &new_type,
-                self.hal_ctx_ptr.map(|p| unsafe { &*p }),
-                #[cfg(target_os = "macos")]
-                self.native_device_ptr.map(|p| unsafe { &*p }),
-            ) {
+            if let Some(generator) = self.registry.create(&self.device, &new_type) {
                 self.layer_generators.insert(
                     layer_id.clone(),
                     LayerGeneratorState {
@@ -390,7 +328,9 @@ impl ClipRenderer for GeneratorRenderer {
 
     fn start_clip(&mut self, clip: &TimelineClip, _current_time: f32, layers: &[Layer]) -> bool {
         let layer_id = clip.layer_id.clone();
-        let layer_index = layers.iter().position(|l| l.layer_id == layer_id)
+        let layer_index = layers
+            .iter()
+            .position(|l| l.layer_id == layer_id)
             .map_or(0, |i| i as i32);
         self.acquire_clip(&clip.id, clip.generator_type.clone(), layer_id, layer_index)
     }
@@ -420,12 +360,22 @@ impl ClipRenderer for GeneratorRenderer {
         self.active_clips.contains_key(clip_id)
     }
 
-    fn needs_prepare_phase(&self) -> bool { false }
-    fn needs_drift_correction(&self) -> bool { false }
-    fn needs_pending_pause(&self) -> bool { false }
+    fn needs_prepare_phase(&self) -> bool {
+        false
+    }
+    fn needs_drift_correction(&self) -> bool {
+        false
+    }
+    fn needs_pending_pause(&self) -> bool {
+        false
+    }
 
-    fn get_clip_playback_time(&self, _clip_id: &str) -> f32 { 0.0 }
-    fn get_clip_media_length(&self, _clip_id: &str) -> f32 { 0.0 }
+    fn get_clip_playback_time(&self, _clip_id: &str) -> f32 {
+        0.0
+    }
+    fn get_clip_media_length(&self, _clip_id: &str) -> f32 {
+        0.0
+    }
 
     fn resume_clip(&mut self, _clip_id: &str) { /* no-op: generators render every frame */ }
     fn pause_clip(&mut self, _clip_id: &str) { /* no-op */ }
@@ -435,7 +385,7 @@ impl ClipRenderer for GeneratorRenderer {
 
     fn pre_render(&mut self, _time: f32, _beat: f32, _dt: f32) {
         // No-op: actual GPU rendering is done via render_all() called from app
-        // with queue/encoder context that the trait can't provide.
+        // with encoder context that the trait can't provide.
         // Unity's PreRender delegates to RenderAll, but Rust needs explicit GPU context.
     }
 
@@ -443,6 +393,10 @@ impl ClipRenderer for GeneratorRenderer {
         self.resize_gpu(width as u32, height as u32);
     }
 
-    fn as_any(&self) -> &dyn Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }

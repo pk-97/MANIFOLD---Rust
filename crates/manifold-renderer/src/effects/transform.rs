@@ -50,19 +50,12 @@ pub struct TransformFX {
 }
 
 impl TransformFX {
-    pub fn new(
-        device: &wgpu::Device,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
-    ) -> Self {
+    pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/fx_transform_compute.wgsl"),
                 "Transform",
-                std::mem::size_of::<TransformUniforms>() as u64,
-                hal_ctx,
-                #[cfg(target_os = "macos")] native_device,
             ),
         }
     }
@@ -91,12 +84,10 @@ impl PostProcessEffect for TransformFX {
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,
-        source: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-        _target_texture: &wgpu::Texture,
+        source: &manifold_gpu::GpuTexture,
+        target: &manifold_gpu::GpuTexture,
         fx: &EffectInstance,
         ctx: &EffectContext,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // TransformFX.cs:18 — clip-level Transform is handled as uniforms in BlitClip.
         // Use identity uniforms so source passes through to target unchanged.
@@ -131,7 +122,6 @@ impl PostProcessEffect for TransformFX {
             bytemuck::bytes_of(&uniforms),
             "Transform Pass",
             ctx.width, ctx.height,
-            profiler,
         );
     }
 }

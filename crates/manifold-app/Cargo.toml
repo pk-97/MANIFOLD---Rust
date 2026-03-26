@@ -42,7 +42,6 @@ raw-window-handle = "0.6"
 
 [features]
 profiling = ["dep:manifold-profiler"]
-hal-encoding = ["manifold-renderer/hal-encoding"]
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("cargo-clippy", "profiling"))'] }

@@ -29,17 +29,8 @@ pub struct DuocylinderGenerator {
 }
 
 impl DuocylinderGenerator {
-    pub fn new(
-        device: &wgpu::Device,
-        target_format: wgpu::TextureFormat,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
-    ) -> Self {
-        let line_pipeline =
-            LinePipeline::new(
-            device, target_format, "Duocylinder", hal_ctx,
-            #[cfg(target_os = "macos")] native_device,
-        );
+    pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
+        let line_pipeline = LinePipeline::new(device, "Duocylinder");
         let mut helper = LineGeneratorHelper::new(VERTEX_COUNT, EDGE_COUNT);
 
         // Parametric 4D torus: (cos(u), sin(u), cos(v), sin(v))
@@ -88,9 +79,8 @@ impl Generator for DuocylinderGenerator {
     fn render(
         &mut self,
         gpu: &mut GpuEncoder,
-        target: &wgpu::TextureView,
+        target: &manifold_gpu::GpuTexture,
         ctx: &GeneratorContext,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         let rot_xy = if ctx.param_count > ROT_XY as u32 { ctx.params[ROT_XY] } else { 0.4 };
         let rot_zw = if ctx.param_count > ROT_ZW as u32 { ctx.params[ROT_ZW] } else { 0.25 };
@@ -137,10 +127,10 @@ impl Generator for DuocylinderGenerator {
             gpu, target,
             positions, instances, num_edges,
             edge_half_thick, dot_half_thick,
-            ctx.beat, profiler, "Duocylinder", ctx.width, ctx.height,
+            ctx.beat, "Duocylinder", ctx.width, ctx.height,
         );
         self.helper.anim_progress
     }
 
-    fn resize(&mut self, _device: &wgpu::Device, _width: u32, _height: u32) {}
+    fn resize(&mut self, _device: &manifold_gpu::GpuDevice, _width: u32, _height: u32) {}
 }

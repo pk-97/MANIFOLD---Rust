@@ -25,4 +25,6 @@ metal = "0.33"
 [dev-dependencies]
 
 [features]
-hal-encoding = []
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("hal-encoding"))'] }
