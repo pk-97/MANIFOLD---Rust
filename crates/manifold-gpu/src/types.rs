@@ -12,6 +12,25 @@ pub enum GpuTextureFormat {
     R16Float,
     Rg16Float,
     R32Uint,
+    Rgba8UnormSrgb,
+    Bgra8Unorm,
+    R8Unorm,
+}
+
+impl GpuTextureFormat {
+    /// Bytes per pixel for this format.
+    pub fn bytes_per_pixel(self) -> u32 {
+        match self {
+            Self::Rgba16Float => 8,
+            Self::Rgba32Float => 16,
+            Self::Rgba8Unorm | Self::Rgba8UnormSrgb | Self::Bgra8Unorm => 4,
+            Self::R32Float | Self::R32Uint => 4,
+            Self::Rg32Float => 8,
+            Self::R16Float => 2,
+            Self::Rg16Float => 4,
+            Self::R8Unorm => 1,
+        }
+    }
 }
 
 /// Texture dimension.
