@@ -314,18 +314,27 @@ impl BlendResources {
         if let Some(ref native_pipe) = self.native_pipeline
             && let Some(ref native_samp) = self.native_sampler
             && gpu.has_native_encoder()
-            && let Some(src_wgpu) = source_tex
-            && let Some(bld_wgpu) = blend_tex
-            && let Some(tgt_wgpu) = target_tex
         {
             let src_gpu = unsafe {
-                crate::gpu_encoder::extract_native_texture(src_wgpu)
+                if let Some(t) = source_tex {
+                    crate::gpu_encoder::extract_native_texture(t)
+                } else {
+                    crate::gpu_encoder::extract_native_texture_from_view(source_view)
+                }
             };
             let blend_gpu = unsafe {
-                crate::gpu_encoder::extract_native_texture(bld_wgpu)
+                if let Some(t) = blend_tex {
+                    crate::gpu_encoder::extract_native_texture(t)
+                } else {
+                    crate::gpu_encoder::extract_native_texture_from_view(blend_view)
+                }
             };
             let tgt_gpu = unsafe {
-                crate::gpu_encoder::extract_native_texture(tgt_wgpu)
+                if let Some(t) = target_tex {
+                    crate::gpu_encoder::extract_native_texture(t)
+                } else {
+                    crate::gpu_encoder::extract_native_texture_from_view(target_view)
+                }
             };
             let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
             enc.dispatch_compute(
