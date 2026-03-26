@@ -846,7 +846,14 @@ impl GpuEncoder {
         cmd_buf.wait_until_completed();
         let status = cmd_buf.status();
         if status == metal::MTLCommandBufferStatus::Error {
-            eprintln!("[GPU ERROR] Command buffer failed after commit! status={status:?}");
+            // MTLCommandBufferError codes:
+            // 1=Internal, 2=Timeout, 3=PageFault, 4=AccessRevoked,
+            // 5=NotPermitted, 7=OutOfMemory, 8=InvalidResource, 12=StackOverflow
+            eprintln!(
+                "[GPU ERROR] Command buffer FAILED! status={status:?} \
+                 label={:?}",
+                cmd_buf.label(),
+            );
         }
     }
 }
