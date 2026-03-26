@@ -910,10 +910,11 @@ fn compile_wgsl_to_msl_render(
     .validate(&module)
     .unwrap_or_else(|e| panic!("{label}: WGSL validation error: {e}"));
 
-    // Build slot maps for both entry points
-    let (slot_map_vs, entry_resources_vs) = build_slot_map(&module, vs_entry);
-    let (slot_map_fs, entry_resources_fs) = build_slot_map(&module, fs_entry);
-    let _ = slot_map_vs; // VS typically has no resource bindings (fullscreen triangle)
+    // Build a UNIFIED slot map from the union of both entry points' globals.
+    // VS and FS share the same Metal argument table, so bindings visible in
+    // either stage need slots (e.g. line pipeline: positions/edges in VS only).
+    let (unified_slot_map, entry_resources_vs, entry_resources_fs) =
+        build_slot_map_render(&module, vs_entry, fs_entry);
 
     let mut per_entry_point_map = naga::back::msl::EntryPointResourceMap::default();
     per_entry_point_map.insert(vs_entry.to_string(), entry_resources_vs);
@@ -938,7 +939,126 @@ fn compile_wgsl_to_msl_render(
         naga::back::msl::write_string(&module, &info, &options, &pipeline_options)
             .unwrap_or_else(|e| panic!("{label}: MSL compilation error: {e}"));
 
-    (slot_map_fs, msl_source, String::new())
+    (unified_slot_map, msl_source, String::new())
+}
+
+/// Build a unified SlotMap + per-entry-point EntryPointResources for a render
+/// pipeline (vertex + fragment). Both stages share the same Metal argument table,
+/// so the slot map includes globals from the union of both entry points.
+/// Each stage gets its own EntryPointResources with the shared index assignments.
+fn build_slot_map_render(
+    module: &naga::Module,
+    vs_entry: &str,
+    fs_entry: &str,
+) -> (SlotMap, naga::back::msl::EntryPointResources, naga::back::msl::EntryPointResources) {
+    use naga::back::msl;
+
+    // Collect globals from both entry points
+    fn collect_ep_globals(
+        module: &naga::Module,
+        entry_name: &str,
+    ) -> std::collections::HashSet<naga::Handle<naga::GlobalVariable>> {
+        let ep = module.entry_points.iter().find(|ep| ep.name == entry_name);
+        if let Some(ep) = ep {
+            let mut called_fns: std::collections::HashSet<naga::Handle<naga::Function>> =
+                std::collections::HashSet::new();
+            collect_called_functions(&ep.function, module, &mut called_fns);
+            let mut globals: std::collections::HashSet<naga::Handle<naga::GlobalVariable>> =
+                std::collections::HashSet::new();
+            collect_globals_from_function(&ep.function, &mut globals);
+            for &fn_handle in &called_fns {
+                collect_globals_from_function(&module.functions[fn_handle], &mut globals);
+            }
+            globals
+        } else {
+            module.global_variables.iter().map(|(h, _)| h).collect()
+        }
+    }
+
+    let vs_globals = collect_ep_globals(module, vs_entry);
+    let fs_globals = collect_ep_globals(module, fs_entry);
+
+    // Union of both entry points' globals
+    let all_globals: std::collections::HashSet<_> =
+        vs_globals.union(&fs_globals).copied().collect();
+
+    // Collect bindings from the union
+    let mut bindings: Vec<(u32, naga::ResourceBinding, &naga::GlobalVariable)> = Vec::new();
+    for (handle, gv) in module.global_variables.iter() {
+        if let Some(ref binding) = gv.binding
+            && all_globals.contains(&handle)
+        {
+            bindings.push((binding.binding, *binding, gv));
+        }
+    }
+    bindings.sort_by_key(|(b, _, _)| *b);
+
+    // Build unified slot map + per-entry-point resources with shared indices
+    let mut slot_map = SlotMap::new();
+    let mut resources_vs = msl::EntryPointResources::default();
+    let mut resources_fs = msl::EntryPointResources::default();
+    let mut next_buffer: u32 = 0;
+    let mut next_texture: u32 = 0;
+    let mut next_sampler: u32 = 0;
+
+    for (binding_num, resource_binding, gv) in &bindings {
+        let ty = &module.types[gv.ty];
+        let is_buffer = matches!(
+            gv.space,
+            naga::AddressSpace::Uniform | naga::AddressSpace::Storage { .. }
+        );
+        let is_sampler = matches!(ty.inner, naga::TypeInner::Sampler { .. });
+        let is_texture = matches!(ty.inner, naga::TypeInner::Image { .. });
+        let is_writable = match gv.space {
+            naga::AddressSpace::Storage { access } => {
+                access.contains(naga::StorageAccess::STORE)
+            }
+            _ => false,
+        } || matches!(
+            ty.inner,
+            naga::TypeInner::Image {
+                class: naga::ImageClass::Storage { access, .. },
+                ..
+            } if access.contains(naga::StorageAccess::STORE)
+        );
+
+        let mut bind_target = msl::BindTarget::default();
+
+        if is_buffer {
+            let idx = next_buffer;
+            next_buffer += 1;
+            bind_target.buffer = Some(idx as u8);
+            bind_target.mutable = is_writable;
+            slot_map.insert(*binding_num, Slot {
+                kind: SlotKind::Buffer,
+                metal_index: idx,
+            });
+        } else if is_sampler {
+            let idx = next_sampler;
+            next_sampler += 1;
+            bind_target.sampler = Some(msl::BindSamplerTarget::Resource(idx as u8));
+            slot_map.insert(*binding_num, Slot {
+                kind: SlotKind::Sampler,
+                metal_index: idx,
+            });
+        } else if is_texture {
+            let idx = next_texture;
+            next_texture += 1;
+            bind_target.texture = Some(idx as u8);
+            bind_target.mutable = is_writable;
+            slot_map.insert(*binding_num, Slot {
+                kind: SlotKind::Texture,
+                metal_index: idx,
+            });
+        }
+
+        // Add to both entry points' resources — naga + fake_missing_bindings
+        // handles the case where a binding is only used in one stage.
+        resources_vs.resources.insert(*resource_binding, bind_target.clone());
+        resources_fs.resources.insert(*resource_binding, bind_target);
+    }
+
+    (slot_map, resources_vs, resources_fs)
 }
 
 /// Build a SlotMap and naga EntryPointResources from a naga module.
