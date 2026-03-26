@@ -278,6 +278,42 @@ impl<'a> GpuEncoder<'a> {
         });
     }
 
+    /// Copy texture to buffer (for GPU readback). Routes to native Metal or wgpu.
+    pub fn copy_texture_to_buffer(
+        &mut self,
+        texture: &wgpu::Texture,
+        buffer: &wgpu::Buffer,
+        width: u32,
+        height: u32,
+        bytes_per_row: u32,
+    ) {
+        #[cfg(target_os = "macos")]
+        if let Some(enc_ptr) = self.native_enc {
+            let gpu_tex = unsafe { extract_native_texture(texture) };
+            let gpu_buf = unsafe { extract_native_buffer(buffer) };
+            let enc = unsafe { &mut *enc_ptr };
+            enc.copy_texture_to_buffer(&gpu_tex, &gpu_buf, width, height, bytes_per_row);
+            return;
+        }
+        self.encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: None,
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+    }
+
     /// Clear a buffer to zeros. Routes to native Metal blit or wgpu encoder.
     pub fn clear_buffer(&mut self, buffer: &wgpu::Buffer) {
         #[cfg(target_os = "macos")]

@@ -793,6 +793,34 @@ impl GpuEncoder {
         enc.end_encoding();
     }
 
+    /// Copy texture to buffer via blit encoder (for readback).
+    pub fn copy_texture_to_buffer(
+        &mut self,
+        src: &GpuTexture,
+        dst: &GpuBuffer,
+        width: u32,
+        height: u32,
+        bytes_per_row: u32,
+    ) {
+        self.end_current();
+        let enc = self.cmd_buf().new_blit_command_encoder();
+        let src_size = metal::MTLSize::new(width as _, height as _, 1);
+        let src_origin = metal::MTLOrigin { x: 0, y: 0, z: 0 };
+        enc.copy_from_texture_to_buffer(
+            &src.raw,
+            0, // slice
+            0, // level
+            src_origin,
+            src_size,
+            &dst.raw,
+            0,                      // destination_offset
+            bytes_per_row as u64,   // destination_bytes_per_row
+            bytes_per_row as u64 * height as u64, // destination_bytes_per_image
+            metal::MTLBlitOption::empty(),
+        );
+        enc.end_encoding();
+    }
+
     /// Signal a shared event on the GPU timeline.
     /// Creates a lightweight command buffer that encodes the signal and commits it.
     /// The event value is incremented automatically.

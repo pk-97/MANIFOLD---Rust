@@ -307,9 +307,21 @@ pub struct BlobTrackingFX {
     /// Cached hal pointer to uniform buffer for bind groups.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_uniform_buf_ptr: Option<*const crate::hal_context::MetalBuffer>,
+    /// Native Metal compute pipeline for overlay (blob visualization).
+    #[cfg(target_os = "macos")]
+    native_compute_overlay: Option<manifold_gpu::GpuComputePipeline>,
+    /// Native Metal compute pipeline for downsample.
+    #[cfg(target_os = "macos")]
+    native_compute_downsample: Option<manifold_gpu::GpuComputePipeline>,
+    /// Native Metal sampler (bilinear).
+    #[cfg(target_os = "macos")]
+    native_sampler: Option<manifold_gpu::GpuSampler>,
+    /// Native Metal sampler (point).
+    #[cfg(target_os = "macos")]
+    native_point_sampler: Option<manifold_gpu::GpuSampler>,
 }
 
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+#[cfg(target_os = "macos")]
 unsafe impl Send for BlobTrackingFX {}
 
 impl BlobTrackingFX {
@@ -676,6 +688,31 @@ impl BlobTrackingFX {
             (None, None, None, None, None, None)
         };
 
+        // --- Native Metal compute pipelines ---
+        #[cfg(target_os = "macos")]
+        let (native_compute_overlay, native_compute_downsample, native_sampler_out, native_point_sampler_out) =
+        if let Some(dev) = _native_device {
+            let cs_overlay = dev.create_compute_pipeline(
+                include_str!("shaders/fx_blob_tracking_compute.wgsl"),
+                "cs_main",
+                "BlobTracking Overlay Native",
+            );
+            let cs_downsample = dev.create_compute_pipeline(
+                DOWNSAMPLE_COMPUTE_SHADER,
+                "cs_downsample",
+                "BlobTracking Downsample Native",
+            );
+            let samp = dev.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
+            let pt_samp = dev.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                min_filter: manifold_gpu::GpuFilterMode::Nearest,
+                mag_filter: manifold_gpu::GpuFilterMode::Nearest,
+                ..manifold_gpu::GpuSamplerDesc::default()
+            });
+            (Some(cs_overlay), Some(cs_downsample), Some(samp), Some(pt_samp))
+        } else {
+            (None, None, None, None)
+        };
+
         Self {
             pipeline,
             bind_group_layout,
@@ -705,6 +742,14 @@ impl BlobTrackingFX {
             hal_uniform_mapped_ptr,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_uniform_buf_ptr,
+            #[cfg(target_os = "macos")]
+            native_compute_overlay,
+            #[cfg(target_os = "macos")]
+            native_compute_downsample,
+            #[cfg(target_os = "macos")]
+            native_sampler: native_sampler_out,
+            #[cfg(target_os = "macos")]
+            native_point_sampler: native_point_sampler_out,
         }
     }
 
@@ -1110,8 +1155,8 @@ fn create_font_atlas(device: &wgpu::Device, queue: &wgpu::Queue) -> (wgpu::Textu
 }
 
 // Compute variant of the downsample blit — bilinear sample, write to storage texture.
-// Eliminates TBDR tile overhead for the downsample pass (hal path only).
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+// Eliminates TBDR tile overhead for the downsample pass.
+#[cfg(target_os = "macos")]
 const DOWNSAMPLE_COMPUTE_SHADER: &str = r#"
 @group(0) @binding(0) var source_tex: texture_2d<f32>;
 @group(0) @binding(1) var tex_sampler: sampler;
@@ -1201,9 +1246,45 @@ impl PostProcessEffect for BlobTrackingFX {
         if !state.readback.is_pending()
             && frame - state.last_readback_frame >= READBACK_INTERVAL_FRAMES
         {
+            // --- native Metal path for downsample ---
+            #[cfg(target_os = "macos")]
+            let mut downsample_done = false;
+            #[cfg(target_os = "macos")]
+            if let Some(ref native_ds) = self.native_compute_downsample
+                && gpu.has_native_encoder()
+            {
+                let native_samp = self.native_sampler.as_ref().unwrap();
+                let n_source = unsafe {
+                    crate::gpu_encoder::extract_native_texture_from_view(source)
+                };
+                let n_ds_target = unsafe {
+                    crate::gpu_encoder::extract_native_texture_from_view(&state.downsample_rt.view)
+                };
+                let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+                enc.dispatch_compute(
+                    native_ds,
+                    &[
+                        manifold_gpu::GpuBinding::Texture { binding: 0, texture: &n_source },
+                        manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: native_samp },
+                        manifold_gpu::GpuBinding::Texture { binding: 2, texture: &n_ds_target },
+                    ],
+                    [READBACK_WIDTH.div_ceil(16), READBACK_HEIGHT.div_ceil(16), 1],
+                    "BlobTracking Downsample Native",
+                );
+                // Readback via native copy_texture_to_buffer
+                state.readback.submit_via_gpu_encoder(
+                    gpu,
+                    &state.downsample_rt.texture,
+                    READBACK_WIDTH, READBACK_HEIGHT,
+                );
+                state.pending_threshold = threshold;
+                state.pending_sensitivity = sensitivity;
+                state.last_readback_frame = frame;
+                downsample_done = true;
+            }
             // --- hal path for downsample (compute dispatch) ---
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
+            if !downsample_done && gpu.has_hal_encoder() {
                 type MetalApi = wgpu::hal::api::Metal;
                 use wgpu::hal::{self as hal, CommandEncoder as _, Device as _};
 
@@ -1286,14 +1367,14 @@ impl PostProcessEffect for BlobTrackingFX {
             }
 
             // --- wgpu path for downsample blit + readback ---
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if !gpu.has_hal_encoder() {
+            #[cfg(target_os = "macos")]
+            if !downsample_done {
                 Self::blit_and_readback_wgpu(
                     &self.blit_bgl, &self.blit_pipeline, &self.sampler,
                     gpu, source, state, threshold, sensitivity, frame, profiler, ctx,
                 );
             }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+            #[cfg(not(target_os = "macos"))]
             {
                 Self::blit_and_readback_wgpu(
                     &self.blit_bgl, &self.blit_pipeline, &self.sampler,
@@ -1337,6 +1418,40 @@ impl PostProcessEffect for BlobTrackingFX {
             blob_center_size,
             blob_connections: blob_connections_arr,
         };
+
+        // --- native Metal path for overlay (compute dispatch) ---
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_cs) = self.native_compute_overlay
+            && gpu.has_native_encoder()
+        {
+            let native_samp = self.native_sampler.as_ref().unwrap();
+            let native_pt = self.native_point_sampler.as_ref().unwrap();
+            let uniform_bytes = bytemuck::bytes_of(&uniforms);
+            let n_source = unsafe {
+                crate::gpu_encoder::extract_native_texture_from_view(source)
+            };
+            let n_font = unsafe {
+                crate::gpu_encoder::extract_native_texture_from_view(&self.font_atlas_view)
+            };
+            let n_target = unsafe {
+                crate::gpu_encoder::extract_native_texture_from_view(target)
+            };
+            let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            enc.dispatch_compute(
+                native_cs,
+                &[
+                    manifold_gpu::GpuBinding::Bytes { binding: 0, data: uniform_bytes },
+                    manifold_gpu::GpuBinding::Texture { binding: 1, texture: &n_source },
+                    manifold_gpu::GpuBinding::Sampler { binding: 2, sampler: native_samp },
+                    manifold_gpu::GpuBinding::Texture { binding: 3, texture: &n_font },
+                    manifold_gpu::GpuBinding::Sampler { binding: 4, sampler: native_pt },
+                    manifold_gpu::GpuBinding::Texture { binding: 5, texture: &n_target },
+                ],
+                [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
+                "BlobTracking Overlay Native",
+            );
+            return;
+        }
 
         // --- hal path for overlay (compute dispatch) ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]

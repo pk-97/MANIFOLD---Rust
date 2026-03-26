@@ -123,6 +123,40 @@ impl ReadbackRequest {
         }
     }
 
+    /// Submit a readback via the unified GpuEncoder (routes to native or wgpu).
+    /// Same as submit() but uses GpuEncoder's copy_texture_to_buffer method
+    /// which handles native Metal dispatch automatically.
+    pub fn submit_via_gpu_encoder(
+        &mut self,
+        gpu: &mut crate::gpu_encoder::GpuEncoder,
+        texture: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) {
+        let bytes_per_row = align_to_256(width * 4);
+        let buffer_size = (bytes_per_row * height) as u64;
+
+        let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Readback Staging"),
+            size: buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        gpu.copy_texture_to_buffer(texture, &staging, width, height, bytes_per_row);
+
+        self.staging_buffer = Some(staging);
+        self.width = width;
+        self.height = height;
+        self.pending = true;
+        self.map_rx = None;
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        {
+            self.shared_mapped_ptr = None;
+        }
+    }
+
     /// Shared-memory readback: creates a shared-memory staging buffer,
     /// encodes copy via hal encoder, reads directly from mapped pointer.
     /// No map_async, no device.poll(), no wgpu submission required.

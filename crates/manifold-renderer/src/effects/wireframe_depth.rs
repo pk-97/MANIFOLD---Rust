@@ -542,6 +542,12 @@ pub struct WireframeDepthFX {
     /// 15 hal compute pipelines (one per entry point) for TBDR-bypass dispatch.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_compute_pipelines: Option<Vec<crate::hal_pipeline::HalComputePipeline>>,
+    /// 15 native Metal compute pipelines (one per entry point).
+    #[cfg(target_os = "macos")]
+    native_compute_pipelines: Option<Vec<manifold_gpu::GpuComputePipeline>>,
+    /// Native Metal sampler for wireframe_depth.
+    #[cfg(target_os = "macos")]
+    native_sampler: Option<manifold_gpu::GpuSampler>,
     /// Persistent mapped pointer to shared-memory ring buffer (hal path).
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_uniform_mapped_ptr: Option<*mut u8>,
@@ -553,7 +559,7 @@ pub struct WireframeDepthFX {
     hal_ring_offset: std::cell::Cell<u32>,
 }
 
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+#[cfg(target_os = "macos")]
 unsafe impl Send for WireframeDepthFX {}
 
 impl WireframeDepthFX {
@@ -975,6 +981,44 @@ impl WireframeDepthFX {
         #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
         let _ = &hal_ctx;
 
+        // --- Native Metal compute pipelines (15 entry points) ---
+        #[cfg(target_os = "macos")]
+        let (native_compute_pipelines, native_sampler) = if let Some(dev) = _native_device {
+            let compute_wgsl = include_str!("shaders/fx_wireframe_depth_compute.wgsl");
+            let cs_entry_points = [
+                "cs_analysis",
+                "cs_heuristic_depth",
+                "cs_wire_mask",
+                "cs_update_history",
+                "cs_composite",
+                "cs_dnn_depth_post",
+                "cs_flow_estimate",
+                "cs_flow_advect_coord",
+                "cs_init_mesh_coord",
+                "cs_mesh_regularize",
+                "cs_mesh_cell_affine",
+                "cs_semantic_mask",
+                "cs_mesh_face_warp",
+                "cs_surface_cache_update",
+                "cs_flow_hygiene",
+            ];
+            let pipes: Vec<manifold_gpu::GpuComputePipeline> = cs_entry_points
+                .iter()
+                .enumerate()
+                .map(|(i, ep)| {
+                    dev.create_compute_pipeline(
+                        compute_wgsl,
+                        ep,
+                        &format!("WireframeDepth Native P{i}"),
+                    )
+                })
+                .collect();
+            let samp = dev.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
+            (Some(pipes), Some(samp))
+        } else {
+            (None, None)
+        };
+
         Self {
             pipelines,
             bind_group_layout,
@@ -1006,6 +1050,10 @@ impl WireframeDepthFX {
             hal_ring_buf_ptr: _wd_hal_ring_buf_ptr,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_ring_offset: std::cell::Cell::new(0),
+            #[cfg(target_os = "macos")]
+            native_compute_pipelines,
+            #[cfg(target_os = "macos")]
+            native_sampler,
         }
     }
 
@@ -1421,6 +1469,56 @@ impl WireframeDepthFX {
         h: u32,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
+        // ── Native Metal dispatch ─────────────────────────────────────
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_pipes) = self.native_compute_pipelines
+            && gpu.has_native_encoder()
+        {
+            let native_samp = self.native_sampler.as_ref().unwrap();
+            let native_pipe = &native_pipes[pass_idx];
+            let uniform_bytes = bytemuck::bytes_of(uniforms);
+
+            // Extract textures from wgpu TextureViews
+            let n_main = unsafe { crate::gpu_encoder::extract_native_texture_from_view(main_view) };
+            let n_prev_analysis = unsafe { crate::gpu_encoder::extract_native_texture_from_view(prev_analysis_view) };
+            let n_prev_depth = unsafe { crate::gpu_encoder::extract_native_texture_from_view(prev_depth_view) };
+            let n_depth = unsafe { crate::gpu_encoder::extract_native_texture_from_view(depth_view) };
+            let n_history = unsafe { crate::gpu_encoder::extract_native_texture_from_view(history_view) };
+            let n_flow = unsafe { crate::gpu_encoder::extract_native_texture_from_view(flow_view) };
+            let n_mesh_coord = unsafe { crate::gpu_encoder::extract_native_texture_from_view(mesh_coord_view) };
+            let n_prev_mesh_coord = unsafe { crate::gpu_encoder::extract_native_texture_from_view(prev_mesh_coord_view) };
+            let n_semantic = unsafe { crate::gpu_encoder::extract_native_texture_from_view(semantic_view) };
+            let n_surface_cache = unsafe { crate::gpu_encoder::extract_native_texture_from_view(surface_cache_view) };
+            let n_prev_surface_cache = unsafe { crate::gpu_encoder::extract_native_texture_from_view(prev_surface_cache_view) };
+            let n_subject_mask = unsafe { crate::gpu_encoder::extract_native_texture_from_view(subject_mask_view) };
+            let n_target = unsafe { crate::gpu_encoder::extract_native_texture_from_view(target) };
+
+            let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            enc.dispatch_compute(
+                native_pipe,
+                &[
+                    manifold_gpu::GpuBinding::Bytes { binding: 0, data: uniform_bytes },
+                    manifold_gpu::GpuBinding::Texture { binding: 1, texture: &n_main },
+                    manifold_gpu::GpuBinding::Texture { binding: 2, texture: &n_prev_analysis },
+                    manifold_gpu::GpuBinding::Texture { binding: 3, texture: &n_prev_depth },
+                    manifold_gpu::GpuBinding::Texture { binding: 4, texture: &n_depth },
+                    manifold_gpu::GpuBinding::Texture { binding: 5, texture: &n_history },
+                    manifold_gpu::GpuBinding::Texture { binding: 6, texture: &n_flow },
+                    manifold_gpu::GpuBinding::Texture { binding: 7, texture: &n_mesh_coord },
+                    manifold_gpu::GpuBinding::Texture { binding: 8, texture: &n_prev_mesh_coord },
+                    manifold_gpu::GpuBinding::Texture { binding: 9, texture: &n_semantic },
+                    manifold_gpu::GpuBinding::Texture { binding: 10, texture: &n_surface_cache },
+                    manifold_gpu::GpuBinding::Texture { binding: 11, texture: &n_prev_surface_cache },
+                    manifold_gpu::GpuBinding::Texture { binding: 12, texture: &n_subject_mask },
+                    manifold_gpu::GpuBinding::Sampler { binding: 13, sampler: native_samp },
+                    manifold_gpu::GpuBinding::Texture { binding: 14, texture: &n_target },
+                ],
+                [w.div_ceil(16), h.div_ceil(16), 1],
+                "WireframeDepth Pass",
+            );
+            return;
+        }
+
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         if gpu.has_hal_encoder() {
             // Prefer compute dispatch (eliminates TBDR tile overhead)
