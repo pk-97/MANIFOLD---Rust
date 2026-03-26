@@ -1,8 +1,10 @@
-// Compute variant of gaussian_blur.wgsl.
-// Identical math — only I/O mechanism changes:
-//   - textureSampleLevel (already used in fragment) stays the same
-//   - textureStore to output storage texture instead of fragment return
-//   - @compute @workgroup_size(16,16) instead of vertex+fragment
+// ARCHIVED: Replaced by MPSImageGaussianBlur on macOS (Phase 6 MPS integration).
+// Kept for future wgpu/Windows backend where MPS is not available.
+//
+// Separable Gaussian blur with bilinear tap pairing.
+// Pairs adjacent integer offsets (j, j+1) into a single weighted-midpoint
+// fetch, halving the sample count. Called twice per blur (H then V).
+// Unity ref: Assets/Shaders/GaussianBlur.shader
 
 struct BlurUniforms {
     direction: vec2<f32>,
@@ -17,16 +19,25 @@ struct BlurUniforms {
 @group(0) @binding(0) var<uniform> params: BlurUniforms;
 @group(0) @binding(1) var t_source: texture_2d<f32>;
 @group(0) @binding(2) var s_source: sampler;
-@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;
 
-@compute @workgroup_size(16, 16)
-fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let dims = textureDimensions(output_tex);
-    if (gid.x >= u32(dims.x) || gid.y >= u32(dims.y)) {
-        return;
-    }
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
 
-    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let x = f32(i32(vi) / 2) * 4.0 - 1.0;
+    let y = f32(i32(vi) % 2) * 4.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let uv = in.uv;
     let texel_step = params.direction * vec2<f32>(params.texel_x, params.texel_y);
     let sigma = max(params.radius / 3.0, 1.0);
     let inv_two_sigma_sq = 1.0 / (2.0 * sigma * sigma);
@@ -65,5 +76,5 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         j += 2;
     }
 
-    textureStore(output_tex, vec2<i32>(gid.xy), result / total_weight);
+    return result / total_weight;
 }
