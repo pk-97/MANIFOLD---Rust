@@ -93,22 +93,10 @@ impl GpuDevice {
         &self.queue
     }
 
-    /// Create a GPU texture.
+    /// Create a GPU texture via device allocation (kernel call per texture).
+    /// Prefer `TexturePool::acquire()` for transient textures.
     pub fn create_texture(&self, desc: &GpuTextureDesc) -> GpuTexture {
-        let mtl_desc = metal::TextureDescriptor::new();
-        mtl_desc.set_pixel_format(to_mtl_pixel_format(desc.format));
-        mtl_desc.set_width(desc.width as u64);
-        mtl_desc.set_height(desc.height as u64);
-        mtl_desc.set_depth(desc.depth as u64);
-        mtl_desc.set_texture_type(to_mtl_texture_type(desc.dimension, desc.depth));
-        mtl_desc.set_usage(to_mtl_texture_usage(desc.usage));
-        if desc.usage.contains(GpuTextureUsage::CPU_UPLOAD) {
-            mtl_desc.set_storage_mode(metal::MTLStorageMode::Shared);
-        } else {
-            mtl_desc.set_storage_mode(metal::MTLStorageMode::Private);
-        }
-        mtl_desc.set_mipmap_level_count(1);
-        mtl_desc.set_sample_count(1);
+        let mtl_desc = Self::build_mtl_texture_desc(desc);
         let raw = self.device.new_texture(&mtl_desc);
         GpuTexture {
             raw,
@@ -325,6 +313,54 @@ impl GpuDevice {
             counter: std::cell::Cell::new(0),
         }
     }
+
+    /// Create a GPU heap for sub-allocation.
+    /// Textures allocated from a heap avoid per-allocation kernel calls.
+    pub fn create_heap(
+        &self,
+        size: u64,
+        storage_mode: GpuStorageMode,
+    ) -> GpuHeap {
+        let desc = metal::HeapDescriptor::new();
+        desc.set_size(size as _);
+        desc.set_storage_mode(to_mtl_storage_mode(storage_mode));
+        let heap = self.device.new_heap(&desc);
+        heap.set_label("MANIFOLD TexturePool Heap");
+        GpuHeap { heap }
+    }
+
+    /// Query the heap size and alignment needed for a texture with the given
+    /// descriptor. Used to pre-compute heap capacity.
+    pub fn heap_texture_size_and_align(&self, desc: &GpuTextureDesc) -> (u64, u64) {
+        let mtl_desc = Self::build_mtl_texture_desc(desc);
+        let sa = self.device.heap_texture_size_and_align(&mtl_desc);
+        (sa.size as u64, sa.align as u64)
+    }
+
+    /// Build a Metal TextureDescriptor from GpuTextureDesc (shared helper).
+    fn build_mtl_texture_desc(desc: &GpuTextureDesc) -> metal::TextureDescriptor {
+        let mtl_desc = metal::TextureDescriptor::new();
+        mtl_desc.set_pixel_format(to_mtl_pixel_format(desc.format));
+        mtl_desc.set_width(desc.width as u64);
+        mtl_desc.set_height(desc.height as u64);
+        mtl_desc.set_depth(desc.depth as u64);
+        mtl_desc.set_texture_type(to_mtl_texture_type(desc.dimension, desc.depth));
+        mtl_desc.set_usage(to_mtl_texture_usage(desc.usage));
+        if desc.usage.contains(GpuTextureUsage::CPU_UPLOAD) {
+            mtl_desc.set_storage_mode(metal::MTLStorageMode::Shared);
+        } else {
+            mtl_desc.set_storage_mode(metal::MTLStorageMode::Private);
+        }
+        mtl_desc.set_mipmap_level_count(1);
+        mtl_desc.set_sample_count(1);
+        mtl_desc
+    }
+
+    /// Create a texture pool backed by an MTLHeap.
+    /// `heap_size` is the initial heap size in bytes (256MB recommended).
+    pub fn create_texture_pool(&self, heap_size: u64) -> TexturePool {
+        TexturePool::new(self, heap_size)
+    }
 }
 
 // ─── GpuTexture ───────────────────────────────────────────────────────
@@ -487,6 +523,181 @@ impl GpuEvent {
     /// Raw Metal shared event reference.
     pub fn raw(&self) -> &metal::SharedEventRef {
         &self.raw
+    }
+}
+
+// ─── GpuHeap ──────────────────────────────────────────────────────────
+
+/// GPU heap backed by a native MTLHeap.
+/// Sub-allocates textures without per-allocation kernel calls.
+pub struct GpuHeap {
+    heap: metal::Heap,
+}
+
+unsafe impl Send for GpuHeap {}
+unsafe impl Sync for GpuHeap {}
+
+impl GpuHeap {
+    /// Sub-allocate a texture from this heap.
+    /// Returns `None` if the heap doesn't have enough space.
+    pub fn new_texture(&self, desc: &GpuTextureDesc) -> Option<GpuTexture> {
+        let mtl_desc = GpuDevice::build_mtl_texture_desc(desc);
+        // Override storage mode to match heap's storage mode.
+        mtl_desc.set_storage_mode(self.heap.storage_mode());
+        self.heap.new_texture(&mtl_desc).map(|raw| GpuTexture {
+            raw,
+            width: desc.width,
+            height: desc.height,
+            depth: desc.depth,
+            format: desc.format,
+        })
+    }
+
+    /// Total heap size in bytes.
+    pub fn size(&self) -> u64 {
+        self.heap.size() as u64
+    }
+
+    /// Currently used heap memory in bytes.
+    pub fn used_size(&self) -> u64 {
+        self.heap.used_size() as u64
+    }
+
+    /// Maximum available contiguous allocation size with given alignment.
+    pub fn max_available_size(&self, alignment: u64) -> u64 {
+        self.heap.max_available_size_with_alignment(alignment as _) as u64
+    }
+}
+
+// ─── TexturePool ──────────────────────────────────────────────────────
+
+/// Texture pool backed by MTLHeap. Recycles textures by (width, height, format).
+///
+/// Matches Unity's `RenderTexture.GetTemporary()` / `ReleaseTemporary()` pattern.
+/// Textures acquired from the pool are sub-allocated from a pre-reserved MTLHeap,
+/// avoiding per-allocation kernel calls. Released textures are cached for reuse.
+///
+/// Uses interior mutability (UnsafeCell) — safe because TexturePool is only
+/// used on the content thread (single-threaded).
+pub struct TexturePool {
+    inner: std::cell::UnsafeCell<TexturePoolInner>,
+}
+
+type PoolKey = (u32, u32, GpuTextureFormat);
+
+struct TexturePoolInner {
+    available: std::collections::HashMap<PoolKey, Vec<GpuTexture>>,
+    heap: GpuHeap,
+    device: *const GpuDevice,
+    /// New allocations (heap or device fallback).
+    stats_allocated: u64,
+    /// Textures recycled from pool (avoided allocation).
+    stats_recycled: u64,
+}
+
+// Safety: TexturePool is only used on the content thread (single-threaded).
+unsafe impl Send for TexturePool {}
+unsafe impl Sync for TexturePool {}
+
+impl TexturePool {
+    /// Create a new texture pool with the given heap size.
+    /// `heap_size` in bytes — 256MB is a good starting point.
+    pub fn new(device: &GpuDevice, heap_size: u64) -> Self {
+        let heap = device.create_heap(heap_size, GpuStorageMode::Private);
+        log::info!(
+            "TexturePool: created {}MB MTLHeap (private storage)",
+            heap_size / (1024 * 1024),
+        );
+        Self {
+            inner: std::cell::UnsafeCell::new(TexturePoolInner {
+                available: std::collections::HashMap::new(),
+                heap,
+                device: device as *const GpuDevice,
+                stats_allocated: 0,
+                stats_recycled: 0,
+            }),
+        }
+    }
+
+    /// Acquire a texture from the pool, recycling if a matching one is available.
+    /// Falls back to heap sub-allocation, then device allocation if heap is full.
+    pub fn acquire(
+        &self,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+        usage: GpuTextureUsage,
+        label: &str,
+    ) -> GpuTexture {
+        let inner = unsafe { &mut *self.inner.get() };
+        let key = (width, height, format);
+
+        // Try recycled texture first (zero allocation cost).
+        if let Some(vec) = inner.available.get_mut(&key) {
+            if let Some(tex) = vec.pop() {
+                inner.stats_recycled += 1;
+                return tex;
+            }
+        }
+
+        inner.stats_allocated += 1;
+        let desc = GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format,
+            dimension: GpuTextureDimension::D2,
+            usage,
+            label,
+        };
+
+        // Try heap sub-allocation (no kernel call).
+        if let Some(tex) = inner.heap.new_texture(&desc) {
+            return tex;
+        }
+
+        // Heap full — fall back to device allocation (kernel call).
+        let device = unsafe { &*inner.device };
+        device.create_texture(&desc)
+    }
+
+    /// Return a texture to the pool for future reuse.
+    /// The texture is NOT freed — it stays in the heap/device memory and will
+    /// be returned by the next `acquire()` with matching dimensions and format.
+    pub fn release(&self, texture: GpuTexture) {
+        let inner = unsafe { &mut *self.inner.get() };
+        let key = (texture.width, texture.height, texture.format);
+        inner.available.entry(key).or_default().push(texture);
+    }
+
+    /// Release all cached textures. Call on resolution change or shutdown.
+    pub fn clear(&self) {
+        let inner = unsafe { &mut *self.inner.get() };
+        inner.available.clear();
+    }
+
+    /// Pool statistics: (total_allocated, total_recycled).
+    pub fn stats(&self) -> (u64, u64) {
+        let inner = unsafe { &*self.inner.get() };
+        (inner.stats_allocated, inner.stats_recycled)
+    }
+
+    /// Number of textures currently cached in the pool.
+    pub fn cached_count(&self) -> usize {
+        let inner = unsafe { &*self.inner.get() };
+        inner.available.values().map(|v| v.len()).sum()
+    }
+
+    /// Heap utilization: (used_bytes, total_bytes).
+    pub fn heap_usage(&self) -> (u64, u64) {
+        let inner = unsafe { &*self.inner.get() };
+        (inner.heap.used_size(), inner.heap.size())
+    }
+
+    /// Reset per-frame statistics. Called at the start of each frame.
+    pub fn clear_frame_stats(&self) {
+        // Currently a no-op — stats are cumulative.
+        // Can be extended for per-frame tracking if needed.
     }
 }
 
@@ -1423,6 +1634,14 @@ fn to_mtl_texture_type(dim: GpuTextureDimension, _depth: u32) -> metal::MTLTextu
     match dim {
         GpuTextureDimension::D2 => metal::MTLTextureType::D2,
         GpuTextureDimension::D3 => metal::MTLTextureType::D3,
+    }
+}
+
+fn to_mtl_storage_mode(mode: GpuStorageMode) -> metal::MTLStorageMode {
+    match mode {
+        GpuStorageMode::Private => metal::MTLStorageMode::Private,
+        GpuStorageMode::Shared => metal::MTLStorageMode::Shared,
+        GpuStorageMode::Managed => metal::MTLStorageMode::Managed,
     }
 }
 

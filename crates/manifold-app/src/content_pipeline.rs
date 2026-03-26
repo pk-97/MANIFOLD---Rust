@@ -107,6 +107,9 @@ pub struct ContentPipeline {
     /// Signal value from the native event.
     #[cfg(target_os = "macos")]
     native_signal_value: u64,
+    /// Texture pool backed by MTLHeap for zero-kernel-call allocation.
+    #[cfg(target_os = "macos")]
+    texture_pool: Option<manifold_gpu::TexturePool>,
 }
 
 impl ContentPipeline {
@@ -143,17 +146,22 @@ impl ContentPipeline {
             native_event: None,
             #[cfg(target_os = "macos")]
             native_signal_value: 0,
+            #[cfg(target_os = "macos")]
+            texture_pool: None,
         }
     }
 
-    /// Initialize the native Metal GPU device and event.
+    /// Initialize the native Metal GPU device, event, and texture pool.
     /// Called once at startup after the content pipeline is created.
     #[cfg(target_os = "macos")]
     pub fn init_native_gpu(&mut self) {
         let device = manifold_gpu::GpuDevice::new();
         let event = device.create_event();
+        // 256MB heap — typical project uses ~100-200MB of transient textures.
+        let pool = device.create_texture_pool(256 * 1024 * 1024);
         self.native_device = Some(device);
         self.native_event = Some(event);
+        self.texture_pool = Some(pool);
     }
 
     /// Set a pre-created native GPU device (transfers ownership).
@@ -162,8 +170,10 @@ impl ContentPipeline {
     #[cfg(target_os = "macos")]
     pub fn set_native_gpu(&mut self, device: manifold_gpu::GpuDevice) {
         let event = device.create_event();
+        let pool = device.create_texture_pool(256 * 1024 * 1024);
         self.native_device = Some(device);
         self.native_event = Some(event);
+        self.texture_pool = Some(pool);
     }
 
     /// Reference to the native GPU device (if initialized).
@@ -272,6 +282,7 @@ impl ContentPipeline {
         _poll_ms: f64,
     ) {
         let native_device = self.native_device.as_ref().unwrap();
+        let texture_pool = self.texture_pool.as_ref();
 
         // Split borrow: get renderers + project from engine simultaneously.
         let (renderers, project) = engine.split_renderer_project();
@@ -281,12 +292,18 @@ impl ContentPipeline {
         let _t0 = std::time::Instant::now();
         let mut native_enc = native_device.create_encoder("Frame");
 
+        // Mark frame boundary for texture pool lifetime tracking.
+        if let Some(pool) = texture_pool {
+            pool.clear_frame_stats();
+        }
+
         // Generators render via native encoder (no wgpu encoder needed)
         {
-            let mut gpu_gen = GpuEncoder::new(
-                &mut native_enc,
-                native_device,
-            );
+            let mut gpu_gen = if let Some(pool) = texture_pool {
+                GpuEncoder::with_pool(&mut native_enc, native_device, pool)
+            } else {
+                GpuEncoder::new(&mut native_enc, native_device)
+            };
 
             for renderer in renderers.iter_mut() {
                 if let Some(gen_renderer) =
@@ -401,10 +418,11 @@ impl ContentPipeline {
         // ── Compositor (same native encoder) ─────────────────────────
         let _t0 = std::time::Instant::now();
         {
-            let mut gpu_comp = GpuEncoder::new(
-                &mut native_enc,
-                native_device,
-            );
+            let mut gpu_comp = if let Some(pool) = texture_pool {
+                GpuEncoder::with_pool(&mut native_enc, native_device, pool)
+            } else {
+                GpuEncoder::new(&mut native_enc, native_device)
+            };
 
             let _compositor_tex =
                 self.compositor.render(&mut gpu_comp, &frame);

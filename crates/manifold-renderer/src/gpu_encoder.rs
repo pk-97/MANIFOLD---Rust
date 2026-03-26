@@ -9,6 +9,9 @@ pub struct GpuEncoder<'a> {
     pub native_enc: &'a mut manifold_gpu::GpuEncoder,
     /// Native Metal GPU device for resource creation.
     pub device: &'a manifold_gpu::GpuDevice,
+    /// Texture pool for heap-backed allocation and recycling.
+    /// Avoids per-allocation kernel calls for transient textures.
+    pub pool: Option<&'a manifold_gpu::TexturePool>,
     /// Shared-memory uniform arena for generator uniform data.
     /// Owned by GeneratorRenderer, set during render_all().
     pub uniform_arena: Option<*mut crate::uniform_arena::UniformArena>,
@@ -25,6 +28,21 @@ impl<'a> GpuEncoder<'a> {
         Self {
             native_enc,
             device,
+            pool: None,
+            uniform_arena: None,
+        }
+    }
+
+    /// Create with a texture pool for heap-backed allocation.
+    pub fn with_pool(
+        native_enc: &'a mut manifold_gpu::GpuEncoder,
+        device: &'a manifold_gpu::GpuDevice,
+        pool: &'a manifold_gpu::TexturePool,
+    ) -> Self {
+        Self {
+            native_enc,
+            device,
+            pool: Some(pool),
             uniform_arena: None,
         }
     }

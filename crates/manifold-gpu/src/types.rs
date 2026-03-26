@@ -41,7 +41,7 @@ pub enum GpuTextureDimension {
 }
 
 /// Texture usage flags.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct GpuTextureUsage(u32);
 
 impl GpuTextureUsage {
