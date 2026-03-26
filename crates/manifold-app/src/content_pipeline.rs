@@ -282,7 +282,12 @@ impl ContentPipeline {
         _poll_ms: f64,
     ) {
         let native_device = self.native_device.as_ref().unwrap();
-        let texture_pool = self.texture_pool.as_ref();
+        // Pool disabled — heap-allocated textures cause GPU corruption.
+        // Root cause: MTLHeap sub-allocated textures alias memory regions
+        // when textures are dropped and re-allocated within the same heap.
+        // Proper fix requires deferred release (wait for fence before freeing
+        // heap regions) or per-frame heaps. Re-enable after implementing that.
+        let texture_pool: Option<&manifold_gpu::TexturePool> = None;
 
         // Split borrow: get renderers + project from engine simultaneously.
         let (renderers, project) = engine.split_renderer_project();
