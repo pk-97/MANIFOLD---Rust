@@ -6,12 +6,11 @@
 // Same logic, same variables, same constants, same edge cases.
 // AsyncGPUReadback → poll-based ReadbackRequest (submit + try_read).
 // Time.frameCount → EffectContext.frame_count.
-// Graphics.Blit → render pass with bind group per call.
+// Graphics.Blit → compute dispatch per pass.
 
 use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
-use wgpu::util::DeviceExt;
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
@@ -119,7 +118,8 @@ enum DepthSourceMode {
 // WireframeDepthFX.cs line 47-90 — OwnerState
 // ARGB32  → Rgba8Unorm
 // ARGBHalf → Rgba16Float
-// RGBAFloat (nativeFlowTexture) → Rgba16Float (Metal: Rgba32Float not filterable; see KNOWN_DIVERGENCES)
+// RGBAFloat (nativeFlowTexture) → Rgba16Float (Metal: Rgba32Float not filterable;
+//   see KNOWN_DIVERGENCES)
 struct OwnerState {
     analysis_width: u32,
     analysis_height: u32,
@@ -140,21 +140,18 @@ struct OwnerState {
     dnn_depth_dirty: bool,
     _dnn_pixel_buffer: Vec<u8>,          // byte[analysisWidth * analysisHeight * 4]
     dnn_depth_buffer: Vec<f32>,          // float[analysisWidth * analysisHeight]
-    dnn_depth_texture: wgpu::Texture,    // Rgba8Unorm CPU-upload texture
-    dnn_depth_texture_view: wgpu::TextureView,
+    dnn_depth_texture: manifold_gpu::GpuTexture, // Rgba8Unorm CPU-upload texture
     // DNN subject mask CPU path
     dnn_has_subject_mask: bool,
     dnn_subject_dirty: bool,
     _dnn_subject_buffer: Vec<f32>,       // float[analysisWidth * analysisHeight]
     dnn_subject_history_buffer: Vec<f32>,// float[analysisWidth * analysisHeight]
-    dnn_subject_texture: wgpu::Texture,  // Rgba8Unorm CPU-upload texture
-    dnn_subject_texture_view: wgpu::TextureView,
+    dnn_subject_texture: manifold_gpu::GpuTexture, // Rgba8Unorm CPU-upload texture
     // Native flow CPU path
     has_prev_native_frame: bool,
     prev_native_pixel_buffer: Vec<u8>,   // byte[analysisWidth * analysisHeight * 4]
     native_flow_buffer: Vec<f32>,        // float[analysisWidth * analysisHeight * 4]
-    native_flow_texture: wgpu::Texture,  // RGBAFloat → Rgba16Float CPU-upload texture (Metal: Rgba32Float not filterable)
-    native_flow_texture_view: wgpu::TextureView,
+    native_flow_texture: manifold_gpu::GpuTexture, // RGBAFloat → Rgba16Float CPU-upload texture
     native_flow_has_data: bool,
     native_flow_dirty: bool,
     native_flow_ready: bool,
@@ -201,319 +198,13 @@ struct WireUniforms {
 
 const _: () = assert!(std::mem::size_of::<WireUniforms>() == 80);
 
-/// BGL entries for the wireframe-depth render pipelines (shared between wgpu and hal).
-/// All 15 passes share a single BGL: binding 0 = uniforms, 1–12 = textures, 13 = sampler.
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-const WIREFRAME_DEPTH_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 14] = [
-    // 0: uniforms
-    wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    },
-    // 1–12: texture_2d<f32> (filterable float)
-    wgpu::BindGroupLayoutEntry {
-        binding: 1,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 2,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 3,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 4,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 5,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 6,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 7,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 8,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 9,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 10,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 11,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 12,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    // 13: sampler
-    wgpu::BindGroupLayoutEntry {
-        binding: 13,
-        visibility: wgpu::ShaderStages::FRAGMENT,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    },
-];
-
-/// BGL entries for the wireframe-depth **compute** pipelines (hal path).
-/// Same as render BGL (bindings 0–13) plus binding 14: storage texture (write-only).
-/// Visibility is COMPUTE instead of VERTEX_FRAGMENT/FRAGMENT.
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-const WIREFRAME_DEPTH_COMPUTE_BGL_ENTRIES: [wgpu::BindGroupLayoutEntry; 15] = [
-    // 0: uniforms
-    wgpu::BindGroupLayoutEntry {
-        binding: 0,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            min_binding_size: None,
-        },
-        count: None,
-    },
-    // 1–12: texture_2d<f32> (filterable float)
-    wgpu::BindGroupLayoutEntry {
-        binding: 1,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 2,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 3,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 4,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 5,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 6,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 7,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 8,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 9,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 10,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 11,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    wgpu::BindGroupLayoutEntry {
-        binding: 12,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: wgpu::TextureViewDimension::D2,
-            multisampled: false,
-        },
-        count: None,
-    },
-    // 13: sampler
-    wgpu::BindGroupLayoutEntry {
-        binding: 13,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-        count: None,
-    },
-    // 14: output storage texture (write-only, rgba16float)
-    wgpu::BindGroupLayoutEntry {
-        binding: 14,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::StorageTexture {
-            access: wgpu::StorageTextureAccess::WriteOnly,
-            format: wgpu::TextureFormat::Rgba16Float,
-            view_dimension: wgpu::TextureViewDimension::D2,
-        },
-        count: None,
-    },
-];
-
 // WireframeDepthFX.cs line 16 — WireframeDepthFX : SimpleBlitEffect, IStatefulEffect
 pub struct WireframeDepthFX {
-    // 15 render pipelines — one per shader pass
-    pipelines: [wgpu::RenderPipeline; 15],
-    bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    #[allow(dead_code)] // Keeps hal ring buffer alive; wgpu path creates per-call UBOs
-    uniform_buffer: wgpu::Buffer,
+    // 15 compute pipelines — one per shader pass
+    compute_pipelines: Vec<manifold_gpu::GpuComputePipeline>,
+    sampler: manifold_gpu::GpuSampler,
     // 1×1 dummy texture for texture slots unused by a given pass
-    _dummy_tex: wgpu::Texture,
-    dummy_view: wgpu::TextureView,
+    dummy_tex: manifold_gpu::GpuTexture,
     // WireframeDepthFX.cs line 92-93
     owner_states: AHashMap<i64, OwnerState>,
     width: u32,
@@ -534,365 +225,54 @@ pub struct WireframeDepthFX {
     dnn_subject_api_available: bool,
     // WireframeDepthFX.cs line 102 — static ompEnvConfigured
     // Handled in FfiDepthEstimator::new() — KMP_DUPLICATE_LIB_OK set there.
-    // --- hal dual-path resources (pipeline + sampler for each of 15 passes) ---
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_pipelines: Option<Vec<crate::hal_pipeline::HalRenderPipeline>>,
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_sampler: Option<crate::hal_context::MetalSampler>,
-    /// 15 hal compute pipelines (one per entry point) for TBDR-bypass dispatch.
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_compute_pipelines: Option<Vec<crate::hal_pipeline::HalComputePipeline>>,
-    /// 15 native Metal compute pipelines (one per entry point).
-    #[cfg(target_os = "macos")]
-    native_compute_pipelines: Option<Vec<manifold_gpu::GpuComputePipeline>>,
-    /// Native Metal sampler for wireframe_depth.
-    #[cfg(target_os = "macos")]
-    native_sampler: Option<manifold_gpu::GpuSampler>,
-    /// Persistent mapped pointer to shared-memory ring buffer (hal path).
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_uniform_mapped_ptr: Option<*mut u8>,
-    /// Cached hal buffer pointer for the ring buffer (hal path).
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_ring_buf_ptr: Option<*const crate::hal_context::MetalBuffer>,
-    /// Frame-local slot counter for the ring buffer (Cell so encode_pass can stay &self).
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    hal_ring_offset: std::cell::Cell<u32>,
 }
 
-#[cfg(target_os = "macos")]
 unsafe impl Send for WireframeDepthFX {}
 
 impl WireframeDepthFX {
-    pub fn new(
-        device: &wgpu::Device,
-        hal_ctx: Option<&crate::hal_context::HalContext>,
-        #[cfg(target_os = "macos")] _native_device: Option<&manifold_gpu::GpuDevice>,
-    ) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("WireframeDepth"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/fx_wireframe_depth.wgsl").into(),
-            ),
-        });
-
-        // Bind group layout: uniforms + 13 textures + 1 sampler (binding 0–13).
-        // Layout matches shader: bindings 0=uniforms, 1–12=textures, 13=sampler.
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("WireframeDepth BGL"),
-            entries: &[
-                // 0: uniforms
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // 1–12: texture_2d<f32> (filterable float)
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 9,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 10,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 11,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 12,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // 13: sampler
-                wgpu::BindGroupLayoutEntry {
-                    binding: 13,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("WireframeDepth PL"),
-            bind_group_layouts: &[&bind_group_layout],
-            immediate_size: 0,
-        });
-
-        // Fragment entry points — indexed by pass constant.
-        // WireframeDepthEffect.shader pass order (0–14).
-        let entry_points = [
-            "fs_analysis",           // 0
-            "fs_heuristic_depth",    // 1
-            "fs_wire_mask",          // 2
-            "fs_update_history",     // 3
-            "fs_composite",          // 4
-            "fs_dnn_depth_post",     // 5
-            "fs_flow_estimate",      // 6
-            "fs_flow_advect_coord",  // 7
-            "fs_init_mesh_coord",    // 8
-            "fs_mesh_regularize",    // 9
-            "fs_mesh_cell_affine",   // 10
-            "fs_semantic_mask",      // 11
-            "fs_mesh_face_warp",     // 12
-            "fs_surface_cache_update", // 13
-            "fs_flow_hygiene",       // 14
+    pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
+        // --- Native Metal compute pipelines (15 entry points) ---
+        let compute_wgsl = include_str!("shaders/fx_wireframe_depth_compute.wgsl");
+        let cs_entry_points = [
+            "cs_analysis",              // 0
+            "cs_heuristic_depth",       // 1
+            "cs_wire_mask",             // 2
+            "cs_update_history",        // 3
+            "cs_composite",             // 4
+            "cs_dnn_depth_post",        // 5
+            "cs_flow_estimate",         // 6
+            "cs_flow_advect_coord",     // 7
+            "cs_init_mesh_coord",       // 8
+            "cs_mesh_regularize",       // 9
+            "cs_mesh_cell_affine",      // 10
+            "cs_semantic_mask",         // 11
+            "cs_mesh_face_warp",        // 12
+            "cs_surface_cache_update",  // 13
+            "cs_flow_hygiene",          // 14
         ];
-
-        // Output formats per pass.
-        // analysis → Rgba8Unorm  (ARGB32)
-        // heuristic_depth → Rgba16Float (ARGBHalf)
-        // wire_mask → Rgba8Unorm (ARGB32)
-        // update_history → Rgba8Unorm (ARGB32)
-        // composite → Rgba16Float (source frame format)
-        // dnn_depth_post → Rgba16Float (ARGBHalf)
-        // flow_estimate → Rgba16Float (ARGBHalf)
-        // flow_advect_coord → Rgba16Float (ARGBHalf)
-        // init_mesh_coord → Rgba16Float (ARGBHalf)
-        // mesh_regularize → Rgba16Float (ARGBHalf)
-        // mesh_cell_affine → Rgba16Float (ARGBHalf)
-        // semantic_mask → Rgba16Float (ARGBHalf)
-        // mesh_face_warp → Rgba16Float (ARGBHalf)
-        // surface_cache_update → Rgba16Float (ARGBHalf)
-        // flow_hygiene → Rgba16Float (ARGBHalf)
-        let output_formats: [wgpu::TextureFormat; 15] = [
-            wgpu::TextureFormat::Rgba8Unorm,   // 0  ARGB32
-            wgpu::TextureFormat::Rgba16Float,  // 1  ARGBHalf
-            wgpu::TextureFormat::Rgba8Unorm,   // 2  ARGB32
-            wgpu::TextureFormat::Rgba8Unorm,   // 3  ARGB32
-            wgpu::TextureFormat::Rgba16Float,  // 4  source frame
-            wgpu::TextureFormat::Rgba16Float,  // 5  ARGBHalf
-            wgpu::TextureFormat::Rgba16Float,  // 6  ARGBHalf
-            wgpu::TextureFormat::Rgba16Float,  // 7  ARGBHalf
-            wgpu::TextureFormat::Rgba16Float,  // 8  ARGBHalf
-            wgpu::TextureFormat::Rgba16Float,  // 9  ARGBHalf
-            wgpu::TextureFormat::Rgba16Float,  // 10 ARGBHalf
-            wgpu::TextureFormat::Rgba16Float,  // 11 ARGBHalf
-            wgpu::TextureFormat::Rgba16Float,  // 12 ARGBHalf
-            wgpu::TextureFormat::Rgba16Float,  // 13 ARGBHalf
-            wgpu::TextureFormat::Rgba16Float,  // 14 ARGBHalf
-        ];
-
-        let pipelines: [wgpu::RenderPipeline; 15] = std::array::from_fn(|i| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(&format!("WireframeDepth P{i}")),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(entry_points[i]),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: output_formats[i],
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            })
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("WireframeDepth Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
-
-        let ubo_size = std::mem::size_of::<WireUniforms>() as u64;
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let (uniform_buffer, _wd_hal_ubo_mapped, _wd_hal_ring_buf_ptr) = if let Some(ctx) = hal_ctx {
-            use wgpu::hal::Device as HalDevice;
-            // 20 slots: enough for all passes per frame (15 pass max + sub-function calls).
-            let ring_size = 20 * ubo_size;
-            let hal_buf = unsafe {
-                ctx.device()
-                    .create_buffer(&wgpu::hal::BufferDescriptor {
-                        label: Some("WireframeDepth Ring HAL"),
-                        size: ring_size,
-                        usage: wgpu::wgt::BufferUses::UNIFORM
-                            | wgpu::wgt::BufferUses::MAP_WRITE,
-                        memory_flags: wgpu::hal::MemoryFlags::PREFER_COHERENT,
-                    })
-                    .expect("Failed to create hal WD ring buffer")
-            };
-            let mapping = unsafe {
-                ctx.device()
-                    .map_buffer(&hal_buf, 0..ring_size)
-                    .expect("Failed to map hal WD ring buffer")
-            };
-            let mapped_ptr = mapping.ptr.as_ptr();
-            let wgpu_buf = unsafe {
-                device.create_buffer_from_hal::<wgpu::hal::api::Metal>(
-                    hal_buf,
-                    &wgpu::BufferDescriptor {
-                        label: Some("WireframeDepth Ring UBO"),
-                        size: ring_size,
-                        usage: wgpu::BufferUsages::UNIFORM
-                            | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    },
+        let compute_pipelines: Vec<manifold_gpu::GpuComputePipeline> = cs_entry_points
+            .iter()
+            .enumerate()
+            .map(|(i, ep)| {
+                device.create_compute_pipeline(
+                    compute_wgsl,
+                    ep,
+                    &format!("WireframeDepth P{i}"),
                 )
-            };
-            let hal_ring_buf_ptr = {
-                let g = unsafe { wgpu_buf.as_hal::<wgpu::hal::api::Metal>() }
-                    .expect("ring buf not Metal");
-                &*g as *const _
-            };
-            (wgpu_buf, Some(mapped_ptr), Some(hal_ring_buf_ptr))
-        } else {
-            let wgpu_buf = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("WireframeDepth UBO"),
-                size: ubo_size,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            (wgpu_buf, None, None)
-        };
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("WireframeDepth UBO"),
-            size: ubo_size,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+            })
+            .collect();
 
-        let dummy_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("WireframeDepth Dummy"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
+        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
+
+        let dummy_tex = device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: 1,
+            height: 1,
+            depth: 1,
+            format: manifold_gpu::GpuTextureFormat::Rgba8Unorm,
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "WireframeDepth Dummy",
         });
-        let dummy_view = dummy_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         // WireframeDepthFX.cs line 96-101 — try to create native backend
         // Plugin is created on the worker thread (single creation, no probe).
@@ -900,132 +280,10 @@ impl WireframeDepthFX {
         let dnn_backend_available = workers.is_some();
         let dnn_backend_initialized = workers.is_some();
 
-        // --- hal pipeline creation (one per pass × 15 output formats) ---
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let (hal_pipelines, hal_sampler, hal_compute_pipelines) = if let Some(ctx) = hal_ctx {
-            use wgpu::hal::Device as HalDevice;
-
-            let wgsl_source = include_str!("shaders/fx_wireframe_depth.wgsl");
-            let hal_pipes: Vec<crate::hal_pipeline::HalRenderPipeline> = entry_points
-                .iter()
-                .zip(output_formats.iter())
-                .enumerate()
-                .map(|(i, (fs_ep, &fmt))| {
-                    crate::hal_pipeline::create_render_pipeline(
-                        ctx,
-                        wgsl_source,
-                        "vs_main",
-                        fs_ep,
-                        &WIREFRAME_DEPTH_BGL_ENTRIES,
-                        fmt,
-                        None,
-                        &format!("WireframeDepth HAL P{i}"),
-                    )
-                })
-                .collect();
-
-            let hal_samp = unsafe {
-                ctx.device()
-                    .create_sampler(&wgpu::hal::SamplerDescriptor {
-                        label: Some("WireframeDepth HAL"),
-                        address_modes: [wgpu::AddressMode::ClampToEdge; 3],
-                        mag_filter: wgpu::FilterMode::Linear,
-                        min_filter: wgpu::FilterMode::Linear,
-                        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-                        lod_clamp: 0.0..32.0,
-                        compare: None,
-                        anisotropy_clamp: 1,
-                        border_color: None,
-                    })
-                    .expect("Failed to create hal wireframe-depth sampler")
-            };
-
-            // --- hal compute pipelines (15 entry points, TBDR-bypass) ---
-            let compute_wgsl = include_str!("shaders/fx_wireframe_depth_compute.wgsl");
-            let cs_entry_points = [
-                "cs_analysis",              // 0
-                "cs_heuristic_depth",       // 1
-                "cs_wire_mask",             // 2
-                "cs_update_history",        // 3
-                "cs_composite",             // 4
-                "cs_dnn_depth_post",        // 5
-                "cs_flow_estimate",         // 6
-                "cs_flow_advect_coord",     // 7
-                "cs_init_mesh_coord",       // 8
-                "cs_mesh_regularize",       // 9
-                "cs_mesh_cell_affine",      // 10
-                "cs_semantic_mask",         // 11
-                "cs_mesh_face_warp",        // 12
-                "cs_surface_cache_update",  // 13
-                "cs_flow_hygiene",          // 14
-            ];
-            let hal_cs_pipes: Vec<crate::hal_pipeline::HalComputePipeline> = cs_entry_points
-                .iter()
-                .enumerate()
-                .map(|(i, ep)| {
-                    crate::hal_pipeline::create_compute_pipeline(
-                        ctx,
-                        compute_wgsl,
-                        ep,
-                        &WIREFRAME_DEPTH_COMPUTE_BGL_ENTRIES,
-                        &format!("WireframeDepth CS HAL P{i}"),
-                    )
-                })
-                .collect();
-
-            (Some(hal_pipes), Some(hal_samp), Some(hal_cs_pipes))
-        } else {
-            (None, None, None)
-        };
-
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        let _ = &hal_ctx;
-
-        // --- Native Metal compute pipelines (15 entry points) ---
-        #[cfg(target_os = "macos")]
-        let (native_compute_pipelines, native_sampler) = if let Some(dev) = _native_device {
-            let compute_wgsl = include_str!("shaders/fx_wireframe_depth_compute.wgsl");
-            let cs_entry_points = [
-                "cs_analysis",
-                "cs_heuristic_depth",
-                "cs_wire_mask",
-                "cs_update_history",
-                "cs_composite",
-                "cs_dnn_depth_post",
-                "cs_flow_estimate",
-                "cs_flow_advect_coord",
-                "cs_init_mesh_coord",
-                "cs_mesh_regularize",
-                "cs_mesh_cell_affine",
-                "cs_semantic_mask",
-                "cs_mesh_face_warp",
-                "cs_surface_cache_update",
-                "cs_flow_hygiene",
-            ];
-            let pipes: Vec<manifold_gpu::GpuComputePipeline> = cs_entry_points
-                .iter()
-                .enumerate()
-                .map(|(i, ep)| {
-                    dev.create_compute_pipeline(
-                        compute_wgsl,
-                        ep,
-                        &format!("WireframeDepth Native P{i}"),
-                    )
-                })
-                .collect();
-            let samp = dev.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
-            (Some(pipes), Some(samp))
-        } else {
-            (None, None)
-        };
-
         Self {
-            pipelines,
-            bind_group_layout,
+            compute_pipelines,
             sampler,
-            uniform_buffer,
-            _dummy_tex: dummy_tex,
-            dummy_view,
+            dummy_tex,
             owner_states: AHashMap::new(),
             width: 0,
             height: 0,
@@ -1038,564 +296,108 @@ impl WireframeDepthFX {
             dnn_next_retry_frame: 0,
             warned_missing_dnn: false,
             dnn_subject_api_available: true,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_pipelines,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_sampler,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_compute_pipelines,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_uniform_mapped_ptr: _wd_hal_ubo_mapped,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_ring_buf_ptr: _wd_hal_ring_buf_ptr,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            hal_ring_offset: std::cell::Cell::new(0),
-            #[cfg(target_os = "macos")]
-            native_compute_pipelines,
-            #[cfg(target_os = "macos")]
-            native_sampler,
         }
     }
 
     // WireframeDepthFX.cs line 259-268 — CreateRenderTexture helper
     fn create_rt(
-        device: &wgpu::Device,
+        device: &manifold_gpu::GpuDevice,
         w: u32,
         h: u32,
-        format: wgpu::TextureFormat,
+        format: manifold_gpu::GpuTextureFormat,
         label: &str,
     ) -> RenderTarget {
         RenderTarget::new(device, w, h, format, label)
     }
 
-    /// HAL path: encode one render pass via hal command encoder.
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(clippy::too_many_arguments)]
-    fn run_pass_hal(
-        &self,
-        gpu: &mut GpuEncoder,
-        pass_idx: usize,
-        uniforms: &WireUniforms,
-        main_view: &wgpu::TextureView,
-        prev_analysis_view: &wgpu::TextureView,
-        prev_depth_view: &wgpu::TextureView,
-        depth_view: &wgpu::TextureView,
-        history_view: &wgpu::TextureView,
-        flow_view: &wgpu::TextureView,
-        mesh_coord_view: &wgpu::TextureView,
-        prev_mesh_coord_view: &wgpu::TextureView,
-        semantic_view: &wgpu::TextureView,
-        surface_cache_view: &wgpu::TextureView,
-        prev_surface_cache_view: &wgpu::TextureView,
-        subject_mask_view: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-        w: u32,
-        h: u32,
-    ) {
-        type MetalApi = wgpu::hal::api::Metal;
-        use wgpu::hal::{self as hal, CommandEncoder as _, Device as _};
-
-        let hal_pipes = self.hal_pipelines.as_ref().expect("hal_pipelines");
-        let hal_samp = self.hal_sampler.as_ref().expect("hal_sampler");
-        let hal_pipe = &hal_pipes[pass_idx];
-
-        // Write uniforms to ring buffer slot
-        let ubo_size = std::mem::size_of::<WireUniforms>();
-        let slot = self.hal_ring_offset.get();
-        self.hal_ring_offset.set(slot + 1);
-        let byte_offset = slot as usize * ubo_size;
-        let ring_mapped = self.hal_uniform_mapped_ptr.expect("hal ring mapped");
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytemuck::bytes_of(uniforms).as_ptr(),
-                ring_mapped.add(byte_offset),
-                ubo_size,
-            );
-        }
-        let ubo_ptr = self.hal_ring_buf_ptr.expect("hal ring buf ptr");
-
-        // Extract hal texture view pointers (sequential snatch lock)
-        let main_ptr = {
-            let g = unsafe { main_view.as_hal::<MetalApi>() }
-                .expect("main_view not Metal");
-            &*g as *const _
-        };
-        let prev_analysis_ptr = {
-            let g = unsafe { prev_analysis_view.as_hal::<MetalApi>() }
-                .expect("prev_analysis not Metal");
-            &*g as *const _
-        };
-        let prev_depth_ptr = {
-            let g = unsafe { prev_depth_view.as_hal::<MetalApi>() }
-                .expect("prev_depth not Metal");
-            &*g as *const _
-        };
-        let depth_ptr = {
-            let g = unsafe { depth_view.as_hal::<MetalApi>() }
-                .expect("depth not Metal");
-            &*g as *const _
-        };
-        let history_ptr = {
-            let g = unsafe { history_view.as_hal::<MetalApi>() }
-                .expect("history not Metal");
-            &*g as *const _
-        };
-        let flow_ptr = {
-            let g = unsafe { flow_view.as_hal::<MetalApi>() }
-                .expect("flow not Metal");
-            &*g as *const _
-        };
-        let mesh_coord_ptr = {
-            let g = unsafe { mesh_coord_view.as_hal::<MetalApi>() }
-                .expect("mesh_coord not Metal");
-            &*g as *const _
-        };
-        let prev_mesh_coord_ptr = {
-            let g = unsafe { prev_mesh_coord_view.as_hal::<MetalApi>() }
-                .expect("prev_mesh_coord not Metal");
-            &*g as *const _
-        };
-        let semantic_ptr = {
-            let g = unsafe { semantic_view.as_hal::<MetalApi>() }
-                .expect("semantic not Metal");
-            &*g as *const _
-        };
-        let surface_cache_ptr = {
-            let g = unsafe { surface_cache_view.as_hal::<MetalApi>() }
-                .expect("surface_cache not Metal");
-            &*g as *const _
-        };
-        let prev_surface_cache_ptr = {
-            let g = unsafe { prev_surface_cache_view.as_hal::<MetalApi>() }
-                .expect("prev_surface_cache not Metal");
-            &*g as *const _
-        };
-        let subject_mask_ptr = {
-            let g = unsafe { subject_mask_view.as_hal::<MetalApi>() }
-                .expect("subject_mask not Metal");
-            &*g as *const _
-        };
-        let target_ptr = {
-            let g = unsafe { target.as_hal::<MetalApi>() }
-                .expect("target not Metal");
-            &*g as *const _
-        };
-
-        let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-        unsafe {
-            let hal_bg = hal_ctx.device().create_bind_group(
-                &hal::BindGroupDescriptor {
-                    label: None,
-                    layout: &hal_pipe.bind_group_layout,
-                    entries: &[
-                        hal::BindGroupEntry { binding: 0, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 1, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 2, resource_index: 1, count: 1 },
-                        hal::BindGroupEntry { binding: 3, resource_index: 2, count: 1 },
-                        hal::BindGroupEntry { binding: 4, resource_index: 3, count: 1 },
-                        hal::BindGroupEntry { binding: 5, resource_index: 4, count: 1 },
-                        hal::BindGroupEntry { binding: 6, resource_index: 5, count: 1 },
-                        hal::BindGroupEntry { binding: 7, resource_index: 6, count: 1 },
-                        hal::BindGroupEntry { binding: 8, resource_index: 7, count: 1 },
-                        hal::BindGroupEntry { binding: 9, resource_index: 8, count: 1 },
-                        hal::BindGroupEntry { binding: 10, resource_index: 9, count: 1 },
-                        hal::BindGroupEntry { binding: 11, resource_index: 10, count: 1 },
-                        hal::BindGroupEntry { binding: 12, resource_index: 11, count: 1 },
-                        hal::BindGroupEntry { binding: 13, resource_index: 0, count: 1 },
-                    ],
-                    buffers: &[hal::BufferBinding::new_unchecked(
-                        &*ubo_ptr,
-                        byte_offset as u64,
-                        std::num::NonZero::new(
-                            std::mem::size_of::<WireUniforms>() as u64,
-                        ),
-                    )],
-                    samplers: &[hal_samp],
-                    textures: &[
-                        hal::TextureBinding { view: &*main_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*prev_analysis_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*prev_depth_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*depth_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*history_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*flow_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*mesh_coord_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*prev_mesh_coord_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*semantic_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*surface_cache_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*prev_surface_cache_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*subject_mask_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                    ],
-                    acceleration_structures: &[],
-                    external_textures: &[],
-                },
-            )
-            .expect("Failed to create hal wireframe-depth bind group");
-
-            hal_enc.begin_render_pass(&hal::RenderPassDescriptor {
-                label: None,
-                extent: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                sample_count: 1,
-                color_attachments: &[Some(hal::ColorAttachment {
-                    target: hal::Attachment {
-                        view: &*target_ptr,
-                        usage: wgpu::wgt::TextureUses::COLOR_TARGET,
-                    },
-                    resolve_target: None,
-                    ops: hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE,
-                    clear_value: wgpu::Color::TRANSPARENT,
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                multiview_mask: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            }).expect("hal begin_render_pass failed");
-            hal_enc.set_render_pipeline(&hal_pipe.pipeline);
-            hal_enc.set_bind_group(
-                &hal_pipe.pipeline_layout, 0, &hal_bg,
-                &[],
-            );
-            hal_enc.draw(0, 3, 0, 1);
-            hal_enc.end_render_pass();
-            hal_ctx.device().destroy_bind_group(hal_bg);
-        }
-    }
-
-    /// HAL compute path: dispatch a compute shader instead of a render pass.
-    /// Eliminates TBDR tile load/store overhead (~290us per pass at 4K).
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    #[allow(clippy::too_many_arguments)]
-    fn run_pass_compute_hal(
-        &self,
-        gpu: &mut GpuEncoder,
-        pass_idx: usize,
-        uniforms: &WireUniforms,
-        main_view: &wgpu::TextureView,
-        prev_analysis_view: &wgpu::TextureView,
-        prev_depth_view: &wgpu::TextureView,
-        depth_view: &wgpu::TextureView,
-        history_view: &wgpu::TextureView,
-        flow_view: &wgpu::TextureView,
-        mesh_coord_view: &wgpu::TextureView,
-        prev_mesh_coord_view: &wgpu::TextureView,
-        semantic_view: &wgpu::TextureView,
-        surface_cache_view: &wgpu::TextureView,
-        prev_surface_cache_view: &wgpu::TextureView,
-        subject_mask_view: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-        w: u32,
-        h: u32,
-    ) {
-        type MetalApi = wgpu::hal::api::Metal;
-        use wgpu::hal::{self as hal, CommandEncoder as _, Device as _};
-
-        let hal_cs_pipes = self.hal_compute_pipelines.as_ref().expect("hal_compute_pipelines");
-        let hal_samp = self.hal_sampler.as_ref().expect("hal_sampler");
-        let hal_cs_pipe = &hal_cs_pipes[pass_idx];
-
-        // Write uniforms to ring buffer slot (same mechanism as render path)
-        let ubo_size = std::mem::size_of::<WireUniforms>();
-        let slot = self.hal_ring_offset.get();
-        self.hal_ring_offset.set(slot + 1);
-        let byte_offset = slot as usize * ubo_size;
-        let ring_mapped = self.hal_uniform_mapped_ptr.expect("hal ring mapped");
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytemuck::bytes_of(uniforms).as_ptr(),
-                ring_mapped.add(byte_offset),
-                ubo_size,
-            );
-        }
-        let ubo_ptr = self.hal_ring_buf_ptr.expect("hal ring buf ptr");
-
-        // Extract hal texture view pointers (sequential snatch lock)
-        let main_ptr = {
-            let g = unsafe { main_view.as_hal::<MetalApi>() }
-                .expect("main_view not Metal");
-            &*g as *const _
-        };
-        let prev_analysis_ptr = {
-            let g = unsafe { prev_analysis_view.as_hal::<MetalApi>() }
-                .expect("prev_analysis not Metal");
-            &*g as *const _
-        };
-        let prev_depth_ptr = {
-            let g = unsafe { prev_depth_view.as_hal::<MetalApi>() }
-                .expect("prev_depth not Metal");
-            &*g as *const _
-        };
-        let depth_ptr = {
-            let g = unsafe { depth_view.as_hal::<MetalApi>() }
-                .expect("depth not Metal");
-            &*g as *const _
-        };
-        let history_ptr = {
-            let g = unsafe { history_view.as_hal::<MetalApi>() }
-                .expect("history not Metal");
-            &*g as *const _
-        };
-        let flow_ptr = {
-            let g = unsafe { flow_view.as_hal::<MetalApi>() }
-                .expect("flow not Metal");
-            &*g as *const _
-        };
-        let mesh_coord_ptr = {
-            let g = unsafe { mesh_coord_view.as_hal::<MetalApi>() }
-                .expect("mesh_coord not Metal");
-            &*g as *const _
-        };
-        let prev_mesh_coord_ptr = {
-            let g = unsafe { prev_mesh_coord_view.as_hal::<MetalApi>() }
-                .expect("prev_mesh_coord not Metal");
-            &*g as *const _
-        };
-        let semantic_ptr = {
-            let g = unsafe { semantic_view.as_hal::<MetalApi>() }
-                .expect("semantic not Metal");
-            &*g as *const _
-        };
-        let surface_cache_ptr = {
-            let g = unsafe { surface_cache_view.as_hal::<MetalApi>() }
-                .expect("surface_cache not Metal");
-            &*g as *const _
-        };
-        let prev_surface_cache_ptr = {
-            let g = unsafe { prev_surface_cache_view.as_hal::<MetalApi>() }
-                .expect("prev_surface_cache not Metal");
-            &*g as *const _
-        };
-        let subject_mask_ptr = {
-            let g = unsafe { subject_mask_view.as_hal::<MetalApi>() }
-                .expect("subject_mask not Metal");
-            &*g as *const _
-        };
-        let target_ptr = {
-            let g = unsafe { target.as_hal::<MetalApi>() }
-                .expect("target not Metal");
-            &*g as *const _
-        };
-
-        let (hal_enc, hal_ctx) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-        unsafe {
-            // Compute BGL: 0=uniform, 1-12=textures (RESOURCE), 13=sampler,
-            // 14=output storage texture (STORAGE_READ_WRITE)
-            let hal_bg = hal_ctx.device().create_bind_group(
-                &hal::BindGroupDescriptor {
-                    label: None,
-                    layout: &hal_cs_pipe.bind_group_layout,
-                    entries: &[
-                        hal::BindGroupEntry { binding: 0, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 1, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 2, resource_index: 1, count: 1 },
-                        hal::BindGroupEntry { binding: 3, resource_index: 2, count: 1 },
-                        hal::BindGroupEntry { binding: 4, resource_index: 3, count: 1 },
-                        hal::BindGroupEntry { binding: 5, resource_index: 4, count: 1 },
-                        hal::BindGroupEntry { binding: 6, resource_index: 5, count: 1 },
-                        hal::BindGroupEntry { binding: 7, resource_index: 6, count: 1 },
-                        hal::BindGroupEntry { binding: 8, resource_index: 7, count: 1 },
-                        hal::BindGroupEntry { binding: 9, resource_index: 8, count: 1 },
-                        hal::BindGroupEntry { binding: 10, resource_index: 9, count: 1 },
-                        hal::BindGroupEntry { binding: 11, resource_index: 10, count: 1 },
-                        hal::BindGroupEntry { binding: 12, resource_index: 11, count: 1 },
-                        hal::BindGroupEntry { binding: 13, resource_index: 0, count: 1 },
-                        hal::BindGroupEntry { binding: 14, resource_index: 12, count: 1 },
-                    ],
-                    buffers: &[hal::BufferBinding::new_unchecked(
-                        &*ubo_ptr,
-                        byte_offset as u64,
-                        std::num::NonZero::new(
-                            std::mem::size_of::<WireUniforms>() as u64,
-                        ),
-                    )],
-                    samplers: &[hal_samp],
-                    textures: &[
-                        hal::TextureBinding { view: &*main_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*prev_analysis_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*prev_depth_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*depth_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*history_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*flow_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*mesh_coord_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*prev_mesh_coord_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*semantic_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*surface_cache_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*prev_surface_cache_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*subject_mask_ptr, usage: wgpu::wgt::TextureUses::RESOURCE },
-                        hal::TextureBinding { view: &*target_ptr, usage: wgpu::wgt::TextureUses::STORAGE_READ_WRITE },
-                    ],
-                    acceleration_structures: &[],
-                    external_textures: &[],
-                },
-            )
-            .expect("Failed to create hal wireframe-depth compute bind group");
-
-            hal_enc.begin_compute_pass(&hal::ComputePassDescriptor {
-                label: Some("WireframeDepth Compute"),
-                timestamp_writes: None,
-            });
-            hal_enc.set_compute_pipeline(&hal_cs_pipe.pipeline);
-            hal_enc.set_bind_group(
-                &hal_cs_pipe.pipeline_layout, 0, &hal_bg,
-                &[],
-            );
-            hal_enc.dispatch([w.div_ceil(16), h.div_ceil(16), 1]);
-            hal_enc.end_compute_pass();
-            hal_ctx.device().destroy_bind_group(hal_bg);
-        }
-    }
-
-    /// Unified encode: compute dispatch (preferred) → hal render pass → wgpu render pass.
-    /// Compute dispatch eliminates TBDR tile overhead (~290us/pass at 4K).
+    /// Dispatch a compute pass via native Metal encoder.
+    /// All 15 passes share the same binding layout:
+    ///   0=uniforms, 1-12=textures, 13=sampler, 14=output storage texture.
     #[allow(clippy::too_many_arguments)]
     fn encode_pass(
         &self,
         gpu: &mut GpuEncoder,
         pass_idx: usize,
         uniforms: &WireUniforms,
-        main_view: &wgpu::TextureView,
-        prev_analysis_view: &wgpu::TextureView,
-        prev_depth_view: &wgpu::TextureView,
-        depth_view: &wgpu::TextureView,
-        history_view: &wgpu::TextureView,
-        flow_view: &wgpu::TextureView,
-        mesh_coord_view: &wgpu::TextureView,
-        prev_mesh_coord_view: &wgpu::TextureView,
-        semantic_view: &wgpu::TextureView,
-        surface_cache_view: &wgpu::TextureView,
-        prev_surface_cache_view: &wgpu::TextureView,
-        subject_mask_view: &wgpu::TextureView,
-        target: &wgpu::TextureView,
+        main_tex: &manifold_gpu::GpuTexture,
+        prev_analysis_tex: &manifold_gpu::GpuTexture,
+        prev_depth_tex: &manifold_gpu::GpuTexture,
+        depth_tex: &manifold_gpu::GpuTexture,
+        history_tex: &manifold_gpu::GpuTexture,
+        flow_tex: &manifold_gpu::GpuTexture,
+        mesh_coord_tex: &manifold_gpu::GpuTexture,
+        prev_mesh_coord_tex: &manifold_gpu::GpuTexture,
+        semantic_tex: &manifold_gpu::GpuTexture,
+        surface_cache_tex: &manifold_gpu::GpuTexture,
+        prev_surface_cache_tex: &manifold_gpu::GpuTexture,
+        subject_mask_tex: &manifold_gpu::GpuTexture,
+        target: &manifold_gpu::GpuTexture,
         w: u32,
         h: u32,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        // ── Native Metal dispatch ─────────────────────────────────────
-        #[cfg(target_os = "macos")]
-        if let Some(ref native_pipes) = self.native_compute_pipelines
-            && gpu.has_native_encoder()
-        {
-            let native_samp = self.native_sampler.as_ref().unwrap();
-            let native_pipe = &native_pipes[pass_idx];
-            let uniform_bytes = bytemuck::bytes_of(uniforms);
+        let pipeline = &self.compute_pipelines[pass_idx];
+        let uniform_bytes = bytemuck::bytes_of(uniforms);
 
-            // Extract textures from wgpu TextureViews
-            let n_main = unsafe { crate::gpu_encoder::extract_native_texture_from_view(main_view) };
-            let n_prev_analysis = unsafe { crate::gpu_encoder::extract_native_texture_from_view(prev_analysis_view) };
-            let n_prev_depth = unsafe { crate::gpu_encoder::extract_native_texture_from_view(prev_depth_view) };
-            let n_depth = unsafe { crate::gpu_encoder::extract_native_texture_from_view(depth_view) };
-            let n_history = unsafe { crate::gpu_encoder::extract_native_texture_from_view(history_view) };
-            let n_flow = unsafe { crate::gpu_encoder::extract_native_texture_from_view(flow_view) };
-            let n_mesh_coord = unsafe { crate::gpu_encoder::extract_native_texture_from_view(mesh_coord_view) };
-            let n_prev_mesh_coord = unsafe { crate::gpu_encoder::extract_native_texture_from_view(prev_mesh_coord_view) };
-            let n_semantic = unsafe { crate::gpu_encoder::extract_native_texture_from_view(semantic_view) };
-            let n_surface_cache = unsafe { crate::gpu_encoder::extract_native_texture_from_view(surface_cache_view) };
-            let n_prev_surface_cache = unsafe { crate::gpu_encoder::extract_native_texture_from_view(prev_surface_cache_view) };
-            let n_subject_mask = unsafe { crate::gpu_encoder::extract_native_texture_from_view(subject_mask_view) };
-            let n_target = unsafe { crate::gpu_encoder::extract_native_texture_from_view(target) };
-
-            let enc = unsafe { gpu.native_encoder_mut() }.unwrap();
-            enc.dispatch_compute(
-                native_pipe,
-                &[
-                    manifold_gpu::GpuBinding::Bytes { binding: 0, data: uniform_bytes },
-                    manifold_gpu::GpuBinding::Texture { binding: 1, texture: &n_main },
-                    manifold_gpu::GpuBinding::Texture { binding: 2, texture: &n_prev_analysis },
-                    manifold_gpu::GpuBinding::Texture { binding: 3, texture: &n_prev_depth },
-                    manifold_gpu::GpuBinding::Texture { binding: 4, texture: &n_depth },
-                    manifold_gpu::GpuBinding::Texture { binding: 5, texture: &n_history },
-                    manifold_gpu::GpuBinding::Texture { binding: 6, texture: &n_flow },
-                    manifold_gpu::GpuBinding::Texture { binding: 7, texture: &n_mesh_coord },
-                    manifold_gpu::GpuBinding::Texture { binding: 8, texture: &n_prev_mesh_coord },
-                    manifold_gpu::GpuBinding::Texture { binding: 9, texture: &n_semantic },
-                    manifold_gpu::GpuBinding::Texture { binding: 10, texture: &n_surface_cache },
-                    manifold_gpu::GpuBinding::Texture { binding: 11, texture: &n_prev_surface_cache },
-                    manifold_gpu::GpuBinding::Texture { binding: 12, texture: &n_subject_mask },
-                    manifold_gpu::GpuBinding::Sampler { binding: 13, sampler: native_samp },
-                    manifold_gpu::GpuBinding::Texture { binding: 14, texture: &n_target },
-                ],
-                [w.div_ceil(16), h.div_ceil(16), 1],
-                "WireframeDepth Pass",
-            );
-            return;
-        }
-
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            // Prefer compute dispatch (eliminates TBDR tile overhead)
-            if self.hal_compute_pipelines.is_some() {
-                self.run_pass_compute_hal(
-                    gpu, pass_idx, uniforms,
-                    main_view, prev_analysis_view, prev_depth_view, depth_view,
-                    history_view, flow_view, mesh_coord_view, prev_mesh_coord_view,
-                    semantic_view, surface_cache_view, prev_surface_cache_view,
-                    subject_mask_view, target, w, h,
-                );
-                return;
-            }
-            // Fallback: hal render pass
-            self.run_pass_hal(
-                gpu, pass_idx, uniforms,
-                main_view, prev_analysis_view, prev_depth_view, depth_view,
-                history_view, flow_view, mesh_coord_view, prev_mesh_coord_view,
-                semantic_view, surface_cache_view, prev_surface_cache_view,
-                subject_mask_view, target, w, h,
-            );
-            return;
-        }
-        // wgpu path: create per-call buffer from uniforms
-        let ubo = gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("WD Pass UBO"),
-            contents: bytemuck::bytes_of(uniforms),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let bg = self.make_bind_group(
-            gpu.device, &ubo,
-            main_view, prev_analysis_view, prev_depth_view, depth_view,
-            history_view, flow_view, mesh_coord_view, prev_mesh_coord_view,
-            semantic_view, surface_cache_view, prev_surface_cache_view,
-            subject_mask_view,
-        );
-        self.run_pass(
-            gpu.encoder.as_mut().unwrap(), &self.pipelines[pass_idx], &bg, target, w, h, profiler,
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                manifold_gpu::GpuBinding::Bytes { binding: 0, data: uniform_bytes },
+                manifold_gpu::GpuBinding::Texture { binding: 1, texture: main_tex },
+                manifold_gpu::GpuBinding::Texture { binding: 2, texture: prev_analysis_tex },
+                manifold_gpu::GpuBinding::Texture { binding: 3, texture: prev_depth_tex },
+                manifold_gpu::GpuBinding::Texture { binding: 4, texture: depth_tex },
+                manifold_gpu::GpuBinding::Texture { binding: 5, texture: history_tex },
+                manifold_gpu::GpuBinding::Texture { binding: 6, texture: flow_tex },
+                manifold_gpu::GpuBinding::Texture { binding: 7, texture: mesh_coord_tex },
+                manifold_gpu::GpuBinding::Texture { binding: 8, texture: prev_mesh_coord_tex },
+                manifold_gpu::GpuBinding::Texture { binding: 9, texture: semantic_tex },
+                manifold_gpu::GpuBinding::Texture { binding: 10, texture: surface_cache_tex },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 11,
+                    texture: prev_surface_cache_tex,
+                },
+                manifold_gpu::GpuBinding::Texture { binding: 12, texture: subject_mask_tex },
+                manifold_gpu::GpuBinding::Sampler { binding: 13, sampler: &self.sampler },
+                manifold_gpu::GpuBinding::Texture { binding: 14, texture: target },
+            ],
+            [w.div_ceil(16), h.div_ceil(16), 1],
+            "WireframeDepth Pass",
         );
     }
 
-    /// Unified encode: copy texture to texture via native, hal, or wgpu.
+    /// Copy texture to texture via native Metal blit.
     fn encode_copy(
         gpu: &mut GpuEncoder,
-        src: &wgpu::Texture,
-        dst: &wgpu::Texture,
+        src: &manifold_gpu::GpuTexture,
+        dst: &manifold_gpu::GpuTexture,
         w: u32,
         h: u32,
     ) {
         gpu.copy_texture_to_texture(src, dst, w, h);
     }
 
-    /// Unified encode: clear a RenderTarget to black via native, hal, or wgpu.
+    /// Clear a RenderTarget to black via native Metal.
     fn encode_clear(gpu: &mut GpuEncoder, rt: &RenderTarget) {
-        gpu.clear_texture_view(&rt.texture, &rt.view, 0.0, 0.0, 0.0, 1.0);
+        gpu.clear_texture(&rt.texture, 0.0, 0.0, 0.0, 1.0);
     }
 
-    // Create a CPU-upload 2D texture (Rgba8Unorm or Rgba32Float) for DNN outputs.
+    // Create a CPU-upload 2D texture (Rgba8Unorm or Rgba16Float) for DNN outputs.
     fn create_cpu_texture(
-        device: &wgpu::Device,
+        device: &manifold_gpu::GpuDevice,
         w: u32,
         h: u32,
-        format: wgpu::TextureFormat,
+        format: manifold_gpu::GpuTextureFormat,
         label: &str,
-    ) -> (wgpu::Texture, wgpu::TextureView) {
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
+    ) -> manifold_gpu::GpuTexture {
+        device.create_texture(&manifold_gpu::GpuTextureDesc {
+            width: w,
+            height: h,
+            depth: 1,
             format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-        (tex, view)
+            dimension: manifold_gpu::GpuTextureDimension::D2,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+            label,
+        })
     }
 
     // WireframeDepthFX.cs line 139-238 — GetOrCreateOwner
@@ -1604,7 +406,6 @@ impl WireframeDepthFX {
         gpu: &mut GpuEncoder,
         owner_key: i64,
         wire_scale: f32,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> &mut OwnerState {
         // WireframeDepthFX.cs line 141-142
         let wire_w = (self.width as f32 * wire_scale).round() as u32;
@@ -1612,7 +413,8 @@ impl WireframeDepthFX {
         let wire_h = (self.height as f32 * wire_scale).round() as u32;
         let wire_h = wire_h.max(36);
 
-        // WireframeDepthFX.cs line 144-162: if exists and valid, rebuild wire RT only if scale changed
+        // WireframeDepthFX.cs line 144-162: if exists and valid, rebuild wire RT only
+        // if scale changed
         if let Some(state) = self.owner_states.get_mut(&owner_key) {
             if state.wire_width != wire_w || state.wire_height != wire_h {
                 // Rebuild line history RT only
@@ -1620,7 +422,7 @@ impl WireframeDepthFX {
                 state.wire_height = wire_h;
                 state.line_history_tex = Self::create_rt(
                     gpu.device, wire_w, wire_h,
-                    wgpu::TextureFormat::Rgba8Unorm,
+                    manifold_gpu::GpuTextureFormat::Rgba8Unorm,
                     &format!("WireframeDepthHistory_{owner_key}"),
                 );
                 Self::encode_clear(gpu, &state.line_history_tex);
@@ -1629,54 +431,58 @@ impl WireframeDepthFX {
             return self.owner_states.get_mut(&owner_key).unwrap();
         }
 
-        // WireframeDepthFX.cs line 164-165: release stale state (handled by drop on overwrite below)
+        // WireframeDepthFX.cs line 164-165: release stale state (handled by drop on
+        // overwrite below)
 
         // WireframeDepthFX.cs line 167-169
-        let scale = (MAX_ANALYSIS_DIM as f32 / self.width.max(self.height) as f32).min(1.0);
-        let analysis_width  = ((self.width  as f32 * scale).round() as u32).max(64);
-        let analysis_height = ((self.height as f32 * scale).round() as u32).max(36);
+        let scale =
+            (MAX_ANALYSIS_DIM as f32 / self.width.max(self.height) as f32).min(1.0);
+        let analysis_width =
+            ((self.width as f32 * scale).round() as u32).max(64);
+        let analysis_height =
+            ((self.height as f32 * scale).round() as u32).max(36);
 
         let aw = analysis_width;
         let ah = analysis_height;
         let pixel_count = (aw * ah) as usize;
 
         let previous_analysis_tex = Self::create_rt(
-            gpu.device, aw, ah, wgpu::TextureFormat::Rgba8Unorm,
+            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
             &format!("WireframeDepthPrev_{owner_key}"));
         let depth_tex = Self::create_rt(
-            gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float,
+            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
             &format!("WireframeDepthDepth_{owner_key}"));
         let line_history_tex = Self::create_rt(
-            gpu.device, wire_w, wire_h, wgpu::TextureFormat::Rgba8Unorm,
+            gpu.device, wire_w, wire_h, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
             &format!("WireframeDepthHistory_{owner_key}"));
         let flow_tex = Self::create_rt(
-            gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float,
+            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
             &format!("WireframeDepthFlow_{owner_key}"));
         let mesh_coord_tex = Self::create_rt(
-            gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float,
+            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
             &format!("WireframeDepthMeshCoord_{owner_key}"));
         let semantic_tex = Self::create_rt(
-            gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float,
+            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
             &format!("WireframeDepthSemantic_{owner_key}"));
         let surface_cache_tex = Self::create_rt(
-            gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float,
+            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
             &format!("WireframeDepthSurface_{owner_key}"));
         let dnn_input_tex = Self::create_rt(
-            gpu.device, aw, ah, wgpu::TextureFormat::Rgba8Unorm,
+            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
             &format!("WireframeDepthDnnInput_{owner_key}"));
 
         // WireframeDepthFX.cs line 205-222 — CPU upload textures
-        let (dnn_depth_texture, dnn_depth_texture_view) = Self::create_cpu_texture(
-            gpu.device, aw, ah, wgpu::TextureFormat::Rgba8Unorm,
+        let dnn_depth_texture = Self::create_cpu_texture(
+            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
             &format!("WireframeDepthDnnDepth_{owner_key}"));
         // Unity: RGBAFloat (Rgba32Float), but Rgba32Float is NOT filterable on Metal.
         // textureSample requires filterable; Rgba16Float is the approved Metal fallback.
         // Upload converts f32 → f16 in upload_native_flow_texture().
-        let (native_flow_texture, native_flow_texture_view) = Self::create_cpu_texture(
-            gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float,
+        let native_flow_texture = Self::create_cpu_texture(
+            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba16Float,
             &format!("WireframeDepthNativeFlow_{owner_key}"));
-        let (dnn_subject_texture, dnn_subject_texture_view) = Self::create_cpu_texture(
-            gpu.device, aw, ah, wgpu::TextureFormat::Rgba8Unorm,
+        let dnn_subject_texture = Self::create_cpu_texture(
+            gpu.device, aw, ah, manifold_gpu::GpuTextureFormat::Rgba8Unorm,
             &format!("WireframeDepthDnnSubject_{owner_key}"));
 
         // WireframeDepthFX.cs line 224-231: clear RTs
@@ -1707,18 +513,15 @@ impl WireframeDepthFX {
             _dnn_pixel_buffer: vec![0u8; pixel_count * 4],
             dnn_depth_buffer: vec![0.0f32; pixel_count],
             dnn_depth_texture,
-            dnn_depth_texture_view,
             dnn_has_subject_mask: false,
             dnn_subject_dirty: false,
             _dnn_subject_buffer: vec![0.0f32; pixel_count],
             dnn_subject_history_buffer: vec![0.0f32; pixel_count],
             dnn_subject_texture,
-            dnn_subject_texture_view,
             has_prev_native_frame: false,
             prev_native_pixel_buffer: vec![0u8; pixel_count * 4],
             native_flow_buffer: vec![0.0f32; pixel_count * 4],
             native_flow_texture,
-            native_flow_texture_view,
             native_flow_has_data: false,
             native_flow_dirty: false,
             native_flow_ready: false,
@@ -1734,19 +537,19 @@ impl WireframeDepthFX {
         };
 
         // WireframeDepthFX.cs line 231 — InitializeMeshCoord
-        self.initialize_mesh_coord_new(gpu, &mut state, profiler);
+        self.initialize_mesh_coord_new(gpu, &mut state);
 
         self.owner_states.insert(owner_key, state);
         self.owner_states.get_mut(&owner_key).unwrap()
     }
 
     // WireframeDepthFX.cs line 240-257 — InitializeMeshCoord
-    // Called during owner creation. Runs PASS_INIT_MESH_COORD then PASS_SURFACE_CACHE_UPDATE.
+    // Called during owner creation. Runs PASS_INIT_MESH_COORD then
+    // PASS_SURFACE_CACHE_UPDATE.
     fn initialize_mesh_coord_new(
         &self,
         gpu: &mut GpuEncoder,
         state: &mut OwnerState,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // WireframeDepthFX.cs line 242: if meshCoordTex == null return
         // (always valid here since we just created it)
@@ -1765,130 +568,25 @@ impl WireframeDepthFX {
         };
 
         // PASS_INIT_MESH_COORD: null → meshCoordTex
-        // In Unity: Graphics.Blit(null, state.meshCoordTex, material, PASS_INIT_MESH_COORD)
+        // In Unity: Graphics.Blit(null, state.meshCoordTex, material,
+        //   PASS_INIT_MESH_COORD)
         // We bind dummy for all textures.
         self.encode_pass(gpu, PASS_INIT_MESH_COORD, &uniforms,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &state.mesh_coord_tex.view, aw, ah, profiler);
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &state.mesh_coord_tex.texture, aw, ah);
         // PASS_SURFACE_CACHE_UPDATE from fresh mesh coord
         self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, &uniforms,
-            &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &state.surface_cache_tex.view, aw, ah, profiler);
-    }
-
-    // Helper: encode a single render pass (blit-style, no vertex buffer).
-    fn run_pass(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        pipeline: &wgpu::RenderPipeline,
-        bind_group: &wgpu::BindGroup,
-        target: &wgpu::TextureView,
-        w: u32,
-        h: u32,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
-    ) {
-        let ts = profiler.and_then(|p| p.render_timestamps("WireframeDepth Pass", w, h));
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: None,
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: ts,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, bind_group, &[]);
-        pass.draw(0..3, 0..1);
-    }
-
-    // Helper: run a pass writing to a temporary RenderTarget.
-    #[allow(dead_code, clippy::too_many_arguments)]
-    fn run_pass_to_rt(
-        &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        pass_idx: usize,
-        ubo: &wgpu::Buffer,
-        main_view: &wgpu::TextureView,
-        prev_analysis_view: &wgpu::TextureView,
-        prev_depth_view: &wgpu::TextureView,
-        depth_view: &wgpu::TextureView,
-        history_view: &wgpu::TextureView,
-        flow_view: &wgpu::TextureView,
-        mesh_coord_view: &wgpu::TextureView,
-        prev_mesh_coord_view: &wgpu::TextureView,
-        semantic_view: &wgpu::TextureView,
-        surface_cache_view: &wgpu::TextureView,
-        prev_surface_cache_view: &wgpu::TextureView,
-        subject_mask_view: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-        w: u32,
-        h: u32,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
-    ) {
-        let bg = self.make_bind_group(device, ubo,
-            main_view, prev_analysis_view, prev_depth_view, depth_view,
-            history_view, flow_view, mesh_coord_view, prev_mesh_coord_view,
-            semantic_view, surface_cache_view, prev_surface_cache_view, subject_mask_view,
-        );
-        self.run_pass(encoder, &self.pipelines[pass_idx], &bg, target, w, h, profiler);
-    }
-
-    // Build a bind group from 1 UBO + 12 texture views + 1 sampler.
-    #[allow(clippy::too_many_arguments)]
-    fn make_bind_group(
-        &self,
-        device: &wgpu::Device,
-        ubo: &wgpu::Buffer,
-        main_view: &wgpu::TextureView,
-        prev_analysis_view: &wgpu::TextureView,
-        prev_depth_view: &wgpu::TextureView,
-        depth_view: &wgpu::TextureView,
-        history_view: &wgpu::TextureView,
-        flow_view: &wgpu::TextureView,
-        mesh_coord_view: &wgpu::TextureView,
-        prev_mesh_coord_view: &wgpu::TextureView,
-        semantic_view: &wgpu::TextureView,
-        surface_cache_view: &wgpu::TextureView,
-        prev_surface_cache_view: &wgpu::TextureView,
-        subject_mask_view: &wgpu::TextureView,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0,  resource: ubo.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1,  resource: wgpu::BindingResource::TextureView(main_view) },
-                wgpu::BindGroupEntry { binding: 2,  resource: wgpu::BindingResource::TextureView(prev_analysis_view) },
-                wgpu::BindGroupEntry { binding: 3,  resource: wgpu::BindingResource::TextureView(prev_depth_view) },
-                wgpu::BindGroupEntry { binding: 4,  resource: wgpu::BindingResource::TextureView(depth_view) },
-                wgpu::BindGroupEntry { binding: 5,  resource: wgpu::BindingResource::TextureView(history_view) },
-                wgpu::BindGroupEntry { binding: 6,  resource: wgpu::BindingResource::TextureView(flow_view) },
-                wgpu::BindGroupEntry { binding: 7,  resource: wgpu::BindingResource::TextureView(mesh_coord_view) },
-                wgpu::BindGroupEntry { binding: 8,  resource: wgpu::BindingResource::TextureView(prev_mesh_coord_view) },
-                wgpu::BindGroupEntry { binding: 9,  resource: wgpu::BindingResource::TextureView(semantic_view) },
-                wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::TextureView(surface_cache_view) },
-                wgpu::BindGroupEntry { binding: 11, resource: wgpu::BindingResource::TextureView(prev_surface_cache_view) },
-                wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::TextureView(subject_mask_view) },
-                wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::Sampler(&self.sampler) },
-            ],
-        })
+            &state.mesh_coord_tex.texture, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex,
+            &state.surface_cache_tex.texture, aw, ah);
     }
 
     // WireframeDepthFX.cs line 538-554 — UploadDnnDepthTexture
-    fn upload_dnn_depth_texture(queue: &wgpu::Queue, state: &mut OwnerState) {
+    fn upload_dnn_depth_texture(gpu: &mut GpuEncoder, state: &mut OwnerState) {
         if !state.dnn_depth_dirty {
             return;
         }
@@ -1901,67 +599,45 @@ impl WireframeDepthFX {
             pixels[i * 4 + 2] = v;
             pixels[i * 4 + 3] = 255;
         }
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &state.dnn_depth_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
+        gpu.native_enc.upload_texture(
+            &state.dnn_depth_texture,
+            state.analysis_width,
+            state.analysis_height,
+            1,
             &pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(state.analysis_width * 4),
-                rows_per_image: None,
-            },
-            wgpu::Extent3d {
-                width: state.analysis_width,
-                height: state.analysis_height,
-                depth_or_array_layers: 1,
-            },
         );
         state.dnn_depth_dirty = false;
     }
 
     // WireframeDepthFX.cs line 556-572 — UploadDnnSubjectTexture
-    fn upload_dnn_subject_texture(queue: &wgpu::Queue, state: &mut OwnerState) {
+    fn upload_dnn_subject_texture(gpu: &mut GpuEncoder, state: &mut OwnerState) {
         if !state.dnn_subject_dirty {
             return;
         }
         let count = (state.analysis_width * state.analysis_height) as usize;
         let mut pixels = vec![0u8; count * 4];
         for i in 0..count {
-            let v = (state.dnn_subject_history_buffer[i].clamp(0.0, 1.0) * 255.0) as u8;
+            let v =
+                (state.dnn_subject_history_buffer[i].clamp(0.0, 1.0) * 255.0) as u8;
             pixels[i * 4] = v;
             pixels[i * 4 + 1] = v;
             pixels[i * 4 + 2] = v;
             pixels[i * 4 + 3] = 255;
         }
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &state.dnn_subject_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
+        gpu.native_enc.upload_texture(
+            &state.dnn_subject_texture,
+            state.analysis_width,
+            state.analysis_height,
+            1,
             &pixels,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(state.analysis_width * 4),
-                rows_per_image: None,
-            },
-            wgpu::Extent3d {
-                width: state.analysis_width,
-                height: state.analysis_height,
-                depth_or_array_layers: 1,
-            },
         );
         state.dnn_subject_dirty = false;
     }
 
     // WireframeDepthFX.cs line 574-594 — UploadNativeFlowTexture
-    // nativeFlowPixels is Color (RGBAFloat) → upload as Rgba16Float (Metal: Rgba32Float not filterable)
-    fn upload_native_flow_texture(queue: &wgpu::Queue, state: &mut OwnerState) {
+    // nativeFlowPixels is Color (RGBAFloat) → upload as Rgba16Float
+    //   (Metal: Rgba32Float not filterable)
+    fn upload_native_flow_texture(gpu: &mut GpuEncoder, state: &mut OwnerState) {
         if !state.native_flow_dirty {
             return;
         }
@@ -1972,24 +648,12 @@ impl WireframeDepthFX {
         for &f in floats {
             f16_bytes.extend_from_slice(&f32_to_f16(f).to_le_bytes());
         }
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &state.native_flow_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
+        gpu.native_enc.upload_texture(
+            &state.native_flow_texture,
+            state.analysis_width,
+            state.analysis_height,
+            1,
             &f16_bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(state.analysis_width * 8), // 4 halfs × 2 bytes
-                rows_per_image: None,
-            },
-            wgpu::Extent3d {
-                width: state.analysis_width,
-                height: state.analysis_height,
-                depth_or_array_layers: 1,
-            },
         );
         state.native_flow_dirty = false;
     }
@@ -1999,21 +663,31 @@ impl WireframeDepthFX {
     fn try_spawn_parallel_workers() -> Option<WorkerMode> {
         let depth_worker = BackgroundWorker::try_new(|| {
             use manifold_native::depth_estimator::DepthEstimator;
-            let mut estimator = manifold_native::ffi::depth_ffi::FfiDepthEstimator::new_depth_only()?;
+            let mut estimator =
+                manifold_native::ffi::depth_ffi::FfiDepthEstimator::new_depth_only()?;
             Some(move |req: DepthOnlyRequest| -> DepthOnlyResponse {
                 let pc = (req.width * req.height) as usize;
                 let mut depth = vec![0f32; pc];
-                let ok = estimator.process(&req.pixel_data, req.width, req.height, &mut depth, req.width, req.height);
-                DepthOnlyResponse { depth_buffer: if ok != 0 { Some(depth) } else { None } }
+                let ok = estimator.process(
+                    &req.pixel_data, req.width, req.height,
+                    &mut depth, req.width, req.height,
+                );
+                DepthOnlyResponse {
+                    depth_buffer: if ok != 0 { Some(depth) } else { None },
+                }
             })
         })?;
 
         let flow_worker = BackgroundWorker::try_new(|| {
             use manifold_native::depth_estimator::DepthEstimator;
-            let mut estimator = manifold_native::ffi::depth_ffi::FfiDepthEstimator::new_flow_only()?;
+            let mut estimator =
+                manifold_native::ffi::depth_ffi::FfiDepthEstimator::new_flow_only()?;
             Some(move |req: FlowOnlyRequest| -> FlowOnlyResponse {
                 if !req.has_prev_frame {
-                    return FlowOnlyResponse { flow_buffer: None, cut_score: 0.0 };
+                    return FlowOnlyResponse {
+                        flow_buffer: None,
+                        cut_score: 0.0,
+                    };
                 }
                 let pc = (req.width * req.height) as usize;
                 let mut flow = vec![0f32; pc * 4];
@@ -2022,30 +696,46 @@ impl WireframeDepthFX {
                     &req.prev_pixel_data, &req.pixel_data,
                     req.width, req.height, &mut flow, req.width, req.height, &mut cut,
                 );
-                if ok != 0 { FlowOnlyResponse { flow_buffer: Some(flow), cut_score: cut[0] } }
-                else { FlowOnlyResponse { flow_buffer: None, cut_score: 0.0 } }
+                if ok != 0 {
+                    FlowOnlyResponse { flow_buffer: Some(flow), cut_score: cut[0] }
+                } else {
+                    FlowOnlyResponse { flow_buffer: None, cut_score: 0.0 }
+                }
             })
         })?;
 
         let subject_worker = BackgroundWorker::try_new(|| {
             use manifold_native::depth_estimator::DepthEstimator;
-            let mut estimator = manifold_native::ffi::depth_ffi::FfiDepthEstimator::new_subject_only()?;
+            let mut estimator =
+                manifold_native::ffi::depth_ffi::FfiDepthEstimator::new_subject_only()?;
             Some(move |req: SubjectOnlyRequest| -> SubjectOnlyResponse {
                 let pc = (req.width * req.height) as usize;
                 let mut mask = vec![0f32; pc];
-                let ok = estimator.process_subject_mask(&req.pixel_data, req.width, req.height, &mut mask, req.width, req.height);
+                let ok = estimator.process_subject_mask(
+                    &req.pixel_data, req.width, req.height,
+                    &mut mask, req.width, req.height,
+                );
                 if ok != 0 {
                     const BLEND: f32 = 0.55;
                     let blended: Vec<f32> = if req.has_subject_mask_history {
                         let mut hist = req.subject_history;
-                        for i in 0..pc { hist[i] = hist[i] + (mask[i].clamp(0.0, 1.0) - hist[i]) * BLEND; }
+                        for i in 0..pc {
+                            hist[i] =
+                                hist[i] + (mask[i].clamp(0.0, 1.0) - hist[i]) * BLEND;
+                        }
                         hist
                     } else {
                         mask.iter().map(|v| v.clamp(0.0, 1.0)).collect()
                     };
-                    SubjectOnlyResponse { subject_history_blended: Some(blended), subject_api_failed: false }
+                    SubjectOnlyResponse {
+                        subject_history_blended: Some(blended),
+                        subject_api_failed: false,
+                    }
                 } else {
-                    SubjectOnlyResponse { subject_history_blended: None, subject_api_failed: true }
+                    SubjectOnlyResponse {
+                        subject_history_blended: None,
+                        subject_api_failed: true,
+                    }
                 }
             })
         })?;
@@ -2060,69 +750,89 @@ impl WireframeDepthFX {
             return Some(parallel);
         }
         let worker = Self::try_spawn_monolithic_worker()?;
-        log::info!("[WireframeDepthFX] Parallel spawn failed; falling back to monolithic worker");
+        log::info!(
+            "[WireframeDepthFX] Parallel spawn failed; \
+             falling back to monolithic worker"
+        );
         Some(WorkerMode::Monolithic { worker })
     }
 
     /// Try to spawn a BackgroundWorker that owns the DepthEstimator (monolithic mode).
     /// Returns None if the native plugin isn't available.
-    fn try_spawn_monolithic_worker() -> Option<BackgroundWorker<DepthRequest, DepthResponse>> {
+    fn try_spawn_monolithic_worker(
+    ) -> Option<BackgroundWorker<DepthRequest, DepthResponse>> {
         BackgroundWorker::try_new(|| {
             use manifold_native::depth_estimator::DepthEstimator;
-            let mut estimator = manifold_native::ffi::depth_ffi::FfiDepthEstimator::new()?;
+            let mut estimator =
+                manifold_native::ffi::depth_ffi::FfiDepthEstimator::new()?;
             Some(move |req: DepthRequest| -> DepthResponse {
                 let w = req.width;
                 let h = req.height;
                 let pixel_count = (w * h) as usize;
 
                 // Flow
-                let (flow_buffer, cut_score) = if req.wants_flow && req.has_prev_frame {
-                    let mut flow = vec![0f32; pixel_count * 4];
-                    let mut cut = vec![0f32; 1];
-                    let ok = estimator.compute_flow(
-                        &req.prev_pixel_data, &req.pixel_data,
-                        w, h, &mut flow, w, h, &mut cut,
-                    );
-                    if ok != 0 { (Some(flow), cut[0]) } else { (None, 0.0) }
-                } else {
-                    (None, 0.0)
-                };
+                let (flow_buffer, cut_score) =
+                    if req.wants_flow && req.has_prev_frame {
+                        let mut flow = vec![0f32; pixel_count * 4];
+                        let mut cut = vec![0f32; 1];
+                        let ok = estimator.compute_flow(
+                            &req.prev_pixel_data, &req.pixel_data,
+                            w, h, &mut flow, w, h, &mut cut,
+                        );
+                        if ok != 0 { (Some(flow), cut[0]) } else { (None, 0.0) }
+                    } else {
+                        (None, 0.0)
+                    };
 
                 // Depth
                 let depth_buffer = if req.wants_depth {
                     let mut depth = vec![0f32; pixel_count];
-                    let ok = estimator.process(&req.pixel_data, w, h, &mut depth, w, h);
+                    let ok = estimator.process(
+                        &req.pixel_data, w, h, &mut depth, w, h,
+                    );
                     if ok != 0 { Some(depth) } else { None }
                 } else {
                     None
                 };
 
                 // Subject mask + temporal blend
-                let (subject_history_blended, subject_api_failed) = if req.wants_subject {
-                    let mut mask = vec![0f32; pixel_count];
-                    let ok = estimator.process_subject_mask(&req.pixel_data, w, h, &mut mask, w, h);
-                    if ok != 0 {
-                        // Temporal blend on worker thread (cheap, data is local)
-                        const BLEND: f32 = 0.55;
-                        let blended: Vec<f32> = if req.has_subject_mask_history {
-                            let mut hist = req.subject_history;
-                            for i in 0..pixel_count {
-                                let current = mask[i].clamp(0.0, 1.0);
-                                hist[i] = hist[i] + (current - hist[i]) * BLEND;
-                            }
-                            hist
+                let (subject_history_blended, subject_api_failed) =
+                    if req.wants_subject {
+                        let mut mask = vec![0f32; pixel_count];
+                        let ok = estimator.process_subject_mask(
+                            &req.pixel_data, w, h, &mut mask, w, h,
+                        );
+                        if ok != 0 {
+                            // Temporal blend on worker thread (cheap, data is local)
+                            const BLEND: f32 = 0.55;
+                            let blended: Vec<f32> =
+                                if req.has_subject_mask_history {
+                                    let mut hist = req.subject_history;
+                                    for i in 0..pixel_count {
+                                        let current = mask[i].clamp(0.0, 1.0);
+                                        hist[i] =
+                                            hist[i] + (current - hist[i]) * BLEND;
+                                    }
+                                    hist
+                                } else {
+                                    mask.iter().map(|v| v.clamp(0.0, 1.0)).collect()
+                                };
+                            (Some(blended), false)
                         } else {
-                            mask.iter().map(|v| v.clamp(0.0, 1.0)).collect()
-                        };
-                        (Some(blended), false)
+                            // API not available in this plugin build
+                            (None, true)
+                        }
                     } else {
-                        (None, true) // API not available in this plugin build
-                    }
-                } else {
-                    (None, false)
-                };
+                        (None, false)
+                    };
 
-                DepthResponse { flow_buffer, cut_score, depth_buffer, subject_history_blended, subject_api_failed }
+                DepthResponse {
+                    flow_buffer,
+                    cut_score,
+                    depth_buffer,
+                    subject_history_blended,
+                    subject_api_failed,
+                }
             })
         })
     }
@@ -2164,8 +874,7 @@ impl WireframeDepthFX {
     fn request_native_readback(
         &mut self,
         gpu: &mut GpuEncoder,
-        _source: &wgpu::TextureView,
-        source_tex: &wgpu::Texture,
+        source_tex: &manifold_gpu::GpuTexture,
         owner_key: i64,
         mode: DepthSourceMode,
         subject_isolation: f32,
@@ -2183,7 +892,8 @@ impl WireframeDepthFX {
             self.dnn_subject_api_available
             && mode == DepthSourceMode::Dnn
             && subject_isolation > 0.02
-            && frame_count - state.last_subject_request_frame >= NATIVE_UPDATE_INTERVAL_SUBJECT;
+            && frame_count - state.last_subject_request_frame
+                >= NATIVE_UPDATE_INTERVAL_SUBJECT;
         if !wants_depth && !wants_flow && !wants_subject {
             return;
         }
@@ -2212,7 +922,7 @@ impl WireframeDepthFX {
         }
 
         // WireframeDepthFX.cs line 483-494: blit source → dnnInputTex, then readback
-        // Copy source → dnn_input_tex via a blit (we copy at texture level since both are Rgba8Unorm)
+        // Copy source → dnn_input_tex via blit (both are Rgba8Unorm)
         let copy_aw = state.analysis_width;
         let copy_ah = state.analysis_height;
         Self::encode_copy(gpu, source_tex, &state.dnn_input_tex.texture, copy_aw, copy_ah);
@@ -2227,19 +937,8 @@ impl WireframeDepthFX {
 
         let aw = state.analysis_width;
         let ah = state.analysis_height;
-        // Shared-memory readback via hal when available — no wgpu submit needed.
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            state.readback.submit_shared(
-                gpu, &state.dnn_input_tex.texture, aw, ah,
-            );
-            state.dnn_readback_pending = true;
-            return;
-        }
-        // Routes to native Metal copy_texture_to_buffer or wgpu fallback.
-        state.readback.submit_via_gpu_encoder(
-            gpu, &state.dnn_input_tex.texture, aw, ah,
-        );
+        // Native shared-memory readback via GpuEncoder.
+        state.readback.submit(gpu, &state.dnn_input_tex.texture, aw, ah);
         state.dnn_readback_pending = true;
     }
 
@@ -2249,7 +948,8 @@ impl WireframeDepthFX {
         // Flow
         if let Some(ref flow) = response.flow_buffer {
             let copy_len = flow.len().min(state.native_flow_buffer.len());
-            state.native_flow_buffer[..copy_len].copy_from_slice(&flow[..copy_len]);
+            state.native_flow_buffer[..copy_len]
+                .copy_from_slice(&flow[..copy_len]);
             state.native_flow_has_data = true;
             state.native_flow_dirty    = true;
             state.native_flow_ready    = true;
@@ -2263,15 +963,18 @@ impl WireframeDepthFX {
         // Depth
         if let Some(ref depth) = response.depth_buffer {
             let copy_len = depth.len().min(state.dnn_depth_buffer.len());
-            state.dnn_depth_buffer[..copy_len].copy_from_slice(&depth[..copy_len]);
+            state.dnn_depth_buffer[..copy_len]
+                .copy_from_slice(&depth[..copy_len]);
             state.dnn_has_depth   = true;
             state.dnn_depth_dirty = true;
         }
 
         // Subject mask (temporally blended on worker thread)
         if let Some(ref blended) = response.subject_history_blended {
-            let copy_len = blended.len().min(state.dnn_subject_history_buffer.len());
-            state.dnn_subject_history_buffer[..copy_len].copy_from_slice(&blended[..copy_len]);
+            let copy_len =
+                blended.len().min(state.dnn_subject_history_buffer.len());
+            state.dnn_subject_history_buffer[..copy_len]
+                .copy_from_slice(&blended[..copy_len]);
             state.dnn_has_subject_mask = true;
             state.dnn_subject_dirty    = true;
         }
@@ -2281,23 +984,26 @@ impl WireframeDepthFX {
     fn estimate_depth_heuristic(
         &self,
         gpu: &mut GpuEncoder,
-        analysis_view: &wgpu::TextureView,
+        analysis_tex: &manifold_gpu::GpuTexture,
         state: &mut OwnerState,
         _temporal_smooth: f32,
         uniforms: &WireUniforms,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         let aw = state.analysis_width;
         let ah = state.analysis_height;
-        let depth_next = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD DepthNext");
+        let depth_next = RenderTarget::new(
+            gpu.device, aw, ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD DepthNext",
+        );
 
         // PASS_HEURISTIC_DEPTH: analysis → depthNext
         self.encode_pass(gpu, PASS_HEURISTIC_DEPTH, uniforms,
-            analysis_view, &state.previous_analysis_tex.view, &state.depth_tex.view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &depth_next.view, aw, ah, profiler);
+            analysis_tex, &state.previous_analysis_tex.texture,
+            &state.depth_tex.texture,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &depth_next.texture, aw, ah);
 
         // Graphics.Blit(depthNext, state.depthTex) — copy
         Self::encode_copy(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
@@ -2310,11 +1016,10 @@ impl WireframeDepthFX {
         state: &mut OwnerState,
         _temporal_smooth: f32,
         uniforms: &WireUniforms,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> bool {
         // dnnBackendAvailable checked by caller (ensure_dnn_backend_available)
         if state.dnn_depth_dirty {
-            Self::upload_dnn_depth_texture(gpu.queue, state);
+            Self::upload_dnn_depth_texture(gpu, state);
         }
         if !state.dnn_has_depth {
             return false;
@@ -2322,15 +1027,18 @@ impl WireframeDepthFX {
 
         let aw = state.analysis_width;
         let ah = state.analysis_height;
-        let depth_next = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD DnnDepthNext");
+        let depth_next = RenderTarget::new(
+            gpu.device, aw, ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD DnnDepthNext",
+        );
 
         // PASS_DNN_DEPTH_POST: dnnDepthTexture → depthNext
         self.encode_pass(gpu, PASS_DNN_DEPTH_POST, uniforms,
-            &state.dnn_depth_texture_view, &self.dummy_view, &state.depth_tex.view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &depth_next.view, aw, ah, profiler);
+            &state.dnn_depth_texture, &self.dummy_tex, &state.depth_tex.texture,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &depth_next.texture, aw, ah);
 
         // Graphics.Blit(depthNext, state.depthTex)
         Self::encode_copy(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
@@ -2342,7 +1050,7 @@ impl WireframeDepthFX {
     fn update_flow_lock(
         &self,
         gpu: &mut GpuEncoder,
-        analysis_view: &wgpu::TextureView,
+        analysis_tex: &manifold_gpu::GpuTexture,
         state: &mut OwnerState,
         _temporal_smooth: f32,
         mesh_rate: i32,
@@ -2350,14 +1058,13 @@ impl WireframeDepthFX {
         face_warp_enabled: bool,
         frame_count: i64,
         uniforms: &WireUniforms,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // WireframeDepthFX.cs line 738-740
         // (null checks — all fields valid if we reached here)
 
         // WireframeDepthFX.cs line 742-743
         if native_flow_enabled && state.native_flow_dirty {
-            Self::upload_native_flow_texture(gpu.queue, state);
+            Self::upload_native_flow_texture(gpu, state);
         }
 
         // WireframeDepthFX.cs line 747-748
@@ -2381,15 +1088,17 @@ impl WireframeDepthFX {
                 ..bytemuck::Zeroable::zeroed()
             };
             self.encode_pass(gpu, PASS_INIT_MESH_COORD, &cut_uniforms,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &state.mesh_coord_tex.view, aw, ah, profiler);
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &state.mesh_coord_tex.texture, aw, ah);
             self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, &cut_uniforms,
-                &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &state.surface_cache_tex.view, aw, ah, profiler);
+                &state.mesh_coord_tex.texture, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &state.surface_cache_tex.texture, aw, ah);
 
             state.dnn_has_subject_mask = false;
             if !state.dnn_subject_history_buffer.is_empty() {
@@ -2400,7 +1109,12 @@ impl WireframeDepthFX {
             state.native_flow_has_data = false;
             state.last_mesh_update_frame = frame_count;
             // Blit analysis → previousAnalysisTex
-            Self::encode_copy(gpu, &state.dnn_input_tex.texture, &state.previous_analysis_tex.texture, aw, ah);
+            Self::encode_copy(
+                gpu,
+                &state.dnn_input_tex.texture,
+                &state.previous_analysis_tex.texture,
+                aw, ah,
+            );
             return;
         }
 
@@ -2416,98 +1130,134 @@ impl WireframeDepthFX {
         let ah = state.analysis_height;
 
         // WireframeDepthFX.cs line 779-789 — choose flow source
-        let flow_input_view: &wgpu::TextureView = if use_native_flow {
-            &state.native_flow_texture_view
+        let flow_input_tex: &manifold_gpu::GpuTexture = if use_native_flow {
+            &state.native_flow_texture
         } else {
             // PASS_FLOW_ESTIMATE: analysis → flowTex
             self.encode_pass(gpu, PASS_FLOW_ESTIMATE, uniforms,
-                analysis_view, &state.previous_analysis_tex.view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &state.flow_tex.view, aw, ah, profiler);
-            &state.flow_tex.view
+                analysis_tex, &state.previous_analysis_tex.texture,
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex,
+                &state.flow_tex.texture, aw, ah);
+            &state.flow_tex.texture
         };
 
         // WireframeDepthFX.cs line 792-826 — flowFiltered, temp RTs
-        let flow_filtered = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD FlowFiltered");
+        let flow_filtered = RenderTarget::new(
+            gpu.device, aw, ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD FlowFiltered",
+        );
         // PASS_FLOW_HYGIENE: flowInput → flowFiltered
         self.encode_pass(gpu, PASS_FLOW_HYGIENE, uniforms,
-            flow_input_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &flow_filtered.view, aw, ah, profiler);
-        let flow_stable_view = &flow_filtered.view;
+            flow_input_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &flow_filtered.texture, aw, ah);
+        let flow_stable_tex = &flow_filtered.texture;
 
         // WireframeDepthFX.cs line 808-826: semantic mask
         // PASS_SEMANTIC_MASK: analysis → semanticTex
         self.encode_pass(gpu, PASS_SEMANTIC_MASK, uniforms,
-            analysis_view, &state.previous_analysis_tex.view,
-            &self.dummy_view, &state.depth_tex.view,
-            &self.dummy_view, flow_stable_view,
-            &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &state.semantic_tex.view, aw, ah, profiler);
+            analysis_tex, &state.previous_analysis_tex.texture,
+            &self.dummy_tex, &state.depth_tex.texture,
+            &self.dummy_tex, flow_stable_tex,
+            &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &state.semantic_tex.texture, aw, ah);
 
         // WireframeDepthFX.cs line 811-826: temp coord RTs
-        let coord_next       = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD CoordNext");
-        let coord_affine     = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD CoordAffine");
-        let coord_regularized = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD CoordReg");
-        let surface_next     = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD SurfaceNext");
+        let coord_next = RenderTarget::new(
+            gpu.device, aw, ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD CoordNext",
+        );
+        let coord_affine = RenderTarget::new(
+            gpu.device, aw, ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD CoordAffine",
+        );
+        let coord_regularized = RenderTarget::new(
+            gpu.device, aw, ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD CoordReg",
+        );
+        let surface_next = RenderTarget::new(
+            gpu.device, aw, ah,
+            manifold_gpu::GpuTextureFormat::Rgba16Float, "WD SurfaceNext",
+        );
 
         // WireframeDepthFX.cs line 829-835: PASS_FLOW_ADVECT_COORD
         self.encode_pass(gpu, PASS_FLOW_ADVECT_COORD, uniforms,
-            analysis_view, &state.previous_analysis_tex.view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            flow_stable_view, &self.dummy_view, &state.mesh_coord_tex.view,
-            &state.semantic_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &coord_next.view, aw, ah, profiler);
+            analysis_tex, &state.previous_analysis_tex.texture,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            flow_stable_tex, &self.dummy_tex, &state.mesh_coord_tex.texture,
+            &state.semantic_tex.texture, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex,
+            &coord_next.texture, aw, ah);
 
         // WireframeDepthFX.cs line 837-841: PASS_MESH_CELL_AFFINE
         self.encode_pass(gpu, PASS_MESH_CELL_AFFINE, uniforms,
-            &coord_next.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &coord_affine.view, aw, ah, profiler);
+            &coord_next.texture, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, flow_stable_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &coord_affine.texture, aw, ah);
 
         // WireframeDepthFX.cs line 843-862: optional face warp pass
-        let pre_regularize_view: &wgpu::TextureView;
+        let pre_regularize_tex: &manifold_gpu::GpuTexture;
         let coord_face_opt: Option<RenderTarget>;
         if face_warp_enabled {
-            let coord_face = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba16Float, "WD CoordFace");
-            let edge_follow_mask_view = if state.dnn_has_subject_mask {
-                &state.dnn_subject_texture_view
+            let coord_face = RenderTarget::new(
+                gpu.device, aw, ah,
+                manifold_gpu::GpuTextureFormat::Rgba16Float, "WD CoordFace",
+            );
+            let edge_follow_mask_tex = if state.dnn_has_subject_mask {
+                &state.dnn_subject_texture
             } else {
-                &state.semantic_tex.view
+                &state.semantic_tex.texture
             };
             self.encode_pass(gpu, PASS_MESH_FACE_WARP, uniforms,
-                &coord_affine.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
-                edge_follow_mask_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &coord_face.view, aw, ah, profiler);
+                &coord_affine.texture, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex, &self.dummy_tex, flow_stable_tex,
+                &self.dummy_tex, &self.dummy_tex,
+                edge_follow_mask_tex, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex,
+                &coord_face.texture, aw, ah);
             coord_face_opt = Some(coord_face);
-            pre_regularize_view = &coord_face_opt.as_ref().unwrap().view;
+            pre_regularize_tex =
+                &coord_face_opt.as_ref().unwrap().texture;
         } else {
             coord_face_opt = None;
-            pre_regularize_view = &coord_affine.view;
+            pre_regularize_tex = &coord_affine.texture;
         }
 
         // WireframeDepthFX.cs line 863-871: PASS_MESH_REGULARIZE
         self.encode_pass(gpu, PASS_MESH_REGULARIZE, uniforms,
-            pre_regularize_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, flow_stable_view, &self.dummy_view,
-            &state.mesh_coord_tex.view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &coord_regularized.view, aw, ah, profiler);
-        Self::encode_copy(gpu, &coord_regularized.texture, &state.mesh_coord_tex.texture, aw, ah);
+            pre_regularize_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, flow_stable_tex,
+            &self.dummy_tex, &state.mesh_coord_tex.texture,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &coord_regularized.texture, aw, ah);
+        Self::encode_copy(
+            gpu,
+            &coord_regularized.texture,
+            &state.mesh_coord_tex.texture,
+            aw, ah,
+        );
 
         // WireframeDepthFX.cs line 873-879: PASS_SURFACE_CACHE_UPDATE
         self.encode_pass(gpu, PASS_SURFACE_CACHE_UPDATE, uniforms,
-            &state.mesh_coord_tex.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, flow_stable_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &state.surface_cache_tex.view, &self.dummy_view,
-            &surface_next.view, aw, ah, profiler);
-        Self::encode_copy(gpu, &surface_next.texture, &state.surface_cache_tex.texture, aw, ah);
+            &state.mesh_coord_tex.texture, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, flow_stable_tex,
+            &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &state.surface_cache_tex.texture,
+            &self.dummy_tex,
+            &surface_next.texture, aw, ah);
+        Self::encode_copy(
+            gpu,
+            &surface_next.texture,
+            &state.surface_cache_tex.texture,
+            aw, ah,
+        );
         // coord_face_opt drops here (ReleaseTemporary equivalent)
         let _ = coord_face_opt;
     }
@@ -2549,18 +1299,14 @@ impl PostProcessEffect for WireframeDepthFX {
         &EffectTypeId::WIREFRAME_DEPTH
     }
 
-    fn supports_hal(&self) -> bool { true }
-
     // WireframeDepthFX.cs line 279-361 — Apply
     fn apply(
         &mut self,
         gpu: &mut GpuEncoder,
-        source: &wgpu::TextureView,
-        target: &wgpu::TextureView,
-        _target_texture: &wgpu::Texture,
+        source: &manifold_gpu::GpuTexture,
+        target: &manifold_gpu::GpuTexture,
         fx: &EffectInstance,
         ctx: &EffectContext,
-        profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
         // WireframeDepthFX.cs line 281-282
         let amount = fx.param_values.first().copied().unwrap_or(0.0);
@@ -2569,17 +1315,22 @@ impl PostProcessEffect for WireframeDepthFX {
         }
 
         // Read params — new 12-param layout (see effect_definition_registry.rs)
-        let wire_scale     = fx.param_values.get(7).copied().unwrap_or(1.0).clamp(0.5, 1.0);
-        let mesh_rate      = fx.param_values.get(8).copied().unwrap_or(1.0).round() as i32;
-        let mesh_rate      = mesh_rate.clamp(1, 4);
-        let native_flow_enabled = fx.param_values.get(9).copied().unwrap_or(0.0).round() as i32 > 0;
-        let flow_lock_enabled   = fx.param_values.get(10).copied().unwrap_or(0.0).round() as i32 > 0;
-        let face_warp_enabled   = fx.param_values.get(11).copied().unwrap_or(0.0) > 0.01;
+        let wire_scale = fx.param_values.get(7).copied().unwrap_or(1.0)
+            .clamp(0.5, 1.0);
+        let mesh_rate = fx.param_values.get(8).copied().unwrap_or(1.0)
+            .round() as i32;
+        let mesh_rate = mesh_rate.clamp(1, 4);
+        let native_flow_enabled = fx.param_values.get(9).copied()
+            .unwrap_or(0.0).round() as i32 > 0;
+        let flow_lock_enabled = fx.param_values.get(10).copied()
+            .unwrap_or(0.0).round() as i32 > 0;
+        let face_warp_enabled = fx.param_values.get(11).copied()
+            .unwrap_or(0.0) > 0.01;
 
-        // GetOrCreateOwner needs encoder; owner_states borrow released before later use.
-        // We store the owner_key to look up the state again after this call.
+        // GetOrCreateOwner needs encoder; owner_states borrow released before later
+        // use. We store the owner_key to look up the state again after this call.
         let owner_key = ctx.owner_key;
-        self.get_or_create_owner(gpu, owner_key, wire_scale, profiler);
+        self.get_or_create_owner(gpu, owner_key, wire_scale);
 
         // Read remaining params — new 12-param layout
         let density         = fx.param_values.get(1).copied().unwrap_or(96.0);
@@ -2587,29 +1338,40 @@ impl PostProcessEffect for WireframeDepthFX {
         let depth_scale     = fx.param_values.get(3).copied().unwrap_or(1.0);
         let temporal_smooth = fx.param_values.get(4).copied().unwrap_or(0.8);
         let persistence     = 0.82; // hardcoded default (Persist param removed from UI)
-        let depth_mode      = DepthSourceMode::Dnn; // always DNN (Depth param removed from UI)
-        let subject_isolation = fx.param_values.get(5).copied().unwrap_or(0.0).clamp(0.0, 1.0);
-        let blend_mode        = fx.param_values.get(6).copied().unwrap_or(0.0).clamp(0.0, 6.0);
+        let depth_mode      = DepthSourceMode::Dnn; // always DNN
+        let subject_isolation = fx.param_values.get(5).copied().unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        let blend_mode = fx.param_values.get(6).copied().unwrap_or(0.0)
+            .clamp(0.0, 6.0);
 
         // ── Poll background worker(s) for completed native results ──
         match &mut self.workers {
-            Some(WorkerMode::Parallel { depth_worker, flow_worker, subject_worker }) => {
+            Some(WorkerMode::Parallel {
+                depth_worker, flow_worker, subject_worker,
+            }) => {
                 if let Some(resp) = depth_worker.try_recv() {
-                    let ok = self.pending_depth_owner.take().unwrap_or(owner_key);
+                    let ok =
+                        self.pending_depth_owner.take().unwrap_or(owner_key);
                     if let Some(state) = self.owner_states.get_mut(&ok)
-                        && let Some(ref depth) = resp.depth_buffer {
-                            let copy_len = depth.len().min(state.dnn_depth_buffer.len());
-                            state.dnn_depth_buffer[..copy_len].copy_from_slice(&depth[..copy_len]);
-                            state.dnn_has_depth = true;
-                            state.dnn_depth_dirty = true;
-                        }
+                        && let Some(ref depth) = resp.depth_buffer
+                    {
+                        let copy_len =
+                            depth.len().min(state.dnn_depth_buffer.len());
+                        state.dnn_depth_buffer[..copy_len]
+                            .copy_from_slice(&depth[..copy_len]);
+                        state.dnn_has_depth = true;
+                        state.dnn_depth_dirty = true;
+                    }
                 }
                 if let Some(resp) = flow_worker.try_recv() {
-                    let ok = self.pending_flow_owner.take().unwrap_or(owner_key);
+                    let ok =
+                        self.pending_flow_owner.take().unwrap_or(owner_key);
                     if let Some(state) = self.owner_states.get_mut(&ok) {
                         if let Some(ref flow) = resp.flow_buffer {
-                            let copy_len = flow.len().min(state.native_flow_buffer.len());
-                            state.native_flow_buffer[..copy_len].copy_from_slice(&flow[..copy_len]);
+                            let copy_len =
+                                flow.len().min(state.native_flow_buffer.len());
+                            state.native_flow_buffer[..copy_len]
+                                .copy_from_slice(&flow[..copy_len]);
                             state.native_flow_has_data = true;
                             state.native_flow_dirty = true;
                             state.native_flow_ready = true;
@@ -2625,20 +1387,29 @@ impl PostProcessEffect for WireframeDepthFX {
                     if resp.subject_api_failed {
                         self.dnn_subject_api_available = false;
                     }
-                    let ok = self.pending_subject_owner.take().unwrap_or(owner_key);
+                    let ok =
+                        self.pending_subject_owner.take().unwrap_or(owner_key);
                     if let Some(state) = self.owner_states.get_mut(&ok)
-                        && let Some(ref blended) = resp.subject_history_blended {
-                            let copy_len = blended.len().min(state.dnn_subject_history_buffer.len());
-                            state.dnn_subject_history_buffer[..copy_len].copy_from_slice(&blended[..copy_len]);
-                            state.dnn_has_subject_mask = true;
-                            state.dnn_subject_dirty = true;
-                        }
+                        && let Some(ref blended) =
+                            resp.subject_history_blended
+                    {
+                        let copy_len = blended.len().min(
+                            state.dnn_subject_history_buffer.len(),
+                        );
+                        state.dnn_subject_history_buffer[..copy_len]
+                            .copy_from_slice(&blended[..copy_len]);
+                        state.dnn_has_subject_mask = true;
+                        state.dnn_subject_dirty = true;
+                    }
                 }
             }
             Some(WorkerMode::Monolithic { worker }) => {
                 if let Some(response) = worker.try_recv() {
-                    let result_owner = self.pending_depth_owner.take().unwrap_or(owner_key);
-                    if let Some(state) = self.owner_states.get_mut(&result_owner) {
+                    let result_owner =
+                        self.pending_depth_owner.take().unwrap_or(owner_key);
+                    if let Some(state) =
+                        self.owner_states.get_mut(&result_owner)
+                    {
                         Self::apply_depth_response(state, &response);
                     }
                     if response.subject_api_failed {
@@ -2650,86 +1421,86 @@ impl PostProcessEffect for WireframeDepthFX {
         }
 
         // ── Poll GPU readback → submit to background worker(s) ──
-        // Native path reads directly from shared-memory buffer.
-        // Hal path checks SharedEvent; wgpu path uses map_async.
-        let readback_pixels = if let Some(state) = self.owner_states.get_mut(&owner_key)
-            && state.dnn_readback_pending
-        {
-            // Try native shared-memory readback first
-            #[cfg(target_os = "macos")]
-            if let Some(p) = state.readback.try_read_native() {
-                Some(p)
+        // Native shared-memory readback via GpuEncoder.
+        let readback_pixels =
+            if let Some(state) = self.owner_states.get_mut(&owner_key)
+                && state.dnn_readback_pending
+            {
+                state.readback.try_read()
             } else {
-                #[cfg(feature = "hal-encoding")]
-                if let Some(ctx) = gpu.hal_ctx {
-                    state.readback.try_read_shared(ctx)
-                } else {
-                    state.readback.try_read(gpu.device)
-                }
-                #[cfg(not(feature = "hal-encoding"))]
-                state.readback.try_read(gpu.device)
-            }
-            #[cfg(not(target_os = "macos"))]
-            state.readback.try_read(gpu.device)
-        } else {
-            None
-        };
+                None
+            };
         if let Some(pixels) = readback_pixels
-            && let Some(state) = self.owner_states.get_mut(&owner_key) {
-                state.dnn_readback_pending = false;
-                let aw = state.analysis_width as i32;
-                let ah = state.analysis_height as i32;
+            && let Some(state) = self.owner_states.get_mut(&owner_key)
+        {
+            state.dnn_readback_pending = false;
+            let aw = state.analysis_width as i32;
+            let ah = state.analysis_height as i32;
 
-                    match &mut self.workers {
-                        Some(WorkerMode::Parallel { depth_worker, flow_worker, subject_worker }) => {
-                            if state.native_request_wants_depth {
-                                depth_worker.submit(DepthOnlyRequest {
-                                    pixel_data: pixels.clone(), width: aw, height: ah,
-                                });
-                                self.pending_depth_owner = Some(owner_key);
-                            }
-                            if state.native_request_wants_flow {
-                                flow_worker.submit(FlowOnlyRequest {
-                                    pixel_data: pixels.clone(),
-                                    prev_pixel_data: state.prev_native_pixel_buffer.clone(),
-                                    has_prev_frame: state.has_prev_native_frame,
-                                    width: aw, height: ah,
-                                });
-                                self.pending_flow_owner = Some(owner_key);
-                            }
-                            if state.native_request_wants_subject {
-                                subject_worker.submit(SubjectOnlyRequest {
-                                    pixel_data: pixels.clone(),
-                                    width: aw, height: ah,
-                                    has_subject_mask_history: state.dnn_has_subject_mask,
-                                    subject_history: state.dnn_subject_history_buffer.clone(),
-                                });
-                                self.pending_subject_owner = Some(owner_key);
-                            }
-                        }
-                        Some(WorkerMode::Monolithic { worker }) => {
-                            let req = DepthRequest {
-                                pixel_data: pixels.clone(),
-                                prev_pixel_data: state.prev_native_pixel_buffer.clone(),
-                                has_prev_frame: state.has_prev_native_frame,
-                                width: aw, height: ah,
-                                wants_flow: state.native_request_wants_flow,
-                                wants_depth: state.native_request_wants_depth,
-                                wants_subject: state.native_request_wants_subject,
-                                has_subject_mask_history: state.dnn_has_subject_mask,
-                                subject_history: state.dnn_subject_history_buffer.clone(),
-                            };
-                            worker.submit(req);
-                            self.pending_depth_owner = Some(owner_key);
-                        }
-                        None => {}
+            match &mut self.workers {
+                Some(WorkerMode::Parallel {
+                    depth_worker, flow_worker, subject_worker,
+                }) => {
+                    if state.native_request_wants_depth {
+                        depth_worker.submit(DepthOnlyRequest {
+                            pixel_data: pixels.clone(),
+                            width: aw,
+                            height: ah,
+                        });
+                        self.pending_depth_owner = Some(owner_key);
                     }
-
-                    // Copy current → prev immediately (at submit time, not completion).
-                    let copy_len = pixels.len().min(state.prev_native_pixel_buffer.len());
-                    state.prev_native_pixel_buffer[..copy_len].copy_from_slice(&pixels[..copy_len]);
-                    state.has_prev_native_frame = true;
+                    if state.native_request_wants_flow {
+                        flow_worker.submit(FlowOnlyRequest {
+                            pixel_data: pixels.clone(),
+                            prev_pixel_data:
+                                state.prev_native_pixel_buffer.clone(),
+                            has_prev_frame: state.has_prev_native_frame,
+                            width: aw,
+                            height: ah,
+                        });
+                        self.pending_flow_owner = Some(owner_key);
+                    }
+                    if state.native_request_wants_subject {
+                        subject_worker.submit(SubjectOnlyRequest {
+                            pixel_data: pixels.clone(),
+                            width: aw,
+                            height: ah,
+                            has_subject_mask_history:
+                                state.dnn_has_subject_mask,
+                            subject_history:
+                                state.dnn_subject_history_buffer.clone(),
+                        });
+                        self.pending_subject_owner = Some(owner_key);
+                    }
                 }
+                Some(WorkerMode::Monolithic { worker }) => {
+                    let req = DepthRequest {
+                        pixel_data: pixels.clone(),
+                        prev_pixel_data:
+                            state.prev_native_pixel_buffer.clone(),
+                        has_prev_frame: state.has_prev_native_frame,
+                        width: aw,
+                        height: ah,
+                        wants_flow: state.native_request_wants_flow,
+                        wants_depth: state.native_request_wants_depth,
+                        wants_subject: state.native_request_wants_subject,
+                        has_subject_mask_history: state.dnn_has_subject_mask,
+                        subject_history:
+                            state.dnn_subject_history_buffer.clone(),
+                    };
+                    worker.submit(req);
+                    self.pending_depth_owner = Some(owner_key);
+                }
+                None => {}
+            }
+
+            // Copy current → prev immediately (at submit time, not completion).
+            let copy_len =
+                pixels.len().min(state.prev_native_pixel_buffer.len());
+            state.prev_native_pixel_buffer[..copy_len]
+                .copy_from_slice(&pixels[..copy_len]);
+            state.has_prev_native_frame = true;
+        }
 
         // Check DNN backend for this frame
         let dnn_available = self.ensure_dnn_backend_available(ctx.frame_count);
@@ -2741,19 +1512,24 @@ impl PostProcessEffect for WireframeDepthFX {
         let wh = state.wire_height;
 
         // Compute derived uniform values.
-        // WireframeDepthFX.cs line 829: flowLockStrength = Lerp(0.76, 0.985, Clamp01(temporalSmooth))
+        // WireframeDepthFX.cs line 829: flowLockStrength =
+        //   Lerp(0.76, 0.985, Clamp01(temporalSmooth))
         let ts01 = temporal_smooth.clamp(0.0, 1.0);
         let flow_lock_strength  = 0.76 + (0.985 - 0.76) * ts01;
         // WireframeDepthFX.cs line 838: cellAffine = Lerp(0.40, 0.88, ...)
         let cell_affine         = 0.40 + (0.88 - 0.40) * ts01;
-        // EdgeFollow (param 11) scales the face warp strength. At 1.0 = original behavior.
-        let edge_follow = fx.param_values.get(11).copied().unwrap_or(0.5).clamp(0.0, 1.0);
+        // EdgeFollow (param 11) scales the face warp strength.
+        // At 1.0 = original behavior.
+        let edge_follow = fx.param_values.get(11).copied().unwrap_or(0.5)
+            .clamp(0.0, 1.0);
         let face_warp_strength  = (0.25 + (0.90 - 0.25) * ts01) * edge_follow;
         // WireframeDepthFX.cs line 864: regularize = Lerp(0.40, 0.74, ...)
         let mesh_regularize     = 0.40 + (0.74 - 0.40) * ts01;
-        // WireframeDepthFX.cs line 874: surfacePersist = Lerp(0.80, 0.985, ...)
+        // WireframeDepthFX.cs line 874: surfacePersist =
+        //   Lerp(0.80, 0.985, ...)
         let surface_persistence = 0.80 + (0.985 - 0.80) * ts01;
-        // WireframeDepthFX.cs line 334: wireTaa = Lerp(0.48, 0.92, Clamp01(temporalSmooth))
+        // WireframeDepthFX.cs line 334: wireTaa =
+        //   Lerp(0.48, 0.92, Clamp01(temporalSmooth))
         let wire_taa            = 0.48 + (0.92 - 0.48) * ts01;
 
         // Build analysis-resolution uniforms
@@ -2796,76 +1572,98 @@ impl PostProcessEffect for WireframeDepthFX {
             ..uniforms_analysis
         };
 
-        // Reset ring buffer slot counter at frame start (hal path).
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        self.hal_ring_offset.set(0);
-
         // --- EstimateDepth ---
         // WireframeDepthFX.cs line 363-418
 
         // PASS_ANALYSIS: source → analysis (temp RT at analysis resolution)
-        let analysis_rt = RenderTarget::new(gpu.device, aw, ah, wgpu::TextureFormat::Rgba8Unorm, "WD Analysis");
+        let analysis_rt = RenderTarget::new(
+            gpu.device, aw, ah,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm, "WD Analysis",
+        );
         self.encode_pass(gpu, PASS_ANALYSIS, &uniforms_analysis,
-            source, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &self.dummy_view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-            &analysis_rt.view, aw, ah, profiler);
+            source, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &self.dummy_tex, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+            &analysis_rt.texture, aw, ah);
 
         // WireframeDepthFX.cs line 388-394 — request native readback
         if native_flow_enabled && flow_lock_enabled {
             let mesh_update_due = {
                 let state = self.owner_states.get(&owner_key).unwrap();
                 mesh_rate <= 1
-                    || ctx.frame_count - state.last_mesh_update_frame >= mesh_rate as i64
+                    || ctx.frame_count - state.last_mesh_update_frame
+                        >= mesh_rate as i64
             };
             if mesh_update_due {
-                // Copy analysis_rt → dnn_input_tex happens inside request_native_readback via encoder copy
+                // Copy analysis_rt → dnn_input_tex happens inside
+                // request_native_readback via encoder copy
                 self.request_native_readback(
                     gpu,
-                    &analysis_rt.view, &analysis_rt.texture,
+                    &analysis_rt.texture,
                     owner_key, depth_mode, subject_isolation, ctx.frame_count,
                 );
             }
         }
 
         // WireframeDepthFX.cs line 396-407 — depth estimation
-        // Temporarily remove state to avoid borrow conflict (self.method + self.owner_states)
-        let dnn_used = if depth_mode == DepthSourceMode::Dnn && dnn_available {
-            let mut state = self.owner_states.remove(&owner_key).unwrap();
-            let result = self.try_estimate_depth_dnn(gpu, &mut state, temporal_smooth, &uniforms_analysis, profiler);
-            self.owner_states.insert(owner_key, state);
-            result
-        } else {
-            false
-        };
+        // Temporarily remove state to avoid borrow conflict
+        // (self.method + self.owner_states)
+        let dnn_used =
+            if depth_mode == DepthSourceMode::Dnn && dnn_available {
+                let mut state =
+                    self.owner_states.remove(&owner_key).unwrap();
+                let result = self.try_estimate_depth_dnn(
+                    gpu, &mut state, temporal_smooth, &uniforms_analysis,
+                );
+                self.owner_states.insert(owner_key, state);
+                result
+            } else {
+                false
+            };
         if !dnn_used {
-            if depth_mode == DepthSourceMode::Dnn && !self.warned_missing_dnn && !self.dnn_backend_available {
-                log::warn!("[WireframeDepthFX] DNN depth path requested, but no backend is configured. \
-                           Falling back to heuristic depth.");
+            if depth_mode == DepthSourceMode::Dnn
+                && !self.warned_missing_dnn
+                && !self.dnn_backend_available
+            {
+                log::warn!(
+                    "[WireframeDepthFX] DNN depth path requested, but no \
+                     backend is configured. Falling back to heuristic depth."
+                );
                 self.warned_missing_dnn = true;
             }
-            let mut state = self.owner_states.remove(&owner_key).unwrap();
-            self.estimate_depth_heuristic(gpu, &analysis_rt.view, &mut state, temporal_smooth, &uniforms_analysis, profiler);
-            self.owner_states.insert(owner_key, state);
-        }
-
-        // WireframeDepthFX.cs line 409-412 — UpdateFlowLock or blit analysis → previousAnalysisTex
-        if flow_lock_enabled {
-            let mut state = self.owner_states.remove(&owner_key).unwrap();
-            self.update_flow_lock(
-                gpu,
-                &analysis_rt.view, &mut state,
-                temporal_smooth, mesh_rate, native_flow_enabled, face_warp_enabled,
-                ctx.frame_count, &uniforms_analysis,
-                profiler,
+            let mut state =
+                self.owner_states.remove(&owner_key).unwrap();
+            self.estimate_depth_heuristic(
+                gpu, &analysis_rt.texture, &mut state,
+                temporal_smooth, &uniforms_analysis,
             );
             self.owner_states.insert(owner_key, state);
         }
 
-        // Always copy analysis → previousAnalysisTex (WireframeDepthFX.cs line 412 / 891)
+        // WireframeDepthFX.cs line 409-412 — UpdateFlowLock or blit analysis →
+        //   previousAnalysisTex
+        if flow_lock_enabled {
+            let mut state =
+                self.owner_states.remove(&owner_key).unwrap();
+            self.update_flow_lock(
+                gpu,
+                &analysis_rt.texture, &mut state,
+                temporal_smooth, mesh_rate, native_flow_enabled,
+                face_warp_enabled, ctx.frame_count, &uniforms_analysis,
+            );
+            self.owner_states.insert(owner_key, state);
+        }
+
+        // Always copy analysis → previousAnalysisTex
+        // (WireframeDepthFX.cs line 412 / 891)
         {
             let state = self.owner_states.get(&owner_key).unwrap();
-            Self::encode_copy(gpu, &analysis_rt.texture, &state.previous_analysis_tex.texture, aw, ah);
+            Self::encode_copy(
+                gpu,
+                &analysis_rt.texture,
+                &state.previous_analysis_tex.texture,
+                aw, ah,
+            );
         }
 
         // --- Upload DNN subject texture if dirty ---
@@ -2873,43 +1671,58 @@ impl PostProcessEffect for WireframeDepthFX {
         {
             let state = self.owner_states.get_mut(&owner_key).unwrap();
             if state.dnn_subject_dirty {
-                Self::upload_dnn_subject_texture(gpu.queue, state);
+                Self::upload_dnn_subject_texture(gpu, state);
             }
         }
 
         // --- Wire mask pass (Pass 2) ---
         // WireframeDepthFX.cs line 305-328
-        let line_mask = RenderTarget::new(gpu.device, ww, wh, wgpu::TextureFormat::Rgba8Unorm, "WD LineMask");
+        let line_mask = RenderTarget::new(
+            gpu.device, ww, wh,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm, "WD LineMask",
+        );
         {
             let state = self.owner_states.get(&owner_key).unwrap();
-            let subject_mask_view = if depth_mode == DepthSourceMode::Dnn
-                && state.dnn_has_subject_mask
-            {
-                &state.dnn_subject_texture_view
-            } else {
-                &self.dummy_view
-            };
+            let subject_mask_tex =
+                if depth_mode == DepthSourceMode::Dnn
+                    && state.dnn_has_subject_mask
+                {
+                    &state.dnn_subject_texture
+                } else {
+                    &self.dummy_tex
+                };
             self.encode_pass(gpu, PASS_WIREFRAME_MASK, &uniforms_wire,
-                source, &self.dummy_view, &self.dummy_view,
-                &state.depth_tex.view, &self.dummy_view, &self.dummy_view,
-                &state.mesh_coord_tex.view, &self.dummy_view,
-                &state.semantic_tex.view, &state.surface_cache_tex.view,
-                &self.dummy_view, subject_mask_view,
-                &line_mask.view, ww, wh, profiler);
+                source, &self.dummy_tex, &self.dummy_tex,
+                &state.depth_tex.texture, &self.dummy_tex, &self.dummy_tex,
+                &state.mesh_coord_tex.texture, &self.dummy_tex,
+                &state.semantic_tex.texture,
+                &state.surface_cache_tex.texture,
+                &self.dummy_tex, subject_mask_tex,
+                &line_mask.texture, ww, wh);
         }
 
         // --- Update history pass (Pass 3) + copy → lineHistoryTex ---
         // WireframeDepthFX.cs line 330-347
-        let history_next = RenderTarget::new(gpu.device, ww, wh, wgpu::TextureFormat::Rgba8Unorm, "WD HistoryNext");
+        let history_next = RenderTarget::new(
+            gpu.device, ww, wh,
+            manifold_gpu::GpuTextureFormat::Rgba8Unorm, "WD HistoryNext",
+        );
         {
             let state = self.owner_states.get(&owner_key).unwrap();
             self.encode_pass(gpu, PASS_UPDATE_HISTORY, &uniforms_wire,
-                &line_mask.view, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &state.line_history_tex.view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &state.surface_cache_tex.view, &self.dummy_view, &self.dummy_view,
-                &history_next.view, ww, wh, profiler);
-            Self::encode_copy(gpu, &history_next.texture, &state.line_history_tex.texture, ww, wh);
+                &line_mask.texture, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex,
+                &state.line_history_tex.texture, &self.dummy_tex,
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &state.surface_cache_tex.texture, &self.dummy_tex,
+                &self.dummy_tex,
+                &history_next.texture, ww, wh);
+            Self::encode_copy(
+                gpu,
+                &history_next.texture,
+                &state.line_history_tex.texture,
+                ww, wh,
+            );
         }
 
         // --- Composite pass (Pass 4) → target ---
@@ -2917,17 +1730,18 @@ impl PostProcessEffect for WireframeDepthFX {
         {
             let state = self.owner_states.get(&owner_key).unwrap();
             self.encode_pass(gpu, PASS_COMPOSITE, &uniforms_source,
-                source, &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &state.line_history_tex.view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                &self.dummy_view, &self.dummy_view, &self.dummy_view,
-                target, self.width, self.height, profiler);
+                source, &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &state.line_history_tex.texture, &self.dummy_tex,
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                &self.dummy_tex, &self.dummy_tex, &self.dummy_tex,
+                target, self.width, self.height);
         }
     }
 
     // WireframeDepthFX.cs line 915-919 — ClearState (all owners)
     fn clear_state(&mut self) {
-        // We can't call encoder from trait — clear flags + CPU buffers, GPU cleared on next apply.
+        // We can't call encoder from trait — clear flags + CPU buffers,
+        // GPU cleared on next apply.
         for state in self.owner_states.values_mut() {
             state.dnn_readback_pending     = false;
             state.dnn_has_depth            = false;
@@ -2950,7 +1764,12 @@ impl PostProcessEffect for WireframeDepthFX {
         }
     }
 
-    fn resize(&mut self, _device: &wgpu::Device, width: u32, height: u32) {
+    fn resize(
+        &mut self,
+        _device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
         // WireframeDepthFX.cs line 133-137 — InitializeState
         self.width  = width;
         self.height = height;
@@ -2994,7 +1813,7 @@ impl StatefulEffect for WireframeDepthFX {
     }
 
     // WireframeDepthFX.cs line 990-996 — CleanupAllOwners
-    fn cleanup_all_owners(&mut self, _device: &wgpu::Device) {
+    fn cleanup_all_owners(&mut self, _device: &manifold_gpu::GpuDevice) {
         self.owner_states.clear();
         self.warned_missing_dnn = false;
     }
