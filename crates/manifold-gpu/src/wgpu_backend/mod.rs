@@ -27,6 +27,7 @@ pub struct GpuSampler;
 pub struct GpuComputePipeline {
     pub label: String,
     pub workgroup_size: [u32; 3],
+    pub needs_sizes_buffer: bool,
 }
 pub struct GpuRenderPipeline {
     pub label: String,

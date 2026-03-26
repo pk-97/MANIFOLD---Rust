@@ -197,11 +197,13 @@ impl GpuDevice {
             .new_compute_pipeline_state_with_function(&function)
             .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {e}"));
 
+        let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
         GpuComputePipeline {
             state,
             slot_map,
             label: label.to_string(),
             workgroup_size,
+            needs_sizes_buffer,
         }
     }
 
@@ -395,6 +397,10 @@ unsafe impl Sync for GpuSampler {}
 
 // ─── GpuComputePipeline ───────────────────────────────────────────────
 
+/// Reserved WGSL "binding" index for the naga sizes buffer.
+/// Not a real @binding — used internally by the slot map.
+pub const SIZES_BUFFER_BINDING: u32 = 0xFFFF;
+
 pub struct GpuComputePipeline {
     pub(crate) state: metal::ComputePipelineState,
     pub slot_map: SlotMap,
@@ -402,6 +408,8 @@ pub struct GpuComputePipeline {
     /// Workgroup size from the shader's @workgroup_size declaration.
     /// Used for dispatch_thread_groups second argument.
     pub workgroup_size: [u32; 3],
+    /// Whether this pipeline needs a sizes buffer for runtime-sized arrays.
+    pub needs_sizes_buffer: bool,
 }
 
 unsafe impl Send for GpuComputePipeline {}
@@ -531,6 +539,10 @@ impl GpuEncoder {
         let enc = unsafe { &*enc_ptr };
         enc.set_compute_pipeline_state(&pipeline.state);
 
+        // Collect buffer sizes for the sizes buffer (runtime-sized arrays).
+        // naga's MSL backend reads arrayLength() from this auxiliary buffer.
+        let mut buffer_sizes: Vec<u32> = Vec::new();
+
         for binding in bindings {
             match binding {
                 GpuBinding::Buffer { binding: b, buffer, offset } => {
@@ -541,6 +553,13 @@ impl GpuEncoder {
                         Some(&buffer.raw),
                         *offset as _,
                     );
+                    // Track buffer size for sizes buffer generation.
+                    // Indexed by Metal buffer argument index.
+                    let idx = slot.metal_index as usize;
+                    if idx >= buffer_sizes.len() {
+                        buffer_sizes.resize(idx + 1, 0);
+                    }
+                    buffer_sizes[idx] = buffer.size as u32;
                 }
                 GpuBinding::Texture { binding: b, texture } => {
                     let slot = pipeline.slot_map.get(*b)
@@ -562,6 +581,17 @@ impl GpuEncoder {
                     );
                 }
             }
+        }
+
+        // Bind the sizes buffer if this pipeline has runtime-sized arrays.
+        if pipeline.needs_sizes_buffer {
+            let slot = pipeline.slot_map.get(SIZES_BUFFER_BINDING)
+                .expect("sizes buffer slot missing");
+            enc.set_bytes(
+                slot.metal_index as _,
+                (buffer_sizes.len() * 4) as _,
+                buffer_sizes.as_ptr() as *const _,
+            );
         }
 
         let wg = pipeline.workgroup_size;
@@ -918,8 +948,32 @@ fn build_slot_map(
             .insert(*resource_binding, bind_target);
     }
 
-    // If the entry point uses workgroup memory or has size buffers, handle that
-    let _ = ep; // suppress unused warning
+    // Detect runtime-sized arrays in storage buffers.
+    // naga's MSL backend needs a "sizes buffer" containing the byte size of each
+    // runtime-sized buffer so it can resolve arrayLength() calls.
+    let has_runtime_array = bindings.iter().any(|(_, _, gv)| {
+        matches!(gv.space, naga::AddressSpace::Storage { .. }) && {
+            let ty = &module.types[gv.ty];
+            matches!(ty.inner, naga::TypeInner::Struct { ref members, .. }
+                if members.last().is_some_and(|m| {
+                    matches!(module.types[m.ty].inner, naga::TypeInner::Array { size: naga::ArraySize::Dynamic, .. })
+                })
+            )
+        }
+    });
+
+    if has_runtime_array {
+        // Assign the sizes buffer to the next available buffer index.
+        resources.sizes_buffer = Some(next_buffer as u8);
+        // Store in slot map so dispatch can bind it.
+        slot_map.insert(SIZES_BUFFER_BINDING, Slot {
+            kind: SlotKind::Buffer,
+            metal_index: next_buffer,
+        });
+        next_buffer += 1;
+    }
+
+    let _ = (ep, next_buffer); // suppress unused warnings
 
     (slot_map, resources)
 }
