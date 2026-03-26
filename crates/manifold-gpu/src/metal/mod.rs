@@ -338,6 +338,11 @@ impl GpuDevice {
     }
 
     /// Build a Metal TextureDescriptor from GpuTextureDesc (shared helper).
+    ///
+    /// Lossy GPU compression (`allowGPUOptimizedContents`) is enabled by default
+    /// in Metal. We never disable it — all Private-storage textures with
+    /// ShaderRead + ShaderWrite usage benefit from lossy compression automatically.
+    /// This reduces VRAM bandwidth for intermediates without any code changes.
     fn build_mtl_texture_desc(desc: &GpuTextureDesc) -> metal::TextureDescriptor {
         let mtl_desc = metal::TextureDescriptor::new();
         mtl_desc.set_pixel_format(to_mtl_pixel_format(desc.format));
@@ -353,7 +358,26 @@ impl GpuDevice {
         }
         mtl_desc.set_mipmap_level_count(1);
         mtl_desc.set_sample_count(1);
+        // allowGPUOptimizedContents defaults to true in Metal — we never
+        // disable it. This enables lossy GPU compression for Private-storage
+        // textures, reducing VRAM bandwidth for intermediates.
         mtl_desc
+    }
+
+    /// Create a texture with memoryless storage (Apple Silicon only).
+    /// Data stays in tile/cache memory — zero VRAM bandwidth.
+    /// Only valid as render pass attachments, NOT for compute storage textures.
+    pub fn create_texture_memoryless(&self, desc: &GpuTextureDesc) -> GpuTexture {
+        let mtl_desc = Self::build_mtl_texture_desc(desc);
+        mtl_desc.set_storage_mode(metal::MTLStorageMode::Memoryless);
+        let raw = self.device.new_texture(&mtl_desc);
+        GpuTexture {
+            raw,
+            width: desc.width,
+            height: desc.height,
+            depth: desc.depth,
+            format: desc.format,
+        }
     }
 
     /// Create a texture pool backed by an MTLHeap.
@@ -1642,6 +1666,7 @@ fn to_mtl_storage_mode(mode: GpuStorageMode) -> metal::MTLStorageMode {
         GpuStorageMode::Private => metal::MTLStorageMode::Private,
         GpuStorageMode::Shared => metal::MTLStorageMode::Shared,
         GpuStorageMode::Managed => metal::MTLStorageMode::Managed,
+        GpuStorageMode::Memoryless => metal::MTLStorageMode::Memoryless,
     }
 }
 

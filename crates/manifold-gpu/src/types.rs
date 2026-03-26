@@ -105,6 +105,11 @@ pub enum GpuStorageMode {
     Shared,
     /// Managed (explicit sync between CPU/GPU) — macOS only.
     Managed,
+    /// Memoryless (Apple Silicon): data stays in tile/cache memory only.
+    /// Zero VRAM bandwidth. Only valid for render pass attachments —
+    /// NOT usable as storage textures in compute shaders.
+    /// On macOS, only available on Apple Silicon (M1+).
+    Memoryless,
 }
 
 /// Filter mode for samplers.

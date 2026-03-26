@@ -57,6 +57,28 @@ impl RenderTarget {
         pool.release(self.texture);
     }
 
+    /// Create a memoryless render target (Apple Silicon only).
+    /// Data stays in tile/cache memory — zero VRAM bandwidth.
+    /// Only valid as render pass color attachments, NOT for compute storage.
+    pub fn new_memoryless(
+        device: &GpuDevice,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+        label: &str,
+    ) -> Self {
+        let texture = device.create_texture_memoryless(&GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
+            format,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET,
+            label,
+        });
+        Self { texture, width, height, format, label: label.to_string() }
+    }
+
     pub fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
         if self.width == width && self.height == height {
             return;
