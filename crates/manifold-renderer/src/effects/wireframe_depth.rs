@@ -2236,9 +2236,9 @@ impl WireframeDepthFX {
             state.dnn_readback_pending = true;
             return;
         }
-        state.readback.submit(
-            gpu.device, gpu.encoder.as_mut().unwrap(),
-            &state.dnn_input_tex.texture, aw, ah,
+        // Routes to native Metal copy_texture_to_buffer or wgpu fallback.
+        state.readback.submit_via_gpu_encoder(
+            gpu, &state.dnn_input_tex.texture, aw, ah,
         );
         state.dnn_readback_pending = true;
     }
