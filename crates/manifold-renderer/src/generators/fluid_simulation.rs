@@ -1047,6 +1047,38 @@ impl FluidSimulationGenerator {
             trigger_count,
             _pad0: 0,
         };
+
+        // ── Native Metal seed dispatch ──
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_seed) = self.native_seed_pipeline
+            && gpu.has_native_encoder()
+        {
+            let particle_gpu = unsafe {
+                crate::gpu_encoder::extract_native_buffer(
+                    self.particle_buffer.as_ref().unwrap(),
+                )
+            };
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            native_enc.dispatch_compute(
+                native_seed,
+                &[
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 0,
+                        buffer: &particle_gpu,
+                        offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 1,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                ],
+                [self.active_count.div_ceil(256), 1, 1],
+                "FluidSim Seed",
+            );
+            return;
+        }
+
+        // ── wgpu fallback ──
         gpu.queue.write_buffer(&self.seed_uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
         let bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
