@@ -317,7 +317,8 @@ impl WireframeDepthFX {
     }
 
     /// Create a transient RenderTarget for per-frame intermediate use.
-    /// Returns to pool on drop via release_transient().
+    /// Drops at end of scope — Metal command buffer retains the underlying
+    /// texture, so GPU work completes before the heap region is freed.
     fn create_transient(
         gpu: &GpuEncoder,
         w: u32,
@@ -325,19 +326,14 @@ impl WireframeDepthFX {
         format: manifold_gpu::GpuTextureFormat,
         label: &str,
     ) -> RenderTarget {
+        // Allocate from heap (if space) or device (fallback).
+        // NOT recycled via pool — that requires deferred release after
+        // the frame's fence signals to avoid inter-frame GPU races.
         if let Some(pool) = gpu.pool {
             RenderTarget::new_pooled(pool, w, h, format, label)
         } else {
             RenderTarget::new(gpu.device, w, h, format, label)
         }
-    }
-
-    /// Release a transient RenderTarget back to the pool.
-    fn release_transient(gpu: &GpuEncoder, rt: RenderTarget) {
-        if let Some(pool) = gpu.pool {
-            rt.release_to_pool(pool);
-        }
-        // If no pool, rt is dropped normally (Metal frees the texture).
     }
 
     /// Dispatch a compute pass via native Metal encoder.
@@ -1038,7 +1034,6 @@ impl WireframeDepthFX {
 
         // Graphics.Blit(depthNext, state.depthTex) — copy
         Self::encode_copy(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
-        Self::release_transient(gpu, depth_next);
     }
 
     // WireframeDepthFX.cs line 420-453 — TryEstimateDepthDnn
@@ -1074,8 +1069,6 @@ impl WireframeDepthFX {
 
         // Graphics.Blit(depthNext, state.depthTex)
         Self::encode_copy(gpu, &depth_next.texture, &state.depth_tex.texture, aw, ah);
-        Self::release_transient(gpu, depth_next);
-
         true
     }
 
@@ -1287,15 +1280,11 @@ impl WireframeDepthFX {
             &state.surface_cache_tex.texture,
             aw, ah,
         );
-        // Release transient textures back to pool (ReleaseTemporary equivalent).
-        if let Some(cf) = coord_face_opt {
-            Self::release_transient(gpu, cf);
-        }
-        Self::release_transient(gpu, flow_filtered);
-        Self::release_transient(gpu, coord_next);
-        Self::release_transient(gpu, coord_affine);
-        Self::release_transient(gpu, coord_regularized);
-        Self::release_transient(gpu, surface_next);
+        // Transient textures drop here. Metal command buffer retains the
+        // underlying MTLTexture, so GPU reads complete before deallocation.
+        // NOT released to pool — recycling requires deferred release after
+        // the command buffer's fence signals (inter-frame GPU race otherwise).
+        let _ = coord_face_opt;
     }
 
     // WireframeDepthFX.cs line 927-978 — ClearOwnerState
@@ -1768,10 +1757,7 @@ impl PostProcessEffect for WireframeDepthFX {
                 target, self.width, self.height);
         }
 
-        // Release transient textures back to pool.
-        Self::release_transient(gpu, analysis_rt);
-        Self::release_transient(gpu, line_mask);
-        Self::release_transient(gpu, history_next);
+        // Transient textures drop here (not recycled — see update_mesh comment).
     }
 
     // WireframeDepthFX.cs line 915-919 — ClearState (all owners)
