@@ -1193,14 +1193,16 @@ impl ContentPipeline {
         let native_event = self.native_event.as_ref().unwrap();
         native_enc.signal_event(native_event);
         self.native_signal_value = native_event.current_value();
-        // Check for command buffer errors before commit
-        if frame_count <= 3 || frame_count.is_multiple_of(300) {
+        if frame_count <= 5 {
+            // Blocking check on first frames to catch startup errors
             eprintln!(
-                "[NATIVE] frame={} signal_value={} committing...",
+                "[NATIVE] frame={} signal_value={} commit_and_check...",
                 frame_count, self.native_signal_value,
             );
+            native_enc.commit_and_check();
+        } else {
+            native_enc.commit();
         }
-        native_enc.commit();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
         // Surface swap

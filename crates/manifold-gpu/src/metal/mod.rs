@@ -833,17 +833,21 @@ impl GpuEncoder {
     /// Ends any active encoder and commits. Consumes the encoder.
     pub fn commit(mut self) {
         self.end_current();
+        self.cmd_buf().commit();
+        // Don't release in commit — Drop handles it
+    }
+
+    /// Commit and wait for GPU completion, checking for errors.
+    /// Use for debugging — blocks until the GPU finishes this command buffer.
+    pub fn commit_and_check(mut self) {
+        self.end_current();
         let cmd_buf = self.cmd_buf();
-        // Check for encoding errors before commit
+        cmd_buf.commit();
+        cmd_buf.wait_until_completed();
         let status = cmd_buf.status();
         if status == metal::MTLCommandBufferStatus::Error {
-            eprintln!(
-                "[GPU ERROR] Command buffer in error state before commit! \
-                 status={status:?}",
-            );
+            eprintln!("[GPU ERROR] Command buffer failed after commit! status={status:?}");
         }
-        cmd_buf.commit();
-        // Don't release in commit — Drop handles it
     }
 }
 
