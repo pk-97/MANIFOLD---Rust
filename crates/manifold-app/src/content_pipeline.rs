@@ -58,7 +58,9 @@ impl SharedOutputView {
 /// The PlaybackEngine (which owns GeneratorRenderer) is borrowed for each frame.
 ///
 /// On macOS, uses native Metal encoding via manifold-gpu.
-/// IOSurface double-buffering for zero-copy cross-device sharing with the UI thread.
+/// IOSurface triple-buffering for zero-copy cross-device sharing with the UI thread.
+/// Combined with separate Metal command queues (content=native, UI=wgpu),
+/// this allows 2 content frames in flight without starving the UI thread.
 pub struct ContentPipeline {
     compositor: Box<dyn Compositor>,
     /// EDR headroom from the display (1.0 = SDR, e.g. 2.0 = 2x SDR white).
@@ -71,11 +73,11 @@ pub struct ContentPipeline {
     last_content_time: f64,
     /// Shared output view for cross-thread access (fallback for non-macOS).
     shared_output: Arc<SharedOutputView>,
-    /// Double-buffered IOSurface textures on the content device (native GpuTexture).
-    /// Content writes to shared_textures[write_surface_index]; UI reads the other surface.
+    /// Triple-buffered IOSurface textures on the content device (native GpuTexture).
+    /// Content writes to shared_textures[write_surface_index]; UI reads the front surface.
     #[cfg(target_os = "macos")]
-    shared_textures: [Option<manifold_gpu::GpuTexture>; 2],
-    /// Which surface we're writing to THIS frame (0 or 1).
+    shared_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    /// Which surface we're writing to THIS frame (0, 1, or 2).
     #[cfg(target_os = "macos")]
     write_surface_index: usize,
     /// IOSurface bridge for cross-device sharing.
@@ -84,6 +86,11 @@ pub struct ContentPipeline {
     /// Last seen bridge generation — used to detect resize and re-import.
     #[cfg(target_os = "macos")]
     shared_generation: u64,
+    /// Per-surface signal values — tracks the GpuEvent signal value from the last
+    /// frame that wrote to each surface. Before writing to surface S, we wait for
+    /// surface_signal_values[S] to complete (the frame that last used it).
+    #[cfg(target_os = "macos")]
+    surface_signal_values: [u64; crate::shared_texture::SURFACE_COUNT],
     /// Which IOSurface the PREVIOUS frame wrote to (published after fence ready).
     #[cfg(target_os = "macos")]
     last_write_surface: usize,
@@ -125,13 +132,15 @@ impl ContentPipeline {
             last_content_time: 0.0,
             shared_output: shared,
             #[cfg(target_os = "macos")]
-            shared_textures: [None, None],
+            shared_textures: [None, None, None],
             #[cfg(target_os = "macos")]
             write_surface_index: 0,
             #[cfg(target_os = "macos")]
             shared_bridge: None,
             #[cfg(target_os = "macos")]
             shared_generation: 0,
+            #[cfg(target_os = "macos")]
+            surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             #[cfg(target_os = "macos")]
             last_write_surface: 0,
             #[cfg(feature = "profiling")]
@@ -183,16 +192,15 @@ impl ContentPipeline {
         self.native_device.as_ref()
     }
 
-    /// Set the double-buffered IOSurface shared textures (native GpuTexture) and bridge.
-    /// Called during init after the bridge imports both textures on the content device.
+    /// Set the triple-buffered IOSurface shared textures (native GpuTexture) and bridge.
+    /// Called during init after the bridge imports all textures on the content device.
     #[cfg(target_os = "macos")]
     pub fn set_shared_textures(
         &mut self,
-        tex_a: manifold_gpu::GpuTexture,
-        tex_b: manifold_gpu::GpuTexture,
+        textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT],
         bridge: Arc<crate::shared_texture::SharedTextureBridge>,
     ) {
-        self.shared_textures = [Some(tex_a), Some(tex_b)];
+        self.shared_textures = textures.map(Some);
         self.shared_bridge = Some(bridge);
     }
 
@@ -202,20 +210,32 @@ impl ContentPipeline {
         Arc::clone(&self.shared_output)
     }
 
-    /// Wait for the previous frame's GPU work to finish (if pending).
+    /// Wait for the surface we're about to write to, if it has pending GPU work.
     /// Called at the START of each frame before encoding new work.
-    /// Publishes the completed IOSurface so the UI can read it.
-    fn wait_previous_frame(&mut self) {
-        // ── Native Metal path: GpuEvent sync ────────────────────────────
-        // Direct GPU counter read via MTLSharedEvent — microsecond latency.
+    /// Also publishes the most recently completed surface so the UI can read it.
+    fn wait_for_surface(&mut self) {
+        // Publish the last completed frame (if any) so UI can read it.
         if let Some(ref native_event) = self.native_event
             && self.native_signal_value > 0
         {
+            // Wait for the PREVIOUS frame to finish (the one we just submitted).
             while !native_event.is_done(self.native_signal_value) {
                 std::thread::yield_now();
             }
             if let Some(ref bridge) = self.shared_bridge {
                 bridge.publish_front(self.last_write_surface as u32);
+            }
+        }
+
+        // Wait for the surface we're about to write to — it may still have
+        // GPU work from 2 frames ago (triple buffering: surface reuse every 3 frames).
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_event) = self.native_event {
+            let pending = self.surface_signal_values[self.write_surface_index];
+            if pending > 0 {
+                while !native_event.is_done(pending) {
+                    std::thread::yield_now();
+                }
             }
         }
     }
@@ -234,10 +254,10 @@ impl ContentPipeline {
     ) {
         let _t_frame = std::time::Instant::now();
 
-        // Wait for PREVIOUS frame's GPU work before encoding this frame.
-        // If the GPU finished quickly (likely), this returns immediately.
+        // Wait for the surface we're about to write to (may have pending GPU work
+        // from 2 frames ago with triple buffering). Also publishes the last completed frame.
         let _poll_start = std::time::Instant::now();
-        self.wait_previous_frame();
+        self.wait_for_surface();
         let _poll_ms = _poll_start.elapsed().as_secs_f64() * 1000.0;
 
         // Extract timing values before split borrow
@@ -457,10 +477,14 @@ impl ContentPipeline {
         native_enc.commit();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
-        // Surface swap
+        // Record which signal value this surface needs to complete before reuse.
+        self.surface_signal_values[self.write_surface_index] = self.native_signal_value;
+
+        // Surface swap — cycle through 3 surfaces (triple buffering).
         {
             self.last_write_surface = self.write_surface_index;
-            self.write_surface_index = 1 - self.write_surface_index;
+            self.write_surface_index = (self.write_surface_index + 1)
+                % crate::shared_texture::SURFACE_COUNT;
         }
 
         // Update shared output view for UI thread
@@ -533,15 +557,15 @@ impl ContentPipeline {
             }
         }
 
-        // Resize IOSurface bridge and re-import both content textures
+        // Resize IOSurface bridge and re-import all content textures
         #[cfg(target_os = "macos")]
         if let Some(ref bridge) = self.shared_bridge {
             bridge.resize(width, height);
-            self.shared_textures = [
-                Some(unsafe { bridge.import_texture_native(native_device, 0) }),
-                Some(unsafe { bridge.import_texture_native(native_device, 1) }),
-            ];
+            self.shared_textures = std::array::from_fn(|i| {
+                Some(unsafe { bridge.import_texture_native(native_device, i) })
+            });
             self.write_surface_index = 0;
+            self.surface_signal_values = [0; crate::shared_texture::SURFACE_COUNT];
             self.shared_generation = bridge.generation();
         }
 

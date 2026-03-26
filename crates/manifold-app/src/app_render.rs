@@ -754,13 +754,15 @@ impl Application {
                 let bridge_gen = bridge.generation();
                 if bridge_gen != self.last_bridge_generation {
                     self.last_bridge_generation = bridge_gen;
-                    let ui_tex_a = unsafe { bridge.import_texture(&gpu.device, 0) };
-                    let ui_tex_b = unsafe { bridge.import_texture(&gpu.device, 1) };
-                    let view_a = ui_tex_a.create_view(&wgpu::TextureViewDescriptor::default());
-                    let view_b = ui_tex_b.create_view(&wgpu::TextureViewDescriptor::default());
-                    self.ui_shared_textures = [Some(ui_tex_a), Some(ui_tex_b)];
-                    self.ui_shared_views = [Some(view_a), Some(view_b)];
-                    log::info!("[UI] re-imported both IOSurface textures after resize (gen={})", bridge_gen);
+                    let ui_textures: [wgpu::Texture; crate::shared_texture::SURFACE_COUNT] =
+                        std::array::from_fn(|i| unsafe { bridge.import_texture(&gpu.device, i) });
+                    let ui_views: [wgpu::TextureView; crate::shared_texture::SURFACE_COUNT] =
+                        std::array::from_fn(|i| {
+                            ui_textures[i].create_view(&wgpu::TextureViewDescriptor::default())
+                        });
+                    self.ui_shared_textures = ui_textures.map(Some);
+                    self.ui_shared_views = ui_views.map(Some);
+                    log::info!("[UI] re-imported {} IOSurface textures after resize (gen={})", crate::shared_texture::SURFACE_COUNT, bridge_gen);
                 }
             }
             // Read the front surface published by the content thread.

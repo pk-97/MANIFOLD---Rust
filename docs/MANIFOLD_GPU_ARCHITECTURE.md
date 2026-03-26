@@ -108,3 +108,11 @@ Incremental, not big-bang. Same pattern as Phases 2-4:
 - Memoryless → VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT
 - Lossy compression → vendor-specific extensions (VK_EXT_image_compression_control)
 - MTLBinaryArchive → VkPipelineCache (pipeline caching to disk)
+
+
+
+## MTL HEAP OPTIMISATIONS
+| **TO DO LATER**|
+Layer 2 (MTLHeap backing): When startup time matters. Right now the pool warms up by calling device.create_texture() 10-30 times over the first 3 frames — kernel allocator calls that take microseconds each. Heap sub-allocation replaces those with nanosecond pointer bumps. The difference is maybe 1-2ms total during the first 3 frames of playback. You'd do this when launch-to-first-frame speed matters for live performance (show starts, you hit play, visuals need to appear instantly). Not urgent.
+
+Layer 3 (intra-frame aliasing): When GPU memory pressure is a problem. If you're running complex projects with WireframeDepth (10 intermediates) + Fluid3D (10+ 3D volumes) + multiple feedback effects (persistent state buffers per clip) and hitting VRAM limits or causing eviction — aliasing reduces peak memory by letting non-overlapping textures share physical memory. On an M4 Max with 64-128GB unified memory, you're unlikely to hit this. You'd do this if you target lower-end Apple Silicon (M1/M2 MacBook Air with 8GB unified memory) where a complex project could genuinely run out.
