@@ -327,7 +327,6 @@ impl LayerCompositor {
 
         // Reset uniform arena for this frame
         self.uniform_arena.reset();
-
         // Clear main to opaque black
         self.main.clear_source(gpu, true);
 
@@ -410,7 +409,6 @@ impl LayerCompositor {
                     aspect_ratio: aspect,
                     invert_colors: if clip.invert_colors { 1.0 } else { 0.0 },
                 };
-
                 self.blend.blend_pass(
                     gpu,
                     &mut self.uniform_arena,
@@ -421,7 +419,7 @@ impl LayerCompositor {
                 );
                 self.main.swap();
             } else {
-                // Multi-clip: composite into layer buffer, then into main
+                // Multi-clip or layer-effects: composite into layer buffer, then into main
                 self.ensure_layer_buffers(gpu.device);
                 let layer_buf = self.layer_buf.as_mut().unwrap();
 
@@ -468,7 +466,6 @@ impl LayerCompositor {
                         aspect_ratio: aspect,
                         invert_colors: if clip.invert_colors { 1.0 } else { 0.0 },
                     };
-
                     self.blend.blend_pass(
                         gpu,
                         &mut self.uniform_arena,

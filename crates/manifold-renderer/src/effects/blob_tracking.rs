@@ -493,7 +493,7 @@ fn create_font_atlas(device: &GpuDevice) -> GpuTexture {
         depth: 1,
         format: GpuTextureFormat::Rgba8Unorm,
         dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_DST,
+        usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_DST | GpuTextureUsage::CPU_UPLOAD,
         label: "BlobTracking FontAtlas",
     });
 

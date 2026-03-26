@@ -395,7 +395,8 @@ impl WireframeDepthFX {
             depth: 1,
             format,
             dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL
+                | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
             label,
         })
     }
@@ -1061,7 +1062,6 @@ impl WireframeDepthFX {
     ) {
         // WireframeDepthFX.cs line 738-740
         // (null checks — all fields valid if we reached here)
-
         // WireframeDepthFX.cs line 742-743
         if native_flow_enabled && state.native_flow_dirty {
             Self::upload_native_flow_texture(gpu, state);
@@ -1070,7 +1070,6 @@ impl WireframeDepthFX {
         // WireframeDepthFX.cs line 747-748
         let use_native_flow = native_flow_enabled
             && state.native_flow_has_data;
-
         // WireframeDepthFX.cs line 750-766 — scene cut hard reset
         if use_native_flow && state.latest_cut_score > 0.28 {
             let aw = state.analysis_width;
@@ -1117,7 +1116,6 @@ impl WireframeDepthFX {
             );
             return;
         }
-
         // WireframeDepthFX.cs line 770-776 — amortization check
         let run_mesh_pipeline = mesh_rate <= 1
             || frame_count - state.last_mesh_update_frame >= mesh_rate as i64;
@@ -1128,7 +1126,6 @@ impl WireframeDepthFX {
 
         let aw = state.analysis_width;
         let ah = state.analysis_height;
-
         // WireframeDepthFX.cs line 779-789 — choose flow source
         let flow_input_tex: &manifold_gpu::GpuTexture = if use_native_flow {
             &state.native_flow_texture
@@ -1343,7 +1340,6 @@ impl PostProcessEffect for WireframeDepthFX {
             .clamp(0.0, 1.0);
         let blend_mode = fx.param_values.get(6).copied().unwrap_or(0.0)
             .clamp(0.0, 6.0);
-
         // ── Poll background worker(s) for completed native results ──
         match &mut self.workers {
             Some(WorkerMode::Parallel {
@@ -1501,7 +1497,6 @@ impl PostProcessEffect for WireframeDepthFX {
                 .copy_from_slice(&pixels[..copy_len]);
             state.has_prev_native_frame = true;
         }
-
         // Check DNN backend for this frame
         let dnn_available = self.ensure_dnn_backend_available(ctx.frame_count);
 
@@ -1604,7 +1599,6 @@ impl PostProcessEffect for WireframeDepthFX {
                 );
             }
         }
-
         // WireframeDepthFX.cs line 396-407 — depth estimation
         // Temporarily remove state to avoid borrow conflict
         // (self.method + self.owner_states)
@@ -1639,7 +1633,6 @@ impl PostProcessEffect for WireframeDepthFX {
             );
             self.owner_states.insert(owner_key, state);
         }
-
         // WireframeDepthFX.cs line 409-412 — UpdateFlowLock or blit analysis →
         //   previousAnalysisTex
         if flow_lock_enabled {
@@ -1653,7 +1646,6 @@ impl PostProcessEffect for WireframeDepthFX {
             );
             self.owner_states.insert(owner_key, state);
         }
-
         // Always copy analysis → previousAnalysisTex
         // (WireframeDepthFX.cs line 412 / 891)
         {

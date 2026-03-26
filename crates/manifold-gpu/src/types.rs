@@ -50,6 +50,8 @@ impl GpuTextureUsage {
     pub const SHADER_WRITE: Self = Self(1 << 2);
     pub const COPY_SRC: Self = Self(1 << 3);
     pub const COPY_DST: Self = Self(1 << 4);
+    /// CPU-writable texture (uses Shared storage for replace_region upload).
+    pub const CPU_UPLOAD: Self = Self(1 << 5);
 
     /// Standard content-thread render target usage.
     pub const RENDER_TARGET_FULL: Self =

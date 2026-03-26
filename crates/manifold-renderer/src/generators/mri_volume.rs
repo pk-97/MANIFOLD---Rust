@@ -130,7 +130,8 @@ impl MriVolumeGenerator {
             depth: 1,
             format: manifold_gpu::GpuTextureFormat::R8Unorm,
             dimension: manifold_gpu::GpuTextureDimension::D2,
-            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL
+                | manifold_gpu::GpuTextureUsage::CPU_UPLOAD,
             label: "MRI Slice 2D",
         });
         self.slice_texture = Some(texture);

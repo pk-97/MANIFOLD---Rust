@@ -102,7 +102,11 @@ impl GpuDevice {
         mtl_desc.set_depth(desc.depth as u64);
         mtl_desc.set_texture_type(to_mtl_texture_type(desc.dimension, desc.depth));
         mtl_desc.set_usage(to_mtl_texture_usage(desc.usage));
-        mtl_desc.set_storage_mode(metal::MTLStorageMode::Private);
+        if desc.usage.contains(GpuTextureUsage::CPU_UPLOAD) {
+            mtl_desc.set_storage_mode(metal::MTLStorageMode::Shared);
+        } else {
+            mtl_desc.set_storage_mode(metal::MTLStorageMode::Private);
+        }
         mtl_desc.set_mipmap_level_count(1);
         mtl_desc.set_sample_count(1);
         let raw = self.device.new_texture(&mtl_desc);
@@ -526,6 +530,10 @@ impl GpuEncoder {
         self.end_current();
         let enc = self.cmd_buf().new_compute_command_encoder();
         let ptr = enc as *const metal::ComputeCommandEncoderRef;
+        // Retain the encoder so it survives autorelease pool drains.
+        // The autoreleased reference from new_compute_command_encoder() could
+        // be freed by an outer pool drain in release builds.
+        unsafe { objc_retain(ptr as *mut std::ffi::c_void); }
         self.state = EncoderState::Compute(ptr);
         ptr
     }
@@ -536,12 +544,15 @@ impl GpuEncoder {
             EncoderState::None => {}
             EncoderState::Compute(ptr) => {
                 unsafe { &*ptr }.end_encoding();
+                unsafe { objc_release(ptr as *mut std::ffi::c_void); }
             }
             EncoderState::Render(ptr) => {
                 unsafe { &*ptr }.end_encoding();
+                // Render encoders are not retained (created+ended in same scope)
             }
             EncoderState::Blit(ptr) => {
                 unsafe { &*ptr }.end_encoding();
+                // Blit encoders are not retained (created+ended in same scope)
             }
         }
         self.state = EncoderState::None;
