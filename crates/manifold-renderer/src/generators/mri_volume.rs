@@ -60,9 +60,9 @@ impl MriVolumeGenerator {
 
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
 
-        let scans = discover_scans(&PathBuf::from("assets/mri-data/volumes"));
+        let scan_path = PathBuf::from("assets/mri-data/volumes");
+        let scans = discover_scans(&scan_path);
         if scans.is_empty() {
-            log::warn!("MRI Volume: no scan directories found");
         } else {
             log::info!("MRI Volume: found {} scan(s)", scans.len());
             for (i, s) in scans.iter().enumerate() {
