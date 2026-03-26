@@ -771,7 +771,11 @@ fn compile_wgsl_to_msl(
     let options = naga::back::msl::Options {
         lang_version: (2, 4),
         per_entry_point_map,
-        fake_missing_bindings: false,
+        // Multi-entry-point shaders (e.g. fluid_scatter.wgsl with splat_main +
+        // resolve_main) have globals at the same @binding that differ per entry.
+        // fake_missing_bindings generates dummy targets for globals not in our
+        // per_entry_point_map — they're never used by the compiled function.
+        fake_missing_bindings: true,
         zero_initialize_workgroup_memory: true,
         ..Default::default()
     };
@@ -833,7 +837,7 @@ fn compile_wgsl_to_msl_render(
     let options = naga::back::msl::Options {
         lang_version: (2, 4),
         per_entry_point_map,
-        fake_missing_bindings: false,
+        fake_missing_bindings: true,
         zero_initialize_workgroup_memory: false,
         ..Default::default()
     };
@@ -872,16 +876,35 @@ fn build_slot_map(
     let mut next_texture: u32 = 0;
     let mut next_sampler: u32 = 0;
 
-    // Find which global variables are actually used by this entry point
+    // Find which global variables are actually used by this entry point.
+    // Multi-entry-point shaders (e.g. fluid_scatter.wgsl) reuse @binding(N)
+    // for different types per entry point — we must only map the ones used.
     let ep = module
         .entry_points
         .iter()
         .find(|ep| ep.name == entry_point);
 
-    // Collect all bindings from global variables
+    // Scan entry point function for GlobalVariable references.
+    let used_globals: std::collections::HashSet<naga::Handle<naga::GlobalVariable>> =
+        if let Some(ep) = ep {
+            ep.function.expressions.iter().filter_map(|(_, expr)| {
+                if let naga::Expression::GlobalVariable(handle) = *expr {
+                    Some(handle)
+                } else {
+                    None
+                }
+            }).collect()
+        } else {
+            // Fallback: include all globals if entry point not found
+            module.global_variables.iter().map(|(h, _)| h).collect()
+        };
+
+    // Collect bindings only for globals referenced by this entry point
     let mut bindings: Vec<(u32, naga::ResourceBinding, &naga::GlobalVariable)> = Vec::new();
-    for (_, gv) in module.global_variables.iter() {
-        if let Some(ref binding) = gv.binding {
+    for (handle, gv) in module.global_variables.iter() {
+        if let Some(ref binding) = gv.binding
+            && used_globals.contains(&handle)
+        {
             bindings.push((binding.binding, *binding, gv));
         }
     }
