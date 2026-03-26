@@ -683,6 +683,14 @@ impl GpuEncoder {
         enc.end_encoding();
     }
 
+    /// Fill a buffer with zeros via blit encoder.
+    pub fn clear_buffer(&mut self, buffer: &GpuBuffer) {
+        self.end_current();
+        let enc = self.cmd_buf().new_blit_command_encoder();
+        enc.fill_buffer(&buffer.raw, metal::NSRange::new(0, buffer.size), 0);
+        enc.end_encoding();
+    }
+
     /// Copy texture to texture via blit encoder.
     pub fn copy_texture_to_texture(
         &mut self,

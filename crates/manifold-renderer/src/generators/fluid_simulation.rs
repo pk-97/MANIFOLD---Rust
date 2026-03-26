@@ -1437,12 +1437,15 @@ impl Generator for FluidSimulationGenerator {
             && self.native_display_pipeline.is_some()
             && self.native_sampler.is_some()
         {
-            // Clear scatter accum via wgpu encoder before native dispatch
-            let scatter_accum = self.scatter_accum.as_ref().unwrap();
-            gpu.encoder.clear_buffer(scatter_accum, 0, None);
-
             let native_target = unsafe { &*native_target_ptr };
             let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+
+            // Clear scatter accum via native Metal blit
+            let scatter_accum = self.scatter_accum.as_ref().unwrap();
+            let accum_clear_gpu = unsafe {
+                crate::gpu_encoder::extract_native_buffer(scatter_accum)
+            };
+            native_enc.clear_buffer(&accum_clear_gpu);
             let native_splat = self.native_splat_pipeline.as_ref().unwrap();
             let native_resolve = self.native_resolve_pipeline.as_ref().unwrap();
             let native_sim = self.native_simulate_pipeline.as_ref().unwrap();
