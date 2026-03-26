@@ -333,7 +333,7 @@ impl Generator for ConcentricTunnelGenerator {
             let ts = profiler.and_then(|p| {
                 p.compute_timestamps("ConcentricTunnel", ctx.width, ctx.height)
             });
-            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("ConcentricTunnel Pass"),
                 timestamp_writes: ts,
             });

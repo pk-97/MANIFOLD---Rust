@@ -555,7 +555,7 @@ impl TonemapPipeline {
                 )
             });
             let mut pass =
-                gpu.encoder
+                gpu.encoder.as_mut().unwrap()
                     .begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("Tonemap Compute Pass"),
                         timestamp_writes: ts,
@@ -599,7 +599,7 @@ impl TonemapPipeline {
             )
         });
         let mut pass =
-            gpu.encoder
+            gpu.encoder.as_mut().unwrap()
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("Tonemap Pass"),
                     color_attachments: &[Some(

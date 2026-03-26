@@ -828,7 +828,7 @@ impl BlobTrackingFX {
             let ts = profiler.and_then(|p| {
                 p.render_timestamps("BlobTracking Downsample", ctx.width, ctx.height)
             });
-            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("BlobTracking Downsample"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &state.downsample_rt.view,
@@ -849,7 +849,7 @@ impl BlobTrackingFX {
             pass.draw(0..3, 0..1);
         }
         state.readback.submit(
-            gpu.device, gpu.encoder,
+            gpu.device, gpu.encoder.as_mut().unwrap(),
             &state.downsample_rt.texture,
             READBACK_WIDTH, READBACK_HEIGHT,
         );
@@ -1597,7 +1597,7 @@ impl PostProcessEffect for BlobTrackingFX {
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps("BlobTracking Overlay", ctx.width, ctx.height));
-            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("BlobTracking Overlay"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,

@@ -774,7 +774,7 @@ impl Generator for ParametricSurfaceGenerator {
                             VOL_SIZE,
                         )
                     });
-                    let mut pass = gpu.encoder.begin_compute_pass(
+                    let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(
                         &wgpu::ComputePassDescriptor {
                             label: Some("ParametricSurface Bake Pass"),
                             timestamp_writes: ts,
@@ -827,7 +827,7 @@ impl Generator for ParametricSurfaceGenerator {
                             VOL_SIZE,
                         )
                     });
-                    let mut pass = gpu.encoder.begin_compute_pass(
+                    let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(
                         &wgpu::ComputePassDescriptor {
                             label: Some("ParametricSurface Bake Pass"),
                             timestamp_writes: ts,
@@ -999,7 +999,7 @@ impl Generator for ParametricSurfaceGenerator {
                     ctx.height,
                 )
             });
-            let mut pass = gpu.encoder.begin_compute_pass(
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(
                 &wgpu::ComputePassDescriptor {
                     label: Some("ParametricSurface Raymarch Compute"),
                     timestamp_writes: ts,
@@ -1056,7 +1056,7 @@ impl Generator for ParametricSurfaceGenerator {
                 )
             });
             let mut pass =
-                gpu.encoder
+                gpu.encoder.as_mut().unwrap()
                     .begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("ParametricSurface Raymarch Pass"),
                         color_attachments: &[Some(

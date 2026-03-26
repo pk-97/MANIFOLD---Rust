@@ -425,7 +425,7 @@ impl BlendResources {
         });
 
         let ts = profiler.and_then(|p| p.compute_timestamps("Blend Pass", self.width, self.height));
-        let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("Blend Pass"),
             timestamp_writes: ts,
         });
@@ -832,13 +832,13 @@ impl LayerCompositor {
                 let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
                 unsafe { self.main.clear_source_hal(hal_enc, &*view_ptr, true); }
             } else {
-                self.main.clear_source(gpu.encoder, true);
+                self.main.clear_source(gpu.encoder.as_mut().unwrap(), true);
             }
             #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            self.main.clear_source(gpu.encoder, true);
+            self.main.clear_source(gpu.encoder.as_mut().unwrap(), true);
         }
         #[cfg(not(target_os = "macos"))]
-        self.main.clear_source(gpu.encoder, true);
+        self.main.clear_source(gpu.encoder.as_mut().unwrap(), true);
 
         // Check for any solo layer
         let any_solo = frame.layers.iter().any(|l| l.is_solo);
@@ -955,13 +955,13 @@ impl LayerCompositor {
                     let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
                     unsafe { layer_buf.clear_source_hal(hal_enc, &*view_ptr, false); }
                 } else {
-                    layer_buf.clear_source(gpu.encoder, false);
+                    layer_buf.clear_source(gpu.encoder.as_mut().unwrap(), false);
                 }
                 #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-                layer_buf.clear_source(gpu.encoder, false);
+                layer_buf.clear_source(gpu.encoder.as_mut().unwrap(), false);
                 }
                 #[cfg(not(target_os = "macos"))]
-                layer_buf.clear_source(gpu.encoder, false);
+                layer_buf.clear_source(gpu.encoder.as_mut().unwrap(), false);
 
                 // Composite each clip into layer buffer with Normal blend
                 for clip in group {
@@ -1125,8 +1125,8 @@ impl Compositor for LayerCompositor {
                 return &self.tonemap.output.view;
             }
 
-            self.main.clear_source(gpu.encoder, true);
-            self.tonemap.clear(gpu.encoder);
+            self.main.clear_source(gpu.encoder.as_mut().unwrap(), true);
+            self.tonemap.clear(gpu.encoder.as_mut().unwrap());
             return &self.tonemap.output.view;
         }
 

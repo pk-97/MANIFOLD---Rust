@@ -1556,7 +1556,7 @@ impl WireframeDepthFX {
             subject_mask_view,
         );
         self.run_pass(
-            gpu.encoder, &self.pipelines[pass_idx], &bg, target, w, h, profiler,
+            gpu.encoder.as_mut().unwrap(), &self.pipelines[pass_idx], &bg, target, w, h, profiler,
         );
     }
 
@@ -2237,7 +2237,7 @@ impl WireframeDepthFX {
             return;
         }
         state.readback.submit(
-            gpu.device, gpu.encoder,
+            gpu.device, gpu.encoder.as_mut().unwrap(),
             &state.dnn_input_tex.texture, aw, ah,
         );
         state.dnn_readback_pending = true;

@@ -592,7 +592,7 @@ impl ContentPipeline {
         if let (Some(staging), Some(fence)) =
             (&self.fence_staging, &self.fence_buffer)
         {
-            gpu_enc.encoder.copy_buffer_to_buffer(staging, 0, fence, 0, 4);
+            gpu_enc.encoder.as_mut().unwrap().copy_buffer_to_buffer(staging, 0, fence, 0, 4);
         }
 
         // Drop GpuEncoder to release mutable borrow on wgpu_encoder before finish().
@@ -983,33 +983,17 @@ impl ContentPipeline {
         let _t0 = std::time::Instant::now();
         let mut native_enc = native_device.create_encoder("Frame");
 
-        // Create a dummy wgpu encoder (never submitted — satisfies GpuEncoder signature
-        // for any remaining wgpu fallback paths during migration).
-        let mut dummy_encoder = gpu.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor {
-                label: Some("Dummy (native path)"),
-            },
-        );
-
-        // Generators render via native encoder
+        // Generators render via native encoder (no wgpu encoder needed)
         {
-            let mut gpu_gen = GpuEncoder::new(
+            let mut gpu_gen = GpuEncoder::new_native(
                 &gpu.device,
                 &gpu.queue,
-                &mut dummy_encoder,
                 self.hal_ctx.as_ref(),
             );
-            // Set native encoder — generators check has_native_encoder() first
             gpu_gen.native_enc = Some(&mut native_enc as *mut manifold_gpu::GpuEncoder);
             gpu_gen.native_device = Some(
                 native_device as *const manifold_gpu::GpuDevice,
             );
-            // Also set hal encoder for generators not yet migrated to native
-            #[cfg(feature = "hal-encoding")]
-            if let Some(ref hal_ctx) = self.hal_ctx {
-                // Generators not yet migrated to native can still use the hal path.
-                // This will be removed once all generators are migrated.
-            }
 
             for renderer in renderers.iter_mut() {
                 if let Some(gen_renderer) =
@@ -1128,10 +1112,9 @@ impl ContentPipeline {
         // ── Compositor (same native encoder) ─────────────────────────
         let _t0 = std::time::Instant::now();
         {
-            let mut gpu_comp = GpuEncoder::new(
+            let mut gpu_comp = GpuEncoder::new_native(
                 &gpu.device,
                 &gpu.queue,
-                &mut dummy_encoder,
                 self.hal_ctx.as_ref(),
             );
             gpu_comp.native_enc = Some(
@@ -1140,11 +1123,6 @@ impl ContentPipeline {
             gpu_comp.native_device = Some(
                 native_device as *const manifold_gpu::GpuDevice,
             );
-            #[cfg(feature = "hal-encoding")]
-            {
-                // Also set hal_enc for effects not yet migrated to native.
-                // This temporary shim will be removed once all effects are migrated.
-            }
 
             let _compositor_view =
                 self.compositor.render(&mut gpu_comp, &frame, None);
@@ -1198,9 +1176,6 @@ impl ContentPipeline {
                 );
             }
         }
-
-        // Drop the dummy encoder without submitting
-        drop(dummy_encoder);
 
         // Signal frame completion + commit
         let native_event = self.native_event.as_ref().unwrap();

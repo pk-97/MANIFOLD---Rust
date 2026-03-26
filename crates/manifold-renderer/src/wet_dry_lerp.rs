@@ -614,7 +614,7 @@ impl WetDryLerpPipeline {
                     target_height,
                 )
             });
-            let mut pass = gpu.encoder.begin_compute_pass(
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(
                 &wgpu::ComputePassDescriptor {
                     label: Some("WetDry Lerp Compute Pass"),
                     timestamp_writes: ts,
@@ -664,7 +664,7 @@ impl WetDryLerpPipeline {
         let ts = profiler
             .and_then(|p| p.render_timestamps("WetDry Lerp", 0, 0));
         let mut pass =
-            gpu.encoder
+            gpu.encoder.as_mut().unwrap()
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("WetDry Lerp Pass"),
                     color_attachments: &[Some(

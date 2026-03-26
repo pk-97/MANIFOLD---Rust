@@ -666,7 +666,7 @@ impl ComputeDualBlitHelper {
         }
 
         let ts = profiler.and_then(|p| p.compute_timestamps(label, width, height));
-        let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some(label),
             timestamp_writes: ts,
         });
@@ -869,7 +869,7 @@ impl ComputeDualBlitHelper {
         self.ensure_bind_group(gpu.device, source_a_view, source_b_view, target_view, label);
 
         let ts = profiler.and_then(|p| p.compute_timestamps(label, width, height));
-        let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some(label),
             timestamp_writes: ts,
         });

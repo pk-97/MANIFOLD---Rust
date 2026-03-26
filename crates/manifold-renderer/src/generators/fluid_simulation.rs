@@ -1097,7 +1097,7 @@ impl FluidSimulationGenerator {
         });
 
         let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim Seed", self.active_count, 1));
-        let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+        let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("FluidSim Seed Pass"),
             timestamp_writes: ts,
         });
@@ -1241,7 +1241,7 @@ impl FluidSimulationGenerator {
                 )
             });
             let mut pass =
-                gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                gpu.encoder.as_mut().unwrap().begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("FluidSim Blur Compute Pass"),
                     timestamp_writes: ts,
                 });
@@ -1288,7 +1288,7 @@ impl FluidSimulationGenerator {
                 )
             });
             let mut pass =
-                gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                gpu.encoder.as_mut().unwrap().begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("FluidSim Blur Pass"),
                     color_attachments: &[Some(
                         wgpu::RenderPassColorAttachment {
@@ -1848,7 +1848,7 @@ impl Generator for FluidSimulationGenerator {
 
         // Clear scatter accum to zero before each frame's splat
         // (atomicAdd compounds; must reset per-frame)
-        gpu.encoder.clear_buffer(scatter_accum, 0, None);
+        gpu.encoder.as_mut().unwrap().clear_buffer(scatter_accum, 0, None);
 
         let splat_bg = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("FluidSim Splat BG"),
@@ -1861,7 +1861,7 @@ impl Generator for FluidSimulationGenerator {
         });
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim Splat", sw, sh));
-            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("FluidSim Splat Pass"),
                 timestamp_writes: ts,
             });
@@ -1886,7 +1886,7 @@ impl Generator for FluidSimulationGenerator {
         });
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim Resolve", sw, sh));
-            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("FluidSim Resolve Pass"),
                 timestamp_writes: ts,
             });
@@ -2057,7 +2057,7 @@ impl Generator for FluidSimulationGenerator {
                 )
             });
             let mut pass =
-                gpu.encoder
+                gpu.encoder.as_mut().unwrap()
                     .begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some(
                             "FluidSim GradientRotate Compute Pass",
@@ -2098,7 +2098,7 @@ impl Generator for FluidSimulationGenerator {
                 p.render_timestamps("FluidSim GradientRotate", bw, bh)
             });
             let mut pass =
-                gpu.encoder
+                gpu.encoder.as_mut().unwrap()
                     .begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("FluidSim GradientRotate Pass"),
                         color_attachments: &[Some(
@@ -2182,7 +2182,7 @@ impl Generator for FluidSimulationGenerator {
         });
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("FluidSim Simulate", active_count, 1));
-            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("FluidSim Simulate Pass"),
                 timestamp_writes: ts,
             });
@@ -2351,7 +2351,7 @@ impl Generator for FluidSimulationGenerator {
                 )
             });
             let mut pass =
-                gpu.encoder
+                gpu.encoder.as_mut().unwrap()
                     .begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("FluidSim Display Compute Pass"),
                         timestamp_writes: ts,
@@ -2400,7 +2400,7 @@ impl Generator for FluidSimulationGenerator {
                 )
             });
             let mut pass =
-                gpu.encoder
+                gpu.encoder.as_mut().unwrap()
                     .begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("FluidSim Display Pass"),
                         color_attachments: &[Some(

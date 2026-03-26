@@ -1407,7 +1407,7 @@ impl Generator for MyceliumGenerator {
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("Mycelium Agent Update", tw, th));
             let mut pass = gpu
-                .encoder
+                .encoder.as_mut().unwrap()
                 .begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("Mycelium Agent Update Pass"),
                     timestamp_writes: ts,
@@ -1457,7 +1457,7 @@ impl Generator for MyceliumGenerator {
         {
             let ts = profiler.and_then(|p| p.compute_timestamps("Mycelium Resolve", tw, th));
             let mut pass = gpu
-                .encoder
+                .encoder.as_mut().unwrap()
                 .begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("Mycelium Resolve Pass"),
                     timestamp_writes: ts,
@@ -1477,7 +1477,7 @@ impl Generator for MyceliumGenerator {
             let trail_a2 = self.trail_a.as_ref().unwrap();
             let trail_b2 = self.trail_b.as_ref().unwrap();
             self.run_diffuse_pass(
-                gpu.device, gpu.queue, gpu.encoder,
+                gpu.device, gpu.queue, gpu.encoder.as_mut().unwrap(),
                 &trail_b2.view, &trail_a2.view, decay, 0.003, profiler,
             );
         }
@@ -1488,7 +1488,7 @@ impl Generator for MyceliumGenerator {
             let trail_a2 = self.trail_a.as_ref().unwrap();
             let trail_b2 = self.trail_b.as_ref().unwrap();
             self.run_diffuse_pass(
-                gpu.device, gpu.queue, gpu.encoder,
+                gpu.device, gpu.queue, gpu.encoder.as_mut().unwrap(),
                 &trail_a2.view, &trail_b2.view, 1.0, 0.0, profiler,
             );
         }
@@ -1499,7 +1499,7 @@ impl Generator for MyceliumGenerator {
             let trail_a2 = self.trail_a.as_ref().unwrap();
             let trail_b2 = self.trail_b.as_ref().unwrap();
             self.run_diffuse_pass(
-                gpu.device, gpu.queue, gpu.encoder,
+                gpu.device, gpu.queue, gpu.encoder.as_mut().unwrap(),
                 &trail_b2.view, &trail_a2.view, 1.0, 0.0, profiler,
             );
         }
@@ -1542,7 +1542,7 @@ impl Generator for MyceliumGenerator {
         {
             let ts = profiler
                 .and_then(|p| p.render_timestamps("Mycelium Display", ctx.width, ctx.height));
-            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Mycelium Display Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,

@@ -479,7 +479,7 @@ impl DualTextureBlitHelper {
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps(label, width, height));
-            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,
@@ -603,7 +603,7 @@ impl DualTextureBlitHelper {
 
         {
             let ts = profiler.and_then(|p| p.render_timestamps(label, width, height));
-            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target_view,

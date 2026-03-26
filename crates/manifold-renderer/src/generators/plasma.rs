@@ -342,7 +342,7 @@ impl Generator for PlasmaGenerator {
             let ts = profiler
                 .and_then(|p| p.compute_timestamps("Plasma", ctx.width, ctx.height));
             let mut pass =
-                gpu.encoder
+                gpu.encoder.as_mut().unwrap()
                     .begin_compute_pass(&wgpu::ComputePassDescriptor {
                         label: Some("Plasma Compute"),
                         timestamp_writes: ts,

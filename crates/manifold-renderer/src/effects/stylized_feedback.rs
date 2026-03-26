@@ -168,10 +168,10 @@ impl PostProcessEffect for StylizedFeedbackFX {
             }
             #[cfg(target_os = "macos")]
             if !cleared {
-                clear_render_target(gpu.encoder, &buffer.texture);
+                clear_render_target(gpu.encoder.as_mut().unwrap(), &buffer.texture);
             }
             #[cfg(not(target_os = "macos"))]
-            clear_render_target(gpu.encoder, &buffer.texture);
+            clear_render_target(gpu.encoder.as_mut().unwrap(), &buffer.texture);
             self.states.insert(ctx.owner_key, StylizedFeedbackState { buffer });
         }
 

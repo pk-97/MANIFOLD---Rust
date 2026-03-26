@@ -493,7 +493,7 @@ impl LinePipeline {
             let ts = profiler.and_then(|p| {
                 p.render_timestamps(profiler_label, width, height)
             });
-            let _pass = gpu.encoder.begin_render_pass(
+            let _pass = gpu.encoder.as_mut().unwrap().begin_render_pass(
                 &wgpu::RenderPassDescriptor {
                     label: Some("Line Clear Pass"),
                     color_attachments: &[Some(
@@ -584,7 +584,7 @@ impl LinePipeline {
             let ts = profiler.and_then(|p| {
                 p.render_timestamps(profiler_label, width, height)
             });
-            let mut pass = gpu.encoder.begin_render_pass(
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_render_pass(
                 &wgpu::RenderPassDescriptor {
                     label: Some("Line Draw Pass"),
                     color_attachments: &[Some(

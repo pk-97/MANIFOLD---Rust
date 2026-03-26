@@ -16,7 +16,9 @@
 pub struct GpuEncoder<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
-    pub encoder: &'a mut wgpu::CommandEncoder,
+    /// wgpu command encoder. `None` on the native Metal path (macOS),
+    /// `Some` on wgpu path (Windows/Linux) or legacy hal path.
+    pub encoder: Option<&'a mut wgpu::CommandEncoder>,
     /// HalContext for hal resource creation (bind groups, samplers).
     /// None when hal-encoding feature is off or on non-macOS.
     pub hal_ctx: Option<&'a crate::hal_context::HalContext>,
@@ -56,7 +58,29 @@ impl<'a> GpuEncoder<'a> {
         Self {
             device,
             queue,
-            encoder,
+            encoder: Some(encoder),
+            hal_ctx,
+            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            hal_enc: None,
+            uniform_arena: None,
+            #[cfg(target_os = "macos")]
+            native_enc: None,
+            #[cfg(target_os = "macos")]
+            native_device: None,
+        }
+    }
+
+    /// Create a GpuEncoder for the native Metal path (no wgpu encoder needed).
+    #[cfg(target_os = "macos")]
+    pub fn new_native(
+        device: &'a wgpu::Device,
+        queue: &'a wgpu::Queue,
+        hal_ctx: Option<&'a crate::hal_context::HalContext>,
+    ) -> Self {
+        Self {
+            device,
+            queue,
+            encoder: None,
             hal_ctx,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_enc: None,
@@ -188,7 +212,7 @@ impl<'a> GpuEncoder<'a> {
             }
             return;
         }
-        self.encoder.copy_texture_to_texture(
+        self.encoder.as_mut().unwrap().copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: src,
                 mip_level: 0,
@@ -223,7 +247,7 @@ impl<'a> GpuEncoder<'a> {
         }
         // wgpu fallback: render pass with load-clear + store, no draw call.
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let _pass = self.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let _pass = self.encoder.as_mut().unwrap().begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Clear Texture"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
@@ -260,7 +284,7 @@ impl<'a> GpuEncoder<'a> {
             enc.clear_texture(&gpu_tex, r, g, b, a);
             return;
         }
-        let _pass = self.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let _pass = self.encoder.as_mut().unwrap().begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Clear Texture"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
@@ -295,7 +319,7 @@ impl<'a> GpuEncoder<'a> {
             enc.copy_texture_to_buffer(&gpu_tex, &gpu_buf, width, height, bytes_per_row);
             return;
         }
-        self.encoder.copy_texture_to_buffer(
+        self.encoder.as_mut().unwrap().copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture,
                 mip_level: 0,
@@ -323,7 +347,7 @@ impl<'a> GpuEncoder<'a> {
             enc.clear_buffer(&gpu_buf);
             return;
         }
-        self.encoder.clear_buffer(buffer, 0, None);
+        self.encoder.as_mut().unwrap().clear_buffer(buffer, 0, None);
     }
 }
 

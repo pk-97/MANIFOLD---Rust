@@ -284,7 +284,7 @@ impl Generator for BasicShapesSnapGenerator {
             let ts = profiler.and_then(|p| {
                 p.compute_timestamps("BasicShapesSnap", ctx.width, ctx.height)
             });
-            let mut pass = gpu.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("BasicShapesSnap Pass"),
                 timestamp_writes: ts,
             });

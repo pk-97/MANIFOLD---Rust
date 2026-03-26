@@ -182,14 +182,14 @@ impl EffectChain {
                             // GPU memcpy so the dry snapshot captures the input.
                             if first_effect_pending {
                                 copy_tex_to_rt(
-                                    gpu.encoder, input_texture, self.source(),
+                                    gpu.encoder.as_mut().unwrap(), input_texture, self.source(),
                                 );
                                 first_effect_pending = false;
                             }
                             self.ensure_dry_snapshot(gpu.device, ctx.width, ctx.height);
                             // GPU copy source → dry_snapshot
                             copy_rt_to_rt(
-                                gpu.encoder,
+                                gpu.encoder.as_mut().unwrap(),
                                 self.source(),
                                 self.dry_snapshot.as_ref().unwrap(),
                             );

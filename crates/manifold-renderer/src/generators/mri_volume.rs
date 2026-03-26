@@ -568,7 +568,7 @@ impl Generator for MriVolumeGenerator {
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) -> f32 {
         if self.scans.is_empty() {
-            Self::render_black(gpu.encoder, target);
+            Self::render_black(gpu.encoder.as_mut().unwrap(), target);
             return ctx.anim_progress;
         }
 
@@ -579,7 +579,7 @@ impl Generator for MriVolumeGenerator {
 
         let scan = &self.scans[scan_index as usize];
         let Some(axis_slices) = &scan.axes[axis as usize] else {
-            Self::render_black(gpu.encoder, target);
+            Self::render_black(gpu.encoder.as_mut().unwrap(), target);
             return ctx.anim_progress;
         };
 
@@ -606,14 +606,14 @@ impl Generator for MriVolumeGenerator {
                 }
                 Err(e) => {
                     log::error!("MRI: {e}");
-                    Self::render_black(gpu.encoder, target);
+                    Self::render_black(gpu.encoder.as_mut().unwrap(), target);
                     return ctx.anim_progress;
                 }
             }
         }
 
         let Some(view) = &self.slice_view else {
-            Self::render_black(gpu.encoder, target);
+            Self::render_black(gpu.encoder.as_mut().unwrap(), target);
             return ctx.anim_progress;
         };
 
@@ -813,7 +813,7 @@ impl Generator for MriVolumeGenerator {
                     ctx.height,
                 )
             });
-            let mut pass = gpu.encoder.begin_compute_pass(
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_compute_pass(
                 &wgpu::ComputePassDescriptor {
                     label: Some("MRI Slice Compute Pass"),
                     timestamp_writes: ts,
@@ -870,7 +870,7 @@ impl Generator for MriVolumeGenerator {
                     ctx.height,
                 )
             });
-            let mut pass = gpu.encoder.begin_render_pass(
+            let mut pass = gpu.encoder.as_mut().unwrap().begin_render_pass(
                 &wgpu::RenderPassDescriptor {
                     label: Some("MRI Slice Pass"),
                     color_attachments: &[Some(
