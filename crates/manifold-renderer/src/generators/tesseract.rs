@@ -33,9 +33,13 @@ impl TesseractGenerator {
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let line_pipeline =
-            LinePipeline::new(device, target_format, "Tesseract", hal_ctx);
+            LinePipeline::new(
+            device, target_format, "Tesseract", hal_ctx,
+            #[cfg(target_os = "macos")] native_device,
+        );
         let mut helper = LineGeneratorHelper::new(VERTEX_COUNT, EDGE_COUNT);
 
         // 16 vertices from 4-bit patterns

@@ -34,9 +34,13 @@ impl OscilloscopeXYGenerator {
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let line_pipeline =
-            LinePipeline::new(device, target_format, "OscilloscopeXY", hal_ctx);
+            LinePipeline::new(
+            device, target_format, "OscilloscopeXY", hal_ctx,
+            #[cfg(target_os = "macos")] native_device,
+        );
         let mut helper = LineGeneratorHelper::new(SAMPLES, SAMPLES);
 
         // Closed loop: i -> (i+1) % 256

@@ -33,9 +33,13 @@ impl DuocylinderGenerator {
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let line_pipeline =
-            LinePipeline::new(device, target_format, "Duocylinder", hal_ctx);
+            LinePipeline::new(
+            device, target_format, "Duocylinder", hal_ctx,
+            #[cfg(target_os = "macos")] native_device,
+        );
         let mut helper = LineGeneratorHelper::new(VERTEX_COUNT, EDGE_COUNT);
 
         // Parametric 4D torus: (cos(u), sin(u), cos(v), sin(v))

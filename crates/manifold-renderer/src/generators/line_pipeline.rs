@@ -91,6 +91,14 @@ pub struct LinePipeline {
     uniform_buffer: wgpu::Buffer,
     positions_buffer: wgpu::Buffer,
     instances_buffer: wgpu::Buffer,
+    // --- native Metal pipeline (macOS) ---
+    #[cfg(target_os = "macos")]
+    native_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// Native shared-memory buffers for zero-copy CPU→GPU writes.
+    #[cfg(target_os = "macos")]
+    native_positions_buf: Option<manifold_gpu::GpuBuffer>,
+    #[cfg(target_os = "macos")]
+    native_instances_buf: Option<manifold_gpu::GpuBuffer>,
     /// HAL render pipeline for zero-overhead encoding.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_pipeline: Option<crate::hal_pipeline::HalRenderPipeline>,
@@ -121,12 +129,16 @@ pub struct LinePipeline {
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
 unsafe impl Send for LinePipeline {}
 
+#[cfg(all(target_os = "macos", not(feature = "hal-encoding")))]
+unsafe impl Send for LinePipeline {}
+
 impl LinePipeline {
     pub fn new(
         device: &wgpu::Device,
         target_format: wgpu::TextureFormat,
         label: &str,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx; // suppress unused warning when hal-encoding off
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -215,6 +227,32 @@ impl LinePipeline {
                 cache: None,
             });
 
+        // --- Native Metal pipeline from manifold-gpu ---
+        #[cfg(target_os = "macos")]
+        let (native_pipeline, native_positions_buf, native_instances_buf) =
+            if let Some(dev) = native_device {
+                let blend = manifold_gpu::GpuBlendState {
+                    src_factor: manifold_gpu::GpuBlendFactor::One,
+                    dst_factor: manifold_gpu::GpuBlendFactor::One,
+                    operation: manifold_gpu::GpuBlendOp::Max,
+                    src_alpha_factor: manifold_gpu::GpuBlendFactor::One,
+                    dst_alpha_factor: manifold_gpu::GpuBlendFactor::One,
+                    alpha_operation: manifold_gpu::GpuBlendOp::Max,
+                };
+                let pipe = dev.create_render_pipeline(
+                    include_str!("shaders/generator_lines.wgsl"),
+                    "vs_main", "fs_main",
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    Some(blend),
+                    &format!("{label} Line Native"),
+                );
+                let pos_buf = dev.create_buffer_shared(MAX_POSITIONS * POSITION_STRIDE);
+                let inst_buf = dev.create_buffer_shared(MAX_INSTANCES * INSTANCE_STRIDE);
+                (Some(pipe), Some(pos_buf), Some(inst_buf))
+            } else {
+                (None, None, None)
+            };
+
         // --- Create buffers ---
         // On hal path: shared-memory buffers with persistent mapped pointers.
         // On wgpu path: regular buffers with COPY_DST for queue.write_buffer().
@@ -278,6 +316,12 @@ impl LinePipeline {
                 uniform_buffer,
                 positions_buffer,
                 instances_buffer,
+                #[cfg(target_os = "macos")]
+                native_pipeline,
+                #[cfg(target_os = "macos")]
+                native_positions_buf,
+                #[cfg(target_os = "macos")]
+                native_instances_buf,
                 hal_pipeline: Some(hal_pipe),
                 uniform_mapped_ptr: Some(uniform_mapped),
                 positions_mapped_ptr: Some(positions_mapped),
@@ -320,6 +364,12 @@ impl LinePipeline {
             uniform_buffer,
             positions_buffer,
             instances_buffer,
+            #[cfg(target_os = "macos")]
+            native_pipeline,
+            #[cfg(target_os = "macos")]
+            native_positions_buf,
+            #[cfg(target_os = "macos")]
+            native_instances_buf,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_pipeline: None,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -359,6 +409,71 @@ impl LinePipeline {
         width: u32,
         height: u32,
     ) {
+        // ── NATIVE METAL render path ────────────────────────────────
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_pipe) = self.native_pipeline
+            && let Some(ref native_pos) = self.native_positions_buf
+            && let Some(ref native_inst) = self.native_instances_buf
+            && gpu.has_native_encoder()
+        {
+            let native_target = unsafe {
+                crate::gpu_encoder::extract_native_texture_from_view(target)
+            };
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+
+            if instances.is_empty() {
+                native_enc.clear_texture(&native_target, 0.0, 0.0, 0.0, 0.0);
+                return;
+            }
+
+            // Write data directly to shared-memory buffers
+            let uniforms = LineUniforms {
+                rt_width: width as f32,
+                rt_height: height as f32,
+                edge_half_thick,
+                beat,
+                dot_half_thick,
+                num_edges,
+                _pad: [0.0; 2],
+            };
+            let pos_bytes = bytemuck::cast_slice(positions);
+            let pos_limit = (MAX_POSITIONS * POSITION_STRIDE) as usize;
+            let pos_len = pos_bytes.len().min(pos_limit);
+            unsafe { native_pos.write(0, &pos_bytes[..pos_len]); }
+
+            let inst_bytes = bytemuck::cast_slice(instances);
+            let inst_limit = (MAX_INSTANCES * INSTANCE_STRIDE) as usize;
+            let inst_len = inst_bytes.len().min(inst_limit);
+            unsafe { native_inst.write(0, &inst_bytes[..inst_len]); }
+
+            let instance_count = (instances.len() as u64).min(MAX_INSTANCES) as u32;
+            native_enc.draw_instanced(
+                native_pipe,
+                &native_target,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&uniforms),
+                    },
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 1,
+                        buffer: native_pos,
+                        offset: 0,
+                    },
+                    manifold_gpu::GpuBinding::Buffer {
+                        binding: 2,
+                        buffer: native_inst,
+                        offset: 0,
+                    },
+                ],
+                6,
+                instance_count,
+                true,
+                profiler_label,
+            );
+            return;
+        }
+
         // --- HAL render path ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
         if gpu.has_hal_encoder()

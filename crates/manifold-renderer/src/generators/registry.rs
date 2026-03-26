@@ -52,15 +52,30 @@ impl GeneratorRegistry {
                 #[cfg(target_os = "macos")] native_device,
             )))
         } else if *gen_type == GeneratorTypeId::TESSERACT {
-            Some(Box::new(TesseractGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(TesseractGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            )))
         } else if *gen_type == GeneratorTypeId::DUOCYLINDER {
-            Some(Box::new(DuocylinderGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(DuocylinderGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            )))
         } else if *gen_type == GeneratorTypeId::LISSAJOUS {
-            Some(Box::new(LissajousGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(LissajousGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            )))
         } else if *gen_type == GeneratorTypeId::WIREFRAME_ZOO {
-            Some(Box::new(WireframeZooGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(WireframeZooGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            )))
         } else if *gen_type == GeneratorTypeId::OSCILLOSCOPE_XY {
-            Some(Box::new(OscilloscopeXYGenerator::new(device, fmt, hal_ctx)))
+            Some(Box::new(OscilloscopeXYGenerator::new(
+                device, fmt, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            )))
         } else if *gen_type == GeneratorTypeId::PARAMETRIC_SURFACE {
             Some(Box::new(ParametricSurfaceGenerator::new(
                 device, fmt, hal_ctx,

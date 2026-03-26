@@ -669,6 +669,83 @@ impl GpuEncoder {
         // State goes back to None (render encoder consumed).
     }
 
+    /// Draw instanced geometry with a render pipeline.
+    ///
+    /// Unlike `draw_fullscreen()` which only sets fragment bindings,
+    /// this sets bindings on BOTH vertex and fragment stages.
+    /// Used by LinePipeline for instanced line/dot rendering.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_instanced(
+        &mut self,
+        pipeline: &GpuRenderPipeline,
+        target: &GpuTexture,
+        bindings: &[GpuBinding],
+        vertex_count: u32,
+        instance_count: u32,
+        clear: bool,
+        _label: &str,
+    ) {
+        self.end_current();
+
+        let desc = metal::RenderPassDescriptor::new();
+        let color = desc.color_attachments().object_at(0).unwrap();
+        color.set_texture(Some(&target.raw));
+        color.set_load_action(if clear {
+            metal::MTLLoadAction::Clear
+        } else {
+            metal::MTLLoadAction::DontCare
+        });
+        color.set_store_action(metal::MTLStoreAction::Store);
+        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
+
+        let enc = self.cmd_buf().new_render_command_encoder(desc);
+        enc.set_render_pipeline_state(&pipeline.state);
+
+        for binding in bindings {
+            match binding {
+                GpuBinding::Buffer { binding: b, buffer, offset } => {
+                    let slot = pipeline.slot_map.get(*b)
+                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    // Set on both vertex and fragment stages
+                    enc.set_vertex_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
+                    enc.set_fragment_buffer(slot.metal_index as _, Some(&buffer.raw), *offset as _);
+                }
+                GpuBinding::Texture { binding: b, texture } => {
+                    let slot = pipeline.slot_map.get(*b)
+                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
+                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
+                }
+                GpuBinding::Sampler { binding: b, sampler } => {
+                    let slot = pipeline.slot_map.get(*b)
+                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                }
+                GpuBinding::Bytes { binding: b, data } => {
+                    let slot = pipeline.slot_map.get(*b)
+                        .unwrap_or_else(|| panic!("no slot for binding {b} in {}", pipeline.label));
+                    enc.set_vertex_bytes(
+                        slot.metal_index as _, data.len() as _,
+                        data.as_ptr() as *const _,
+                    );
+                    enc.set_fragment_bytes(
+                        slot.metal_index as _, data.len() as _,
+                        data.as_ptr() as *const _,
+                    );
+                }
+            }
+        }
+
+        if instance_count > 0 {
+            enc.draw_primitives_instanced(
+                metal::MTLPrimitiveType::Triangle,
+                0, vertex_count as u64, instance_count as u64,
+            );
+        }
+        enc.end_encoding();
+    }
+
     /// Clear a texture to a solid color via a render pass with MTLLoadAction::Clear.
     /// No draw call — just load-clear + store.
     pub fn clear_texture(&mut self, texture: &GpuTexture, r: f64, g: f64, b: f64, a: f64) {
