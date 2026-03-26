@@ -1020,26 +1020,6 @@ impl WireframeDepthFX {
         RenderTarget::new(device, w, h, format, label)
     }
 
-    // WireframeDepthFX.cs line 270-277 — ClearRenderTexture: write black pixels via queue clear
-    fn clear_rt(encoder: &mut wgpu::CommandEncoder, rt: &RenderTarget) {
-        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("WireframeDepth Clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &rt.view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-    }
-
     /// HAL path: encode one render pass via hal command encoder.
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     #[allow(clippy::too_many_arguments)]
@@ -1416,96 +1396,6 @@ impl WireframeDepthFX {
         }
     }
 
-    /// HAL path: copy texture to texture via hal command encoder.
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    fn copy_texture_hal(
-        gpu: &mut GpuEncoder,
-        src: &wgpu::Texture,
-        dst: &wgpu::Texture,
-        w: u32,
-        h: u32,
-    ) {
-        type MetalApi = wgpu::hal::api::Metal;
-        use wgpu::hal::CommandEncoder as _;
-
-        let src_ptr = {
-            let g = unsafe { src.as_hal::<MetalApi>() }
-                .expect("src tex not Metal");
-            &*g as *const _
-        };
-        let dst_ptr = {
-            let g = unsafe { dst.as_hal::<MetalApi>() }
-                .expect("dst tex not Metal");
-            &*g as *const _
-        };
-        let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-        unsafe {
-            hal_enc.copy_texture_to_texture(
-                &*src_ptr,
-                wgpu::wgt::TextureUses::COPY_SRC,
-                &*dst_ptr,
-                std::iter::once(wgpu::hal::TextureCopy {
-                    src_base: wgpu::hal::TextureCopyBase {
-                        mip_level: 0,
-                        array_layer: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::hal::FormatAspects::COLOR,
-                    },
-                    dst_base: wgpu::hal::TextureCopyBase {
-                        mip_level: 0,
-                        array_layer: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::hal::FormatAspects::COLOR,
-                    },
-                    size: wgpu::hal::CopyExtent {
-                        width: w,
-                        height: h,
-                        depth: 1,
-                    },
-                }),
-            );
-        }
-    }
-
-    /// HAL path: clear a RenderTarget to black via hal render pass.
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    fn clear_rt_hal(gpu: &mut GpuEncoder, rt: &RenderTarget) {
-        type MetalApi = wgpu::hal::api::Metal;
-        use wgpu::hal::{self as hal, CommandEncoder as _};
-
-        let view_ptr = {
-            let g = unsafe { rt.view.as_hal::<MetalApi>() }
-                .expect("rt view not Metal");
-            &*g as *const _
-        };
-        let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-        unsafe {
-            hal_enc.begin_render_pass(&hal::RenderPassDescriptor {
-                label: None,
-                extent: wgpu::Extent3d {
-                    width: rt.width, height: rt.height,
-                    depth_or_array_layers: 1,
-                },
-                sample_count: 1,
-                color_attachments: &[Some(hal::ColorAttachment {
-                    target: hal::Attachment {
-                        view: &*view_ptr,
-                        usage: wgpu::wgt::TextureUses::COLOR_TARGET,
-                    },
-                    resolve_target: None,
-                    ops: hal::AttachmentOps::LOAD_CLEAR | hal::AttachmentOps::STORE,
-                    clear_value: wgpu::Color::BLACK,
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                multiview_mask: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            }).expect("hal begin_render_pass failed");
-            hal_enc.end_render_pass();
-        }
-    }
-
     /// Unified encode: compute dispatch (preferred) → hal render pass → wgpu render pass.
     /// Compute dispatch eliminates TBDR tile overhead (~290us/pass at 4K).
     #[allow(clippy::too_many_arguments)]
@@ -1572,7 +1462,7 @@ impl WireframeDepthFX {
         );
     }
 
-    /// Unified encode: copy texture to texture via hal or wgpu.
+    /// Unified encode: copy texture to texture via native, hal, or wgpu.
     fn encode_copy(
         gpu: &mut GpuEncoder,
         src: &wgpu::Texture,
@@ -1580,36 +1470,12 @@ impl WireframeDepthFX {
         w: u32,
         h: u32,
     ) {
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            Self::copy_texture_hal(gpu, src, dst, w, h);
-            return;
-        }
-        gpu.encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: src,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: dst,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        );
+        gpu.copy_texture_to_texture(src, dst, w, h);
     }
 
-    /// Unified encode: clear a RenderTarget to black via hal or wgpu.
+    /// Unified encode: clear a RenderTarget to black via native, hal, or wgpu.
     fn encode_clear(gpu: &mut GpuEncoder, rt: &RenderTarget) {
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
-            Self::clear_rt_hal(gpu, rt);
-            return;
-        }
-        Self::clear_rt(gpu.encoder, rt);
+        gpu.clear_texture_view(&rt.texture, &rt.view, 0.0, 0.0, 0.0, 1.0);
     }
 
     // Create a CPU-upload 2D texture (Rgba8Unorm or Rgba32Float) for DNN outputs.

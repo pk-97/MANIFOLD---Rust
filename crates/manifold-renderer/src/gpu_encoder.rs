@@ -123,6 +123,172 @@ impl<'a> GpuEncoder<'a> {
             None
         }
     }
+
+    // ─── Unified GPU operations ──────────────────────────────────────
+    // These methods route to native Metal or wgpu depending on the active
+    // backend. Consumer code calls these instead of touching gpu.encoder
+    // directly.
+
+    /// Copy texture to texture. Routes to native Metal blit or wgpu encoder.
+    pub fn copy_texture_to_texture(
+        &mut self,
+        src: &wgpu::Texture,
+        dst: &wgpu::Texture,
+        width: u32,
+        height: u32,
+    ) {
+        #[cfg(target_os = "macos")]
+        if let Some(enc_ptr) = self.native_enc {
+            let src_gpu = unsafe { extract_native_texture(src) };
+            let dst_gpu = unsafe { extract_native_texture(dst) };
+            let enc = unsafe { &mut *enc_ptr };
+            enc.copy_texture_to_texture(&src_gpu, &dst_gpu, width, height, 1);
+            return;
+        }
+        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+        if self.hal_enc.is_some() && self.hal_ctx.is_some() {
+            type MetalApi = wgpu::hal::api::Metal;
+            use wgpu::hal::CommandEncoder as _;
+            let src_ptr = {
+                let g = unsafe { src.as_hal::<MetalApi>() }
+                    .expect("src not Metal");
+                &*g as *const _
+            };
+            let dst_ptr = {
+                let g = unsafe { dst.as_hal::<MetalApi>() }
+                    .expect("dst not Metal");
+                &*g as *const _
+            };
+            let (hal_enc, _) = unsafe { self.hal_encoder_mut() }.unwrap();
+            unsafe {
+                hal_enc.copy_texture_to_texture(
+                    &*src_ptr,
+                    wgpu::wgt::TextureUses::COPY_SRC,
+                    &*dst_ptr,
+                    std::iter::once(wgpu::hal::TextureCopy {
+                        src_base: wgpu::hal::TextureCopyBase {
+                            mip_level: 0,
+                            array_layer: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::hal::FormatAspects::COLOR,
+                        },
+                        dst_base: wgpu::hal::TextureCopyBase {
+                            mip_level: 0,
+                            array_layer: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::hal::FormatAspects::COLOR,
+                        },
+                        size: wgpu::hal::CopyExtent {
+                            width,
+                            height,
+                            depth: 1,
+                        },
+                    }),
+                );
+            }
+            return;
+        }
+        self.encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: src,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: dst,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+    }
+
+    /// Clear a texture to a solid color. Routes to native Metal or wgpu render pass.
+    pub fn clear_texture(
+        &mut self,
+        texture: &wgpu::Texture,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) {
+        #[cfg(target_os = "macos")]
+        if let Some(enc_ptr) = self.native_enc {
+            let gpu_tex = unsafe { extract_native_texture(texture) };
+            let enc = unsafe { &mut *enc_ptr };
+            enc.clear_texture(&gpu_tex, r, g, b, a);
+            return;
+        }
+        // wgpu fallback: render pass with load-clear + store, no draw call.
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let _pass = self.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Clear Texture"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        // pass dropped → encoder ends render pass
+    }
+
+    /// Clear a texture view to a solid color via render pass. Routes to native
+    /// Metal or wgpu. Use this when you already have a TextureView.
+    pub fn clear_texture_view(
+        &mut self,
+        texture: &wgpu::Texture,
+        view: &wgpu::TextureView,
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    ) {
+        #[cfg(target_os = "macos")]
+        if let Some(enc_ptr) = self.native_enc {
+            let gpu_tex = unsafe { extract_native_texture(texture) };
+            let enc = unsafe { &mut *enc_ptr };
+            enc.clear_texture(&gpu_tex, r, g, b, a);
+            return;
+        }
+        let _pass = self.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Clear Texture"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a }),
+                    store: wgpu::StoreOp::Store,
+                },
+                depth_slice: None,
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+    }
+
+    /// Clear a buffer to zeros. Routes to native Metal blit or wgpu encoder.
+    pub fn clear_buffer(&mut self, buffer: &wgpu::Buffer) {
+        #[cfg(target_os = "macos")]
+        if let Some(enc_ptr) = self.native_enc {
+            let gpu_buf = unsafe { extract_native_buffer(buffer) };
+            let enc = unsafe { &mut *enc_ptr };
+            enc.clear_buffer(&gpu_buf);
+            return;
+        }
+        self.encoder.clear_buffer(buffer, 0, None);
+    }
 }
 
 /// Extract a raw Metal texture from a wgpu Texture and wrap as GpuTexture.

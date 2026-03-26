@@ -203,7 +203,7 @@ impl PostProcessEffect for BloomFX {
         };
         let prefilter_uniforms = bytemuck::bytes_of(&prefilter_u);
         if use_compute {
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            #[cfg(target_os = "macos")]
             self.compute_dual_blit.dispatch_a_only(
                 gpu, source, &state.mips_a[0].view, prefilter_uniforms,
                 "Bloom Prefilter",
@@ -302,7 +302,7 @@ impl PostProcessEffect for BloomFX {
         };
         let composite_uniforms = bytemuck::bytes_of(&composite_u);
         if use_compute {
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            #[cfg(target_os = "macos")]
             self.compute_dual_blit.dispatch(
                 gpu, source, &state.mips_b[0].view, target,
                 composite_uniforms, "Bloom Composite",

@@ -1147,80 +1147,7 @@ impl Compositor for LayerCompositor {
                     gpu.device, w, h, wgpu::TextureFormat::Rgba16Float, "LED_Tap",
                 );
             }
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
-                type MetalApi = wgpu::hal::api::Metal;
-                use wgpu::hal::CommandEncoder as _;
-                let src_tex_ptr = {
-                    let g = unsafe { self.main.source_texture().as_hal::<MetalApi>() }
-                        .expect("main source tex not Metal");
-                    &*g as *const _
-                };
-                let dst_tex_ptr = {
-                    let g = unsafe { tap.texture.as_hal::<MetalApi>() }
-                        .expect("led tap tex not Metal");
-                    &*g as *const _
-                };
-                let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-                unsafe {
-                    hal_enc.copy_texture_to_texture(
-                        &*src_tex_ptr,
-                        wgpu::wgt::TextureUses::COPY_SRC,
-                        &*dst_tex_ptr,
-                        std::iter::once(wgpu::hal::TextureCopy {
-                            src_base: wgpu::hal::TextureCopyBase {
-                                mip_level: 0,
-                                array_layer: 0,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::hal::FormatAspects::COLOR,
-                            },
-                            dst_base: wgpu::hal::TextureCopyBase {
-                                mip_level: 0,
-                                array_layer: 0,
-                                origin: wgpu::Origin3d::ZERO,
-                                aspect: wgpu::hal::FormatAspects::COLOR,
-                            },
-                            size: wgpu::hal::CopyExtent {
-                                width: w,
-                                height: h,
-                                depth: 1,
-                            },
-                        }),
-                    );
-                }
-            } else {
-                gpu.encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: self.main.source_texture(),
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &tap.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-                );
-            }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-            gpu.encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: self.main.source_texture(),
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &tap.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-            );
+            gpu.copy_texture_to_texture(self.main.source_texture(), &tap.texture, w, h);
         } else {
             // Free the tap buffer when not needed
             self.led_tap = None;
@@ -1272,89 +1199,11 @@ impl Compositor for LayerCompositor {
                 // Copy processed result back into tonemap output via GPU memcpy.
                 // Replaces the old Opaque compute blend pass — same result, zero
                 // shader cost. Unity ref: same pattern as Graphics.CopyTexture.
-                #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-                if gpu.has_hal_encoder() {
-                    type MetalApi = wgpu::hal::api::Metal;
-                    use wgpu::hal::CommandEncoder as _;
-                    let src_tex_ptr = {
-                        let g = unsafe {
-                            self.effect_chain.source_texture().as_hal::<MetalApi>()
-                        }.expect("effect chain source tex not Metal");
-                        &*g as *const _
-                    };
-                    let dst_tex_ptr = {
-                        let g = unsafe {
-                            self.tonemap.output.texture.as_hal::<MetalApi>()
-                        }.expect("tonemap output tex not Metal");
-                        &*g as *const _
-                    };
-                    let (hal_enc, _) = unsafe { gpu.hal_encoder_mut() }.unwrap();
-                    unsafe {
-                        hal_enc.copy_texture_to_texture(
-                            &*src_tex_ptr,
-                            wgpu::wgt::TextureUses::COPY_SRC,
-                            &*dst_tex_ptr,
-                            std::iter::once(wgpu::hal::TextureCopy {
-                                src_base: wgpu::hal::TextureCopyBase {
-                                    mip_level: 0,
-                                    array_layer: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::hal::FormatAspects::COLOR,
-                                },
-                                dst_base: wgpu::hal::TextureCopyBase {
-                                    mip_level: 0,
-                                    array_layer: 0,
-                                    origin: wgpu::Origin3d::ZERO,
-                                    aspect: wgpu::hal::FormatAspects::COLOR,
-                                },
-                                size: wgpu::hal::CopyExtent {
-                                    width,
-                                    height,
-                                    depth: 1,
-                                },
-                            }),
-                        );
-                    }
-                } else {
-                    gpu.encoder.copy_texture_to_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: self.effect_chain.source_texture(),
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &self.tonemap.output.texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::Extent3d {
-                            width,
-                            height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                }
-                #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-                gpu.encoder.copy_texture_to_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: self.effect_chain.source_texture(),
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &self.tonemap.output.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    wgpu::Extent3d {
-                        width,
-                        height,
-                        depth_or_array_layers: 1,
-                    },
+                gpu.copy_texture_to_texture(
+                    self.effect_chain.source_texture(),
+                    &self.tonemap.output.texture,
+                    width,
+                    height,
                 );
             }
         }

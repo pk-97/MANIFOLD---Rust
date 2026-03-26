@@ -562,24 +562,9 @@ impl ContentPipeline {
         {
             if let Some(ref shared_tex) = self.shared_textures[self.write_surface_index]
                 && shared_tex.width() == comp_w && shared_tex.height() == comp_h {
-                    gpu_enc.encoder.copy_texture_to_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: self.compositor.output_texture(),
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::TexelCopyTextureInfo {
-                            texture: shared_tex,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::Extent3d {
-                            width: comp_w,
-                            height: comp_h,
-                            depth_or_array_layers: 1,
-                        },
+                    gpu_enc.copy_texture_to_texture(
+                        self.compositor.output_texture(), shared_tex,
+                        comp_w, comp_h,
                     );
                 }
         }
@@ -588,25 +573,11 @@ impl ContentPipeline {
         {
             let back_index = 1 - self.front_index;
             let bufs = self.output_buffers.as_ref().unwrap();
-            let copy_size = wgpu::Extent3d {
-                width: comp_w.min(bufs[back_index].width),
-                height: comp_h.min(bufs[back_index].height),
-                depth_or_array_layers: 1,
-            };
-            gpu_enc.encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: self.compositor.output_texture(),
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &bufs[back_index].texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                copy_size,
+            let copy_w = comp_w.min(bufs[back_index].width);
+            let copy_h = comp_h.min(bufs[back_index].height);
+            gpu_enc.copy_texture_to_texture(
+                self.compositor.output_texture(), &bufs[back_index].texture,
+                copy_w, copy_h,
             );
         }
 
