@@ -317,6 +317,7 @@ impl BlobTrackingFX {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] _native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx;
         // BlobTrackingFX.cs line 108-117 — try to create native detector

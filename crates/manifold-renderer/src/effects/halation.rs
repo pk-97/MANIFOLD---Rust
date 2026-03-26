@@ -15,7 +15,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::HDR_BUFFER_DIVISOR;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+#[cfg(target_os = "macos")]
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 
 #[repr(C)]
@@ -43,7 +43,7 @@ struct HalationState {
 
 pub struct HalationFX {
     helper: DualTextureBlitHelper,
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[cfg(target_os = "macos")]
     compute_dual_blit: ComputeDualBlitHelper,
     states: AHashMap<i64, HalationState>,
     width: u32,
@@ -51,7 +51,11 @@ pub struct HalationFX {
 }
 
 impl HalationFX {
-    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
+    ) -> Self {
         Self {
             helper: DualTextureBlitHelper::new(
                 device,
@@ -60,13 +64,14 @@ impl HalationFX {
                 std::mem::size_of::<HalationUniforms>() as u64,
                 hal_ctx,
             ),
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            #[cfg(target_os = "macos")]
             compute_dual_blit: ComputeDualBlitHelper::new(
                 device,
                 include_str!("shaders/fx_halation_compute.wgsl"),
                 "Halation Compute",
                 std::mem::size_of::<HalationUniforms>() as u64,
                 hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
             ),
             states: AHashMap::new(),
             width: 0,
@@ -139,9 +144,14 @@ impl PostProcessEffect for HalationFX {
         };
 
         // Check once whether to use compute path for this frame
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let use_compute = gpu.has_hal_encoder();
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        #[cfg(target_os = "macos")]
+        let use_compute = gpu.has_native_encoder() || {
+            #[cfg(feature = "hal-encoding")]
+            { gpu.has_hal_encoder() }
+            #[cfg(not(feature = "hal-encoding"))]
+            { false }
+        };
+        #[cfg(not(target_os = "macos"))]
         let use_compute = false;
 
         let threshold = fx.param_values.get(1).copied().unwrap_or(0.5);
@@ -177,7 +187,7 @@ impl PostProcessEffect for HalationFX {
         };
         let pass0_uniforms = bytemuck::bytes_of(&pass0_u);
         if use_compute {
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            #[cfg(target_os = "macos")]
             self.compute_dual_blit.dispatch_a_only(
                 gpu, source, &state.buf_b.view, pass0_uniforms,
                 "Halation ThresholdTintBlurH", qw, qh, profiler,
@@ -198,7 +208,7 @@ impl PostProcessEffect for HalationFX {
         };
         let pass1_uniforms = bytemuck::bytes_of(&pass1_u);
         if use_compute {
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            #[cfg(target_os = "macos")]
             self.compute_dual_blit.dispatch_a_only(
                 gpu, &state.buf_b.view, &state.buf_a.view, pass1_uniforms,
                 "Halation BlurV", qw, qh, profiler,
@@ -221,7 +231,7 @@ impl PostProcessEffect for HalationFX {
         };
         let pass2_uniforms = bytemuck::bytes_of(&pass2_u);
         if use_compute {
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            #[cfg(target_os = "macos")]
             self.compute_dual_blit.dispatch(
                 gpu, source, &state.buf_a.view, target, pass2_uniforms,
                 "Halation Composite", ctx.width, ctx.height, profiler,

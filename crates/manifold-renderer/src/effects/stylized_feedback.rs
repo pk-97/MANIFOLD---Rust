@@ -8,7 +8,7 @@ use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+#[cfg(target_os = "macos")]
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 
 // StylizedFeedbackFX.cs line 34 — Mathf.Deg2Rad
@@ -32,7 +32,7 @@ struct StylizedFeedbackState {
 /// Stylized feedback effect — zoom/rotate/blend current frame with previous frame's state buffer.
 pub struct StylizedFeedbackFX {
     helper: DualTextureBlitHelper,
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[cfg(target_os = "macos")]
     compute_dual_blit: ComputeDualBlitHelper,
     states: AHashMap<i64, StylizedFeedbackState>,
     width: u32,
@@ -48,7 +48,11 @@ fn clear_render_target(encoder: &mut wgpu::CommandEncoder, texture: &wgpu::Textu
 }
 
 impl StylizedFeedbackFX {
-    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
+    ) -> Self {
         Self {
             helper: DualTextureBlitHelper::new(
                 device,
@@ -57,13 +61,14 @@ impl StylizedFeedbackFX {
                 std::mem::size_of::<StylizedFeedbackUniforms>() as u64,
                 hal_ctx,
             ),
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            #[cfg(target_os = "macos")]
             compute_dual_blit: ComputeDualBlitHelper::new(
                 device,
                 include_str!("shaders/fx_stylized_feedback_compute.wgsl"),
                 "StylizedFeedback Compute",
                 std::mem::size_of::<StylizedFeedbackUniforms>() as u64,
                 hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
             ),
             states: AHashMap::new(),
             width: 0,
@@ -106,14 +111,25 @@ impl PostProcessEffect for StylizedFeedbackFX {
         self.width = ctx.width;
         self.height = ctx.height;
 
-        // Ensure state buffer exists — hal clear or wgpu clear
+        // Ensure state buffer exists — native/hal clear or wgpu clear
         if !self.states.contains_key(&ctx.owner_key) && self.width > 0 && self.height > 0 {
             let format = wgpu::TextureFormat::Rgba16Float;
             let buffer = RenderTarget::new(
                 gpu.device, self.width, self.height, format, "StylizedFeedback State",
             );
+            #[cfg(target_os = "macos")]
+            let mut cleared = false;
+            #[cfg(target_os = "macos")]
+            if gpu.has_native_encoder() {
+                let native_tex = unsafe {
+                    crate::gpu_encoder::extract_native_texture(&buffer.texture)
+                };
+                let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+                native_enc.clear_texture(&native_tex, 0.0, 0.0, 0.0, 0.0);
+                cleared = true;
+            }
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            if gpu.has_hal_encoder() {
+            if !cleared && gpu.has_hal_encoder() {
                 type MetalApi = wgpu::hal::api::Metal;
                 use wgpu::hal::{self as hal, CommandEncoder as _};
                 let view_ptr = {
@@ -148,10 +164,13 @@ impl PostProcessEffect for StylizedFeedbackFX {
                     }).expect("hal begin_render_pass failed");
                     hal_enc.end_render_pass();
                 }
-            } else {
+                cleared = true;
+            }
+            #[cfg(target_os = "macos")]
+            if !cleared {
                 clear_render_target(gpu.encoder, &buffer.texture);
             }
-            #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+            #[cfg(not(target_os = "macos"))]
             clear_render_target(gpu.encoder, &buffer.texture);
             self.states.insert(ctx.owner_key, StylizedFeedbackState { buffer });
         }
@@ -167,13 +186,18 @@ impl PostProcessEffect for StylizedFeedbackFX {
         let uniform_bytes = bytemuck::bytes_of(&uniforms);
 
         // Check once whether to use compute path for this frame
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let use_compute = gpu.has_hal_encoder();
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        #[cfg(target_os = "macos")]
+        let use_compute = gpu.has_native_encoder() || {
+            #[cfg(feature = "hal-encoding")]
+            { gpu.has_hal_encoder() }
+            #[cfg(not(feature = "hal-encoding"))]
+            { false }
+        };
+        #[cfg(not(target_os = "macos"))]
         let use_compute = false;
 
         if use_compute {
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            #[cfg(target_os = "macos")]
             self.compute_dual_blit.dispatch(
                 gpu, source, &state.buffer.view, target, uniform_bytes,
                 "StylizedFeedback Pass", ctx.width, ctx.height, profiler,
@@ -187,8 +211,24 @@ impl PostProcessEffect for StylizedFeedbackFX {
 
         // PostBlit: copy result → state buffer
         let state = self.states.get(&ctx.owner_key).unwrap();
+        #[cfg(target_os = "macos")]
+        let mut copied = false;
+        #[cfg(target_os = "macos")]
+        if gpu.has_native_encoder() {
+            let native_src = unsafe {
+                crate::gpu_encoder::extract_native_texture(target_texture)
+            };
+            let native_dst = unsafe {
+                crate::gpu_encoder::extract_native_texture(&state.buffer.texture)
+            };
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            native_enc.copy_texture_to_texture(
+                &native_src, &native_dst, ctx.width, ctx.height, 1,
+            );
+            copied = true;
+        }
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        if gpu.has_hal_encoder() {
+        if !copied && gpu.has_hal_encoder() {
             type MetalApi = wgpu::hal::api::Metal;
             use wgpu::hal::CommandEncoder as _;
             let src_ptr = {
@@ -224,7 +264,10 @@ impl PostProcessEffect for StylizedFeedbackFX {
                     }),
                 );
             }
-        } else {
+            copied = true;
+        }
+        #[cfg(target_os = "macos")]
+        if !copied {
             gpu.encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: target_texture,
@@ -239,7 +282,7 @@ impl PostProcessEffect for StylizedFeedbackFX {
                 wgpu::Extent3d { width: ctx.width, height: ctx.height, depth_or_array_layers: 1 },
             );
         }
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        #[cfg(not(target_os = "macos"))]
         gpu.encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: target_texture,

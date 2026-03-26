@@ -28,7 +28,11 @@ pub struct InfraredFX {
 }
 
 impl InfraredFX {
-    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
+    ) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
@@ -36,6 +40,7 @@ impl InfraredFX {
                 "Infrared",
                 std::mem::size_of::<InfraredUniforms>() as u64,
                 hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
             ),
         }
     }

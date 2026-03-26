@@ -19,7 +19,11 @@ pub struct MirrorFX {
 }
 
 impl MirrorFX {
-    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
+    ) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
@@ -27,6 +31,7 @@ impl MirrorFX {
                 "Mirror",
                 std::mem::size_of::<MirrorUniforms>() as u64,
                 hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
             ),
         }
     }

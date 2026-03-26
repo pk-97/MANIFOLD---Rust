@@ -25,7 +25,11 @@ pub struct EdgeGlowFX {
 }
 
 impl EdgeGlowFX {
-    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
+    ) -> Self {
         Self {
             helper: ComputeBlitHelper::new(
                 device,
@@ -33,6 +37,7 @@ impl EdgeGlowFX {
                 "EdgeGlow",
                 std::mem::size_of::<EdgeGlowUniforms>() as u64,
                 hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
             ),
         }
     }

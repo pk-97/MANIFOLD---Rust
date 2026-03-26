@@ -738,8 +738,14 @@ impl LayerCompositor {
             ),
             uniform_arena: UniformArena::new(device, hal_ctx),
             effect_chain: EffectChain::new(),
-            effect_registry: EffectRegistry::new(device, queue, hal_ctx),
-            wet_dry_lerp: WetDryLerpPipeline::new(device, hal_ctx),
+            effect_registry: EffectRegistry::new(
+                device, queue, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            ),
+            wet_dry_lerp: WetDryLerpPipeline::new(
+                device, hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
+            ),
             tonemap: TonemapPipeline::new(
                 device, width, height, hal_ctx,
                 #[cfg(target_os = "macos")] native_device,

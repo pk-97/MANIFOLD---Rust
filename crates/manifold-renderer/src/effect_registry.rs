@@ -28,29 +28,34 @@ pub struct EffectRegistry {
 }
 
 impl EffectRegistry {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
+    ) -> Self {
         let mut processors: HashMap<EffectTypeId, Box<dyn PostProcessEffect>> = HashMap::new();
-        processors.insert(EffectTypeId::INVERT_COLORS, Box::new(InvertColorsFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::COLOR_GRADE, Box::new(ColorGradeFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::MIRROR, Box::new(MirrorFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::BLOOM, Box::new(BloomFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::CHROMATIC_ABERRATION, Box::new(ChromaticAberrationFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::GLITCH, Box::new(GlitchFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::DITHER, Box::new(DitherFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::HALATION, Box::new(HalationFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::KALEIDOSCOPE, Box::new(KaleidoscopeFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::EDGE_STRETCH, Box::new(EdgeStretchFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::QUAD_MIRROR, Box::new(QuadMirrorFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::STROBE, Box::new(StrobeFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::STYLIZED_FEEDBACK, Box::new(StylizedFeedbackFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::EDGE_GLOW, Box::new(EdgeGlowFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::TRANSFORM, Box::new(TransformFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::INFRARED, Box::new(InfraredFX::new(device, hal_ctx)));
-        processors.insert(EffectTypeId::VORONOI_PRISM, Box::new(VoronoiPrismFX::new(device, hal_ctx)));
+        processors.insert(EffectTypeId::INVERT_COLORS, Box::new(InvertColorsFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::COLOR_GRADE, Box::new(ColorGradeFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::MIRROR, Box::new(MirrorFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::BLOOM, Box::new(BloomFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::CHROMATIC_ABERRATION, Box::new(ChromaticAberrationFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::GLITCH, Box::new(GlitchFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::DITHER, Box::new(DitherFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::HALATION, Box::new(HalationFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::KALEIDOSCOPE, Box::new(KaleidoscopeFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::EDGE_STRETCH, Box::new(EdgeStretchFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::QUAD_MIRROR, Box::new(QuadMirrorFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::STROBE, Box::new(StrobeFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::STYLIZED_FEEDBACK, Box::new(StylizedFeedbackFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::EDGE_GLOW, Box::new(EdgeGlowFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::TRANSFORM, Box::new(TransformFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::INFRARED, Box::new(InfraredFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
+        processors.insert(EffectTypeId::VORONOI_PRISM, Box::new(VoronoiPrismFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
         // BlobTrackingFX needs queue for font atlas upload
-        processors.insert(EffectTypeId::BLOB_TRACKING, Box::new(BlobTrackingFX::new(device, queue, hal_ctx)));
+        processors.insert(EffectTypeId::BLOB_TRACKING, Box::new(BlobTrackingFX::new(device, queue, hal_ctx, #[cfg(target_os = "macos")] native_device)));
         // WireframeDepthFX needs queue for dummy texture uploads
-        processors.insert(EffectTypeId::WIREFRAME_DEPTH, Box::new(WireframeDepthFX::new(device, hal_ctx)));
+        processors.insert(EffectTypeId::WIREFRAME_DEPTH, Box::new(WireframeDepthFX::new(device, hal_ctx, #[cfg(target_os = "macos")] native_device)));
         Self { processors }
     }
 

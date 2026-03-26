@@ -82,6 +82,12 @@ pub struct ComputeBlitHelper {
     ring_index: Cell<u64>,
     cached: Option<CachedBG>,
 
+    // --- native Metal pipeline (macOS) ---
+    #[cfg(target_os = "macos")]
+    native_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_sampler: Option<manifold_gpu::GpuSampler>,
+
     // --- hal encoding fields (macOS + hal-encoding feature) ---
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
@@ -103,6 +109,10 @@ pub struct ComputeBlitHelper {
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
 unsafe impl Send for ComputeBlitHelper {}
 
+// Safety: native_pipeline and native_sampler are Send+Sync (Metal guarantee).
+#[cfg(all(target_os = "macos", not(feature = "hal-encoding")))]
+unsafe impl Send for ComputeBlitHelper {}
+
 impl ComputeBlitHelper {
     /// Create a new compute-based effect pipeline.
     ///
@@ -118,6 +128,7 @@ impl ComputeBlitHelper {
         label: &str,
         uniform_size: u64,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -268,6 +279,16 @@ impl ComputeBlitHelper {
             mapped_at_creation: false,
         });
 
+        // --- native Metal pipeline from manifold-gpu ---
+        #[cfg(target_os = "macos")]
+        let (native_pipeline, native_sampler) = if let Some(dev) = native_device {
+            let pipe = dev.create_compute_pipeline(shader_source, "cs_main", label);
+            let samp = dev.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
+            (Some(pipe), Some(samp))
+        } else {
+            (None, None)
+        };
+
         Self {
             pipeline,
             bind_group_layout,
@@ -277,6 +298,10 @@ impl ComputeBlitHelper {
             slot_stride,
             ring_index: Cell::new(0),
             cached: None,
+            #[cfg(target_os = "macos")]
+            native_pipeline,
+            #[cfg(target_os = "macos")]
+            native_sampler,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -358,9 +383,52 @@ impl ComputeBlitHelper {
         height: u32,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        let slot = self.ring_index.get() % RING_SLOTS;
+        let _slot = self.ring_index.get() % RING_SLOTS;
         self.ring_index.set(self.ring_index.get() + 1);
-        let byte_offset = slot * self.slot_stride;
+        let byte_offset = _slot * self.slot_stride;
+
+        // ── NATIVE METAL dispatch path ─────────────────────────────────
+        // Zero wgpu — dispatches through manifold_gpu::GpuEncoder directly.
+        // Uses set_bytes for uniforms (inline, no buffer allocation).
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_pipe) = self.native_pipeline
+            && gpu.has_native_encoder()
+        {
+            let native_samp = self.native_sampler.as_ref().unwrap();
+            // Extract source and target textures from wgpu views.
+            // MUST drop each guard before acquiring the next (wgpu snatch lock).
+            let native_source = unsafe {
+                crate::gpu_encoder::extract_native_texture_from_view(source_view)
+            };
+            let native_target = unsafe {
+                crate::gpu_encoder::extract_native_texture_from_view(target_view)
+            };
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            native_enc.dispatch_compute(
+                native_pipe,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: uniform_bytes,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: &native_source,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: native_samp,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3,
+                        texture: &native_target,
+                    },
+                ],
+                [width.div_ceil(16), height.div_ceil(16), 1],
+                label,
+            );
+            return;
+        }
 
         // --- hal dispatch path (uses separate hal command encoder) ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]

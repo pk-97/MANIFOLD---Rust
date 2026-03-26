@@ -97,6 +97,15 @@ pub struct ComputeDualBlitHelper {
     pub dummy_view: wgpu::TextureView,
     cached: Option<CachedBG>,
 
+    // --- native Metal pipeline (macOS) ---
+    #[cfg(target_os = "macos")]
+    native_pipeline: Option<manifold_gpu::GpuComputePipeline>,
+    #[cfg(target_os = "macos")]
+    native_sampler: Option<manifold_gpu::GpuSampler>,
+    /// 1x1 native dummy texture for source_b when it's not read.
+    #[cfg(target_os = "macos")]
+    native_dummy: Option<manifold_gpu::GpuTexture>,
+
     // --- hal encoding fields (macOS + hal-encoding feature) ---
     #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
     hal_pipeline: Option<crate::hal_pipeline::HalComputePipeline>,
@@ -121,6 +130,10 @@ pub struct ComputeDualBlitHelper {
 #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
 unsafe impl Send for ComputeDualBlitHelper {}
 
+// Safety: native_pipeline and native_sampler are Send+Sync (Metal guarantee).
+#[cfg(all(target_os = "macos", not(feature = "hal-encoding")))]
+unsafe impl Send for ComputeDualBlitHelper {}
+
 impl ComputeDualBlitHelper {
     /// Create a new compute-based two-texture effect pipeline.
     ///
@@ -137,6 +150,7 @@ impl ComputeDualBlitHelper {
         label: &str,
         uniform_size: u64,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let _ = &hal_ctx; // suppress unused warning when hal-encoding is off
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -309,6 +323,26 @@ impl ComputeDualBlitHelper {
             mapped_at_creation: false,
         });
 
+        // --- native Metal pipeline from manifold-gpu ---
+        #[cfg(target_os = "macos")]
+        let (native_pipeline, native_sampler, native_dummy) =
+            if let Some(dev) = native_device {
+                let pipe = dev.create_compute_pipeline(shader_source, "cs_main", label);
+                let samp = dev.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
+                let dummy = dev.create_texture(&manifold_gpu::GpuTextureDesc {
+                    width: 1,
+                    height: 1,
+                    depth: 1,
+                    format: manifold_gpu::GpuTextureFormat::Rgba16Float,
+                    dimension: manifold_gpu::GpuTextureDimension::D2,
+                    usage: manifold_gpu::GpuTextureUsage::SHADER_READ,
+                    label: "ComputeDualBlit Native Dummy",
+                });
+                (Some(pipe), Some(samp), Some(dummy))
+            } else {
+                (None, None, None)
+            };
+
         Self {
             pipeline,
             bind_group_layout,
@@ -319,6 +353,12 @@ impl ComputeDualBlitHelper {
             ring_index: Cell::new(0),
             dummy_view,
             cached: None,
+            #[cfg(target_os = "macos")]
+            native_pipeline,
+            #[cfg(target_os = "macos")]
+            native_sampler,
+            #[cfg(target_os = "macos")]
+            native_dummy,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
             hal_pipeline,
             #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -413,9 +453,38 @@ impl ComputeDualBlitHelper {
         height: u32,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        let slot = self.ring_index.get() % RING_SLOTS;
+        let _slot = self.ring_index.get() % RING_SLOTS;
         self.ring_index.set(self.ring_index.get() + 1);
-        let byte_offset = slot * self.slot_stride;
+        let byte_offset = _slot * self.slot_stride;
+
+        // ── NATIVE METAL dispatch path ─────────────────────────────────
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_pipe) = self.native_pipeline
+            && gpu.has_native_encoder()
+        {
+            let native_samp = self.native_sampler.as_ref().unwrap();
+            let native_dummy = self.native_dummy.as_ref().unwrap();
+            let native_source_a = unsafe {
+                crate::gpu_encoder::extract_native_texture_from_view(source_a_view)
+            };
+            let native_target = unsafe {
+                crate::gpu_encoder::extract_native_texture_from_view(target_view)
+            };
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            native_enc.dispatch_compute(
+                native_pipe,
+                &[
+                    manifold_gpu::GpuBinding::Bytes { binding: 0, data: uniform_bytes },
+                    manifold_gpu::GpuBinding::Texture { binding: 1, texture: &native_source_a },
+                    manifold_gpu::GpuBinding::Texture { binding: 2, texture: native_dummy },
+                    manifold_gpu::GpuBinding::Sampler { binding: 3, sampler: native_samp },
+                    manifold_gpu::GpuBinding::Texture { binding: 4, texture: &native_target },
+                ],
+                [width.div_ceil(16), height.div_ceil(16), 1],
+                label,
+            );
+            return;
+        }
 
         // --- hal dispatch path ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
@@ -626,9 +695,40 @@ impl ComputeDualBlitHelper {
         height: u32,
         profiler: Option<&crate::gpu_profiler::GpuProfiler>,
     ) {
-        let slot = self.ring_index.get() % RING_SLOTS;
+        let _slot = self.ring_index.get() % RING_SLOTS;
         self.ring_index.set(self.ring_index.get() + 1);
-        let byte_offset = slot * self.slot_stride;
+        let byte_offset = _slot * self.slot_stride;
+
+        // ── NATIVE METAL dispatch path ─────────────────────────────────
+        #[cfg(target_os = "macos")]
+        if let Some(ref native_pipe) = self.native_pipeline
+            && gpu.has_native_encoder()
+        {
+            let native_samp = self.native_sampler.as_ref().unwrap();
+            let native_source_a = unsafe {
+                crate::gpu_encoder::extract_native_texture_from_view(source_a_view)
+            };
+            let native_source_b = unsafe {
+                crate::gpu_encoder::extract_native_texture_from_view(source_b_view)
+            };
+            let native_target = unsafe {
+                crate::gpu_encoder::extract_native_texture_from_view(target_view)
+            };
+            let native_enc = unsafe { gpu.native_encoder_mut() }.unwrap();
+            native_enc.dispatch_compute(
+                native_pipe,
+                &[
+                    manifold_gpu::GpuBinding::Bytes { binding: 0, data: uniform_bytes },
+                    manifold_gpu::GpuBinding::Texture { binding: 1, texture: &native_source_a },
+                    manifold_gpu::GpuBinding::Texture { binding: 2, texture: &native_source_b },
+                    manifold_gpu::GpuBinding::Sampler { binding: 3, sampler: native_samp },
+                    manifold_gpu::GpuBinding::Texture { binding: 4, texture: &native_target },
+                ],
+                [width.div_ceil(16), height.div_ceil(16), 1],
+                label,
+            );
+            return;
+        }
 
         // --- hal dispatch path (uses separate hal command encoder) ---
         #[cfg(all(target_os = "macos", feature = "hal-encoding"))]

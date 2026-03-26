@@ -152,6 +152,45 @@ pub unsafe fn extract_native_texture(
     )
 }
 
+/// Extract a raw Metal texture from a wgpu TextureView and wrap as GpuTexture.
+///
+/// Uses wgpu's `as_hal()` for resource extraction only (NOT for encoding).
+/// In Metal, a texture view IS a texture (separate MTLTexture object created
+/// via `newTextureViewWithPixelFormat:`). The wgpu-hal Metal `TextureView`
+/// struct has `raw: metal::Texture` as its first field.
+///
+/// The returned GpuTexture holds a retained reference to the underlying Metal
+/// texture. Safe as long as the wgpu TextureView is alive.
+///
+/// # Safety
+/// The TextureView must be backed by the Metal backend.
+/// Relies on wgpu-hal 28's `metal::TextureView` struct layout:
+/// `{ raw: metal::Texture, aspects: FormatAspects }`.
+#[cfg(target_os = "macos")]
+pub unsafe fn extract_native_texture_from_view(
+    view: &wgpu::TextureView,
+) -> manifold_gpu::GpuTexture {
+    type MetalApi = wgpu::hal::api::Metal;
+    let guard = unsafe {
+        view.as_hal::<MetalApi>()
+            .expect("TextureView not Metal")
+    };
+    // wgpu-hal metal::TextureView has `raw: metal::Texture` as first field.
+    // metal::Texture is a foreign_type wrapping *mut MTLTexture (ObjC id pointer).
+    // Read the ObjC id pointer at offset 0, then retain via TextureRef::to_owned().
+    let hal_view_ptr = &*guard as *const _ as *const *mut std::ffi::c_void;
+    let mtl_id = unsafe { *hal_view_ptr };
+    let tex_ref: &metal::TextureRef = unsafe { &*(mtl_id as *const _) };
+    let raw_tex = tex_ref.to_owned();
+    let w = tex_ref.width() as u32;
+    let h = tex_ref.height() as u32;
+    let d = tex_ref.depth() as u32;
+    manifold_gpu::GpuTexture::from_raw(
+        raw_tex, w, h, d.max(1),
+        manifold_gpu::GpuTextureFormat::Rgba16Float,
+    )
+}
+
 /// Extract the native Metal buffer from a wgpu::Buffer for native Metal dispatch.
 ///
 /// Uses wgpu's `as_hal()` for resource extraction only (NOT for encoding).

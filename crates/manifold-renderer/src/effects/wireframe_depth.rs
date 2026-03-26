@@ -560,6 +560,7 @@ impl WireframeDepthFX {
     pub fn new(
         device: &wgpu::Device,
         hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] _native_device: Option<&manifold_gpu::GpuDevice>,
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("WireframeDepth"),

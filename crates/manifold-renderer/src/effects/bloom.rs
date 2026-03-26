@@ -9,7 +9,7 @@ use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
 use super::HDR_BUFFER_DIVISOR;
 use super::dual_texture_blit_helper::DualTextureBlitHelper;
-#[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+#[cfg(target_os = "macos")]
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 
 // BloomFX.cs lines 19-25 — constants
@@ -49,7 +49,7 @@ struct BloomState {
 // BloomFX.cs line 12 — BloomFX : SimpleBlitEffect, IStatefulEffect
 pub struct BloomFX {
     helper: DualTextureBlitHelper,
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+    #[cfg(target_os = "macos")]
     compute_dual_blit: ComputeDualBlitHelper,
     states: AHashMap<i64, BloomState>,
     width: u32,  // BloomFX.cs line 17 — _width
@@ -57,7 +57,11 @@ pub struct BloomFX {
 }
 
 impl BloomFX {
-    pub fn new(device: &wgpu::Device, hal_ctx: Option<&crate::hal_context::HalContext>) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        hal_ctx: Option<&crate::hal_context::HalContext>,
+        #[cfg(target_os = "macos")] native_device: Option<&manifold_gpu::GpuDevice>,
+    ) -> Self {
         Self {
             helper: DualTextureBlitHelper::new(
                 device,
@@ -66,13 +70,14 @@ impl BloomFX {
                 std::mem::size_of::<BloomUniforms>() as u64,
                 hal_ctx,
             ),
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+            #[cfg(target_os = "macos")]
             compute_dual_blit: ComputeDualBlitHelper::new(
                 device,
                 include_str!("shaders/bloom_compute.wgsl"),
                 "Bloom Compute",
                 std::mem::size_of::<BloomUniforms>() as u64,
                 hal_ctx,
+                #[cfg(target_os = "macos")] native_device,
             ),
             states: AHashMap::new(),
             width: 0,
@@ -136,9 +141,14 @@ impl PostProcessEffect for BloomFX {
         self.ensure_state(gpu.device, ctx.owner_key);
 
         // Check once whether to use compute path for this frame
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let use_compute = gpu.has_hal_encoder();
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
+        #[cfg(target_os = "macos")]
+        let use_compute = gpu.has_native_encoder() || {
+            #[cfg(feature = "hal-encoding")]
+            { gpu.has_hal_encoder() }
+            #[cfg(not(feature = "hal-encoding"))]
+            { false }
+        };
+        #[cfg(not(target_os = "macos"))]
         let use_compute = false;
 
         let state = self.states.get(&ctx.owner_key).unwrap();
@@ -152,7 +162,7 @@ impl PostProcessEffect for BloomFX {
             };
             let skip_uniforms = bytemuck::bytes_of(&skip_u);
             if use_compute {
-                #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+                #[cfg(target_os = "macos")]
                 self.compute_dual_blit.dispatch_a_only(
                     gpu, source, target, skip_uniforms,
                     "Bloom Skip", ctx.width, ctx.height, profiler,
@@ -219,7 +229,7 @@ impl PostProcessEffect for BloomFX {
             };
             let down_uniforms = bytemuck::bytes_of(&down_u);
             if use_compute {
-                #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+                #[cfg(target_os = "macos")]
                 self.compute_dual_blit.dispatch_a_only(
                     gpu, &state.mips_a[i - 1].view, &state.mips_a[i].view,
                     down_uniforms, "Bloom Down",
@@ -264,7 +274,7 @@ impl PostProcessEffect for BloomFX {
             };
             let up_uniforms = bytemuck::bytes_of(&up_u);
             if use_compute {
-                #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
+                #[cfg(target_os = "macos")]
                 self.compute_dual_blit.dispatch(
                     gpu, &state.mips_a[i].view, lo_view, &state.mips_b[i].view,
                     up_uniforms, "Bloom Up",
