@@ -951,14 +951,26 @@ fn build_slot_map(
     // Detect runtime-sized arrays in storage buffers.
     // naga's MSL backend needs a "sizes buffer" containing the byte size of each
     // runtime-sized buffer so it can resolve arrayLength() calls.
+    // Covers both top-level `array<T>` and struct with last member `array<T>`.
     let has_runtime_array = bindings.iter().any(|(_, _, gv)| {
         matches!(gv.space, naga::AddressSpace::Storage { .. }) && {
             let ty = &module.types[gv.ty];
-            matches!(ty.inner, naga::TypeInner::Struct { ref members, .. }
-                if members.last().is_some_and(|m| {
-                    matches!(module.types[m.ty].inner, naga::TypeInner::Array { size: naga::ArraySize::Dynamic, .. })
-                })
-            )
+            match &ty.inner {
+                // Top-level runtime-sized array: var<storage> foo: array<T>
+                naga::TypeInner::Array { size: naga::ArraySize::Dynamic, .. } => true,
+                // Struct with last member being a runtime-sized array
+                naga::TypeInner::Struct { members, .. } => {
+                    members.last().is_some_and(|m| {
+                        matches!(
+                            module.types[m.ty].inner,
+                            naga::TypeInner::Array { size: naga::ArraySize::Dynamic, .. }
+                        )
+                    })
+                }
+                // Binding array (runtime array of resources)
+                naga::TypeInner::BindingArray { size: naga::ArraySize::Dynamic, .. } => true,
+                _ => false,
+            }
         }
     });
 
