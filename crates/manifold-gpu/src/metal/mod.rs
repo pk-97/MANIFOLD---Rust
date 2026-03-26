@@ -276,7 +276,12 @@ impl GpuDevice {
 
     /// Create a new command encoder for one frame's GPU work.
     pub fn create_encoder(&self, label: &str) -> GpuEncoder {
-        let cmd_buf = self.queue.new_command_buffer_with_unretained_references();
+        // Use retained references — Metal retains all resources set on encoders.
+        // Slightly higher overhead than unretained, but guarantees resources
+        // survive until GPU execution completes. Required because we extract
+        // temporary GpuTexture wrappers (via extract_native_texture) that are
+        // dropped before commit.
+        let cmd_buf = self.queue.new_command_buffer();
         cmd_buf.set_label(label);
         // Retain the command buffer so it outlives the autorelease pool drain.
         let ptr = cmd_buf as *const metal::CommandBufferRef as *mut std::ffi::c_void;
