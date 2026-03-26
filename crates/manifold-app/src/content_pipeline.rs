@@ -289,8 +289,20 @@ impl ContentPipeline {
         #[cfg(target_os = "macos")]
         if let Some(ref native_event) = self.native_event {
             if self.native_signal_value > 0 {
+                let wait_start = std::time::Instant::now();
                 while !native_event.is_done(self.native_signal_value) {
                     std::thread::yield_now();
+                    if wait_start.elapsed().as_secs() >= 3 {
+                        eprintln!(
+                            "[HANG] wait_previous_frame stuck for 3s! \
+                             signal_value={} gpu_value={}",
+                            self.native_signal_value,
+                            native_event.signaled_value(),
+                        );
+                        // Break out to avoid permanent hang — frame will
+                        // have artifacts but the app stays responsive.
+                        break;
+                    }
                 }
                 if let Some(ref bridge) = self.shared_bridge {
                     bridge.publish_front(self.last_write_surface as u32);
@@ -1181,6 +1193,13 @@ impl ContentPipeline {
         let native_event = self.native_event.as_ref().unwrap();
         native_enc.signal_event(native_event);
         self.native_signal_value = native_event.current_value();
+        // Check for command buffer errors before commit
+        if frame_count <= 3 || frame_count.is_multiple_of(300) {
+            eprintln!(
+                "[NATIVE] frame={} signal_value={} committing...",
+                frame_count, self.native_signal_value,
+            );
+        }
         native_enc.commit();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
