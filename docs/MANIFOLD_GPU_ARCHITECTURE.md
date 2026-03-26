@@ -56,8 +56,8 @@ manifold-gpu/
 | 4.5                    | Generators → hal, single submission                                                              | **In progress** |
 | 4.6                    | LinePipeline hal render + native readbacks → zero wgpu on content hot path                       | Next            |
 | **manifold-gpu crate** | Extract hal code into proper native backend + wgpu fallback crate                                | After 4.6       |
-| 5                      | MTLHeap + memoryless + aliasing + lossy compression                                              | After crate     |
-| 6                      | MPS kernels (blur, Sobel, scale)                                                                 | After 5         |
+| 5                      | MTLHeap + memoryless + aliasing + lossy compression                                              | **Done**        |
+| 6                      | MPS kernels (blur, Sobel, scale)                                                                 | Next            |
 | 7                      | MetalFX Scaler (Spatial confirmed; Temporal needs depth — only works when WireframeDepth active) | After 6         |
 | 8                      | f16 math + pass fusion + function constants + MTLBinaryArchive                                   | After 7         |
 
