@@ -2,8 +2,24 @@
 //!
 //! Owns metal::Device, metal::CommandQueue, metal::CommandBuffer directly.
 //! Zero wgpu types, zero wgpu submission tracking, zero "(wgpu internal) Signal"
-//! overhead. WGSL→MSL compilation via naga, shader loading via
-//! metal::Device::new_library_with_source().
+//! overhead.
+//!
+//! Shader compilation pipeline: WGSL → naga → SPIR-V → spirv-opt → SPIRV-Cross → MSL.
+//! naga parses WGSL and provides binding introspection for the SlotMap.
+//! spirv-opt runs optimization passes (constant folding, dead code elimination, etc.).
+//! SPIRV-Cross compiles optimized SPIR-V to MSL with explicit resource binding indices
+//! matching the SlotMap assignments. Metal compiles MSL at runtime.
+//!
+//! ## objc2-metal migration path (future task)
+//!
+//! The current `metal` crate (v0.33 from gfx-rs) is functional but missing newer
+//! Metal features (MetalFX, MPS image processing), which is why `mps.rs` and
+//! `metalfx.rs` use raw `objc::msg_send!`. `objc2-metal` (v0.3.2, 13M+ downloads)
+//! is the successor with full API coverage including MPS and MetalFX. A full
+//! migration from `metal` to `objc2-metal` would touch every file in manifold-gpu
+//! (different naming conventions, ownership model via `objc2::rc::Retained`).
+//! This is a future task — the current `metal` crate works correctly for all
+//! existing functionality.
 
 #[allow(unexpected_cfgs)]
 pub mod mps;
@@ -11,6 +27,8 @@ pub mod archive;
 pub mod metalfx;
 
 use crate::types::*;
+use spirv_cross2::compile::msl;
+use spirv_cross2::Compiler;
 
 // Raw ObjC retain/release — avoids dependency on objc::msg_send! macro.
 unsafe extern "C" {
@@ -1336,7 +1354,233 @@ impl Drop for GpuEncoder {
     }
 }
 
-// ─── WGSL→MSL compilation ─────────────────────────────────────────────
+// ─── WGSL→SPIR-V→spirv-opt→SPIRV-Cross→MSL compilation ──────────────
+
+/// Core shader compilation pipeline:
+///   1. naga Module → SPIR-V (via naga::back::spv)
+///   2. SPIR-V → optimized SPIR-V (via spirv-tools optimizer)
+///   3. optimized SPIR-V → MSL (via SPIRV-Cross with explicit resource bindings)
+///
+/// The SlotMap (built from naga introspection) determines Metal argument indices.
+/// SPIRV-Cross is told to use those exact indices via `add_resource_binding()`.
+fn compile_to_optimized_msl(
+    module: &naga::Module,
+    info: &naga::valid::ModuleInfo,
+    slot_map: &SlotMap,
+    entry_points: &[&str],
+    label: &str,
+) -> String {
+    // Step 1: naga Module → SPIR-V bytes
+    let spv_options = naga::back::spv::Options {
+        lang_version: (1, 3),
+        flags: naga::back::spv::WriterFlags::empty(),
+        ..Default::default()
+    };
+    let spv_words = naga::back::spv::write_vec(module, info, &spv_options, None)
+        .unwrap_or_else(|e| panic!("{label}: naga SPIR-V output error: {e}"));
+
+    // Step 2: Optimize SPIR-V via spirv-tools
+    let optimized_words = optimize_spirv(&spv_words, label);
+
+    // Step 3: SPIR-V → MSL via SPIRV-Cross
+    compile_spirv_to_msl(&optimized_words, module, slot_map, entry_points, label)
+}
+
+/// Run spirv-opt optimization passes on SPIR-V words.
+/// Falls back to unoptimized SPIR-V if optimization fails.
+fn optimize_spirv(spv_words: &[u32], label: &str) -> Vec<u32> {
+    use spirv_tools::opt::{self, Optimizer};
+
+    let mut optimizer = opt::create(None);
+
+    // Register key optimization passes (same categories as spirv-opt -O):
+    optimizer
+        .register_pass(opt::Passes::InlineExhaustive)
+        .register_pass(opt::Passes::EliminateDeadFunctions)
+        .register_pass(opt::Passes::EliminateDeadConstant)
+        .register_pass(opt::Passes::EliminateDeadMembers)
+        .register_pass(opt::Passes::DeadVariableElimination)
+        .register_pass(opt::Passes::ConditionalConstantPropagation)
+        .register_pass(opt::Passes::AggressiveDCE)
+        .register_pass(opt::Passes::Simplification)
+        .register_pass(opt::Passes::StrengthReduction)
+        .register_pass(opt::Passes::BlockMerge)
+        .register_pass(opt::Passes::CFGCleanup)
+        .register_pass(opt::Passes::LocalSingleStoreElim)
+        .register_pass(opt::Passes::LocalMultiStoreElim)
+        .register_pass(opt::Passes::LocalAccessChainConvert)
+        .register_pass(opt::Passes::InsertExtractElim)
+        .register_pass(opt::Passes::CopyPropagateArrays)
+        .register_pass(opt::Passes::VectorDCE)
+        .register_pass(opt::Passes::RedundancyElimination)
+        .register_pass(opt::Passes::ReduceLoadSize)
+        .register_pass(opt::Passes::CombineAccessChains)
+        .register_pass(opt::Passes::CodeSinking)
+        .register_pass(opt::Passes::CompactIds);
+
+    match optimizer.optimize(spv_words, &mut |msg| {
+        log::warn!("{label}: spirv-opt: {msg:?}");
+    }, None) {
+        Ok(binary) => {
+            // binary.as_words() gives us &[u32]
+            binary.as_words().to_vec()
+        }
+        Err(e) => {
+            log::warn!(
+                "{label}: spirv-opt optimization failed ({e}), using unoptimized SPIR-V"
+            );
+            spv_words.to_vec()
+        }
+    }
+}
+
+/// Compile optimized SPIR-V to MSL via SPIRV-Cross.
+/// Sets explicit resource bindings matching the SlotMap assignments.
+fn compile_spirv_to_msl(
+    spv_words: &[u32],
+    naga_module: &naga::Module,
+    slot_map: &SlotMap,
+    entry_points: &[&str],
+    label: &str,
+) -> String {
+    use spirv_cross2::compile::msl;
+    use spirv_cross2::{Compiler, Module, targets::Msl};
+
+    let sc_module = Module::from_words(spv_words);
+    let mut compiler: Compiler<Msl> = Compiler::new(sc_module)
+        .unwrap_or_else(|e| panic!("{label}: SPIRV-Cross compiler creation error: {e}"));
+
+    // Set the active entry point (use the first one, SPIRV-Cross will include all)
+    // For multi-entry-point shaders, SPIRV-Cross compiles all entry points.
+
+    // Add explicit resource bindings matching our SlotMap.
+    // This ensures SPIRV-Cross uses the same Metal argument indices that
+    // our dispatch code expects.
+    // Determine execution models present in the entry points.
+    let exec_models = determine_execution_models(naga_module, entry_points);
+    for exec_model in &exec_models {
+        add_resource_bindings_from_slot_map(
+            &mut compiler, naga_module, slot_map, *exec_model, label,
+        );
+    }
+
+    // Configure MSL compiler options
+    let mut options = <Msl as spirv_cross2::compile::CompilableTarget>::options();
+    options.version = msl::MslVersion::new(2, 4, 0);
+    options.platform = msl::MetalPlatform::MacOS;
+    options.force_native_arrays = true;
+    // zero_initialize_workgroup_memory is handled by SPIRV-Cross automatically
+
+    let artifact = compiler.compile(&options)
+        .unwrap_or_else(|e| {
+            panic!("{label}: SPIRV-Cross MSL compilation error: {e}")
+        });
+
+    let msl_source = artifact.to_string();
+
+    // Verify entry points exist in the output
+    for ep_name in entry_points {
+        if !msl_source.contains(ep_name) {
+            log::warn!(
+                "{label}: entry point '{ep_name}' not found in SPIRV-Cross MSL output"
+            );
+        }
+    }
+
+    msl_source
+}
+
+/// Add explicit MSL resource bindings to SPIRV-Cross compiler matching our SlotMap.
+///
+/// Iterates over naga module globals, finds their WGSL @binding(N), looks up the
+/// Metal argument index from the SlotMap, and tells SPIRV-Cross to use that index.
+fn add_resource_bindings_from_slot_map(
+    compiler: &mut Compiler<spirv_cross2::targets::Msl>,
+    naga_module: &naga::Module,
+    slot_map: &SlotMap,
+    exec_model: spirv_cross2::spirv::ExecutionModel,
+    label: &str,
+) {
+    for (_handle, gv) in naga_module.global_variables.iter() {
+        let Some(ref binding) = gv.binding else {
+            continue;
+        };
+        let wgsl_binding = binding.binding;
+        let Some(slot) = slot_map.get(wgsl_binding) else {
+            continue;
+        };
+
+        // SPIRV-Cross uses descriptor set 0 for all bindings (naga puts
+        // everything in set 0 when outputting SPIR-V).
+        let resource_binding = msl::ResourceBinding::Qualified {
+            set: binding.group,
+            binding: wgsl_binding,
+        };
+        let mut bind_target = msl::BindTarget {
+            buffer: 0,
+            texture: 0,
+            sampler: 0,
+            count: None,
+        };
+        match slot.kind {
+            SlotKind::Buffer => bind_target.buffer = slot.metal_index,
+            SlotKind::Texture => bind_target.texture = slot.metal_index,
+            SlotKind::Sampler => bind_target.sampler = slot.metal_index,
+        }
+
+        if let Err(e) = compiler.add_resource_binding(
+            exec_model, resource_binding, &bind_target,
+        ) {
+            log::warn!(
+                "{label}: failed to set MSL binding for @binding({wgsl_binding}): {e}"
+            );
+        }
+    }
+
+    // If there's a sizes buffer in the slot map, add it too
+    if let Some(sizes_slot) = slot_map.get(SIZES_BUFFER_BINDING) {
+        let resource_binding = msl::ResourceBinding::BufferSizeBuffer(sizes_slot.metal_index);
+        let bind_target = msl::BindTarget {
+            buffer: sizes_slot.metal_index,
+            texture: 0,
+            sampler: 0,
+            count: None,
+        };
+        if let Err(e) = compiler.add_resource_binding(
+            exec_model, resource_binding, &bind_target,
+        ) {
+            log::warn!(
+                "{label}: failed to set MSL sizes buffer binding: {e}"
+            );
+        }
+    }
+}
+
+/// Map naga shader stages to SPIRV-Cross ExecutionModel.
+fn determine_execution_models(
+    naga_module: &naga::Module,
+    entry_points: &[&str],
+) -> Vec<spirv_cross2::spirv::ExecutionModel> {
+    use spirv_cross2::spirv::ExecutionModel;
+
+    let mut models = Vec::new();
+    for ep_name in entry_points {
+        for ep in &naga_module.entry_points {
+            if ep.name == *ep_name {
+                let model = match ep.stage {
+                    naga::ShaderStage::Compute => ExecutionModel::GLCompute,
+                    naga::ShaderStage::Vertex => ExecutionModel::Vertex,
+                    naga::ShaderStage::Fragment => ExecutionModel::Fragment,
+                    _ => continue,
+                };
+                if !models.contains(&model) {
+                    models.push(model);
+                }
+            }
+        }
+    }
+    models
+}
 
 /// Parse WGSL, introspect bindings, compile to MSL for a compute entry point.
 /// Returns (slot_map, msl_source, msl_entry_name).
@@ -1357,48 +1601,29 @@ fn compile_wgsl_to_msl(
     .validate(&module)
     .unwrap_or_else(|e| panic!("{label}: WGSL validation error: {e}"));
 
-    // Step 3: Introspect bindings and build slot map + naga MSL options
-    let (slot_map, entry_resources) = build_slot_map(&module, entry_point);
+    // Step 3: Introspect bindings and build slot map
+    let (slot_map, _entry_resources) = build_slot_map(&module, entry_point);
 
-    let mut per_entry_point_map = naga::back::msl::EntryPointResourceMap::default();
-    per_entry_point_map.insert(entry_point.to_string(), entry_resources);
-
-    let options = naga::back::msl::Options {
-        lang_version: (2, 4),
-        per_entry_point_map,
-        // Multi-entry-point shaders (e.g. fluid_scatter.wgsl with splat_main +
-        // resolve_main) have globals at the same @binding that differ per entry.
-        // fake_missing_bindings generates dummy targets for globals not in our
-        // per_entry_point_map — they're never used by the compiled function.
-        fake_missing_bindings: true,
-        zero_initialize_workgroup_memory: true,
-        ..Default::default()
-    };
-
-    let pipeline_options = naga::back::msl::PipelineOptions {
-        allow_and_force_point_size: false,
-        entry_point: None,
-        vertex_pulling_transform: false,
-        vertex_buffer_mappings: Vec::new(),
-    };
-
-    // Step 4: Compile to MSL
-    let (msl_source, translation_info) =
-        naga::back::msl::write_string(&module, &info, &options, &pipeline_options)
-            .unwrap_or_else(|e| panic!("{label}: MSL compilation error: {e}"));
-
-    // Step 5: Get actual MSL entry point name and workgroup size
+    // Step 4: Get workgroup size from naga module
     let entry_idx = module
         .entry_points
         .iter()
         .position(|ep| ep.name == entry_point)
         .unwrap_or_else(|| panic!("{label}: entry point '{entry_point}' not found in module"));
-    let msl_entry_name = translation_info.entry_point_names[entry_idx]
-        .as_ref()
-        .unwrap_or_else(|e| panic!("{label}: entry point error: {e:?}"))
-        .clone();
-
     let workgroup_size = module.entry_points[entry_idx].workgroup_size;
+
+    // Step 5: WGSL → SPIR-V → spirv-opt → SPIRV-Cross → MSL
+    let msl_source = compile_to_optimized_msl(
+        &module,
+        &info,
+        &slot_map,
+        &[entry_point],
+        label,
+    );
+
+    // Step 6: SPIRV-Cross preserves entry point names from SPIR-V (which come from
+    // naga's SPIR-V backend preserving the original WGSL names).
+    let msl_entry_name = entry_point.to_string();
 
     (slot_map, msl_source, msl_entry_name, workgroup_size)
 }
@@ -1423,31 +1648,17 @@ fn compile_wgsl_to_msl_render(
     // Build a UNIFIED slot map from the union of both entry points' globals.
     // VS and FS share the same Metal argument table, so bindings visible in
     // either stage need slots (e.g. line pipeline: positions/edges in VS only).
-    let (unified_slot_map, entry_resources_vs, entry_resources_fs) =
+    let (unified_slot_map, _resources_vs, _resources_fs) =
         build_slot_map_render(&module, vs_entry, fs_entry);
 
-    let mut per_entry_point_map = naga::back::msl::EntryPointResourceMap::default();
-    per_entry_point_map.insert(vs_entry.to_string(), entry_resources_vs);
-    per_entry_point_map.insert(fs_entry.to_string(), entry_resources_fs);
-
-    let options = naga::back::msl::Options {
-        lang_version: (2, 4),
-        per_entry_point_map,
-        fake_missing_bindings: true,
-        zero_initialize_workgroup_memory: false,
-        ..Default::default()
-    };
-
-    let pipeline_options = naga::back::msl::PipelineOptions {
-        allow_and_force_point_size: false,
-        entry_point: None,
-        vertex_pulling_transform: false,
-        vertex_buffer_mappings: Vec::new(),
-    };
-
-    let (msl_source, _info) =
-        naga::back::msl::write_string(&module, &info, &options, &pipeline_options)
-            .unwrap_or_else(|e| panic!("{label}: MSL compilation error: {e}"));
+    // WGSL → SPIR-V → spirv-opt → SPIRV-Cross → MSL
+    let msl_source = compile_to_optimized_msl(
+        &module,
+        &info,
+        &unified_slot_map,
+        &[vs_entry, fs_entry],
+        label,
+    );
 
     (unified_slot_map, msl_source, String::new())
 }
