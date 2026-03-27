@@ -655,6 +655,25 @@ impl ContentThread {
                 authority,
             );
         }
+
+        // Auto-determine clock authority from enabled/receiving sources.
+        // Priority: MidiClock (position sync) > Osc > Link > Internal.
+        let auto_authority = if self.transport_controller.midi_clock_sync.as_ref()
+            .is_some_and(|s| s.is_midi_clock_enabled() && s.is_receiving_clock())
+        {
+            ClockAuthority::MidiClock
+        } else if self.osc_sync.is_receiving_timecode {
+            ClockAuthority::Osc
+        } else if self.transport_controller.link_sync.as_ref()
+            .is_some_and(|s| s.is_link_enabled() && s.has_active_peers())
+        {
+            ClockAuthority::Link
+        } else {
+            ClockAuthority::Internal
+        };
+        if let Some(project) = self.engine.project_mut() {
+            project.settings.clock_authority = auto_authority;
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -1064,7 +1083,8 @@ impl ContentThread {
 
             // ── Transport/sync ─────────────────────────────────────
             ContentCommand::CycleClockAuthority => {
-                self.transport_controller.cycle_authority(&mut self.engine);
+                // No longer used — authority is auto-determined from enabled sources.
+                // Kept for backwards compatibility with any pending commands.
             }
             ContentCommand::ToggleLink => {
                 self.transport_controller.toggle_link(&mut self.engine);

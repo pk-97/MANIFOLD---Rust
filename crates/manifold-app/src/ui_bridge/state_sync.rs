@@ -119,7 +119,8 @@ pub fn push_state(
         ui.transport.set_bpm_text(tree, &format!("{:.1}", bpm));
 
         // Clock authority display — "SRC:INT"/"SRC:LNK"/"SRC:CLK"/"SRC:OSC"
-        let auth = project.settings.clock_authority;
+        // Use content_state (authoritative, auto-determined each content frame)
+        let auth = content_state.clock_authority;
         let auth_color = match auth {
             manifold_core::types::ClockAuthority::Internal => color::BUTTON_INACTIVE_C32,
             manifold_core::types::ClockAuthority::Link => color::LINK_ORANGE,

@@ -708,7 +708,7 @@ impl TransportPanel {
 
     fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
-        if id == self.clock_authority_id { return vec![PanelAction::CycleClockAuthority]; }
+        // clock_authority_id is read-only — authority is auto-determined from enabled sources
         if id == self.link_button_id { return vec![PanelAction::ToggleLink]; }
         if id == self.clk_button_id { return vec![PanelAction::ToggleMidiClock]; }
         if id == self.clk_device_id { return vec![PanelAction::SelectClkDevice]; }

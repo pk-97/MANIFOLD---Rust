@@ -184,38 +184,33 @@ impl TransportController {
 
     // ── Sync toggle actions ──────────────────────────────────────────
 
-    /// Toggle Ableton Link on/off. If disabling and Link was authority, revert to Internal.
-    /// Port of Unity TransportController.ToggleLink.
+    /// Toggle Ableton Link on/off.
+    /// Authority is auto-determined by content thread — no explicit authority management here.
     pub fn toggle_link(&mut self, engine: &mut PlaybackEngine) {
         if let Some(ref mut link) = self.link_sync {
             if link.is_link_enabled() {
                 link.disable_link();
-                let auth = Self::get_clock_authority(engine.project());
-                if auth == ClockAuthority::Link {
-                    self.apply_authority_exclusively(engine, ClockAuthority::Internal);
-                }
+                log::info!("[TransportController] Link disabled");
             } else {
                 let bpm = engine.project().map_or(120.0, |p| p.settings.bpm as f64);
                 link.enable_link(bpm);
+                log::info!("[TransportController] Link enabled");
             }
         } else {
             log::info!("[TransportController] Link sync not available");
         }
     }
 
-    /// Toggle MIDI Clock. If disabling and CLK was authority, revert to Internal.
-    /// If enabling, takes over authority.
-    /// Port of Unity TransportController.ToggleMidiClock.
-    pub fn toggle_midi_clock(&mut self, engine: &mut PlaybackEngine) {
+    /// Toggle MIDI Clock on/off.
+    /// Authority is auto-determined by content thread — no explicit authority management here.
+    pub fn toggle_midi_clock(&mut self, _engine: &mut PlaybackEngine) {
         if let Some(ref mut clk) = self.midi_clock_sync {
             if clk.is_midi_clock_enabled() {
                 clk.disable_midi_clock();
-                let auth = Self::get_clock_authority(engine.project());
-                if auth == ClockAuthority::MidiClock {
-                    self.apply_authority_exclusively(engine, ClockAuthority::Internal);
-                }
+                log::info!("[TransportController] MIDI Clock disabled");
             } else {
-                self.apply_authority_exclusively(engine, ClockAuthority::MidiClock);
+                clk.enable_midi_clock(clk.selected_source_index());
+                log::info!("[TransportController] MIDI Clock enabled");
             }
         } else {
             log::info!("[TransportController] MIDI Clock sync not available");

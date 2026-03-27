@@ -422,10 +422,7 @@ impl Application {
                     continue;
                 }
                 // Transport controller actions — intercept here for Application-level access
-                PanelAction::CycleClockAuthority => {
-                    self.send_content_cmd(ContentCommand::CycleClockAuthority);
-                    continue;
-                }
+                // CycleClockAuthority removed — authority is auto-determined from enabled sources
                 PanelAction::ToggleLink => {
                     self.send_content_cmd(ContentCommand::ToggleLink);
                     continue;
