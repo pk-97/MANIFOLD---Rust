@@ -240,6 +240,28 @@ fn layer_id_owner_key(layer_id: &manifold_core::LayerId) -> i64 {
     (hasher.finish() | (1 << 63)) as i64
 }
 
+/// Count active (non-muted, non-solo-hidden) layers in the frame.
+fn count_active_layers(frame: &CompositorFrame) -> usize {
+    let clips = frame.clips;
+    let any_solo = frame.layers.iter().any(|l| l.is_solo);
+    let mut count = 0;
+    let mut i = 0;
+    while i < clips.len() {
+        let layer_idx = clips[i].layer_index;
+        let layer_desc = frame.layers.iter().find(|l| l.layer_index == layer_idx);
+        while i < clips.len() && clips[i].layer_index == layer_idx {
+            i += 1;
+        }
+        if let Some(ld) = layer_desc
+            && (ld.is_muted || (any_solo && !ld.is_solo))
+        {
+            continue;
+        }
+        count += 1;
+    }
+    count
+}
+
 /// Check if an effect slice has any enabled effects with non-zero amount.
 /// Unity ref: CompositorStack.cs lines 965-974 — checks enabled && GetParam(0) > 0.
 fn has_enabled_effects(effects: &[EffectInstance]) -> bool {
@@ -325,6 +347,16 @@ pub struct LayerCompositor {
     /// Per-layer transform data for the blend pass. Cleared each frame.
     /// Parallel to `layer_outputs` returned by `generate_layers()`.
     single_clip_transforms: Vec<SingleClipTransform>,
+    /// Shared event for async compute synchronization.
+    /// Layer command buffers signal this with incrementing values;
+    /// compositor command buffer waits for the final value.
+    /// Created lazily on first parallel frame.
+    #[cfg(target_os = "macos")]
+    async_event: Option<manifold_gpu::GpuEvent>,
+    /// Base signal value for the current frame's async compute.
+    /// Each layer signals base + layer_index; compositor waits for base + layer_count.
+    #[cfg(target_os = "macos")]
+    async_signal_base: u64,
 }
 
 impl LayerCompositor {
@@ -340,6 +372,10 @@ impl LayerCompositor {
             tonemap: TonemapPipeline::new(device, width, height),
             led_tap: None,
             single_clip_transforms: Vec::new(),
+            #[cfg(target_os = "macos")]
+            async_event: None,
+            #[cfg(target_os = "macos")]
+            async_signal_base: 0,
         }
     }
 
@@ -695,17 +731,331 @@ impl LayerCompositor {
         }
     }
 
-    /// Composite all clips into main buffer, grouping by layer.
-    /// Split into two phases: generate_layers (per-layer, parallelizable) +
-    /// blend_layers (serial, order-dependent).
-    fn composite(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
-        // Reset uniform arena for this frame
+    /// Serial composite path: single encoder for all work.
+    /// Used when only 1 active layer (no parallel benefit).
+    fn composite_serial(
+        &mut self,
+        gpu: &mut GpuEncoder,
+        frame: &CompositorFrame,
+    ) {
         self.uniform_arena.reset();
-        // Clear per-frame scratch
         self.single_clip_transforms.clear();
-
         let layer_outputs = self.generate_layers(gpu, frame);
         self.blend_layers(gpu, &layer_outputs);
+    }
+
+    /// Parallel composite path: one command buffer per layer for generation,
+    /// then a serial blend on the original command buffer.
+    ///
+    /// Each layer's generation encodes into its own MTLCommandBuffer, signals
+    /// a GpuEvent, and commits. The GPU schedules these for concurrent execution.
+    /// The original command buffer (passed as `compositor_gpu`) waits on all
+    /// layer completions before blending.
+    ///
+    /// Safety: per-layer effect chains and scratch buffers use raw pointer access
+    /// (unique index per layer, no aliasing). LayerOutput textures are valid for
+    /// the frame duration since they're owned by effect chains, layer bufs, or
+    /// clip render targets that aren't reallocated between generate and blend.
+    #[cfg(target_os = "macos")]
+    fn composite_parallel(
+        &mut self,
+        compositor_gpu: &mut GpuEncoder,
+        frame: &CompositorFrame,
+    ) {
+        let clips = frame.clips;
+        let width = self.main.width();
+        let height = self.main.height();
+        let aspect = width as f32 / height as f32;
+        let device = compositor_gpu.device;
+        let pool = compositor_gpu.pool;
+
+        self.uniform_arena.reset();
+        self.single_clip_transforms.clear();
+
+        // Ensure async event exists
+        if self.async_event.is_none() {
+            self.async_event = Some(device.create_event());
+        }
+        // Raw pointer to avoid borrow conflict with &mut self later.
+        // Safety: async_event lives for the duration of this method and
+        // is not modified (only signal values change, which is interior mutation).
+        let async_event: *const manifold_gpu::GpuEvent =
+            self.async_event.as_ref().unwrap();
+
+        // Check for any solo layer
+        let any_solo = frame.layers.iter().any(|l| l.is_solo);
+
+        // Pre-scan: count active layers and multi-clip layers for pool sizing.
+        let mut active_layer_count = 0usize;
+        let mut multi_clip_layer_count = 0usize;
+        {
+            let mut ci = 0;
+            while ci < clips.len() {
+                let layer_idx = clips[ci].layer_index;
+                let layer_desc =
+                    frame.layers.iter().find(|l| l.layer_index == layer_idx);
+                let start = ci;
+                while ci < clips.len() && clips[ci].layer_index == layer_idx {
+                    ci += 1;
+                }
+                if let Some(ld) = layer_desc
+                    && (ld.is_muted || (any_solo && !ld.is_solo))
+                {
+                    continue;
+                }
+                let clip_count = ci - start;
+                let has_layer_effects =
+                    layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
+                active_layer_count += 1;
+                if clip_count > 1 || has_layer_effects {
+                    multi_clip_layer_count += 1;
+                }
+            }
+        }
+
+        self.ensure_effect_chains(active_layer_count);
+        if multi_clip_layer_count > 0 {
+            self.ensure_layer_bufs(multi_clip_layer_count, device);
+        }
+
+        let effect_chains_ptr = self.effect_chains.as_mut_ptr();
+        let layer_bufs_ptr = self.layer_bufs.as_mut_ptr();
+        let base_signal = self.async_signal_base;
+
+        let mut layer_outputs = Vec::with_capacity(active_layer_count);
+        let mut effect_chain_idx = 0usize;
+        let mut layer_buf_idx = 0usize;
+        let mut layer_signal_idx = 0u64;
+
+        // Process each layer on its own command buffer.
+        let mut i = 0;
+        while i < clips.len() {
+            let layer_idx = clips[i].layer_index;
+            let layer_desc =
+                frame.layers.iter().find(|l| l.layer_index == layer_idx);
+
+            // Check mute/solo
+            if let Some(ld) = layer_desc
+                && (ld.is_muted || (any_solo && !ld.is_solo))
+            {
+                while i < clips.len() && clips[i].layer_index == layer_idx {
+                    i += 1;
+                }
+                continue;
+            }
+
+            let group_start = i;
+            while i < clips.len() && clips[i].layer_index == layer_idx {
+                i += 1;
+            }
+            let group = &clips[group_start..i];
+
+            let layer_blend =
+                layer_desc.map_or(BlendMode::Normal, |l| l.blend_mode);
+            let layer_opacity = layer_desc.map_or(1.0, |l| l.opacity);
+            let has_layer_effects =
+                layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
+
+            let ec_idx = effect_chain_idx;
+            effect_chain_idx += 1;
+            let effect_chain =
+                unsafe { &mut *effect_chains_ptr.add(ec_idx) };
+
+            // Create per-layer command buffer
+            let mut layer_enc = device.create_encoder(&format!(
+                "Layer {layer_idx}"
+            ));
+
+            // Scope the GpuEncoder wrapper so it drops before signal+commit
+            {
+                let mut gpu = if let Some(p) = pool {
+                    GpuEncoder::with_pool(&mut layer_enc, device, p)
+                } else {
+                    GpuEncoder::new(&mut layer_enc, device)
+                };
+
+                if group.len() == 1 && !has_layer_effects {
+                    let clip = &group[0];
+                    let blend_input = if has_enabled_effects(clip.effects) {
+                        let ctx = EffectContext {
+                            time: frame.time,
+                            beat: frame.beat,
+                            dt: frame.dt,
+                            width,
+                            height,
+                            owner_key: clip_id_owner_key(clip.clip_id),
+                            is_clip_level: true,
+                            edge_stretch_width: 0.5625,
+                            frame_count: frame.frame_count as i64,
+                        };
+                        Self::apply_effects(
+                            effect_chain,
+                            &mut self.effect_registry,
+                            &self.wet_dry_lerp,
+                            &mut gpu,
+                            clip.texture,
+                            clip.effects,
+                            clip.effect_groups,
+                            &ctx,
+                        )
+                    } else {
+                        None
+                    };
+
+                    let effective_tex: *const GpuTexture =
+                        blend_input.unwrap_or(clip.texture);
+                    layer_outputs.push(LayerOutput {
+                        texture: effective_tex,
+                        blend_mode: layer_blend,
+                        opacity: layer_opacity * clip.opacity,
+                        aspect,
+                    });
+                    self.single_clip_transforms.push(SingleClipTransform {
+                        translate_x: clip.translate_x,
+                        translate_y: clip.translate_y,
+                        scale: clip.scale,
+                        rotation: clip.rotation,
+                        invert_colors: clip.invert_colors,
+                    });
+                } else {
+                    let lb_idx = layer_buf_idx;
+                    layer_buf_idx += 1;
+                    let layer_buf =
+                        unsafe { &mut *layer_bufs_ptr.add(lb_idx) };
+
+                    layer_buf.clear_source(&mut gpu, false);
+
+                    for clip in group {
+                        let blend_input =
+                            if has_enabled_effects(clip.effects) {
+                                let ctx = EffectContext {
+                                    time: frame.time,
+                                    beat: frame.beat,
+                                    dt: frame.dt,
+                                    width,
+                                    height,
+                                    owner_key: clip_id_owner_key(
+                                        clip.clip_id,
+                                    ),
+                                    is_clip_level: true,
+                                    edge_stretch_width: 0.5625,
+                                    frame_count: frame.frame_count as i64,
+                                };
+                                Self::apply_effects(
+                                    effect_chain,
+                                    &mut self.effect_registry,
+                                    &self.wet_dry_lerp,
+                                    &mut gpu,
+                                    clip.texture,
+                                    clip.effects,
+                                    clip.effect_groups,
+                                    &ctx,
+                                )
+                            } else {
+                                None
+                            };
+                        let effective_blend_tex =
+                            blend_input.unwrap_or(clip.texture);
+
+                        let uniforms = BlendUniforms {
+                            blend_mode: BlendMode::Normal as u32,
+                            opacity: clip.opacity,
+                            translate_x: clip.translate_x,
+                            translate_y: clip.translate_y,
+                            scale_val: clip.scale,
+                            rotation: clip.rotation,
+                            aspect_ratio: aspect,
+                            invert_colors: if clip.invert_colors {
+                                1.0
+                            } else {
+                                0.0
+                            },
+                        };
+                        self.blend.blend_pass(
+                            &mut gpu,
+                            &mut self.uniform_arena,
+                            layer_buf.source_texture(),
+                            effective_blend_tex,
+                            layer_buf.target_texture(),
+                            &uniforms,
+                        );
+                        layer_buf.swap();
+                    }
+
+                    // Layer-level effects
+                    let layer_source = if let Some(ld) = layer_desc
+                        && has_enabled_effects(ld.effects)
+                    {
+                        let ctx = EffectContext {
+                            time: frame.time,
+                            beat: frame.beat,
+                            dt: frame.dt,
+                            width,
+                            height,
+                            owner_key: layer_desc.map_or(0, |ld| {
+                                layer_id_owner_key(&ld.layer_id)
+                            }),
+                            is_clip_level: false,
+                            edge_stretch_width: 0.5625,
+                            frame_count: frame.frame_count as i64,
+                        };
+                        Self::apply_effects(
+                            effect_chain,
+                            &mut self.effect_registry,
+                            &self.wet_dry_lerp,
+                            &mut gpu,
+                            layer_buf.source_texture(),
+                            ld.effects,
+                            ld.effect_groups,
+                            &ctx,
+                        )
+                    } else {
+                        None
+                    };
+
+                    let effective_layer_tex: *const GpuTexture =
+                        layer_source.unwrap_or(layer_buf.source_texture());
+
+                    layer_outputs.push(LayerOutput {
+                        texture: effective_layer_tex,
+                        blend_mode: layer_blend,
+                        opacity: layer_opacity,
+                        aspect,
+                    });
+                    self.single_clip_transforms.push(
+                        SingleClipTransform {
+                            translate_x: 0.0,
+                            translate_y: 0.0,
+                            scale: 1.0,
+                            rotation: 0.0,
+                            invert_colors: false,
+                        },
+                    );
+                }
+            } // gpu wrapper drops here, releasing borrow on layer_enc
+
+            // Signal completion for this layer and commit
+            layer_signal_idx += 1;
+            let signal_value = base_signal + layer_signal_idx;
+            layer_enc.signal_event_value(
+                unsafe { &*async_event }, signal_value,
+            );
+            layer_enc.commit();
+        }
+
+        // Update base for next frame
+        self.async_signal_base = base_signal + layer_signal_idx;
+
+        // Compositor command buffer waits for all layer completions
+        let final_signal = base_signal + layer_signal_idx;
+        if layer_signal_idx > 0 {
+            compositor_gpu.native_enc.wait_event(
+                unsafe { &*async_event }, final_signal,
+            );
+        }
+
+        // Serial blend phase on the compositor command buffer
+        self.blend_layers(compositor_gpu, &layer_outputs);
     }
 }
 
@@ -724,7 +1074,21 @@ impl Compositor for LayerCompositor {
             return &self.tonemap.output.texture;
         }
 
-        self.composite(gpu, frame);
+        // Choose serial vs parallel composite path.
+        // Parallel path creates per-layer command buffers for GPU-concurrent
+        // generation. Only activated with 2+ active layers (no overhead for
+        // single-layer frames).
+        #[cfg(target_os = "macos")]
+        {
+            let active_layers = count_active_layers(frame);
+            if active_layers >= 2 {
+                self.composite_parallel(gpu, frame);
+            } else {
+                self.composite_serial(gpu, frame);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        self.composite_serial(gpu, frame);
 
         // LED tap: capture pre-tonemap composite when exit index is 0.
         // main.source holds the all-layers composite at this point, before
