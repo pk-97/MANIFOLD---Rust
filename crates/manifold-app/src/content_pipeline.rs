@@ -94,6 +94,10 @@ pub struct ContentPipeline {
     /// Which IOSurface the PREVIOUS frame wrote to (published after fence ready).
     #[cfg(target_os = "macos")]
     last_write_surface: usize,
+    /// Duration of the last GPU fence wait in milliseconds.
+    /// Non-zero means the GPU was still working when the content thread woke up.
+    /// Exposed unconditionally for the performance overlay.
+    last_fence_wait_ms: f64,
     /// Duration of the last GPU poll (wait for completion) in milliseconds.
     /// Captured inside render_content(), read by the profiler.
     #[cfg(feature = "profiling")]
@@ -143,6 +147,7 @@ impl ContentPipeline {
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             #[cfg(target_os = "macos")]
             last_write_surface: 0,
+            last_fence_wait_ms: 0.0,
             #[cfg(feature = "profiling")]
             gpu_poll_ms: 0.0,
             #[cfg(feature = "profiling")]
@@ -263,9 +268,10 @@ impl ContentPipeline {
 
         // Wait for the surface we're about to write to (may have pending GPU work
         // from 2 frames ago with triple buffering). Also publishes the last completed frame.
-        let _poll_start = std::time::Instant::now();
+        let fence_wait_start = std::time::Instant::now();
         self.wait_for_surface();
-        let _poll_ms = _poll_start.elapsed().as_secs_f64() * 1000.0;
+        self.last_fence_wait_ms = fence_wait_start.elapsed().as_secs_f64() * 1000.0;
+        let _poll_ms = self.last_fence_wait_ms;
 
         // Extract timing values before split borrow
         let time = engine.current_time();

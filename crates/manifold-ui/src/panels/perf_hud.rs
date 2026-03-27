@@ -31,6 +31,9 @@ pub struct PerfMetrics {
     pub ui_frame_time_ms: f32,
     pub render_fps: f32,
     pub render_frame_time_ms: f32,
+    /// Target content FPS from project settings (e.g. 60, 120, 240).
+    /// Used to scale graph colors relative to the frame budget.
+    pub render_target_fps: f32,
     pub active_clips: usize,
     pub preparing_clips: usize,
     pub current_beat: f32,
@@ -216,18 +219,30 @@ impl PerfHudPanel {
             }
         }
 
-        // Update graph bars — resize height + recolor per sample value
-        self.update_graph_bars(tree, &self.ui_graph_bar_ids, &self.ui_dt_history, self.ui_graph_y);
-        self.update_graph_bars(tree, &self.render_graph_bar_ids, &self.render_dt_history, self.render_graph_y);
+        // Update graph bars — resize height + recolor per sample value.
+        // UI graph: budget = 120 FPS (8.3ms). Render graph: budget = project target FPS.
+        let ui_budget_ms = 8.33;
+        let render_budget_ms = if m.render_target_fps > 0.0 {
+            1000.0 / m.render_target_fps
+        } else {
+            16.67
+        };
+        self.update_graph_bars(tree, &self.ui_graph_bar_ids, &self.ui_dt_history,
+            self.ui_graph_y, ui_budget_ms);
+        self.update_graph_bars(tree, &self.render_graph_bar_ids, &self.render_dt_history,
+            self.render_graph_y, render_budget_ms);
     }
 
     /// Update bar heights and colors from the ring buffer.
+    /// `budget_ms` is the target frame time — bars are green when under budget,
+    /// yellow when close, red when over.
     fn update_graph_bars(
         &self,
         tree: &mut UITree,
         bar_ids: &[i32],
         history: &FrameTimeHistory,
         graph_y: f32,
+        budget_ms: f32,
     ) {
         if bar_ids.is_empty() { return; }
         for (i, ms) in history.iter_oldest_first().enumerate() {
@@ -238,7 +253,16 @@ impl PerfHudPanel {
             let frac = (ms / GRAPH_MAX_MS).clamp(0.0, 1.0);
             let bar_h = (frac * GRAPH_HEIGHT).max(1.0);
             let bar_y = graph_y + GRAPH_HEIGHT - bar_h;
-            let col = dt_color(ms);
+            // Color relative to frame budget: green = at or under budget,
+            // yellow = slightly over (dropping occasional frames),
+            // red = significantly over (sustained frame drops).
+            let col = if ms <= budget_ms * 1.05 {
+                color::STATUS_GOOD
+            } else if ms <= budget_ms * 1.5 {
+                color::STATUS_WARNING
+            } else {
+                color::STATUS_BAD
+            };
 
             // Preserve x/w, update y/h
             let old = tree.get_bounds(id as u32);

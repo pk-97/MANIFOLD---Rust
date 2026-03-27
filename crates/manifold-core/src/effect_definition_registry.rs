@@ -375,14 +375,14 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
         osc_prefix: Some("fluidDistortion"),
     });
 
-    // EdgeGlow
+    // EdgeDetect (formerly EdgeGlow — glow removed, use Bloom/Halation for glow)
     m.insert(EffectTypeId::EDGE_GLOW, EffectDef {
-        display_name: "Edge Glow",
+        display_name: "Edge Detect",
         param_count: 4,
         param_defs: vec![
             pd("Amount", 0.0, 1.0, 0.0),
             pd_osc("Thresh", 0.0, 1.0, 0.3, "Threshold"),
-            pd_osc("Glow", 0.0, 1.0, 0.5, "Glow"),
+            pd("_unused", 0.0, 1.0, 0.0), // p[2] was Glow — kept for project file compat
             pd_whole_labels("Mode", 0.0, 2.0, 0.0,
                 &["Sobel", "Laplacian", "Frei-Chen"],
                 "Mode"),

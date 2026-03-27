@@ -156,11 +156,13 @@ impl ContentThread {
             }
             if !self.timer.should_tick() {
                 // Precise sleep: compute exact time to next frame, sleep most of it,
-                // then spin for the final sub-ms to avoid macOS sleep overshoot (~1-2ms).
+                // then spin-wait for the final stretch to avoid macOS sleep overshoot.
+                // macOS thread::sleep overshoots by 2-4ms under load. A 3ms spin margin
+                // keeps the content thread hitting its target FPS consistently.
                 let remaining = self.timer.time_until_next_tick();
-                if remaining > std::time::Duration::from_millis(2) {
-                    // Sleep for most of the remaining time, leaving 1.5ms margin for spin-wait
-                    std::thread::sleep(remaining - std::time::Duration::from_micros(1500));
+                if remaining > std::time::Duration::from_millis(4) {
+                    // Sleep for most of the remaining time, leaving 3ms margin for spin-wait
+                    std::thread::sleep(remaining - std::time::Duration::from_millis(3));
                 } else if remaining > std::time::Duration::from_micros(100) {
                     // Close to deadline — yield to OS scheduler instead of sleeping
                     std::thread::yield_now();
@@ -273,9 +275,11 @@ impl ContentThread {
             #[cfg(feature = "profiling")]
             let _t0 = std::time::Instant::now();
 
+            let render_work_start = std::time::Instant::now();
             self.content_pipeline.render_content(
                 &self.gpu, &mut self.engine, &tick_result, dt, self.frame_count,
             );
+            let render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
 
             #[cfg(feature = "profiling")]
             let _render_content_ms = _t0.elapsed().as_secs_f64() * 1000.0;
