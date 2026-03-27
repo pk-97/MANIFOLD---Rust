@@ -44,9 +44,18 @@ struct BloomState {
     count: usize,
 }
 
+// Bloom WGSL source — shared across all specialized pipeline variants.
+const BLOOM_WGSL: &str = include_str!("shaders/bloom_compute.wgsl");
+
 // BloomFX.cs line 12 — BloomFX : SimpleBlitEffect, IStatefulEffect
 pub struct BloomFX {
     helper: ComputeDualBlitHelper,
+    /// Specialized pipelines with mode baked in — one per bloom pass type.
+    /// Metal compiler dead-code eliminates inactive branches in each variant.
+    pipeline_prefilter: manifold_gpu::GpuComputePipeline,  // mode=0
+    pipeline_downsample: manifold_gpu::GpuComputePipeline, // mode=1
+    pipeline_upsample: manifold_gpu::GpuComputePipeline,   // mode=2
+    pipeline_composite: manifold_gpu::GpuComputePipeline,  // mode=3
     states: AHashMap<i64, BloomState>,
     width: u32,
     height: u32,
@@ -54,12 +63,20 @@ pub struct BloomFX {
 
 impl BloomFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
+        let spec = |mode: &str, label: &str| {
+            device.create_specialized_compute_pipeline(
+                BLOOM_WGSL,
+                "cs_main",
+                &[("uniforms.mode", mode)],
+                label,
+            )
+        };
         Self {
-            helper: ComputeDualBlitHelper::new(
-                device,
-                include_str!("shaders/bloom_compute.wgsl"),
-                "Bloom Compute",
-            ),
+            helper: ComputeDualBlitHelper::new(device, BLOOM_WGSL, "Bloom Compute"),
+            pipeline_prefilter: spec("0u", "Bloom Prefilter"),
+            pipeline_downsample: spec("1u", "Bloom Downsample"),
+            pipeline_upsample: spec("2u", "Bloom Upsample"),
+            pipeline_composite: spec("3u", "Bloom Composite"),
             states: AHashMap::new(),
             width: 0,
             height: 0,
@@ -142,8 +159,9 @@ impl PostProcessEffect for BloomFX {
                 bloom_texel_size_x: 0.0, bloom_texel_size_y: 0.0,
                 _pad0: 0.0, _pad1: 0.0,
             };
-            self.helper.dispatch_a_only(
-                gpu, source, target, bytemuck::bytes_of(&skip_u),
+            self.helper.dispatch_a_only_with(
+                &self.pipeline_composite, gpu, source, target,
+                bytemuck::bytes_of(&skip_u),
                 "Bloom Skip", ctx.width, ctx.height,
             );
             return;
@@ -174,8 +192,9 @@ impl PostProcessEffect for BloomFX {
             main_texel_size_y: 1.0 / ctx.height as f32,
             ..base_uniforms
         };
-        self.helper.dispatch_a_only(
-            gpu, source, &state.mips_a[0].texture, bytemuck::bytes_of(&prefilter_u),
+        self.helper.dispatch_a_only_with(
+            &self.pipeline_prefilter, gpu, source, &state.mips_a[0].texture,
+            bytemuck::bytes_of(&prefilter_u),
             "Bloom Prefilter",
             state.mips_a[0].width, state.mips_a[0].height,
         );
@@ -190,8 +209,9 @@ impl PostProcessEffect for BloomFX {
                 main_texel_size_y: 1.0 / src_h as f32,
                 ..base_uniforms
             };
-            self.helper.dispatch_a_only(
-                gpu, &state.mips_a[i - 1].texture, &state.mips_a[i].texture,
+            self.helper.dispatch_a_only_with(
+                &self.pipeline_downsample, gpu,
+                &state.mips_a[i - 1].texture, &state.mips_a[i].texture,
                 bytemuck::bytes_of(&down_u), "Bloom Down",
                 state.mips_a[i].width, state.mips_a[i].height,
             );
@@ -215,8 +235,9 @@ impl PostProcessEffect for BloomFX {
                 bloom_texel_size_y: 1.0 / lo_h as f32,
                 ..base_uniforms
             };
-            self.helper.dispatch(
-                gpu, &state.mips_a[i].texture, lo_tex, &state.mips_b[i].texture,
+            self.helper.dispatch_with(
+                &self.pipeline_upsample, gpu,
+                &state.mips_a[i].texture, lo_tex, &state.mips_b[i].texture,
                 bytemuck::bytes_of(&up_u), "Bloom Up",
                 state.mips_b[i].width, state.mips_b[i].height,
             );
@@ -233,8 +254,9 @@ impl PostProcessEffect for BloomFX {
             bloom_texel_size_y: 1.0 / bloom_h as f32,
             ..base_uniforms
         };
-        self.helper.dispatch(
-            gpu, source, &state.mips_b[0].texture, target,
+        self.helper.dispatch_with(
+            &self.pipeline_composite, gpu,
+            source, &state.mips_b[0].texture, target,
             bytemuck::bytes_of(&composite_u), "Bloom Composite",
             ctx.width, ctx.height,
         );
