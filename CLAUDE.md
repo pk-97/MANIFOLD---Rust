@@ -15,13 +15,14 @@ The Rust codebase is the authoritative implementation. The Unity codebase at `/U
 | `manifold-core` | Data models, types, registries (pure, no GPU) | `Project`, `Timeline`, `Layer`, `TimelineClip`, `ClipId`, `LayerId`, `EffectGroupId` |
 | `manifold-editing` | Commands, undo/redo, EditingService | `Command` trait, `EditingService`, `UndoRedoManager` |
 | `manifold-playback` | PlaybackEngine, scheduling, sync, MIDI/OSC | `PlaybackEngine`, `ClipScheduler`, `SyncArbiter`, `ClipRenderer` trait |
-| `manifold-renderer` | wgpu GPU: compositor, effects, generators | `Compositor` trait, `PostProcessEffect` trait, `Generator` trait |
+| `manifold-gpu` | Native Metal GPU backend (`metal` crate). Zero wgpu. | `GpuDevice`, `GpuEncoder`, `GpuTexture`, `GpuBuffer`, `GpuComputePipeline`, `GpuRenderPipeline`, `TexturePool` |
+| `manifold-renderer` | Compositor, effects, generators (uses `manifold-gpu`) | `Compositor` trait, `PostProcessEffect` trait, `Generator` trait |
 | `manifold-ui` | Custom bitmap UI: tree, panels, input | `UIState`, `CoordinateMapper`, `UITree`, 17 panel types |
 | `manifold-io` | Project serialization (V1 JSON + V2 ZIP) | `loader`, `saver`, `migrate` |
 | `manifold-native` | Native plugin FFI (depth estimation) | `DepthEstimator`, `BlobDetector` |
 | `manifold-app` | winit entry, Application, UIRoot, UIBridge | `Application`, `ContentThread`, `ContentPipeline` |
 
-**Dependency direction:** `core` ← `editing`, `playback`, `renderer`, `ui`, `io` ← `app`. No backwards dependencies. Core is pure.
+**Dependency direction:** `core` ← `gpu` ← `editing`, `playback`, `renderer`, `ui`, `io` ← `app`. No backwards dependencies. Core is pure. GPU is Metal-only on content thread.
 
 ## ARCHITECTURE
 
@@ -40,12 +41,19 @@ The Rust codebase is the authoritative implementation. The Unity codebase at `/U
 - **parking_lot** — `RwLock`/`Mutex` replacing std (no poisoning, smaller, faster)
 - **Lock-free MIDI** — `AtomicClockState` packed `AtomicU64` CAS for real-time-safe MIDI clock callbacks
 - **Per-owner effect cleanup** — `TickResult::stopped_clips` → `ContentPipeline::cleanup_stopped_clips()` → `EffectRegistry` → stateful effects
+- **Native Metal GPU** — content thread uses `manifold-gpu` crate (`metal` crate directly, zero wgpu). UI thread uses wgpu on separate device.
+- **Hybrid render pipeline** — single-pass effects use fragment shaders (TBDR tile memory), multi-pass/stateful effects use compute dispatches
+- **Async compute** — independent layers generate in parallel `MTLCommandBuffer`s, compositor waits via `MTLEvent`
+- **Texture pool** — frame-stamped recycling, zero per-frame allocations after 3-frame warmup
+- **Function constants** — specialized Metal pipelines per effect mode (bloom 4, compositor 13 blend modes, etc.)
+- **MTLBinaryArchive** — compiled pipeline cache on disk, near-instant startup on subsequent launches
+- **`set_fast_math_enabled(true)`** — globally on all Metal pipeline compile options
 
 ### Key Module Splits
 
 - `manifold-app/src/ui_bridge/` — 7 modules: mod, transport, editing, inspector, layer, project, state_sync
 - `manifold-app/src/` — `app.rs` + `app_render.rs` + `app_lifecycle.rs`
-- `manifold-renderer/src/effects/` — 26 effect impls + `simple_blit_helper` + `dual_texture_blit_helper`
+- `manifold-renderer/src/effects/` — 26 effect impls + `fragment_blit_helper` (single-pass) + `compute_blit_helper` (multi-pass) + `compute_dual_blit_helper`
 - `manifold-renderer/src/generators/` — 20+ generator impls + shared infrastructure
 
 ---
@@ -92,7 +100,7 @@ The Rust codebase is the authoritative implementation. The Unity codebase at `/U
 
 ### Build
 
-- **wgpu 28**, winit 0.30, Edition 2024, Rust stable
+- **manifold-gpu** (native `metal` crate on macOS), **wgpu 28** (UI thread only), winit 0.30, Edition 2024, Rust stable
 - `clippy.toml`: `too-many-arguments-threshold = 20`
 - `rustfmt.toml`: `max_width = 100`, `use_field_init_shorthand = true`
 - Release: `lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`, `panic = "abort"`
@@ -106,34 +114,45 @@ YOU MUST COMMIT AND PUSH CODE CHANGES TO THE RELEVANT REPO AFTER COMPLETING FEAT
 
 ---
 
-## wgpu / METAL CONSTRAINTS
+## GPU ARCHITECTURE — NATIVE METAL
 
-Metal/wgpu constraints are RUNTIME problems, NOT source-code compromises.
+The content thread uses `manifold-gpu` with the `metal` crate directly. **Zero wgpu on the content thread.** wgpu is only used on the UI thread (separate device). See `docs/MANIFOLD_GPU_ARCHITECTURE.md` for full details.
 
-### Workgroup Size
-- `max_compute_invocations_per_workgroup` = 256 on Metal → `@workgroup_size(4,4,4)` for 3D volumes
-- 3D textures: dispatch `(res+7)/8` per axis
+### Content Thread GPU Types
+- ALL GPU types from `manifold-gpu`: `GpuDevice`, `GpuEncoder`, `GpuTexture`, `GpuBuffer`, `GpuComputePipeline`, `GpuRenderPipeline`
+- **NEVER** use `wgpu::*` types on the content thread
+- UI thread files (`ui_renderer.rs`, `tonemap_blit.rs`, `layer_bitmap_gpu.rs`, `app_render.rs`) use wgpu — don't migrate these
 
-### Texture Format Rules
-- **First, match Unity's format.** `RFloat` → `R32Float`. `RGFloat` → `Rg32Float`. `ARGBFloat` → `Rgba32Float`. `ARGBHalf` → `Rgba16Float`.
-- **ALL 32-bit float formats are NOT filterable on Metal.** If shader uses `textureSample` (sampler), MUST use `Rgba16Float`. If shader uses `textureLoad` only, 32-bit formats are fine with `Float { filterable: false }` in BGL.
-- `R16Float` does NOT support `STORAGE_BINDING` on Metal
-- Document every format substitution in `docs/KNOWN_DIVERGENCES.md`
-- **Decision rule for every texture:**
-  1. `textureSample`? → MUST be filterable → `Rgba16Float` if Unity uses 32-bit float
-  2. `textureLoad` only? → 32-bit float fine → `Float { filterable: false }` in BGL
-  3. Both? → Two textures or `Rgba16Float` for both
+### Hybrid Render Pipeline
+- **Single-pass effects → fragment shaders** via `FragmentBlitHelper` — benefits from TBDR tile memory on Apple Silicon
+- **Multi-pass/stateful effects → compute dispatches** via `ComputeBlitHelper` — avoids per-pass tile load/store
+- **Rule:** If `num_passes == 1` AND effect is not stateful → use fragment shader. Otherwise → compute.
 
-### Buffer Sizes
-- Match Unity's buffer sizes exactly. Runtime clamp if Metal's 128MB limit is a problem.
-
-### Pipeline / API
-- `immediate_size: 0` on `PipelineLayoutDescriptor` (wgpu 28+)
-- `depth_slice: None` on `RenderPassColorAttachment`
-- `textureSampleLevel` required for 3D texture sampling in fragment shaders
-- 3D sampler needs `address_mode_w` set
-- Separate render pipelines needed per output format even with same shader
+### Metal Constraints
+- `max_compute_invocations_per_workgroup` = 256 → `@workgroup_size(16,16)` for 2D, `@workgroup_size(4,4,4)` for 3D
+- `R32Float` NOT filterable — use `Rgba16Float` if `textureSample` needed
+- `R16Float` does NOT support `STORAGE_BINDING`
+- Match Unity's texture formats first, substitute only when Metal requires it
+- Uniform structs: 16-byte aligned, `_pad` fields, `#[repr(C)]`, field order matches WGSL
+- `textureSampleLevel` required for 3D textures in fragment shaders
+- `textureSample` (implicit LOD) preferred in fragment shaders — more efficient than `textureSampleLevel`
+- `set_fast_math_enabled(true)` is set globally on all pipeline compile options
 - Separable 3D blur: after 3 passes (X,Y,Z) result is in the "temp" volume (odd number of swaps)
+
+### Async Compute
+- Independent layers generate in parallel `MTLCommandBuffer`s
+- Compositor `MTLCommandBuffer` waits on all layer `MTLEvent` signals before blending
+- Single-layer fast path skips multi-command-buffer overhead
+
+### Texture Pool
+- Frame-stamped recycling: textures released to pool, only reused after N frames (N = frames in flight)
+- Zero per-frame allocations after 3-frame warmup
+- Persistent state textures (feedback, stylized_feedback) are NOT pooled
+
+### Resolution Scaling (matching Unity)
+- Generators with organic/particle content run at reduced resolution (0.5× or 0.75×) with bilinear upscale
+- Sharp geometric generators (Lissajous, Tesseract, BasicShapes) run at full resolution
+- Effect intermediates (Halation blur, CRT glow, FluidDistortion velocity) run at reduced resolution
 
 ---
 
@@ -198,7 +217,7 @@ For features ported from Unity, the Unity source is the behavioral specification
 
 ### Texture Format Mapping
 
-| Unity | Rust (wgpu) | Notes |
+| Unity | Rust (manifold-gpu / Metal) | Notes |
 |---|---|---|
 | `RFloat` | `R32Float` | Keep unless sampled via `textureSample` |
 | `RGFloat` | `Rg32Float` | Keep unless sampled via `textureSample` |
