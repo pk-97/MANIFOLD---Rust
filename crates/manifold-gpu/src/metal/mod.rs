@@ -233,15 +233,10 @@ impl GpuDevice {
                 panic!("{label}: MTL library compile error: {e}\nMSL source:\n{msl_source}")
             });
 
-        let function = library
-            .get_function(&msl_entry_name, None)
-            .unwrap_or_else(|e| {
-                let names = library.function_names();
-                panic!(
-                    "{label}: function '{msl_entry_name}' not found: {e}. \
-                     Available: {names:?}"
-                )
-            });
+        let available = library.function_names();
+        let function = find_entry_function(
+            &library, &msl_entry_name, &available, label, "compute",
+        );
 
         // Use descriptor-based creation when archive is available — enables
         // binary archive lookup (near-instant on cache hit) and auto-populates
