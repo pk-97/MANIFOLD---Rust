@@ -598,21 +598,26 @@ impl ContentThread {
         let now = self.time_since_start;
 
         // Link sync — poll beat/phase/tempo from Ableton Link network.
-        if let Some(ref mut link) = self.transport_controller.link_sync {
+        let link_has_tempo = if let Some(ref mut link) = self.transport_controller.link_sync {
             link.update(
                 &mut self.sync_arbiter,
                 &mut self.engine,
                 authority,
             );
-            // Feed live Link tempo to engine for UI readout.
+            // Link provides the most accurate BPM when peers are connected.
             if link.is_link_enabled() && link.has_active_peers() {
                 self.engine.set_live_external_tempo(
                     true,
                     link.link_tempo as f32,
                     TempoPointSource::Link,
                 );
+                true
+            } else {
+                false
             }
-        }
+        } else {
+            false
+        };
 
         // MIDI Clock sync — poll clock/SPP from midir.
         // Snapshot SyncTarget state before passing &mut engine as SyncArbiterTarget.
@@ -625,8 +630,9 @@ impl ContentThread {
                 &snap,
                 authority,
             );
-            // Feed live MIDI Clock BPM to engine.
-            if clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
+            // Feed live MIDI Clock BPM to engine — but Link takes priority
+            // when available (more accurate, network-synced tempo).
+            if !link_has_tempo && clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
                 self.engine.set_live_external_tempo(
                     true,
                     clk.current_clock_bpm(),

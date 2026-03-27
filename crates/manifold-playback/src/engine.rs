@@ -1,6 +1,6 @@
 use manifold_core::ClipId;
 use manifold_core::layer::Layer;
-use manifold_core::types::{ClockAuthority, LayerType, PlaybackState, TempoPointSource};
+use manifold_core::types::{LayerType, PlaybackState, TempoPointSource};
 use manifold_core::GeneratorTypeId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::math::BeatQuantizer;
@@ -1063,16 +1063,13 @@ impl PlaybackEngine {
         self.live_external_tempo_source = source;
     }
 
-    /// Try to get live external tempo (Link or MIDI Clock only).
-    /// Port of C# PlaybackEngine.TryGetLiveExternalTempo (lines 1404-1421).
+    /// Try to get live external tempo from Link or MIDI Clock.
+    /// Returns the tempo regardless of clock authority — live BPM display
+    /// should reflect the external source when available (Link is most accurate).
+    /// Port of C# PlaybackEngine.TryGetLiveExternalTempo (lines 1404-1421),
+    /// with authority gate removed so BPM readout works with any SRC setting.
     pub fn try_get_live_external_tempo(&self) -> Option<(f32, TempoPointSource)> {
         if !self.has_live_external_tempo {
-            return None;
-        }
-        let authority = self.project.as_ref()
-            .map(|p| p.settings.clock_authority)
-            .unwrap_or(ClockAuthority::Internal);
-        if authority != ClockAuthority::Link && authority != ClockAuthority::MidiClock {
             return None;
         }
         if self.live_external_tempo_bpm > 0.0 {
