@@ -61,8 +61,8 @@ manifold-gpu/
 | 6                      | MPS API (27 operations behind manifold-gpu). Effects use compound shaders — API available for future use | **Done**        |
 | 7                      | MetalFX Frame Interpolation (Metal 4 / macOS Tahoe). Master output level — render at 90 FPS, interpolate to 120. Requires 2 frames + depth + motion vectors. Depth available when WireframeDepth active. Without depth/motion: spatial-only fallback. | Future          |
 | 8                      | Function constants (bloom 4-way, compositor 13 blend modes, plasma 5-way, feedback 3-way, edge glow 3-way, fluid display 2-way) + MTLBinaryArchive pipeline caching | **Done**        |
-| 9                      | Async compute — parallel command buffers for independent layer generator+effect chains. Serial: N×2ms. Parallel: 2ms. Scales with layer count. | After 8         |
-| 10                     | Indirect command buffers (ICB) — GPU-driven compositor encoding. CPU sends layer list, GPU encodes all blend dispatches in one shot. Eliminates per-layer CPU→GPU round-trips. Scales with layer count. | After 9         |
+| 9                      | Async compute — parallel command buffers for independent layer generator+effect chains. Serial: N×2ms. Parallel: 2ms. Scales with layer count. | **Done**        |
+| 10                     | Indirect command buffers (ICB) — GPU-driven compositor encoding. CPU sends layer list, GPU encodes all blend dispatches in one shot. Eliminates per-layer CPU→GPU round-trips. Scales with layer count. | After 9 |
 
 ## Metal Version Target
 
