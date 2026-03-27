@@ -23,7 +23,7 @@ manifold-gpu/
 │   ├── encoder.rs      — GpuEncoder (MTLCommandBuffer + encoders)
 │   ├── texture.rs      — GpuTexture / GpuTextureView (MTLTexture)
 │   ├── buffer.rs       — GpuBuffer (MTLBuffer, shared-memory mapped by default)
-│   ├── pipeline.rs     — GpuComputePipeline / GpuRenderPipeline (naga WGSL→MSL)
+│   ├── pipeline.rs     — GpuComputePipeline / GpuRenderPipeline (WGSL→SPIR-V→spirv-opt→SPIRV-Cross→MSL)
 │   ├── sampler.rs      — GpuSampler
 │   ├── sync.rs         — GpuEvent (MTLSharedEvent)
 │   ├── heap.rs         — GpuHeap (MTLHeap — memoryless, aliasing, lossy compression)
@@ -40,7 +40,7 @@ manifold-gpu/
 
 **API surface:** ~15 methods total. create_texture, create_buffer, create_pipeline, create_sampler, dispatch_compute, begin/end_render_pass, copy_texture, clear_texture, submit, signal_event. Purpose-built for MANIFOLD, not general-purpose.
 
-**Shaders:** WGSL everywhere, compiled via naga (WGSL→MSL on Metal, WGSL→SPIR-V/HLSL on wgpu). Naga runs at pipeline creation (startup), not per-frame. MTLBinaryArchive caches compiled GPU binaries to disk.
+**Shaders:** WGSL everywhere. On Metal: WGSL → naga → SPIR-V → spirv-opt (22 optimization passes) → SPIRV-Cross → MSL. On wgpu: WGSL→SPIR-V/HLSL via naga. Compilation runs at pipeline creation (startup), not per-frame. MTLBinaryArchive caches compiled GPU binaries to disk.
 
 **UI thread:** Stays on wgpu directly on all platforms. Separate device, separate concern. Does not use manifold-gpu.
 
