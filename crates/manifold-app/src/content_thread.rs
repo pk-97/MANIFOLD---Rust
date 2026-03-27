@@ -822,10 +822,18 @@ impl ContentThread {
                             source,
                         );
                     }
-                } else if project.tempo_map.point_count() <= 1 {
-                    // No automation lane authored yet: treat tempo as a global master value.
+                } else if project.tempo_map.point_count() <= 1
+                    && authority == ClockAuthority::Internal
+                {
+                    // No automation lane authored and no external position source:
+                    // treat tempo as a global master value.
                     // Compare quantized values so raw float jitter doesn't trigger writes.
                     // Port of C# ApplyResolvedTempo lines 1127-1134.
+                    //
+                    // When MidiClock or Link is active, do NOT write to the tempo map —
+                    // the project BPM is updated via sync_project_bpm_from_current_beat()
+                    // for display only. Writing the tempo map causes beat re-derivation
+                    // from stale time values, which makes the timeline stutter.
                     let map_bpm =
                         project.tempo_map.get_bpm_at_beat(0.0, project.settings.bpm);
                     let q_resolved_bpm = BeatQuantizer::quantize_bpm(bpm);
