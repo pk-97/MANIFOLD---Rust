@@ -223,6 +223,29 @@ impl GpuDevice {
         }
     }
 
+    /// Create a specialized compute pipeline by substituting constants in the WGSL
+    /// source before compilation. Each `(pattern, replacement)` pair performs a
+    /// string replacement — e.g. `("uniforms.mode", "0u")` replaces every
+    /// occurrence of `uniforms.mode` with the literal `0u`, allowing naga and
+    /// the Metal compiler to constant-fold branches and dead-code eliminate
+    /// inactive paths.
+    ///
+    /// This achieves the same effect as Metal function constants without
+    /// requiring naga to emit `[[function_constant]]` annotations.
+    pub fn create_specialized_compute_pipeline(
+        &self,
+        wgsl_source: &str,
+        entry_point: &str,
+        specializations: &[(&str, &str)],
+        label: &str,
+    ) -> GpuComputePipeline {
+        let mut source = wgsl_source.to_string();
+        for &(pattern, replacement) in specializations {
+            source = source.replace(pattern, replacement);
+        }
+        self.create_compute_pipeline(&source, entry_point, label)
+    }
+
     /// Create a render pipeline from WGSL source (fullscreen triangle pattern).
     ///
     /// Vertex shader generates a fullscreen triangle from vertex_index.

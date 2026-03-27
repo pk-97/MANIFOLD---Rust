@@ -28,6 +28,67 @@ impl ComputeDualBlitHelper {
         Self { pipeline, sampler }
     }
 
+    /// Execute a compute dispatch with an externally-supplied specialized pipeline
+    /// and one source texture (source_a only).
+    pub fn dispatch_a_only_with(
+        &self,
+        pipeline: &manifold_gpu::GpuComputePipeline,
+        gpu: &mut GpuEncoder,
+        source: &manifold_gpu::GpuTexture,
+        target: &manifold_gpu::GpuTexture,
+        uniform_bytes: &[u8],
+        label: &str,
+        width: u32,
+        height: u32,
+    ) {
+        self.dispatch_with(
+            pipeline, gpu, source, source, target, uniform_bytes, label, width, height,
+        );
+    }
+
+    /// Execute a compute dispatch with an externally-supplied specialized pipeline
+    /// and two source textures.
+    pub fn dispatch_with(
+        &self,
+        pipeline: &manifold_gpu::GpuComputePipeline,
+        gpu: &mut GpuEncoder,
+        source_a: &manifold_gpu::GpuTexture,
+        source_b: &manifold_gpu::GpuTexture,
+        target: &manifold_gpu::GpuTexture,
+        uniform_bytes: &[u8],
+        label: &str,
+        width: u32,
+        height: u32,
+    ) {
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                manifold_gpu::GpuBinding::Bytes {
+                    binding: 0,
+                    data: uniform_bytes,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 1,
+                    texture: source_a,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 2,
+                    texture: source_b,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 3,
+                    sampler: &self.sampler,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 4,
+                    texture: target,
+                },
+            ],
+            [width.div_ceil(16), height.div_ceil(16), 1],
+            label,
+        );
+    }
+
     /// Execute a compute dispatch with one source texture (source_a only).
     /// Binds source_a to both @binding(1) and @binding(2) — the shader's
     /// source_b input is unused for prefilter/downsample modes.

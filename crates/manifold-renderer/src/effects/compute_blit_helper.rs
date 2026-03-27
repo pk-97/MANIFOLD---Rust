@@ -28,6 +28,45 @@ impl ComputeBlitHelper {
         Self { pipeline, sampler }
     }
 
+    /// Execute a compute dispatch with an externally-supplied specialized pipeline.
+    /// Used for function-constant-specialized variants where the effect holds
+    /// multiple pre-compiled pipelines and selects one per dispatch.
+    pub fn dispatch_with(
+        &self,
+        pipeline: &manifold_gpu::GpuComputePipeline,
+        gpu: &mut GpuEncoder,
+        source: &manifold_gpu::GpuTexture,
+        target: &manifold_gpu::GpuTexture,
+        uniform_bytes: &[u8],
+        label: &str,
+        width: u32,
+        height: u32,
+    ) {
+        gpu.native_enc.dispatch_compute(
+            pipeline,
+            &[
+                manifold_gpu::GpuBinding::Bytes {
+                    binding: 0,
+                    data: uniform_bytes,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 1,
+                    texture: source,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &self.sampler,
+                },
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 3,
+                    texture: target,
+                },
+            ],
+            [width.div_ceil(16), height.div_ceil(16), 1],
+            label,
+        );
+    }
+
     /// Execute a compute dispatch: reads source texture, writes to target storage texture.
     /// Dispatches ceil(width/16) x ceil(height/16) workgroups of 16x16 threads.
     pub fn dispatch(
