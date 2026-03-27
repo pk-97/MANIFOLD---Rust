@@ -23,7 +23,6 @@ use super::{GpuTexture, GpuTextureFormat};
 unsafe extern "C" {}
 
 unsafe extern "C" {
-    fn objc_retain(obj: *mut c_void) -> *mut c_void;
     fn objc_release(obj: *mut c_void);
 }
 
@@ -112,13 +111,17 @@ impl MetalFxSpatialScaler {
         unsafe { objc_release(desc as *mut c_void); }
 
         if scaler.is_null() {
-            log::warn!("MetalFX: failed to create spatial scaler ({}x{} -> {}x{})",
+            eprintln!("[MetalFX] Failed to create spatial scaler ({}x{} -> {}x{})",
                 input_width, input_height, output_width, output_height);
             return None;
         }
 
-        // Retain the scaler
-        unsafe { objc_retain(scaler as *mut c_void); }
+        // `newSpatialScalerWithDevice:` follows ObjC +1 naming convention (already retained).
+        // No extra retain needed — we own it, drop releases it.
+        eprintln!(
+            "[MetalFX] Created spatial scaler: {}x{} -> {}x{}",
+            input_width, input_height, output_width, output_height
+        );
 
         Some(Self {
             scaler_ptr: scaler,
@@ -221,10 +224,10 @@ impl TextureUpscaler {
     pub fn new(device: &GpuDevice, format: super::GpuTextureFormat) -> Self {
         let mps_lanczos = mps::MpsLanczosScale::new(device.raw_device());
         let mode = if supports_spatial_scaling(device.raw_device()) {
-            log::info!("TextureUpscaler: MetalFX Spatial available");
+            eprintln!("[TextureUpscaler] MetalFX Spatial available — using ML upscaling");
             UpscaleMode::MetalFxSpatial
         } else {
-            log::info!("TextureUpscaler: MetalFX unavailable, using MPS Lanczos");
+            eprintln!("[TextureUpscaler] MetalFX unavailable — using MPS Lanczos");
             UpscaleMode::MpsLanczos
         };
         Self {
