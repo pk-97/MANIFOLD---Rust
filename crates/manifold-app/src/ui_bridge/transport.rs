@@ -90,7 +90,12 @@ pub(super) fn dispatch_transport(
             DispatchResult::handled()
         }
         PanelAction::SelectClkDevice => {
-            log::info!("Select clock device (dropdown not yet implemented)");
+            // Handled by try_open_dropdown — should not reach here
+            DispatchResult::handled()
+        }
+        PanelAction::SetMidiClockDevice(index) => {
+            // Handled by app_render.rs intercept — should not reach here
+            ContentCommand::send(content_tx, ContentCommand::SetMidiClockDevice(*index));
             DispatchResult::handled()
         }
 

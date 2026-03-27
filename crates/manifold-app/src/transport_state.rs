@@ -197,22 +197,26 @@ impl TransportStateCache {
 
     fn update_midi_clock_state(&mut self, ui: &mut UIRoot, content_state: &crate::content_state::ContentState) {
         let enabled = content_state.midi_clock_enabled;
-        // For now, no receiving/position available — will be populated when MidiClockSyncController exists
-        let receiving = false;
-        let position = String::new();
+        let receiving = content_state.midi_clock_receiving;
+        let position = content_state.midi_clock_position_display.clone();
 
         if enabled == self.clk_enabled && receiving == self.clk_receiving && position == self.clk_position { return; }
         self.clk_enabled = enabled;
         self.clk_receiving = receiving;
         self.clk_position = position.clone();
 
-        let device_text = "Select..."; // Will be populated from controller
+        let device_text = if content_state.midi_clock_device_name.is_empty() {
+            if enabled { "MIDI" } else { "Select..." }
+        } else {
+            &content_state.midi_clock_device_name
+        };
 
         let tree = &mut ui.tree;
         if !enabled {
             ui.transport.set_clk_state(tree, false, device_text, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
         } else if receiving {
-            ui.transport.set_clk_state(tree, true, device_text, color::STATUS_DOT_GREEN, &position, color::TEXT_WHITE_C32);
+            let display = if position.is_empty() { "Receiving".to_string() } else { position };
+            ui.transport.set_clk_state(tree, true, device_text, color::STATUS_DOT_GREEN, &display, color::TEXT_WHITE_C32);
         } else {
             ui.transport.set_clk_state(tree, true, device_text, color::STATUS_DOT_YELLOW, "Waiting", color::TEXT_DIMMED_C32);
         }

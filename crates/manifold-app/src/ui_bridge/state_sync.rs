@@ -124,10 +124,61 @@ pub fn push_state(
         };
         ui.transport.set_clock_authority(tree, auth.transport_label(), auth_color);
 
-        // Sync source status (default inactive until sync controllers exist)
-        ui.transport.set_link_state(tree, false, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
-        ui.transport.set_clk_state(tree, false, "Select...", color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
-        ui.transport.set_sync_state(tree, false, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
+        // Cache MIDI device names for dropdown
+        ui.midi_device_names.clone_from(&content_state.midi_device_names);
+
+        // Sync source status — driven by content_state from transport controller
+        // Link
+        if !content_state.link_enabled {
+            ui.transport.set_link_state(tree, false, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
+        } else if content_state.link_peers > 0 {
+            let status = if content_state.link_peers == 1 {
+                "1 peer".to_string()
+            } else {
+                format!("{} peers", content_state.link_peers)
+            };
+            ui.transport.set_link_state(tree, true, color::STATUS_DOT_GREEN, &status, color::TEXT_WHITE_C32);
+        } else {
+            ui.transport.set_link_state(tree, true, color::STATUS_DOT_YELLOW, "Listening", color::TEXT_DIMMED_C32);
+        }
+
+        // MIDI Clock
+        if !content_state.midi_clock_enabled {
+            let device_text = if content_state.midi_clock_device_name.is_empty() {
+                "Select..."
+            } else {
+                &content_state.midi_clock_device_name
+            };
+            ui.transport.set_clk_state(tree, false, device_text, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
+        } else if content_state.midi_clock_receiving {
+            let device_text = if content_state.midi_clock_device_name.is_empty() {
+                "MIDI"
+            } else {
+                &content_state.midi_clock_device_name
+            };
+            let position = if content_state.midi_clock_position_display.is_empty() {
+                "Receiving".to_string()
+            } else {
+                content_state.midi_clock_position_display.clone()
+            };
+            ui.transport.set_clk_state(tree, true, device_text, color::STATUS_DOT_GREEN, &position, color::TEXT_WHITE_C32);
+        } else {
+            let device_text = if content_state.midi_clock_device_name.is_empty() {
+                "MIDI"
+            } else {
+                &content_state.midi_clock_device_name
+            };
+            ui.transport.set_clk_state(tree, true, device_text, color::STATUS_DOT_YELLOW, "Waiting", color::TEXT_DIMMED_C32);
+        }
+
+        // OSC Sync output
+        if !content_state.osc_sender_enabled {
+            ui.transport.set_sync_state(tree, false, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
+        } else {
+            let port = project.settings.osc_send_port;
+            let status = format!(":{}", port);
+            ui.transport.set_sync_state(tree, true, color::STATUS_DOT_GREEN, &status, color::TEXT_WHITE_C32);
+        }
 
         // Record state — disabled when OSC is clock authority (Unity invariant)
         let rec_allowed = auth != manifold_core::types::ClockAuthority::Osc;

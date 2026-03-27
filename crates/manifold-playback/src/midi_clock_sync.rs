@@ -343,6 +343,22 @@ impl MidiClockSyncController {
     pub fn last_hard_seek_delta_seconds(&self) -> f32 { self.last_hard_seek_delta_seconds }
     pub fn selected_source_index(&self) -> i32 { self.selected_source_index }
 
+    /// Number of available MIDI input ports.
+    pub fn available_source_count() -> usize {
+        MidiClockReceiver::source_count()
+    }
+
+    /// Display name of the MIDI port at `index`.
+    pub fn available_source_name(index: i32) -> String {
+        MidiClockReceiver::source_name(index)
+    }
+
+    /// List all available MIDI input port names.
+    pub fn available_source_names() -> Vec<String> {
+        let count = MidiClockReceiver::source_count();
+        (0..count).map(|i| MidiClockReceiver::source_name(i as i32)).collect()
+    }
+
     /// Display name of the currently selected MIDI source.
     /// Port of C# MidiClockSyncController.SelectedSourceName property.
     pub fn selected_source_name(&self) -> String {

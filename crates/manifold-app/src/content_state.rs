@@ -52,6 +52,9 @@ pub struct ContentState {
     pub midi_clock_bpm: f32,
     pub midi_clock_position_display: String,
     pub midi_clock_receiving: bool,
+    pub midi_clock_device_name: String,
+    /// Available MIDI input device names for the CLK device dropdown.
+    pub midi_device_names: Vec<String>,
     pub osc_sender_enabled: bool,
     pub osc_receiving_timecode: bool,
     pub osc_timecode_display: String,
@@ -121,6 +124,8 @@ impl Default for ContentState {
             midi_clock_bpm: 120.0,
             midi_clock_position_display: String::new(),
             midi_clock_receiving: false,
+            midi_clock_device_name: String::new(),
+            midi_device_names: Vec::new(),
             osc_sender_enabled: false,
             osc_receiving_timecode: false,
             osc_timecode_display: String::new(),

@@ -75,6 +75,11 @@ pub struct ContentThread {
     /// LED/ArtNet output controller. None when not initialized.
     pub led_controller: Option<manifold_led::LedOutputController>,
 
+    // ── MIDI device cache ──
+    /// Cached MIDI device names, refreshed every ~2 seconds.
+    pub cached_midi_device_names: Vec<String>,
+    pub last_midi_device_scan_time: f32,
+
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
     #[cfg(feature = "profiling")]
@@ -166,6 +171,13 @@ impl ContentThread {
             let dt = self.timer.consume_tick();
             let realtime = self.timer.realtime_since_start();
             self.time_since_start = realtime as f32;
+
+            // Refresh MIDI device list every ~2 seconds
+            if self.time_since_start - self.last_midi_device_scan_time >= 2.0 {
+                self.cached_midi_device_names =
+                    manifold_playback::midi_clock_sync::MidiClockSyncController::available_source_names();
+                self.last_midi_device_scan_time = self.time_since_start;
+            }
 
             // Profiling: frame start timestamp
             #[cfg(feature = "profiling")]
@@ -530,6 +542,9 @@ impl ContentThread {
                     .map_or_else(String::new, |s| s.current_position_display().to_string()),
                 midi_clock_receiving: self.transport_controller.midi_clock_sync.as_ref()
                     .is_some_and(|s| s.is_receiving_clock()),
+                midi_clock_device_name: self.transport_controller.midi_clock_sync.as_ref()
+                    .map_or_else(String::new, |s| s.selected_source_name()),
+                midi_device_names: self.cached_midi_device_names.clone(),
                 osc_sender_enabled: self.transport_controller.osc_sender_enabled,
                 osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
                 osc_timecode_display: self.osc_sync.current_timecode_display.clone(),
@@ -1053,6 +1068,12 @@ impl ContentThread {
             }
             ContentCommand::ToggleSyncOutput => {
                 self.transport_controller.toggle_sync_output(&mut self.engine);
+            }
+            ContentCommand::SetMidiClockDevice(index) => {
+                if let Some(ref mut clk) = self.transport_controller.midi_clock_sync {
+                    clk.change_source(index);
+                    log::info!("[ContentThread] MIDI clock device changed to index {}", index);
+                }
             }
             ContentCommand::ResetBpm => {
                 TransportController::reset_bpm(

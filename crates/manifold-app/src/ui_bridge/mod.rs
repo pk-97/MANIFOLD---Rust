@@ -73,6 +73,7 @@ pub fn dispatch(
         | PanelAction::ToggleMidiClock
         | PanelAction::ToggleSyncOutput
         | PanelAction::SelectClkDevice
+        | PanelAction::SetMidiClockDevice(_)
         | PanelAction::CycleQuantize
         | PanelAction::ResolutionClicked
         | PanelAction::FpsFieldClicked

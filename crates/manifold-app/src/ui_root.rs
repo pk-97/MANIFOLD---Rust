@@ -21,6 +21,7 @@ pub enum DropdownContext {
     TrackContext(f32, usize), // right-click on empty track: beat, layer
     LayerContext(usize),     // right-click on layer header: layer_index
     MasterExitPath,          // LED exit path dropdown
+    ClkDevice,               // MIDI clock device selection
 }
 
 /// Owns all UI state for one window.
@@ -65,6 +66,10 @@ pub struct UIRoot {
     /// Cached master effect names for the LED exit path dropdown.
     /// Updated by state_sync when project changes.
     pub master_effect_names: Vec<String>,
+
+    /// Cached MIDI clock device names for the CLK device dropdown.
+    /// Updated from ContentState each frame.
+    pub midi_device_names: Vec<String>,
 
     // Inspector resize state
     pub inspector_resize_dragging: bool,
@@ -127,6 +132,7 @@ impl UIRoot {
             dropdown_context: None,
             display_resolutions: Vec::new(),
             master_effect_names: Vec::new(),
+            midi_device_names: Vec::new(),
             inspector_resize_dragging: false,
             inspector_drag_start_x: 0.0,
             inspector_drag_start_width: 0.0,
@@ -639,6 +645,17 @@ impl UIRoot {
                 });
                 true
             }
+            PanelAction::SelectClkDevice => {
+                if self.midi_device_names.is_empty() {
+                    log::info!("[UIRoot] No MIDI devices available for CLK selection");
+                    return false;
+                }
+                let items: Vec<DropdownItem> = self.midi_device_names.iter()
+                    .map(|name| DropdownItem::new(name))
+                    .collect();
+                self.open_dropdown_at(DropdownContext::ClkDevice, items, trigger);
+                true
+            }
             PanelAction::MidiInputClicked(idx) => {
                 let items: Vec<DropdownItem> = (0..128)
                     .map(|n| DropdownItem::new(&format!("{}", n)))
@@ -786,6 +803,9 @@ impl UIRoot {
                     6 => Some(PanelAction::ContextDeleteLayer(layer_idx)),
                     _ => None,
                 }
+            }
+            DropdownContext::ClkDevice => {
+                Some(PanelAction::SetMidiClockDevice(index as i32))
             }
             DropdownContext::MasterExitPath => {
                 // 0 = "After All FX" → led_exit_index -1

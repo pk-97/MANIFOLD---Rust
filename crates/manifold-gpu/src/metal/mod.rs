@@ -955,10 +955,11 @@ impl GpuEncoder {
         pipeline: &GpuComputePipeline,
         bindings: &[GpuBinding],
         workgroups: [u32; 3],
-        _label: &str,
+        label: &str,
     ) {
         let enc_ptr = self.ensure_compute();
         let enc = unsafe { &*enc_ptr };
+        enc.push_debug_group(label);
         enc.set_compute_pipeline_state(&pipeline.state);
 
         // Collect buffer sizes for the sizes buffer (runtime-sized arrays).
@@ -1021,6 +1022,7 @@ impl GpuEncoder {
             metal::MTLSize::new(workgroups[0] as _, workgroups[1] as _, workgroups[2] as _),
             metal::MTLSize::new(wg[0] as _, wg[1] as _, wg[2] as _),
         );
+        enc.pop_debug_group();
     }
 
     /// Draw a fullscreen triangle with a render pipeline.
@@ -1035,7 +1037,7 @@ impl GpuEncoder {
         bindings: &[GpuBinding],
         clear: bool,
         store: bool,
-        _label: &str,
+        label: &str,
     ) {
         self.end_current();
 
@@ -1055,6 +1057,7 @@ impl GpuEncoder {
         color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
 
         let enc = self.cmd_buf().new_render_command_encoder(desc);
+        enc.push_debug_group(label);
         enc.set_render_pipeline_state(&pipeline.state);
 
         for binding in bindings {
@@ -1083,6 +1086,7 @@ impl GpuEncoder {
         }
 
         enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+        enc.pop_debug_group();
         enc.end_encoding();
         // State goes back to None (render encoder consumed).
     }
@@ -1101,7 +1105,7 @@ impl GpuEncoder {
         vertex_count: u32,
         instance_count: u32,
         clear: bool,
-        _label: &str,
+        label: &str,
     ) {
         self.end_current();
 
@@ -1117,6 +1121,7 @@ impl GpuEncoder {
         color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
 
         let enc = self.cmd_buf().new_render_command_encoder(desc);
+        enc.push_debug_group(label);
         enc.set_render_pipeline_state(&pipeline.state);
 
         for binding in bindings {
@@ -1157,6 +1162,7 @@ impl GpuEncoder {
                 0, vertex_count as u64, instance_count as u64,
             );
         }
+        enc.pop_debug_group();
         enc.end_encoding();
     }
 

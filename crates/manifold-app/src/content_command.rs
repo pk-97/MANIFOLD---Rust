@@ -48,6 +48,7 @@ pub enum ContentCommand {
     ToggleLink,
     ToggleMidiClock,
     ToggleSyncOutput,
+    SetMidiClockDevice(i32),
     ResetBpm,
 
     // ── Audio ──────────────────────────────────────────────────────

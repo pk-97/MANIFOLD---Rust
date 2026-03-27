@@ -438,6 +438,10 @@ impl Application {
                     self.send_content_cmd(ContentCommand::ToggleSyncOutput);
                     continue;
                 }
+                PanelAction::SetMidiClockDevice(index) => {
+                    self.send_content_cmd(ContentCommand::SetMidiClockDevice(*index));
+                    continue;
+                }
                 PanelAction::ResetBpm => {
                     self.send_content_cmd(ContentCommand::ResetBpm);
                     self.needs_rebuild = true;

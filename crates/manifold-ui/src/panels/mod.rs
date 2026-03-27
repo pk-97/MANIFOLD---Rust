@@ -238,6 +238,7 @@ pub enum PanelAction {
     SetDisplayResolution(i32, i32), // direct width, height (no undo, matches Unity)
     AddEffect(InspectorTab, usize), // tab, effect_type index
     SetGenType(Option<LayerId>, usize),  // layer_id, gen_type index
+    SetMidiClockDevice(i32),             // MIDI device index
 
     // Layer header right-click
     LayerHeaderRightClicked(usize),                    // layer_index

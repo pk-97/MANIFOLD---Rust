@@ -1172,6 +1172,8 @@ impl ApplicationHandler for Application {
                 tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
                 link_beat_offset: f64::NAN,
                 led_controller: None,
+                cached_midi_device_names: Vec::new(),
+                last_midi_device_scan_time: -10.0,
                 #[cfg(feature = "profiling")]
                 profiler: None,
             };
