@@ -12,6 +12,9 @@ use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 // StylizedFeedbackFX.cs line 34 — Mathf.Deg2Rad
 const DEG_TO_RAD: f32 = std::f32::consts::PI / 180.0;
 
+/// WGSL source — shared across all specialized mode variants.
+const FEEDBACK_WGSL: &str = include_str!("shaders/fx_stylized_feedback_compute.wgsl");
+
 // StylizedFeedbackFX.cs lines 34-37 — uniforms matching StylizedFeedbackEffect.shader Properties
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -31,6 +34,11 @@ struct StylizedFeedbackState {
 /// frame's state buffer.
 pub struct StylizedFeedbackFX {
     helper: ComputeDualBlitHelper,
+    /// Specialized pipelines per mode: 0=Screen, 1=Additive, 2=Max.
+    /// Metal compiler dead-code eliminates inactive if/else branches.
+    pipeline_screen: manifold_gpu::GpuComputePipeline,
+    pipeline_additive: manifold_gpu::GpuComputePipeline,
+    pipeline_max: manifold_gpu::GpuComputePipeline,
     states: AHashMap<i64, StylizedFeedbackState>,
     width: u32,
     height: u32,
@@ -38,12 +46,21 @@ pub struct StylizedFeedbackFX {
 
 impl StylizedFeedbackFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
+        let spec = |mode: &str, label: &str| {
+            device.create_specialized_compute_pipeline(
+                FEEDBACK_WGSL,
+                "cs_main",
+                &[("uniforms.mode", mode)],
+                label,
+            )
+        };
         Self {
             helper: ComputeDualBlitHelper::new(
-                device,
-                include_str!("shaders/fx_stylized_feedback_compute.wgsl"),
-                "StylizedFeedback Compute",
+                device, FEEDBACK_WGSL, "StylizedFeedback Compute",
             ),
+            pipeline_screen: spec("0.0", "StylizedFeedback Screen"),
+            pipeline_additive: spec("1.0", "StylizedFeedback Additive"),
+            pipeline_max: spec("2.0", "StylizedFeedback Max"),
             states: AHashMap::new(),
             width: 0,
             height: 0,
@@ -102,7 +119,14 @@ impl PostProcessEffect for StylizedFeedbackFX {
             mode,
         };
 
-        self.helper.dispatch(
+        // Select specialized pipeline based on mode
+        let pipeline = match mode.round() as u32 {
+            1 => &self.pipeline_additive,
+            2 => &self.pipeline_max,
+            _ => &self.pipeline_screen,
+        };
+        self.helper.dispatch_with(
+            pipeline,
             gpu,
             source,
             &state.buffer.texture,

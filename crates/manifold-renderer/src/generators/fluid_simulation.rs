@@ -174,7 +174,10 @@ pub struct FluidSimulationGenerator {
     seed_pipeline: manifold_gpu::GpuComputePipeline,
     blur_pipeline: manifold_gpu::GpuComputePipeline,
     gradient_pipeline: manifold_gpu::GpuComputePipeline,
-    display_pipeline: manifold_gpu::GpuComputePipeline,
+    /// Specialized display pipelines: mono (color_mode=0) vs color (color_mode=1).
+    /// Metal compiler eliminates the if/else branch in each variant.
+    display_pipeline_mono: manifold_gpu::GpuComputePipeline,
+    display_pipeline_color: manifold_gpu::GpuComputePipeline,
     sampler: manifold_gpu::GpuSampler,
 
     // GPU resources (lazy-init)
@@ -238,10 +241,16 @@ impl FluidSimulationGenerator {
             "cs_main",
             "FluidSim Gradient",
         );
-        let display_pipeline = device.create_compute_pipeline(
-            include_str!("shaders/fluid_display_compute.wgsl"),
-            "cs_main",
-            "FluidSim Display",
+        let display_wgsl = include_str!("shaders/fluid_display_compute.wgsl");
+        let display_pipeline_mono = device.create_specialized_compute_pipeline(
+            display_wgsl, "cs_main",
+            &[("params.color_mode", "0.0")],
+            "FluidSim Display Mono",
+        );
+        let display_pipeline_color = device.create_specialized_compute_pipeline(
+            display_wgsl, "cs_main",
+            &[("params.color_mode", "1.0")],
+            "FluidSim Display Color",
         );
 
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
@@ -258,7 +267,8 @@ impl FluidSimulationGenerator {
             seed_pipeline,
             blur_pipeline,
             gradient_pipeline,
-            display_pipeline,
+            display_pipeline_mono,
+            display_pipeline_color,
             sampler,
             particle_buffer: None,
             scatter_accum: None,
@@ -780,8 +790,14 @@ impl Generator for FluidSimulationGenerator {
             color_bright,
             _pad0: 0.0, _pad1: 0.0,
         };
+        // Select specialized display pipeline: mono (color_mode=0) vs color (color_mode>0)
+        let display_pipeline = if color_mode > 0 {
+            &self.display_pipeline_color
+        } else {
+            &self.display_pipeline_mono
+        };
         gpu.native_enc.dispatch_compute(
-            &self.display_pipeline,
+            display_pipeline,
             &[
                 manifold_gpu::GpuBinding::Bytes {
                     binding: 0,

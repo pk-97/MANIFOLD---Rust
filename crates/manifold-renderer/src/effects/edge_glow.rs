@@ -18,20 +18,35 @@ struct EdgeGlowUniforms {
     _pad: [f32; 2],
 }
 
+/// Edge glow WGSL source — shared across all specialized mode variants.
+const EDGE_GLOW_WGSL: &str = include_str!("shaders/fx_edge_glow_compute.wgsl");
+
 /// Edge detection with soft glow.
 /// Stateless single-pass effect. Translated from EdgeGlowFX.cs + EdgeGlowEffect.shader.
 pub struct EdgeGlowFX {
     helper: ComputeBlitHelper,
+    /// Specialized pipelines per edge detection mode: Sobel=0, Laplacian=1, Frei-Chen=2.
+    /// Metal compiler eliminates inactive if/else branches in detect_edge().
+    pipeline_sobel: manifold_gpu::GpuComputePipeline,
+    pipeline_laplacian: manifold_gpu::GpuComputePipeline,
+    pipeline_frei_chen: manifold_gpu::GpuComputePipeline,
 }
 
 impl EdgeGlowFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
+        let spec = |mode: &str, label: &str| {
+            device.create_specialized_compute_pipeline(
+                EDGE_GLOW_WGSL,
+                "cs_main",
+                &[("uniforms.mode", mode)],
+                label,
+            )
+        };
         Self {
-            helper: ComputeBlitHelper::new(
-                device,
-                include_str!("shaders/fx_edge_glow_compute.wgsl"),
-                "EdgeGlow",
-            ),
+            helper: ComputeBlitHelper::new(device, EDGE_GLOW_WGSL, "EdgeGlow"),
+            pipeline_sobel: spec("0u", "EdgeGlow Sobel"),
+            pipeline_laplacian: spec("1u", "EdgeGlow Laplacian"),
+            pipeline_frei_chen: spec("2u", "EdgeGlow Frei-Chen"),
         }
     }
 }
@@ -62,8 +77,14 @@ impl PostProcessEffect for EdgeGlowFX {
             _pad: [0.0; 2],
         };
 
-        self.helper.dispatch(
-            gpu,
+        // Select specialized pipeline based on edge detection mode
+        let pipeline = match uniforms.mode {
+            1 => &self.pipeline_laplacian,
+            2 => &self.pipeline_frei_chen,
+            _ => &self.pipeline_sobel,
+        };
+        self.helper.dispatch_with(
+            pipeline, gpu,
             source, target,
             bytemuck::bytes_of(&uniforms),
             "EdgeGlow Pass",
