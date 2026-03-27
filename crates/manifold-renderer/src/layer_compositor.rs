@@ -1,5 +1,6 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use ahash::AHashMap;
 use manifold_core::{BlendMode, EffectTypeId};
 use manifold_core::effects::{EffectGroup, EffectInstance};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureFormat};
@@ -44,9 +45,18 @@ struct BlendUniforms {
 
 const _: () = assert!(std::mem::size_of::<BlendUniforms>() == 32);
 
+/// Blend WGSL source — shared across all specialized blend mode variants.
+const BLEND_WGSL: &str = include_str!("generators/shaders/compositor_blend_compute.wgsl");
+
+/// Number of blend modes (Normal=0 through Darken=12).
+const BLEND_MODE_COUNT: u32 = 13;
+
 /// GPU resources for blend operations using native Metal compute.
+/// Holds one specialized pipeline per blend mode — Metal compiler dead-code
+/// eliminates inactive switch branches in each variant.
 struct BlendResources {
-    pipeline: manifold_gpu::GpuComputePipeline,
+    /// Specialized pipelines indexed by blend mode (0..12).
+    blend_pipelines: AHashMap<u32, manifold_gpu::GpuComputePipeline>,
     sampler: manifold_gpu::GpuSampler,
     /// Compositor width/height — needed for dispatch_workgroups.
     width: u32,
@@ -55,11 +65,19 @@ struct BlendResources {
 
 impl BlendResources {
     fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
-        let pipeline = device.create_compute_pipeline(
-            include_str!("generators/shaders/compositor_blend_compute.wgsl"),
-            "cs_main",
-            "Blend Compute Native",
-        );
+        let mut blend_pipelines = AHashMap::with_capacity(BLEND_MODE_COUNT as usize);
+        for mode in 0..BLEND_MODE_COUNT {
+            let label = format!("Blend Mode {mode}");
+            let mode_str = format!("{mode}u");
+            let pipeline = device.create_specialized_compute_pipeline(
+                BLEND_WGSL,
+                "cs_main",
+                &[("u.blend_mode", &mode_str)],
+                &label,
+            );
+            blend_pipelines.insert(mode, pipeline);
+        }
+
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
             min_filter: manifold_gpu::GpuFilterMode::Linear,
             mag_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -70,7 +88,7 @@ impl BlendResources {
         });
 
         Self {
-            pipeline,
+            blend_pipelines,
             sampler,
             width,
             height,
@@ -78,8 +96,7 @@ impl BlendResources {
     }
 
     /// Execute a compute blend: reads source + blend textures, writes to target storage texture.
-    /// Pushes uniforms into the shared arena (for offset tracking) and uses
-    /// GpuBinding::Bytes for inline set_bytes dispatch.
+    /// Selects the specialized pipeline matching the blend mode in uniforms.
     fn blend_pass(
         &self,
         gpu: &mut GpuEncoder,
@@ -92,8 +109,13 @@ impl BlendResources {
         // Push to arena for offset tracking (arena buffer not read on native path)
         let _offset = arena.push(uniforms);
 
+        // Select specialized pipeline for this blend mode (fall back to mode 0 if unknown)
+        let pipeline = self.blend_pipelines.get(&uniforms.blend_mode)
+            .or_else(|| self.blend_pipelines.get(&0))
+            .unwrap();
+
         gpu.native_enc.dispatch_compute(
-            &self.pipeline,
+            pipeline,
             &[
                 manifold_gpu::GpuBinding::Bytes {
                     binding: 0,
