@@ -338,7 +338,11 @@ impl ContentPipeline {
                     renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
                 {
                     // Sync upscale mode from project settings (per-frame, zero-cost read).
-                    if let Some(p) = project {
+                    // Override: MANIFOLD_NATIVE_RES=1 forces full-res (for A/B perf testing).
+                    let force_native = std::env::var("MANIFOLD_NATIVE_RES").is_ok();
+                    if force_native {
+                        gen_renderer.set_scaling_enabled(false);
+                    } else if let Some(p) = project {
                         use manifold_core::types::UpscaleMode;
                         match p.settings.upscale_mode {
                             UpscaleMode::Native => {
