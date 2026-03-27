@@ -9,6 +9,18 @@
 //!
 //! Uses `msg_send!` because the `metal` crate v0.33 only exposes
 //! MPS ray tracing types, not image processing kernels.
+//!
+//! ## Why not objc2-metal-performance-shaders?
+//!
+//! The `objc2-metal-performance-shaders` crate (v0.3.2) provides typed bindings for
+//! all MPS image kernels we use (MPSImageGaussianBlur, MPSImageSobel, MPSImageBox,
+//! MPSImageTent, MPSImageLanczosScale). However, it uses `objc2-metal`'s type system
+//! (`ProtocolObject<dyn MTLDevice>`, `ProtocolObject<dyn MTLCommandBuffer>`, etc.)
+//! which is incompatible with our `metal` crate types. Using it would require either
+//! unsafe pointer casting between the two type systems, or a full migration from the
+//! `metal` crate to `objc2-metal` across all of manifold-gpu. The full migration is
+//! a future task (see mod.rs header). Once that migration happens, MPS and MetalFX
+//! bindings should be replaced with the typed objc2 crates.
 
 use objc::runtime::{Class, Object, BOOL, YES};
 use std::ffi::c_void;

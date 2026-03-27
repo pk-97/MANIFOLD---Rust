@@ -9,6 +9,14 @@
 //!
 //! Uses `msg_send!` because the `metal` crate v0.33 doesn't expose
 //! MetalFX types.
+//!
+//! ## Why not objc2-metal-fx?
+//!
+//! The `objc2-metal-fx` crate provides typed bindings for MTLFXSpatialScalerDescriptor
+//! and MTLFXSpatialScaler. However, it uses `objc2-metal`'s type system which is
+//! incompatible with our `metal` crate types. The same migration blocker as MPS —
+//! see `mps.rs` header for details. Once the full `metal` → `objc2-metal` migration
+//! happens, MetalFX bindings should be replaced with the typed objc2-metal-fx crate.
 
 use objc::runtime::{Class, Object, BOOL};
 use std::ffi::c_void;
