@@ -337,6 +337,27 @@ impl ContentPipeline {
                 if let Some(gen_renderer) =
                     renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
                 {
+                    // Sync upscale mode from project settings (per-frame, zero-cost read).
+                    if let Some(p) = project {
+                        use manifold_core::types::UpscaleMode;
+                        match p.settings.upscale_mode {
+                            UpscaleMode::Native => {
+                                gen_renderer.set_scaling_enabled(false);
+                            }
+                            UpscaleMode::MetalFxSpatial => {
+                                gen_renderer.set_scaling_enabled(true);
+                                gen_renderer.set_upscale_mode(
+                                    manifold_gpu::metalfx::UpscaleMode::MetalFxSpatial,
+                                );
+                            }
+                            UpscaleMode::MpsLanczos => {
+                                gen_renderer.set_scaling_enabled(true);
+                                gen_renderer.set_upscale_mode(
+                                    manifold_gpu::metalfx::UpscaleMode::MpsLanczos,
+                                );
+                            }
+                        }
+                    }
                     gen_renderer.render_all(
                         &mut gpu_gen, time, beat, dt as f32, layers,
                     );

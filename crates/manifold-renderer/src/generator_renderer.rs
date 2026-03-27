@@ -70,6 +70,9 @@ pub struct GeneratorRenderer {
     /// Texture upscaler for reduced-resolution generators.
     /// Uses MetalFX Spatial when available, MPS Lanczos as fallback.
     upscaler: manifold_gpu::metalfx::TextureUpscaler,
+    /// When false, all generators render at full resolution (Native mode).
+    /// Controlled by `UpscaleMode` from project settings.
+    scaling_enabled: bool,
 }
 
 // Safety: device_ptr points to GpuDevice on the content thread.
@@ -110,6 +113,7 @@ impl GeneratorRenderer {
             render_scratch: Vec::with_capacity(16),
             uniform_arena,
             upscaler,
+            scaling_enabled: true,
         }
     }
 
@@ -118,6 +122,19 @@ impl GeneratorRenderer {
     /// generator is created.
     pub fn set_device(&mut self, device: &GpuDevice) {
         self.device_ptr = device as *const GpuDevice;
+    }
+
+    /// Set whether internal resolution scaling is active.
+    /// When disabled (Native mode), all generators render at full output resolution.
+    /// When enabled, generators with `internal_resolution_scale() < 1.0` render at
+    /// reduced resolution and are upscaled via MetalFX/MPS.
+    pub fn set_scaling_enabled(&mut self, enabled: bool) {
+        self.scaling_enabled = enabled;
+    }
+
+    /// Set the upscale method (MetalFX Spatial vs MPS Lanczos).
+    pub fn set_upscale_mode(&mut self, mode: manifold_gpu::metalfx::UpscaleMode) {
+        self.upscaler.set_mode(mode);
     }
 
     /// Get a reference to the GpuDevice.
@@ -172,11 +189,14 @@ impl GeneratorRenderer {
             ls.trigger_count += 1;
         }
 
-        // Query generator's internal resolution scale
-        let internal_scale = self
-            .layer_generators
-            .get(&layer_id)
-            .map_or(1.0, |ls| ls.generator.internal_resolution_scale());
+        // Query generator's internal resolution scale (disabled in Native mode)
+        let internal_scale = if self.scaling_enabled {
+            self.layer_generators
+                .get(&layer_id)
+                .map_or(1.0, |ls| ls.generator.internal_resolution_scale())
+        } else {
+            1.0
+        };
         let needs_upscale = internal_scale < 1.0;
 
         // Create render target at appropriate resolution
