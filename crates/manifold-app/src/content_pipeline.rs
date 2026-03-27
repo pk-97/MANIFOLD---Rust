@@ -165,6 +165,13 @@ impl ContentPipeline {
     #[cfg(target_os = "macos")]
     pub fn init_native_gpu(&mut self) {
         let device = manifold_gpu::GpuDevice::new();
+        // Load pipeline binary archive for near-instant pipeline creation on warm starts.
+        if let Ok(home) = std::env::var("HOME") {
+            let cache_dir = std::path::PathBuf::from(home)
+                .join("Library/Caches/com.latentspace.manifold");
+            std::fs::create_dir_all(&cache_dir).ok();
+            device.load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
+        }
         let event = device.create_event();
         // 3 frames in flight (triple buffering).
         let pool = device.create_texture_pool(3);

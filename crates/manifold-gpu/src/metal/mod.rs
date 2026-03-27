@@ -65,12 +65,20 @@ impl SlotMap {
 /// Native Metal device + command queue for the content thread.
 /// Created once at startup. Owns the Metal device and a dedicated command queue
 /// for content-thread GPU work (separate from the UI thread's wgpu queue).
+///
+/// Optionally holds a `GpuPipelineArchive` for caching compiled pipeline binaries
+/// to disk. When present, all `create_compute_pipeline` calls automatically use
+/// the archive — no caller changes needed.
 pub struct GpuDevice {
     device: metal::Device,
     queue: metal::CommandQueue,
+    /// Binary archive for pipeline caching. Protected by Mutex for Sync.
+    /// Only locked during pipeline creation (startup), never on the hot path.
+    archive: std::sync::Mutex<Option<archive::GpuPipelineArchive>>,
 }
 
 // Safety: metal::Device and metal::CommandQueue are thread-safe (Metal guarantee).
+// The archive Mutex provides the synchronization for the archive field.
 unsafe impl Send for GpuDevice {}
 unsafe impl Sync for GpuDevice {}
 
@@ -84,7 +92,11 @@ impl GpuDevice {
     pub fn new() -> Self {
         let device = metal::Device::system_default().expect("No Metal device found");
         let queue = device.new_command_queue();
-        Self { device, queue }
+        Self {
+            device,
+            queue,
+            archive: std::sync::Mutex::new(None),
+        }
     }
 
     /// Raw Metal device reference (for advanced interop).
@@ -180,6 +192,9 @@ impl GpuDevice {
     /// 3. Compile naga → MSL with slot assignments
     /// 4. Create MTLLibrary from MSL source
     /// 5. Create MTLComputePipelineState from entry function
+    ///
+    /// If a binary archive is loaded on this device, the pipeline is
+    /// automatically cached — archive lookup on hit, recompile + add on miss.
     pub fn create_compute_pipeline(
         &self,
         wgsl_source: &str,
@@ -209,10 +224,39 @@ impl GpuDevice {
                 )
             });
 
-        let state = self
-            .device
-            .new_compute_pipeline_state_with_function(&function)
-            .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {e}"));
+        // Use descriptor-based creation when archive is available — enables
+        // binary archive lookup (near-instant on cache hit) and auto-populates
+        // the archive on miss.
+        let mut archive_guard = self.archive.lock().unwrap();
+        let state = if let Some(ref mut arch) = *archive_guard {
+            let hash = archive::pipeline_hash(wgsl_source, entry_point);
+            let desc = metal::ComputePipelineDescriptor::new();
+            desc.set_compute_function(Some(&function));
+            desc.set_label(label);
+            desc.set_binary_archives(&[arch.raw_archive()]);
+
+            let state = self
+                .device
+                .new_compute_pipeline_state(&desc)
+                .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {e}"));
+
+            if !arch.was_added(hash) {
+                if let Err(e) = arch
+                    .raw_archive()
+                    .add_compute_pipeline_functions_with_descriptor(&desc)
+                {
+                    log::warn!("{label}: failed to add to binary archive: {e}");
+                } else {
+                    arch.mark_added(hash);
+                }
+            }
+            state
+        } else {
+            self.device
+                .new_compute_pipeline_state_with_function(&function)
+                .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {e}"))
+        };
+        drop(archive_guard);
 
         let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
         GpuComputePipeline {
@@ -247,100 +291,22 @@ impl GpuDevice {
         self.create_compute_pipeline(&source, entry_point, label)
     }
 
-    /// Create a compute pipeline with binary archive caching.
-    ///
-    /// If the archive contains a pre-compiled binary for this shader+entry,
-    /// pipeline creation is near-instant (no shader compilation).
-    /// Otherwise compiles normally and adds the result to the archive.
-    pub fn create_compute_pipeline_cached(
-        &self,
-        wgsl_source: &str,
-        entry_point: &str,
-        archive: &mut archive::GpuPipelineArchive,
-        label: &str,
-    ) -> GpuComputePipeline {
-        let (slot_map, msl_source, msl_entry_name, workgroup_size) =
-            compile_wgsl_to_msl(wgsl_source, entry_point, label);
-
-        let hash = archive::pipeline_hash(wgsl_source, entry_point);
-
-        let compile_opts = metal::CompileOptions::new();
-        compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
-        compile_opts.set_fast_math_enabled(true);
-        let library = self
-            .device
-            .new_library_with_source(&msl_source, &compile_opts)
-            .unwrap_or_else(|e| {
-                panic!("{label}: MTL library compile error: {e}\nMSL source:\n{msl_source}")
-            });
-
-        let function = library
-            .get_function(&msl_entry_name, None)
-            .unwrap_or_else(|e| {
-                let names = library.function_names();
-                panic!(
-                    "{label}: function '{msl_entry_name}' not found: {e}. \
-                     Available: {names:?}"
-                )
-            });
-
-        // Use descriptor-based creation to attach binary archive
-        let desc = metal::ComputePipelineDescriptor::new();
-        desc.set_compute_function(Some(&function));
-        desc.set_label(label);
-        desc.set_binary_archives(&[archive.raw_archive()]);
-
-        let state = self
-            .device
-            .new_compute_pipeline_state(&desc)
-            .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {e}"));
-
-        // Add to archive if not already present
-        if !archive.was_added(hash) {
-            if let Err(e) = archive
-                .raw_archive()
-                .add_compute_pipeline_functions_with_descriptor(&desc)
-            {
-                log::warn!("{label}: failed to add to binary archive: {e}");
-            } else {
-                archive.mark_added(hash);
-            }
-        }
-
-        let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
-        GpuComputePipeline {
-            state,
-            slot_map,
-            label: label.to_string(),
-            workgroup_size,
-            needs_sizes_buffer,
-        }
-    }
-
-    /// Create a specialized compute pipeline with binary archive caching.
-    /// Combines WGSL source specialization with archive-backed compilation.
-    pub fn create_specialized_compute_pipeline_cached(
-        &self,
-        wgsl_source: &str,
-        entry_point: &str,
-        specializations: &[(&str, &str)],
-        archive: &mut archive::GpuPipelineArchive,
-        label: &str,
-    ) -> GpuComputePipeline {
-        let mut source = wgsl_source.to_string();
-        for &(pattern, replacement) in specializations {
-            source = source.replace(pattern, replacement);
-        }
-        self.create_compute_pipeline_cached(&source, entry_point, archive, label)
-    }
-
     /// Load or create a pipeline binary archive at the given path.
-    /// Returns None if the device doesn't support binary archives.
-    pub fn load_pipeline_archive(
-        &self,
-        path: &std::path::Path,
-    ) -> Option<archive::GpuPipelineArchive> {
-        archive::GpuPipelineArchive::load_or_create(&self.device, path)
+    /// Once loaded, all subsequent `create_compute_pipeline` calls automatically
+    /// use the archive for caching. Call `save_pipeline_archive()` after all
+    /// pipelines have been created to persist to disk.
+    pub fn load_pipeline_archive(&self, path: &std::path::Path) {
+        if let Some(arch) = archive::GpuPipelineArchive::load_or_create(&self.device, path) {
+            *self.archive.lock().unwrap() = Some(arch);
+        }
+    }
+
+    /// Save the pipeline binary archive to disk (if loaded and modified).
+    /// Call after all pipelines have been created (e.g. end of startup).
+    pub fn save_pipeline_archive(&self) {
+        if let Some(ref mut arch) = *self.archive.lock().unwrap() {
+            arch.save();
+        }
     }
 
     /// Create a render pipeline from WGSL source (fullscreen triangle pattern).

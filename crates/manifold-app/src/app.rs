@@ -1061,6 +1061,15 @@ impl ApplicationHandler for Application {
             // from the UI thread's wgpu queue. Metal interleaves GPU work from both queues,
             // preventing the content thread from starving UI submissions.
             let native_device = manifold_gpu::GpuDevice::new();
+            // Load pipeline binary archive — subsequent pipeline creation calls
+            // automatically use it for near-instant cache hits.
+            if let Ok(home) = std::env::var("HOME") {
+                let cache_dir = std::path::PathBuf::from(home)
+                    .join("Library/Caches/com.latentspace.manifold");
+                std::fs::create_dir_all(&cache_dir).ok();
+                native_device
+                    .load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
+            }
             log::info!(
                 "[GPU] Dual command queue: content=native MTLCommandQueue, UI=wgpu MTLCommandQueue"
             );
@@ -1093,6 +1102,8 @@ impl ApplicationHandler for Application {
                 Box::new(LayerCompositor::new(&native_device, output_w, output_h)),
             );
             content_pipeline.edr_headroom = self.edr_headroom;
+            // Save pipeline archive after all pipelines have been created.
+            native_device.save_pipeline_archive();
             // Transfer native device ownership to content pipeline.
             content_pipeline.set_native_gpu(native_device);
             // Give the content pipeline all IOSurface textures for triple-buffered async output.
