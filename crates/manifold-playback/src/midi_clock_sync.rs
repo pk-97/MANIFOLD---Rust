@@ -493,8 +493,18 @@ impl MidiClockSyncController {
         }
 
         // Activity timeout check (port of C# lines 239-240).
+        let was_receiving = self.is_receiving_clock;
         let has_recent_clock_activity = (now - self.last_clock_activity_time) <= self.clock_signal_timeout;
         self.is_receiving_clock = has_recent_clock_activity;
+
+        // Log sync state transitions for live monitoring.
+        if has_recent_clock_activity && !was_receiving {
+            log::info!("[MidiClockSync] SYNC ESTABLISHED — receiving clock from {}",
+                self.selected_source_name());
+        } else if !has_recent_clock_activity && was_receiving {
+            log::warn!("[MidiClockSync] SYNC LOST — no clock signal for {:.1}s",
+                self.clock_signal_timeout);
+        }
 
         // Whether MANIFOLD initiated this play session (port of C# line 245).
         let manifold_owns = arbiter.manifold_owns_playback;

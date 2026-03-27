@@ -593,9 +593,32 @@ impl ContentThread {
     /// Handles the borrow-split problem: snapshot read-only engine state first,
     /// then pass &mut engine for transport commands via SyncArbiter.
     fn tick_sync_controllers(&mut self) {
-        let authority = self.engine.project()
-            .map_or(ClockAuthority::Internal, |p| p.settings.clock_authority);
         let now = self.time_since_start;
+
+        // Auto-determine clock authority BEFORE sync controllers run.
+        // Uses previous frame's receiving/peer state (updated by sync controllers
+        // last frame). This ensures the SyncArbiter gates are consistent with
+        // the authority — prevents one-frame mismatch where external_time_sync
+        // or transport commands are incorrectly rejected.
+        let authority = {
+            let auto = if self.transport_controller.midi_clock_sync.as_ref()
+                .is_some_and(|s| s.is_midi_clock_enabled() && s.is_receiving_clock())
+            {
+                ClockAuthority::MidiClock
+            } else if self.osc_sync.is_receiving_timecode {
+                ClockAuthority::Osc
+            } else if self.transport_controller.link_sync.as_ref()
+                .is_some_and(|s| s.is_link_enabled() && s.has_active_peers())
+            {
+                ClockAuthority::Link
+            } else {
+                ClockAuthority::Internal
+            };
+            if let Some(project) = self.engine.project_mut() {
+                project.settings.clock_authority = auto;
+            }
+            auto
+        };
 
         // Link sync — poll beat/phase/tempo from Ableton Link network.
         let link_has_tempo = if let Some(ref mut link) = self.transport_controller.link_sync {
@@ -654,25 +677,6 @@ impl ContentThread {
                 &mut self.engine,
                 authority,
             );
-        }
-
-        // Auto-determine clock authority from enabled/receiving sources.
-        // Priority: MidiClock (position sync) > Osc > Link > Internal.
-        let auto_authority = if self.transport_controller.midi_clock_sync.as_ref()
-            .is_some_and(|s| s.is_midi_clock_enabled() && s.is_receiving_clock())
-        {
-            ClockAuthority::MidiClock
-        } else if self.osc_sync.is_receiving_timecode {
-            ClockAuthority::Osc
-        } else if self.transport_controller.link_sync.as_ref()
-            .is_some_and(|s| s.is_link_enabled() && s.has_active_peers())
-        {
-            ClockAuthority::Link
-        } else {
-            ClockAuthority::Internal
-        };
-        if let Some(project) = self.engine.project_mut() {
-            project.settings.clock_authority = auto_authority;
         }
     }
 
