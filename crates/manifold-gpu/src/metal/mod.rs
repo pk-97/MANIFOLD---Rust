@@ -292,6 +292,26 @@ impl GpuDevice {
         self.create_compute_pipeline(&source, entry_point, label)
     }
 
+    /// Create a specialized render pipeline by text-replacing patterns in WGSL
+    /// source before compilation. Same approach as `create_specialized_compute_pipeline`:
+    /// replaces occurrences of pattern strings (e.g. `uniforms.mode`) with literal
+    /// values (e.g. `0u`) so naga and Metal constant-fold and dead-code eliminate.
+    pub fn create_specialized_render_pipeline(
+        &self,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        specializations: &[(&str, &str)],
+        color_format: GpuTextureFormat,
+        label: &str,
+    ) -> GpuRenderPipeline {
+        let mut source = wgsl_source.to_string();
+        for &(pattern, replacement) in specializations {
+            source = source.replace(pattern, replacement);
+        }
+        self.create_render_pipeline(&source, vs_entry, fs_entry, color_format, None, label)
+    }
+
     /// Load or create a pipeline binary archive at the given path.
     /// Once loaded, all subsequent `create_compute_pipeline` calls automatically
     /// use the archive for caching. Call `save_pipeline_archive()` after all
