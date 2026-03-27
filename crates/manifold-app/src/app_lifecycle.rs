@@ -284,12 +284,15 @@ impl Application {
         if let Some(project) = action.apply_project {
             let t_total = std::time::Instant::now();
 
-            // PrepareForProjectSwitch — clean up previous audio/waveform state
+            // PrepareForProjectSwitch — clean up previous audio/waveform/stem state
             // Unity: WorkspaceController.ProjectIO.cs PrepareForProjectSwitch()
-            // Audio reset sent to content thread
+            // Audio + stem reset sent to content thread
             self.send_content_cmd(ContentCommand::ResetAudio);
+            self.send_content_cmd(ContentCommand::StemReset);
             self.ui_root.waveform_lane.clear_audio();
+            self.ui_root.stem_lanes.clear_all_stems();
             self.ui_root.layout.waveform_lane_visible = false;
+            self.ui_root.layout.stem_lanes_expanded = false;
             self.pending_audio_load = None;
             self.loaded_audio_path = None;
 

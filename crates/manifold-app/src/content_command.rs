@@ -34,7 +34,6 @@ pub enum ContentCommand {
 
     // ── Project lifecycle ──────────────────────────────────────────
     LoadProject(Box<Project>),
-    NewProject(Box<Project>),
 
     // ── Settings ───────────────────────────────────────────────────
     SetBpm(f64),

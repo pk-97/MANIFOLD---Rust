@@ -1064,21 +1064,6 @@ impl ContentThread {
                     self.midi_input.set_midi_config(p.midi_config.clone());
                 }
             }
-            ContentCommand::NewProject(project) => {
-                self.link_beat_offset = f64::NAN;
-                self.tempo_recorder.reset();
-                self.engine.initialize(*project);
-                self.editing_service.set_project();
-                // Sync frame timer to new project's frame rate.
-                if let Some(p) = self.engine.project() {
-                    self.timer.set_target_fps(p.settings.frame_rate as f64);
-                }
-                // Update MIDI mapping config for new project.
-                if let Some(p) = self.engine.project() {
-                    self.midi_input.set_midi_config(p.midi_config.clone());
-                }
-            }
-
             // ── Settings ───────────────────────────────────────────
             ContentCommand::SetBpm(bpm) => {
                 if let Some(p) = self.engine.project_mut() {
