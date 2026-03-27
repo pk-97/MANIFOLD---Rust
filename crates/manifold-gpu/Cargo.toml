@@ -4,10 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# WGSL parsing + validation + MSL output
-naga = { version = "28", features = ["wgsl-in", "msl-out"] }
+# WGSL parsing + validation + MSL output + SPIR-V output
+naga = { version = "28", features = ["wgsl-in", "msl-out", "spv-out"] }
 bytemuck = { version = "1", features = ["derive"] }
 log = "0.4"
+
+# SPIR-V optimization (wraps Google SPIRV-Tools C++)
+spirv-tools = { version = "0.13", features = ["use-compiled-tools"] }
+# SPIR-V → MSL compilation (wraps SPIRV-Cross C)
+spirv-cross2 = { version = "0.4", default-features = false, features = ["msl"] }
 
 # Native Metal backend
 [target.'cfg(target_os = "macos")'.dependencies]
