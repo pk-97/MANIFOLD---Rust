@@ -20,9 +20,7 @@ use crate::effects::transform::TransformFX;
 use crate::effects::infrared::InfraredFX;
 use crate::effects::voronoi_prism::VoronoiPrismFX;
 use crate::effects::wireframe_depth::WireframeDepthFX;
-// TODO: BlobTrackingFX still uses wgpu types internally.
-// It needs its own migration pass before it can be registered here.
-// use crate::effects::blob_tracking::BlobTrackingFX;
+use crate::effects::blob_tracking::BlobTrackingFX;
 
 /// Factory + singleton storage for all effect processors.
 /// One processor per EffectTypeId — per-owner state lives inside each processor.
@@ -85,8 +83,10 @@ impl EffectRegistry {
             EffectTypeId::WIREFRAME_DEPTH,
             Box::new(WireframeDepthFX::new(device)),
         );
-        // TODO: Re-enable after BlobTrackingFX is migrated to manifold_gpu types.
-        // processors.insert(EffectTypeId::BLOB_TRACKING, Box::new(BlobTrackingFX::new(device)));
+        processors.insert(
+            EffectTypeId::BLOB_TRACKING,
+            Box::new(BlobTrackingFX::new(device)),
+        );
         Self { processors }
     }
 

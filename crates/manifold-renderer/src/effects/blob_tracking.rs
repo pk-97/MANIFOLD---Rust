@@ -5,19 +5,18 @@
 // The "frame" counter maps to an app-managed frame_count in EffectContext.
 // Unity's OnReadbackComplete callback maps to try_read() polled at apply() start.
 
-use ahash::AHashMap;
-use manifold_core::EffectTypeId;
-use manifold_core::effects::EffectInstance;
-use manifold_gpu::{
-    GpuBinding, GpuComputePipeline, GpuDevice, GpuFilterMode, GpuSampler,
-    GpuSamplerDesc, GpuTexture, GpuTextureDesc, GpuTextureDimension,
-    GpuTextureFormat, GpuTextureUsage,
-};
 use crate::background_worker::BackgroundWorker;
 use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
+use ahash::AHashMap;
+use manifold_core::EffectTypeId;
+use manifold_core::effects::EffectInstance;
+use manifold_gpu::{
+    GpuBinding, GpuComputePipeline, GpuDevice, GpuFilterMode, GpuSampler, GpuSamplerDesc,
+    GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+};
 
 // Request/response types for the background blob detection worker.
 struct BlobRequest {
@@ -27,7 +26,7 @@ struct BlobRequest {
 }
 
 struct BlobResponse {
-    blob_data: Vec<f32>,  // MAX_BLOBS * 4: [x, y, w, h] per blob
+    blob_data: Vec<f32>, // MAX_BLOBS * 4: [x, y, w, h] per blob
     blob_count: i32,
 }
 
@@ -60,17 +59,17 @@ struct OwnerState {
     downsample_rt: RenderTarget,
     readback: ReadbackRequest,
     has_blob_data: bool,
-    _pixel_buffer: Vec<u8>,           // new byte[READBACK_WIDTH * READBACK_HEIGHT * 4]
-    native_blob_output: Vec<f32>,     // new float[MAX_BLOBS * 4]
+    _pixel_buffer: Vec<u8>, // new byte[READBACK_WIDTH * READBACK_HEIGHT * 4]
+    native_blob_output: Vec<f32>, // new float[MAX_BLOBS * 4]
     blob_data_for_shader: Vec<[f32; 4]>, // Vector4[MAX_BLOBS]
-    connection_lines: Vec<[f32; 4]>,     // Vector4[MAX_BLOBS]
+    connection_lines: Vec<[f32; 4]>, // Vector4[MAX_BLOBS]
     blob_count: i32,
     connection_count: i32,
     pending_threshold: f32,
     pending_sensitivity: f32,
     last_readback_frame: i64,
     // Temporal smoothing
-    tracked: Vec<TrackedBlob>,        // new TrackedBlob[MAX_BLOBS]
+    tracked: Vec<TrackedBlob>, // new TrackedBlob[MAX_BLOBS]
     tracked_count: usize,
     has_new_detection: bool,
 }
@@ -94,8 +93,8 @@ struct BlobUniforms {
     blob_count: i32,
     connection_count: i32,
     _pad0: f32,
-    resolution: [f32; 2],   // width, height
-    texel_size: [f32; 2],   // 1/width, 1/height
+    resolution: [f32; 2], // width, height
+    texel_size: [f32; 2], // 1/width, 1/height
     // _BlobCenterSize[MAX_BLOBS] — each vec4 is [cx, cy, sw, sh]
     blob_center_size: [[f32; 4]; 16],
     // _BlobConnections[MAX_BLOBS] — each vec4 is [ax, ay, bx, by]
@@ -134,8 +133,7 @@ impl BlobTrackingFX {
         // try_new returns None if the plugin isn't available.
         let worker = BackgroundWorker::try_new(|| {
             use manifold_native::blob_detector::BlobDetector;
-            let detector =
-                manifold_native::ffi::blob_ffi::FfiBlobDetector::new(MAX_BLOBS as i32)?;
+            let detector = manifold_native::ffi::blob_ffi::FfiBlobDetector::new(MAX_BLOBS as i32)?;
             Some(move |req: BlobRequest| -> BlobResponse {
                 let mut blob_data = vec![0f32; MAX_BLOBS * 4];
                 let blob_count = detector.process(
@@ -146,7 +144,10 @@ impl BlobTrackingFX {
                     req.sensitivity,
                     &mut blob_data,
                 );
-                BlobResponse { blob_data, blob_count }
+                BlobResponse {
+                    blob_data,
+                    blob_count,
+                }
             })
         });
         if worker.is_none() {
@@ -205,21 +206,24 @@ impl BlobTrackingFX {
             // Unity creates an RGBA32 RT; we use Rgba8Unorm for readback compatibility.
             let downsample_rt = if let Some(p) = pool {
                 RenderTarget::new_pooled(
-                    p, READBACK_WIDTH, READBACK_HEIGHT,
+                    p,
+                    READBACK_WIDTH,
+                    READBACK_HEIGHT,
                     GpuTextureFormat::Rgba8Unorm,
                     &format!("BlobAnalysis_{owner_key}"),
                 )
             } else {
                 RenderTarget::new(
-                    device, READBACK_WIDTH, READBACK_HEIGHT,
+                    device,
+                    READBACK_WIDTH,
+                    READBACK_HEIGHT,
                     GpuTextureFormat::Rgba8Unorm,
                     &format!("BlobAnalysis_{owner_key}"),
                 )
             };
 
             // BlobTrackingFX.cs lines 80-84
-            let pixel_buffer =
-                vec![0u8; (READBACK_WIDTH * READBACK_HEIGHT * 4) as usize];
+            let pixel_buffer = vec![0u8; (READBACK_WIDTH * READBACK_HEIGHT * 4) as usize];
             let native_blob_output = vec![0f32; MAX_BLOBS * 4];
             let blob_data_for_shader = vec![[0f32; 4]; MAX_BLOBS];
             let connection_lines = vec![[0f32; 4]; MAX_BLOBS];
@@ -256,8 +260,7 @@ impl BlobTrackingFX {
             && let Some(response) = worker.try_recv()
         {
             // Route result to the owner that submitted it.
-            let result_owner =
-                self.pending_worker_owner.take().unwrap_or(owner_key);
+            let result_owner = self.pending_worker_owner.take().unwrap_or(owner_key);
             if let Some(state) = self.owner_states.get_mut(&result_owner) {
                 Self::apply_blob_response(state, &response);
             }
@@ -274,7 +277,9 @@ impl BlobTrackingFX {
         };
 
         // BlobTrackingFX.cs line 195: if (nativeHandle == IntPtr.Zero) return;
-        let Some(worker) = &mut self.worker else { return };
+        let Some(worker) = &mut self.worker else {
+            return;
+        };
 
         // Submit to background worker (non-blocking).
         worker.submit(BlobRequest {
@@ -289,10 +294,8 @@ impl BlobTrackingFX {
     // BlobTrackingFX.cs lines 204-252 — greedy nearest-neighbour matching
     fn apply_blob_response(state: &mut OwnerState, response: &BlobResponse) {
         // Copy raw blob output into state for matching
-        let copy_len =
-            response.blob_data.len().min(state.native_blob_output.len());
-        state.native_blob_output[..copy_len]
-            .copy_from_slice(&response.blob_data[..copy_len]);
+        let copy_len = response.blob_data.len().min(state.native_blob_output.len());
+        state.native_blob_output[..copy_len].copy_from_slice(&response.blob_data[..copy_len]);
 
         // Mark all existing tracked blobs as unmatched
         for i in 0..state.tracked_count {
@@ -355,8 +358,7 @@ impl BlobTrackingFX {
         // Mathf.Lerp clamps t to [0,1]
         let lerp_speed = 60.0 + (2.0 - 60.0) * smoothing.clamp(0.0, 1.0);
         let pos_alpha = 1.0 - (-lerp_speed * dt).exp();
-        let size_alpha =
-            1.0 - (-lerp_speed * SIZE_SMOOTH_FACTOR * dt).exp();
+        let size_alpha = 1.0 - (-lerp_speed * SIZE_SMOOTH_FACTOR * dt).exp();
 
         // BlobTrackingFX.cs lines 268-281 — remove unmatched blobs on new detection
         if state.has_new_detection {
@@ -378,16 +380,12 @@ impl BlobTrackingFX {
             let t = state.tracked[i];
             // Vector2.Lerp(a, b, t) = a + (b-a)*clamp(t,0,1) — but alpha is already [0,1]
             state.tracked[i].smooth_pos = [
-                t.smooth_pos[0]
-                    + (t.raw_pos[0] - t.smooth_pos[0]) * pos_alpha,
-                t.smooth_pos[1]
-                    + (t.raw_pos[1] - t.smooth_pos[1]) * pos_alpha,
+                t.smooth_pos[0] + (t.raw_pos[0] - t.smooth_pos[0]) * pos_alpha,
+                t.smooth_pos[1] + (t.raw_pos[1] - t.smooth_pos[1]) * pos_alpha,
             ];
             state.tracked[i].smooth_size = [
-                t.smooth_size[0]
-                    + (t.raw_size[0] - t.smooth_size[0]) * size_alpha,
-                t.smooth_size[1]
-                    + (t.raw_size[1] - t.smooth_size[1]) * size_alpha,
+                t.smooth_size[0] + (t.raw_size[0] - t.smooth_size[0]) * size_alpha,
+                t.smooth_size[1] + (t.raw_size[1] - t.smooth_size[1]) * size_alpha,
             ];
         }
     }
@@ -448,27 +446,69 @@ fn create_font_atlas(device: &GpuDevice) -> GpuTexture {
 
     // BlobTrackingFX.cs lines 391-414 — glyph bitmaps (IDENTICAL to Unity source)
     let glyphs: &[&[&str]] = &[
-        &[".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."], // 0
-        &["..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."], // 1
-        &[".###.", "#...#", "....#", "..##.", ".#...", "#....", "#####"], // 2
-        &[".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###."], // 3
-        &["...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."], // 4
-        &["#####", "#....", "####.", "....#", "....#", "#...#", ".###."], // 5
-        &[".###.", "#....", "#....", "####.", "#...#", "#...#", ".###."], // 6
-        &["#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."], // 7
-        &[".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."], // 8
-        &[".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##.."], // 9
-        &[".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"], // A
-        &["####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."], // B
-        &[".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."], // C
-        &["####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."], // D
-        &["#####", "#....", "#....", "####.", "#....", "#....", "#####"], // E
-        &["#####", "#....", "#....", "####.", "#....", "#....", "#...."], // F
-        &["#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"], // X
-        &["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."], // Y
-        &[".....", ".....", ".....", ".....", ".....", ".....", "..#.."], // .
-        &[".....", "..#..", "..#..", ".....", "..#..", "..#..", "....."], // :
-        &["##..#", "##.#.", "..#..", "..#..", "..#..", ".#.##", "#..##"], // %
+        &[
+            ".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###.",
+        ], // 0
+        &[
+            "..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###.",
+        ], // 1
+        &[
+            ".###.", "#...#", "....#", "..##.", ".#...", "#....", "#####",
+        ], // 2
+        &[
+            ".###.", "#...#", "....#", "..##.", "....#", "#...#", ".###.",
+        ], // 3
+        &[
+            "...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#.",
+        ], // 4
+        &[
+            "#####", "#....", "####.", "....#", "....#", "#...#", ".###.",
+        ], // 5
+        &[
+            ".###.", "#....", "#....", "####.", "#...#", "#...#", ".###.",
+        ], // 6
+        &[
+            "#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#...",
+        ], // 7
+        &[
+            ".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###.",
+        ], // 8
+        &[
+            ".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##..",
+        ], // 9
+        &[
+            ".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#",
+        ], // A
+        &[
+            "####.", "#...#", "#...#", "####.", "#...#", "#...#", "####.",
+        ], // B
+        &[
+            ".###.", "#...#", "#....", "#....", "#....", "#...#", ".###.",
+        ], // C
+        &[
+            "####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####.",
+        ], // D
+        &[
+            "#####", "#....", "#....", "####.", "#....", "#....", "#####",
+        ], // E
+        &[
+            "#####", "#....", "#....", "####.", "#....", "#....", "#....",
+        ], // F
+        &[
+            "#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#",
+        ], // X
+        &[
+            "#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#..",
+        ], // Y
+        &[
+            ".....", ".....", ".....", ".....", ".....", ".....", "..#..",
+        ], // .
+        &[
+            ".....", "..#..", "..#..", ".....", "..#..", "..#..", ".....",
+        ], // :
+        &[
+            "##..#", "##.#.", "..#..", "..#..", "..#..", ".#.##", "#..##",
+        ], // %
     ];
 
     // BlobTrackingFX.cs line 422: var pixels = new Color32[texW * texH]
@@ -485,8 +525,7 @@ fn create_font_atlas(device: &GpuDevice) -> GpuTexture {
             for col in 0..GW {
                 if col < line.len() && line.as_bytes()[col] == b'#' {
                     // BlobTrackingFX.cs line 434: new Color32(255, 255, 255, 255)
-                    pixels[tex_y * tex_w + base_x + col] =
-                        [255, 255, 255, 255];
+                    pixels[tex_y * tex_w + base_x + col] = [255, 255, 255, 255];
                 }
             }
         }
@@ -500,7 +539,9 @@ fn create_font_atlas(device: &GpuDevice) -> GpuTexture {
         depth: 1,
         format: GpuTextureFormat::Rgba8Unorm,
         dimension: GpuTextureDimension::D2,
-        usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::COPY_DST | GpuTextureUsage::CPU_UPLOAD,
+        usage: GpuTextureUsage::SHADER_READ
+            | GpuTextureUsage::COPY_DST
+            | GpuTextureUsage::CPU_UPLOAD,
         label: "BlobTracking FontAtlas",
     });
 
@@ -590,11 +631,7 @@ impl PostProcessEffect for BlobTrackingFX {
                         texture: &state.downsample_rt.texture,
                     },
                 ],
-                [
-                    READBACK_WIDTH.div_ceil(16),
-                    READBACK_HEIGHT.div_ceil(16),
-                    1,
-                ],
+                [READBACK_WIDTH.div_ceil(16), READBACK_HEIGHT.div_ceil(16), 1],
                 "BlobTracking Downsample",
             );
 
@@ -634,10 +671,8 @@ impl PostProcessEffect for BlobTrackingFX {
 
         let mut blob_center_size = [[0f32; 4]; 16];
         let mut blob_connections_arr = [[0f32; 4]; 16];
-        blob_center_size[..MAX_BLOBS]
-            .copy_from_slice(&state.blob_data_for_shader[..MAX_BLOBS]);
-        blob_connections_arr[..MAX_BLOBS]
-            .copy_from_slice(&state.connection_lines[..MAX_BLOBS]);
+        blob_center_size[..MAX_BLOBS].copy_from_slice(&state.blob_data_for_shader[..MAX_BLOBS]);
+        blob_connections_arr[..MAX_BLOBS].copy_from_slice(&state.connection_lines[..MAX_BLOBS]);
 
         let uniforms = BlobUniforms {
             amount,
@@ -692,12 +727,7 @@ impl PostProcessEffect for BlobTrackingFX {
         }
     }
 
-    fn resize(
-        &mut self,
-        _device: &GpuDevice,
-        _width: u32,
-        _height: u32,
-    ) {
+    fn resize(&mut self, _device: &GpuDevice, _width: u32, _height: u32) {
         // BlobTrackingFX.cs lines 366-368:
         // "Downsample RT is fixed size, no resize needed"
     }
