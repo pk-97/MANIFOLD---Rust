@@ -532,4 +532,10 @@ impl Generator for MyceliumGenerator {
     fn resize(&mut self, _device: &manifold_gpu::GpuDevice, _width: u32, _height: u32) {
         self.initialized = false;
     }
+
+    /// Unity: TRAIL_RESOLUTION_SCALE = 0.5.
+    /// Physarum agent trail simulation — naturally smooth, half-res is invisible.
+    fn internal_resolution_scale(&self) -> f32 {
+        0.5
+    }
 }

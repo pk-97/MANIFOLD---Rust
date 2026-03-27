@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::types::{ClockAuthority, QuantizeMode, ResolutionPreset};
+use crate::types::{ClockAuthority, QuantizeMode, ResolutionPreset, UpscaleMode};
 use crate::effects::{EffectInstance, EffectGroup};
 
 /// Project-wide settings.
@@ -34,6 +34,11 @@ pub struct ProjectSettings {
     pub quantize_mode: QuantizeMode,
     #[serde(default)]
     pub resolution_preset: ResolutionPreset,
+    /// How reduced-resolution generator output is upscaled to full output resolution.
+    /// Organic/particle generators render internally at 0.5× for performance, then
+    /// are upscaled via this method before effects and compositing.
+    #[serde(default)]
+    pub upscale_mode: UpscaleMode,
 
     #[serde(default = "default_one")]
     pub master_opacity: f32,
@@ -117,6 +122,7 @@ impl Default for ProjectSettings {
             time_signature_denominator: 4,
             quantize_mode: QuantizeMode::Off,
             resolution_preset: ResolutionPreset::FHD1080p,
+            upscale_mode: UpscaleMode::MetalFxSpatial,
             master_opacity: 1.0,
             master_effects: Vec::new(),
             master_effect_groups: None,

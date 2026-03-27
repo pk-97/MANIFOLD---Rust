@@ -8,6 +8,7 @@
 #[allow(unexpected_cfgs)]
 pub mod mps;
 pub mod archive;
+pub mod metalfx;
 
 use crate::types::*;
 
@@ -879,6 +880,13 @@ impl GpuEncoder {
         unsafe { &*(self.cmd_buf_ptr as *const metal::CommandBufferRef) }
     }
 
+    /// Get the raw command buffer for direct encoding (MPS kernels, MetalFX).
+    /// Ends any active encoder first to avoid encoding conflicts.
+    pub fn raw_cmd_buf(&mut self) -> &metal::CommandBufferRef {
+        self.end_current();
+        self.cmd_buf()
+    }
+
     /// Ensure a compute encoder is active. Returns a raw pointer to it.
     fn ensure_compute(&mut self) -> *const metal::ComputeCommandEncoderRef {
         if let EncoderState::Compute(ptr) = self.state {
@@ -1252,6 +1260,36 @@ impl GpuEncoder {
     pub fn wait_event(&mut self, event: &GpuEvent, value: u64) {
         self.end_current();
         self.cmd_buf().encode_wait_for_event(event.raw(), value);
+    }
+
+    /// Encode a MetalFX spatial upscale (src → dst).
+    /// Ends any active encoder first. The scaler must match the texture dimensions.
+    pub fn encode_metalfx_upscale(
+        &mut self,
+        scaler: &metalfx::MetalFxSpatialScaler,
+        src: &GpuTexture,
+        dst: &GpuTexture,
+    ) {
+        self.end_current();
+        scaler.encode(self.cmd_buf(), src, dst);
+    }
+
+    /// Encode an MPS Lanczos upscale (src → dst).
+    /// Automatically computes the scale transform from texture dimensions.
+    pub fn encode_mps_upscale(
+        &mut self,
+        scaler: &mps::MpsLanczosScale,
+        src: &GpuTexture,
+        dst: &GpuTexture,
+    ) {
+        self.end_current();
+        scaler.set_transform(&mps::MpsScaleTransform {
+            scale_x: dst.width as f64 / src.width as f64,
+            scale_y: dst.height as f64 / src.height as f64,
+            translate_x: 0.0,
+            translate_y: 0.0,
+        });
+        scaler.encode(self.cmd_buf(), &src.raw, &dst.raw);
     }
 
     /// Commit the command buffer to the GPU queue.

@@ -788,3 +788,22 @@ impl TryFrom<i32> for BlendMode {
         }
     }
 }
+
+// ─── Upscale Mode ───
+
+/// Controls how reduced-resolution generator output is upscaled to full output resolution.
+/// Generators with `internal_resolution_scale < 1.0` (organic/particle types) render at
+/// reduced resolution for performance, then are upscaled before effects and compositing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UpscaleMode {
+    /// MetalFX Spatial (ML-based, best quality). Default on macOS 13+ Apple Silicon.
+    /// Falls back to MpsLanczos if MetalFX is unavailable at runtime.
+    #[default]
+    MetalFxSpatial = 0,
+    /// MPS Lanczos resampling (high-quality, always available on Apple Silicon).
+    MpsLanczos = 1,
+    /// No scaling — all generators render at full output resolution.
+    /// Highest quality but significantly more GPU work for particle/fluid generators.
+    Native = 2,
+}

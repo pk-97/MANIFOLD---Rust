@@ -14,11 +14,26 @@ use crate::uniform_arena::UniformArena;
 
 /// Per-clip active state.
 struct ActiveClip {
+    /// Generator renders into this texture (may be reduced resolution).
     render_target: RenderTarget,
+    /// Full-resolution output texture for upscaled generators.
+    /// None when the generator runs at full resolution (scale = 1.0).
+    upscale_target: Option<RenderTarget>,
+    /// Internal resolution scale of this clip's generator (cached from trait).
+    internal_scale: f32,
     generator_type: GeneratorTypeId,
     layer_id: LayerId,
     layer_index: i32, // positional cache for param lookup in render_all
     anim_progress: f32,
+}
+
+impl ActiveClip {
+    /// The texture to hand to the compositor (upscaled if needed, else direct).
+    fn output_texture(&self) -> &manifold_gpu::GpuTexture {
+        self.upscale_target
+            .as_ref()
+            .map_or(&self.render_target.texture, |rt| &rt.texture)
+    }
 }
 
 /// Per-layer generator state. Persists across clips to maintain
@@ -32,6 +47,11 @@ struct LayerGeneratorState {
 /// GPU-side clip renderer for generators.
 /// Manages per-layer Generator instances and per-clip RenderTargets.
 /// Port of C# GeneratorRenderer : IClipRenderer.
+///
+/// Generators with `internal_resolution_scale() < 1.0` render to reduced-resolution
+/// render targets, then are upscaled to full output resolution via MetalFX Spatial
+/// (or MPS Lanczos fallback). This matches Unity's `InternalResolutionScale` pattern
+/// where organic/particle generators run at 0.5× and geometric generators at 1.0×.
 pub struct GeneratorRenderer {
     /// Cached pointer to GpuDevice owned by ContentPipeline (same thread, same lifetime).
     device_ptr: *const GpuDevice,
@@ -47,6 +67,9 @@ pub struct GeneratorRenderer {
     /// Shared-memory uniform arena for generator uniform data.
     /// Eliminates per-generator queue.write_buffer() calls.
     uniform_arena: UniformArena,
+    /// Texture upscaler for reduced-resolution generators.
+    /// Uses MetalFX Spatial when available, MPS Lanczos as fallback.
+    upscaler: manifold_gpu::metalfx::TextureUpscaler,
 }
 
 // Safety: device_ptr points to GpuDevice on the content thread.
@@ -73,6 +96,7 @@ impl GeneratorRenderer {
         }
 
         let uniform_arena = UniformArena::new(device);
+        let upscaler = manifold_gpu::metalfx::TextureUpscaler::new(device, format);
 
         Self {
             device_ptr: device as *const GpuDevice,
@@ -85,6 +109,7 @@ impl GeneratorRenderer {
             available_rts,
             render_scratch: Vec::with_capacity(16),
             uniform_arena,
+            upscaler,
         }
     }
 
@@ -98,6 +123,15 @@ impl GeneratorRenderer {
     /// Get a reference to the GpuDevice.
     fn device(&self) -> &GpuDevice {
         unsafe { &*self.device_ptr }
+    }
+
+    /// Compute the reduced resolution for a generator with the given scale.
+    /// Matches Unity's SetTrailResolution: clamp scale, round, minimum 16px.
+    fn scaled_dimensions(width: u32, height: u32, scale: f32) -> (u32, u32) {
+        let scale = scale.clamp(0.125, 1.0);
+        let sw = (width as f32 * scale).round() as u32;
+        let sh = (height as f32 * scale).round() as u32;
+        (sw.max(16), sh.max(16))
     }
 
     /// Internal: acquire a clip with generator type and layer identity.
@@ -138,23 +172,68 @@ impl GeneratorRenderer {
             ls.trigger_count += 1;
         }
 
-        // Acquire RT from pool or create new
-        let rt = if let Some(rt) = self.available_rts.pop() {
-            rt
+        // Query generator's internal resolution scale
+        let internal_scale = self
+            .layer_generators
+            .get(&layer_id)
+            .map_or(1.0, |ls| ls.generator.internal_resolution_scale());
+        let needs_upscale = internal_scale < 1.0;
+
+        // Create render target at appropriate resolution
+        let (rt_w, rt_h) = if needs_upscale {
+            Self::scaled_dimensions(self.width, self.height, internal_scale)
         } else {
+            (self.width, self.height)
+        };
+
+        let render_target = if !needs_upscale {
+            // Full-res generator: try to reuse from pool
+            if let Some(rt) = self.available_rts.pop() {
+                rt
+            } else {
+                RenderTarget::new(
+                    self.device(),
+                    rt_w,
+                    rt_h,
+                    self.format,
+                    "Generator RT (overflow)",
+                )
+            }
+        } else {
+            // Reduced-res generator: always create at scaled size
             RenderTarget::new(
                 self.device(),
-                self.width,
-                self.height,
+                rt_w,
+                rt_h,
                 self.format,
-                "Generator RT (overflow)",
+                &format!("Generator RT ({}x{} @ {:.0}%)", rt_w, rt_h, internal_scale * 100.0),
             )
+        };
+
+        // Create upscale target at full resolution if needed
+        let upscale_target = if needs_upscale {
+            let target = if let Some(rt) = self.available_rts.pop() {
+                rt
+            } else {
+                RenderTarget::new(
+                    self.device(),
+                    self.width,
+                    self.height,
+                    self.format,
+                    "Generator Upscale RT",
+                )
+            };
+            Some(target)
+        } else {
+            None
         };
 
         self.active_clips.insert(
             clip_id.to_string(),
             ActiveClip {
-                render_target: rt,
+                render_target,
+                upscale_target,
+                internal_scale,
                 generator_type: gen_type.clone(),
                 layer_id,
                 layer_index,
@@ -197,7 +276,7 @@ impl GeneratorRenderer {
         for clip_id in 0..self.render_scratch.len() {
             let id = &self.render_scratch[clip_id];
 
-            let (layer_id, layer_index, gen_type, anim_progress) = {
+            let (layer_id, layer_index, gen_type, anim_progress, internal_scale) = {
                 let active = match self.active_clips.get(id) {
                     Some(a) => a,
                     None => continue,
@@ -207,6 +286,7 @@ impl GeneratorRenderer {
                     active.layer_index,
                     active.generator_type.clone(),
                     active.anim_progress,
+                    active.internal_scale,
                 )
             };
 
@@ -227,13 +307,21 @@ impl GeneratorRenderer {
                 .get(&layer_id)
                 .map_or(0, |ls| ls.trigger_count);
 
+            // For scaled generators, pass reduced dimensions in the context.
+            // The generator sees the reduced resolution as its world, then we upscale.
+            let (ctx_w, ctx_h) = if internal_scale < 1.0 {
+                Self::scaled_dimensions(self.width, self.height, internal_scale)
+            } else {
+                (self.width, self.height)
+            };
+
             let ctx = GeneratorContext {
                 time,
                 beat,
                 dt,
-                width: self.width,
-                height: self.height,
-                aspect: self.width as f32 / self.height as f32,
+                width: ctx_w,
+                height: ctx_h,
+                aspect: self.width as f32 / self.height as f32, // aspect stays at output ratio
                 anim_progress,
                 trigger_count,
                 params,
@@ -258,6 +346,32 @@ impl GeneratorRenderer {
         self.uniform_arena.flush(gpu.device);
         // Clear the arena pointer from GpuEncoder.
         gpu.uniform_arena = None;
+
+        // ── Upscale pass: reduced-res generators → full-res output ───
+        // Uses MetalFX Spatial when available, MPS Lanczos as fallback.
+        // Must happen after all generators have rendered and arena is flushed.
+        // Safety: device_ptr is valid for the lifetime of ContentPipeline.
+        let device = unsafe { &*self.device_ptr };
+        for id in &self.render_scratch {
+            let active = match self.active_clips.get(id) {
+                Some(a) => a,
+                None => continue,
+            };
+            if let Some(ref upscale_rt) = active.upscale_target {
+                // Get raw pointers to avoid borrow conflicts with self.upscaler
+                let src_tex = &active.render_target.texture as *const manifold_gpu::GpuTexture;
+                let dst_tex = &upscale_rt.texture as *const manifold_gpu::GpuTexture;
+                // Safety: textures are valid for the duration of this frame.
+                // No aliasing: src and dst are different textures, upscaler borrows
+                // are disjoint from active_clips reads.
+                self.upscaler.upscale(
+                    gpu.native_enc,
+                    device,
+                    unsafe { &*src_tex },
+                    unsafe { &*dst_tex },
+                );
+            }
+        }
     }
 
     /// Get the animation progress for a rendered clip (for profiling).
@@ -268,27 +382,45 @@ impl GeneratorRenderer {
     }
 
     /// Get the texture for a rendered clip (used by compositor).
+    /// Returns the upscaled full-res texture for scaled generators,
+    /// or the direct render target for full-res generators.
     pub fn get_clip_texture(&self, clip_id: &str) -> Option<&manifold_gpu::GpuTexture> {
         self.active_clips
             .get(clip_id)
-            .map(|a| &a.render_target.texture)
+            .map(|a| a.output_texture())
     }
 
     /// Resize all render targets and generators.
     pub fn resize_gpu(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
+        // Invalidate cached MetalFX scalers (dimension-specific).
+        self.upscaler.invalidate();
         // Safety: device_ptr points to GpuDevice owned by ContentPipeline,
         // which outlives GeneratorRenderer. No aliasing with active_clips/generators.
         let device = unsafe { &*self.device_ptr };
         for active in self.active_clips.values_mut() {
-            active.render_target.resize(device, width, height);
+            let (rt_w, rt_h) = if active.internal_scale < 1.0 {
+                Self::scaled_dimensions(width, height, active.internal_scale)
+            } else {
+                (width, height)
+            };
+            active.render_target.resize(device, rt_w, rt_h);
+            if let Some(ref mut upscale_rt) = active.upscale_target {
+                upscale_rt.resize(device, width, height);
+            }
         }
         for rt in &mut self.available_rts {
             rt.resize(device, width, height);
         }
         for layer_state in self.layer_generators.values_mut() {
-            layer_state.generator.resize(device, width, height);
+            let scale = layer_state.generator.internal_resolution_scale();
+            let (gen_w, gen_h) = if scale < 1.0 {
+                Self::scaled_dimensions(width, height, scale)
+            } else {
+                (width, height)
+            };
+            layer_state.generator.resize(device, gen_w, gen_h);
         }
     }
 
@@ -318,6 +450,36 @@ impl GeneratorRenderer {
                 .get(layer_id)
                 .map_or(0, |ls| ls.trigger_count);
             if let Some(generator) = self.registry.create(self.device(), &new_type) {
+                // Update internal_scale on active clips for this layer
+                let new_scale = generator.internal_resolution_scale();
+                // Safety: device_ptr is valid for the lifetime of ContentPipeline.
+                let device = unsafe { &*self.device_ptr };
+                let width = self.width;
+                let height = self.height;
+                let format = self.format;
+                for active in self.active_clips.values_mut() {
+                    if active.layer_id == *layer_id && active.internal_scale != new_scale {
+                        active.internal_scale = new_scale;
+                        if new_scale < 1.0 {
+                            let (sw, sh) =
+                                Self::scaled_dimensions(width, height, new_scale);
+                            active.render_target.resize(device, sw, sh);
+                            if active.upscale_target.is_none() {
+                                active.upscale_target = Some(RenderTarget::new(
+                                    device,
+                                    width,
+                                    height,
+                                    format,
+                                    "Generator Upscale RT",
+                                ));
+                            }
+                        } else {
+                            active.render_target.resize(device, width, height);
+                            active.upscale_target = None;
+                        }
+                    }
+                }
+
                 self.layer_generators.insert(
                     layer_id.clone(),
                     LayerGeneratorState {
@@ -357,13 +519,22 @@ impl ClipRenderer for GeneratorRenderer {
 
     fn stop_clip(&mut self, clip_id: &str) {
         if let Some(active) = self.active_clips.remove(clip_id) {
-            self.available_rts.push(active.render_target);
+            // Return full-res RTs to pool (reduced-res RTs are dropped)
+            if let Some(upscale_rt) = active.upscale_target {
+                self.available_rts.push(upscale_rt);
+            } else {
+                self.available_rts.push(active.render_target);
+            }
         }
     }
 
     fn release_all(&mut self) {
         for (_, active) in self.active_clips.drain() {
-            self.available_rts.push(active.render_target);
+            if let Some(upscale_rt) = active.upscale_target {
+                self.available_rts.push(upscale_rt);
+            } else {
+                self.available_rts.push(active.render_target);
+            }
         }
     }
 
