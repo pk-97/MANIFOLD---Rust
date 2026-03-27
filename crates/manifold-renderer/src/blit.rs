@@ -1,15 +1,9 @@
 /// Fullscreen triangle blit pipeline: renders a texture onto a surface.
+/// UI-thread only — blits shared IOSurface textures to the window surface.
 pub struct BlitPipeline {
-    #[allow(dead_code)] // render fallback for non-hal builds
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
-    #[allow(dead_code)]
     bind_group_layout: wgpu::BindGroupLayout,
-    // Compute blit pipeline (macOS + hal-encoding)
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    compute_pipeline: wgpu::ComputePipeline,
-    #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-    compute_bgl: wgpu::BindGroupLayout,
 }
 
 const BLIT_SHADER: &str = r#"
@@ -109,91 +103,10 @@ impl BlitPipeline {
             ..Default::default()
         });
 
-        // ── Compute blit pipeline (macOS + hal-encoding) ──
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        let (compute_pipeline, compute_bgl) = {
-            let compute_shader =
-                device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("Blit Compute Shader"),
-                    source: wgpu::ShaderSource::Wgsl(
-                        include_str!("generators/shaders/blit_compute.wgsl")
-                            .into(),
-                    ),
-                });
-
-            let cbgl = device.create_bind_group_layout(
-                &wgpu::BindGroupLayoutDescriptor {
-                    label: Some("Blit Compute BGL"),
-                    entries: &[
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 0,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Texture {
-                                sample_type:
-                                    wgpu::TextureSampleType::Float {
-                                        filterable: true,
-                                    },
-                                view_dimension:
-                                    wgpu::TextureViewDimension::D2,
-                                multisampled: false,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 1,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Sampler(
-                                wgpu::SamplerBindingType::Filtering,
-                            ),
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 2,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::StorageTexture {
-                                access:
-                                    wgpu::StorageTextureAccess::WriteOnly,
-                                format: wgpu::TextureFormat::Rgba16Float,
-                                view_dimension:
-                                    wgpu::TextureViewDimension::D2,
-                            },
-                            count: None,
-                        },
-                    ],
-                },
-            );
-
-            let clayout = device.create_pipeline_layout(
-                &wgpu::PipelineLayoutDescriptor {
-                    label: Some("Blit Compute Layout"),
-                    bind_group_layouts: &[&cbgl],
-                    immediate_size: 0,
-                },
-            );
-
-            let cpipeline = device.create_compute_pipeline(
-                &wgpu::ComputePipelineDescriptor {
-                    label: Some("Blit Compute Pipeline"),
-                    layout: Some(&clayout),
-                    module: &compute_shader,
-                    entry_point: Some("cs_main"),
-                    compilation_options:
-                        wgpu::PipelineCompilationOptions::default(),
-                    cache: None,
-                },
-            );
-
-            (cpipeline, cbgl)
-        };
-
         Self {
             pipeline,
             sampler,
             bind_group_layout,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            compute_pipeline,
-            #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-            compute_bgl,
         }
     }
 
@@ -208,97 +121,52 @@ impl BlitPipeline {
         target_width: u32,
         target_height: u32,
     ) {
-        #[cfg(all(target_os = "macos", feature = "hal-encoding"))]
-        {
-            let bind_group =
-                device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Blit Compute Bind Group"),
-                    layout: &self.compute_bgl,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(
-                                source,
-                            ),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(
-                                &self.sampler,
-                            ),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::TextureView(
-                                target,
-                            ),
-                        },
-                    ],
-                });
+        let _ = (target_width, target_height);
+        let bind_group =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Blit Bind Group"),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(
+                            source,
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(
+                            &self.sampler,
+                        ),
+                    },
+                ],
+            });
 
-            let mut pass =
-                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("Blit Compute Pass"),
-                    timestamp_writes: None,
-                });
-            pass.set_pipeline(&self.compute_pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(
-                target_width.div_ceil(16),
-                target_height.div_ceil(16),
-                1,
-            );
-        }
-
-        #[cfg(not(all(target_os = "macos", feature = "hal-encoding")))]
-        {
-            let _ = (target_width, target_height);
-            let bind_group =
-                device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Blit Bind Group"),
-                    layout: &self.bind_group_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(
-                                source,
+        let mut pass =
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Blit Pass"),
+                color_attachments: &[Some(
+                    wgpu::RenderPassColorAttachment {
+                        view: target,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(
+                                wgpu::Color::BLACK,
                             ),
+                            store: wgpu::StoreOp::Store,
                         },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::Sampler(
-                                &self.sampler,
-                            ),
-                        },
-                    ],
-                });
+                    },
+                )],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
 
-            let mut pass =
-                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("Blit Pass"),
-                    color_attachments: &[Some(
-                        wgpu::RenderPassColorAttachment {
-                            view: target,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(
-                                    wgpu::Color::BLACK,
-                                ),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        },
-                    )],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     /// Blit source into a specific rect within the target (in physical pixels).

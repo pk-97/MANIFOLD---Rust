@@ -23,8 +23,3 @@ naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 metal = "0.33"
 
 [dev-dependencies]
-
-[features]
-
-[lints.rust]
-unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("hal-encoding"))'] }

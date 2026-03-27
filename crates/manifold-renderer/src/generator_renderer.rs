@@ -221,7 +221,7 @@ impl GeneratorRenderer {
             }
         } else {
             // Reduced-res generator: always create at scaled size
-            eprintln!(
+            log::debug!(
                 "[GenRenderer] Clip {clip_id}: rendering at {}x{} ({:.0}% of {}x{}), upscale to full",
                 rt_w, rt_h, internal_scale * 100.0, self.width, self.height,
             );

@@ -518,23 +518,26 @@ impl ContentPipeline {
         // Update shared output view for UI thread
         let (comp_w, comp_h) = self.compositor.dimensions();
 
-        // Periodic perf dump
-        let _total_ms = _t_frame.elapsed().as_secs_f64() * 1000.0;
-        if frame_count > 0 && frame_count.is_multiple_of(60) {
-            eprintln!(
-                "[PERF/NATIVE] frame={} clips={} res={}x{} | gen={:.1}ms desc={:.1}ms \
-                 comp={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
-                frame_count,
-                tick_result.ready_clips.len(),
-                comp_w,
-                comp_h,
-                _gen_ms,
-                _desc_ms,
-                _comp_ms,
-                _poll_ms,
-                _total_ms,
-                1000.0 / _total_ms.max(0.001),
-            );
+        // Periodic perf dump (profiling builds only)
+        #[cfg(feature = "profiling")]
+        {
+            let _total_ms = _t_frame.elapsed().as_secs_f64() * 1000.0;
+            if frame_count > 0 && frame_count.is_multiple_of(60) {
+                eprintln!(
+                    "[PERF/NATIVE] frame={} clips={} res={}x{} | gen={:.1}ms desc={:.1}ms \
+                     comp={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
+                    frame_count,
+                    tick_result.ready_clips.len(),
+                    comp_w,
+                    comp_h,
+                    _gen_ms,
+                    _desc_ms,
+                    _comp_ms,
+                    _poll_ms,
+                    _total_ms,
+                    1000.0 / _total_ms.max(0.001),
+                );
+            }
         }
 
         // Update shared dimensions

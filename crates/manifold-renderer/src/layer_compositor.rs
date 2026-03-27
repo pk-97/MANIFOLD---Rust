@@ -862,9 +862,7 @@ impl LayerCompositor {
                 unsafe { &mut *effect_chains_ptr.add(ec_idx) };
 
             // Create per-layer command buffer
-            let mut layer_enc = device.create_encoder(&format!(
-                "Layer {layer_idx}"
-            ));
+            let mut layer_enc = device.create_encoder("Layer");
 
             // Scope the GpuEncoder wrapper so it drops before signal+commit
             {
