@@ -7,6 +7,7 @@
 
 #[allow(unexpected_cfgs)]
 pub mod mps;
+pub mod archive;
 
 use crate::types::*;
 
@@ -244,6 +245,102 @@ impl GpuDevice {
             source = source.replace(pattern, replacement);
         }
         self.create_compute_pipeline(&source, entry_point, label)
+    }
+
+    /// Create a compute pipeline with binary archive caching.
+    ///
+    /// If the archive contains a pre-compiled binary for this shader+entry,
+    /// pipeline creation is near-instant (no shader compilation).
+    /// Otherwise compiles normally and adds the result to the archive.
+    pub fn create_compute_pipeline_cached(
+        &self,
+        wgsl_source: &str,
+        entry_point: &str,
+        archive: &mut archive::GpuPipelineArchive,
+        label: &str,
+    ) -> GpuComputePipeline {
+        let (slot_map, msl_source, msl_entry_name, workgroup_size) =
+            compile_wgsl_to_msl(wgsl_source, entry_point, label);
+
+        let hash = archive::pipeline_hash(wgsl_source, entry_point);
+
+        let compile_opts = metal::CompileOptions::new();
+        compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
+        compile_opts.set_fast_math_enabled(true);
+        let library = self
+            .device
+            .new_library_with_source(&msl_source, &compile_opts)
+            .unwrap_or_else(|e| {
+                panic!("{label}: MTL library compile error: {e}\nMSL source:\n{msl_source}")
+            });
+
+        let function = library
+            .get_function(&msl_entry_name, None)
+            .unwrap_or_else(|e| {
+                let names = library.function_names();
+                panic!(
+                    "{label}: function '{msl_entry_name}' not found: {e}. \
+                     Available: {names:?}"
+                )
+            });
+
+        // Use descriptor-based creation to attach binary archive
+        let desc = metal::ComputePipelineDescriptor::new();
+        desc.set_compute_function(Some(&function));
+        desc.set_label(label);
+        desc.set_binary_archives(&[archive.raw_archive()]);
+
+        let state = self
+            .device
+            .new_compute_pipeline_state(&desc)
+            .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {e}"));
+
+        // Add to archive if not already present
+        if !archive.was_added(hash) {
+            if let Err(e) = archive
+                .raw_archive()
+                .add_compute_pipeline_functions_with_descriptor(&desc)
+            {
+                log::warn!("{label}: failed to add to binary archive: {e}");
+            } else {
+                archive.mark_added(hash);
+            }
+        }
+
+        let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
+        GpuComputePipeline {
+            state,
+            slot_map,
+            label: label.to_string(),
+            workgroup_size,
+            needs_sizes_buffer,
+        }
+    }
+
+    /// Create a specialized compute pipeline with binary archive caching.
+    /// Combines WGSL source specialization with archive-backed compilation.
+    pub fn create_specialized_compute_pipeline_cached(
+        &self,
+        wgsl_source: &str,
+        entry_point: &str,
+        specializations: &[(&str, &str)],
+        archive: &mut archive::GpuPipelineArchive,
+        label: &str,
+    ) -> GpuComputePipeline {
+        let mut source = wgsl_source.to_string();
+        for &(pattern, replacement) in specializations {
+            source = source.replace(pattern, replacement);
+        }
+        self.create_compute_pipeline_cached(&source, entry_point, archive, label)
+    }
+
+    /// Load or create a pipeline binary archive at the given path.
+    /// Returns None if the device doesn't support binary archives.
+    pub fn load_pipeline_archive(
+        &self,
+        path: &std::path::Path,
+    ) -> Option<archive::GpuPipelineArchive> {
+        archive::GpuPipelineArchive::load_or_create(&self.device, path)
     }
 
     /// Create a render pipeline from WGSL source (fullscreen triangle pattern).
