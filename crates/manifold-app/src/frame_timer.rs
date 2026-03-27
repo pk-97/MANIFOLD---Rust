@@ -18,7 +18,7 @@ pub struct FrameTimer {
     missed_ticks: u64,
 }
 
-const FPS_SAMPLE_INTERVAL: f64 = 2.0;
+const FPS_SAMPLE_INTERVAL: f64 = 1.0;
 
 #[allow(dead_code)]
 impl FrameTimer {
