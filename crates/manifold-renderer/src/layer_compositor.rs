@@ -254,30 +254,63 @@ fn has_enabled_effects(effects: &[EffectInstance]) -> bool {
     false
 }
 
+/// Output descriptor for a single processed layer, ready for the blend pass.
+///
+/// Uses a raw pointer for the texture reference to avoid borrow checker conflicts
+/// between `generate_layers()` (which borrows effect chain / layer buf textures)
+/// and `blend_layers()` (which needs `&mut self` for the main ping-pong).
+/// Safety: the texture pointer is valid for the duration of the frame — textures
+/// are owned by effect chains, layer bufs, or clip render targets, none of which
+/// are reallocated between generate and blend.
+pub(crate) struct LayerOutput {
+    /// Final texture for this layer (post-effects). Raw pointer to avoid lifetime.
+    texture: *const GpuTexture,
+    /// Layer blend mode.
+    blend_mode: BlendMode,
+    /// Layer opacity (includes per-clip opacity for single-clip layers).
+    opacity: f32,
+    /// Aspect ratio at time of generation (width / height).
+    aspect: f32,
+}
+
+impl LayerOutput {
+    fn texture(&self) -> &GpuTexture {
+        // Safety: pointer is valid for the frame duration (see struct doc).
+        unsafe { &*self.texture }
+    }
+}
+
+/// Per-clip transform stored alongside LayerOutput for single-clip layers.
+/// Multi-clip layers have transforms baked into the layer scratch buffer.
+struct SingleClipTransform {
+    translate_x: f32,
+    translate_y: f32,
+    scale: f32,
+    rotation: f32,
+    invert_colors: bool,
+}
+
 /// Layer-aware compositor with per-layer ping-pong blending.
 ///
-/// Compositing flow:
-/// 1. Clear main buffer to opaque black
-/// 2. Group clips by layer_index (sorted descending by engine)
-/// 3. For each layer:
-///    - Single clip: blit directly into main with layer blend mode
-///    - Multi-clip: composite clips into layer buffer (Normal blend), then
-///      blit layer result into main with layer blend mode
-/// 4. Apply master effects to final buffer
-/// 5. Return final accumulated main buffer
+/// Compositing flow (two-phase):
+/// 1. **generate_layers**: process each layer's clips + effects independently
+/// 2. **blend_layers**: serial blend of all layer outputs into main accumulator
 pub struct LayerCompositor {
     /// Main accumulation ping-pong (opaque black init).
     main: PingPong,
-    /// Shared per-layer scratch buffers (lazy, transparent black init).
-    layer_buf: Option<PingPong>,
+    /// Per-layer scratch buffers (lazy, transparent black init).
+    /// One per active multi-clip layer, reused across frames.
+    layer_bufs: Vec<PingPong>,
     /// GPU resources for blend operations (pipeline, sampler).
     blend: BlendResources,
     /// Per-frame uniform sub-allocator — batches all blend uniform writes into
     /// a single buffer. On native path, arena buffer is not read (uses inline
     /// set_bytes), but offset tracking is preserved.
     uniform_arena: UniformArena,
-    /// Effect chain processor (owns its own ping-pong for effect processing).
-    effect_chain: EffectChain,
+    /// Per-layer effect chain processors. Pool grows to match peak active layer
+    /// count, then stays stable (no per-frame allocation after warmup).
+    /// Index 0..N-1 for clip/layer effects, last entry reserved for master effects.
+    effect_chains: Vec<EffectChain>,
     /// Registry of all effect processors.
     effect_registry: EffectRegistry,
     /// Wet/dry lerp pipeline for effect group blending.
@@ -289,29 +322,44 @@ pub struct LayerCompositor {
     /// led_exit_index == 0. Avoids the main buffer being overwritten by tonemap
     /// and master effects before the LED pipeline reads it.
     led_tap: Option<RenderTarget>,
+    /// Per-layer transform data for the blend pass. Cleared each frame.
+    /// Parallel to `layer_outputs` returned by `generate_layers()`.
+    single_clip_transforms: Vec<SingleClipTransform>,
 }
 
 impl LayerCompositor {
     pub fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
         Self {
             main: PingPong::new(device, None, width, height, "Compositor"),
-            layer_buf: None,
+            layer_bufs: Vec::new(),
             blend: BlendResources::new(device, width, height),
             uniform_arena: UniformArena::new(device),
-            effect_chain: EffectChain::new(),
+            effect_chains: Vec::new(),
             effect_registry: EffectRegistry::new(device),
             wet_dry_lerp: WetDryLerpPipeline::new(device),
             tonemap: TonemapPipeline::new(device, width, height),
             led_tap: None,
+            single_clip_transforms: Vec::new(),
         }
     }
 
-    /// Ensure lazy layer scratch buffers exist.
-    fn ensure_layer_buffers(&mut self, device: &GpuDevice) {
-        if self.layer_buf.is_none() {
-            let w = self.main.width();
-            let h = self.main.height();
-            self.layer_buf = Some(PingPong::new(device, None, w, h, "Layer Scratch"));
+    /// Ensure we have at least `count` layer scratch buffers available.
+    fn ensure_layer_bufs(&mut self, count: usize, device: &GpuDevice) {
+        let w = self.main.width();
+        let h = self.main.height();
+        while self.layer_bufs.len() < count {
+            let idx = self.layer_bufs.len();
+            self.layer_bufs.push(PingPong::new(
+                device, None, w, h,
+                &format!("Layer Scratch {idx}"),
+            ));
+        }
+    }
+
+    /// Ensure we have at least `count` effect chains available.
+    fn ensure_effect_chains(&mut self, count: usize) {
+        while self.effect_chains.len() < count {
+            self.effect_chains.push(EffectChain::new());
         }
     }
 
@@ -344,20 +392,70 @@ impl LayerCompositor {
         self.effect_registry.cleanup_clip_owner(owner_key);
     }
 
-    /// Composite all clips into main buffer, grouping by layer.
-    fn composite(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
+    /// Phase A: Process each layer's clips + effects into per-layer output textures.
+    ///
+    /// For single-clip layers without layer effects, the output is the clip texture
+    /// (possibly post-clip-effects via the layer's effect chain).
+    /// For multi-clip layers or layers with effects, clips are composited into a
+    /// per-layer scratch buffer and layer effects are applied.
+    ///
+    /// Each layer uses its own effect chain (no shared state between layers).
+    /// Returns a list of LayerOutput descriptors for the blend pass.
+    fn generate_layers(
+        &mut self,
+        gpu: &mut GpuEncoder,
+        frame: &CompositorFrame,
+    ) -> Vec<LayerOutput> {
         let clips = frame.clips;
         let width = self.main.width();
         let height = self.main.height();
         let aspect = width as f32 / height as f32;
 
-        // Reset uniform arena for this frame
-        self.uniform_arena.reset();
-        // Clear main to opaque black
-        self.main.clear_source(gpu, true);
-
         // Check for any solo layer
         let any_solo = frame.layers.iter().any(|l| l.is_solo);
+
+        // Count active layers for pool sizing
+        let mut active_layer_count = 0usize;
+        let mut multi_clip_layer_count = 0usize;
+        {
+            let mut ci = 0;
+            while ci < clips.len() {
+                let layer_idx = clips[ci].layer_index;
+                let layer_desc = frame.layers.iter().find(|l| l.layer_index == layer_idx);
+                let start = ci;
+                while ci < clips.len() && clips[ci].layer_index == layer_idx {
+                    ci += 1;
+                }
+                if let Some(ld) = layer_desc
+                    && (ld.is_muted || (any_solo && !ld.is_solo))
+                {
+                    continue;
+                }
+                let clip_count = ci - start;
+                let has_layer_effects =
+                    layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
+                active_layer_count += 1;
+                if clip_count > 1 || has_layer_effects {
+                    multi_clip_layer_count += 1;
+                }
+            }
+        }
+
+        // Ensure enough effect chains and scratch buffers
+        self.ensure_effect_chains(active_layer_count);
+        if multi_clip_layer_count > 0 {
+            self.ensure_layer_bufs(multi_clip_layer_count, gpu.device);
+        }
+
+        let mut layer_outputs = Vec::with_capacity(active_layer_count);
+        let mut effect_chain_idx = 0usize;
+        let mut layer_buf_idx = 0usize;
+
+        // Raw pointers to avoid borrow checker conflicts between per-layer
+        // effect chains / layer bufs and the rest of self. Each iteration
+        // accesses a unique index — no aliasing.
+        let effect_chains_ptr = self.effect_chains.as_mut_ptr();
+        let layer_bufs_ptr = self.layer_bufs.as_mut_ptr();
 
         // Group clips by layer_index. Clips are sorted by layer_index descending
         // (higher index = bottom of timeline = rendered first as base).
@@ -393,8 +491,14 @@ impl LayerCompositor {
             let has_layer_effects =
                 layer_desc.is_some_and(|ld| has_enabled_effects(ld.effects));
 
+            // Acquire this layer's effect chain (unique index per layer).
+            // Safety: ec_idx is unique per iteration and < effect_chains.len().
+            let ec_idx = effect_chain_idx;
+            effect_chain_idx += 1;
+            let effect_chain = unsafe { &mut *effect_chains_ptr.add(ec_idx) };
+
             if group.len() == 1 && !has_layer_effects {
-                // Single clip with NO layer effects: blit directly into main with layer blend mode
+                // Single clip with NO layer effects
                 let clip = &group[0];
 
                 // Apply clip-level effects if present
@@ -411,7 +515,7 @@ impl LayerCompositor {
                         frame_count: frame.frame_count as i64,
                     };
                     Self::apply_effects(
-                        &mut self.effect_chain,
+                        effect_chain,
                         &mut self.effect_registry,
                         &self.wet_dry_lerp,
                         gpu,
@@ -423,38 +527,34 @@ impl LayerCompositor {
                 } else {
                     None
                 };
-                let effective_blend_tex = blend_input.unwrap_or(clip.texture);
 
-                let uniforms = BlendUniforms {
-                    blend_mode: layer_blend as u32,
+                let effective_tex: *const GpuTexture =
+                    blend_input.unwrap_or(clip.texture);
+                layer_outputs.push(LayerOutput {
+                    texture: effective_tex,
+                    blend_mode: layer_blend,
                     opacity: layer_opacity * clip.opacity,
+                    aspect,
+                });
+                self.single_clip_transforms.push(SingleClipTransform {
                     translate_x: clip.translate_x,
                     translate_y: clip.translate_y,
-                    scale_val: clip.scale,
+                    scale: clip.scale,
                     rotation: clip.rotation,
-                    aspect_ratio: aspect,
-                    invert_colors: if clip.invert_colors { 1.0 } else { 0.0 },
-                };
-                self.blend.blend_pass(
-                    gpu,
-                    &mut self.uniform_arena,
-                    self.main.source_texture(),
-                    effective_blend_tex,
-                    self.main.target_texture(),
-                    &uniforms,
-                );
-                self.main.swap();
+                    invert_colors: clip.invert_colors,
+                });
             } else {
-                // Multi-clip or layer-effects: composite into layer buffer, then into main
-                self.ensure_layer_buffers(gpu.device);
-                let layer_buf = self.layer_buf.as_mut().unwrap();
+                // Multi-clip or layer-effects: composite into layer buffer
+                // Safety: lb_idx is unique per multi-clip layer and < layer_bufs.len().
+                let lb_idx = layer_buf_idx;
+                layer_buf_idx += 1;
+                let layer_buf = unsafe { &mut *layer_bufs_ptr.add(lb_idx) };
 
                 // Clear layer buffer to transparent
                 layer_buf.clear_source(gpu, false);
 
                 // Composite each clip into layer buffer with Normal blend
                 for clip in group {
-                    // Apply clip-level effects if present
                     let blend_input = if has_enabled_effects(clip.effects) {
                         let ctx = EffectContext {
                             time: frame.time,
@@ -468,7 +568,7 @@ impl LayerCompositor {
                             frame_count: frame.frame_count as i64,
                         };
                         Self::apply_effects(
-                            &mut self.effect_chain,
+                            effect_chain,
                             &mut self.effect_registry,
                             &self.wet_dry_lerp,
                             gpu,
@@ -504,68 +604,108 @@ impl LayerCompositor {
                 }
 
                 // Apply layer-level effects to composited layer buffer
-                let layer_source = if let Some(ld) = layer_desc {
-                    if has_enabled_effects(ld.effects) {
-                        let ctx = EffectContext {
-                            time: frame.time,
-                            beat: frame.beat,
-                            dt: frame.dt,
-                            width,
-                            height,
-                            owner_key: layer_desc
-                                .map_or(0, |ld| layer_id_owner_key(&ld.layer_id)),
-                            is_clip_level: false,
-                            edge_stretch_width: 0.5625,
-                            frame_count: frame.frame_count as i64,
-                        };
-                        let layer_buf = self.layer_buf.as_ref().unwrap();
-                        Self::apply_effects(
-                            &mut self.effect_chain,
-                            &mut self.effect_registry,
-                            &self.wet_dry_lerp,
-                            gpu,
-                            layer_buf.source_texture(),
-                            ld.effects,
-                            ld.effect_groups,
-                            &ctx,
-                        )
-                    } else {
-                        None
-                    }
+                let layer_source = if let Some(ld) = layer_desc
+                    && has_enabled_effects(ld.effects)
+                {
+                    let ctx = EffectContext {
+                        time: frame.time,
+                        beat: frame.beat,
+                        dt: frame.dt,
+                        width,
+                        height,
+                        owner_key: layer_desc
+                            .map_or(0, |ld| layer_id_owner_key(&ld.layer_id)),
+                        is_clip_level: false,
+                        edge_stretch_width: 0.5625,
+                        frame_count: frame.frame_count as i64,
+                    };
+                    Self::apply_effects(
+                        effect_chain,
+                        &mut self.effect_registry,
+                        &self.wet_dry_lerp,
+                        gpu,
+                        layer_buf.source_texture(),
+                        ld.effects,
+                        ld.effect_groups,
+                        &ctx,
+                    )
                 } else {
                     None
                 };
-                let layer_buf = self.layer_buf.as_ref().unwrap();
-                let effective_layer_tex =
+
+                let effective_layer_tex: *const GpuTexture =
                     layer_source.unwrap_or(layer_buf.source_texture());
 
-                // Blit layer result into main with layer blend mode (no transforms)
-                let uniforms = BlendUniforms {
-                    blend_mode: layer_blend as u32,
+                layer_outputs.push(LayerOutput {
+                    texture: effective_layer_tex,
+                    blend_mode: layer_blend,
                     opacity: layer_opacity,
+                    aspect,
+                });
+                self.single_clip_transforms.push(SingleClipTransform {
                     translate_x: 0.0,
                     translate_y: 0.0,
-                    scale_val: 1.0,
+                    scale: 1.0,
                     rotation: 0.0,
-                    aspect_ratio: aspect,
-                    invert_colors: 0.0,
-                };
-
-                self.blend.blend_pass(
-                    gpu,
-                    &mut self.uniform_arena,
-                    self.main.source_texture(),
-                    effective_layer_tex,
-                    self.main.target_texture(),
-                    &uniforms,
-                );
-                self.main.swap();
+                    invert_colors: false,
+                });
             }
         }
 
-        // Master effects (bloom, halation, CRT) are applied AFTER tonemapping
-        // in render() so their glow contribution extends above 1.0 for HDR displays.
-        // On SDR displays, values > 1.0 clip to white — visually identical to pre-tonemap.
+        layer_outputs
+    }
+
+    /// Phase B: Blend all layer outputs into main in order.
+    ///
+    /// Layers are blended bottom-to-top (order preserved from generate_layers).
+    /// This pass is always serial — each blend reads the previous blend's result.
+    /// Phase B: Blend all layer outputs into main in order.
+    ///
+    /// Layers are blended bottom-to-top (order preserved from generate_layers).
+    /// This pass is always serial — each blend reads the previous blend's result.
+    fn blend_layers(
+        &mut self,
+        gpu: &mut GpuEncoder,
+        layer_outputs: &[LayerOutput],
+    ) {
+        // Clear main to opaque black
+        self.main.clear_source(gpu, true);
+
+        for (idx, output) in layer_outputs.iter().enumerate() {
+            let transform = &self.single_clip_transforms[idx];
+            let uniforms = BlendUniforms {
+                blend_mode: output.blend_mode as u32,
+                opacity: output.opacity,
+                translate_x: transform.translate_x,
+                translate_y: transform.translate_y,
+                scale_val: transform.scale,
+                rotation: transform.rotation,
+                aspect_ratio: output.aspect,
+                invert_colors: if transform.invert_colors { 1.0 } else { 0.0 },
+            };
+            self.blend.blend_pass(
+                gpu,
+                &mut self.uniform_arena,
+                self.main.source_texture(),
+                output.texture(),
+                self.main.target_texture(),
+                &uniforms,
+            );
+            self.main.swap();
+        }
+    }
+
+    /// Composite all clips into main buffer, grouping by layer.
+    /// Split into two phases: generate_layers (per-layer, parallelizable) +
+    /// blend_layers (serial, order-dependent).
+    fn composite(&mut self, gpu: &mut GpuEncoder, frame: &CompositorFrame) {
+        // Reset uniform arena for this frame
+        self.uniform_arena.reset();
+        // Clear per-frame scratch
+        self.single_clip_transforms.clear();
+
+        let layer_outputs = self.generate_layers(gpu, frame);
+        self.blend_layers(gpu, &layer_outputs);
     }
 }
 
@@ -647,10 +787,15 @@ impl Compositor for LayerCompositor {
                 frame_count: frame.frame_count as i64,
             };
 
+            // Use a dedicated effect chain for master effects (index 0 in the
+            // pool — always available since we ensure at least 1 chain exists).
+            self.ensure_effect_chains(1);
+            let master_ec = &mut self.effect_chains[0];
+
             // Feed tonemap output directly into the effect chain — the first
             // effect reads from tonemap.output without copying.
             if let Some(_processed) = Self::apply_effects(
-                &mut self.effect_chain,
+                master_ec,
                 &mut self.effect_registry,
                 &self.wet_dry_lerp,
                 gpu,
@@ -661,7 +806,7 @@ impl Compositor for LayerCompositor {
             ) {
                 // Copy processed result back into tonemap output via GPU memcpy.
                 gpu.copy_texture_to_texture(
-                    self.effect_chain.source_texture_pub(),
+                    master_ec.source_texture_pub(),
                     &self.tonemap.output.texture,
                     width,
                     height,
@@ -679,11 +824,13 @@ impl Compositor for LayerCompositor {
 
     fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
         self.main.resize(device, width, height);
-        if let Some(lb) = &mut self.layer_buf {
+        for lb in &mut self.layer_bufs {
             lb.resize(device, width, height);
         }
         self.blend.resize(width, height);
-        self.effect_chain.resize(device, width, height);
+        for ec in &mut self.effect_chains {
+            ec.resize(device, width, height);
+        }
         self.effect_registry.resize_all(device, width, height);
         self.tonemap.resize(device, width, height);
         // LED tap will be recreated at new size on next frame if needed.

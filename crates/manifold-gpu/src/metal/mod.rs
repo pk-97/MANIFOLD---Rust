@@ -1230,19 +1230,28 @@ impl GpuEncoder {
     }
 
     /// Signal a shared event on the GPU timeline.
-    /// Creates a lightweight command buffer that encodes the signal and commits it.
     /// The event value is incremented automatically.
     pub fn signal_event(&mut self, event: &GpuEvent) {
         let value = event.counter.get() + 1;
         event.counter.set(value);
         // Encode signal on current command buffer (after all work).
         self.end_current();
-        let enc = self.cmd_buf().new_blit_command_encoder();
-        // Use encode_signal_event through the command buffer's blit encoder
-        // to add the signal to this command buffer.
-        enc.end_encoding();
-        // Signal on the command buffer directly
         self.cmd_buf().encode_signal_event(event.raw(), value);
+    }
+
+    /// Signal a shared event with a specific value (does NOT auto-increment).
+    /// Used for per-layer completion signals in async compute.
+    pub fn signal_event_value(&mut self, event: &GpuEvent, value: u64) {
+        self.end_current();
+        self.cmd_buf().encode_signal_event(event.raw(), value);
+    }
+
+    /// Wait for a shared event to reach a specific value before executing
+    /// subsequent GPU work on this command buffer.
+    /// Used by the compositor to wait for all layer generation to complete.
+    pub fn wait_event(&mut self, event: &GpuEvent, value: u64) {
+        self.end_current();
+        self.cmd_buf().encode_wait_for_event(event.raw(), value);
     }
 
     /// Commit the command buffer to the GPU queue.
