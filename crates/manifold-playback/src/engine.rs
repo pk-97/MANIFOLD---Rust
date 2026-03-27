@@ -527,6 +527,18 @@ impl PlaybackEngine {
         result
     }
 
+    /// Reclaim the ready_clips buffer from a consumed TickResult.
+    /// Call after the frame is done with the TickResult to preserve
+    /// the pre-allocated buffer for the next tick (zero allocation).
+    pub fn reclaim_tick_result(&mut self, mut result: TickResult) {
+        // Take the ready_clips Vec back — its capacity survives for reuse.
+        result.ready_clips.clear();
+        self.ready_clips_list = result.ready_clips;
+        // Also reclaim stopped_clips buffer.
+        result.stopped_clips.clear();
+        self.stopped_this_tick = result.stopped_clips;
+    }
+
     /// Playing-state tick. Matches C# PlaybackController.Update lines 1135-1218.
     fn tick_playing(&mut self, ctx: TickContext) -> TickResult {
         // 1. Clear deferred sync flag — SyncClipsToTime below handles it.
@@ -921,6 +933,9 @@ impl PlaybackEngine {
         if !sync_result.to_stop.is_empty() {
             self.compositor_dirty_deadline = self.compositor_dirty_deadline.max(0.0 + COMPOSITOR_DIRTY_TIME as f64);
         }
+
+        // Reclaim buffers for reuse on the next sync call (zero allocation).
+        self.scheduler.reclaim(sync_result);
     }
 
     // ─── Time/Tempo math ───
@@ -1640,7 +1655,7 @@ impl PlaybackEngine {
         // Resolve layer_id → positional index via the project's cached map.
         let id_to_idx = self.project.as_ref()
             .map(|p| p.timeline.layer_id_index_map());
-        self.ready_clips_list.sort_by(|a, b| {
+        self.ready_clips_list.sort_unstable_by(|a, b| {
             let ai = id_to_idx.and_then(|m| m.get(&a.layer_id).copied()).unwrap_or(0);
             let bi = id_to_idx.and_then(|m| m.get(&b.layer_id).copied()).unwrap_or(0);
             bi.cmp(&ai)
@@ -1652,7 +1667,11 @@ impl PlaybackEngine {
             last_rt - start_time < RECENTLY_STARTED_TIME as f64
         });
 
-        self.ready_clips_list.clone()
+        // Take the buffer out instead of cloning — zero allocation.
+        // The empty Vec left behind has zero capacity, but on the next tick,
+        // filter_ready_clips reuses compositor_fallback_clips (already pre-allocated).
+        // The ready_clips Vec is consumed by TickResult and dropped after the frame.
+        std::mem::take(&mut self.ready_clips_list)
     }
 
     /// Compute pre-warm candidates: clips near the playhead that should have decoders started.
@@ -1700,7 +1719,7 @@ impl PlaybackEngine {
             }
         }
 
-        self.prewarm_candidates.sort_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal));
+        self.prewarm_candidates.sort_unstable_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal));
 
         // Build prewarm set from candidates
         let mut prewarm_set: HashMap<String, crate::video_time::PrewarmCandidate> = HashMap::new();

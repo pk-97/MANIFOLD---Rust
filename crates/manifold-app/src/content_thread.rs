@@ -80,6 +80,17 @@ pub struct ContentThread {
     pub cached_midi_device_names: Vec<String>,
     pub last_midi_device_scan_time: f32,
 
+    // ── Cached project snapshot (Arc avoids deep clone every modulation frame) ──
+    pub cached_project_snapshot: Option<std::sync::Arc<manifold_core::project::Project>>,
+
+    // ── Cached ContentState strings (only rebuilt when changed) ──
+    pub cached_midi_clock_position: String,
+    pub cached_midi_clock_device: String,
+    pub cached_osc_timecode: String,
+    pub cached_perc_message: String,
+    /// Last-sent MIDI device names — only clone when the list changes.
+    pub last_sent_midi_device_names: Vec<String>,
+
     // ── Profiling ──
     /// Active profiling session (only present when feature = "profiling").
     #[cfg(feature = "profiling")]
@@ -94,6 +105,26 @@ impl ContentThread {
         state_tx: Sender<ContentState>,
     ) {
         log::info!("[ContentThread] started");
+
+        // Set content thread to real-time scheduling priority.
+        // Priority 47 is high but leaves headroom for the audio thread (max=48).
+        // Reduces context switch latency and sleep overshoot.
+        #[cfg(target_os = "macos")]
+        {
+            let pthread = unsafe { libc::pthread_self() };
+            let mut param: libc::sched_param = unsafe { std::mem::zeroed() };
+            param.sched_priority = 47;
+            let ret = unsafe { libc::pthread_setschedparam(pthread, libc::SCHED_RR, &param) };
+            if ret != 0 {
+                log::warn!(
+                    "[ContentThread] Failed to set real-time priority (err={}), \
+                     continuing with default priority",
+                    ret,
+                );
+            } else {
+                log::info!("[ContentThread] Real-time priority set (SCHED_RR, priority=47)");
+            }
+        }
 
         // Set stable device pointer on GeneratorRenderer.
         // This must happen here (after all moves into ContentThread are complete)
@@ -170,6 +201,20 @@ impl ContentThread {
                 // Below 100μs: fall through to re-check should_tick() immediately
                 continue;
             }
+            // Drain autoreleased ObjC Metal objects at the end of each frame,
+            // preventing memory accumulation and random GC-like pauses.
+            #[cfg(target_os = "macos")]
+            objc::rc::autoreleasepool(|| {
+                self.tick_frame(&state_tx);
+            });
+            #[cfg(not(target_os = "macos"))]
+            self.tick_frame(&state_tx);
+        }
+    }
+
+    /// Execute one content frame: tick engine, render, send state to UI.
+    /// Separated from the main loop to allow wrapping in autoreleasepool on macOS.
+    fn tick_frame(&mut self, state_tx: &Sender<ContentState>) {
             let dt = self.timer.consume_tick();
             let realtime = self.timer.realtime_since_start();
             self.time_since_start = realtime as f32;
@@ -504,15 +549,59 @@ impl ContentThread {
             // Send a project snapshot when data_version changes (editing commands)
             // OR when modulation is active (LFO/envelope writes to param_values
             // without bumping data_version — UI needs live modulated values).
-            let snapshot = if version_changed || tick_result.modulation_active {
-                self.engine.project().map(|p| Box::new(p.clone()))
+            let modulation_active = tick_result.modulation_active;
+
+            // Reclaim tick_result buffers (ready_clips, stopped_clips) for reuse
+            // on the next tick — avoids per-frame Vec allocation.
+            self.engine.reclaim_tick_result(tick_result);
+
+            // Arc<Project> snapshot: only deep-clone when data_version changes.
+            // Modulation frames send the same Arc (zero-cost pointer clone).
+            let snapshot = if version_changed {
+                // Structural change — create a new Arc with a fresh clone.
+                let arc = self.engine.project()
+                    .map(|p| std::sync::Arc::new(p.clone()));
+                self.cached_project_snapshot = arc.clone();
+                arc
+            } else if modulation_active {
+                // Modulation only — reuse the existing Arc (no deep clone).
+                // If no cached snapshot exists yet, create one.
+                if self.cached_project_snapshot.is_none() {
+                    self.cached_project_snapshot = self.engine.project()
+                        .map(|p| std::sync::Arc::new(p.clone()));
+                }
+                self.cached_project_snapshot.clone()
             } else {
                 None
             };
 
-            let perc_msg = self.percussion_orchestrator.status_message().to_string();
+            // Update cached strings only when underlying values change.
+            let new_pos = self.transport_controller.midi_clock_sync.as_ref()
+                .map_or("", |s| s.current_position_display());
+            if new_pos != self.cached_midi_clock_position {
+                self.cached_midi_clock_position.clear();
+                self.cached_midi_clock_position.push_str(new_pos);
+            }
+            let new_dev = self.transport_controller.midi_clock_sync.as_ref()
+                .map_or_else(String::new, |s| s.selected_source_name());
+            if new_dev != self.cached_midi_clock_device {
+                self.cached_midi_clock_device = new_dev;
+            }
+            if self.osc_sync.current_timecode_display != self.cached_osc_timecode {
+                self.cached_osc_timecode.clone_from(&self.osc_sync.current_timecode_display);
+            }
+            let new_perc = self.percussion_orchestrator.status_message();
+            if new_perc != self.cached_perc_message {
+                self.cached_perc_message.clear();
+                self.cached_perc_message.push_str(new_perc);
+            }
+            if self.cached_midi_device_names != self.last_sent_midi_device_names {
+                self.last_sent_midi_device_names.clone_from(&self.cached_midi_device_names);
+            }
+
             let perc_progress = self.percussion_orchestrator.status_progress01();
-            let perc_show = self.percussion_orchestrator.show_progress_bar() && !perc_msg.is_empty();
+            let perc_show = self.percussion_orchestrator.show_progress_bar()
+                && !self.cached_perc_message.is_empty();
 
             let state = ContentState {
                 current_beat: self.engine.current_beat(),
@@ -542,16 +631,14 @@ impl ContentThread {
                     .is_some_and(|s| s.is_midi_clock_enabled()),
                 midi_clock_bpm: self.transport_controller.midi_clock_sync.as_ref()
                     .map_or(120.0, |s| s.current_clock_bpm()),
-                midi_clock_position_display: self.transport_controller.midi_clock_sync.as_ref()
-                    .map_or_else(String::new, |s| s.current_position_display().to_string()),
+                midi_clock_position_display: self.cached_midi_clock_position.clone(),
                 midi_clock_receiving: self.transport_controller.midi_clock_sync.as_ref()
                     .is_some_and(|s| s.is_receiving_clock()),
-                midi_clock_device_name: self.transport_controller.midi_clock_sync.as_ref()
-                    .map_or_else(String::new, |s| s.selected_source_name()),
-                midi_device_names: self.cached_midi_device_names.clone(),
+                midi_clock_device_name: self.cached_midi_clock_device.clone(),
+                midi_device_names: self.last_sent_midi_device_names.clone(),
                 osc_sender_enabled: self.transport_controller.osc_sender_enabled,
                 osc_receiving_timecode: self.osc_sync.is_receiving_timecode,
-                osc_timecode_display: self.osc_sync.current_timecode_display.clone(),
+                osc_timecode_display: self.cached_osc_timecode.clone(),
                 stem_expanded: self.stem_audio.as_ref().is_some_and(|s| s.is_expanded()),
                 stem_ready: self.stem_audio.as_ref().is_some_and(|s| s.stems_ready()),
                 stem_muted: self.stem_audio.as_ref().map_or([false; manifold_playback::stem_audio::STEM_COUNT], |s| {
@@ -564,7 +651,7 @@ impl ContentThread {
                     core::array::from_fn(|i| s.is_stem_available(i))
                 }),
                 percussion_importing: self.percussion_orchestrator.is_import_in_progress(),
-                percussion_status_message: perc_msg,
+                percussion_status_message: self.cached_perc_message.clone(),
                 percussion_progress: if perc_progress < 0.0 { 0.0 } else { perc_progress.clamp(0.0, 1.0) },
                 percussion_show_progress: perc_show,
                 profiling_active: {
@@ -590,7 +677,6 @@ impl ContentThread {
 
             // Non-blocking send — if the UI is behind, drop the oldest state.
             let _ = state_tx.try_send(state);
-        }
     }
 
     /// Tick all sync controllers once per frame. Called before engine tick.
@@ -1596,6 +1682,8 @@ impl ContentThread {
                 self.content_pipeline
                     .cleanup_stopped_clips(&tick_result.stopped_clips);
             }
+            // Reclaim tick_result buffers for reuse on next frame.
+            self.engine.reclaim_tick_result(tick_result);
 
             // Send progress to UI (throttle: every 10 frames)
             if frame_idx % 10 == 0 {

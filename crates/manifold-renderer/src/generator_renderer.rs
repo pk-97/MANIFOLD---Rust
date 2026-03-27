@@ -64,6 +64,9 @@ pub struct GeneratorRenderer {
     available_rts: Vec<RenderTarget>,
     /// Pre-allocated scratch buffer for render iteration (avoids per-frame alloc).
     render_scratch: Vec<String>,
+    /// Per-clip render info: (layer_index, trigger_count, anim_progress, internal_scale).
+    /// Parallel to render_scratch — avoids LayerId/GeneratorTypeId clones in render loop.
+    render_info_scratch: Vec<(i32, u32, f32, f32)>,
     /// Shared-memory uniform arena for generator uniform data.
     /// Eliminates per-generator queue.write_buffer() calls.
     uniform_arena: UniformArena,
@@ -111,6 +114,7 @@ impl GeneratorRenderer {
             layer_generators: AHashMap::with_capacity(8),
             available_rts,
             render_scratch: Vec::with_capacity(16),
+            render_info_scratch: Vec::with_capacity(16),
             uniform_arena,
             upscaler,
             scaling_enabled: true,
@@ -297,22 +301,34 @@ impl GeneratorRenderer {
         self.render_scratch
             .extend(self.active_clips.keys().cloned());
 
-        for clip_id in 0..self.render_scratch.len() {
-            let id = &self.render_scratch[clip_id];
-
-            let (layer_id, layer_index, gen_type, anim_progress, internal_scale) = {
-                let active = match self.active_clips.get(id) {
-                    Some(a) => a,
-                    None => continue,
-                };
-                (
-                    active.layer_id.clone(),
+        // Pre-collect (layer_index, trigger_count, anim_progress, internal_scale)
+        // per clip during immutable borrow, avoiding per-clip LayerId/GeneratorTypeId clones.
+        self.render_info_scratch.clear();
+        for id in &self.render_scratch {
+            if let Some(active) = self.active_clips.get(id.as_str()) {
+                let trigger_count = self
+                    .layer_generators
+                    .get(&active.layer_id)
+                    .map_or(0, |ls| ls.trigger_count);
+                self.render_info_scratch.push((
                     active.layer_index,
-                    active.generator_type.clone(),
+                    trigger_count,
                     active.anim_progress,
                     active.internal_scale,
-                )
-            };
+                ));
+            } else {
+                // Sentinel: skip this clip in the render loop
+                self.render_info_scratch.push((-1, 0, 0.0, 1.0));
+            }
+        }
+
+        for clip_idx in 0..self.render_scratch.len() {
+            let id = &self.render_scratch[clip_idx];
+            let (layer_index, trigger_count, anim_progress, internal_scale) =
+                self.render_info_scratch[clip_idx];
+            if layer_index < 0 {
+                continue; // sentinel — clip not found
+            }
 
             // Build GeneratorContext from layer params (zero allocation)
             let mut params = [0.0f32; MAX_GEN_PARAMS];
@@ -325,11 +341,6 @@ impl GeneratorRenderer {
                     params[i] = *val;
                 }
             }
-
-            let trigger_count = self
-                .layer_generators
-                .get(&layer_id)
-                .map_or(0, |ls| ls.trigger_count);
 
             // For scaled generators, pass reduced dimensions in the context.
             // The generator sees the reduced resolution as its world, then we upscale.
@@ -352,10 +363,13 @@ impl GeneratorRenderer {
                 param_count,
             };
 
-            // Split borrows: get generator and active clip's RT separately
-            let _ = gen_type; // used for type matching if needed
-            if let Some(layer_state) = self.layer_generators.get_mut(&layer_id)
-                && let Some(active) = self.active_clips.get_mut(id)
+            // Split borrows: use layers[layer_index].layer_id (from the external
+            // `layers` slice, not from `self`) for the layer_generators lookup.
+            // This avoids cloning LayerId — layers[i].layer_id == active.layer_id
+            // is guaranteed by the positional cache refresh above.
+            if let Some(layer) = layers.get(layer_index as usize)
+                && let Some(layer_state) = self.layer_generators.get_mut(&layer.layer_id)
+                && let Some(active) = self.active_clips.get_mut(id.as_str())
             {
                 let new_progress = layer_state.generator.render(
                     gpu,

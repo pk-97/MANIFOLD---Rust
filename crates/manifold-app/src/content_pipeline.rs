@@ -327,8 +327,13 @@ impl ContentPipeline {
         let mut native_enc = native_device.create_encoder("Frame");
 
         // Advance the pool's frame counter — drives frame-stamped recycling.
+        // Prune stale textures every 300 frames (~5s at 60fps) to free GPU memory
+        // after resolution changes or project switches.
         if let Some(pool) = texture_pool {
             pool.begin_frame();
+            if pool.current_frame() % 300 == 0 {
+                pool.prune_stale(300);
+            }
         }
 
         // Generators render via native encoder (no wgpu encoder needed)

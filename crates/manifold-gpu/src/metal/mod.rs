@@ -891,6 +891,28 @@ impl TexturePool {
         let inner = unsafe { &*self.inner.get() };
         inner.current_frame
     }
+
+    /// Remove textures that have been sitting in the pool unreused for
+    /// `stale_frames` frames. Prevents GPU memory from growing monotonically
+    /// after resolution changes or project switches.
+    pub fn prune_stale(&self, stale_frames: u64) {
+        let inner = unsafe { &mut *self.inner.get() };
+        let threshold = inner.current_frame.saturating_sub(stale_frames);
+        let mut pruned = 0u64;
+        inner.available.retain(|_key, entries| {
+            let before = entries.len();
+            entries.retain(|entry| entry.release_frame >= threshold);
+            pruned += (before - entries.len()) as u64;
+            !entries.is_empty()
+        });
+        if pruned > 0 {
+            log::debug!(
+                "TexturePool: pruned {} stale textures (threshold={})",
+                pruned,
+                stale_frames,
+            );
+        }
+    }
 }
 
 // ─── GpuEncoder ───────────────────────────────────────────────────────

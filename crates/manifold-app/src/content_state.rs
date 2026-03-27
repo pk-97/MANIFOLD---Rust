@@ -4,6 +4,7 @@
 //! project data version, and other engine state without accessing the
 //! PlaybackEngine or EditingService directly.
 
+use std::sync::Arc;
 use manifold_core::project::Project;
 use manifold_core::types::ClockAuthority;
 use manifold_playback::stem_audio::STEM_COUNT;
@@ -95,9 +96,11 @@ pub struct ContentState {
     pub export_finished: Option<ExportFinishedEvent>,
 
     // ── Project snapshot ──────────────────────────────────────────
-    /// Sent when data_version changes so the UI thread can update
-    /// its local_project for reads. None when version hasn't changed.
-    pub project_snapshot: Option<Box<Project>>,
+    /// Sent when data_version changes or modulation is active so the UI
+    /// thread can update its local_project. Arc avoids deep-cloning the
+    /// entire Project struct every modulation frame — only pointer-copies
+    /// the Arc when the underlying project hasn't changed structurally.
+    pub project_snapshot: Option<Arc<Project>>,
 }
 
 impl Default for ContentState {

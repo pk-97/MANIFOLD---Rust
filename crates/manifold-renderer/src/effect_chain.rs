@@ -125,27 +125,11 @@ impl EffectChain {
         ctx: &EffectContext,
         wet_dry_lerp: Option<&WetDryLerpPipeline>,
     ) -> Option<&'a GpuTexture> {
-        // Filter to enabled effects with registered processors
-        let enabled: Vec<usize> = effects
-            .iter()
-            .enumerate()
-            .filter(|(_, fx)| {
-                if !fx.enabled {
-                    return false;
-                }
-                if registry.get_mut(fx.effect_type()).is_none() {
-                    log::debug!(
-                        "Effect {:?} has no GPU processor -- skipped",
-                        fx.effect_type()
-                    );
-                    return false;
-                }
-                true
-            })
-            .map(|(i, _)| i)
-            .collect();
-
-        if enabled.is_empty() {
+        // Quick scan: any enabled effects with registered processors?
+        let has_enabled = effects.iter().any(|fx| {
+            fx.enabled && registry.get_mut(fx.effect_type()).is_some()
+        });
+        if !has_enabled {
             return None;
         }
 
@@ -172,8 +156,12 @@ impl EffectChain {
 
         let mut current_group_id: Option<&str> = None;
 
-        for &idx in &enabled {
-            let fx = &effects[idx];
+        for fx in effects {
+            // Skip disabled effects and effects without registered processors
+            // (replaces the pre-collected `enabled` Vec).
+            if !fx.enabled || registry.get_mut(fx.effect_type()).is_none() {
+                continue;
+            }
 
             // Track group transitions for wet/dry
             let fx_group_id = fx.group_id.as_deref();

@@ -149,6 +149,10 @@ pub struct Application {
     /// when data_version changes. During drag, snapshots are deferred.
     pub(crate) local_project: Project,
 
+    /// Last received project snapshot Arc. Used to skip redundant deep clones
+    /// when the content thread sends the same Arc for modulation-only frames.
+    pub(crate) last_snapshot_arc: Option<std::sync::Arc<manifold_core::project::Project>>,
+
     /// After a local project load (open/new), suppress content thread snapshots
     /// until its data_version exceeds this value. Prevents the old project from
     /// overwriting the locally-loaded new project before the content thread
@@ -267,6 +271,8 @@ pub struct Application {
 
     // State
     pub(crate) initialized: bool,
+    /// Set on CloseRequested — prevents about_to_wait from rendering after shutdown.
+    pub(crate) shutting_down: bool,
     pub(crate) pending_toggle_output: bool,
     pub(crate) pending_close_output: bool,
     pub(crate) pending_export: bool,
@@ -296,6 +302,7 @@ impl Application {
             content_thread_handle: None,
             content_state: ContentState::default(),
             local_project: default_project,
+            last_snapshot_arc: None,
             suppress_snapshot_until: 0,
             suppress_snapshot_set_at: 0,
             selection: UIState::new(),
@@ -356,6 +363,7 @@ impl Application {
             pre_drag_commands: Vec::new(),
             display_resolutions: Vec::new(),
             initialized: false,
+            shutting_down: false,
             pending_toggle_output: false,
             pending_export: false,
             pending_close_output: false,
@@ -1191,6 +1199,12 @@ impl ApplicationHandler for Application {
                 led_controller: None,
                 cached_midi_device_names: Vec::new(),
                 last_midi_device_scan_time: -10.0,
+                cached_project_snapshot: None,
+                cached_midi_clock_position: String::new(),
+                cached_midi_clock_device: String::new(),
+                cached_osc_timecode: String::new(),
+                cached_perc_message: String::new(),
+                last_sent_midi_device_names: Vec::new(),
                 #[cfg(feature = "profiling")]
                 profiler: None,
             };
@@ -1244,6 +1258,8 @@ impl ApplicationHandler for Application {
         match event {
             WindowEvent::CloseRequested => {
                 if is_primary {
+                    self.shutting_down = true;
+
                     // Shut down content thread
                     if let Some(tx) = self.content_tx.take() {
                         let _ = tx.send(ContentCommand::Shutdown);
@@ -1824,7 +1840,7 @@ impl ApplicationHandler for Application {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.initialized {
+        if !self.initialized || self.shutting_down {
             return;
         }
 
@@ -1924,5 +1940,30 @@ impl Drop for Application {
             let _ = handle.join();
             log::info!("[Application::Drop] content thread joined");
         }
+
+        // Wait for all in-flight GPU work to complete before dropping resources.
+        // Without this, the last frame's command buffer may still be executing when
+        // wgpu surfaces/textures/pipelines are destroyed, causing a segfault in the
+        // Metal runtime.
+        if let Some(ref gpu) = self.gpu {
+            let _ = gpu.device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            });
+        }
+
+        // Drop GPU resources before the device and surfaces.
+        // Field drop order is declaration order — gpu (device) drops before
+        // window_registry (surfaces) and IOSurface textures, which can crash.
+        // Explicitly clear them here so they're gone before implicit field drops.
+        #[cfg(target_os = "macos")]
+        {
+            self.ui_shared_views = [None, None, None];
+            self.ui_shared_textures = [None, None, None];
+        }
+        self.layer_bitmap_gpu = None;
+        self.ui_renderer = None;
+        self.output_blit_pipeline = None;
+        self.blit_pipeline = None;
     }
 }

@@ -54,7 +54,19 @@ impl Application {
                     // snapshot, so we still suppress for overlay drags.
                     if !drag_active && !suppressed {
                         let version_changed = state.data_version != self.content_state.data_version;
-                        self.local_project = *snapshot;
+                        // Only deep-clone from Arc when it's a different allocation
+                        // (new data_version). Modulation-only frames send the same
+                        // Arc pointer — skip the clone (values are 1 frame stale,
+                        // imperceptible).
+                        let is_new_arc = self.last_snapshot_arc.as_ref()
+                            .is_none_or(|prev| !std::sync::Arc::ptr_eq(prev, &snapshot));
+                        if is_new_arc {
+                            self.local_project = (*snapshot).clone();
+                            self.last_snapshot_arc = Some(snapshot);
+                        } else {
+                            // Same Arc — skip deep clone. Drop the Arc ref.
+                            drop(snapshot);
+                        }
                         // Restore actively-dragged inspector field so snapshot
                         // doesn't overwrite the value the user is manipulating.
                         if let Some(ref drag) = self.active_inspector_drag {
