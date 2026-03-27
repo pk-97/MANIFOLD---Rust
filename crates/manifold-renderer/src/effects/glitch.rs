@@ -2,7 +2,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use super::fragment_blit_helper::FragmentBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -18,16 +18,17 @@ struct GlitchUniforms {
 }
 
 /// Glitch effect — block displacement, scanline jitter, RGB channel split.
+/// Uses fragment shader for TBDR tile memory on Apple Silicon.
 pub struct GlitchFX {
-    helper: ComputeBlitHelper,
+    helper: FragmentBlitHelper,
 }
 
 impl GlitchFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: ComputeBlitHelper::new(
+            helper: FragmentBlitHelper::new(
                 device,
-                include_str!("shaders/fx_glitch_compute.wgsl"),
+                include_str!("shaders/fx_glitch.wgsl"),
                 "Glitch",
             ),
         }

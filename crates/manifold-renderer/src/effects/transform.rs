@@ -17,7 +17,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use super::fragment_blit_helper::FragmentBlitHelper;
 
 const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
 
@@ -45,16 +45,17 @@ struct TransformUniforms {
 /// Transform effect — translate, scale, and rotate at layer/master level.
 /// Clip-level Transform is handled as compositor uniforms in BlitClip, not here.
 /// Unity ref: TransformFX.cs
+/// Uses fragment shader for TBDR tile memory on Apple Silicon.
 pub struct TransformFX {
-    helper: ComputeBlitHelper,
+    helper: FragmentBlitHelper,
 }
 
 impl TransformFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: ComputeBlitHelper::new(
+            helper: FragmentBlitHelper::new(
                 device,
-                include_str!("shaders/fx_transform_compute.wgsl"),
+                include_str!("shaders/fx_transform.wgsl"),
                 "Transform",
             ),
         }

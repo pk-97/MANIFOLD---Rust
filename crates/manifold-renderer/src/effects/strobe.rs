@@ -2,7 +2,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use super::fragment_blit_helper::FragmentBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -18,16 +18,17 @@ struct StrobeUniforms {
 const NOTE_RATES: [f32; 9] = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
 
 /// Strobe effect — beat-synced square wave flash.
+/// Uses fragment shader for TBDR tile memory on Apple Silicon.
 pub struct StrobeFX {
-    helper: ComputeBlitHelper,
+    helper: FragmentBlitHelper,
 }
 
 impl StrobeFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: ComputeBlitHelper::new(
+            helper: FragmentBlitHelper::new(
                 device,
-                include_str!("shaders/fx_strobe_compute.wgsl"),
+                include_str!("shaders/fx_strobe.wgsl"),
                 "Strobe",
             ),
         }

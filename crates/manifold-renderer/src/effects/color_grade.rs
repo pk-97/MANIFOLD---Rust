@@ -5,7 +5,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use super::fragment_blit_helper::FragmentBlitHelper;
 
 // ColorGradeFX.cs line 11
 const EPSILON: f32 = 0.001;
@@ -29,16 +29,17 @@ struct ColorGradeUniforms {
 }
 
 /// ColorGrade effect — gain, saturation, hue shift, contrast, colorize tinting.
+/// Uses fragment shader for TBDR tile memory on Apple Silicon.
 pub struct ColorGradeFX {
-    helper: ComputeBlitHelper,
+    helper: FragmentBlitHelper,
 }
 
 impl ColorGradeFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: ComputeBlitHelper::new(
+            helper: FragmentBlitHelper::new(
                 device,
-                include_str!("shaders/color_grade_compute.wgsl"),
+                include_str!("shaders/color_grade.wgsl"),
                 "ColorGrade",
             ),
         }

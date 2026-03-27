@@ -2,7 +2,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use super::fragment_blit_helper::FragmentBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -16,16 +16,17 @@ struct ChromaticAberrationUniforms {
 }
 
 /// ChromaticAberration effect — radial or linear RGB channel separation.
+/// Uses fragment shader for TBDR tile memory on Apple Silicon.
 pub struct ChromaticAberrationFX {
-    helper: ComputeBlitHelper,
+    helper: FragmentBlitHelper,
 }
 
 impl ChromaticAberrationFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: ComputeBlitHelper::new(
+            helper: FragmentBlitHelper::new(
                 device,
-                include_str!("shaders/fx_chromatic_aberration_compute.wgsl"),
+                include_str!("shaders/fx_chromatic_aberration.wgsl"),
                 "ChromaticAberration",
             ),
         }

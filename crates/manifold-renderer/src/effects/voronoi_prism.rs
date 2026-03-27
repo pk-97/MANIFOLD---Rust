@@ -2,7 +2,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use super::fragment_blit_helper::FragmentBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -18,18 +18,18 @@ struct VoronoiPrismUniforms {
 }
 
 /// VoronoiPrism effect — per-cell UV remapping with beat-synchronized pop-in.
-/// Uses compute dispatch to bypass Metal TBDR tile overhead.
+/// Uses fragment shader for TBDR tile memory on Apple Silicon.
 /// Unity ref: VoronoiPrismFX.cs / VoronoiPrismEffect.shader
 pub struct VoronoiPrismFX {
-    helper: ComputeBlitHelper,
+    helper: FragmentBlitHelper,
 }
 
 impl VoronoiPrismFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: ComputeBlitHelper::new(
+            helper: FragmentBlitHelper::new(
                 device,
-                include_str!("shaders/fx_voronoi_prism_compute.wgsl"),
+                include_str!("shaders/fx_voronoi_prism.wgsl"),
                 "VoronoiPrism",
             ),
         }

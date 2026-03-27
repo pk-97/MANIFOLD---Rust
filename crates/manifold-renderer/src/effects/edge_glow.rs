@@ -2,7 +2,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use super::fragment_blit_helper::FragmentBlitHelper;
 
 // EdgeGlowFX.cs:16-19 — shader property IDs (_Amount, _Threshold, _Glow, _Mode)
 // + _MainTex_TexelSize from the shader (xy = 1/width, 1/height)
@@ -18,32 +18,35 @@ struct EdgeGlowUniforms {
     _pad: [f32; 2],
 }
 
-/// Edge glow WGSL source — shared across all specialized mode variants.
-const EDGE_GLOW_WGSL: &str = include_str!("shaders/fx_edge_glow_compute.wgsl");
+/// Edge glow fragment WGSL source — shared across all specialized mode variants.
+const EDGE_GLOW_WGSL: &str = include_str!("shaders/fx_edge_glow.wgsl");
 
 /// Edge detection with soft glow.
 /// Stateless single-pass effect. Translated from EdgeGlowFX.cs + EdgeGlowEffect.shader.
+/// Uses fragment shader via TBDR for tile memory / texture cache locality on Apple Silicon.
 pub struct EdgeGlowFX {
-    helper: ComputeBlitHelper,
-    /// Specialized pipelines per edge detection mode: Sobel=0, Laplacian=1, Frei-Chen=2.
+    helper: FragmentBlitHelper,
+    /// Specialized render pipelines per edge detection mode: Sobel=0, Laplacian=1, Frei-Chen=2.
     /// Metal compiler eliminates inactive if/else branches in detect_edge().
-    pipeline_sobel: manifold_gpu::GpuComputePipeline,
-    pipeline_laplacian: manifold_gpu::GpuComputePipeline,
-    pipeline_frei_chen: manifold_gpu::GpuComputePipeline,
+    pipeline_sobel: manifold_gpu::GpuRenderPipeline,
+    pipeline_laplacian: manifold_gpu::GpuRenderPipeline,
+    pipeline_frei_chen: manifold_gpu::GpuRenderPipeline,
 }
 
 impl EdgeGlowFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         let spec = |mode: &str, label: &str| {
-            device.create_specialized_compute_pipeline(
+            device.create_specialized_render_pipeline(
                 EDGE_GLOW_WGSL,
-                "cs_main",
+                "vs_main",
+                "fs_main",
                 &[("uniforms.mode", mode)],
+                manifold_gpu::GpuTextureFormat::Rgba16Float,
                 label,
             )
         };
         Self {
-            helper: ComputeBlitHelper::new(device, EDGE_GLOW_WGSL, "EdgeGlow"),
+            helper: FragmentBlitHelper::new(device, EDGE_GLOW_WGSL, "EdgeGlow"),
             pipeline_sobel: spec("0u", "EdgeGlow Sobel"),
             pipeline_laplacian: spec("1u", "EdgeGlow Laplacian"),
             pipeline_frei_chen: spec("2u", "EdgeGlow Frei-Chen"),

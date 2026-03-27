@@ -2,7 +2,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::compute_blit_helper::ComputeBlitHelper;
+use super::fragment_blit_helper::FragmentBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -22,17 +22,18 @@ struct InfraredUniforms {
 }
 
 /// Infrared / thermal vision effect.
+/// Uses fragment shader for TBDR tile memory on Apple Silicon.
 /// Unity ref: InfraredFX.cs / InfraredEffect.shader
 pub struct InfraredFX {
-    helper: ComputeBlitHelper,
+    helper: FragmentBlitHelper,
 }
 
 impl InfraredFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: ComputeBlitHelper::new(
+            helper: FragmentBlitHelper::new(
                 device,
-                include_str!("shaders/fx_infrared_compute.wgsl"),
+                include_str!("shaders/fx_infrared.wgsl"),
                 "Infrared",
             ),
         }
