@@ -29,9 +29,8 @@ pub(super) fn dispatch_marker(
             DispatchResult::structural()
         }
 
-        // ── DoubleClick: rename (placeholder — inline text editing TBD)
-        PanelAction::MarkerDoubleClicked(_marker_id_str) => {
-            log::info!("[Marker] Rename: inline text editing not yet implemented");
+        // ── DoubleClick: intercepted in app_render.rs for text input
+        PanelAction::MarkerDoubleClicked(_) => {
             DispatchResult::handled()
         }
 

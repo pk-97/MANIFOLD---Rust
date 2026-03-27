@@ -379,6 +379,32 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::MarkerDoubleClicked(marker_id_str) => {
+                    // Open text input for marker rename
+                    let marker_id = manifold_core::MarkerId::new(marker_id_str.as_str());
+                    if let Some(marker) = self.local_project.timeline.find_marker(&marker_id) {
+                        let beat = marker.beat;
+                        let name = marker.name.clone();
+                        // Anchor to marker flag position in the ruler
+                        let px = self.ui_root.viewport.beat_to_pixel(beat);
+                        let ruler = self.ui_root.viewport.ruler_rect();
+                        let flag_w = manifold_ui::color::MARKER_FLAG_WIDTH;
+                        let r = crate::text_input::AnchorRect::new(
+                            px + flag_w * 0.5 + 2.0,
+                            ruler.y,
+                            80.0,
+                            manifold_ui::color::MARKER_FLAG_HEIGHT,
+                        );
+                        self.text_input.begin(
+                            crate::text_input::TextInputField::MarkerName,
+                            &name,
+                            r,
+                            9.0,
+                        );
+                        self.text_input.marker_id = Some(marker_id);
+                    }
+                    continue;
+                }
                 PanelAction::ClipBpmClicked => {
                     // Open text input for clip recorded BPM editing.
                     // Unity: ClipInspector.OnBitmapBpmClicked → BitmapTextInput.BeginEdit
@@ -409,15 +435,8 @@ impl Application {
                     continue;
                 }
                 PanelAction::NewProject => {
-                    let project = Self::create_default_project();
-                    self.local_project = project.clone();
-                    self.suppress_snapshot_until = self.content_state.data_version + 1;
-                    self.suppress_snapshot_set_at = self.frame_count;
-                    self.send_content_cmd(ContentCommand::LoadProject(Box::new(project)));
-                    self.send_content_cmd(ContentCommand::SetProject);
-                    self.selection.clear_selection();
-                    self.active_layer_id = self.local_project.timeline.layers.first().map(|l| l.layer_id.clone());
-                    self.current_project_path = None;
+                    let action = self.project_io.new_project();
+                    self.apply_project_io_action(action);
                     needs_structural_sync = true;
                     continue;
                 }

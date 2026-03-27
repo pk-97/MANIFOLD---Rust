@@ -737,6 +737,23 @@ impl Application {
                 self.ui_root.browser_popup.set_filter(text.trim().to_string());
                 self.needs_rebuild = true;
             }
+            TextInputField::MarkerName => {
+                if let Some(marker_id) = self.text_input.marker_id.take() {
+                    let new_name = text.to_string();
+                    let old_name = self.local_project.timeline.find_marker(&marker_id)
+                        .map(|m| m.name.clone())
+                        .unwrap_or_default();
+                    if old_name != new_name {
+                        let cmd = manifold_editing::commands::marker::RenameMarkerCommand::new(
+                            marker_id, old_name, new_name,
+                        );
+                        let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                        boxed.execute(&mut self.local_project);
+                        self.send_content_cmd(ContentCommand::Execute(boxed));
+                    }
+                }
+                self.needs_rebuild = true;
+            }
         }
     }
 

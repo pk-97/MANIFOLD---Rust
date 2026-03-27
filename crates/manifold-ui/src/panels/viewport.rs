@@ -1496,10 +1496,12 @@ impl TimelineViewportPanel {
                 self.marker_node_ids.push(outline_id);
             }
 
-            // Label (marker name, if any)
+            // Label (marker name, to the right of the flag)
             if !marker.name.is_empty() {
+                let label_x = flag_x + flag_w + 2.0;
+                let label_y = flag_y + (flag_h - color::MARKER_LABEL_HEIGHT) * 0.5;
                 let label_id = tree.add_label(
-                    -1, px + flag_w * 0.5 + 2.0, flag_y,
+                    -1, label_x, label_y,
                     color::MARKER_LABEL_WIDTH, color::MARKER_LABEL_HEIGHT,
                     &marker.name,
                     UIStyle {

@@ -24,6 +24,8 @@ pub enum TextInputField {
     GenParam(usize),
     /// Browser popup search filter — commit updates filter, no undo command.
     SearchFilter,
+    /// Timeline marker rename. MarkerId stored in TextInputState::marker_id.
+    MarkerName,
 }
 
 /// Screen-space rectangle for anchoring the text input overlay.
@@ -58,6 +60,8 @@ pub struct TextInputState {
     /// When true, the entire text is selected. First keystroke replaces all.
     /// Set on `begin()`, cleared on any edit action.
     pub select_all: bool,
+    /// MarkerId for MarkerName field (String not Copy, so stored separately).
+    pub marker_id: Option<manifold_core::MarkerId>,
 }
 
 impl TextInputState {
@@ -70,6 +74,7 @@ impl TextInputState {
             anchor: AnchorRect::zero(),
             font_size: 12.0,
             select_all: false,
+            marker_id: None,
         }
     }
 

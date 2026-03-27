@@ -793,13 +793,13 @@ impl TryFrom<i32> for BlendMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum MarkerColor {
-    #[default]
     Red = 0,
     Orange = 1,
     Yellow = 2,
     Green = 3,
     Cyan = 4,
     Blue = 5,
+    #[default]
     Purple = 6,
     White = 7,
 }
