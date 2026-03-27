@@ -797,13 +797,12 @@ impl TryFrom<i32> for BlendMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum UpscaleMode {
-    /// MetalFX Spatial (ML-based, best quality). Default on macOS 13+ Apple Silicon.
-    /// Falls back to MpsLanczos if MetalFX is unavailable at runtime.
-    #[default]
+    /// MetalFX Spatial (ML-based upscaling). Reduces generator GPU work at the
+    /// cost of some visual quality on organic content.
     MetalFxSpatial = 0,
-    /// MPS Lanczos resampling (high-quality, always available on Apple Silicon).
+    /// MPS Lanczos resampling (always available on Apple Silicon).
     MpsLanczos = 1,
     /// No scaling — all generators render at full output resolution.
-    /// Highest quality but significantly more GPU work for particle/fluid generators.
+    #[default]
     Native = 2,
 }

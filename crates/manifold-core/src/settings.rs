@@ -122,7 +122,7 @@ impl Default for ProjectSettings {
             time_signature_denominator: 4,
             quantize_mode: QuantizeMode::Off,
             resolution_preset: ResolutionPreset::FHD1080p,
-            upscale_mode: UpscaleMode::MetalFxSpatial,
+            upscale_mode: UpscaleMode::Native,
             master_opacity: 1.0,
             master_effects: Vec::new(),
             master_effect_groups: None,
