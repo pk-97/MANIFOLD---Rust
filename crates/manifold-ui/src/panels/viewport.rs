@@ -1,4 +1,5 @@
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{ClipId, LayerId, MarkerId};
+use manifold_core::marker::TimelineMarker;
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
@@ -170,6 +171,14 @@ pub struct TimelineViewportPanel {
     // Dirty-checking fingerprint to skip unnecessary rebuilds.
     // From Unity LayerBitmapRenderer dirty-checking (lines 99-186).
     cached_fingerprint: u64,
+
+    // Timeline markers
+    markers: Vec<TimelineMarker>,
+    selected_marker_ids: Vec<MarkerId>,
+    marker_flag_rects: Vec<(MarkerId, Rect)>,
+    marker_node_ids: Vec<i32>,
+    marker_drag_id: Option<MarkerId>,
+    marker_drag_start_beat: f32,
 }
 
 /// Viewport-local drag mode. Only tracks ruler scrub — all clip interaction
@@ -179,6 +188,7 @@ enum ViewportDragMode {
     None,
     RulerScrub,
     OverviewScrub,
+    MarkerDrag,
 }
 
 impl TimelineViewportPanel {
@@ -224,6 +234,12 @@ impl TimelineViewportPanel {
             drag_mode: ViewportDragMode::None,
             scrub_free: false,
             cached_fingerprint: 0,
+            markers: Vec::new(),
+            selected_marker_ids: Vec::new(),
+            marker_flag_rects: Vec::new(),
+            marker_node_ids: Vec::new(),
+            marker_drag_id: None,
+            marker_drag_start_beat: 0.0,
         }
     }
 
@@ -496,6 +512,25 @@ impl TimelineViewportPanel {
 
     pub fn set_hovered_clip_id(&mut self, id: Option<ClipId>) {
         self.hovered_clip_id = id;
+    }
+
+    pub fn set_markers(&mut self, markers: Vec<TimelineMarker>) {
+        self.markers = markers;
+    }
+
+    pub fn set_selected_marker_ids(&mut self, ids: Vec<MarkerId>) {
+        self.selected_marker_ids = ids;
+    }
+
+    /// Hit-test a point against marker flags in the ruler area.
+    /// Returns the MarkerId if a flag was hit.
+    pub fn hit_test_marker_flag(&self, pos: Vec2) -> Option<MarkerId> {
+        for (id, rect) in &self.marker_flag_rects {
+            if rect.contains(pos) {
+                return Some(id.clone());
+            }
+        }
+        None
     }
 
     // ── Accessors ─────────────────────────────────────────────────
@@ -917,6 +952,9 @@ impl Panel for TimelineViewportPanel {
         // Export range markers
         self.build_export_markers(tree);
 
+        // Timeline markers (user-placed)
+        self.build_markers(tree);
+
         // Insert cursor ruler marker only (track cursor painted into bitmap)
         self.build_insert_cursor_ruler(tree);
 
@@ -934,8 +972,14 @@ impl Panel for TimelineViewportPanel {
         // InteractionOverlay in app.rs — NOT here. This method only
         // handles ruler events (seek/scrub) which are viewport-specific.
         match event {
-            // ── Click: ruler or overview strip ────────────────────
+            // ── Click: marker flag → ruler → overview strip ───────
             UIEvent::Click { pos, modifiers, .. } => {
+                // Marker flag hit-test (priority over ruler scrub)
+                if let Some(marker_id) = self.hit_test_marker_flag(*pos) {
+                    return vec![PanelAction::MarkerClicked(
+                        marker_id.to_string(), *modifiers,
+                    )];
+                }
                 if self.overview_rect.contains(*pos) {
                     let norm = ((pos.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
                     return vec![PanelAction::OverviewScrub(norm)];
@@ -948,8 +992,19 @@ impl Panel for TimelineViewportPanel {
                 Vec::new()
             }
 
-            // ── DragBegin: ruler or overview scrub ───────────────
+            // ── DragBegin: marker flag → ruler → overview scrub ──
             UIEvent::DragBegin { origin, modifiers, .. } => {
+                // Marker flag drag (priority over ruler scrub)
+                if let Some(marker_id) = self.hit_test_marker_flag(*origin) {
+                    self.drag_mode = ViewportDragMode::MarkerDrag;
+                    // Store start beat for undo
+                    self.marker_drag_start_beat = self.markers.iter()
+                        .find(|m| m.id == marker_id)
+                        .map(|m| m.beat)
+                        .unwrap_or(0.0);
+                    self.marker_drag_id = Some(marker_id.clone());
+                    return vec![PanelAction::MarkerDragStarted(marker_id.to_string())];
+                }
                 if self.overview_rect.contains(*origin) {
                     self.drag_mode = ViewportDragMode::OverviewScrub;
                     self.scrub_free = false;
@@ -968,8 +1023,17 @@ impl Panel for TimelineViewportPanel {
                 Vec::new()
             }
 
-            // ── Drag: ruler or overview scrub continuation ───────
+            // ── Drag: marker → ruler → overview scrub continuation
             UIEvent::Drag { pos, .. } => {
+                if self.drag_mode == ViewportDragMode::MarkerDrag
+                    && let Some(marker_id) = &self.marker_drag_id
+                {
+                    let raw = self.pixel_to_beat(pos.x);
+                    let beat = self.scrub_snap_beat(raw, false).max(0.0);
+                    return vec![PanelAction::MarkerDragMoved(
+                        marker_id.to_string(), beat,
+                    )];
+                }
                 if self.drag_mode == ViewportDragMode::OverviewScrub {
                     let norm = ((pos.x - self.overview_rect.x) / self.overview_rect.width).clamp(0.0, 1.0);
                     return vec![PanelAction::OverviewScrub(norm)];
@@ -983,7 +1047,18 @@ impl Panel for TimelineViewportPanel {
             }
 
             // ── DragEnd: reset drag mode ─────────────────────────
-            UIEvent::DragEnd { .. } => {
+            UIEvent::DragEnd { pos, .. } => {
+                if self.drag_mode == ViewportDragMode::MarkerDrag {
+                    let result = if let Some(marker_id) = self.marker_drag_id.take() {
+                        let raw = self.pixel_to_beat(pos.x);
+                        let beat = self.scrub_snap_beat(raw, false).max(0.0);
+                        vec![PanelAction::MarkerDragEnded(marker_id.to_string(), beat)]
+                    } else {
+                        Vec::new()
+                    };
+                    self.drag_mode = ViewportDragMode::None;
+                    return result;
+                }
                 if self.drag_mode != ViewportDragMode::None {
                     self.drag_mode = ViewportDragMode::None;
                     self.scrub_free = false;
@@ -991,8 +1066,23 @@ impl Panel for TimelineViewportPanel {
                 Vec::new()
             }
 
-            // All other events (DoubleClick, RightClick, Hover) handled
-            // by InteractionOverlay — return empty.
+            // ── DoubleClick: marker rename ────────────────────────
+            UIEvent::DoubleClick { pos, .. } => {
+                if let Some(marker_id) = self.hit_test_marker_flag(*pos) {
+                    return vec![PanelAction::MarkerDoubleClicked(marker_id.to_string())];
+                }
+                Vec::new()
+            }
+
+            // ── RightClick: marker context menu ──────────────────
+            UIEvent::RightClick { pos, .. } => {
+                if let Some(marker_id) = self.hit_test_marker_flag(*pos) {
+                    return vec![PanelAction::MarkerRightClicked(marker_id.to_string())];
+                }
+                Vec::new()
+            }
+
+            // All other events handled by InteractionOverlay — return empty.
             _ => Vec::new()
         }
     }
@@ -1345,6 +1435,88 @@ impl TimelineViewportPanel {
         ) as i32;
         if !in_view {
             tree.set_visible(self.insert_cursor_ruler_id as u32, false);
+        }
+    }
+
+    /// Build timeline marker vertical lines and flags in the ruler.
+    fn build_markers(&mut self, tree: &mut UITree) {
+        self.marker_flag_rects.clear();
+        self.marker_node_ids.clear();
+
+        let flag_w = color::MARKER_FLAG_WIDTH;
+        let flag_h = color::MARKER_FLAG_HEIGHT;
+        let line_w = color::MARKER_LINE_WIDTH;
+        let total_line_h = self.ruler_rect.height + self.tracks_rect.height;
+
+        for marker in &self.markers {
+            let px = self.beat_to_pixel(marker.beat);
+            if px < self.tracks_rect.x - flag_w || px > self.tracks_rect.x_max() + flag_w {
+                continue;
+            }
+
+            let mc = color::marker_color_to_color32(marker.color);
+            let is_selected = self.selected_marker_ids.contains(&marker.id);
+
+            // Vertical line spanning ruler + tracks
+            let line_color = Color32::new(mc.r, mc.g, mc.b, color::MARKER_LINE_ALPHA);
+            let line_id = tree.add_panel(
+                -1, px - line_w * 0.5, self.ruler_rect.y,
+                line_w, total_line_h,
+                UIStyle { bg_color: line_color, ..UIStyle::default() },
+            ) as i32;
+            self.marker_node_ids.push(line_id);
+
+            // Flag in ruler (small colored rectangle at top)
+            let flag_x = px - flag_w * 0.5;
+            let flag_y = self.ruler_rect.y;
+            let flag_color = if is_selected {
+                Color32::new(
+                    mc.r.saturating_add(40),
+                    mc.g.saturating_add(40),
+                    mc.b.saturating_add(40),
+                    255,
+                )
+            } else {
+                mc
+            };
+            let flag_id = tree.add_panel(
+                -1, flag_x, flag_y,
+                flag_w, flag_h,
+                UIStyle { bg_color: flag_color, ..UIStyle::default() },
+            ) as i32;
+            self.marker_node_ids.push(flag_id);
+
+            // Selection outline
+            if is_selected {
+                let outline_id = tree.add_panel(
+                    -1, flag_x - 1.0, flag_y - 1.0,
+                    flag_w + 2.0, flag_h + 2.0,
+                    UIStyle { bg_color: color::MARKER_SELECTED_OUTLINE, ..UIStyle::default() },
+                ) as i32;
+                self.marker_node_ids.push(outline_id);
+            }
+
+            // Label (marker name, if any)
+            if !marker.name.is_empty() {
+                let label_id = tree.add_label(
+                    -1, px + flag_w * 0.5 + 2.0, flag_y,
+                    color::MARKER_LABEL_WIDTH, color::MARKER_LABEL_HEIGHT,
+                    &marker.name,
+                    UIStyle {
+                        text_color: mc,
+                        font_size: RULER_FONT_SIZE,
+                        text_align: TextAlign::Left,
+                        ..UIStyle::default()
+                    },
+                ) as i32;
+                self.marker_node_ids.push(label_id);
+            }
+
+            // Store flag rect for hit-testing
+            self.marker_flag_rects.push((
+                marker.id.clone(),
+                Rect::new(flag_x, flag_y, flag_w, flag_h),
+            ));
         }
     }
 }

@@ -241,4 +241,15 @@ pub trait TimelineInputHost {
 
     /// Reset percussion alignment to beat 0.
     fn reset_percussion_alignment(&mut self);
+
+    // ── Timeline markers ─────────────────────────────────────────
+
+    /// Add a marker at the current playhead beat (snapped to grid).
+    fn add_marker_at_playhead(&mut self);
+
+    /// Delete all currently selected markers.
+    fn delete_selected_markers(&mut self);
+
+    /// Whether any markers are currently selected.
+    fn has_selected_markers(&self) -> bool;
 }

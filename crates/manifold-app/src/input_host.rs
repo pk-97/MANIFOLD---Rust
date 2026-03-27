@@ -1101,6 +1101,51 @@ impl TimelineInputHost for AppInputHost<'_> {
             ContentCommand::PercussionResetAlignment,
         );
     }
+
+    // ── Timeline markers ─────────────────────────────────────────
+
+    fn add_marker_at_playhead(&mut self) {
+        use manifold_core::marker::TimelineMarker;
+        use manifold_editing::commands::marker::AddMarkerCommand;
+
+        let beat = self.content_state.current_beat;
+        let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
+        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
+        let marker = TimelineMarker::new(snapped);
+
+        let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+            Box::new(AddMarkerCommand::new(marker));
+        boxed.execute(self.project);
+        ContentCommand::send(self.content_tx, ContentCommand::Execute(boxed));
+        *self.needs_rebuild = true;
+    }
+
+    fn delete_selected_markers(&mut self) {
+        use manifold_editing::commands::marker::DeleteMarkerCommand;
+
+        let ids: Vec<manifold_core::MarkerId> =
+            self.selection.selected_marker_ids.iter().cloned().collect();
+        if ids.is_empty() { return; }
+
+        let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
+        for id in &ids {
+            let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
+                Box::new(DeleteMarkerCommand::new(id.clone()));
+            boxed.execute(self.project);
+            commands.push(boxed);
+        }
+        ContentCommand::send(
+            self.content_tx,
+            ContentCommand::ExecuteBatch(commands, "Delete Markers".into()),
+        );
+
+        self.selection.selected_marker_ids.clear();
+        *self.needs_rebuild = true;
+    }
+
+    fn has_selected_markers(&self) -> bool {
+        !self.selection.selected_marker_ids.is_empty()
+    }
 }
 
 // ── Effect resolution helpers (mirrors ui_bridge resolve_effects) ──

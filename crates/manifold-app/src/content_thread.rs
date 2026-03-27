@@ -279,7 +279,7 @@ impl ContentThread {
             self.content_pipeline.render_content(
                 &self.gpu, &mut self.engine, &tick_result, dt, self.frame_count,
             );
-            let render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
+            let _render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
 
             #[cfg(feature = "profiling")]
             let _render_content_ms = _t0.elapsed().as_secs_f64() * 1000.0;

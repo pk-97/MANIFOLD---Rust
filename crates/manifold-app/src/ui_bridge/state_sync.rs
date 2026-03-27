@@ -276,6 +276,9 @@ pub fn push_state(
     ui.viewport.set_selected_clip_ids(
         selection.selected_clip_ids.iter().cloned().collect()
     );
+    ui.viewport.set_selected_marker_ids(
+        selection.selected_marker_ids.iter().cloned().collect()
+    );
     if let Some(beat) = selection.insert_cursor_beat {
         ui.viewport.set_insert_cursor(beat);
     }
@@ -606,6 +609,12 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
         }
         ui.viewport.set_clips(viewport_clips);
 
+        // Timeline markers → viewport
+        ui.viewport.set_markers(project.timeline.markers.clone());
+        ui.viewport.set_selected_marker_ids(
+            selection.selected_marker_ids.iter().cloned().collect(),
+        );
+
         // Beats per bar
         ui.viewport.set_beats_per_bar(project.settings.time_signature_numerator as u32);
     }
@@ -650,6 +659,8 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
         }
     }
     ui.viewport.set_clips(viewport_clips);
+    // Also sync markers during drag (marker drag mutates project.timeline.markers)
+    ui.viewport.set_markers(project.timeline.markers.clone());
 }
 
 /// Sync inspector content for the active selection.

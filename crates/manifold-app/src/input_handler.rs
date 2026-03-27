@@ -217,7 +217,7 @@ impl InputHandler {
             return true;
         }
 
-        // ── Delete/Backspace (context-sensitive: effects → layers → clips) (Unity line 336) ──
+        // ── Delete/Backspace (context-sensitive: effects → markers → layers → clips) (Unity line 336) ──
         if matches!(logical_key, Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace))
             && m.is_none()
         {
@@ -225,7 +225,12 @@ impl InputHandler {
             if self.inspector_has_focus && host.handle_effect_delete() {
                 return true;
             }
-            // Priority 2: layer selection active, no clips, no region → delete layers
+            // Priority 2: selected markers → delete markers
+            if host.has_selected_markers() {
+                host.delete_selected_markers();
+                return true;
+            }
+            // Priority 3: layer selection active, no clips, no region → delete layers
             // (Unity lines 341-346)
             if host.layer_selection_count() > 0
                 && !host.has_region()
@@ -234,7 +239,7 @@ impl InputHandler {
                 host.delete_selected_layers();
                 return true;
             }
-            // Priority 3: delete selected clips (region-aware)
+            // Priority 4: delete selected clips (region-aware)
             let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.delete_clips(&ids, host.has_region());
@@ -345,6 +350,12 @@ impl InputHandler {
                 let grid_step = host.grid_step();
                 host.navigate_cursor(direction, m.shift, grid_step);
             }
+            return true;
+        }
+
+        // ── M — add marker at playhead (bare M, no modifiers) ──
+        if matches!(logical_key, Key::Character(c) if c.as_str() == "m") && m.is_none() {
+            host.add_marker_at_playhead();
             return true;
         }
 

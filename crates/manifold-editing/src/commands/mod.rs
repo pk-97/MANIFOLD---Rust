@@ -7,3 +7,4 @@ pub mod effect_groups;
 pub mod drivers;
 pub mod envelopes;
 pub mod selection;
+pub mod marker;

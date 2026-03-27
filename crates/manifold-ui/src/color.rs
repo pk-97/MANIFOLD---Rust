@@ -229,6 +229,37 @@ pub const OVERVIEW_PLAYHEAD: Color32 = Color32::new(217, 64, 56, 255);
 pub const EXPORT_MARKER_COLOR: Color32 = Color32::new(77, 141, 235, 255);
 pub const EXPORT_RANGE_HIGHLIGHT: Color32 = Color32::new(77, 140, 235, 31);
 
+// ── Timeline Markers ────────────────────────────────────────────────
+pub const MARKER_RED: Color32 = Color32::new(217, 64, 56, 255);
+pub const MARKER_ORANGE: Color32 = Color32::new(230, 150, 50, 255);
+pub const MARKER_YELLOW: Color32 = Color32::new(230, 210, 60, 255);
+pub const MARKER_GREEN: Color32 = Color32::new(80, 190, 80, 255);
+pub const MARKER_CYAN: Color32 = Color32::new(70, 200, 210, 255);
+pub const MARKER_BLUE: Color32 = Color32::new(89, 148, 235, 255);
+pub const MARKER_PURPLE: Color32 = Color32::new(170, 100, 230, 255);
+pub const MARKER_WHITE: Color32 = Color32::new(220, 220, 225, 255);
+pub const MARKER_LINE_ALPHA: u8 = 128;
+pub const MARKER_FLAG_WIDTH: f32 = 8.0;
+pub const MARKER_FLAG_HEIGHT: f32 = 14.0;
+pub const MARKER_LINE_WIDTH: f32 = 1.0;
+pub const MARKER_LABEL_WIDTH: f32 = 60.0;
+pub const MARKER_LABEL_HEIGHT: f32 = 12.0;
+pub const MARKER_SELECTED_OUTLINE: Color32 = Color32::new(255, 255, 255, 200);
+
+pub fn marker_color_to_color32(color: manifold_core::MarkerColor) -> Color32 {
+    use manifold_core::MarkerColor;
+    match color {
+        MarkerColor::Red => MARKER_RED,
+        MarkerColor::Orange => MARKER_ORANGE,
+        MarkerColor::Yellow => MARKER_YELLOW,
+        MarkerColor::Green => MARKER_GREEN,
+        MarkerColor::Cyan => MARKER_CYAN,
+        MarkerColor::Blue => MARKER_BLUE,
+        MarkerColor::Purple => MARKER_PURPLE,
+        MarkerColor::White => MARKER_WHITE,
+    }
+}
+
 // ── Bitmap Panel Common ─────────────────────────────────────────────
 pub const TRANSPARENT: Color32 = Color32::new(0, 0, 0, 0);
 pub const HOVER_OVERLAY: Color32 = Color32::new(255, 255, 255, 15);

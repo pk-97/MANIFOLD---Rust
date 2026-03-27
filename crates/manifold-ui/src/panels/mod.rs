@@ -256,6 +256,15 @@ pub enum PanelAction {
     ContextGroupSelectedLayers,
     ContextUngroup(usize),                           // layer_index
 
+    // Timeline Markers
+    MarkerClicked(String, Modifiers),     // marker_id, modifiers (Shift for multi-select)
+    MarkerDoubleClicked(String),          // marker_id (rename)
+    MarkerDragStarted(String),            // marker_id
+    MarkerDragMoved(String, f32),         // marker_id, new_beat
+    MarkerDragEnded(String, f32),         // marker_id, final_beat
+    MarkerRightClicked(String),           // marker_id (context menu)
+    DeleteSelectedMarkers,
+
     // Waveform lane
     ImportAudioClicked,
     RemoveAudioClicked,

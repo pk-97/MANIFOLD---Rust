@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 use ahash::AHashMap;
-use crate::id::{ClipId, LayerId};
+use crate::id::{ClipId, LayerId, MarkerId};
 use crate::clip::TimelineClip;
 use crate::layer::Layer;
+use crate::marker::TimelineMarker;
 
 /// The timeline containing all layers and clips.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -18,6 +19,10 @@ pub struct Timeline {
     pub export_out_beat: f32,
     #[serde(default)]
     pub export_range_enabled: bool,
+
+    /// User-placed timeline markers (sorted by beat on insert).
+    #[serde(default)]
+    pub markers: Vec<TimelineMarker>,
 
     /// Runtime clip lookup cache: clip_id → (layer_index, clip_index).
     #[serde(skip)]
@@ -372,5 +377,36 @@ impl Timeline {
             }
         }
         min_beat
+    }
+
+    // ── Markers ─────────────────────────────────────────────────────
+
+    /// Add a marker, maintaining sorted order by beat.
+    pub fn add_marker(&mut self, marker: TimelineMarker) {
+        let pos = self.markers
+            .binary_search_by(|m| m.beat.partial_cmp(&marker.beat).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or_else(|i| i);
+        self.markers.insert(pos, marker);
+    }
+
+    /// Remove a marker by ID. Returns the removed marker if found.
+    pub fn remove_marker(&mut self, id: &MarkerId) -> Option<TimelineMarker> {
+        let pos = self.markers.iter().position(|m| m.id == *id)?;
+        Some(self.markers.remove(pos))
+    }
+
+    /// Find a marker by ID (immutable).
+    pub fn find_marker(&self, id: &MarkerId) -> Option<&TimelineMarker> {
+        self.markers.iter().find(|m| m.id == *id)
+    }
+
+    /// Find a marker by ID (mutable).
+    pub fn find_marker_mut(&mut self, id: &MarkerId) -> Option<&mut TimelineMarker> {
+        self.markers.iter_mut().find(|m| m.id == *id)
+    }
+
+    /// Re-sort markers after a beat change.
+    pub fn sort_markers(&mut self) {
+        self.markers.sort_by(|a, b| a.beat.partial_cmp(&b.beat).unwrap_or(std::cmp::Ordering::Equal));
     }
 }

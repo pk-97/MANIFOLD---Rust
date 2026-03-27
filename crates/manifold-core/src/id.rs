@@ -28,6 +28,11 @@ pub struct EffectGroupId(pub String);
 #[serde(transparent)]
 pub struct EffectId(pub String);
 
+/// Timeline marker identifier — wraps a short UUID string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(transparent)]
+pub struct MarkerId(pub String);
+
 // ── Macro for shared impls ──
 
 macro_rules! impl_id_type {
@@ -125,3 +130,4 @@ impl_id_type!(ClipId);
 impl_id_type!(LayerId);
 impl_id_type!(EffectGroupId);
 impl_id_type!(EffectId);
+impl_id_type!(MarkerId);

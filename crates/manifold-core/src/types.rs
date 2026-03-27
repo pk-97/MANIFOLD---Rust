@@ -789,6 +789,107 @@ impl TryFrom<i32> for BlendMode {
     }
 }
 
+// ─── Marker Color ───
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum MarkerColor {
+    #[default]
+    Red = 0,
+    Orange = 1,
+    Yellow = 2,
+    Green = 3,
+    Cyan = 4,
+    Blue = 5,
+    Purple = 6,
+    White = 7,
+}
+
+impl MarkerColor {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Red => "Red",
+            Self::Orange => "Orange",
+            Self::Yellow => "Yellow",
+            Self::Green => "Green",
+            Self::Cyan => "Cyan",
+            Self::Blue => "Blue",
+            Self::Purple => "Purple",
+            Self::White => "White",
+        }
+    }
+
+    pub const ALL: &'static [MarkerColor] = &[
+        MarkerColor::Red, MarkerColor::Orange, MarkerColor::Yellow,
+        MarkerColor::Green, MarkerColor::Cyan, MarkerColor::Blue,
+        MarkerColor::Purple, MarkerColor::White,
+    ];
+
+    pub fn from_index(i: usize) -> Self {
+        Self::try_from(i as i32).unwrap_or(Self::Red)
+    }
+}
+
+impl Serialize for MarkerColor {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_i32(*self as i32)
+    }
+}
+
+impl<'de> Deserialize<'de> for MarkerColor {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(match &value {
+            serde_json::Value::Number(n) => match n.as_i64().unwrap_or(0) as i32 {
+                0 => MarkerColor::Red,
+                1 => MarkerColor::Orange,
+                2 => MarkerColor::Yellow,
+                3 => MarkerColor::Green,
+                4 => MarkerColor::Cyan,
+                5 => MarkerColor::Blue,
+                6 => MarkerColor::Purple,
+                7 => MarkerColor::White,
+                _ => MarkerColor::Red,
+            },
+            serde_json::Value::String(s) => match s.as_str() {
+                "Red" => MarkerColor::Red,
+                "Orange" => MarkerColor::Orange,
+                "Yellow" => MarkerColor::Yellow,
+                "Green" => MarkerColor::Green,
+                "Cyan" => MarkerColor::Cyan,
+                "Blue" => MarkerColor::Blue,
+                "Purple" => MarkerColor::Purple,
+                "White" => MarkerColor::White,
+                _ => MarkerColor::Red,
+            },
+            _ => MarkerColor::Red,
+        })
+    }
+}
+
+impl std::fmt::Display for MarkerColor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.display_name())
+    }
+}
+
+impl TryFrom<i32> for MarkerColor {
+    type Error = ();
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Red),
+            1 => Ok(Self::Orange),
+            2 => Ok(Self::Yellow),
+            3 => Ok(Self::Green),
+            4 => Ok(Self::Cyan),
+            5 => Ok(Self::Blue),
+            6 => Ok(Self::Purple),
+            7 => Ok(Self::White),
+            _ => Err(()),
+        }
+    }
+}
+
 // ─── Upscale Mode ───
 
 /// Controls how reduced-resolution generator output is upscaled to full output resolution.

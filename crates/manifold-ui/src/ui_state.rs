@@ -5,7 +5,7 @@
 // Replaces the former app::SelectionState + app::ClipDragState.
 
 use std::collections::HashSet;
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{ClipId, LayerId, MarkerId};
 use manifold_core::selection::SelectionRegion;
 
 pub struct UIState {
@@ -62,6 +62,9 @@ pub struct UIState {
 
     // ── Zoom ──
     pub current_zoom_index: usize,
+
+    // ── Marker Selection ──
+    pub selected_marker_ids: HashSet<MarkerId>,
 }
 
 impl Default for UIState {
@@ -98,6 +101,7 @@ impl UIState {
             trim_original_in_point: 0.0,
             is_scrubbing: false,
             current_zoom_index: crate::color::DEFAULT_ZOOM_INDEX,
+            selected_marker_ids: HashSet::new(),
         }
     }
 
@@ -136,7 +140,7 @@ impl UIState {
         self.selection_version += 1;
     }
 
-    /// Clear all selection (clips, layers, region, and insert cursor).
+    /// Clear all selection (clips, layers, markers, region, and insert cursor).
     /// Unity UIState.cs ClearSelection (lines 211-222).
     pub fn clear_selection(&mut self) {
         self.selected_clip_ids.clear();
@@ -144,6 +148,7 @@ impl UIState {
         self.selected_layer_id_for_clip = None;
         self.selected_layer_ids.clear();
         self.primary_selected_layer_id = None;
+        self.selected_marker_ids.clear();
         self.selection_region = SelectionRegion::default();
         self.insert_cursor_beat = None;
         self.insert_cursor_layer_id = None;
@@ -537,5 +542,37 @@ impl UIState {
             self.selection_version += 1;
         }
         changed
+    }
+
+    // ── Marker Selection ────────────────────────────────────────────
+
+    /// Select a single marker (clears clips, layers, region, cursor).
+    pub fn select_marker(&mut self, marker_id: MarkerId) {
+        self.selected_clip_ids.clear();
+        self.primary_selected_clip_id = None;
+        self.selected_layer_id_for_clip = None;
+        self.selected_layer_ids.clear();
+        self.primary_selected_layer_id = None;
+        self.selection_region = SelectionRegion::default();
+        self.insert_cursor_beat = None;
+        self.insert_cursor_layer_id = None;
+        self.selected_marker_ids.clear();
+        self.selected_marker_ids.insert(marker_id);
+        self.selection_version += 1;
+    }
+
+    /// Toggle a marker in/out of multi-selection (Shift+Click).
+    pub fn toggle_marker_selection(&mut self, marker_id: MarkerId) {
+        if self.selected_marker_ids.contains(&marker_id) {
+            self.selected_marker_ids.remove(&marker_id);
+        } else {
+            self.selected_marker_ids.insert(marker_id);
+        }
+        self.selection_version += 1;
+    }
+
+    /// Whether a specific marker is selected.
+    pub fn is_marker_selected(&self, marker_id: &MarkerId) -> bool {
+        self.selected_marker_ids.contains(marker_id)
     }
 }

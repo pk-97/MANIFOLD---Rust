@@ -326,6 +326,7 @@ impl PerfHudPanel {
 }
 
 /// Map frame time to color: green (<8ms), yellow (8-16ms), red (>16ms).
+#[allow(dead_code)]
 fn dt_color(ms: f32) -> Color32 {
     if ms < 8.5 {
         color::STATUS_GOOD

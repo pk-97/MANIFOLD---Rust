@@ -8,6 +8,7 @@ mod transport;
 mod editing;
 mod inspector;
 mod layer;
+mod marker;
 mod project;
 mod state_sync;
 
@@ -205,6 +206,17 @@ pub fn dispatch(
         | PanelAction::AddLayerClicked
         | PanelAction::DeleteLayerClicked(_) => {
             layer::dispatch_layer(action, project, content_tx, content_state, ui, selection, active_layer)
+        }
+
+        // ── Timeline markers ─────────────────────────────────────────
+        PanelAction::MarkerClicked(..)
+        | PanelAction::MarkerDoubleClicked(_)
+        | PanelAction::MarkerDragStarted(_)
+        | PanelAction::MarkerDragMoved(..)
+        | PanelAction::MarkerDragEnded(..)
+        | PanelAction::MarkerRightClicked(_)
+        | PanelAction::DeleteSelectedMarkers => {
+            marker::dispatch_marker(action, project, content_tx, ui, selection, drag_snapshot)
         }
 
         // ── Project/file/export/audio ─────────────────────────────
