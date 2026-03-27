@@ -583,6 +583,15 @@ impl Application {
             if monitors.len() > 1 { Some(1) } else { Some(0) }
         });
 
+        // Query headroom for the new output window immediately — don't wait
+        // for an NSNotification. Without this, output_edr_headroom stays at 1.0
+        // (SDR) and the blit applies ACES on top of the compositor's EDR output,
+        // causing washed-out, double-tonemapped results.
+        let h = crate::edr_surface::query_window_headroom(&window);
+        if (h - self.output_edr_headroom).abs() > 0.01 {
+            self.output_edr_headroom = h;
+        }
+
         let state = WindowState {
             window,
             surface,
@@ -594,8 +603,9 @@ impl Application {
 
         self.window_registry.add(id, state);
         log::info!(
-            "[OutputWindow] Opened '{}' on '{}' ({}x{}, {:?})",
-            name, mon_name, size.width, size.height, surface_format
+            "[OutputWindow] Opened '{}' on '{}' ({}x{}, {:?}, EDR={:.2}x → blit={})",
+            name, mon_name, size.width, size.height, surface_format, h,
+            if h > 1.0 { "passthrough" } else { "ACES tonemap" },
         );
     }
 }
