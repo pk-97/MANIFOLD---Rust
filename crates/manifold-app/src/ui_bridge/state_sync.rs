@@ -95,7 +95,11 @@ pub fn push_state(
     let time = content_state.current_time;
 
     {
-        let bpm = project.settings.bpm;
+        // Use content_state.bpm (authoritative, updated every content frame)
+        // rather than local_project.settings.bpm which only updates on
+        // data_version change. This ensures live external tempo from
+        // Link or MIDI Clock is reflected immediately.
+        let bpm = content_state.bpm as f32;
 
         // Unity FormatTime: "{minutes:D2}:{seconds:D2}.{tenths}"
         // Time first, then bar.beat.sixteenth — matches Unity exactly
