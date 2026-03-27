@@ -1,15 +1,19 @@
-//! Minimal GPU blit pipeline for the LED edge-extend shader.
+//! Native Metal compute pipeline for the LED edge-extend shader.
 //! Self-contained — does not depend on manifold-renderer.
-//! Creates a tiny render target (strip_count × leds_per_strip, Rgba8Unorm)
-//! and a fullscreen triangle render pipeline with the edge-extend shader.
+//! Creates a tiny Rgba8Unorm output texture (strip_count × leds_per_strip)
+//! and a compute pipeline with the edge-extend shader.
 
-/// GPU resources for the LED edge-extend blit pass.
+use manifold_gpu::{
+    GpuBinding, GpuComputePipeline, GpuDevice, GpuSampler, GpuSamplerDesc,
+    GpuTexture, GpuTextureDesc, GpuTextureFormat, GpuTextureDimension,
+    GpuTextureUsage, GpuFilterMode, GpuAddressMode,
+};
+
+/// GPU resources for the LED edge-extend compute pass.
 pub struct EdgeExtendBlit {
-    pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    target: wgpu::Texture,
-    target_view: wgpu::TextureView,
+    pipeline: GpuComputePipeline,
+    sampler: GpuSampler,
+    pub(crate) output: GpuTexture,
     pub(crate) width: u32,
     pub(crate) height: u32,
 }
@@ -24,132 +28,48 @@ struct EdgeExtendUniforms {
 }
 
 impl EdgeExtendBlit {
-    /// Create the edge-extend blit pipeline and tiny render target.
-    /// `strip_count` = width, `leds_per_strip` = height of the sample texture.
-    pub fn new(device: &wgpu::Device, strip_count: u32, leds_per_strip: u32) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("LEDEdgeExtend Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("shaders/led_edge_extend.wgsl").into(),
-            ),
+    /// Create the edge-extend compute pipeline and tiny output texture.
+    /// `strip_count` = width, `leds_per_strip` = height.
+    pub fn new(device: &GpuDevice, strip_count: u32, leds_per_strip: u32) -> Self {
+        let pipeline = device.create_compute_pipeline(
+            include_str!("shaders/led_edge_extend_compute.wgsl"),
+            "cs_main",
+            "LEDEdgeExtend Compute",
+        );
+
+        let sampler = device.create_sampler(&GpuSamplerDesc {
+            min_filter: GpuFilterMode::Linear,
+            mag_filter: GpuFilterMode::Linear,
+            mip_filter: GpuFilterMode::Nearest,
+            address_mode_u: GpuAddressMode::ClampToEdge,
+            address_mode_v: GpuAddressMode::ClampToEdge,
+            address_mode_w: GpuAddressMode::ClampToEdge,
         });
 
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("LEDEdgeExtend BGL"),
-                entries: &[
-                    // Binding 0: Uniforms
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Binding 1: Source texture (filterable — Rgba16Float from compositor
-                    // is sampled via textureSample, which requires filterable)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    // Binding 2: Sampler
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-            });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("LEDEdgeExtend PipelineLayout"),
-            bind_group_layouts: &[&bind_group_layout],
-            immediate_size: 0,
+        let output = device.create_texture(&GpuTextureDesc {
+            width: strip_count,
+            height: leds_per_strip,
+            depth: 1,
+            format: GpuTextureFormat::Rgba8Unorm,
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label: "LED_SampleRT",
         });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("LEDEdgeExtend Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("LEDEdgeExtend Sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("LED_SampleRT"),
-            size: wgpu::Extent3d {
-                width: strip_count,
-                height: leds_per_strip,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
         Self {
             pipeline,
-            bind_group_layout,
             sampler,
-            target,
-            target_view,
+            output,
             width: strip_count,
             height: leds_per_strip,
         }
     }
 
-    /// Blit the compositor output through the edge-extend shader into the tiny
-    /// sample texture. The result is ready for GPU readback.
+    /// Dispatch the edge-extend compute shader: source → tiny output texture.
     pub fn blit(
         &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        source: &wgpu::TextureView,
+        enc: &mut manifold_gpu::GpuEncoder,
+        source: &GpuTexture,
         left_edge_width: f32,
         right_edge_width: f32,
         blur_radius: f32,
@@ -161,66 +81,42 @@ impl EdgeExtendBlit {
             _pad: 0.0,
         };
 
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("LEDEdgeExtend Uniforms"),
-            size: std::mem::size_of::<EdgeExtendUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("LEDEdgeExtend BindGroup"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
+        enc.dispatch_compute(
+            &self.pipeline,
+            &[
+                GpuBinding::Bytes {
                     binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
+                    data: bytemuck::bytes_of(&uniforms),
                 },
-                wgpu::BindGroupEntry {
+                GpuBinding::Texture {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(source),
+                    texture: source,
                 },
-                wgpu::BindGroupEntry {
+                GpuBinding::Sampler {
                     binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    sampler: &self.sampler,
+                },
+                GpuBinding::Texture {
+                    binding: 3,
+                    texture: &self.output,
                 },
             ],
-        });
-
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("LEDEdgeExtend Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.target_view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        pass.draw(0..3, 0..1);
+            [self.width.div_ceil(16), self.height.div_ceil(16), 1],
+            "LEDEdgeExtend",
+        );
     }
 
-    /// The tiny sample texture. Use for GPU readback.
-    pub fn output_texture(&self) -> &wgpu::Texture {
-        &self.target
+    /// The tiny output texture (Rgba8Unorm, strip_count × leds_per_strip).
+    pub fn output_texture(&self) -> &GpuTexture {
+        &self.output
     }
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
-    fn led_edge_extend_wgsl_parses() {
-        let source = include_str!("shaders/led_edge_extend.wgsl");
+    fn led_edge_extend_compute_wgsl_parses() {
+        let source = include_str!("shaders/led_edge_extend_compute.wgsl");
         naga::front::wgsl::parse_str(source).expect("WGSL parse failed");
     }
 }

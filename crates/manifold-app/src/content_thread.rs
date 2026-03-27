@@ -106,12 +106,14 @@ impl ContentThread {
             }
         }
 
-        // Auto-initialize LED output with default settings.
+        // Auto-initialize LED output with default settings (native Metal).
         // Can be reconfigured at runtime via InitLedOutput command.
         {
             let settings = manifold_led::LedSettings::default();
             let mut ctrl = manifold_led::LedOutputController::new();
-            if ctrl.initialize(&self.gpu.device, &settings) {
+            let native_device = self.content_pipeline.native_device()
+                .expect("native device required for LED init");
+            if ctrl.initialize(native_device, &settings) {
                 self.led_controller = Some(ctrl);
                 eprintln!("[LED] Auto-initialized: {}x{} LEDs, target={}:{}",
                     settings.strip_count, settings.leds_per_strip,
@@ -278,15 +280,21 @@ impl ContentThread {
                 self.content_pipeline.cleanup_stopped_clips(&tick_result.stopped_clips);
             }
 
-            // 7c. LED output — blit compositor output through edge-extend shader
-            // and submit readback. Uses a separate encoder since render_content
-            // already submitted its own.
-            // TODO: LED output needs migration to manifold_gpu types.
-            // For now, LED processing is disabled in the native Metal path.
-            // The LED controller (led_source_texture -> wgpu process_frame)
-            // requires its own migration pass.
+            // 7c. LED output — native Metal: dispatch edge-extend compute on
+            // compositor output, readback tiny pixel grid, send DMX/ArtNet.
+            // Uses a dedicated encoder (separate from the content frame).
             if let Some(ref mut led) = self.led_controller {
-                led.poll_readback(&self.gpu.device);
+                // Poll previous frame's readback (send DMX if ready).
+                led.poll_readback();
+                // Submit new frame: edge-extend compute + readback copy.
+                let native_device = self.content_pipeline.native_device().unwrap();
+                let source = self.content_pipeline.led_source_texture();
+                led.process_frame(
+                    native_device,
+                    source,
+                    tick_result.ready_clips.len(),
+                    1.0, // TODO: wire brightness from project settings
+                );
             }
 
             #[cfg(feature = "profiling")]
@@ -1237,7 +1245,9 @@ impl ContentThread {
             // ── LED output ─────────────────────────────────────────────
             ContentCommand::InitLedOutput(settings) => {
                 let mut ctrl = manifold_led::LedOutputController::new();
-                if ctrl.initialize(&self.gpu.device, &settings) {
+                let native_device = self.content_pipeline.native_device()
+                    .expect("native device required for LED init");
+                if ctrl.initialize(native_device, &settings) {
                     self.led_controller = Some(ctrl);
                     log::info!("[ContentThread] LED output initialized.");
                 } else {

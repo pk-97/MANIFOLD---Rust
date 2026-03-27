@@ -1,18 +1,20 @@
-//! ArtNet external output — full pipeline.
-//! Blits the compositor frame through the edge-extend shader, reads back
-//! the tiny pixel grid asynchronously, packs into DMX universes, and sends
-//! over UDP.
+//! ArtNet external output — full pipeline (native Metal).
+//! Dispatches the edge-extend compute shader on the compositor output,
+//! reads back the tiny pixel grid via shared-memory buffer, packs into
+//! DMX universes, and sends over UDP.
 //! Unity equivalent: ArtNetOutput.cs
 
 use std::net::{SocketAddr, UdpSocket};
 use std::time::Instant;
+
+use manifold_gpu::{GpuDevice, GpuTexture};
 
 use crate::blit::EdgeExtendBlit;
 use crate::dmx;
 use crate::readback::ReadbackRequest;
 use crate::types::*;
 
-/// ArtNet output pipeline.
+/// ArtNet output pipeline (native Metal).
 pub struct ArtNetOutput {
     // GPU — created during initialize()
     edge_blit: Option<EdgeExtendBlit>,
@@ -82,7 +84,7 @@ impl ArtNetOutput {
 
     /// Initialize the ArtNet output pipeline.
     /// Returns false if initialization fails (socket error).
-    pub fn initialize(&mut self, device: &wgpu::Device, settings: &LedSettings) -> bool {
+    pub fn initialize(&mut self, device: &GpuDevice, settings: &LedSettings) -> bool {
         self.strip_count = settings.strip_count;
         self.leds_per_strip = settings.leds_per_strip;
         self.is_bgr = settings.is_bgr;
@@ -111,7 +113,7 @@ impl ArtNetOutput {
             }
         }
 
-        // Create GPU pipeline
+        // Create native Metal compute pipeline
         self.edge_blit = Some(EdgeExtendBlit::new(
             device,
             self.strip_count,
@@ -139,10 +141,6 @@ impl ArtNetOutput {
             return false;
         }
 
-        // No reachability probe — rely on send-failure logging only.
-        // ArtPoll probe removed: most LED controllers don't implement
-        // ArtPollReply, causing false-negative host-unreachable marking.
-
         self.initialized = true;
         eprintln!(
             "[ArtNet] Initialized: {} universe(s), {}x{} LEDs, {:?} addressing, \
@@ -161,15 +159,17 @@ impl ArtNetOutput {
         self.initialized
     }
 
-    /// Blit compositor output through edge-extend shader and submit GPU readback.
-    /// Call this BEFORE queue.submit().
+    /// Dispatch edge-extend compute and submit GPU readback.
+    /// Uses a dedicated native Metal encoder (separate from the content frame).
+    /// `signal_value` is the GpuEvent value that will be signaled after this
+    /// encoder commits — used by poll_readback to know when the GPU is done.
     pub fn process_frame(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        source: &wgpu::TextureView,
+        device: &GpuDevice,
+        source: &GpuTexture,
         brightness: f32,
+        signal_value: u64,
+        event: &manifold_gpu::GpuEvent,
     ) {
         if !self.initialized {
             return;
@@ -180,37 +180,42 @@ impl ArtNetOutput {
 
         let blit = self.edge_blit.as_ref().unwrap();
 
-        // GPU blit through edge-extend shader into tiny sample RT
+        // Create a dedicated encoder for LED work.
+        let mut enc = device.create_encoder("LED");
+
+        // Dispatch edge-extend compute: source → tiny output texture.
         blit.blit(
-            device,
-            queue,
-            encoder,
+            &mut enc,
             source,
             self.left_edge_width,
             self.right_edge_width,
             self.blur_radius,
         );
 
-        // Submit readback of the tiny texture
+        // Copy tiny texture to shared-memory readback buffer.
         self.readback.submit(
             device,
-            encoder,
-            blit.output_texture(),
+            &mut enc,
+            &blit.output,
             blit.width,
             blit.height,
+            signal_value,
         );
+
+        // Signal event and commit.
+        enc.signal_event_value(event, signal_value);
+        enc.commit();
 
         // Stash brightness for when readback completes
         self.pending_brightness = brightness;
     }
 
     /// Check if readback completed and send DMX data if so.
-    /// Call this AFTER device.poll().
-    pub fn poll_readback(&mut self, device: &wgpu::Device) {
+    pub fn poll_readback(&mut self, event: &manifold_gpu::GpuEvent) {
         if !self.initialized {
             return;
         }
-        if let Some(pixels) = self.readback.try_read(device) {
+        if let Some(pixels) = self.readback.try_read(event) {
             self.readback_count += 1;
             if self.readback_count == 1 {
                 eprintln!(
@@ -355,7 +360,3 @@ impl ArtNetOutput {
         self.artnet_packets.clear();
     }
 }
-
-// NOTE: ArtPoll reachability probe removed — most LED controllers don't
-// implement ArtPollReply, causing false-negative host-unreachable marking
-// that silently killed all sends. Now relies on send-failure logging only.
