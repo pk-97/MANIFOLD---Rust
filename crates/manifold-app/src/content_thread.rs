@@ -1821,6 +1821,11 @@ impl ContentThread {
         };
         let tick_result = self.engine.tick(ctx);
 
+        // Wait for any in-flight video decodes to complete before rendering.
+        // At GPU speed the export outruns the async decoder — without this,
+        // the same stale video frame gets encoded for dozens of frames.
+        self.engine.flush_pending_decodes();
+
         self.content_pipeline.render_content(
             &self.gpu, &mut self.engine, &tick_result, frame_dt, frame_idx as u64,
         );
