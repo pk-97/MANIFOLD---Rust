@@ -1,4 +1,4 @@
-use manifold_core::ClipId;
+use manifold_core::{Beats, ClipId};
 use manifold_core::project::Project;
 use manifold_editing::command::Command;
 
@@ -140,12 +140,12 @@ impl Command for SetAudioStartBeatCommand {
 pub struct MoveClipBeatCommand {
     clip_id: ClipId,
     layer_index: i32,
-    old_start_beat: f32,
-    new_start_beat: f32,
+    old_start_beat: Beats,
+    new_start_beat: Beats,
 }
 
 impl MoveClipBeatCommand {
-    pub fn new(clip_id: ClipId, layer_index: i32, old_start_beat: f32, new_start_beat: f32) -> Self {
+    pub fn new(clip_id: ClipId, layer_index: i32, old_start_beat: Beats, new_start_beat: Beats) -> Self {
         Self {
             clip_id,
             layer_index,
@@ -154,7 +154,7 @@ impl MoveClipBeatCommand {
         }
     }
 
-    fn apply(project: &mut Project, clip_id: &str, layer_index: i32, start_beat: f32) {
+    fn apply(project: &mut Project, clip_id: &str, layer_index: i32, start_beat: Beats) {
         if let Some(layer) = project.timeline.layers.get_mut(layer_index as usize)
             && let Some(clip) = layer.clips.iter_mut().find(|c| c.id == clip_id) {
                 clip.start_beat = start_beat;

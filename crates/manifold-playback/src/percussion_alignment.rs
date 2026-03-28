@@ -1,4 +1,4 @@
-use manifold_core::ClipId;
+use manifold_core::{Beats, ClipId};
 // Port of Unity PercussionAlignmentService.cs (538 lines).
 // Application-layer service for percussion alignment calibration, nudge, reset, and reprojection.
 // No UI dependencies.
@@ -307,7 +307,7 @@ impl PercussionAlignmentService {
 
         for (placement, projected_beat_opt) in provenance_snapshot.iter().zip(projected_beats.iter()) {
             let projected_beat = match projected_beat_opt {
-                Some(pb) => *pb,
+                Some(pb) => Beats::from(*pb),
                 None => {
                     result.invalid += 1;
                     continue;
@@ -327,7 +327,7 @@ impl PercussionAlignmentService {
 
             retained_ids.push(placement.clip_id.clone());
 
-            if (old_beat - projected_beat).abs() <= CALIBRATION_EPSILON_BEATS {
+            if (old_beat - projected_beat).abs() <= Beats::from(CALIBRATION_EPSILON_BEATS) {
                 continue;
             }
 
@@ -604,7 +604,7 @@ fn build_reprojection_move_commands_inner(
 
     for (placement, projected_beat_opt) in provenance.iter().zip(projected_beats.iter()) {
         let projected_beat = match projected_beat_opt {
-            Some(pb) => *pb,
+            Some(pb) => Beats::from(*pb),
             None => {
                 invalid += 1;
                 continue;
@@ -623,7 +623,7 @@ fn build_reprojection_move_commands_inner(
             }
         };
 
-        if (old_beat - projected_beat).abs() <= CALIBRATION_EPSILON_BEATS {
+        if (old_beat - projected_beat).abs() <= Beats::from(CALIBRATION_EPSILON_BEATS) {
             continue;
         }
 

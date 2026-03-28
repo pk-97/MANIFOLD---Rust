@@ -1,4 +1,4 @@
-use manifold_core::ClipId;
+use manifold_core::{Beats, Seconds, ClipId};
 // Port of Unity PercussionImportService.cs (405 lines).
 // Application-layer service for applying percussion import results to the timeline.
 // Owns layer resolution, clip creation, BPM auto-apply, and undo recording.
@@ -173,8 +173,8 @@ impl PercussionImportService {
                 TimelineClip::new_generator(
                     effective_gen_type,
                     target_layer_lid.clone(),
-                    placement.start_beat,
-                    placement.duration_beats,
+                    Beats::from(placement.start_beat),
+                    Beats::from(placement.duration_beats),
                 )
             } else {
                 let video_clip_id = match &placement.video_clip_id {
@@ -188,9 +188,9 @@ impl PercussionImportService {
                 TimelineClip::new_video(
                     video_clip_id,
                     target_layer_lid.clone(),
-                    placement.start_beat,
-                    placement.duration_beats,
-                    0.0,
+                    Beats::from(placement.start_beat),
+                    Beats::from(placement.duration_beats),
+                    Seconds(0.0),
                 )
             };
 
@@ -206,7 +206,7 @@ impl PercussionImportService {
 
                 // Collect indices to remove and IDs to trim — avoid borrow issues.
                 let mut ids_to_remove: Vec<ClipId> = Vec::new();
-                let mut ids_to_trim: Vec<(ClipId, f32)> = Vec::new();
+                let mut ids_to_trim: Vec<(ClipId, Beats)> = Vec::new();
 
                 for existing in target_layer.clips.iter() {
                     if existing.start_beat < clip_start && existing.end_beat() > clip_start {

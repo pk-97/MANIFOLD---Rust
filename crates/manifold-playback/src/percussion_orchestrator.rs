@@ -20,6 +20,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use manifold_core::Beats;
 use manifold_core::percussion_analysis::{
     PercussionAnalysisData, ProjectBeatTimeConverter,
 };
@@ -1059,8 +1060,8 @@ impl PercussionImportOrchestrator {
             let mut min_beat = current_start_beat;
             for layer in &project.timeline.layers {
                 for clip in &layer.clips {
-                    if clip.start_beat < min_beat {
-                        min_beat = clip.start_beat;
+                    if clip.start_beat.as_f32() < min_beat {
+                        min_beat = clip.start_beat.as_f32();
                     }
                 }
             }
@@ -1209,8 +1210,8 @@ impl PercussionImportOrchestrator {
         for layer in &project.timeline.layers {
             for clip in &layer.clips {
                 let old_beat = clip.start_beat;
-                let new_beat = (old_beat * ratio).max(0.0);
-                if (new_beat - old_beat).abs() < 0.0001 {
+                let new_beat = Beats::from((old_beat.as_f32() * ratio).max(0.0));
+                if (new_beat - old_beat).abs() < Beats::from(0.0001f32) {
                     continue;
                 }
                 let clip_li = project.timeline.layer_index_for_id(&clip.layer_id)
@@ -2339,8 +2340,8 @@ impl PercussionImportOrchestrator {
         let mut min_beat = old_audio_start;
         for layer in &project.timeline.layers {
             for clip in &layer.clips {
-                if clip.start_beat < min_beat {
-                    min_beat = clip.start_beat;
+                if clip.start_beat.as_f32() < min_beat {
+                    min_beat = clip.start_beat.as_f32();
                 }
             }
         }
@@ -2360,8 +2361,8 @@ impl PercussionImportOrchestrator {
         for (li, layer) in project.timeline.layers.iter().enumerate() {
             for clip in &layer.clips {
                 let old_beat = clip.start_beat;
-                let new_beat = (old_beat + final_delta).max(0.0);
-                if (new_beat - old_beat).abs() < 0.0001 {
+                let new_beat = Beats::from((old_beat.as_f32() + final_delta).max(0.0));
+                if (new_beat - old_beat).abs() < Beats::from(0.0001f32) {
                     continue;
                 }
                 commands.push(Box::new(MoveClipBeatCommand::new(
