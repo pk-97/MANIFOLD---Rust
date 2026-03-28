@@ -93,7 +93,7 @@ pub struct DecodeResult {
 ///
 /// Variants that indicate a decoded frame is available include `handle_ptr` —
 /// the raw DecoderHandle pointer. The content thread uses this to call
-/// `VideoDecoder_CopyFrameToTexture` with the wgpu destination texture.
+/// `VideoDecoder_CopyFrameToTexture` with the destination Metal texture.
 /// This is safe because no decode jobs are in-flight for the clip when
 /// the content thread processes the result (decode_pending flag prevents it).
 pub enum DecodeResultStatus {

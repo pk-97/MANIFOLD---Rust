@@ -162,7 +162,7 @@ impl MetalEncoder {
     /// Encode a single frame from a raw Metal texture pointer.
     ///
     /// The `metal_texture_ptr` must be a valid `id<MTLTexture>` cast to `*mut c_void`.
-    /// Obtained via `wgpu::Texture::as_hal::<Metal>()`.
+    /// Obtained via `GpuTexture::raw_ptr()` or equivalent.
     ///
     /// # Safety
     /// The caller must ensure `metal_texture_ptr` points to a valid Metal texture

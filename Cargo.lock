@@ -2163,15 +2163,10 @@ dependencies = [
  "ahash",
  "cc",
  "crossbeam-channel",
- "foreign-types",
  "log",
  "manifold-core",
+ "manifold-gpu",
  "manifold-playback",
- "metal",
- "objc",
- "wgpu",
- "wgpu-hal",
- "wgpu-types",
 ]
 
 [[package]]

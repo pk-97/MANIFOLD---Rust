@@ -398,10 +398,7 @@ impl ContentPipeline {
                     r.as_any().downcast_ref::<VideoRenderer>()
                     && let Some(t) = vid_r.get_clip_texture(&clip.id)
                 {
-                    // VideoRenderer still returns &wgpu::Texture — skip for now.
-                    // TODO: Port VideoRenderer to manifold-gpu types.
-                    let _ = t;
-                    return None;
+                    return Some(t);
                 }
                 None
             });

@@ -553,6 +553,12 @@ impl GpuTexture {
     pub fn raw(&self) -> &metal::TextureRef {
         &self.raw
     }
+
+    /// Raw Metal texture pointer as `*mut c_void` for FFI interop.
+    pub fn raw_ptr(&self) -> *mut std::ffi::c_void {
+        use metal::foreign_types::ForeignType;
+        self.raw.as_ptr() as *mut std::ffi::c_void
+    }
 }
 
 // ─── GpuBuffer ────────────────────────────────────────────────────────

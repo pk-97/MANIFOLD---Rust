@@ -19,6 +19,7 @@ use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::video::VideoLibrary;
+use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 use manifold_playback::renderer::ClipRenderer;
 
 use crate::decode_scheduler::{
@@ -30,40 +31,30 @@ use crate::decoder_ffi;
 /// Initial render target pool size.
 const INITIAL_RT_POOL_SIZE: usize = 8;
 
-/// A wgpu texture + view pair for video output.
+/// A native Metal texture for video output.
 struct VideoRenderTarget {
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    texture: GpuTexture,
 }
 
 impl VideoRenderTarget {
     fn new(
-        device: &wgpu::Device,
+        device: &GpuDevice,
         width: u32,
         height: u32,
-        format: wgpu::TextureFormat,
+        format: GpuTextureFormat,
         index: usize,
     ) -> Self {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&format!("VideoRT_{index:02}")),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
+        let label = format!("VideoRT_{index:02}");
+        let texture = device.create_texture(&GpuTextureDesc {
+            width,
+            height,
+            depth: 1,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::STORAGE_BINDING
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
+            dimension: GpuTextureDimension::D2,
+            usage: GpuTextureUsage::RENDER_TARGET_FULL,
+            label: &label,
         });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        Self { texture, view }
+        Self { texture }
     }
 }
 
@@ -89,10 +80,11 @@ struct ActiveVideoClip {
 
 /// Native video renderer implementing the ClipRenderer trait.
 pub struct VideoRenderer {
-    device: Arc<wgpu::Device>,
+    /// Cached pointer to GpuDevice owned by ContentPipeline (same thread, same lifetime).
+    device_ptr: *const GpuDevice,
     width: u32,
     height: u32,
-    format: wgpu::TextureFormat,
+    format: GpuTextureFormat,
     active_clips: AHashMap<String, ActiveVideoClip>,
     scheduler: DecodeScheduler,
     available_rts: Vec<VideoRenderTarget>,
@@ -100,12 +92,16 @@ pub struct VideoRenderer {
     rt_counter: usize,
 }
 
+// Safety: device_ptr points to GpuDevice on the content thread.
+// VideoRenderer is only used on the content thread.
+unsafe impl Send for VideoRenderer {}
+
 impl VideoRenderer {
     pub fn new(
-        device: Arc<wgpu::Device>,
+        device: &GpuDevice,
         width: u32,
         height: u32,
-        format: wgpu::TextureFormat,
+        format: GpuTextureFormat,
         pool_size: usize,
     ) -> Self {
         let decoder_pool = Arc::new(
@@ -117,12 +113,12 @@ impl VideoRenderer {
         let mut available_rts = Vec::with_capacity(pool_size);
         for i in 0..pool_size {
             available_rts.push(VideoRenderTarget::new(
-                &device, width, height, format, i,
+                device, width, height, format, i,
             ));
         }
 
         Self {
-            device,
+            device_ptr: device as *const GpuDevice,
             width,
             height,
             format,
@@ -134,15 +130,20 @@ impl VideoRenderer {
         }
     }
 
-    /// Get the texture view for a clip's rendered output.
-    pub fn get_clip_texture_view(&self, clip_id: &str) -> Option<&wgpu::TextureView> {
-        self.active_clips
-            .get(clip_id)
-            .and_then(|c| if c.has_frame { Some(&c.render_target.view) } else { None })
+    /// Set the device pointer after the GpuDevice has been moved to its
+    /// final location (inside ContentPipeline). Must be called before resize
+    /// or pool-exhaustion triggers new texture creation.
+    pub fn set_device(&mut self, device: &GpuDevice) {
+        self.device_ptr = device as *const GpuDevice;
     }
 
-    /// Get the texture for a rendered clip (used for copy_texture_to_texture).
-    pub fn get_clip_texture(&self, clip_id: &str) -> Option<&wgpu::Texture> {
+    /// Safety: device_ptr is valid for the lifetime of ContentPipeline.
+    fn device(&self) -> &GpuDevice {
+        unsafe { &*self.device_ptr }
+    }
+
+    /// Get the texture for a rendered clip.
+    pub fn get_clip_texture(&self, clip_id: &str) -> Option<&GpuTexture> {
         self.active_clips
             .get(clip_id)
             .and_then(|c| if c.has_frame { Some(&c.render_target.texture) } else { None })
@@ -176,7 +177,7 @@ impl VideoRenderer {
             let idx = self.rt_counter;
             self.rt_counter += 1;
             log::debug!("[VideoRenderer] Pool exhausted, creating RT_{idx:02}");
-            VideoRenderTarget::new(&self.device, self.width, self.height, self.format, idx)
+            VideoRenderTarget::new(self.device(), self.width, self.height, self.format, idx)
         }
     }
 
@@ -184,7 +185,7 @@ impl VideoRenderer {
         self.available_rts.push(rt);
     }
 
-    /// Copy the decoded frame from the native decoder to the wgpu render target.
+    /// Copy the decoded frame from the native decoder to the Metal render target.
     /// Called on the content thread when a FrameReady/Prepared/Seeked result arrives.
     ///
     /// # Safety
@@ -196,15 +197,7 @@ impl VideoRenderer {
         handle_ptr: *mut c_void,
         render_target: &VideoRenderTarget,
     ) -> bool {
-        use foreign_types::ForeignType;
-
-        let hal_texture =
-            unsafe { render_target.texture.as_hal::<wgpu_hal::api::Metal>() };
-        let Some(tex_guard) = hal_texture else {
-            log::warn!("[VideoRenderer] Failed to get Metal texture from wgpu");
-            return false;
-        };
-        let dest_ptr = unsafe { tex_guard.raw_handle() }.as_ptr() as *mut c_void;
+        let dest_ptr = render_target.texture.raw_ptr();
 
         let result = unsafe {
             decoder_ffi::VideoDecoder_CopyFrameToTexture(
@@ -573,18 +566,19 @@ impl ClipRenderer for VideoRenderer {
         self.width = w;
         self.height = h;
 
+        // Safety: device_ptr is valid for the lifetime of ContentPipeline.
+        let device = unsafe { &*self.device_ptr };
+        let fmt = self.format;
+
         self.available_rts.clear();
         for i in 0..INITIAL_RT_POOL_SIZE {
-            self.available_rts.push(VideoRenderTarget::new(
-                &self.device, w, h, self.format, i,
-            ));
+            self.available_rts.push(VideoRenderTarget::new(device, w, h, fmt, i));
         }
         self.rt_counter = INITIAL_RT_POOL_SIZE;
 
         for clip in self.active_clips.values_mut() {
-            clip.render_target = VideoRenderTarget::new(
-                &self.device, w, h, self.format, self.rt_counter,
-            );
+            clip.render_target =
+                VideoRenderTarget::new(device, w, h, fmt, self.rt_counter);
             self.rt_counter += 1;
             clip.has_frame = false;
         }

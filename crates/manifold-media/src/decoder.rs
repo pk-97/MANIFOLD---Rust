@@ -117,7 +117,7 @@ impl DecoderPool {
     }
 
     /// Run the NV12→Rgba16Float compute shader, copying the decoded frame
-    /// into a wgpu-owned destination Metal texture.
+    /// into the destination Metal texture.
     ///
     /// # Safety
     /// `dest_metal_texture` must be a valid `id<MTLTexture>` cast to `*mut c_void`.

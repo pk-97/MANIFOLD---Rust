@@ -1058,7 +1058,6 @@ impl ApplicationHandler for Application {
 
             let output_w = self.local_project.settings.output_width.max(1) as u32;
             let output_h = self.local_project.settings.output_height.max(1) as u32;
-            let compositor_format = wgpu::TextureFormat::Rgba16Float;
 
             // Create IOSurface bridge for cross-device texture sharing.
             // Both devices get their own MTLTexture backed by the same IOSurface memory.
@@ -1104,10 +1103,10 @@ impl ApplicationHandler for Application {
             let renderers: Vec<Box<dyn manifold_playback::renderer::ClipRenderer>> = vec![
                 #[cfg(target_os = "macos")]
                 Box::new(manifold_media::video_renderer::VideoRenderer::new(
-                    Arc::clone(&gpu.device),
+                    &native_device,
                     output_w,
                     output_h,
-                    compositor_format,
+                    manifold_gpu::GpuTextureFormat::Rgba16Float,
                     8,
                 )),
                 #[cfg(not(target_os = "macos"))]
