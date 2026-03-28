@@ -19,6 +19,7 @@ use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::video::VideoLibrary;
+use manifold_core::Seconds;
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 use manifold_playback::renderer::ClipRenderer;
 
@@ -362,7 +363,7 @@ impl ClipRenderer for VideoRenderer {
     fn start_clip(
         &mut self,
         clip: &TimelineClip,
-        _current_time: f32,
+        _current_time: Seconds,
         _layers: &[Layer],
     ) -> bool {
         if self.active_clips.contains_key(clip.id.as_ref()) {

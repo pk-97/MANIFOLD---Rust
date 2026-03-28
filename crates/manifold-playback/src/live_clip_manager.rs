@@ -1,4 +1,4 @@
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{Beats, Seconds, ClipId, LayerId};
 use manifold_core::clip::TimelineClip;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
@@ -18,14 +18,14 @@ const TICKS_PER_SIXTEENTH: i32 = MIDI_CLOCK_TICKS_PER_BEAT / 4; // 6
 /// Host interface for LiveClipManager.
 /// Port of C# ILiveClipHost.cs.
 pub trait LiveClipHost {
-    fn current_beat(&self) -> f32;
+    fn current_beat(&self) -> Beats;
     fn current_time(&self) -> f32;
     fn is_recording(&self) -> bool;
     fn is_playing(&self) -> bool;
     fn show_debug_logs(&self) -> bool;
-    fn get_bpm_at_beat(&self, beat: f32) -> f32;
-    fn get_tempo_source_at_beat(&self, beat: f32) -> TempoPointSource;
-    fn get_beat_snapped_beat(&self) -> f32;
+    fn get_bpm_at_beat(&self, beat: Beats) -> f32;
+    fn get_tempo_source_at_beat(&self, beat: Beats) -> TempoPointSource;
+    fn get_beat_snapped_beat(&self) -> Beats;
     fn get_current_absolute_tick(&self) -> i32;
     fn stop_clip(&mut self, clip_id: &str);
     fn mark_sync_dirty(&mut self);
@@ -33,7 +33,7 @@ pub trait LiveClipHost {
     fn invalidate_lookahead_prewarm(&mut self);
     fn register_clip_lookup(&mut self, clip_id: &str, clip: &TimelineClip);
     fn record_command(&mut self, cmd: Box<dyn Command>);
-    fn beat_to_timeline_time(&self, beat: f32) -> f32;
+    fn beat_to_timeline_time(&self, beat: Beats) -> f32;
 }
 
 /// Queued launch waiting for a target tick.
@@ -60,7 +60,7 @@ struct RecordingClipStartInfo {
     layer_index: i32,
     midi_note: i32,
     start_time_seconds: f32,
-    start_beat: f32,
+    start_beat: Beats,
     start_absolute_tick: i32,
     start_bpm: f32,
     start_tempo_source: TempoPointSource,
@@ -443,11 +443,11 @@ impl LiveClipManager {
         );
 
         // Compute duration
-        let duration_beats = Self::compute_duration_beats(
+        let duration_beats = Beats::from_f32(Self::compute_duration_beats(
             duration_seconds, spb, event_absolute_tick,
             project.settings.quantize_mode,
             project.settings.time_signature_numerator,
-        );
+        ));
 
         // Create phantom clip
         let layer_id = project.timeline.layers.get(layer_index as usize)
@@ -458,12 +458,12 @@ impl LiveClipManager {
             layer_id,
             snap_beat,
             duration_beats,
-            in_point,
+            Seconds::from_f32(in_point),
         );
         clip.recorded_bpm = host.get_bpm_at_beat(snap_beat);
 
         if event_absolute_tick >= 0 {
-            clip.start_absolute_tick = (snap_beat * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
+            clip.start_absolute_tick = (snap_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
             clip.has_start_absolute_tick = true;
         }
 
@@ -473,7 +473,7 @@ impl LiveClipManager {
             .unwrap_or_default();
 
         // Queue or activate immediately
-        let target_tick = (snap_beat * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
+        let target_tick = (snap_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
         if event_absolute_tick >= 0 && target_tick > event_absolute_tick {
             // Queue for future activation
             let launch = PendingLiveLaunch {
@@ -525,11 +525,11 @@ impl LiveClipManager {
             project.settings.time_signature_numerator,
         );
 
-        let duration_beats = Self::compute_duration_beats(
+        let duration_beats = Beats::from_f32(Self::compute_duration_beats(
             duration_seconds, spb, event_absolute_tick,
             project.settings.quantize_mode,
             project.settings.time_signature_numerator,
-        );
+        ));
 
         let layer_id = project.timeline.layers.get(layer_index as usize)
             .map(|l| l.layer_id.clone())
@@ -540,7 +540,7 @@ impl LiveClipManager {
         clip.recorded_bpm = host.get_bpm_at_beat(snap_beat);
 
         if event_absolute_tick >= 0 {
-            clip.start_absolute_tick = (snap_beat * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
+            clip.start_absolute_tick = (snap_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
             clip.has_start_absolute_tick = true;
         }
 
@@ -549,7 +549,7 @@ impl LiveClipManager {
             .map(|l| l.layer_id.clone())
             .unwrap_or_default();
 
-        let target_tick = (snap_beat * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
+        let target_tick = (snap_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32;
         if event_absolute_tick >= 0 && target_tick > event_absolute_tick {
             let launch = PendingLiveLaunch {
                 clip: clip.clone(),
@@ -583,14 +583,14 @@ impl LiveClipManager {
         event_absolute_tick: i32,
         quantize_mode: QuantizeMode,
         time_sig_numerator: i32,
-    ) -> f32 {
+    ) -> Beats {
         if event_absolute_tick >= 0 {
-            Self::compute_snap_beat_from_tick(
+            Beats::from_f32(Self::compute_snap_beat_from_tick(
                 event_absolute_tick,
                 quantize_mode,
                 time_sig_numerator,
                 true, // ceil to next grid for NoteOn
-            )
+            ))
         } else if let Some(stamp) = beat_stamp {
             if quantize_mode != QuantizeMode::Off {
                 let interval = match quantize_mode {
@@ -599,9 +599,9 @@ impl LiveClipManager {
                     QuantizeMode::Bar => time_sig_numerator as f32,
                     QuantizeMode::Off => 1.0,
                 };
-                (stamp / interval).round() * interval
+                Beats::from_f32((stamp / interval).round() * interval)
             } else {
-                stamp
+                Beats::from_f32(stamp)
             }
         } else {
             host.get_beat_snapped_beat()
@@ -671,7 +671,7 @@ impl LiveClipManager {
             let start_tick = if live_clip.has_start_absolute_tick {
                 live_clip.start_absolute_tick
             } else {
-                (start_beat * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32
+                (start_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32) as i32
             };
             Self::compute_held_beats_from_ticks(
                 start_tick,
@@ -680,8 +680,8 @@ impl LiveClipManager {
                 project.settings.time_signature_numerator,
             )
         } else {
-            let beat_now = beat_stamp.unwrap_or_else(|| host.get_beat_snapped_beat());
-            let raw = beat_now - start_beat;
+            let beat_now = beat_stamp.unwrap_or_else(|| host.get_beat_snapped_beat().as_f32());
+            let raw = beat_now - start_beat.as_f32();
             if project.settings.quantize_mode != QuantizeMode::Off {
                 let interval = project.settings.get_quantize_interval_beats();
                 if interval > 0.0 {
@@ -712,12 +712,12 @@ impl LiveClipManager {
                 false,
             );
             if project.settings.quantize_mode != QuantizeMode::Off {
-                start_beat + held_beats
+                start_beat.as_f32() + held_beats
             } else {
                 raw_snap
             }
         } else {
-            beat_stamp.unwrap_or_else(|| host.get_beat_snapped_beat())
+            beat_stamp.unwrap_or_else(|| host.get_beat_snapped_beat().as_f32())
         };
 
         let live_clip_id = live_clip.id.clone();
@@ -728,11 +728,11 @@ impl LiveClipManager {
             let original_duration = live_clip.duration_beats;
 
             let mut committed = live_clip;
-            committed.duration_beats = held_beats;
+            committed.duration_beats = Beats::from_f32(held_beats);
 
             // If held longer than original + epsilon, enable looping.
             // Port of C# LiveClipManager commit: heldBeats > liveClip.DurationBeats + 0.001f
-            if held_beats > original_duration + 0.001 {
+            if held_beats > original_duration.as_f32() + 0.001 {
                 committed.is_looping = true;
                 committed.loop_duration_beats = original_duration;
             }
@@ -801,7 +801,7 @@ impl LiveClipManager {
         let resolved_start_tick = if clip.start_absolute_tick >= 0 {
             clip.start_absolute_tick
         } else {
-            (start_beat * MIDI_CLOCK_TICKS_PER_BEAT as f32).round() as i32
+            (start_beat.as_f32() * MIDI_CLOCK_TICKS_PER_BEAT as f32).round() as i32
         };
 
         let clip_layer_idx = project.timeline.layer_index_for_id(&clip.layer_id)
@@ -854,9 +854,10 @@ impl LiveClipManager {
         let saved_layer = project.timeline.layer_index_for_id(&recorded_clip.layer_id)
             .unwrap_or(0) as i32;
 
-        let end_bpm = host.get_bpm_at_beat(end_beat);
-        let end_source = host.get_tempo_source_at_beat(end_beat);
-        let end_time = host.beat_to_timeline_time(end_beat);
+        let end_beat_typed = Beats::from_f32(end_beat);
+        let end_bpm = host.get_bpm_at_beat(end_beat_typed);
+        let end_source = host.get_tempo_source_at_beat(end_beat_typed);
+        let end_time = host.beat_to_timeline_time(end_beat_typed);
 
         let entry = RecordedClipProvenance {
             clip_id: saved_clip_id,
@@ -866,7 +867,7 @@ impl LiveClipManager {
             midi_note: resolved_midi_note,
             start_time_seconds: BeatQuantizer::quantize_time_seconds(start.start_time_seconds),
             end_time_seconds: BeatQuantizer::quantize_time_seconds(end_time),
-            start_beat: BeatQuantizer::quantize_beat(start.start_beat),
+            start_beat: BeatQuantizer::quantize_beat(start.start_beat.as_f32()),
             end_beat: BeatQuantizer::quantize_beat(end_beat),
             start_absolute_tick: start.start_absolute_tick,
             end_absolute_tick: resolved_end_tick,

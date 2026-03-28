@@ -1,3 +1,4 @@
+use manifold_core::{Beats, Seconds};
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
@@ -96,8 +97,8 @@ impl MidiImportService {
                 TimelineClip::new_generator(
                     resolved_gen_type.clone(),
                     target_layer_lid.clone(),
-                    note.start_beat,
-                    note.duration_beats,
+                    Beats::from_f32(note.start_beat),
+                    Beats::from_f32(note.duration_beats),
                 )
             } else {
                 // Round-robin through source clips
@@ -107,9 +108,9 @@ impl MidiImportService {
                 TimelineClip::new_video(
                     video_clip_id,
                     target_layer_lid.clone(),
-                    note.start_beat,
-                    note.duration_beats,
-                    0.0,
+                    Beats::from_f32(note.start_beat),
+                    Beats::from_f32(note.duration_beats),
+                    Seconds::ZERO,
                 )
             };
 

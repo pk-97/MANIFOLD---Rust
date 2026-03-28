@@ -1,6 +1,6 @@
 use std::any::Any;
 use ahash::AHashMap;
-use manifold_core::{GeneratorTypeId, LayerId};
+use manifold_core::{GeneratorTypeId, LayerId, Seconds};
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
@@ -561,7 +561,7 @@ impl ClipRenderer for GeneratorRenderer {
         clip.is_generator()
     }
 
-    fn start_clip(&mut self, clip: &TimelineClip, _current_time: f32, layers: &[Layer]) -> bool {
+    fn start_clip(&mut self, clip: &TimelineClip, _current_time: Seconds, layers: &[Layer]) -> bool {
         let layer_id = clip.layer_id.clone();
         let layer_index = layers
             .iter()

@@ -3,12 +3,13 @@ use manifold_core::ClipId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
+use manifold_core::Seconds;
 
 /// Abstraction over clip renderers (video player pool, generator renderer, etc.).
 /// Port of C# IClipRenderer interface.
 pub trait ClipRenderer: Any + Send {
     fn can_handle(&self, clip: &TimelineClip) -> bool;
-    fn start_clip(&mut self, clip: &TimelineClip, current_time: f32, layers: &[Layer]) -> bool;
+    fn start_clip(&mut self, clip: &TimelineClip, current_time: Seconds, layers: &[Layer]) -> bool;
     fn stop_clip(&mut self, clip_id: &str);
     fn release_all(&mut self);
 
@@ -79,7 +80,7 @@ impl ClipRenderer for StubRenderer {
         if self.is_generator { clip.is_generator() } else { !clip.is_generator() }
     }
 
-    fn start_clip(&mut self, clip: &TimelineClip, _current_time: f32, _layers: &[Layer]) -> bool {
+    fn start_clip(&mut self, clip: &TimelineClip, _current_time: Seconds, _layers: &[Layer]) -> bool {
         self.active_clips.insert(clip.id.clone(), StubClipState {
             playing: true,
             ready: true,

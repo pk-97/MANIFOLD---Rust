@@ -13,6 +13,7 @@ use manifold_core::effects::{EffectInstance, ParamEnvelope, ParameterDriver};
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::{effect_definition_registry, generator_definition_registry};
+use manifold_core::{Beats};
 
 // =====================================================================
 // Phase 1: Reset all effectives (base → effective, blank slate)
@@ -61,7 +62,7 @@ pub fn reset_all_effectives(project: &mut Project) {
 
 /// Evaluate all parameter drivers on master effects, layer effects, and generator params.
 /// Returns true if any driver was active (compositor should be marked dirty).
-pub fn evaluate_all_drivers(project: &mut Project, current_beat: f32) -> bool {
+pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool {
     let mut any_driven = false;
 
     // Master effect drivers
@@ -110,7 +111,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: f32) -> bool {
                             let (min, max) = (pd.min, pd.max);
 
                             let mut normalized = ParameterDriver::evaluate(
-                                current_beat,
+                                current_beat.as_f32(),
                                 driver.beat_division,
                                 driver.waveform,
                                 driver.phase,
@@ -145,7 +146,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: f32) -> bool {
 
 /// Evaluate all drivers on a single EffectInstance. Returns true if any driver was active.
 /// Port of C# ParameterDriverManager.EvaluateEffectDrivers().
-fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: f32) -> bool {
+fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool {
     if !fx.enabled {
         return false;
     }
@@ -173,7 +174,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: f32) -> bool {
             let (min, max) = (effect_defs[idx].min, effect_defs[idx].max);
 
             let mut normalized = ParameterDriver::evaluate(
-                current_beat,
+                current_beat.as_f32(),
                 driver.beat_division,
                 driver.waveform,
                 driver.phase,
@@ -208,7 +209,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: f32) -> bool {
 
 /// Evaluate all clip and layer ADSR envelopes.
 /// Returns true if any envelope was active (compositor should be marked dirty).
-pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool {
+pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> bool {
     let mut any_modulated = false;
 
     for layer in project.timeline.layers.iter_mut() {
@@ -223,10 +224,10 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
             if clip.is_muted {
                 continue;
             }
-            let elapsed = current_beat - clip.start_beat;
-            if elapsed >= 0.0 && elapsed < clip.duration_beats {
+            let elapsed = (current_beat - clip.start_beat).as_f32();
+            if elapsed >= 0.0 && elapsed < clip.duration_beats.as_f32() {
                 active_elapsed = elapsed;
-                active_duration = clip.duration_beats;
+                active_duration = clip.duration_beats.as_f32();
                 break; // Use first active clip
             }
         }
@@ -243,8 +244,8 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
                 continue;
             }
 
-            let clip_elapsed = current_beat - clip.start_beat;
-            if clip_elapsed < 0.0 || clip_elapsed >= clip.duration_beats {
+            let clip_elapsed = (current_beat - clip.start_beat).as_f32();
+            if clip_elapsed < 0.0 || clip_elapsed >= clip.duration_beats.as_f32() {
                 continue;
             }
 
@@ -261,7 +262,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
 
                 let adsr_value = ParamEnvelope::calculate_adsr(
                     clip_elapsed,
-                    clip.duration_beats,
+                    clip.duration_beats.as_f32(),
                     attack,
                     decay,
                     sustain,
@@ -393,7 +394,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: f32) -> bool 
 
 /// Evaluate ADSR envelopes on generator layer parameters.
 /// Returns true if any envelope was active (compositor should be marked dirty).
-pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: f32) -> bool {
+pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) -> bool {
     let mut any_modulated = false;
 
     for layer in project.timeline.layers.iter_mut() {
@@ -409,10 +410,10 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: f32) ->
             if clip.is_muted {
                 continue;
             }
-            let elapsed = current_beat - clip.start_beat;
-            if elapsed >= 0.0 && elapsed < clip.duration_beats {
+            let elapsed = (current_beat - clip.start_beat).as_f32();
+            if elapsed >= 0.0 && elapsed < clip.duration_beats.as_f32() {
                 active_elapsed = elapsed;
-                active_duration = clip.duration_beats;
+                active_duration = clip.duration_beats.as_f32();
                 break;
             }
         }
@@ -496,7 +497,7 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: f32) ->
 
 /// Run the full modulation pipeline: reset → drivers → envelopes → gen envelopes.
 /// Returns true if any modulation was applied (compositor should be marked dirty).
-pub fn evaluate_modulation(project: &mut Project, current_beat: f32) -> bool {
+pub fn evaluate_modulation(project: &mut Project, current_beat: Beats) -> bool {
     // Phase 1: Reset all effective values to base
     reset_all_effectives(project);
 
