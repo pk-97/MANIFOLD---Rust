@@ -1613,6 +1613,17 @@ impl ContentThread {
             export_config.audio_path = Some(path.to_string());
             export_config.audio_start_beat = audio_sync.start_beat();
             export_config.audio_encoder_delay = audio_sync.encoder_delay_seconds();
+            eprintln!(
+                "[Export] Audio wired: path={}, start_beat={:.2}, delay={:.3}s",
+                path, audio_sync.start_beat(), audio_sync.encoder_delay_seconds(),
+            );
+        } else {
+            let has_sync = self.audio_sync.is_some();
+            let is_ready = self.audio_sync.as_ref().is_some_and(|a| a.is_ready());
+            let has_path = self.audio_sync.as_ref().and_then(|a| a.audio_path()).is_some();
+            eprintln!(
+                "[Export] No audio: has_sync={has_sync} is_ready={is_ready} has_path={has_path}",
+            );
         }
 
         // Calculate timing
@@ -1773,6 +1784,11 @@ impl ContentThread {
         } else {
             // Resolve FFmpeg for audio muxing
             let ffmpeg_path = AudioMuxer::resolve_ffmpeg("");
+            eprintln!(
+                "[Export] Finalize: has_audio={} ffmpeg={:?}",
+                export_config.has_audio(),
+                ffmpeg_path,
+            );
             match session.finalize(ffmpeg_path.as_deref()) {
                 Ok(result) => {
                     log::info!(
