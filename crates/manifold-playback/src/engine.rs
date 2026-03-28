@@ -74,6 +74,10 @@ pub struct TickResult {
     /// to release per-owner GPU effect state (Feedback, Bloom, etc.),
     /// preventing unbounded GPU memory growth.
     pub stopped_clips: Vec<ClipId>,
+    /// Video clips approaching the playhead that should be pre-warmed
+    /// (decoder opened + first frame decoded before the clip becomes active).
+    /// The content thread passes these to VideoRenderer::pre_warm_clips().
+    pub prewarm_candidates: Option<std::collections::HashMap<String, crate::video_time::PrewarmCandidate>>,
 }
 
 // ─── Playback Engine ───
@@ -620,7 +624,7 @@ impl PlaybackEngine {
         // 10. Lookahead prewarm — engine computes candidates, caller executes pool pre-warm.
         //     Port of C# line 1217: UpdateLookaheadPrewarm(force: false).
         //     Candidates are returned in TickResult for the caller (app.rs) to act on.
-        let _prewarm = self.compute_prewarm_candidates(false);
+        let prewarm = self.compute_prewarm_candidates(false);
 
         TickResult {
             ready_clips: ready,
@@ -629,6 +633,7 @@ impl PlaybackEngine {
             should_clear_feedback_buffer: false,
             modulation_active: modulation_dirty,
             stopped_clips: Vec::new(), // Populated by tick() after this returns
+            prewarm_candidates: prewarm,
         }
     }
 
@@ -678,6 +683,7 @@ impl PlaybackEngine {
             should_clear_feedback_buffer: false,
             modulation_active: modulation_dirty,
             stopped_clips: Vec::new(), // Populated by tick() after this returns
+            prewarm_candidates: None,
         }
     }
 

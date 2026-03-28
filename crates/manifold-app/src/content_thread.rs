@@ -324,6 +324,22 @@ impl ContentThread {
                 );
             }
 
+            // 6b. Video prewarm — pass lookahead candidates to VideoRenderer
+            //     so decoders are opened before clips become active (prevents
+            //     black frames at clip start). Port of Unity WorkspaceController
+            //     → VideoPlayerPool.WarmCache(candidates).
+            if let Some(ref candidates) = tick_result.prewarm_candidates {
+                for renderer in self.engine.renderers_mut() {
+                    if let Some(vid) = renderer
+                        .as_any_mut()
+                        .downcast_mut::<manifold_media::video_renderer::VideoRenderer>()
+                    {
+                        vid.pre_warm_from_candidates(candidates);
+                        break;
+                    }
+                }
+            }
+
             #[cfg(feature = "profiling")]
             let _engine_tick_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 

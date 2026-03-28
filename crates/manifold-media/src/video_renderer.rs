@@ -170,6 +170,28 @@ impl VideoRenderer {
         }
     }
 
+    /// Submit pre-warm requests from engine's lookahead prewarm candidates.
+    /// Accepts the PrewarmCandidate type from PlaybackEngine::compute_prewarm_candidates().
+    pub fn pre_warm_from_candidates(
+        &mut self,
+        candidates: &std::collections::HashMap<String, manifold_playback::video_time::PrewarmCandidate>,
+    ) {
+        for (video_clip_id, candidate) in candidates {
+            let already_active = self
+                .active_clips
+                .values()
+                .any(|c| &c.video_clip_id == video_clip_id);
+            if already_active {
+                continue;
+            }
+
+            self.scheduler.submit(DecodeJob::WarmOpen {
+                video_clip_id: video_clip_id.clone(),
+                path: candidate.file_path.clone(),
+            });
+        }
+    }
+
     fn acquire_rt(&mut self) -> VideoRenderTarget {
         if let Some(rt) = self.available_rts.pop() {
             rt
