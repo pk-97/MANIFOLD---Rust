@@ -159,6 +159,56 @@ impl MetalEncoder {
         })
     }
 
+    /// Create an encoder session using an external Metal device.
+    ///
+    /// Same as `new()` but shares the caller's `id<MTLDevice>` instead of
+    /// creating a new one. Avoids cross-device GPU synchronization overhead
+    /// when the source textures already live on this device.
+    ///
+    /// # Safety
+    /// `device_ptr` must be a valid `id<MTLDevice>` that outlives the encoder.
+    pub unsafe fn new_with_device(
+        width: u32,
+        height: u32,
+        fps: f32,
+        output_path: &str,
+        hdr: bool,
+        device_ptr: *mut c_void,
+    ) -> Result<Self, EncoderError> {
+        let c_path =
+            CString::new(output_path).map_err(|_| EncoderError::WriterFailed)?;
+
+        let handle = unsafe {
+            if hdr {
+                metal_ffi::MetalEncoder_CreateHDRWithDevice(
+                    width as i32, height as i32, fps, c_path.as_ptr(), device_ptr,
+                )
+            } else {
+                metal_ffi::MetalEncoder_CreateWithDevice(
+                    width as i32, height as i32, fps, c_path.as_ptr(), device_ptr,
+                )
+            }
+        };
+
+        if handle.is_null() {
+            return Err(EncoderError::WriterFailed);
+        }
+
+        log::info!(
+            "[MetalEncoder] Created {} encoder (shared device) {}x{} @ {} fps -> {}",
+            if hdr { "HDR" } else { "SDR" },
+            width, height, fps, output_path,
+        );
+
+        Ok(Self {
+            handle,
+            width,
+            height,
+            frames_encoded: 0,
+            is_hdr: hdr,
+        })
+    }
+
     /// Encode a single frame from a raw Metal texture pointer.
     ///
     /// The `metal_texture_ptr` must be a valid `id<MTLTexture>` cast to `*mut c_void`.

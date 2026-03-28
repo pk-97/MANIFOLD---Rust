@@ -133,12 +133,8 @@ impl ExportSession {
             config.output_path.clone()
         };
 
-        let encoder = MetalEncoder::new(
-            config.width,
-            config.height,
-            config.fps,
-            &encoder_output,
-            config.hdr,
+        let encoder = Self::create_encoder(
+            &config, &encoder_output, None,
         )?;
 
         log::info!(
@@ -174,6 +170,95 @@ impl ExportSession {
         }
         unsafe { self.encoder.encode_frame(metal_texture_ptr)? };
         Ok(())
+    }
+
+    /// Create an export session using the content pipeline's Metal device.
+    ///
+    /// Same as `new()` but shares the device to avoid cross-device GPU sync.
+    ///
+    /// # Safety
+    /// `device_ptr` must be a valid `id<MTLDevice>` that outlives the session.
+    pub unsafe fn new_with_device(
+        config: ExportConfig,
+        bpm: f32,
+        tempo_map: &mut TempoMap,
+        device_ptr: *mut std::ffi::c_void,
+    ) -> Result<Self, ExportError> {
+        let start_seconds =
+            TempoMapConverter::beat_to_seconds(tempo_map, config.start_beat, bpm);
+        let end_seconds =
+            TempoMapConverter::beat_to_seconds(tempo_map, config.end_beat, bpm);
+
+        if end_seconds <= start_seconds {
+            return Err(ExportError::InvalidRange {
+                start: config.start_beat,
+                end: config.end_beat,
+            });
+        }
+
+        let duration = end_seconds - start_seconds;
+        let total_frames = (duration * config.fps).round() as u32;
+
+        if total_frames == 0 {
+            return Err(ExportError::NoContent);
+        }
+
+        let audio_offset_seconds = if config.has_audio() {
+            let audio_start_seconds = TempoMapConverter::beat_to_seconds(
+                tempo_map, config.audio_start_beat, bpm,
+            );
+            audio_start_seconds - start_seconds - config.audio_encoder_delay
+        } else {
+            0.0
+        };
+
+        let encoder_output = if config.has_audio() {
+            format!("{}.video_only.mp4", config.output_path)
+        } else {
+            config.output_path.clone()
+        };
+
+        let encoder = Self::create_encoder(
+            &config, &encoder_output, Some(device_ptr),
+        )?;
+
+        log::info!(
+            "[ExportSession] {} frames, {:.2}s, beats {:.1}-{:.1}, \
+             audio_offset={:.3}s (shared device)",
+            total_frames, duration, config.start_beat, config.end_beat,
+            audio_offset_seconds,
+        );
+
+        Ok(Self {
+            config,
+            encoder,
+            total_frames,
+            start_seconds,
+            end_seconds,
+            audio_offset_seconds,
+            cancelled: false,
+        })
+    }
+
+    /// Create the Metal encoder, optionally sharing an external device.
+    fn create_encoder(
+        config: &ExportConfig,
+        encoder_output: &str,
+        device_ptr: Option<*mut std::ffi::c_void>,
+    ) -> Result<MetalEncoder, EncoderError> {
+        if let Some(ptr) = device_ptr {
+            unsafe {
+                MetalEncoder::new_with_device(
+                    config.width, config.height, config.fps,
+                    encoder_output, config.hdr, ptr,
+                )
+            }
+        } else {
+            MetalEncoder::new(
+                config.width, config.height, config.fps,
+                encoder_output, config.hdr,
+            )
+        }
     }
 
     /// Export progress as a fraction (0.0..1.0).

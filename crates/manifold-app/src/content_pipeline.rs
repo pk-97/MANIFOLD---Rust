@@ -204,6 +204,12 @@ impl ContentPipeline {
         self.native_device.as_ref()
     }
 
+    /// Raw Metal device pointer for FFI interop (encoder sharing).
+    #[cfg(target_os = "macos")]
+    pub fn native_device_ptr(&self) -> Option<*mut std::ffi::c_void> {
+        self.native_device.as_ref().map(|d| d.raw_device_ptr())
+    }
+
     /// Set the triple-buffered IOSurface shared textures (native GpuTexture) and bridge.
     /// Called during init after the bridge imports all textures on the content device.
     #[cfg(target_os = "macos")]
@@ -256,6 +262,10 @@ impl ContentPipeline {
     ///
     /// Uses native Metal encoding on macOS via manifold-gpu.
     /// IOSurface double-buffering for zero-copy cross-device sharing.
+    ///
+    /// When `export_mode` is true, skips IOSurface wait/blit/swap — the export
+    /// pipeline reads directly from `export_output_texture()` and doesn't need
+    /// the cross-device surface bridge.
     pub fn render_content(
         &mut self,
         gpu: &manifold_renderer::gpu::GpuContext,
@@ -263,13 +273,17 @@ impl ContentPipeline {
         tick_result: &TickResult,
         dt: f64,
         frame_count: u64,
+        export_mode: bool,
     ) {
         let _t_frame = std::time::Instant::now();
 
         // Wait for the surface we're about to write to (may have pending GPU work
         // from 2 frames ago with triple buffering). Also publishes the last completed frame.
+        // Skipped in export mode — export reads output_texture directly, no IOSurface needed.
         let fence_wait_start = std::time::Instant::now();
-        self.wait_for_surface();
+        if !export_mode {
+            self.wait_for_surface();
+        }
         self.last_fence_wait_ms = fence_wait_start.elapsed().as_secs_f64() * 1000.0;
         let _poll_ms = self.last_fence_wait_ms;
 
@@ -284,7 +298,7 @@ impl ContentPipeline {
         if self.native_device.is_some() {
             self.render_content_native(
                 gpu, engine, tick_result, dt, frame_count,
-                time, beat, _t_frame, _poll_ms,
+                time, beat, _t_frame, _poll_ms, export_mode,
             );
         }
 
@@ -314,6 +328,7 @@ impl ContentPipeline {
         beat: f32,
         _t_frame: std::time::Instant,
         _poll_ms: f64,
+        export_mode: bool,
     ) {
         let native_device = self.native_device.as_ref().unwrap();
         let texture_pool = self.texture_pool.as_ref();
@@ -485,16 +500,15 @@ impl ContentPipeline {
                 self.compositor.render(&mut gpu_comp, &frame);
         }
 
-        // IOSurface copy via native blit
-        {
+        // IOSurface copy via native blit — skipped in export mode (export reads
+        // output_texture directly, no UI thread needs the surface).
+        if !export_mode {
             let (comp_w, comp_h) = self.compositor.dimensions();
             if let Some(ref shared_tex) =
                 self.shared_textures[self.write_surface_index]
                 && shared_tex.width == comp_w
                 && shared_tex.height == comp_h
             {
-                // Compositor output is already a native GpuTexture.
-                // Copy directly via the native encoder.
                 let src = self.compositor.output_texture();
                 native_enc.copy_texture_to_texture(
                     src,
@@ -513,11 +527,10 @@ impl ContentPipeline {
         native_enc.commit();
         let _comp_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
-        // Record which signal value this surface needs to complete before reuse.
-        self.surface_signal_values[self.write_surface_index] = self.native_signal_value;
-
-        // Surface swap — cycle through 3 surfaces (triple buffering).
-        {
+        // Surface tracking — skipped in export mode (no surface cycling needed).
+        if !export_mode {
+            self.surface_signal_values[self.write_surface_index] =
+                self.native_signal_value;
             self.last_write_surface = self.write_surface_index;
             self.write_surface_index = (self.write_surface_index + 1)
                 % crate::shared_texture::SURFACE_COUNT;

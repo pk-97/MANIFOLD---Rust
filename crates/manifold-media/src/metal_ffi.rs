@@ -31,6 +31,26 @@ unsafe extern "C" {
         output_path: *const c_char,
     ) -> *mut c_void;
 
+    /// Create an SDR encoder session using an external Metal device.
+    /// The device_ptr must be a valid `id<MTLDevice>`.
+    pub fn MetalEncoder_CreateWithDevice(
+        width: i32,
+        height: i32,
+        fps: f32,
+        output_path: *const c_char,
+        device_ptr: *mut c_void,
+    ) -> *mut c_void;
+
+    /// Create an HDR encoder session using an external Metal device.
+    /// The device_ptr must be a valid `id<MTLDevice>`.
+    pub fn MetalEncoder_CreateHDRWithDevice(
+        width: i32,
+        height: i32,
+        fps: f32,
+        output_path: *const c_char,
+        device_ptr: *mut c_void,
+    ) -> *mut c_void;
+
     /// Encode a single frame from a Metal texture.
     /// Returns 0 (ME_OK) on success, or an error code.
     pub fn MetalEncoder_EncodeFrame(

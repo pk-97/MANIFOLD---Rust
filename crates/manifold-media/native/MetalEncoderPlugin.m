@@ -91,7 +91,8 @@ typedef struct
 // -- Forward declarations -----------------------------------------------------
 
 static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, float fps,
-                                                       const char* outputPath, BOOL hdr);
+                                                       const char* outputPath, BOOL hdr,
+                                                       id<MTLDevice> externalDevice);
 
 // -- IsAvailable --------------------------------------------------------------
 
@@ -119,27 +120,44 @@ int MetalEncoder_IsHDRAvailable(void)
 
 void* MetalEncoder_Create(int width, int height, float fps, const char* outputPath)
 {
-    return MetalEncoder_CreateInternal(width, height, fps, outputPath, NO);
+    return MetalEncoder_CreateInternal(width, height, fps, outputPath, NO, nil);
 }
 
 // -- CreateHDR ----------------------------------------------------------------
 
 void* MetalEncoder_CreateHDR(int width, int height, float fps, const char* outputPath)
 {
-    return MetalEncoder_CreateInternal(width, height, fps, outputPath, YES);
+    return MetalEncoder_CreateInternal(width, height, fps, outputPath, YES, nil);
+}
+
+// -- Create (with external device) --------------------------------------------
+
+void* MetalEncoder_CreateWithDevice(int width, int height, float fps,
+                                     const char* outputPath, void* devicePtr)
+{
+    return MetalEncoder_CreateInternal(width, height, fps, outputPath, NO,
+                                       (__bridge id<MTLDevice>)devicePtr);
+}
+
+void* MetalEncoder_CreateHDRWithDevice(int width, int height, float fps,
+                                        const char* outputPath, void* devicePtr)
+{
+    return MetalEncoder_CreateInternal(width, height, fps, outputPath, YES,
+                                       (__bridge id<MTLDevice>)devicePtr);
 }
 
 // -- Create (internal) --------------------------------------------------------
 
 static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, float fps,
-                                                       const char* outputPath, BOOL hdr)
+                                                       const char* outputPath, BOOL hdr,
+                                                       id<MTLDevice> externalDevice)
 {
     @autoreleasepool
     {
         if (outputPath == NULL || width <= 0 || height <= 0 || fps <= 0.0f)
             return NULL;
 
-        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        id<MTLDevice> device = externalDevice ? externalDevice : MTLCreateSystemDefaultDevice();
         if (device == nil)
             return NULL;
 

@@ -123,6 +123,13 @@ impl GpuDevice {
         &self.device
     }
 
+    /// Raw Metal device pointer as `*mut c_void` (an `id<MTLDevice>`).
+    /// Used for FFI interop with native Objective-C plugins.
+    pub fn raw_device_ptr(&self) -> *mut std::ffi::c_void {
+        use metal::foreign_types::ForeignType;
+        self.device.as_ptr() as *mut std::ffi::c_void
+    }
+
     /// Raw Metal command queue reference (for advanced interop).
     pub fn raw_queue(&self) -> &metal::CommandQueueRef {
         &self.queue

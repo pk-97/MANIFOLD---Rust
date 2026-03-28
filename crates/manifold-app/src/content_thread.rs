@@ -350,6 +350,7 @@ impl ContentThread {
             let render_work_start = std::time::Instant::now();
             self.content_pipeline.render_content(
                 &self.gpu, &mut self.engine, &tick_result, dt, self.frame_count,
+                false,
             );
             let _render_work_ms = render_work_start.elapsed().as_secs_f64() * 1000.0;
 
@@ -1630,8 +1631,17 @@ impl ContentThread {
             return;
         }
 
+        // Detect generator-only projects: no video clips means no decode
+        // backpressure needed, enabling faster-than-realtime export.
+        // Matches Unity's IsGeneratorOnlyProject() → Time.captureFramerate path.
+        let generator_only = project.timeline.layers.iter().all(|layer| {
+            layer.is_group() || layer.clips.iter().all(|c| c.is_generator())
+        });
+        let mode_label = if generator_only { "offline" } else { "real-time" };
+
         log::info!(
-            "[ContentThread] Export: {} frames, {:.2}s, beats {:.1}-{:.1}, {}x{} @ {} fps",
+            "[ContentThread] Export ({mode_label}): {} frames, {:.2}s, \
+             beats {:.1}-{:.1}, {}x{} @ {} fps",
             total_frames, duration, start_beat, end_beat,
             export_config.width, export_config.height, export_config.fps,
         );
@@ -1653,12 +1663,20 @@ impl ContentThread {
         self.engine.seek_to(start_time);
         self.engine.play();
 
-        // 4. Create export session (initializes native Metal encoder)
-        let session_result = manifold_media::export_session::ExportSession::new(
-            export_config.clone(),
-            bpm,
-            &mut tempo_map,
-        );
+        // 4. Create export session (initializes native Metal encoder).
+        //    Share the content pipeline's Metal device to avoid cross-device GPU sync.
+        let device_ptr = self.content_pipeline.native_device_ptr();
+        let session_result = if let Some(ptr) = device_ptr {
+            unsafe {
+                manifold_media::export_session::ExportSession::new_with_device(
+                    export_config.clone(), bpm, &mut tempo_map, ptr,
+                )
+            }
+        } else {
+            manifold_media::export_session::ExportSession::new(
+                export_config.clone(), bpm, &mut tempo_map,
+            )
+        };
         let mut session = match session_result {
             Ok(s) => s,
             Err(e) => {
@@ -1675,7 +1693,8 @@ impl ContentThread {
         // 4b. Wait for video decoders to produce their first frame.
         // Only ticks the engine (which drives pre_render → decode result drain).
         // No GPU rendering — we re-seek afterward, clearing all temporal state.
-        {
+        // Skipped for generator-only projects (no video decoders to wait for).
+        if !generator_only {
             const MAX_WARMUP_TICKS: u32 = 120;
             for warmup_i in 0..MAX_WARMUP_TICKS {
                 let warmup_ctx = TickContext {
@@ -1726,13 +1745,13 @@ impl ContentThread {
             let frame_err: Option<String> = objc::rc::autoreleasepool(|| {
                 self.export_one_frame(
                     &mut session, &export_config, frame_idx, total_frames,
-                    frame_dt, state_tx,
+                    frame_dt, state_tx, generator_only,
                 )
             });
             #[cfg(not(target_os = "macos"))]
             let frame_err: Option<String> = self.export_one_frame(
                 &mut session, &export_config, frame_idx, total_frames,
-                frame_dt, state_tx,
+                frame_dt, state_tx, generator_only,
             );
 
             if let Some(err) = frame_err {
@@ -1811,7 +1830,10 @@ impl ContentThread {
         _total_frames: u32,
         frame_dt: f64,
         state_tx: &crossbeam_channel::Sender<ContentState>,
+        generator_only: bool,
     ) -> Option<String> {
+        let frame_start = std::time::Instant::now();
+
         let ctx = TickContext {
             dt_seconds: frame_dt,
             realtime_now: frame_idx as f64 * frame_dt,
@@ -1824,11 +1846,33 @@ impl ContentThread {
         // Wait for any in-flight video decodes to complete before rendering.
         // At GPU speed the export outruns the async decoder — without this,
         // the same stale video frame gets encoded for dozens of frames.
-        self.engine.flush_pending_decodes();
+        // Skipped for generator-only projects (no video decoders).
+        let decode_start = std::time::Instant::now();
+        if !generator_only {
+            self.engine.flush_pending_decodes();
+        }
+        let decode_ms = decode_start.elapsed().as_secs_f64() * 1000.0;
 
         self.content_pipeline.render_content(
             &self.gpu, &mut self.engine, &tick_result, frame_dt, frame_idx as u64,
+            true,
         );
+
+        // Diagnostic logging: first 5 frames, then every 60 frames.
+        // Shows beat, time, clip count, decode wait — essential for diagnosing
+        // frozen sections and timing drift.
+        if frame_idx < 5 || frame_idx.is_multiple_of(60) {
+            let beat = self.engine.current_beat();
+            let time = self.engine.current_time();
+            log::info!(
+                "[Export] frame={} beat={:.2} time={:.3}s clips={} dirty={} \
+                 decode_wait={:.1}ms",
+                frame_idx, beat, time,
+                tick_result.ready_clips.len(),
+                tick_result.compositor_dirty,
+                decode_ms,
+            );
+        }
 
         let tex_ptr = if export_config.hdr {
             let paper_white = 200.0f32;
@@ -1864,6 +1908,15 @@ impl ContentThread {
 
         if frame_idx.is_multiple_of(10) {
             self.send_export_progress(state_tx, session);
+        }
+
+        // Per-frame timing for first few frames (diagnose slow starts).
+        if frame_idx < 5 {
+            let total_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
+            log::info!(
+                "[Export] frame={} total={:.1}ms",
+                frame_idx, total_ms,
+            );
         }
 
         None
