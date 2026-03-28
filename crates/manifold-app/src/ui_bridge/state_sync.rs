@@ -95,11 +95,16 @@ pub fn push_state(
     let time = content_state.current_time;
 
     {
-        // Use content_state.bpm (authoritative, updated every content frame)
-        // rather than local_project.settings.bpm which only updates on
-        // data_version change. This ensures live external tempo from
-        // Link or MIDI Clock is reflected immediately.
-        let bpm = content_state.bpm as f32;
+        // When clock authority is Internal, use project.settings.bpm (the local
+        // project) — it's updated immediately by handle_text_input_commit, so
+        // the BPM field reflects user input without waiting for the content thread
+        // round-trip. When an external source is active (Link, MIDI Clock, OSC),
+        // use content_state.bpm which carries the live external tempo.
+        let bpm = if content_state.clock_authority == manifold_core::types::ClockAuthority::Internal {
+            project.settings.bpm
+        } else {
+            content_state.bpm as f32
+        };
 
         // Unity FormatTime: "{minutes:D2}:{seconds:D2}.{tenths}"
         // Time first, then bar.beat.sixteenth — matches Unity exactly
