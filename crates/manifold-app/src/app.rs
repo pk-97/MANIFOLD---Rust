@@ -1194,6 +1194,7 @@ impl ApplicationHandler for Application {
                 osc_receiver: manifold_playback::osc_receiver::OscReceiver::new(),
                 osc_sync: manifold_playback::osc_sync::OscSyncController::new(),
                 osc_sender: manifold_playback::osc_sender::OscPositionSender::new(),
+                osc_param_router: manifold_playback::osc_param_router::OscParamRouter::new(),
                 tempo_recorder: manifold_playback::tempo_recorder::TempoRecorder::new(),
                 link_beat_offset: f64::NAN,
                 led_controller: None,

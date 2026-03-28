@@ -60,6 +60,10 @@ pub struct ContentThread {
     pub osc_sync: OscSyncController,
     /// OSC position sender — sends transport state to DAW (LateUpdate equivalent).
     pub osc_sender: OscPositionSender,
+    /// OSC parameter router — maps incoming OSC floats to effect/generator params.
+    /// Port of Unity's MasterEffectOscBridge + LayerOscBridge + LayerEffectOscBridge
+    /// + GeneratorOscBridge as a single data-driven unit.
+    pub osc_param_router: manifold_playback::osc_param_router::OscParamRouter,
 
     // ── Tempo recording (port of C# PlaybackController fields) ──
     /// Tempo recording/provenance — tracks external tempo for tempo automation.
@@ -757,6 +761,11 @@ impl ContentThread {
         // OSC receiver — drain queued UDP messages and dispatch to subscribers.
         self.osc_receiver.update();
 
+        // OSC parameter router — apply any pending param writes from OSC messages.
+        if let Some(p) = self.engine.project_mut() {
+            self.osc_param_router.apply(p);
+        }
+
         // OSC timecode sync — process pending timecode, manage transport.
         {
             let snap = SyncTargetSnapshot::from_engine(&self.engine);
@@ -1053,12 +1062,19 @@ impl ContentThread {
                 }
                 // Editing commands may add/remove clips — sync on next tick.
                 self.engine.mark_sync_dirty();
+                // Rebuild OSC routes — command may have added/removed layers or effects.
+                if let Some(p) = self.engine.project() {
+                    self.osc_param_router.rebuild(p, &mut self.osc_receiver);
+                }
             }
             ContentCommand::ExecuteBatch(cmds, desc) => {
                 if let Some(p) = self.engine.project_mut() {
                     self.editing_service.execute_batch(cmds, desc, p);
                 }
                 self.engine.mark_sync_dirty();
+                if let Some(p) = self.engine.project() {
+                    self.osc_param_router.rebuild(p, &mut self.osc_receiver);
+                }
             }
             ContentCommand::Undo => {
                 // Capture pre-undo settings so we can detect resolution/FPS changes.
@@ -1087,6 +1103,9 @@ impl ContentThread {
                         self.timer.set_target_fps(post_fps as f64);
                     }
                 }
+                if let Some(p) = self.engine.project() {
+                    self.osc_param_router.rebuild(p, &mut self.osc_receiver);
+                }
             }
             ContentCommand::Redo => {
                 // Same pre/post settings detection as Undo.
@@ -1112,6 +1131,9 @@ impl ContentThread {
                     if (post_fps - pre_fps).abs() > 0.01 {
                         self.timer.set_target_fps(post_fps as f64);
                     }
+                }
+                if let Some(p) = self.engine.project() {
+                    self.osc_param_router.rebuild(p, &mut self.osc_receiver);
                 }
             }
             ContentCommand::SetProject => {
@@ -1148,6 +1170,11 @@ impl ContentThread {
                 // Port of C# PlaybackController.OnProjectLoaded → midiInputController.SetMidiConfig().
                 if let Some(p) = self.engine.project() {
                     self.midi_input.set_midi_config(p.midi_config.clone());
+                }
+                // Rebuild OSC parameter routes for the loaded project.
+                // Port of C# WorkspaceController: creates/registers OSC bridges on project load.
+                if let Some(p) = self.engine.project() {
+                    self.osc_param_router.rebuild(p, &mut self.osc_receiver);
                 }
             }
             // ── Settings ───────────────────────────────────────────
