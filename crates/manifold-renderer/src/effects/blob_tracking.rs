@@ -38,7 +38,7 @@ struct BlobResponse {
 // Instead, preserve source aspect ratio with the same pixel budget (57,600 px).
 const READBACK_PIXEL_BUDGET: u32 = 320 * 180; // 57,600
 const MAX_BLOBS: usize = 16;
-const READBACK_INTERVAL_FRAMES: i64 = 3;
+const READBACK_INTERVAL_FRAMES: i64 = 1;
 
 /// Compute readback dimensions that preserve source aspect ratio.
 /// Keeps total pixel count ≈ READBACK_PIXEL_BUDGET, rounds to multiples of 16
