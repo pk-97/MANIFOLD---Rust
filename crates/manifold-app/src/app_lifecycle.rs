@@ -65,31 +65,31 @@ impl Application {
         // Pause rendering while native file dialog is open (macOS GPU contention)
         self.send_content_cmd(ContentCommand::PauseRendering);
 
-        // Use previous export location if available, otherwise default to Desktop.
-        let (start_dir, start_name) = if let Some(ref prev) = self.last_export_path {
-            let dir = prev.parent().map(|p| p.to_path_buf());
-            let name = prev.file_name()
-                .map(|n| n.to_string_lossy().to_string());
-            (dir, name)
+        // Restore last-used directory and filename from persisted prefs.
+        let saved_dir = crate::dialog_path_memory::get_last_directory(
+            crate::dialog_path_memory::DialogContext::ExportMP4,
+            &mut self.user_prefs,
+        );
+        let saved_name = self.user_prefs.get_string("MANIFOLD_LastExportFileName", "");
+
+        let default_name = if !saved_name.is_empty() {
+            saved_name
         } else {
-            (None, None)
-        };
-        let default_name = start_name.unwrap_or_else(|| {
             let project_name = if project.project_name.is_empty() {
                 "MANIFOLD_Export"
             } else {
                 &project.project_name
             };
             format!("{project_name}.mp4")
-        });
+        };
 
         let mut dialog = rfd::FileDialog::new()
             .set_title("Export Video")
             .add_filter("MP4 Video", &["mp4"])
             .set_file_name(&default_name);
 
-        if let Some(ref dir) = start_dir {
-            dialog = dialog.set_directory(dir);
+        if !saved_dir.is_empty() {
+            dialog = dialog.set_directory(&saved_dir);
         } else {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
             let desktop = std::path::Path::new(&home).join("Desktop");
@@ -110,7 +110,20 @@ impl Application {
             path.set_extension("mp4");
         }
 
-        // Remember for next export dialog
+        // Persist directory and filename for next export dialog (survives app restart).
+        let path_str = path.to_string_lossy();
+        crate::dialog_path_memory::remember_directory(
+            crate::dialog_path_memory::DialogContext::ExportMP4,
+            &path_str,
+            &mut self.user_prefs,
+        );
+        if let Some(name) = path.file_name() {
+            self.user_prefs.set_string(
+                "MANIFOLD_LastExportFileName",
+                &name.to_string_lossy(),
+            );
+            self.user_prefs.save();
+        }
         self.last_export_path = Some(path.clone());
 
         let output_path = path.to_string_lossy().to_string();
