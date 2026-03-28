@@ -230,10 +230,14 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
 
         if (hdr)
         {
-            // HDR: HEVC Main 10 with HDR10 color metadata
+            // HDR: HEVC Main 10 with HDR10 color metadata.
+            // Quality-based VBR: VideoToolbox allocates bits based on content
+            // complexity. 0.95 = near-lossless, avoids blocking on gradients
+            // and fine particle detail that fixed-bitrate encoding destroys.
             compressionProps = @{
-                AVVideoAverageBitRateKey:            @(100000000),  // 100 Mbps for HDR
+                AVVideoQualityKey:                   @(0.95),
                 AVVideoExpectedSourceFrameRateKey:   @(state->fpsNum),
+                AVVideoMaxKeyFrameIntervalKey:       @(state->fpsNum),  // 1 GOP/second
                 AVVideoAllowFrameReorderingKey:      @NO,
                 AVVideoProfileLevelKey:              @"HEVC_Main10_AutoLevel",
             };
@@ -254,11 +258,15 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
         }
         else
         {
-            // SDR: H.264 High Profile
+            // SDR: H.264 High Profile.
+            // Quality-based VBR: lets VideoToolbox decide bitrate per-frame
+            // based on content complexity. Fixed bitrate (old: 50 Mbps) starves
+            // complex frames with gradients, particles, and fine generative detail.
             compressionProps = @{
-                AVVideoAverageBitRateKey:            @(50000000),   // 50 Mbps
+                AVVideoQualityKey:                   @(0.95),
                 AVVideoProfileLevelKey:              AVVideoProfileLevelH264HighAutoLevel,
                 AVVideoExpectedSourceFrameRateKey:   @(state->fpsNum),
+                AVVideoMaxKeyFrameIntervalKey:       @(state->fpsNum),  // 1 GOP/second
                 AVVideoAllowFrameReorderingKey:      @NO,
             };
 
