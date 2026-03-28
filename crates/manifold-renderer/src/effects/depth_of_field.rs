@@ -403,8 +403,12 @@ impl PostProcessEffect for DepthOfFieldFX {
                     Self::poll_depth_readback(ds, dw);
                     Self::poll_depth_worker(ds, dw, gpu);
 
-                    // Submit new readback if interval elapsed
+                    // Submit new readback if interval elapsed.
+                    // Guard: reset if frame_count jumped backwards (export restart).
                     let ds = self.depth_states.get_mut(&ctx.owner_key).unwrap();
+                    if ctx.frame_count < ds.last_request_frame {
+                        ds.last_request_frame = ctx.frame_count - DEPTH_UPDATE_INTERVAL;
+                    }
                     let elapsed = ctx.frame_count - ds.last_request_frame;
                     if elapsed >= DEPTH_UPDATE_INTERVAL && !ds.readback.is_pending() {
                         Self::submit_depth_readback(gpu, source, ds);

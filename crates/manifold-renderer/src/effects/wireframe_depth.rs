@@ -1388,6 +1388,16 @@ impl PostProcessEffect for WireframeDepthFX {
         let owner_key = ctx.owner_key;
         self.get_or_create_owner(gpu, owner_key, wire_scale);
 
+        // Guard: if frame_count jumped backwards (export restart, seek), reset
+        // all frame-throttle counters so readback/mesh updates fire immediately.
+        if let Some(state) = self.owner_states.get_mut(&owner_key)
+            && ctx.frame_count < state.last_native_request_frame
+        {
+            state.last_native_request_frame = -1024;
+            state.last_subject_request_frame = -1024;
+            state.last_mesh_update_frame = -1024;
+        }
+
         // Read remaining params — new 12-param layout
         let density         = fx.param_values.get(1).copied().unwrap_or(96.0);
         let line_width      = fx.param_values.get(2).copied().unwrap_or(1.2);
