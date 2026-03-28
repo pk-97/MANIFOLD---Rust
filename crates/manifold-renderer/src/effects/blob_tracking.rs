@@ -20,12 +20,14 @@ use manifold_gpu::{
 
 // Request/response types for the background blob detection worker.
 struct BlobRequest {
+    owner_key: i64,
     pixel_buffer: Vec<u8>,
     threshold: f32,
     sensitivity: f32,
 }
 
 struct BlobResponse {
+    owner_key: i64,
     blob_data: Vec<f32>, // MAX_BLOBS * 4: [x, y, w, h] per blob
     blob_count: i32,
 }
@@ -117,9 +119,9 @@ pub struct BlobTrackingFX {
     font_atlas: GpuTexture,
     // BlobTrackingFX.cs line 22 — nativeHandle (native blob detector)
     // Native processing runs on a background thread via BackgroundWorker.
+    // Single worker shared across owners — guarded by is_busy() to prevent
+    // drain-to-latest from discarding one owner's request in favour of another.
     worker: Option<BackgroundWorker<BlobRequest, BlobResponse>>,
-    // Track which owner submitted the in-flight worker request.
-    pending_worker_owner: Option<i64>,
     // BlobTrackingFX.cs line 70 — ownerStates
     owner_states: AHashMap<i64, OwnerState>,
 }
@@ -145,6 +147,7 @@ impl BlobTrackingFX {
                     &mut blob_data,
                 );
                 BlobResponse {
+                    owner_key: req.owner_key,
                     blob_data,
                     blob_count,
                 }
@@ -189,7 +192,6 @@ impl BlobTrackingFX {
             point_sampler,
             font_atlas,
             worker,
-            pending_worker_owner: None,
             owner_states: AHashMap::new(),
         }
     }
@@ -254,19 +256,32 @@ impl BlobTrackingFX {
     // Split into two non-blocking phases:
     //   1. Poll worker for completed blob detection result
     //   2. Poll GPU readback for new pixel data → submit to worker
+    //
+    // The worker is shared across owners. To prevent drain-to-latest from
+    // discarding one owner's request when another submits, Phase 2 only
+    // submits if the worker is idle. Each owner gets served round-robin
+    // across frames.
     fn poll_readback(&mut self, owner_key: i64) {
         // ── Phase 1: check if the background worker has a result ──
         if let Some(worker) = &mut self.worker
             && let Some(response) = worker.try_recv()
         {
-            // Route result to the owner that submitted it.
-            let result_owner = self.pending_worker_owner.take().unwrap_or(owner_key);
-            if let Some(state) = self.owner_states.get_mut(&result_owner) {
+            // Route result to the owner that submitted it (embedded in response).
+            if let Some(state) = self.owner_states.get_mut(&response.owner_key) {
                 Self::apply_blob_response(state, &response);
             }
         }
 
         // ── Phase 2: check for new pixel data from GPU readback ──
+        let Some(worker) = &self.worker else {
+            return;
+        };
+        // Only submit if worker is idle — prevents overwriting another owner's
+        // in-flight request via drain-to-latest semantics.
+        if worker.is_busy() {
+            return;
+        }
+
         let Some(state) = self.owner_states.get_mut(&owner_key) else {
             return;
         };
@@ -283,11 +298,11 @@ impl BlobTrackingFX {
 
         // Submit to background worker (non-blocking).
         worker.submit(BlobRequest {
+            owner_key,
             pixel_buffer: pixels,
             threshold: state.pending_threshold,
             sensitivity: state.pending_sensitivity,
         });
-        self.pending_worker_owner = Some(owner_key);
     }
 
     // Apply a completed BlobResponse to OwnerState.
