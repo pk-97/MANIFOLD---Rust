@@ -42,6 +42,8 @@ impl ContentThread {
         };
         let bpm = project.settings.bpm;
         let (content_start, content_end) = project.timeline.content_range_beats();
+        let content_start = content_start.as_f32();
+        let content_end = content_end.as_f32();
 
         // Use config beats if set, otherwise use content range
         let start_beat = if config.start_beat > 0.0 {

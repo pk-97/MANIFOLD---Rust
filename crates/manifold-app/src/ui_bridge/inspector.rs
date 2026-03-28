@@ -1,7 +1,7 @@
 //! Inspector-related dispatch: effect params, drivers, envelopes, generator params,
 //! master/layer/clip chrome, slider interactions.
 
-use manifold_core::LayerId;
+use manifold_core::{Beats, LayerId, Seconds};
 use manifold_core::effects::{EffectInstance, ParameterDriver, ParamEnvelope};
 use manifold_core::project::Project;
 use manifold_core::types::{BeatDivision, DriverWaveform};
@@ -241,10 +241,10 @@ pub(super) fn dispatch_inspector(
         PanelAction::ClipSlipSnapshot => {
             if let Some(clip_id) = &selection.primary_selected_clip_id
                 && let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
-                    *drag_snapshot = Some(clip.in_point);
+                    *drag_snapshot = Some(clip.in_point.as_f32());
                     *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::ClipSlip {
                         clip_id: clip_id.clone(),
-                        value: clip.in_point,
+                        value: clip.in_point.as_f32(),
                     });
                 }
             DispatchResult::handled()
@@ -252,12 +252,12 @@ pub(super) fn dispatch_inspector(
         PanelAction::ClipSlipChanged(val) => {
             if let Some(clip_id) = &selection.primary_selected_clip_id {
                 if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                    clip.in_point = val.max(0.0);
+                    clip.in_point = Seconds::from_f32(val.max(0.0));
                 }
                 if let Some(crate::app::ActiveInspectorDrag::ClipSlip { value, .. }) = active_inspector_drag {
                     *value = val.max(0.0);
                 }
-                let v = val.max(0.0);
+                let v = Seconds::from_f32(val.max(0.0));
                 let cid = clip_id.clone();
                 ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
                     if let Some(clip) = p.timeline.find_clip_by_id_mut(&cid) {
@@ -273,8 +273,8 @@ pub(super) fn dispatch_inspector(
                     let clip_id = clip_id.clone();
                     if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
                         let new_val = clip.in_point;
-                        if (old_val - new_val).abs() > f32::EPSILON {
-                            let cmd = SlipClipCommand::new(clip_id, old_val, new_val);
+                        if (old_val - new_val.as_f32()).abs() > f32::EPSILON {
+                            let cmd = SlipClipCommand::new(clip_id, Seconds::from_f32(old_val), new_val);
                             ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                         }
                     }
@@ -285,10 +285,10 @@ pub(super) fn dispatch_inspector(
         PanelAction::ClipLoopSnapshot => {
             if let Some(clip_id) = &selection.primary_selected_clip_id
                 && let Some(clip) = project.timeline.find_clip_by_id(clip_id) {
-                    *drag_snapshot = Some(clip.loop_duration_beats);
+                    *drag_snapshot = Some(clip.loop_duration_beats.as_f32());
                     *active_inspector_drag = Some(crate::app::ActiveInspectorDrag::ClipLoop {
                         clip_id: clip_id.clone(),
-                        value: clip.loop_duration_beats,
+                        value: clip.loop_duration_beats.as_f32(),
                     });
                 }
             DispatchResult::handled()
@@ -296,12 +296,12 @@ pub(super) fn dispatch_inspector(
         PanelAction::ClipLoopChanged(val) => {
             if let Some(clip_id) = &selection.primary_selected_clip_id {
                 if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                    clip.loop_duration_beats = val.max(0.0);
+                    clip.loop_duration_beats = Beats::from_f32(val.max(0.0));
                 }
                 if let Some(crate::app::ActiveInspectorDrag::ClipLoop { value, .. }) = active_inspector_drag {
                     *value = val.max(0.0);
                 }
-                let v = val.max(0.0);
+                let v = Beats::from_f32(val.max(0.0));
                 let cid = clip_id.clone();
                 ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
                     if let Some(clip) = p.timeline.find_clip_by_id_mut(&cid) {
@@ -318,9 +318,9 @@ pub(super) fn dispatch_inspector(
                     if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
                         let new_val = clip.loop_duration_beats;
                         let is_looping = clip.is_looping;
-                        if (old_val - new_val).abs() > f32::EPSILON {
+                        if (old_val - new_val.as_f32()).abs() > f32::EPSILON {
                             let cmd = ChangeClipLoopCommand::new(
-                                clip_id, is_looping, is_looping, old_val, new_val,
+                                clip_id, is_looping, is_looping, Beats::from_f32(old_val), new_val,
                             );
                             ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                         }
@@ -335,9 +335,9 @@ pub(super) fn dispatch_inspector(
                 let clip_id = clip_id.clone();
                 if let Some(clip) = project.timeline.find_clip_by_id_mut(&clip_id) {
                     let old = clip.in_point;
-                    if old.abs() > f32::EPSILON {
-                        clip.in_point = 0.0;
-                        let cmd = SlipClipCommand::new(clip_id, old, 0.0);
+                    if old.as_f32().abs() > f32::EPSILON {
+                        clip.in_point = Seconds(0.0);
+                        let cmd = SlipClipCommand::new(clip_id, old, Seconds(0.0));
                         ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
                     }
                 }
@@ -352,7 +352,7 @@ pub(super) fn dispatch_inspector(
                     let old_dur = clip.loop_duration_beats;
                     let full_dur = clip.duration_beats;
                     let is_looping = clip.is_looping;
-                    if (old_dur - full_dur).abs() > f32::EPSILON {
+                    if (old_dur - full_dur).abs().as_f32() > f32::EPSILON {
                         clip.loop_duration_beats = full_dur;
                         let cmd = ChangeClipLoopCommand::new(
                             clip_id, is_looping, is_looping, old_dur, full_dur,

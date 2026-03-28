@@ -333,7 +333,7 @@ impl ContentThread {
             ContentCommand::PasteClips { target_beat, target_layer, result_tx } => {
                 if let Some(p) = self.engine.project_mut() {
                     let spb = 60.0 / p.settings.bpm.max(1.0);
-                    let result = self.editing_service.paste_clips(p, target_beat, target_layer, spb);
+                    let result = self.editing_service.paste_clips(p, manifold_core::Beats::from_f32(target_beat), target_layer, spb);
                     if !result.commands.is_empty() {
                         self.editing_service.execute_batch(result.commands, "Paste clips".into(), p);
                     }
@@ -487,8 +487,8 @@ impl ContentThread {
                         let clips = layer.clips.iter()
                             .map(|c| manifold_profiler::ClipSnapshot {
                                 id: c.id.to_string(),
-                                start_beat: c.start_beat,
-                                duration_beats: c.duration_beats,
+                                start_beat: c.start_beat.as_f32(),
+                                duration_beats: c.duration_beats.as_f32(),
                                 generator_type: c.generator_type.to_string(),
                                 effect_count: c.effects.len(),
                             })

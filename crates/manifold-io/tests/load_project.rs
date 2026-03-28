@@ -45,12 +45,12 @@ fn load_burn_v5_clips_have_valid_beats() {
             assert!(!clip.id.is_empty(), "Clip [{li}][{ci}] has empty ID");
 
             // Duration must be positive
-            assert!(clip.duration_beats > 0.0,
+            assert!(clip.duration_beats > manifold_core::Beats::ZERO,
                 "Clip {} [{li}][{ci}] has non-positive duration: {}",
                 clip.id, clip.duration_beats);
 
             // Start beat should be non-negative
-            assert!(clip.start_beat >= 0.0,
+            assert!(clip.start_beat >= manifold_core::Beats::ZERO,
                 "Clip {} [{li}][{ci}] has negative start beat: {}",
                 clip.id, clip.start_beat);
 
@@ -68,7 +68,7 @@ fn load_burn_v5_timeline_duration() {
     let project = loader::load_project(&path).unwrap();
 
     let duration = project.timeline.duration_beats();
-    assert!(duration > 0.0, "Timeline should have positive duration, got {}", duration);
+    assert!(duration > manifold_core::Beats::ZERO, "Timeline should have positive duration, got {}", duration);
 }
 
 #[test]
@@ -259,8 +259,8 @@ fn load_waypoints_large_project() {
     // Stress test: all clips should have valid beats
     for layer in &project.timeline.layers {
         for clip in &layer.clips {
-            assert!(clip.duration_beats > 0.0);
-            assert!(clip.start_beat >= 0.0);
+            assert!(clip.duration_beats > manifold_core::Beats::ZERO);
+            assert!(clip.start_beat >= manifold_core::Beats::ZERO);
         }
     }
 }

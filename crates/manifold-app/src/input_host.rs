@@ -387,14 +387,14 @@ impl TimelineInputHost for AppInputHost<'_> {
             // Sentinel for "seek to end" — Unity InputHandler line 380-390
             // Uses beat_to_timeline_time for tempo map consistency (Step 8 fix)
             if let Some(project) = Some(&*self.project) {
-                let mut max_beat: f32 = 0.0;
+                let mut max_beat = manifold_core::Beats::ZERO;
                 for layer in &project.timeline.layers {
                     for clip in &layer.clips {
                         let end = clip.start_beat + clip.duration_beats;
                         if end > max_beat { max_beat = end; }
                     }
                 }
-                let end_time = max_beat * (60.0 / self.project.settings.bpm);
+                let end_time = max_beat.as_f32() * (60.0 / self.project.settings.bpm);
                 ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(end_time));
             }
         } else {
@@ -590,7 +590,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             let spb = 60.0 / project.settings.bpm;
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
             for id in clip_ids {
-                if let Some(cmd) = EditingService::split_clip_at_beat(project, id, beat, spb) {
+                if let Some(cmd) = EditingService::split_clip_at_beat(project, id, manifold_core::Beats::from_f32(beat), spb) {
                     commands.push(cmd);
                 }
             }
@@ -602,7 +602,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn extend_clips(&mut self, clip_ids: &[ClipId], grid_step: f32) {
         if let Some(project) = Some(&mut *self.project) {
-            let commands = EditingService::extend_clips_by_grid(project, clip_ids, grid_step);
+            let commands = EditingService::extend_clips_by_grid(project, clip_ids, manifold_core::Beats::from_f32(grid_step));
             if !commands.is_empty() {
                 ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
@@ -611,7 +611,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn shrink_clips(&mut self, clip_ids: &[ClipId], grid_step: f32) {
         if let Some(project) = Some(&mut *self.project) {
-            let commands = EditingService::shrink_clips_by_grid(project, clip_ids, grid_step);
+            let commands = EditingService::shrink_clips_by_grid(project, clip_ids, manifold_core::Beats::from_f32(grid_step));
             if !commands.is_empty() {
                 ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
@@ -621,7 +621,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn nudge_clips(&mut self, clip_ids: &[ClipId], beat_delta: f32) {
         if let Some(project) = Some(&mut *self.project) {
             let spb = 60.0 / project.settings.bpm;
-            let commands = EditingService::nudge_clips(project, clip_ids, beat_delta, spb);
+            let commands = EditingService::nudge_clips(project, clip_ids, manifold_core::Beats::from_f32(beat_delta), spb);
             if !commands.is_empty() {
                 ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));
             }
@@ -776,7 +776,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let beat = self.content_state.current_beat as f32;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
         let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
-        self.project.timeline.export_in_beat = snapped;
+        self.project.timeline.export_in_beat = manifold_core::Beats::from_f32(snapped);
         self.project.timeline.export_range_enabled = true;
         // Push to viewport immediately so build() sees it this frame
         self.ui_root.viewport.set_export_range(
@@ -787,7 +787,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_rebuild = true;
         ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
             Box::new(move |p| {
-                p.timeline.export_in_beat = snapped;
+                p.timeline.export_in_beat = manifold_core::Beats::from_f32(snapped);
                 p.timeline.export_range_enabled = true;
             }),
         ));
@@ -797,7 +797,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         let beat = self.content_state.current_beat as f32;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
         let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
-        self.project.timeline.export_out_beat = snapped;
+        self.project.timeline.export_out_beat = manifold_core::Beats::from_f32(snapped);
         self.project.timeline.export_range_enabled = true;
         self.ui_root.viewport.set_export_range(
             self.project.timeline.export_in_beat,
@@ -807,7 +807,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_rebuild = true;
         ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
             Box::new(move |p| {
-                p.timeline.export_out_beat = snapped;
+                p.timeline.export_out_beat = manifold_core::Beats::from_f32(snapped);
                 p.timeline.export_range_enabled = true;
             }),
         ));
@@ -817,20 +817,20 @@ impl TimelineInputHost for AppInputHost<'_> {
         let has_out = self.project.timeline.export_out_beat
             > self.project.timeline.export_in_beat;
         if !has_out {
-            self.project.timeline.export_in_beat = 0.0;
-            self.project.timeline.export_out_beat = 0.0;
+            self.project.timeline.export_in_beat = manifold_core::Beats::ZERO;
+            self.project.timeline.export_out_beat = manifold_core::Beats::ZERO;
             self.project.timeline.export_range_enabled = false;
             ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
                 Box::new(|p| {
-                    p.timeline.export_in_beat = 0.0;
-                    p.timeline.export_out_beat = 0.0;
+                    p.timeline.export_in_beat = manifold_core::Beats::ZERO;
+                    p.timeline.export_out_beat = manifold_core::Beats::ZERO;
                     p.timeline.export_range_enabled = false;
                 }),
             ));
         } else {
-            self.project.timeline.export_in_beat = 0.0;
+            self.project.timeline.export_in_beat = manifold_core::Beats::ZERO;
             ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
-                Box::new(|p| { p.timeline.export_in_beat = 0.0; }),
+                Box::new(|p| { p.timeline.export_in_beat = manifold_core::Beats::ZERO; }),
             ));
         }
         self.ui_root.viewport.set_export_range(
@@ -845,15 +845,15 @@ impl TimelineInputHost for AppInputHost<'_> {
         if !self.project.timeline.export_range_enabled {
             return;
         }
-        self.project.timeline.export_in_beat = 0.0;
-        self.project.timeline.export_out_beat = 0.0;
+        self.project.timeline.export_in_beat = manifold_core::Beats::ZERO;
+        self.project.timeline.export_out_beat = manifold_core::Beats::ZERO;
         self.project.timeline.export_range_enabled = false;
-        self.ui_root.viewport.set_export_range(0.0, 0.0, false);
+        self.ui_root.viewport.set_export_range(manifold_core::Beats::ZERO, manifold_core::Beats::ZERO, false);
         *self.needs_rebuild = true;
         ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
             Box::new(|p| {
-                p.timeline.export_in_beat = 0.0;
-                p.timeline.export_out_beat = 0.0;
+                p.timeline.export_in_beat = manifold_core::Beats::ZERO;
+                p.timeline.export_out_beat = manifold_core::Beats::ZERO;
                 p.timeline.export_range_enabled = false;
             }),
         ));
@@ -910,8 +910,8 @@ impl TimelineInputHost for AppInputHost<'_> {
                     clips.push(cursor_nav::NavClipInfo {
                         clip_id: clip.id.clone(),
                         layer_index: i,
-                        start_beat: clip.start_beat,
-                        end_beat: clip.start_beat + clip.duration_beats,
+                        start_beat: clip.start_beat.as_f32(),
+                        end_beat: (clip.start_beat + clip.duration_beats).as_f32(),
                     });
                 }
             }
@@ -1016,8 +1016,9 @@ impl TimelineInputHost for AppInputHost<'_> {
         let mut clip_count = 0;
         for layer in &project.timeline.layers {
             for clip in &layer.clips {
-                if clip.start_beat < min_beat { min_beat = clip.start_beat; }
-                let end = clip.start_beat + clip.duration_beats;
+                let sb = clip.start_beat.as_f32();
+                if sb < min_beat { min_beat = sb; }
+                let end = (clip.start_beat + clip.duration_beats).as_f32();
                 if end > max_beat { max_beat = end; }
                 clip_count += 1;
             }

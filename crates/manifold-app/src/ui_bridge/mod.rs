@@ -275,8 +275,8 @@ fn update_region_from_clip_selection(selection: &mut SelectionState, project: &P
             let li = li as i32;
             for clip in &layer.clips {
                 if selection.selected_clip_ids.contains(&clip.id) {
-                    min_beat = min_beat.min(clip.start_beat);
-                    max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
+                    min_beat = min_beat.min(clip.start_beat.as_f32());
+                    max_beat = max_beat.max((clip.start_beat + clip.duration_beats).as_f32());
                     min_layer = min_layer.min(li);
                     max_layer = max_layer.max(li);
                     found = true;
@@ -306,8 +306,8 @@ pub fn update_region_from_clip_selection_inline(selection: &mut SelectionState, 
         let li = li as i32;
         for clip in &layer.clips {
             if selection.selected_clip_ids.contains(&clip.id) {
-                min_beat = min_beat.min(clip.start_beat);
-                max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
+                min_beat = min_beat.min(clip.start_beat.as_f32());
+                max_beat = max_beat.max((clip.start_beat + clip.duration_beats).as_f32());
                 min_layer = min_layer.min(li);
                 max_layer = max_layer.max(li);
                 found = true;
@@ -348,7 +348,7 @@ pub(crate) fn select_region_to_with_project(
         project.timeline.layers.iter().enumerate()
             .find_map(|(li, l)| l.clips.iter()
                 .find(|c| c.id == *clip_id)
-                .map(|_c| (_c.start_beat, li)))
+                .map(|_c| (_c.start_beat.as_f32(), li)))
     } else {
         None
     };

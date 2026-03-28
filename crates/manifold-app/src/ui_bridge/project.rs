@@ -1,7 +1,7 @@
 //! Project-related dispatch: file operations, export, audio/percussion, resolution,
 //! MIDI note/channel, generator type, waveform/stem actions.
 
-use manifold_core::LayerId;
+use manifold_core::{Beats, LayerId};
 use manifold_core::project::Project;
 use manifold_core::GeneratorTypeId;
 use manifold_ui::PanelAction;
@@ -205,7 +205,7 @@ pub(super) fn dispatch_project(
                     for clip in &layer.clips {
                         ui.waveform_lane.waveform_drag_clip_snapshots.push((
                             clip.id.clone(),
-                            clip.start_beat,
+                            clip.start_beat.as_f32(),
                             clip.layer_id.clone(),
                         ));
                     }
@@ -218,8 +218,8 @@ pub(super) fn dispatch_project(
                 .map_or(f32::MAX, |s| s.audio_start_beat);
             for layer in &project.timeline.layers {
                 for clip in &layer.clips {
-                    if clip.start_beat < min_current {
-                        min_current = clip.start_beat;
+                    if clip.start_beat.as_f32() < min_current {
+                        min_current = clip.start_beat.as_f32();
                     }
                 }
             }
@@ -233,7 +233,7 @@ pub(super) fn dispatch_project(
             // Move ALL clips (Unity lines 1395-1400)
             for layer in &mut project.timeline.layers {
                 for clip in &mut layer.clips {
-                    clip.start_beat = (clip.start_beat + clamped).max(0.0);
+                    clip.start_beat = (clip.start_beat + Beats::from_f32(clamped)).max(Beats::ZERO);
                 }
                 layer.mark_clips_unsorted();
             }
@@ -246,7 +246,7 @@ pub(super) fn dispatch_project(
                 }
                 for layer in &mut p.timeline.layers {
                     for clip in &mut layer.clips {
-                        clip.start_beat = (clip.start_beat + db).max(0.0);
+                        clip.start_beat = (clip.start_beat + Beats::from_f32(db)).max(Beats::ZERO);
                     }
                     layer.mark_clips_unsorted();
                 }
@@ -281,12 +281,12 @@ pub(super) fn dispatch_project(
                     let new_beat = project.timeline.find_clip_by_id(clip_id)
                         .map(|c| c.start_beat);
                     if let Some(new_beat) = new_beat
-                        && (new_beat - old_beat).abs() > 0.0001
+                        && (new_beat.as_f32() - old_beat).abs() > 0.0001
                     {
                         commands.push(Box::new(
                             manifold_editing::commands::clip::MoveClipCommand::new(
                                 clip_id.clone(),
-                                *old_beat,
+                                Beats::from_f32(*old_beat),
                                 new_beat,
                                 layer_id.clone(),
                                 layer_id.clone(),

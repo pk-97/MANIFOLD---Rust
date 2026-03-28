@@ -135,8 +135,8 @@ impl Application {
             height: h,
             fps: project.settings.frame_rate,
             hdr: project.settings.export_hdr,
-            start_beat: project.timeline.export_in_beat,
-            end_beat: project.timeline.export_out_beat,
+            start_beat: project.timeline.export_in_beat.as_f32(),
+            end_beat: project.timeline.export_out_beat.as_f32(),
             audio_path: None, // TODO: wire from audio sync controller
             audio_start_beat: 0.0,
             audio_encoder_delay: 0.0,
@@ -249,9 +249,9 @@ impl Application {
                 let clip = manifold_core::clip::TimelineClip::new_video(
                     video_clip_id,
                     layer_id.clone(),
-                    beat,
-                    duration_beats,
-                    0.0,
+                    manifold_core::Beats::from_f32(beat),
+                    manifold_core::Beats::from_f32(duration_beats),
+                    manifold_core::Seconds::ZERO,
                 );
 
                 commands.push(ContentCommand::Execute(Box::new(

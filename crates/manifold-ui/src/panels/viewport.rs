@@ -1,4 +1,4 @@
-use manifold_core::{ClipId, LayerId, MarkerId};
+use manifold_core::{Beats, ClipId, LayerId, MarkerId};
 use manifold_core::marker::TimelineMarker;
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
@@ -492,9 +492,9 @@ impl TimelineViewportPanel {
         self.insert_cursor_beat = beat;
     }
 
-    pub fn set_export_range(&mut self, in_beat: f32, out_beat: f32, enabled: bool) {
-        self.export_in_beat = in_beat;
-        self.export_out_beat = out_beat;
+    pub fn set_export_range(&mut self, in_beat: Beats, out_beat: Beats, enabled: bool) {
+        self.export_in_beat = in_beat.as_f32();
+        self.export_out_beat = out_beat.as_f32();
         self.export_range_enabled = enabled;
     }
 

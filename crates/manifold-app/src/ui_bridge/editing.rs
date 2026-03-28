@@ -1,5 +1,5 @@
 //! Editing-related dispatch: clip interaction, context menus, drag actions.
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{Beats, ClipId, LayerId};
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::GeneratorTypeId;
@@ -34,12 +34,12 @@ pub(super) fn dispatch_editing(
                     .find_map(|(i, l)| l.clips.iter()
                         .find(|c| c.id == clip_id)
                         .map(|c| (i, l.layer_id.clone(), c.start_beat + c.duration_beats))))
-                .unwrap_or((0, manifold_core::LayerId::default(), 0.0));
+                .unwrap_or((0, manifold_core::LayerId::default(), Beats::ZERO));
 
             if modifiers.shift {
                 // Shift+Click: extend region from anchor to clip end.
                 // From Unity InteractionOverlay.OnPointerClick (line 206-207).
-                super::select_region_to_with_project(clip_end_beat, layer_idx, selection, &*project);
+                super::select_region_to_with_project(clip_end_beat.as_f32(), layer_idx, selection, &*project);
             } else if modifiers.command || modifiers.ctrl {
                 // Cmd/Ctrl+Click: toggle clip in/out of selection, then update region bounds.
                 // From Unity InteractionOverlay.OnPointerClick (line 208-211).
@@ -79,7 +79,7 @@ pub(super) fn dispatch_editing(
             let grid_step = ui.viewport.grid_step();
             let snapped = manifold_ui::snap::floor_beat_to_grid(*beat, grid_step);
             {
-                let (cmd, _clip_id) = EditingService::create_clip_at_position(project, snapped, *layer, 4.0);
+                let (cmd, _clip_id) = EditingService::create_clip_at_position(project, Beats::from_f32(snapped), *layer, Beats::from_f32(4.0));
                 { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
                 // Enforce non-overlap for the newly created clip
                 if let Some(new_layer) = project.timeline.layers.get(*layer)
@@ -112,7 +112,7 @@ pub(super) fn dispatch_editing(
             let beat = content_state.current_beat as f32;
             {
                 let spb = 60.0 / project.settings.bpm;
-                if let Some(cmd) = EditingService::split_clip_at_beat(project, clip_id, beat, spb) {
+                if let Some(cmd) = EditingService::split_clip_at_beat(project, clip_id, Beats::from_f32(beat), spb) {
                     { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
                 }
             }
@@ -135,8 +135,8 @@ pub(super) fn dispatch_editing(
                 // Calculate region from the single clip for proper offset
                 let mut region = manifold_core::selection::SelectionRegion::default();
                 if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
-                    region.start_beat = clip.start_beat;
-                    region.end_beat = clip.start_beat + clip.duration_beats;
+                    region.start_beat = clip.start_beat.as_f32();
+                    region.end_beat = (clip.start_beat + clip.duration_beats).as_f32();
                     region.is_active = true;
                 }
                 let spb = 60.0 / project.settings.bpm.max(1.0);

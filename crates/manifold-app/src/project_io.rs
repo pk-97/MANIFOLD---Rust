@@ -428,9 +428,9 @@ impl ProjectIOService {
             let timeline_clip = TimelineClip {
                 video_clip_id: video_clip_id.clone(),
                 layer_id: drop_layer_id.clone(),
-                start_beat: placement_beat,
-                duration_beats,
-                in_point: 0.0,
+                start_beat: manifold_core::Beats::from_f32(placement_beat),
+                duration_beats: manifold_core::Beats::from_f32(duration_beats),
+                in_point: manifold_core::Seconds::ZERO,
                 generator_type: GeneratorTypeId::NONE,
                 ..TimelineClip::default()
             };

@@ -1,3 +1,4 @@
+use manifold_core::{Beats, Seconds};
 use crate::color;
 use crate::node::*;
 use crate::tree::UITree;
@@ -132,8 +133,8 @@ impl ClipChromePanel {
     }
 
     // Kept as no-ops for callers that still reference them
-    pub fn set_slip_range(&mut self, _max: f32) {}
-    pub fn set_loop_range(&mut self, _max_beats: f32) {}
+    pub fn set_slip_range(&mut self, _max: Seconds) {}
+    pub fn set_loop_range(&mut self, _max_beats: Beats) {}
 
     // ── Build ────────────────────────────────────────────────────
 
@@ -377,8 +378,8 @@ impl ClipChromePanel {
     }
 
     // Kept as no-ops for callers
-    pub fn sync_slip(&mut self, _tree: &mut UITree, _value: f32) {}
-    pub fn sync_loop_duration(&mut self, _tree: &mut UITree, _beats: f32) {}
+    pub fn sync_slip(&mut self, _tree: &mut UITree, _value: Seconds) {}
+    pub fn sync_loop_duration(&mut self, _tree: &mut UITree, _beats: Beats) {}
 
     pub fn sync_bpm(&mut self, tree: &mut UITree, text: &str) {
         self.cached_bpm_text = text.into();

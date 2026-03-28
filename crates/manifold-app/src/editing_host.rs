@@ -136,12 +136,12 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 if clip.id == clip_id {
                     return Some(ClipRef {
                         clip_id: clip.id.clone(),
-                        start_beat: clip.start_beat,
-                        duration_beats: clip.duration_beats,
-                        end_beat: clip.start_beat + clip.duration_beats,
+                        start_beat: clip.start_beat.as_f32(),
+                        duration_beats: clip.duration_beats.as_f32(),
+                        end_beat: (clip.start_beat + clip.duration_beats).as_f32(),
                         layer_index: li,
                         layer_id: layer.layer_id.clone(),
-                        in_point: clip.in_point,
+                        in_point: clip.in_point.as_f32(),
                         is_generator: layer.layer_type == manifold_core::types::LayerType::Generator,
                         is_locked: clip.is_locked,
                         is_looping: clip.is_looping,
@@ -185,7 +185,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         let duration = grid_step.max(0.25); // minimum 1/16th note
         let clip_id = {
             let project = Some(&mut *self.project)?;
-            let (cmd, id) = EditingService::create_clip_at_position(project, beat, layer, duration);
+            let (cmd, id) = EditingService::create_clip_at_position(project, manifold_core::Beats::from_f32(beat), layer, manifold_core::Beats::from_f32(duration));
             { let mut cmd = cmd; cmd.execute(project); crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(cmd)); }
             id
         };
@@ -447,7 +447,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             .unwrap_or_default();
         let cmd = manifold_editing::commands::clip::MoveClipCommand::new(
             ClipId::new(clip_id),
-            old_start, new_start,
+            manifold_core::Beats::from_f32(old_start), manifold_core::Beats::from_f32(new_start),
             old_layer_id, new_layer_id,
         );
         self.command_batch.push(Box::new(cmd));
@@ -462,9 +462,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     ) {
         let cmd = manifold_editing::commands::clip::TrimClipCommand::new(
             ClipId::new(clip_id),
-            old_start, new_start,
-            old_duration, new_duration,
-            old_in_point, new_in_point,
+            manifold_core::Beats::from_f32(old_start), manifold_core::Beats::from_f32(new_start),
+            manifold_core::Beats::from_f32(old_duration), manifold_core::Beats::from_f32(new_duration),
+            manifold_core::Seconds::from_f32(old_in_point), manifold_core::Seconds::from_f32(new_in_point),
         );
         self.command_batch.push(Box::new(cmd));
     }
@@ -499,7 +499,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     fn set_clip_start_beat(&mut self, clip_id: &str, beat: f32) {
         if let Some(project) = Some(&mut *self.project) {
             if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                clip.start_beat = beat;
+                clip.start_beat = manifold_core::Beats::from_f32(beat);
             }
             project.timeline.mark_clip_lookup_dirty();
         }
@@ -508,9 +508,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     fn set_clip_trim(&mut self, clip_id: &str, start_beat: f32, duration_beats: f32, in_point: f32) {
         if let Some(project) = Some(&mut *self.project) {
             if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                clip.start_beat = start_beat;
-                clip.duration_beats = duration_beats;
-                clip.in_point = in_point;
+                clip.start_beat = manifold_core::Beats::from_f32(start_beat);
+                clip.duration_beats = manifold_core::Beats::from_f32(duration_beats);
+                clip.in_point = manifold_core::Seconds::from_f32(in_point);
             }
             project.timeline.mark_clip_lookup_dirty();
         }
@@ -543,7 +543,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             return 0.0;
         }
 
-        let available_seconds = (video_clip.duration - clip.in_point).max(0.0);
+        let available_seconds = (video_clip.duration - clip.in_point.as_f32()).max(0.0);
         let spb = self.get_seconds_per_beat();
         if spb > 0.0 { available_seconds / spb } else { 0.0 }
     }

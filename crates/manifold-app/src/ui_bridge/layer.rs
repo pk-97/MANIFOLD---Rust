@@ -1,6 +1,6 @@
 //! Layer-related dispatch: mute/solo/click/chevron/blend/drag/add/delete.
 
-use manifold_core::LayerId;
+use manifold_core::{Beats, LayerId};
 use manifold_core::project::Project;
 use manifold_core::types::{BlendMode, LayerType};
 use manifold_core::GeneratorTypeId;
@@ -182,17 +182,17 @@ pub(super) fn dispatch_layer(
             DispatchResult::handled()
         }
 PanelAction::NewClipClicked(idx) => {
-            let beat = content_state.current_beat as f32;
+            let beat = Beats(content_state.current_beat);
             {
-                let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
+                let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, Beats(4.0));
                 { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
             }
             DispatchResult::structural()
         }
 PanelAction::AddGenClipClicked(idx) => {
-            let beat = content_state.current_beat as f32;
+            let beat = Beats(content_state.current_beat);
             {
-                let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
+                let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, Beats(4.0));
                 { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
             }
             DispatchResult::structural()

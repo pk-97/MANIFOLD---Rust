@@ -1,5 +1,6 @@
 //! State synchronization: push_state, sync_project_data, sync_clip_positions,
 //! sync_inspector_data, check_auto_scroll.
+use manifold_core::{Beats, Seconds};
 use manifold_core::effects::{EffectInstance, ParamEnvelope};
 use manifold_core::project::Project;
 use manifold_core::types::{LayerType, BeatDivision};
@@ -40,7 +41,7 @@ pub fn check_auto_scroll(ui: &mut UIRoot, content_state: &crate::content_state::
     // Content expansion: if playhead approaches end of content, grow it.
     // From Unity ViewportManager.UpdatePlayheadPosition (lines 314-324).
     let content_beats = project.timeline.duration_beats();
-    let content_w_px = content_beats * ppb;
+    let content_w_px = content_beats.as_f32() * ppb;
     let playhead_abs_px = playhead_beat * ppb;
     if playhead_abs_px > content_w_px - 50.0 {
         // Content would need to grow — handled by sync_project_data setting clips
@@ -401,9 +402,9 @@ pub fn push_state(
                     }
                     // Slip range = source duration - clip duration in seconds
                     let spb = 60.0 / Some(project).map_or(120.0, |p| p.settings.bpm);
-                    let clip_dur_s = clip.duration_beats * spb;
-                    chrome.set_slip_range(clip_dur_s.max(1.0));
-                    chrome.set_loop_range(clip.duration_beats.max(1.0));
+                    let clip_dur_s = Seconds::from_f32(clip.duration_beats.as_f32() * spb);
+                    chrome.set_slip_range(clip_dur_s.max(Seconds(1.0)));
+                    chrome.set_loop_range(clip.duration_beats.max(Beats(1.0)));
                 } else if is_gen {
                     chrome.sync_name(tree, manifold_core::generator_type_registry::display_name(&clip.generator_type));
                     chrome.sync_gen_type(tree, manifold_core::generator_type_registry::display_name(&clip.generator_type));
@@ -602,8 +603,8 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
                 viewport_clips.push(ViewportClip {
                     clip_id: clip.id.clone(),
                     layer_index: i,
-                    start_beat: clip.start_beat,
-                    duration_beats: clip.duration_beats,
+                    start_beat: clip.start_beat.as_f32(),
+                    duration_beats: clip.duration_beats.as_f32(),
                     name,
                     color: clip_color,
                     is_muted: clip.is_muted,
@@ -653,8 +654,8 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
             viewport_clips.push(ViewportClip {
                 clip_id: clip.id.clone(),
                 layer_index: i,
-                start_beat: clip.start_beat,
-                duration_beats: clip.duration_beats,
+                start_beat: clip.start_beat.as_f32(),
+                duration_beats: clip.duration_beats.as_f32(),
                 name,
                 color: clip_color,
                 is_muted: clip.is_muted,

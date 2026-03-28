@@ -79,12 +79,12 @@ impl ActiveInspectorDrag {
             }
             Self::ClipSlip { clip_id, value } => {
                 if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                    clip.in_point = *value;
+                    clip.in_point = manifold_core::Seconds::from_f32(*value);
                 }
             }
             Self::ClipLoop { clip_id, value } => {
                 if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                    clip.loop_duration_beats = *value;
+                    clip.loop_duration_beats = manifold_core::Beats::from_f32(*value);
                 }
             }
             Self::EffectParam { tab, layer_id, effect_idx, param_idx, value, clip_id } => {
@@ -482,8 +482,8 @@ impl Application {
                 l.clips.iter().map(move |c| NavClipInfo {
                     clip_id: c.id.clone(),
                     layer_index: li,
-                    start_beat: c.start_beat,
-                    end_beat: c.start_beat + c.duration_beats,
+                    start_beat: c.start_beat.as_f32(),
+                    end_beat: (c.start_beat + c.duration_beats).as_f32(),
                 })
             }).collect())
             .unwrap_or_default();
