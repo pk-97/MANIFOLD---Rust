@@ -239,12 +239,8 @@ impl TransportStateCache {
 
     fn update_bpm_buttons(&mut self, ui: &mut UIRoot, project: &manifold_core::project::Project) {
         {
-            let bpm = project.settings.bpm;
-
-            // Reset: enabled when recorded tempo differs from current
-            let can_reset = !project.recording_provenance.recorded_tempo_lane.is_empty()
-                || (project.recording_provenance.has_recorded_project_bpm
-                    && (bpm - project.recording_provenance.recorded_project_bpm).abs() >= 0.0001);
+            // Reset: enabled only when recorded tempo lane exists
+            let can_reset = !project.recording_provenance.recorded_tempo_lane.is_empty();
             ui.transport.set_bpm_reset_active(&mut ui.tree, can_reset);
 
             // Clear: enabled when tempo map has >1 point

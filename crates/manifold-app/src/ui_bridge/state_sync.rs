@@ -194,10 +194,10 @@ pub fn push_state(
         let rec_allowed = auth != manifold_core::types::ClockAuthority::Osc;
         ui.transport.set_record_state(tree, content_state.is_recording && rec_allowed, rec_allowed);
 
-        // BPM reset: enabled when recorded tempo lane exists or recorded BPM differs
-        let can_reset = !project.recording_provenance.recorded_tempo_lane.is_empty()
-            || (project.recording_provenance.has_recorded_project_bpm
-                && (bpm - project.recording_provenance.recorded_project_bpm).abs() >= 0.0001);
+        // BPM reset: enabled only when a recorded tempo lane exists (tempo
+        // automation from a recording session). Audio-import-detected BPM is
+        // not a "recorded" value — importing audio just sets the project BPM.
+        let can_reset = !project.recording_provenance.recorded_tempo_lane.is_empty();
         ui.transport.set_bpm_reset_active(tree, can_reset);
 
         // BPM clear: enabled when tempo map has >1 point
