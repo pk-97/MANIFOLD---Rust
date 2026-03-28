@@ -21,6 +21,7 @@ use crate::effects::infrared::InfraredFX;
 use crate::effects::voronoi_prism::VoronoiPrismFX;
 use crate::effects::wireframe_depth::WireframeDepthFX;
 use crate::effects::blob_tracking::BlobTrackingFX;
+use crate::effects::depth_of_field::DepthOfFieldFX;
 
 /// Factory + singleton storage for all effect processors.
 /// One processor per EffectTypeId — per-owner state lives inside each processor.
@@ -86,6 +87,10 @@ impl EffectRegistry {
         processors.insert(
             EffectTypeId::BLOB_TRACKING,
             Box::new(BlobTrackingFX::new(device)),
+        );
+        processors.insert(
+            EffectTypeId::DEPTH_OF_FIELD,
+            Box::new(DepthOfFieldFX::new(device)),
         );
         Self { processors }
     }

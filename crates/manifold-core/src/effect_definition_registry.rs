@@ -525,6 +525,27 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
     });
 
 
+    // DepthOfField
+    m.insert(EffectTypeId::DEPTH_OF_FIELD, EffectDef {
+        display_name: "Depth of Field",
+        param_count: 8,
+        param_defs: vec![
+            pd("Amount", 0.0, 1.0, 0.0),
+            pd_whole_labels("Mode", 0.0, 2.0, 0.0,
+                &["Tilt-Shift", "Radial", "Depth"],
+                "Mode"),
+            pd_osc("Focus", 0.0, 1.0, 0.5, "FocusPosition"),
+            pd_osc("Focus X", 0.0, 1.0, 0.5, "FocusX"),
+            pd_osc("Width", 0.01, 0.5, 0.15, "FocusWidth"),
+            pd_osc("Blur", 0.0, 1.0, 0.5, "BlurStrength"),
+            pd_whole("Angle", 0.0, 360.0, 0.0, "TiltAngle"),
+            pd_whole_labels("Quality", 0.0, 2.0, 1.0,
+                &["Low", "Medium", "High"],
+                "Quality"),
+        ],
+        osc_prefix: Some("dof"),
+    });
+
     // Corruption
     m.insert(EffectTypeId::CORRUPTION, EffectDef {
         display_name: "Corruption",

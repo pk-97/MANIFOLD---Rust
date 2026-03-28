@@ -69,6 +69,7 @@ impl EffectTypeId {
     pub const INFRARED: Self = Self(Cow::Borrowed("Infrared"));
     pub const SURVEILLANCE: Self = Self(Cow::Borrowed("Surveillance"));
     pub const REDACTION: Self = Self(Cow::Borrowed("Redaction"));
+    pub const DEPTH_OF_FIELD: Self = Self(Cow::Borrowed("DepthOfField"));
 
     /// Placeholder for unrecognized/removed effect types.
     /// Renderers skip this — it never applies any GPU work.
@@ -113,6 +114,7 @@ impl EffectTypeId {
             37 => Self::INFRARED,
             38 => Self::SURVEILLANCE,
             39 => Self::REDACTION,
+            40 => Self::DEPTH_OF_FIELD,
             _ => Self::UNKNOWN,
         }
     }

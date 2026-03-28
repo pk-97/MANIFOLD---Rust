@@ -58,6 +58,7 @@ fn build_registry() -> Vec<EffectTypeRegistration> {
         reg(E::GRADIENT_MAP,         "Gradient Map",          FILMIC,       false),
         reg(E::GLITCH,               "Glitch",                FILMIC,       true),
         reg(E::HALATION,             "Halation",              FILMIC,       true),
+        reg(E::DEPTH_OF_FIELD,       "Depth of Field",        FILMIC,       true),
         // Surveillance
         reg(E::CORRUPTION,           "Corruption",           SURVEILLANCE,  false),
         reg(E::INFRARED,             "Infrared",             SURVEILLANCE,  true),
