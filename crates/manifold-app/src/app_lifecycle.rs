@@ -71,6 +71,7 @@ impl Application {
             &mut self.user_prefs,
         );
         let saved_name = self.user_prefs.get_string("MANIFOLD_LastExportFileName", "");
+        eprintln!("[Export] Dialog prefs: dir={saved_dir:?} name={saved_name:?}");
 
         let default_name = if !saved_name.is_empty() {
             saved_name
