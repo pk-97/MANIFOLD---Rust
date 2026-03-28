@@ -126,7 +126,20 @@ pub(super) fn dispatch_transport(
                 .unwrap_or(manifold_ui::color::DEFAULT_ZOOM_INDEX);
             let new_idx = (current_idx + 1).min(levels.len() - 1);
             if new_idx != current_idx {
-                ui.viewport.set_zoom(levels[new_idx]);
+                let new_ppb = levels[new_idx];
+                let playhead = content_state.current_beat;
+                let tracks_x = ui.viewport.get_tracks_rect().x;
+                let viewport_w = ui.viewport.get_tracks_rect().width;
+                // Anchor on playhead: place it at the same relative screen position,
+                // clamped so the playhead pixel stays within the viewport.
+                let playhead_px = ui.viewport.beat_to_pixel(playhead);
+                let anchor_x = (playhead_px - tracks_x).clamp(0.0, viewport_w);
+                let new_scroll = playhead - anchor_x / new_ppb;
+                ui.viewport.set_zoom(new_ppb);
+                ui.viewport.set_scroll(
+                    new_scroll.max(0.0),
+                    ui.viewport.scroll_y_px(),
+                );
             }
             DispatchResult::structural()
         }
@@ -138,7 +151,18 @@ pub(super) fn dispatch_transport(
                 .unwrap_or(manifold_ui::color::DEFAULT_ZOOM_INDEX);
             let new_idx = current_idx.saturating_sub(1);
             if new_idx != current_idx {
-                ui.viewport.set_zoom(levels[new_idx]);
+                let new_ppb = levels[new_idx];
+                let playhead = content_state.current_beat;
+                let tracks_x = ui.viewport.get_tracks_rect().x;
+                let viewport_w = ui.viewport.get_tracks_rect().width;
+                let playhead_px = ui.viewport.beat_to_pixel(playhead);
+                let anchor_x = (playhead_px - tracks_x).clamp(0.0, viewport_w);
+                let new_scroll = playhead - anchor_x / new_ppb;
+                ui.viewport.set_zoom(new_ppb);
+                ui.viewport.set_scroll(
+                    new_scroll.max(0.0),
+                    ui.viewport.scroll_y_px(),
+                );
             }
             DispatchResult::structural()
         }

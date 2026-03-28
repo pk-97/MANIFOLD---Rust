@@ -1704,10 +1704,9 @@ impl ContentThread {
             self.engine.seek_to(start_time);
         }
 
-        // 5. Export frame loop — runs as fast as GPU can encode (no sleep).
+        // 5. Export frame loop.
         //    Each iteration is wrapped in an autoreleasepool to drain Metal's
-        //    autoreleased ObjC objects per-frame (command buffers, texture views).
-        //    Without this, memory grows unboundedly for the entire export duration.
+        //    autoreleased ObjC objects per-frame.
         let mut cancelled = false;
         let mut encode_error: Option<String> = None;
         for frame_idx in 0..total_frames {
@@ -1822,13 +1821,9 @@ impl ContentThread {
         };
         let tick_result = self.engine.tick(ctx);
 
-        self.engine.flush_pending_decodes();
-
         self.content_pipeline.render_content(
             &self.gpu, &mut self.engine, &tick_result, frame_dt, frame_idx as u64,
         );
-
-        self.content_pipeline.flush_all_background_work();
 
         let tex_ptr = if export_config.hdr {
             let paper_white = 200.0f32;

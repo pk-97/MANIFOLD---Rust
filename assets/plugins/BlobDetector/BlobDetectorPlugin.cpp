@@ -138,25 +138,35 @@ int BlobDetector_Process(
               [](const std::pair<double, int>& a, const std::pair<double, int>& b)
               { return a.first > b.first; });
 
+    // Maximum bounding rect area — reject blobs whose bounding box covers
+    // too much of the frame. Contour area can be small for complex shapes
+    // whose bounding rect still spans most of the image.
+    double maxBBoxArea = imageArea * 0.50;
+
     // Output top N blobs as normalized [cx, cy, w, h]
-    int blobCount = std::min((int)state->areaIndex.size(), state->maxBlobs);
+    int blobCount = 0;
     float invW = 1.0f / width;
     float invH = 1.0f / height;
 
-    for (int i = 0; i < blobCount; i++)
+    for (int i = 0; i < (int)state->areaIndex.size() && blobCount < state->maxBlobs; i++)
     {
         int contourIdx = state->areaIndex[i].second;
         cv::Rect rect = cv::boundingRect(state->contours[contourIdx]);
+
+        // Reject if bounding box covers more than 50% of the frame
+        if ((double)rect.width * rect.height > maxBBoxArea)
+            continue;
 
         float cx = (rect.x + rect.width * 0.5f) * invW;
         float cy = 1.0f - (rect.y + rect.height * 0.5f) * invH; // Flip Y for UV space
         float w = rect.width * invW;
         float h = rect.height * invH;
 
-        outBlobData[i * 4 + 0] = cx;
-        outBlobData[i * 4 + 1] = cy;
-        outBlobData[i * 4 + 2] = w;
-        outBlobData[i * 4 + 3] = h;
+        outBlobData[blobCount * 4 + 0] = cx;
+        outBlobData[blobCount * 4 + 1] = cy;
+        outBlobData[blobCount * 4 + 2] = w;
+        outBlobData[blobCount * 4 + 3] = h;
+        blobCount++;
     }
 
     return blobCount;

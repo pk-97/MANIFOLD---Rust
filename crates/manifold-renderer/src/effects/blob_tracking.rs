@@ -284,6 +284,10 @@ impl BlobTrackingFX {
         if let Some(worker) = &mut self.worker
             && let Some(response) = worker.try_recv()
         {
+            eprintln!(
+                "[BlobTrack] poll: got result for owner={} blobs={}",
+                response.owner_key, response.blob_count,
+            );
             // Route result to the owner that submitted it (embedded in response).
             if let Some(state) = self.owner_states.get_mut(&response.owner_key) {
                 Self::apply_blob_response(state, &response);
@@ -308,6 +312,13 @@ impl BlobTrackingFX {
             Some(p) => p,
             None => return,
         };
+
+        // Check if readback data is non-zero (sanity check)
+        let nonzero = pixels.iter().any(|&b| b != 0);
+        eprintln!(
+            "[BlobTrack] poll: readback {}x{} nonzero={nonzero} → submitting to worker",
+            state.readback_w, state.readback_h,
+        );
 
         // BlobTrackingFX.cs line 195: if (nativeHandle == IntPtr.Zero) return;
         let Some(worker) = &mut self.worker else {
@@ -650,9 +661,17 @@ impl PostProcessEffect for BlobTrackingFX {
 
         // ---- Phase 1: Blit to downsample RT and request readback (throttled) ----
         let frame = ctx.frame_count;
-        if !state.readback.is_pending()
-            && frame - state.last_readback_frame >= READBACK_INTERVAL_FRAMES
-        {
+        let readback_pending = state.readback.is_pending();
+        let frames_since = frame - state.last_readback_frame;
+        let worker_busy = self.worker.as_ref().is_some_and(|w| w.is_busy());
+        if frame <= 30 || frame % 60 == 0 {
+            eprintln!(
+                "[BlobTrack] f={frame} owner={} pending={readback_pending} \
+                 since={frames_since} busy={worker_busy} blobs={} has_data={}",
+                ctx.owner_key, state.tracked_count, state.has_blob_data,
+            );
+        }
+        if !readback_pending && frames_since >= READBACK_INTERVAL_FRAMES {
             // Compute downsample dispatch
             gpu.native_enc.dispatch_compute(
                 &self.compute_downsample,
