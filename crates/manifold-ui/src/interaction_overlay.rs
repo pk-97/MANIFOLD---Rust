@@ -230,7 +230,7 @@ impl InteractionOverlay {
             if click_count >= 2
                 && let Some(layer) = layer_index {
                     let beat = viewport.floor_to_grid(viewport.pixel_to_beat(pos.x));
-                    if let Some(clip_id) = host.create_clip_at_position(beat, layer, viewport.grid_step()) {
+                    if let Some(clip_id) = host.create_clip_at_position(beat, layer, viewport.clip_creation_step()) {
                         let lid = host.layer_id_at_index(layer).unwrap_or_default();
                         ui_state.select_clip(clip_id.clone(), lid);
                         host.on_clip_selected(&clip_id);

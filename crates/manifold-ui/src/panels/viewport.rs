@@ -815,6 +815,29 @@ impl TimelineViewportPanel {
         }
     }
 
+    /// Grid-aligned step for clip creation, guaranteed to produce a clip
+    /// at least `MIN_CREATION_PX` wide on screen. Walks up musical grid
+    /// levels (16th → 8th → beat → bar) until the threshold is met.
+    const MIN_CREATION_PX: f32 = 40.0;
+
+    pub fn clip_creation_step(&self) -> f32 {
+        let ppb = self.mapper.pixels_per_beat();
+        let candidates: [f32; 4] = [
+            0.25,
+            0.5,
+            1.0,
+            self.beats_per_bar as f32,
+        ];
+        let grid = self.grid_step();
+        for &step in &candidates {
+            if step >= grid && step * ppb >= Self::MIN_CREATION_PX {
+                return step;
+            }
+        }
+        // Fallback: bar is always the coarsest grid level
+        self.beats_per_bar as f32
+    }
+
     // ── Grid subdivision ──────────────────────────────────────────
 
     /// Determine grid subdivision level based on zoom.
@@ -1657,6 +1680,34 @@ mod tests {
         // ppb=20: sixteenth=5px ≥ 4 → Sixteenth
         panel.set_zoom(20.0);
         assert_eq!(panel.grid_subdivision(), GridSubdivision::Sixteenth);
+    }
+
+    #[test]
+    fn clip_creation_step_walks_up_grid_levels() {
+        let mut panel = TimelineViewportPanel::new();
+        panel.beats_per_bar = 4;
+
+        // ppb=200: sixteenth = 50px ≥ 40 → stays at 0.25
+        panel.set_zoom(200.0);
+        assert_eq!(panel.clip_creation_step(), 0.25);
+
+        // ppb=100: sixteenth = 25px < 40, eighth = 50px ≥ 40 → 0.5
+        panel.set_zoom(100.0);
+        assert_eq!(panel.clip_creation_step(), 0.5);
+
+        // ppb=20: sixteenth = 5px, eighth = 10px, beat = 20px < 40,
+        //         bar = 80px ≥ 40 → 4.0
+        panel.set_zoom(20.0);
+        assert_eq!(panel.clip_creation_step(), 4.0);
+
+        // ppb=50: sixteenth = 12.5px < 40, eighth = 25px < 40,
+        //         beat = 50px ≥ 40 → 1.0
+        panel.set_zoom(50.0);
+        assert_eq!(panel.clip_creation_step(), 1.0);
+
+        // Very zoomed out ppb=5: grid_step = bar (4.0), 4*5=20px < 40 → still bar (fallback)
+        panel.set_zoom(5.0);
+        assert_eq!(panel.clip_creation_step(), 4.0);
     }
 
     #[test]

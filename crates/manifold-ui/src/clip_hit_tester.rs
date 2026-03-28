@@ -30,8 +30,12 @@ pub struct ClipHitResult {
 
 // ── Constants ───────────────────────────────────────────────────
 
-/// Trim handle width in pixels. Matches Unity ClipHitTester.TRIM_HANDLE_WIDTH_PX = 8f (line 25).
-const TRIM_HANDLE_WIDTH_PX: f32 = 8.0;
+/// Maximum trim handle width in pixels (Unity ClipHitTester.TRIM_HANDLE_WIDTH_PX = 8f, line 25).
+const MAX_TRIM_HANDLE_PX: f32 = 8.0;
+
+/// Each trim handle takes at most this fraction of the clip width,
+/// guaranteeing ≥70% of any clip is grabbable body.
+const TRIM_HANDLE_RATIO: f32 = 0.15;
 
 // ── ClipHitTester ───────────────────────────────────────────────
 
@@ -96,14 +100,15 @@ impl ClipHitTester {
             let local_px = (beat_at_pointer - clip.start_beat) * ppb;
             let clip_width_px = clip.duration_beats * ppb;
 
-            // Unity lines 84-89: trim handle detection
-            let region = if local_px < TRIM_HANDLE_WIDTH_PX
-                && clip_width_px > TRIM_HANDLE_WIDTH_PX * 2.0
-            {
+            // Trim handle detection — proportional width so narrow clips
+            // stay grabbable (≥70% body). Caps at 8px for wide clips.
+            let trim_w = MAX_TRIM_HANDLE_PX.min(clip_width_px * TRIM_HANDLE_RATIO);
+            let region = if trim_w < 2.0 {
+                // Clip too narrow for usable trim handles
+                HitRegion::Body
+            } else if local_px < trim_w {
                 HitRegion::TrimLeft
-            } else if local_px > clip_width_px - TRIM_HANDLE_WIDTH_PX
-                && clip_width_px > TRIM_HANDLE_WIDTH_PX * 2.0
-            {
+            } else if local_px > clip_width_px - trim_w {
                 HitRegion::TrimRight
             } else {
                 HitRegion::Body
