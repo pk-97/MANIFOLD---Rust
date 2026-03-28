@@ -1639,8 +1639,8 @@ impl ContentThread {
         });
         let mode_label = if generator_only { "offline" } else { "real-time" };
 
-        log::info!(
-            "[ContentThread] Export ({mode_label}): {} frames, {:.2}s, \
+        eprintln!(
+            "[Export] START ({mode_label}): {} frames, {:.2}s, \
              beats {:.1}-{:.1}, {}x{} @ {} fps",
             total_frames, duration, start_beat, end_beat,
             export_config.width, export_config.height, export_config.fps,
@@ -1858,13 +1858,12 @@ impl ContentThread {
             true,
         );
 
-        // Diagnostic logging: first 5 frames, then every 60 frames.
-        // Shows beat, time, clip count, decode wait — essential for diagnosing
-        // frozen sections and timing drift.
-        if frame_idx < 5 || frame_idx.is_multiple_of(60) {
+        // Diagnostic logging: first 5 frames, then every 30 frames.
+        // Uses eprintln! to bypass log level filtering.
+        if frame_idx < 5 || frame_idx.is_multiple_of(30) {
             let beat = self.engine.current_beat();
             let time = self.engine.current_time();
-            log::info!(
+            eprintln!(
                 "[Export] frame={} beat={:.2} time={:.3}s clips={} dirty={} \
                  decode_wait={:.1}ms",
                 frame_idx, beat, time,
@@ -1913,7 +1912,7 @@ impl ContentThread {
         // Per-frame timing for first few frames (diagnose slow starts).
         if frame_idx < 5 {
             let total_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
-            log::info!(
+            eprintln!(
                 "[Export] frame={} total={:.1}ms",
                 frame_idx, total_ms,
             );
