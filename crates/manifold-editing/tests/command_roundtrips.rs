@@ -13,7 +13,7 @@ use manifold_core::project::Project;
 use manifold_core::layer::Layer;
 use manifold_core::LayerId;
 use manifold_core::types::*;
-use manifold_core::{EffectTypeId, GeneratorTypeId};
+use manifold_core::{Beats, Seconds, EffectTypeId, GeneratorTypeId};
 use manifold_core::effects::*;
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
@@ -40,13 +40,13 @@ fn make_test_project() -> Project {
 
     // Add clips to layer 0
     let clip1 = TimelineClip {
-        start_beat: 0.0,
-        duration_beats: 4.0,
+        start_beat: Beats(0.0),
+        duration_beats: Beats(4.0),
         ..Default::default()
     };
     let clip2 = TimelineClip {
-        start_beat: 4.0,
-        duration_beats: 4.0,
+        start_beat: Beats(4.0),
+        duration_beats: Beats(4.0),
         ..Default::default()
     };
     project.timeline.layers[0].add_clip(clip1);
@@ -66,21 +66,21 @@ fn swap_video_undo_roundtrip() {
     let mut cmd = SwapVideoCommand::new(
         clip_id.clone(),
         "old_video".into(), "new_video".into(),
-        0.0, 1.5,
-        4.0, 8.0,
+        Seconds(0.0), Seconds(1.5),
+        Beats(4.0), Beats(8.0),
     );
 
     cmd.execute(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert_eq!(clip.video_clip_id, "new_video");
-    assert!((clip.in_point - 1.5).abs() < 0.001);
-    assert!((clip.duration_beats - 8.0).abs() < 0.001);
+    assert!((clip.in_point - Seconds(1.5)).abs() < Seconds(0.001));
+    assert!((clip.duration_beats - Beats(8.0)).abs() < Beats(0.001));
 
     cmd.undo(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert_eq!(clip.video_clip_id, "old_video");
-    assert!((clip.in_point - 0.0).abs() < 0.001);
-    assert!((clip.duration_beats - 4.0).abs() < 0.001);
+    assert!((clip.in_point - Seconds(0.0)).abs() < Seconds(0.001));
+    assert!((clip.duration_beats - Beats(4.0)).abs() < Beats(0.001));
 }
 
 #[test]
@@ -88,15 +88,15 @@ fn slip_clip_undo_roundtrip() {
     let mut project = make_test_project();
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
 
-    let mut cmd = SlipClipCommand::new(clip_id.clone(), 0.0, 2.5);
+    let mut cmd = SlipClipCommand::new(clip_id.clone(), Seconds(0.0), Seconds(2.5));
 
     cmd.execute(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.in_point - 2.5).abs() < 0.001);
+    assert!((clip.in_point - Seconds(2.5)).abs() < Seconds(0.001));
 
     cmd.undo(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.in_point - 0.0).abs() < 0.001);
+    assert!((clip.in_point - Seconds(0.0)).abs() < Seconds(0.001));
 }
 
 #[test]
@@ -105,11 +105,11 @@ fn clip_effects_undo_roundtrip() {
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
 
     let old = ClipEffectsSnapshot {
-        invert_colors: false, is_looping: false, loop_duration_beats: 0.0,
+        invert_colors: false, is_looping: false, loop_duration_beats: Beats(0.0),
         translate_x: 0.0, translate_y: 0.0, scale: 1.0, rotation: 0.0,
     };
     let new = ClipEffectsSnapshot {
-        invert_colors: true, is_looping: true, loop_duration_beats: 2.0,
+        invert_colors: true, is_looping: true, loop_duration_beats: Beats(2.0),
         translate_x: 0.5, translate_y: -0.3, scale: 2.0, rotation: 45.0,
     };
 
@@ -133,12 +133,12 @@ fn change_clip_loop_undo_roundtrip() {
     let mut project = make_test_project();
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
 
-    let mut cmd = ChangeClipLoopCommand::new(clip_id.clone(), false, true, 0.0, 2.0);
+    let mut cmd = ChangeClipLoopCommand::new(clip_id.clone(), false, true, Beats(0.0), Beats(2.0));
 
     cmd.execute(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert!(clip.is_looping);
-    assert!((clip.loop_duration_beats - 2.0).abs() < 0.001);
+    assert!((clip.loop_duration_beats - Beats(2.0)).abs() < Beats(0.001));
 
     cmd.undo(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
@@ -168,21 +168,21 @@ fn split_clip_undo_roundtrip() {
     let initial_count = project.timeline.layers[0].clips.len();
 
     let mut tail = project.timeline.layers[0].clips[0].clone_with_new_id();
-    tail.start_beat = 2.0;
-    tail.duration_beats = 2.0;
+    tail.start_beat = Beats(2.0);
+    tail.duration_beats = Beats(2.0);
 
     let layer_id = project.timeline.layers[0].layer_id.clone();
-    let mut cmd = SplitClipCommand::new(clip_id.clone(), layer_id, 4.0, 2.0, tail);
+    let mut cmd = SplitClipCommand::new(clip_id.clone(), layer_id, Beats(4.0), Beats(2.0), tail);
 
     cmd.execute(&mut project);
     assert_eq!(project.timeline.layers[0].clips.len(), initial_count + 1);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.duration_beats - 2.0).abs() < 0.001);
+    assert!((clip.duration_beats - Beats(2.0)).abs() < Beats(0.001));
 
     cmd.undo(&mut project);
     assert_eq!(project.timeline.layers[0].clips.len(), initial_count);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.duration_beats - 4.0).abs() < 0.001);
+    assert!((clip.duration_beats - Beats(4.0)).abs() < Beats(0.001));
 }
 
 // ─── Layer Commands ───
@@ -835,11 +835,11 @@ fn commands_work_on_loaded_project() {
     let original_beat = project.timeline.layers[0].clips[0].start_beat;
 
     // Chain several commands
-    let mut cmd1 = SlipClipCommand::new(clip_id.clone(), 0.0, 1.0);
+    let mut cmd1 = SlipClipCommand::new(clip_id.clone(), Seconds(0.0), Seconds(1.0));
     cmd1.execute(&mut project);
-    assert!((project.timeline.find_clip_by_id(&clip_id).unwrap().in_point - 1.0).abs() < 0.001);
+    assert!((project.timeline.find_clip_by_id(&clip_id).unwrap().in_point - Seconds(1.0)).abs() < Seconds(0.001));
 
-    let mut cmd2 = ChangeClipLoopCommand::new(clip_id.clone(), false, true, 0.0, 2.0);
+    let mut cmd2 = ChangeClipLoopCommand::new(clip_id.clone(), false, true, Beats(0.0), Beats(2.0));
     cmd2.execute(&mut project);
     assert!(project.timeline.find_clip_by_id(&clip_id).unwrap().is_looping);
 
@@ -848,8 +848,8 @@ fn commands_work_on_loaded_project() {
     assert!(!project.timeline.find_clip_by_id(&clip_id).unwrap().is_looping);
 
     cmd1.undo(&mut project);
-    assert!((project.timeline.find_clip_by_id(&clip_id).unwrap().in_point - 0.0).abs() < 0.001);
-    assert!((project.timeline.find_clip_by_id(&clip_id).unwrap().start_beat - original_beat).abs() < 0.001);
+    assert!((project.timeline.find_clip_by_id(&clip_id).unwrap().in_point - Seconds(0.0)).abs() < Seconds(0.001));
+    assert!((project.timeline.find_clip_by_id(&clip_id).unwrap().start_beat - original_beat).abs() < Beats(0.001));
 }
 
 fn make_effect(effect_type: &EffectTypeId) -> EffectInstance {

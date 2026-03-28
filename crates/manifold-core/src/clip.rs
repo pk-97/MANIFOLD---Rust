@@ -3,6 +3,7 @@ use crate::id::{ClipId, LayerId};
 use crate::generator_type_id::GeneratorTypeId;
 use crate::effect_type_id::EffectTypeId;
 use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope};
+use crate::units::{Beats, Seconds};
 
 /// A single clip on the timeline. Beat-primary timing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,13 +18,13 @@ pub struct TimelineClip {
 
     // ── Beat-primary timing (source of truth) ──
     #[serde(default)]
-    pub start_beat: f32,
-    #[serde(default)]
-    pub duration_beats: f32,
+    pub start_beat: Beats,
+    #[serde(default = "default_one_beat")]
+    pub duration_beats: Beats,
 
     // ── Seconds (video source offset, BPM-independent) ──
     #[serde(default)]
-    pub in_point: f32,
+    pub in_point: Seconds,
 
     // ── Metadata ──
     #[serde(default)]
@@ -53,7 +54,7 @@ pub struct TimelineClip {
     #[serde(default)]
     pub is_looping: bool,
     #[serde(default)]
-    pub loop_duration_beats: f32,
+    pub loop_duration_beats: Beats,
 
     // ── MIDI tick ──
     #[serde(default)]
@@ -84,7 +85,7 @@ pub struct TimelineClip {
 
 impl TimelineClip {
     #[must_use]
-    pub fn end_beat(&self) -> f32 {
+    pub fn end_beat(&self) -> Beats {
         self.start_beat + self.duration_beats
     }
 
@@ -92,7 +93,7 @@ impl TimelineClip {
         self.generator_type != GeneratorTypeId::NONE
     }
 
-    pub fn is_active_at_beat(&self, beat: f32) -> bool {
+    pub fn is_active_at_beat(&self, beat: Beats) -> bool {
         beat >= self.start_beat && beat < self.end_beat()
     }
 
@@ -128,7 +129,7 @@ impl TimelineClip {
     }
 
     /// Deep clone with optionally overridden start beat.
-    pub fn clone_at(&self, start_beat: Option<f32>) -> Self {
+    pub fn clone_at(&self, start_beat: Option<Beats>) -> Self {
         let mut cloned = self.clone_with_new_id();
         if let Some(beat) = start_beat {
             cloned.start_beat = beat;
@@ -139,13 +140,13 @@ impl TimelineClip {
     // ── Clamped setters (match Unity TimelineClip property setters) ──
 
     /// Set duration with non-negative clamp. Unity TimelineClip.cs line 82.
-    pub fn set_duration_beats(&mut self, v: f32) {
-        self.duration_beats = v.max(0.0);
+    pub fn set_duration_beats(&mut self, v: Beats) {
+        self.duration_beats = v.max(Beats::ZERO);
     }
 
     /// Set in-point with non-negative clamp. Unity TimelineClip.cs line 114.
-    pub fn set_in_point(&mut self, v: f32) {
-        self.in_point = v.max(0.0);
+    pub fn set_in_point(&mut self, v: Seconds) {
+        self.in_point = v.max(Seconds::ZERO);
     }
 
     /// Resolved recorded BPM: clamped to 20-300 if > 0, else 0.
@@ -181,16 +182,16 @@ impl TimelineClip {
     pub fn new_video(
         video_clip_id: String,
         layer_id: LayerId,
-        start_beat: f32,
-        duration_beats: f32,
-        in_point: f32,
+        start_beat: Beats,
+        duration_beats: Beats,
+        in_point: Seconds,
     ) -> Self {
         Self {
             video_clip_id,
             layer_id,
             start_beat,
-            duration_beats: duration_beats.max(0.0),
-            in_point: in_point.max(0.0),
+            duration_beats: duration_beats.max(Beats::ZERO),
+            in_point: in_point.max(Seconds::ZERO),
             ..Default::default()
         }
     }
@@ -199,14 +200,14 @@ impl TimelineClip {
     pub fn new_generator(
         gen_type: GeneratorTypeId,
         layer_id: LayerId,
-        start_beat: f32,
-        duration_beats: f32,
+        start_beat: Beats,
+        duration_beats: Beats,
     ) -> Self {
         Self {
             generator_type: gen_type,
             layer_id,
             start_beat,
-            duration_beats: duration_beats.max(0.0),
+            duration_beats: duration_beats.max(Beats::ZERO),
             ..Default::default()
         }
     }
@@ -233,8 +234,8 @@ impl TimelineClip {
     }
 
     /// Set loop duration with clamp. Unity TimelineClip.cs line 201.
-    pub fn set_loop_duration_beats(&mut self, v: f32) {
-        self.loop_duration_beats = v.max(0.0);
+    pub fn set_loop_duration_beats(&mut self, v: Beats) {
+        self.loop_duration_beats = v.max(Beats::ZERO);
     }
 
     /// Find effect by type. Unity TimelineClip.cs line 230.
@@ -287,9 +288,9 @@ impl Default for TimelineClip {
             id: ClipId::new(crate::short_id()),
             video_clip_id: String::new(),
             layer_id: LayerId::default(),
-            start_beat: 0.0,
-            duration_beats: 1.0,
-            in_point: 0.0,
+            start_beat: Beats::ZERO,
+            duration_beats: Beats::ONE,
+            in_point: Seconds::ZERO,
             recorded_bpm: 0.0,
             is_locked: false,
             is_muted: false,
@@ -300,7 +301,7 @@ impl Default for TimelineClip {
             scale: 1.0,
             rotation: 0.0,
             is_looping: false,
-            loop_duration_beats: 0.0,
+            loop_duration_beats: Beats::ZERO,
             start_absolute_tick: 0,
             has_start_absolute_tick: false,
             effects: Vec::new(),
@@ -316,6 +317,7 @@ impl Default for TimelineClip {
 }
 
 fn default_one() -> f32 { 1.0 }
+fn default_one_beat() -> Beats { Beats::ONE }
 
 #[cfg(test)]
 mod tests {
@@ -324,22 +326,22 @@ mod tests {
     #[test]
     fn test_set_duration_beats_clamps_negative() {
         let mut clip = TimelineClip::default();
-        clip.set_duration_beats(-5.0);
-        assert_eq!(clip.duration_beats, 0.0);
+        clip.set_duration_beats(Beats(-5.0));
+        assert_eq!(clip.duration_beats, Beats(0.0));
     }
 
     #[test]
     fn test_set_duration_beats_preserves_positive() {
         let mut clip = TimelineClip::default();
-        clip.set_duration_beats(4.0);
-        assert_eq!(clip.duration_beats, 4.0);
+        clip.set_duration_beats(Beats(4.0));
+        assert_eq!(clip.duration_beats, Beats(4.0));
     }
 
     #[test]
     fn test_set_in_point_clamps_negative() {
         let mut clip = TimelineClip::default();
-        clip.set_in_point(-2.0);
-        assert_eq!(clip.in_point, 0.0);
+        clip.set_in_point(Seconds(-2.0));
+        assert_eq!(clip.in_point, Seconds(0.0));
     }
 
     #[test]
@@ -409,14 +411,20 @@ mod tests {
 
     #[test]
     fn test_new_video_clamps_duration() {
-        let clip = TimelineClip::new_video("v1".into(), LayerId::default(), 0.0, -3.0, -1.0);
-        assert_eq!(clip.duration_beats, 0.0);
-        assert_eq!(clip.in_point, 0.0);
+        let clip = TimelineClip::new_video(
+            "v1".into(), LayerId::default(),
+            Beats(0.0), Beats(-3.0), Seconds(-1.0),
+        );
+        assert_eq!(clip.duration_beats, Beats(0.0));
+        assert_eq!(clip.in_point, Seconds(0.0));
     }
 
     #[test]
     fn test_new_generator_clamps_duration() {
-        let clip = TimelineClip::new_generator(GeneratorTypeId::NONE, LayerId::default(), 0.0, -2.0);
-        assert_eq!(clip.duration_beats, 0.0);
+        let clip = TimelineClip::new_generator(
+            GeneratorTypeId::NONE, LayerId::default(),
+            Beats(0.0), Beats(-2.0),
+        );
+        assert_eq!(clip.duration_beats, Beats(0.0));
     }
 }

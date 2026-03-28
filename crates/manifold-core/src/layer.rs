@@ -7,6 +7,7 @@ use crate::clip::TimelineClip;
 use crate::color::Color;
 use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope, ParameterDriver};
 use crate::generator::GeneratorParamState;
+use crate::units::Beats;
 
 /// A single layer in the timeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -204,7 +205,7 @@ impl Layer {
     ///
     /// IMPORTANT: Caches must be up-to-date before calling. Either call
     /// `ensure_sorted()` first, or use `collect_active_clips_at_beat_mut()`.
-    pub fn collect_active_clips_at_beat(&self, beat: f32, results: &mut Vec<usize>) {
+    pub fn collect_active_clips_at_beat(&self, beat: Beats, results: &mut Vec<usize>) {
         if self.clips.is_empty() {
             return;
         }
@@ -254,7 +255,7 @@ impl Layer {
 
     /// Binary search: count of clips with start_beat <= beat.
     /// From Unity Layer.cs UpperBoundStartBeat (lines 475-489).
-    fn upper_bound_start_beat(clips: &[TimelineClip], beat: f32) -> usize {
+    fn upper_bound_start_beat(clips: &[TimelineClip], beat: Beats) -> usize {
         let mut lo = 0;
         let mut hi = clips.len();
         while lo < hi {
@@ -270,7 +271,7 @@ impl Layer {
 
     /// Binary search: first index in clips_by_end_indices where end_beat > beat.
     /// From Unity Layer.cs LowerBoundEndBeat (lines 491-505).
-    fn lower_bound_end_beat(clips: &[TimelineClip], indices: &[usize], beat: f32) -> usize {
+    fn lower_bound_end_beat(clips: &[TimelineClip], indices: &[usize], beat: Beats) -> usize {
         let mut lo = 0;
         let mut hi = indices.len();
         while lo < hi {
@@ -302,7 +303,7 @@ impl Layer {
 
     /// Convenience: ensure caches + collect active clips in one &mut self call.
     /// Use when you don't need to split the borrow.
-    pub fn collect_active_clips_at_beat_mut(&mut self, beat: f32, results: &mut Vec<usize>) {
+    pub fn collect_active_clips_at_beat_mut(&mut self, beat: Beats, results: &mut Vec<usize>) {
         self.ensure_clip_ordering_caches();
         self.collect_active_clips_at_beat(beat, results);
     }
@@ -449,8 +450,8 @@ impl Layer {
     }
 
     /// Get duration in beats (max end_beat across all clips). Unity Layer.cs line 530.
-    pub fn get_duration_beats(&self) -> f32 {
-        self.clips.iter().map(|c| c.end_beat()).fold(0.0f32, f32::max)
+    pub fn get_duration_beats(&self) -> Beats {
+        self.clips.iter().map(|c| c.end_beat()).fold(Beats::ZERO, |a, b| a.max(b))
     }
 
     /// Set a generator param base value at index.

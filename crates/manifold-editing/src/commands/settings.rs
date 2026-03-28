@@ -1,4 +1,5 @@
 use crate::command::Command;
+use manifold_core::Beats;
 use manifold_core::LayerId;
 use manifold_core::project::Project;
 use manifold_core::math::BeatQuantizer;
@@ -636,7 +637,7 @@ pub struct RescaleBeatsForBpmChangeCommand {
     _old_bpm: f32,
     _new_bpm: f32,
     /// (layer_index, clip_index, old_start_beat, new_start_beat)
-    clip_moves: Vec<(usize, usize, f32, f32)>,
+    clip_moves: Vec<(usize, usize, Beats, Beats)>,
 }
 
 impl RescaleBeatsForBpmChangeCommand {
@@ -652,8 +653,8 @@ impl RescaleBeatsForBpmChangeCommand {
         for (li, layer) in project.timeline.layers.iter().enumerate() {
             for (ci, clip) in layer.clips.iter().enumerate() {
                 let old_beat = clip.start_beat;
-                let new_beat = (old_beat * ratio).max(0.0);
-                if (new_beat - old_beat).abs() >= 0.0001 {
+                let new_beat = Beats((old_beat.0 * ratio as f64).max(0.0));
+                if (new_beat.0 - old_beat.0).abs() >= 0.0001 {
                     clip_moves.push((li, ci, old_beat, new_beat));
                 }
             }

@@ -1,9 +1,9 @@
+use manifold_core::Beats;
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::{MoveClipCommand, TrimClipCommand, MuteClipCommand, AddClipCommand, DeleteClipCommand};
 use manifold_editing::commands::settings::ChangeBpmCommand;
 use manifold_editing::undo::UndoRedoManager;
 use manifold_core::clip::TimelineClip;
-use manifold_core::LayerId;
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
     let mut p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -25,19 +25,19 @@ fn move_clip_undo_restores_position() {
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
     let original_beat = project.timeline.layers[0].clips[0].start_beat;
 
-    let new_beat = original_beat + 4.0;
+    let new_beat = original_beat + Beats(4.0);
     let layer_id = project.timeline.layers[0].layer_id.clone();
     let mut cmd = MoveClipCommand::new(clip_id.clone(), original_beat, new_beat, layer_id.clone(), layer_id);
 
     // Execute
     cmd.execute(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.start_beat - new_beat).abs() < 0.001, "Clip should have moved to {new_beat}");
+    assert!((clip.start_beat - new_beat).abs() < Beats(0.001), "Clip should have moved to {new_beat}");
 
     // Undo
     cmd.undo(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.start_beat - original_beat).abs() < 0.001, "Undo should restore to {original_beat}");
+    assert!((clip.start_beat - original_beat).abs() < Beats(0.001), "Undo should restore to {original_beat}");
 }
 
 #[test]
@@ -49,7 +49,7 @@ fn trim_clip_undo_restores_duration() {
     let original_dur = project.timeline.layers[0].clips[0].duration_beats;
     let original_in = project.timeline.layers[0].clips[0].in_point;
 
-    let new_dur = original_dur + 2.0;
+    let new_dur = original_dur + Beats(2.0);
     let mut cmd = TrimClipCommand::new(
         clip_id.clone(),
         original_start, original_start,
@@ -59,11 +59,11 @@ fn trim_clip_undo_restores_duration() {
 
     cmd.execute(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.duration_beats - new_dur).abs() < 0.001);
+    assert!((clip.duration_beats - new_dur).abs() < Beats(0.001));
 
     cmd.undo(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.duration_beats - original_dur).abs() < 0.001);
+    assert!((clip.duration_beats - original_dur).abs() < Beats(0.001));
 }
 
 #[test]
@@ -149,20 +149,20 @@ fn undo_manager_multi_command_roundtrip() {
 
     // Command 2: move clip
     let layer_id = project.timeline.layers[0].layer_id.clone();
-    let mut cmd2 = Box::new(MoveClipCommand::new(clip_id.clone(), original_beat, original_beat + 8.0, layer_id.clone(), layer_id));
+    let mut cmd2 = Box::new(MoveClipCommand::new(clip_id.clone(), original_beat, original_beat + Beats(8.0), layer_id.clone(), layer_id));
     cmd2.execute(&mut project);
     undo_mgr.record(cmd2);
 
     // Verify state after both commands
     assert!((project.settings.bpm - 120.0).abs() < 0.01);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.start_beat - (original_beat + 8.0)).abs() < 0.001);
+    assert!((clip.start_beat - (original_beat + Beats(8.0))).abs() < Beats(0.001));
 
     // Undo command 2
     assert!(undo_mgr.can_undo());
     assert!(undo_mgr.undo(&mut project));
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.start_beat - original_beat).abs() < 0.001);
+    assert!((clip.start_beat - original_beat).abs() < Beats(0.001));
     assert!((project.settings.bpm - 120.0).abs() < 0.01); // BPM unchanged
 
     // Undo command 1
@@ -175,5 +175,5 @@ fn undo_manager_multi_command_roundtrip() {
 
     assert!(undo_mgr.redo(&mut project));
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!((clip.start_beat - (original_beat + 8.0)).abs() < 0.001);
+    assert!((clip.start_beat - (original_beat + Beats(8.0))).abs() < Beats(0.001));
 }

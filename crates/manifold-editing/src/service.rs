@@ -1,7 +1,7 @@
 use crate::command::{Command, CompositeCommand};
 use crate::undo::UndoRedoManager;
 use crate::commands::clip::*;
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{Beats, ClipId, LayerId, Seconds};
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::selection::SelectionRegion;
@@ -10,11 +10,11 @@ use std::collections::HashSet;
 
 /// Host trait for EditingService — replaces C#'s UIState/CoordinateMapper/PlaybackController.
 pub trait EditingHost {
-    fn current_beat(&self) -> f32;
+    fn current_beat(&self) -> Beats;
     fn seconds_per_beat(&self) -> f32;
-    fn grid_interval_beats(&self) -> f32;
-    fn floor_beat_to_grid(&self, beat: f32) -> f32;
-    fn snap_beat_to_grid(&self, beat: f32) -> f32;
+    fn grid_interval_beats(&self) -> Beats;
+    fn floor_beat_to_grid(&self, beat: Beats) -> Beats;
+    fn snap_beat_to_grid(&self, beat: Beats) -> Beats;
     fn request_clip_sync(&mut self);
     fn mark_compositor_dirty(&mut self);
 }
@@ -23,7 +23,7 @@ pub trait EditingHost {
 #[derive(Debug, Clone)]
 struct ClipboardEntry {
     source_clip: TimelineClip,
-    beat_offset: f32,
+    beat_offset: Beats,
     layer_offset: i32,
 }
 
@@ -134,12 +134,15 @@ impl EditingService {
             .unwrap_or((0, 0));
         let mut results = Vec::new();
 
+        let region_start = Beats::from_f32(region.start_beat);
+        let region_end = Beats::from_f32(region.end_beat);
+
         for (li, layer) in project.timeline.layers.iter().enumerate() {
             if li < min_layer || li > max_layer {
                 continue;
             }
             for clip in &layer.clips {
-                if clip.start_beat < region.end_beat && clip.end_beat() > region.start_beat {
+                if clip.start_beat < region_end && clip.end_beat() > region_start {
                     results.push((li, clip.id.clone()));
                 }
             }
@@ -190,7 +193,7 @@ impl EditingService {
             // Case 2: placed clip covers the start -> trim start of existing
             if placed_start <= clip_start && placed_end < clip_end {
                 let trim_beats = placed_end - clip_start;
-                let trim_seconds = trim_beats * spb;
+                let trim_seconds = Seconds(trim_beats.0 * spb as f64);
                 let new_in_point = clip.in_point + trim_seconds;
                 let new_start = placed_end;
                 let new_duration = clip.duration_beats - trim_beats;
@@ -223,7 +226,7 @@ impl EditingService {
                 tail.start_beat = placed_end;
                 tail.duration_beats = clip_end - placed_end;
                 let beats_elapsed = placed_end - clip_start;
-                tail.in_point = clip.in_point + beats_elapsed * spb;
+                tail.in_point = clip.in_point + Seconds(beats_elapsed.0 * spb as f64);
 
                 commands.push(Box::new(TrimClipCommand::new(
                     clip.id.clone(),
@@ -257,12 +260,15 @@ impl EditingService {
         // Region mode: trim clips at boundaries, use region origin
         if let Some(region) = region
             && region.is_active {
+                let region_start = Beats::from_f32(region.start_beat);
+                let region_end = Beats::from_f32(region.end_beat);
+
                 // Find overlapping clips in region (matching Unity CopySelectedClips)
                 let overlapping: Vec<&TimelineClip> = project.timeline.layers.iter()
                     .flat_map(|l| l.clips.iter())
                     .filter(|c| {
-                        c.start_beat < region.end_beat
-                            && c.end_beat() > region.start_beat
+                        c.start_beat < region_end
+                            && c.end_beat() > region_start
                             && clip_ids.contains(&c.id)
                     })
                     .collect();
@@ -271,7 +277,7 @@ impl EditingService {
                     return;
                 }
 
-                let origin_beat = region.start_beat;
+                let origin_beat = region_start;
                 let (min_layer, _) = region.layer_index_range(&project.timeline.layers)
                     .unwrap_or((0, 0));
 
@@ -306,7 +312,7 @@ impl EditingService {
             return;
         }
 
-        let min_beat = clips.iter().map(|c| c.start_beat).fold(f32::MAX, f32::min);
+        let min_beat = clips.iter().map(|c| c.start_beat).fold(Beats(f64::MAX), Beats::min);
         let min_layer_idx = clips.iter()
             .map(|c| project.timeline.layer_index_for_id(&c.layer_id).unwrap_or(0) as i32)
             .min()
@@ -329,7 +335,7 @@ impl EditingService {
     pub fn paste_clips(
         &self,
         project: &mut Project,
-        target_beat: f32,
+        target_beat: Beats,
         target_layer: i32,
         spb: f32,
     ) -> PasteResult {
@@ -403,7 +409,7 @@ impl EditingService {
     pub fn split_clip_at_beat(
         project: &Project,
         clip_id: &str,
-        split_beat: f32,
+        split_beat: Beats,
         spb: f32,
     ) -> Option<Box<dyn Command>> {
         for layer in &project.timeline.layers {
@@ -419,8 +425,8 @@ impl EditingService {
                 let mut tail = clip.clone_with_new_id();
                 tail.start_beat = tail_start;
                 tail.duration_beats = tail_duration;
-                if !clip.is_generator() && clip.duration_beats > 0.0 {
-                    tail.in_point = clip.in_point + new_duration * spb;
+                if !clip.is_generator() && clip.duration_beats > Beats::ZERO {
+                    tail.in_point = clip.in_point + Seconds(new_duration.0 * spb as f64);
                 }
                 tail.layer_id = layer.layer_id.clone();
 
@@ -451,6 +457,9 @@ impl EditingService {
             .map(|(lo, hi)| (lo.min(layer_count.saturating_sub(1)), hi.min(layer_count.saturating_sub(1))))
             .unwrap_or((0, 0));
 
+        let region_start = Beats::from_f32(region.start_beat);
+        let region_end = Beats::from_f32(region.end_beat);
+
         for li in start_layer..=end_layer {
             // Snapshot clip IDs (splits add new clips)
             let clip_ids: Vec<ClipId> = project.timeline.layers[li]
@@ -462,20 +471,20 @@ impl EditingService {
                     None => continue,
                 };
 
-                if clip.end_beat() <= region.start_beat || clip.start_beat >= region.end_beat {
+                if clip.end_beat() <= region_start || clip.start_beat >= region_end {
                     continue;
                 }
 
                 // Split at region end FIRST (so the original's EndBeat is still valid
                 // when we split at region start)
-                if clip.end_beat() > region.end_beat
-                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region.end_beat, spb) {
+                if clip.end_beat() > region_end
+                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_end, spb) {
                         commands.push(cmd);
                     }
 
                 // Split at region start
-                if clip.start_beat < region.start_beat
-                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region.start_beat, spb) {
+                if clip.start_beat < region_start
+                    && let Some(cmd) = Self::split_clip_at_beat(project, clip_id, region_start, spb) {
                         commands.push(cmd);
                     }
             }
@@ -494,9 +503,12 @@ impl EditingService {
         region: &SelectionRegion,
         spb: f32,
     ) -> TimelineClip {
-        let new_start = clip.start_beat.max(region.start_beat);
-        let new_end = clip.end_beat().min(region.end_beat);
-        let new_duration = (new_end - new_start).max(0.0);
+        let region_start = Beats::from_f32(region.start_beat);
+        let region_end = Beats::from_f32(region.end_beat);
+
+        let new_start = clip.start_beat.max(region_start);
+        let new_end = clip.end_beat().min(region_end);
+        let new_duration = (new_end - new_start).max(Beats::ZERO);
 
         let mut trimmed = clip.clone_with_new_id();
         trimmed.start_beat = new_start;
@@ -504,7 +516,7 @@ impl EditingService {
 
         // Adjust in_point for video clips (generators have no in_point)
         if !clip.is_generator() {
-            trimmed.in_point = clip.in_point + (new_start - clip.start_beat) * spb;
+            trimmed.in_point = clip.in_point + Seconds((new_start - clip.start_beat).0 * spb as f64);
         }
 
         trimmed
@@ -516,9 +528,9 @@ impl EditingService {
     /// Returns (command, clip_id) so the caller can track the new clip.
     pub fn create_clip_at_position(
         project: &mut Project,
-        beat: f32,
+        beat: Beats,
         layer_index: usize,
-        duration_beats: f32,
+        duration_beats: Beats,
     ) -> (Box<dyn Command>, ClipId) {
         let layer = project.timeline.layers.get(layer_index);
         let is_generator = layer.is_some_and(|l| l.layer_type == LayerType::Generator);
@@ -558,7 +570,9 @@ impl EditingService {
             // Region mode: find ALL clips overlapping the region (Unity FillClipsInRegion),
             // trim to region boundaries, place copies after region end.
             // The offset is the full region duration, preserving gaps (Ableton behavior).
-            let offset = region.duration_beats();
+            let offset = Beats::from_f32(region.duration_beats());
+            let region_start = Beats::from_f32(region.start_beat);
+            let region_end = Beats::from_f32(region.end_beat);
             let (start_layer, end_layer) = region.layer_index_range(&project.timeline.layers)
                 .map(|(lo, hi)| (lo, hi.min(project.timeline.layers.len().saturating_sub(1))))
                 .unwrap_or((0, 0));
@@ -567,8 +581,8 @@ impl EditingService {
                 let layer = &project.timeline.layers[li];
                 for clip in &layer.clips {
                     // Overlap test: clip intersects region (Unity lines 182-183)
-                    if clip.end_beat() <= region.start_beat
-                        || clip.start_beat >= region.end_beat
+                    if clip.end_beat() <= region_start
+                        || clip.start_beat >= region_end
                     {
                         continue;
                     }
@@ -580,8 +594,8 @@ impl EditingService {
             }
         } else {
             // Individual mode: offset by the clips' own span
-            let mut min_beat = f32::MAX;
-            let mut max_end = f32::MIN;
+            let mut min_beat = Beats(f64::MAX);
+            let mut max_end = Beats(f64::MIN);
             for layer in &project.timeline.layers {
                 for clip in &layer.clips {
                     if clip_ids.contains(&clip.id) {
@@ -590,7 +604,7 @@ impl EditingService {
                     }
                 }
             }
-            let shift = if max_end > min_beat { max_end - min_beat } else { 1.0 };
+            let shift = if max_end > min_beat { max_end - min_beat } else { Beats::ONE };
 
             for layer in &project.timeline.layers {
                 for clip in &layer.clips {
@@ -657,7 +671,7 @@ impl EditingService {
     pub fn nudge_clips(
         project: &Project,
         clip_ids: &[ClipId],
-        beat_delta: f32,
+        beat_delta: Beats,
         spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
@@ -677,8 +691,8 @@ impl EditingService {
                     continue;
                 }
                 let old_start = clip.start_beat;
-                let new_start = (old_start + beat_delta).max(0.0);
-                if (new_start - old_start).abs() < 0.0001 {
+                let new_start = (old_start + beat_delta).max(Beats::ZERO);
+                if (new_start - old_start).abs() < Beats(0.0001) {
                     continue;
                 }
 
@@ -722,7 +736,7 @@ impl EditingService {
     pub fn extend_clips_by_grid(
         project: &Project,
         clip_ids: &[ClipId],
-        grid_step: f32,
+        grid_step: Beats,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
 
@@ -735,7 +749,7 @@ impl EditingService {
                 let mut new_duration = clip.duration_beats + grid_step;
 
                 // Clamp to next clip on same layer to prevent overlap
-                let mut next_start = f32::MAX;
+                let mut next_start = Beats(f64::MAX);
                 for other in &layer.clips {
                     if other.id == clip.id {
                         continue;
@@ -750,7 +764,7 @@ impl EditingService {
                 }
 
                 // Skip if duration didn't actually change or decreased
-                if (new_duration - clip.duration_beats).abs() < 0.001 {
+                if (new_duration - clip.duration_beats).abs() < Beats(0.001) {
                     continue;
                 }
                 if new_duration <= clip.duration_beats {
@@ -773,16 +787,16 @@ impl EditingService {
     pub fn shrink_clips_by_grid(
         project: &Project,
         clip_ids: &[ClipId],
-        grid_step: f32,
+        grid_step: Beats,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
-        let min_duration = 0.25; // Fixed 1/16th note minimum. Port of Unity line 861: const float minDuration = 0.25f;
+        let min_duration = Beats(0.25); // Fixed 1/16th note minimum. Port of Unity line 861: const float minDuration = 0.25f;
 
         for layer in &project.timeline.layers {
             for clip in &layer.clips {
                 if clip_ids.contains(&clip.id) {
                     let new_duration = (clip.duration_beats - grid_step).max(min_duration);
-                    if (new_duration - clip.duration_beats).abs() > 0.001 {
+                    if (new_duration - clip.duration_beats).abs() > Beats(0.001) {
                         commands.push(Box::new(TrimClipCommand::new(
                             clip.id.clone(),
                             clip.start_beat, clip.start_beat,
@@ -911,8 +925,8 @@ impl EditingService {
             return None;
         }
 
-        let mut min_beat = f32::MAX;
-        let mut max_beat = f32::MIN;
+        let mut min_beat = Beats(f64::MAX);
+        let mut max_beat = Beats(f64::MIN);
         let mut min_layer = i32::MAX;
         let mut max_layer = i32::MIN;
 
@@ -930,7 +944,7 @@ impl EditingService {
         }
 
         if min_beat < max_beat {
-            Some((min_beat, max_beat, min_layer, max_layer))
+            Some((min_beat.as_f32(), max_beat.as_f32(), min_layer, max_layer))
         } else {
             None
         }
@@ -973,7 +987,7 @@ impl EditingService {
     pub fn split_clips_at_beat_batch(
         project: &Project,
         clip_ids: &[ClipId],
-        split_beat: f32,
+        split_beat: Beats,
         spb: f32,
     ) -> (Vec<Box<dyn Command>>, Vec<ClipId>) {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
@@ -995,7 +1009,7 @@ impl EditingService {
         // Find tail clip IDs after split (clips starting at split_beat on same layers)
         for layer in &project.timeline.layers {
             for clip in &layer.clips {
-                if (clip.start_beat - split_beat).abs() < 0.001 {
+                if (clip.start_beat - split_beat).abs() < Beats(0.001) {
                     tail_clip_ids.push(clip.id.clone());
                 }
             }
@@ -1034,7 +1048,7 @@ impl EditingService {
 
     /// Get the current grid step in beats.
     /// Port of C# EditingService.GetCurrentGridStep (lines 949-954).
-    pub fn get_current_grid_step(host: &dyn EditingHost) -> f32 {
+    pub fn get_current_grid_step(host: &dyn EditingHost) -> Beats {
         host.grid_interval_beats()
     }
 

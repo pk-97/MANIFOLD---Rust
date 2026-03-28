@@ -1,4 +1,4 @@
-use manifold_core::ClipId;
+use manifold_core::{Beats, ClipId};
 use manifold_editing::service::EditingService;
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
@@ -39,8 +39,8 @@ fn make_region(project: &Project, start_beat: f32, end_beat: f32, start_layer: u
 fn add_clip(project: &mut Project, layer: usize, start: f32, dur: f32) -> ClipId {
     let layer_id = project.timeline.layers[layer].layer_id.clone();
     let clip = TimelineClip {
-        start_beat: start,
-        duration_beats: dur,
+        start_beat: Beats::from_f32(start),
+        duration_beats: Beats::from_f32(dur),
         layer_id,
         ..Default::default()
     };
@@ -59,8 +59,8 @@ fn overlap_covers_both_deletes() {
 
     let layer_id = project.timeline.layers[0].layer_id.clone();
     let placed = TimelineClip {
-        start_beat: 1.0,
-        duration_beats: 5.0, // [1..6] covers [2..4]
+        start_beat: Beats(1.0),
+        duration_beats: Beats(5.0), // [1..6] covers [2..4]
         layer_id: layer_id.clone(),
         ..Default::default()
     };
@@ -82,8 +82,8 @@ fn overlap_covers_start_trims() {
 
     let layer_id = project.timeline.layers[0].layer_id.clone();
     let placed = TimelineClip {
-        start_beat: 1.0,
-        duration_beats: 3.0, // [1..4] covers start of [2..6]
+        start_beat: Beats(1.0),
+        duration_beats: Beats(3.0), // [1..4] covers start of [2..6]
         layer_id: layer_id.clone(),
         ..Default::default()
     };
@@ -96,8 +96,8 @@ fn overlap_covers_start_trims() {
     service.execute_batch(cmds, "overlap".into(), &mut project);
 
     let clip = project.timeline.find_clip_by_id(&existing_id).unwrap();
-    assert!((clip.start_beat - 4.0).abs() < 0.001); // trimmed to start at placed_end
-    assert!((clip.end_beat() - 6.0).abs() < 0.001);
+    assert!((clip.start_beat - Beats(4.0)).abs() < Beats(0.001)); // trimmed to start at placed_end
+    assert!((clip.end_beat() - Beats(6.0)).abs() < Beats(0.001));
 }
 
 #[test]
@@ -107,8 +107,8 @@ fn overlap_covers_end_trims() {
 
     let layer_id = project.timeline.layers[0].layer_id.clone();
     let placed = TimelineClip {
-        start_beat: 4.0,
-        duration_beats: 4.0, // [4..8] covers end of [2..6]
+        start_beat: Beats(4.0),
+        duration_beats: Beats(4.0), // [4..8] covers end of [2..6]
         layer_id: layer_id.clone(),
         ..Default::default()
     };
@@ -121,8 +121,8 @@ fn overlap_covers_end_trims() {
     service.execute_batch(cmds, "overlap".into(), &mut project);
 
     let clip = project.timeline.find_clip_by_id(&existing_id).unwrap();
-    assert!((clip.start_beat - 2.0).abs() < 0.001);
-    assert!((clip.duration_beats - 2.0).abs() < 0.001); // trimmed to end at placed_start
+    assert!((clip.start_beat - Beats(2.0)).abs() < Beats(0.001));
+    assert!((clip.duration_beats - Beats(2.0)).abs() < Beats(0.001)); // trimmed to end at placed_start
 }
 
 #[test]
@@ -132,8 +132,8 @@ fn overlap_splits_middle() {
 
     let layer_id = project.timeline.layers[0].layer_id.clone();
     let placed = TimelineClip {
-        start_beat: 3.0,
-        duration_beats: 2.0, // [3..5] in middle of [0..8]
+        start_beat: Beats(3.0),
+        duration_beats: Beats(2.0), // [3..5] in middle of [0..8]
         layer_id: layer_id.clone(),
         ..Default::default()
     };
@@ -147,16 +147,16 @@ fn overlap_splits_middle() {
 
     // Original clip trimmed to [0..3]
     let clip = project.timeline.find_clip_by_id(&existing_id).unwrap();
-    assert!((clip.start_beat - 0.0).abs() < 0.001);
-    assert!((clip.duration_beats - 3.0).abs() < 0.001);
+    assert!((clip.start_beat - Beats(0.0)).abs() < Beats(0.001));
+    assert!((clip.duration_beats - Beats(3.0)).abs() < Beats(0.001));
 
     // Tail clip added at [5..8]
     assert_eq!(project.timeline.layers[0].clips.len(), 2);
     let tail = project.timeline.layers[0].clips.iter()
         .find(|c| c.id != existing_id)
         .expect("tail clip should exist");
-    assert!((tail.start_beat - 5.0).abs() < 0.001);
-    assert!((tail.duration_beats - 3.0).abs() < 0.001);
+    assert!((tail.start_beat - Beats(5.0)).abs() < Beats(0.001));
+    assert!((tail.duration_beats - Beats(3.0)).abs() < Beats(0.001));
 }
 
 // ─── Clipboard ───
@@ -171,7 +171,7 @@ fn copy_paste_roundtrip() {
     service.copy_clips(&project, &[id1.clone(), id2.clone()], None, 0.5);
     assert!(service.has_clipboard());
 
-    let result = service.paste_clips(&mut project, 10.0, 0, 0.5);
+    let result = service.paste_clips(&mut project, Beats(10.0), 0, 0.5);
     assert_eq!(result.pasted_clip_ids.len(), 2);
 
     // Execute all paste commands
@@ -199,7 +199,7 @@ fn paste_preserves_relative_offsets() {
     let mut service = EditingService::new();
     service.copy_clips(&project, &[id1, id2, id3], None, 0.5);
 
-    let result = service.paste_clips(&mut project, 10.0, 0, 0.5);
+    let result = service.paste_clips(&mut project, Beats(10.0), 0, 0.5);
     for mut cmd in result.commands {
         cmd.execute(&mut project);
     }
@@ -211,7 +211,7 @@ fn paste_preserves_relative_offsets() {
             // Two-step to avoid borrow conflict (find_clip_by_id takes &mut self)
             let (beat, lid) = {
                 let c = project.timeline.find_clip_by_id(id).unwrap();
-                (c.start_beat, c.layer_id.clone())
+                (c.start_beat.as_f32(), c.layer_id.clone())
             };
             let li = project.timeline.layer_index_for_id(&lid).unwrap_or(0);
             (beat, li)
@@ -248,7 +248,7 @@ fn duplicate_region_shifts_forward() {
     let dup = project.timeline.layers[0].clips.iter()
         .find(|c| c.id != id1)
         .unwrap();
-    assert!((dup.start_beat - 4.0).abs() < 0.001); // shifted by region duration (4)
+    assert!((dup.start_beat - Beats(4.0)).abs() < Beats(0.001)); // shifted by region duration (4)
 }
 
 // ─── Delete ───
@@ -276,14 +276,14 @@ fn create_clip_at_position() {
     let mut project = make_project();
     let initial = project.timeline.layers[0].clips.len();
 
-    let (mut cmd, _clip_id) = EditingService::create_clip_at_position(&mut project, 2.0, 0, 4.0);
+    let (mut cmd, _clip_id) = EditingService::create_clip_at_position(&mut project, Beats(2.0), 0, Beats(4.0));
     cmd.execute(&mut project);
     project.timeline.rebuild_clip_lookup();
 
     assert_eq!(project.timeline.layers[0].clips.len(), initial + 1);
     let clip = &project.timeline.layers[0].clips[initial];
-    assert!((clip.start_beat - 2.0).abs() < 0.001);
-    assert!((clip.duration_beats - 4.0).abs() < 0.001);
+    assert!((clip.start_beat - Beats(2.0)).abs() < Beats(0.001));
+    assert!((clip.duration_beats - Beats(4.0)).abs() < Beats(0.001));
 }
 
 // ─── Nudge ───
@@ -293,14 +293,14 @@ fn nudge_selected_clips() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 2.0, 4.0);
 
-    let cmds = EditingService::nudge_clips(&project, &[id1.clone()], 1.0, 0.5);
+    let cmds = EditingService::nudge_clips(&project, &[id1.clone()], Beats(1.0), 0.5);
     assert_eq!(cmds.len(), 1);
 
     let mut service = EditingService::new();
     service.execute_batch(cmds, "nudge".into(), &mut project);
 
     let clip = project.timeline.find_clip_by_id(&id1).unwrap();
-    assert!((clip.start_beat - 3.0).abs() < 0.001);
+    assert!((clip.start_beat - Beats(3.0)).abs() < Beats(0.001));
 }
 
 // ─── Undo/Redo ───
@@ -313,7 +313,7 @@ fn multi_step_undo_redo() {
     // Execute 5 operations
     for i in 0..5 {
         let (cmd, _) = EditingService::create_clip_at_position(
-            &mut project, i as f32 * 4.0, 0, 4.0,
+            &mut project, Beats(i as f64 * 4.0), 0, Beats(4.0),
         );
         service.execute(cmd, &mut project);
     }
@@ -340,7 +340,7 @@ fn data_version_increments() {
     let mut service = EditingService::new();
     assert_eq!(service.data_version(), 0);
 
-    let (cmd, _) = EditingService::create_clip_at_position(&mut project, 0.0, 0, 4.0);
+    let (cmd, _) = EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0));
     service.execute(cmd, &mut project);
     assert_eq!(service.data_version(), 1);
 
@@ -358,7 +358,7 @@ fn dirty_flag_tracks_saves() {
 
     assert!(!service.is_dirty());
 
-    let (cmd, _) = EditingService::create_clip_at_position(&mut project, 0.0, 0, 4.0);
+    let (cmd, _) = EditingService::create_clip_at_position(&mut project, Beats(0.0), 0, Beats(4.0));
     service.execute(cmd, &mut project);
     assert!(service.is_dirty());
 
@@ -377,7 +377,7 @@ fn split_at_beat() {
     let id1 = add_clip(&mut project, 0, 0.0, 8.0);
 
     let spb = 60.0 / project.settings.bpm;
-    let cmd = EditingService::split_clip_at_beat(&project, &id1, 4.0, spb);
+    let cmd = EditingService::split_clip_at_beat(&project, &id1, Beats(4.0), spb);
     assert!(cmd.is_some());
 
     let mut cmd = cmd.unwrap();
@@ -385,14 +385,14 @@ fn split_at_beat() {
     project.timeline.rebuild_clip_lookup();
 
     let original = project.timeline.find_clip_by_id(&id1).unwrap();
-    assert!((original.duration_beats - 4.0).abs() < 0.001);
+    assert!((original.duration_beats - Beats(4.0)).abs() < Beats(0.001));
 
     assert_eq!(project.timeline.layers[0].clips.len(), 2);
     let tail = project.timeline.layers[0].clips.iter()
         .find(|c| c.id != id1)
         .unwrap();
-    assert!((tail.start_beat - 4.0).abs() < 0.001);
-    assert!((tail.duration_beats - 4.0).abs() < 0.001);
+    assert!((tail.start_beat - Beats(4.0)).abs() < Beats(0.001));
+    assert!((tail.duration_beats - Beats(4.0)).abs() < Beats(0.001));
 }
 
 #[test]
@@ -402,9 +402,9 @@ fn split_at_boundary_returns_none() {
 
     let spb = 60.0 / project.settings.bpm;
     // Split at start — invalid
-    assert!(EditingService::split_clip_at_beat(&project, &id1, 0.0, spb).is_none());
+    assert!(EditingService::split_clip_at_beat(&project, &id1, Beats(0.0), spb).is_none());
     // Split at end — invalid
-    assert!(EditingService::split_clip_at_beat(&project, &id1, 8.0, spb).is_none());
+    assert!(EditingService::split_clip_at_beat(&project, &id1, Beats(8.0), spb).is_none());
 }
 
 // ─── Extend/Shrink ───
@@ -415,17 +415,17 @@ fn extend_shrink_by_grid() {
     let id1 = add_clip(&mut project, 0, 0.0, 4.0);
 
     // Extend
-    let cmds = EditingService::extend_clips_by_grid(&project, &[id1.clone()], 1.0);
+    let cmds = EditingService::extend_clips_by_grid(&project, &[id1.clone()], Beats(1.0));
     let mut service = EditingService::new();
     service.execute_batch(cmds, "ext".into(), &mut project);
     let clip = project.timeline.find_clip_by_id(&id1).unwrap();
-    assert!((clip.duration_beats - 5.0).abs() < 0.001);
+    assert!((clip.duration_beats - Beats(5.0)).abs() < Beats(0.001));
 
     // Shrink
-    let cmds = EditingService::shrink_clips_by_grid(&project, &[id1.clone()], 1.0);
+    let cmds = EditingService::shrink_clips_by_grid(&project, &[id1.clone()], Beats(1.0));
     service.execute_batch(cmds, "shrink".into(), &mut project);
     let clip = project.timeline.find_clip_by_id(&id1).unwrap();
-    assert!((clip.duration_beats - 4.0).abs() < 0.001);
+    assert!((clip.duration_beats - Beats(4.0)).abs() < Beats(0.001));
 }
 
 // ─── Move clip to layer ───
@@ -476,8 +476,8 @@ fn trim_clip_to_region_fully_inside() {
     let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
 
     // Fully inside region — no trimming
-    assert!((trimmed.start_beat - 2.0).abs() < 0.001);
-    assert!((trimmed.duration_beats - 4.0).abs() < 0.001);
+    assert!((trimmed.start_beat - Beats(2.0)).abs() < Beats(0.001));
+    assert!((trimmed.duration_beats - Beats(4.0)).abs() < Beats(0.001));
 }
 
 #[test]
@@ -490,10 +490,10 @@ fn trim_clip_to_region_straddles_start() {
     let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
 
     // Trimmed at start: should start at 2.0, duration 6.0
-    assert!((trimmed.start_beat - 2.0).abs() < 0.001);
-    assert!((trimmed.duration_beats - 6.0).abs() < 0.001);
+    assert!((trimmed.start_beat - Beats(2.0)).abs() < Beats(0.001));
+    assert!((trimmed.duration_beats - Beats(6.0)).abs() < Beats(0.001));
     // InPoint adjusted by (2.0 - 0.0) * 0.5 = 1.0 seconds
-    assert!((trimmed.in_point - 1.0).abs() < 0.001);
+    assert!((trimmed.in_point.0 - 1.0).abs() < 0.001);
 }
 
 #[test]
@@ -506,8 +506,8 @@ fn trim_clip_to_region_straddles_end() {
     let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
 
     // Trimmed at end: should start at 4.0, duration 4.0
-    assert!((trimmed.start_beat - 4.0).abs() < 0.001);
-    assert!((trimmed.duration_beats - 4.0).abs() < 0.001);
+    assert!((trimmed.start_beat - Beats(4.0)).abs() < Beats(0.001));
+    assert!((trimmed.duration_beats - Beats(4.0)).abs() < Beats(0.001));
 }
 
 #[test]
@@ -520,9 +520,9 @@ fn trim_clip_to_region_straddles_both() {
     let trimmed = EditingService::trim_clip_to_region(clip, &region, 0.5);
 
     // Trimmed at both: 4.0..12.0
-    assert!((trimmed.start_beat - 4.0).abs() < 0.001);
-    assert!((trimmed.duration_beats - 8.0).abs() < 0.001);
-    assert!((trimmed.in_point - 2.0).abs() < 0.001); // (4.0 - 0.0) * 0.5
+    assert!((trimmed.start_beat - Beats(4.0)).abs() < Beats(0.001));
+    assert!((trimmed.duration_beats - Beats(8.0)).abs() < Beats(0.001));
+    assert!((trimmed.in_point.0 - 2.0).abs() < 0.001); // (4.0 - 0.0) * 0.5
 }
 
 // ─── Region-aware copy ───
@@ -539,7 +539,7 @@ fn copy_clips_region_mode_trims() {
     assert!(service.has_clipboard());
 
     // Paste to verify trimmed content
-    let result = service.paste_clips(&mut project, 10.0, 0, 0.5);
+    let result = service.paste_clips(&mut project, Beats(10.0), 0, 0.5);
     assert_eq!(result.pasted_clip_ids.len(), 1);
 
     for mut cmd in result.commands {
@@ -552,8 +552,8 @@ fn copy_clips_region_mode_trims() {
         .find(|c| c.id == result.pasted_clip_ids[0])
         .unwrap();
     // Should be trimmed: start=10.0 (paste target + 0 offset), duration=4.0 (6-2)
-    assert!((pasted.start_beat - 10.0).abs() < 0.001);
-    assert!((pasted.duration_beats - 4.0).abs() < 0.001);
+    assert!((pasted.start_beat - Beats(10.0)).abs() < Beats(0.001));
+    assert!((pasted.duration_beats - Beats(4.0)).abs() < Beats(0.001));
 }
 
 // ─── Region-aware duplicate ───
@@ -574,9 +574,9 @@ fn duplicate_clips_region_mode_trims() {
     // Should have 2 clips: original (0..8) + trimmed duplicate (6..10)
     assert_eq!(project.timeline.layers[0].clips.len(), 2);
     let dup = project.timeline.layers[0].clips.iter()
-        .find(|c| c.start_beat > 5.0)
+        .find(|c| c.start_beat > Beats(5.0))
         .unwrap();
     // Region duration is 4.0, so duplicate starts at 2.0 + 4.0 = 6.0
-    assert!((dup.start_beat - 6.0).abs() < 0.001);
-    assert!((dup.duration_beats - 4.0).abs() < 0.001);
+    assert!((dup.start_beat - Beats(6.0)).abs() < Beats(0.001));
+    assert!((dup.duration_beats - Beats(4.0)).abs() < Beats(0.001));
 }

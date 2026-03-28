@@ -4,6 +4,7 @@ use crate::id::{ClipId, LayerId, MarkerId};
 use crate::clip::TimelineClip;
 use crate::layer::Layer;
 use crate::marker::TimelineMarker;
+use crate::units::Beats;
 
 /// The timeline containing all layers and clips.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -14,9 +15,9 @@ pub struct Timeline {
     #[serde(default)]
     pub layers: Vec<Layer>,
     #[serde(default)]
-    pub export_in_beat: f32,
+    pub export_in_beat: Beats,
     #[serde(default)]
-    pub export_out_beat: f32,
+    pub export_out_beat: Beats,
     #[serde(default)]
     pub export_range_enabled: bool,
 
@@ -121,8 +122,8 @@ impl Timeline {
     }
 
     /// Get total duration in beats (max clip EndBeat across all layers).
-    pub fn duration_beats(&self) -> f32 {
-        let mut max_beat = 0.0f32;
+    pub fn duration_beats(&self) -> Beats {
+        let mut max_beat = Beats::ZERO;
         for layer in &self.layers {
             for clip in &layer.clips {
                 max_beat = max_beat.max(clip.end_beat());
@@ -135,25 +136,25 @@ impl Timeline {
     /// If export markers are set, clamps to them.
     /// Otherwise returns first-clip-start to last-clip-end.
     /// Port of Unity Timeline.GetContentRange().
-    pub fn content_range_beats(&self) -> (f32, f32) {
-        let mut min_beat = f32::MAX;
-        let mut max_beat = 0.0f32;
+    pub fn content_range_beats(&self) -> (Beats, Beats) {
+        let mut min_beat = Beats(f64::MAX);
+        let mut max_beat = Beats::ZERO;
         for layer in &self.layers {
             for clip in &layer.clips {
                 min_beat = min_beat.min(clip.start_beat);
                 max_beat = max_beat.max(clip.end_beat());
             }
         }
-        if min_beat == f32::MAX {
-            return (0.0, 0.0);
+        if min_beat.0 >= f64::MAX / 2.0 {
+            return (Beats::ZERO, Beats::ZERO);
         }
 
         // Apply export markers if set
         if self.export_range_enabled {
-            if self.export_in_beat > 0.0 {
+            if self.export_in_beat > Beats::ZERO {
                 min_beat = min_beat.max(self.export_in_beat);
             }
-            if self.export_out_beat > 0.0 {
+            if self.export_out_beat > Beats::ZERO {
                 max_beat = max_beat.min(self.export_out_beat);
             }
         }
@@ -253,7 +254,7 @@ impl Timeline {
     /// Get active clips at a given beat (respecting mute/solo with group hierarchy).
     /// This &mut self variant ensures sort caches are up-to-date before querying.
     /// From Unity Timeline.cs GetActiveClipsAtBeat (lines 331-374).
-    pub fn get_active_clips_at_beat(&mut self, beat: f32) -> Vec<(usize, usize)> {
+    pub fn get_active_clips_at_beat(&mut self, beat: Beats) -> Vec<(usize, usize)> {
         self.ensure_layers_sorted();
         self.get_active_clips_at_beat_ref(beat)
     }
@@ -261,7 +262,7 @@ impl Timeline {
     /// Get active clips at a given beat (&self variant).
     /// IMPORTANT: Caller must ensure sort caches are current via `ensure_layers_sorted()`
     /// before calling this. Use `get_active_clips_at_beat()` if unsure.
-    pub fn get_active_clips_at_beat_ref(&self, beat: f32) -> Vec<(usize, usize)> {
+    pub fn get_active_clips_at_beat_ref(&self, beat: Beats) -> Vec<(usize, usize)> {
         let any_solo = self.layers.iter().any(|l| l.is_solo);
         let mut results = Vec::new();
 
@@ -347,7 +348,7 @@ impl Timeline {
 
     /// Get duration in seconds. Unity Timeline.cs lines 105-108.
     pub fn get_duration_seconds(&self, seconds_per_beat: f32) -> f32 {
-        self.duration_beats() * seconds_per_beat
+        (self.duration_beats().0 * seconds_per_beat as f64) as f32
     }
 
     /// Clear all clips on all layers. Unity Timeline.cs lines 439-445.
@@ -367,8 +368,8 @@ impl Timeline {
 
     /// Get the earliest clip start beat across all layers.
     /// From Unity Timeline.cs GetStartBeat.
-    pub fn get_start_beat(&self) -> f32 {
-        let mut min_beat = f32::MAX;
+    pub fn get_start_beat(&self) -> Beats {
+        let mut min_beat = Beats(f64::MAX);
         for layer in &self.layers {
             for clip in &layer.clips {
                 if clip.start_beat < min_beat {
@@ -376,7 +377,7 @@ impl Timeline {
                 }
             }
         }
-        min_beat
+        if min_beat.0 >= f64::MAX / 2.0 { Beats::ZERO } else { min_beat }
     }
 
     // ── Markers ─────────────────────────────────────────────────────
