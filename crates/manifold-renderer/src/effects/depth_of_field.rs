@@ -1,15 +1,19 @@
-// Depth of Field effect — 3 focus modes, optimized half-res separable blur.
+// Depth of Field effect — 3 focus modes, full-res separable Gaussian blur.
 //
 // Modes:
 //   0 = Tilt-Shift  — linear focus band with rotation
 //   1 = Radial       — circular focus region
 //   2 = Depth        — DNN monocular depth map (MiDaS via DepthEstimator.bundle)
 //
-// Pipeline (4 compute passes):
-//   Pass 0: CoC generation + bilinear downsample (full→half)
-//   Pass 1: Horizontal separable blur (half-res, variable width from CoC)
-//   Pass 2: Vertical separable blur (half-res, variable width from CoC)
-//   Pass 3: Composite — upsample blur + blend with sharp original
+// Pipeline (4 compute passes, ALL at full resolution):
+//   Pass 0: CoC generation (full-res, CoC stored in alpha)
+//   Pass 1: Horizontal separable Gaussian blur (full-res, variable width from CoC)
+//   Pass 2: Vertical separable Gaussian blur (full-res, variable width from CoC)
+//   Pass 3: Composite — blend blurred with sharp original using CoC
+//
+// Full-res blur is essential: DOF replaces pixels (unlike bloom/halation which
+// are additive), so any downsampled intermediate creates visible block artifacts.
+// On native Metal / Apple Silicon, full-res separable blur is fast enough.
 //
 // 6 function-constant-specialized pipelines:
 //   3 × CoC variants (tilt-shift, radial, depth) — dead-code eliminate focus_mode
@@ -27,7 +31,6 @@ use crate::effect::{EffectContext, PostProcessEffect, StatefulEffect};
 use crate::gpu_encoder::GpuEncoder;
 use crate::gpu_readback::ReadbackRequest;
 use crate::render_target::RenderTarget;
-use super::HDR_BUFFER_DIVISOR;
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 
 // ─── Depth worker types ───────────────────────────────────────────────
@@ -73,8 +76,8 @@ struct DofUniforms {
 // ─── Per-owner state ──────────────────────────────────────────────────
 
 struct DofOwnerState {
-    half_a: RenderTarget,  // blur ping-pong A (half-res)
-    half_b: RenderTarget,  // blur ping-pong B (half-res)
+    buf_a: RenderTarget,  // blur ping-pong A (full-res)
+    buf_b: RenderTarget,  // blur ping-pong B (full-res)
 }
 
 /// Per-owner state for depth mode (shared across owners via single worker).
@@ -160,19 +163,19 @@ impl DepthOfFieldFX {
             return;
         }
         let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
-        let hw = (self.width / HDR_BUFFER_DIVISOR).max(1);
-        let hh = (self.height / HDR_BUFFER_DIVISOR).max(1);
-        let half_a = if let Some(p) = pool {
-            RenderTarget::new_pooled(p, hw, hh, format, &format!("DofA_{owner_key}"))
+        let w = self.width;
+        let h = self.height;
+        let buf_a = if let Some(p) = pool {
+            RenderTarget::new_pooled(p, w, h, format, &format!("DofA_{owner_key}"))
         } else {
-            RenderTarget::new(device, hw, hh, format, &format!("DofA_{owner_key}"))
+            RenderTarget::new(device, w, h, format, &format!("DofA_{owner_key}"))
         };
-        let half_b = if let Some(p) = pool {
-            RenderTarget::new_pooled(p, hw, hh, format, &format!("DofB_{owner_key}"))
+        let buf_b = if let Some(p) = pool {
+            RenderTarget::new_pooled(p, w, h, format, &format!("DofB_{owner_key}"))
         } else {
-            RenderTarget::new(device, hw, hh, format, &format!("DofB_{owner_key}"))
+            RenderTarget::new(device, w, h, format, &format!("DofB_{owner_key}"))
         };
-        self.states.insert(owner_key, DofOwnerState { half_a, half_b });
+        self.states.insert(owner_key, DofOwnerState { buf_a, buf_b });
     }
 
     // ── Depth worker management ───────────────────────────────────────
@@ -377,13 +380,12 @@ impl PostProcessEffect for DepthOfFieldFX {
         self.height = ctx.height;
         self.ensure_blur_state(gpu.device, gpu.pool, ctx.owner_key);
 
-        let state = match self.states.get(&ctx.owner_key) {
-            Some(s) => s,
-            None => return,
-        };
+        if !self.states.contains_key(&ctx.owner_key) {
+            return;
+        }
 
-        let hw = state.half_a.width;
-        let hh = state.half_a.height;
+        let w = ctx.width;
+        let h = ctx.height;
 
         // ── Depth mode: manage DNN worker + readback ──────────────────
         // Determine which texture to use as source_b for CoC pass
@@ -436,11 +438,13 @@ impl PostProcessEffect for DepthOfFieldFX {
             _pad: 0.0,
         };
 
-        // ── Pass 0: CoC + Downsample (full → half) ───────────────────
+        // ── Pass 0: CoC generation (full-res) ─────────────────────────
+        let texel_x = 1.0 / w as f32;
+        let texel_y = 1.0 / h as f32;
         let pass0_u = DofUniforms {
             mode: 0,
-            texel_size_x: 1.0 / ctx.width as f32,
-            texel_size_y: 1.0 / ctx.height as f32,
+            texel_size_x: texel_x,
+            texel_size_y: texel_y,
             ..base
         };
 
@@ -448,69 +452,66 @@ impl PostProcessEffect for DepthOfFieldFX {
 
         if focus_mode == FOCUS_DEPTH {
             if let Some(depth_tex) = depth_tex_for_coc {
-                // Depth mode: source_a = original, source_b = depth texture
                 self.helper.dispatch_with(
-                    coc_pipeline, gpu, source, depth_tex, &state.half_a.texture,
+                    coc_pipeline, gpu, source, depth_tex, &state.buf_a.texture,
                     bytemuck::bytes_of(&pass0_u),
-                    "DOF CoC+Down (Depth)", hw, hh,
+                    "DOF CoC (Depth)", w, h,
                 );
             } else {
-                // No depth data yet — pass through with zero CoC
                 self.helper.dispatch_a_only_with(
-                    coc_pipeline, gpu, source, &state.half_a.texture,
+                    coc_pipeline, gpu, source, &state.buf_a.texture,
                     bytemuck::bytes_of(&pass0_u),
-                    "DOF CoC+Down (Depth pending)", hw, hh,
+                    "DOF CoC (Depth pending)", w, h,
                 );
             }
         } else {
-            // Tilt-shift / Radial: no second texture needed
             self.helper.dispatch_a_only_with(
-                coc_pipeline, gpu, source, &state.half_a.texture,
+                coc_pipeline, gpu, source, &state.buf_a.texture,
                 bytemuck::bytes_of(&pass0_u),
-                "DOF CoC+Down", hw, hh,
+                "DOF CoC", w, h,
             );
         }
 
-        // ── Pass 1: Horizontal blur (half-res) ───────────────────────
+        // ── Pass 1: Horizontal blur (full-res) ───────────────────────
         let pass1_u = DofUniforms {
             mode: 1,
-            texel_size_x: 1.0 / hw as f32,
-            texel_size_y: 1.0 / hh as f32,
+            texel_size_x: texel_x,
+            texel_size_y: texel_y,
             ..base
         };
         self.helper.dispatch_a_only_with(
             &self.pipeline_blur_h, gpu,
-            &state.half_a.texture, &state.half_b.texture,
+            &state.buf_a.texture, &state.buf_b.texture,
             bytemuck::bytes_of(&pass1_u),
-            "DOF HBlur", hw, hh,
+            "DOF HBlur", w, h,
         );
 
-        // ── Pass 2: Vertical blur (half-res) ─────────────────────────
+        // ── Pass 2: Vertical blur (full-res) ─────────────────────────
         let pass2_u = DofUniforms {
             mode: 2,
-            texel_size_x: 1.0 / hw as f32,
-            texel_size_y: 1.0 / hh as f32,
+            texel_size_x: texel_x,
+            texel_size_y: texel_y,
             ..base
         };
         self.helper.dispatch_a_only_with(
             &self.pipeline_blur_v, gpu,
-            &state.half_b.texture, &state.half_a.texture,
+            &state.buf_b.texture, &state.buf_a.texture,
             bytemuck::bytes_of(&pass2_u),
-            "DOF VBlur", hw, hh,
+            "DOF VBlur", w, h,
         );
 
         // ── Pass 3: Composite (full-res) ─────────────────────────────
         let pass3_u = DofUniforms {
             mode: 3,
-            texel_size_x: 1.0 / ctx.width as f32,
-            texel_size_y: 1.0 / ctx.height as f32,
+            texel_size_x: texel_x,
+            texel_size_y: texel_y,
             ..base
         };
         self.helper.dispatch_with(
             &self.pipeline_composite, gpu,
-            source, &state.half_a.texture, target,
+            source, &state.buf_a.texture, target,
             bytemuck::bytes_of(&pass3_u),
-            "DOF Composite", ctx.width, ctx.height,
+            "DOF Composite", w, h,
         );
     }
 
@@ -523,14 +524,12 @@ impl PostProcessEffect for DepthOfFieldFX {
         self.width = width;
         self.height = height;
         let format = manifold_gpu::GpuTextureFormat::Rgba16Float;
-        let hw = (width / HDR_BUFFER_DIVISOR).max(1);
-        let hh = (height / HDR_BUFFER_DIVISOR).max(1);
         for (key, state) in &mut self.states {
-            state.half_a = RenderTarget::new(
-                device, hw, hh, format, &format!("DofA_{key}"),
+            state.buf_a = RenderTarget::new(
+                device, width, height, format, &format!("DofA_{key}"),
             );
-            state.half_b = RenderTarget::new(
-                device, hw, hh, format, &format!("DofB_{key}"),
+            state.buf_b = RenderTarget::new(
+                device, width, height, format, &format!("DofB_{key}"),
             );
         }
         // Depth states use analysis-res which may also change

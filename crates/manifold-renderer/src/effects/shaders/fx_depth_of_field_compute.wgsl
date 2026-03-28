@@ -1,16 +1,15 @@
 // Depth of Field — 3 modes (Tilt-Shift, Radial, Depth), 4 compute passes.
+// All passes run at FULL resolution for smooth, artifact-free blur.
 //
-// Pass 0 (mode 0): CoC generation + bilinear downsample to half-res.
-//                   CoC stored in alpha channel.
-// Pass 1 (mode 1): Horizontal separable Gaussian blur at half-res.
+// Pass 0 (mode 0): CoC generation. CoC stored in alpha channel.
+// Pass 1 (mode 1): Horizontal separable Gaussian blur (full-res).
 //                   Variable-width kernel driven by CoC alpha.
-// Pass 2 (mode 2): Vertical separable Gaussian blur at half-res.
+// Pass 2 (mode 2): Vertical separable Gaussian blur (full-res).
 //                   Variable-width kernel driven by CoC alpha.
-// Pass 3 (mode 3): Composite — upsample blurred half-res, blend with
-//                   sharp full-res original using recomputed CoC.
+// Pass 3 (mode 3): Composite — blend blurred with sharp original using CoC.
 
 struct Uniforms {
-    mode: u32,           // 0=CoC+Down, 1=HBlur, 2=VBlur, 3=Composite
+    mode: u32,           // 0=CoC, 1=HBlur, 2=VBlur, 3=Composite
     focus_mode: u32,     // 0=TiltShift, 1=Radial, 2=Depth
     amount: f32,         // overall effect intensity (dry/wet)
     focus_y: f32,        // focus Y position [0,1] (tilt-shift & depth)
