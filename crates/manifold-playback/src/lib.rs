@@ -24,6 +24,8 @@ pub mod percussion_parser;
 pub mod percussion_backend;
 pub mod percussion_planner;
 pub mod percussion_import;
+pub mod percussion_progress_parser;
+pub mod percussion_commands;
 pub mod percussion_orchestrator;
 pub mod midi_parser;
 pub mod midi_import;
