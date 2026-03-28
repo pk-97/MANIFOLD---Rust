@@ -43,27 +43,17 @@
 
 // SDR: apply linear → sRGB gamma (compositor outputs linear light;
 // CAMetalLayer applies gamma for display, but export needs it baked in).
-// Also draws a small frame counter bar in the top-left corner (DEBUG)
-// so we can verify each frame is unique in the exported video.
 static NSString* const kCopyShaderSDR =
     @"#include <metal_stdlib>\n"
      "using namespace metal;\n"
-     "struct FrameInfo { uint frame_index; };\n"
      "kernel void copy_texture(\n"
      "    texture2d<half, access::read>  src [[texture(0)]],\n"
      "    texture2d<half, access::write> dst [[texture(1)]],\n"
-     "    constant FrameInfo& info [[buffer(0)]],\n"
      "    uint2 gid [[thread_position_in_grid]])\n"
      "{\n"
      "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
      "    half4 c = src.read(gid);\n"
      "    c.rgb = pow(max(c.rgb, half3(0.0h)), half3(1.0h / 2.2h));\n"
-     "    // DEBUG: frame counter bar — width cycles 0..200 px based on frame index.\n"
-     "    // Red bar that grows/shrinks so freezes are visually obvious.\n"
-     "    uint barW = info.frame_index % 200u;\n"
-     "    if (gid.y < 8u && gid.x < barW) {\n"
-     "        c = half4(1.0h, 0.0h, 0.0h, 1.0h);\n"
-     "    }\n"
      "    dst.write(c, gid);\n"
      "}\n";
 
@@ -71,11 +61,9 @@ static NSString* const kCopyShaderSDR =
 static NSString* const kCopyShaderHDR =
     @"#include <metal_stdlib>\n"
      "using namespace metal;\n"
-     "struct FrameInfo { uint frame_index; };\n"
      "kernel void copy_texture(\n"
      "    texture2d<half, access::read>  src [[texture(0)]],\n"
      "    texture2d<half, access::write> dst [[texture(1)]],\n"
-     "    constant FrameInfo& info [[buffer(0)]],\n"
      "    uint2 gid [[thread_position_in_grid]])\n"
      "{\n"
      "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
@@ -258,18 +246,26 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
         NSDictionary* videoSettings;
         OSType pixelFormatType;
 
+        // Compute target bitrate from resolution and frame rate.
+        // 0.2 bits/pixel/frame = very high quality, decodable in real-time.
+        // Clamped to 8-200 Mbps to avoid absurd values at extreme resolutions.
+        int targetBps = (int)((double)width * height * state->fpsNum * 0.2);
+        if (targetBps < 8000000) targetBps = 8000000;      // 8 Mbps min
+        if (targetBps > 200000000) targetBps = 200000000;   // 200 Mbps max
+
+        NSLog(@"[MetalEncoder] Target bitrate: %d bps (%.1f Mbps) for %dx%d @ %d fps",
+              targetBps, targetBps / 1000000.0, width, height, state->fpsNum);
+
         if (hdr)
         {
             // HDR: HEVC Main 10 with HDR10 color metadata.
-            // Quality-based VBR: VideoToolbox allocates bits based on content
-            // complexity. 0.95 = near-lossless, avoids blocking on gradients
-            // and fine particle detail that fixed-bitrate encoding destroys.
+            // Average bitrate with peak headroom for complex frames.
             compressionProps = @{
-                AVVideoQualityKey:                   @(0.95),
-                AVVideoExpectedSourceFrameRateKey:   @(state->fpsNum),
-                AVVideoMaxKeyFrameIntervalKey:       @(state->fpsNum),  // 1 GOP/second
-                AVVideoAllowFrameReorderingKey:      @NO,
-                AVVideoProfileLevelKey:              @"HEVC_Main10_AutoLevel",
+                AVVideoAverageBitRateKey:             @(targetBps),
+                AVVideoExpectedSourceFrameRateKey:    @(state->fpsNum),
+                AVVideoMaxKeyFrameIntervalKey:        @(state->fpsNum),  // 1 GOP/second
+                AVVideoAllowFrameReorderingKey:       @NO,
+                AVVideoProfileLevelKey:               @"HEVC_Main10_AutoLevel",
             };
 
             videoSettings = @{
@@ -289,11 +285,10 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
         else
         {
             // SDR: H.264 High Profile.
-            // Quality-based VBR: lets VideoToolbox decide bitrate per-frame
-            // based on content complexity. Fixed bitrate (old: 50 Mbps) starves
-            // complex frames with gradients, particles, and fine generative detail.
+            // Average bitrate scaled to resolution — 0.2 bpp gives very high
+            // quality while staying within real-time decode limits.
             compressionProps = @{
-                AVVideoQualityKey:                   @(0.95),
+                AVVideoAverageBitRateKey:             @(targetBps),
                 AVVideoProfileLevelKey:              AVVideoProfileLevelH264HighAutoLevel,
                 AVVideoExpectedSourceFrameRateKey:   @(state->fpsNum),
                 AVVideoMaxKeyFrameIntervalKey:       @(state->fpsNum),  // 1 GOP/second
@@ -457,10 +452,6 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
         [compute setComputePipelineState:state->swizzlePipeline];
         [compute setTexture:srcTexture atIndex:0];
         [compute setTexture:destTexture atIndex:1];
-
-        // Pass frame index to compute shader (for SDR frame counter debug bar)
-        uint32_t frameInfoData = (uint32_t)frameIndex;
-        [compute setBytes:&frameInfoData length:sizeof(frameInfoData) atIndex:0];
 
         // Dispatch threads to cover the full texture
         MTLSize threadGroupSize = MTLSizeMake(16, 16, 1);
