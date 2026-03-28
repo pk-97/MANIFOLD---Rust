@@ -37,6 +37,10 @@ impl GpuContext {
         let (device, queue) =
             Self::create_device_from_adapter(&adapter, "MANIFOLD Device").await;
 
+        device.on_uncaptured_error(Arc::new(|error| {
+            log::error!("[wgpu] Uncaptured device error: {error}");
+        }));
+
         Self {
             instance,
             adapter,

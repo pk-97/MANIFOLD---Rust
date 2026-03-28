@@ -87,8 +87,8 @@ impl ReadbackRequest {
 
         let bytes_per_row = align_to_256(self.width * 4) as usize;
         let row_bytes = (self.width * 4) as usize;
-
         let mut out = vec![0u8; row_bytes * self.height as usize];
+
         for row in 0..self.height as usize {
             let src_start = row * bytes_per_row;
             let dst_start = row * row_bytes;

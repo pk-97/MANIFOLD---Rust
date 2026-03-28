@@ -48,6 +48,7 @@ pub struct MriVolumeGenerator {
     current_axis: i32,
     current_slice_index: i32,
     // Async slice loading — avoids blocking the 60 FPS content thread on file I/O
+    #[allow(clippy::type_complexity)]
     pending_load: Option<mpsc::Receiver<Result<(u32, u32, Vec<u8>), String>>>,
     pending_scan_index: i32,
     pending_axis: i32,

@@ -295,6 +295,12 @@ pub(crate) struct LayerOutput {
     aspect: f32,
 }
 
+// Safety: LayerOutput is only used within the compositor on the content thread.
+// The raw pointer points to GpuTexture owned by effect chains, layer bufs, or
+// clip render targets that are valid for the frame duration. The Vec<LayerOutput>
+// field on LayerCompositor makes the struct non-Send without this impl.
+unsafe impl Send for LayerOutput {}
+
 impl LayerOutput {
     fn texture(&self) -> &GpuTexture {
         // Safety: pointer is valid for the frame duration (see struct doc).
@@ -347,6 +353,10 @@ pub struct LayerCompositor {
     /// Per-layer transform data for the blend pass. Cleared each frame.
     /// Parallel to `layer_outputs` returned by `generate_layers()`.
     single_clip_transforms: Vec<SingleClipTransform>,
+    /// Pre-allocated scratch buffer for per-layer output descriptors.
+    /// Cleared and populated each frame by generate_layers / composite_parallel
+    /// to avoid per-frame heap allocation.
+    layer_outputs_scratch: Vec<LayerOutput>,
     /// Shared event for async compute synchronization.
     /// Layer command buffers signal this with incrementing values;
     /// compositor command buffer waits for the final value.
@@ -372,6 +382,7 @@ impl LayerCompositor {
             tonemap: TonemapPipeline::new(device, width, height),
             led_tap: None,
             single_clip_transforms: Vec::new(),
+            layer_outputs_scratch: Vec::new(),
             #[cfg(target_os = "macos")]
             async_event: None,
             #[cfg(target_os = "macos")]
@@ -436,12 +447,12 @@ impl LayerCompositor {
     /// per-layer scratch buffer and layer effects are applied.
     ///
     /// Each layer uses its own effect chain (no shared state between layers).
-    /// Returns a list of LayerOutput descriptors for the blend pass.
+    /// Populates `self.layer_outputs_scratch` for the blend pass.
     fn generate_layers(
         &mut self,
         gpu: &mut GpuEncoder,
         frame: &CompositorFrame,
-    ) -> Vec<LayerOutput> {
+    ) {
         let clips = frame.clips;
         let width = self.main.width();
         let height = self.main.height();
@@ -483,7 +494,7 @@ impl LayerCompositor {
             self.ensure_layer_bufs(multi_clip_layer_count, gpu.device);
         }
 
-        let mut layer_outputs = Vec::with_capacity(active_layer_count);
+        self.layer_outputs_scratch.clear();
         let mut effect_chain_idx = 0usize;
         let mut layer_buf_idx = 0usize;
 
@@ -566,7 +577,7 @@ impl LayerCompositor {
 
                 let effective_tex: *const GpuTexture =
                     blend_input.unwrap_or(clip.texture);
-                layer_outputs.push(LayerOutput {
+                self.layer_outputs_scratch.push(LayerOutput {
                     texture: effective_tex,
                     blend_mode: layer_blend,
                     opacity: layer_opacity * clip.opacity,
@@ -672,7 +683,7 @@ impl LayerCompositor {
                 let effective_layer_tex: *const GpuTexture =
                     layer_source.unwrap_or(layer_buf.source_texture());
 
-                layer_outputs.push(LayerOutput {
+                self.layer_outputs_scratch.push(LayerOutput {
                     texture: effective_layer_tex,
                     blend_mode: layer_blend,
                     opacity: layer_opacity,
@@ -687,8 +698,6 @@ impl LayerCompositor {
                 });
             }
         }
-
-        layer_outputs
     }
 
     /// Phase B: Blend all layer outputs into main in order.
@@ -740,8 +749,15 @@ impl LayerCompositor {
     ) {
         self.uniform_arena.reset();
         self.single_clip_transforms.clear();
-        let layer_outputs = self.generate_layers(gpu, frame);
-        self.blend_layers(gpu, &layer_outputs);
+        self.generate_layers(gpu, frame);
+        // Safety: layer_outputs_scratch contains raw pointers to textures owned
+        // by effect chains, layer bufs, or clip render targets — all valid for
+        // the frame duration. Using a raw pointer avoids a split-borrow conflict
+        // with blend_layers (which also needs &mut self for main ping-pong).
+        let outputs_ptr = self.layer_outputs_scratch.as_ptr();
+        let outputs_len = self.layer_outputs_scratch.len();
+        let outputs = unsafe { std::slice::from_raw_parts(outputs_ptr, outputs_len) };
+        self.blend_layers(gpu, outputs);
     }
 
     /// Parallel composite path: one command buffer per layer for generation,
@@ -822,7 +838,7 @@ impl LayerCompositor {
         let layer_bufs_ptr = self.layer_bufs.as_mut_ptr();
         let base_signal = self.async_signal_base;
 
-        let mut layer_outputs = Vec::with_capacity(active_layer_count);
+        self.layer_outputs_scratch.clear();
         let mut effect_chain_idx = 0usize;
         let mut layer_buf_idx = 0usize;
         let mut layer_signal_idx = 0u64;
@@ -902,7 +918,7 @@ impl LayerCompositor {
 
                     let effective_tex: *const GpuTexture =
                         blend_input.unwrap_or(clip.texture);
-                    layer_outputs.push(LayerOutput {
+                    self.layer_outputs_scratch.push(LayerOutput {
                         texture: effective_tex,
                         blend_mode: layer_blend,
                         opacity: layer_opacity * clip.opacity,
@@ -1014,7 +1030,7 @@ impl LayerCompositor {
                     let effective_layer_tex: *const GpuTexture =
                         layer_source.unwrap_or(layer_buf.source_texture());
 
-                    layer_outputs.push(LayerOutput {
+                    self.layer_outputs_scratch.push(LayerOutput {
                         texture: effective_layer_tex,
                         blend_mode: layer_blend,
                         opacity: layer_opacity,
@@ -1052,8 +1068,12 @@ impl LayerCompositor {
             );
         }
 
-        // Serial blend phase on the compositor command buffer
-        self.blend_layers(compositor_gpu, &layer_outputs);
+        // Serial blend phase on the compositor command buffer.
+        // Safety: layer_outputs_scratch is populated above and not modified during blend.
+        let outputs_ptr = self.layer_outputs_scratch.as_ptr();
+        let outputs_len = self.layer_outputs_scratch.len();
+        let outputs = unsafe { std::slice::from_raw_parts(outputs_ptr, outputs_len) };
+        self.blend_layers(compositor_gpu, outputs);
     }
 }
 

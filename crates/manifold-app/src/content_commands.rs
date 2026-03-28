@@ -178,6 +178,9 @@ impl ContentThread {
                 self.link_beat_offset = f64::NAN;
                 self.tempo_recorder.reset();
                 self.engine.initialize(*project);
+                // Clear stale temporal effect state from the previous project
+                // (feedback textures, bloom state, etc.) to prevent bleed-through.
+                self.content_pipeline.clear_all_effect_state();
                 // Resize content pipeline to project dims
                 if let Some(p) = self.engine.project() {
                     let w = p.settings.output_width.max(1) as u32;

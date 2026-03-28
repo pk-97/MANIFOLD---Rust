@@ -578,6 +578,18 @@ impl ClipRenderer for GeneratorRenderer {
             } else {
                 self.available_rts.push(active.render_target);
             }
+
+            // If no remaining active clips reference this layer, remove the
+            // layer generator state to free GPU resources (particle buffers,
+            // density textures, etc.).
+            let layer_id = &active.layer_id;
+            let has_remaining = self
+                .active_clips
+                .values()
+                .any(|a| a.layer_id == *layer_id);
+            if !has_remaining {
+                self.layer_generators.remove(layer_id);
+            }
         }
     }
 

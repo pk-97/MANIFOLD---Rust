@@ -1309,7 +1309,9 @@ impl PlaybackEngine {
             };
 
             if loop_len_sec > 0.01 {
-                return clip.in_point + (source_elapsed % loop_len_sec);
+                let wrapped = source_elapsed
+                    - (source_elapsed / loop_len_sec).floor() * loop_len_sec;
+                return clip.in_point + wrapped;
             }
         }
 

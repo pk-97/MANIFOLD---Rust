@@ -90,6 +90,10 @@ pub struct VideoRenderer {
     available_rts: Vec<VideoRenderTarget>,
     video_library: Option<VideoLibrary>,
     rt_counter: usize,
+    /// Pre-allocated scratch buffer for pending seek dispatch (avoids per-frame alloc).
+    pending_scratch: Vec<(String, f32)>,
+    /// Pre-allocated scratch buffer for clip ID iteration (avoids per-frame alloc).
+    clip_ids_scratch: Vec<String>,
 }
 
 // Safety: device_ptr points to GpuDevice on the content thread.
@@ -127,6 +131,8 @@ impl VideoRenderer {
             available_rts,
             video_library: None,
             rt_counter: pool_size,
+            pending_scratch: Vec::new(),
+            clip_ids_scratch: Vec::new(),
         }
     }
 
@@ -523,33 +529,38 @@ impl ClipRenderer for VideoRenderer {
     }
 
     fn pre_render(&mut self, _time: f32, _beat: f32, dt: f32) {
-        // 1. Drain decode results and update clip state
+        // 1. Drain decode results and update clip state.
         let results = self.scheduler.drain_results();
         self.process_decode_results(results);
 
         // 2. Dispatch any queued seeks that were coalesced while decode was pending.
-        let pending: Vec<(String, f32)> = self.active_clips.iter_mut()
-            .filter_map(|(id, clip)| {
-                if !clip.decode_pending && clip.pending_seek_time.is_some() {
-                    let t = clip.pending_seek_time.take().unwrap();
-                    clip.decode_pending = true;
-                    clip.playback_time = t;
-                    Some((id.clone(), t))
-                } else {
-                    None
-                }
-            })
-            .collect();
-        for (clip_id, target_time) in pending {
-            self.scheduler.submit(DecodeJob::Seek { clip_id, target_time });
+        //    Reuses pre-allocated scratch buffer to avoid per-frame Vec allocation.
+        self.pending_scratch.clear();
+        for (id, clip) in self.active_clips.iter_mut() {
+            if !clip.decode_pending && clip.pending_seek_time.is_some() {
+                let t = clip.pending_seek_time.take().unwrap();
+                clip.decode_pending = true;
+                clip.playback_time = t;
+                self.pending_scratch.push((id.clone(), t));
+            }
+        }
+        for i in 0..self.pending_scratch.len() {
+            let (ref clip_id, target_time) = self.pending_scratch[i];
+            self.scheduler.submit(DecodeJob::Seek {
+                clip_id: clip_id.clone(),
+                target_time,
+            });
         }
 
         // 3. Pacing: request next frame for playing clips based on video frame rate.
         // Accumulate dt and submit DecodeNext when enough time has elapsed for
         // the next video frame. This prevents the decoder from running at full
         // speed and flooding the result queue.
-        let clip_ids: Vec<String> = self.active_clips.keys().cloned().collect();
-        for clip_id in &clip_ids {
+        //    Reuses pre-allocated scratch buffer to avoid per-frame Vec allocation.
+        self.clip_ids_scratch.clear();
+        self.clip_ids_scratch.extend(self.active_clips.keys().cloned());
+        for idx in 0..self.clip_ids_scratch.len() {
+            let clip_id = &self.clip_ids_scratch[idx];
             let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) else {
                 continue;
             };

@@ -617,6 +617,12 @@ impl ContentPipeline {
         }
     }
 
+    /// Clear all temporal effect state (feedback textures, bloom state, etc.).
+    /// Called on project load to prevent stale GPU state from bleeding across projects.
+    pub fn clear_all_effect_state(&mut self) {
+        self.compositor.clear_all_effect_state();
+    }
+
     /// Block until the last render's GPU command buffer has completed.
     /// Must be called before reading the output texture on a different queue.
     #[cfg(target_os = "macos")]

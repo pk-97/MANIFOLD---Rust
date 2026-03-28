@@ -163,12 +163,16 @@ pub fn save_v2_archive(
     match write_result {
         Ok(()) => {
             // Atomic rename: temp → final path (Unity lines 227-229)
-            if Path::new(path).exists() {
-                std::fs::remove_file(path)
-                    .map_err(|e| format!("Failed to remove old file: {e}"))?;
-            }
+            // On Unix, rename() atomically replaces the target — no remove needed.
             std::fs::rename(&temp_path, path)
                 .map_err(|e| format!("Failed to rename temp file: {e}"))?;
+
+            // fsync parent directory to ensure the rename is durable on disk.
+            if let Some(parent) = Path::new(path).parent()
+                && let Ok(dir) = std::fs::File::open(parent)
+            {
+                let _ = dir.sync_all();
+            }
 
             log::info!("[ProjectArchive] Saved V2: {}", path);
             Ok(true)
@@ -330,9 +334,15 @@ pub fn revert_to(path: &str, hash: &str) -> bool {
 
     match write_result {
         Ok(()) => {
-            let _ = std::fs::remove_file(path);
+            // On Unix, rename() atomically replaces the target — no remove needed.
             if std::fs::rename(&temp_path, path).is_err() {
                 return false;
+            }
+            // fsync parent directory to ensure the rename is durable on disk.
+            if let Some(parent) = Path::new(path).parent()
+                && let Ok(dir) = std::fs::File::open(parent)
+            {
+                let _ = dir.sync_all();
             }
             log::info!("[ProjectArchive] Reverted to snapshot: {}", hash);
             true
@@ -603,8 +613,15 @@ fn rewrite_manifest(path: &str, manifest: &ProjectManifest) -> bool {
 
     match result {
         Ok(()) => {
-            let _ = std::fs::remove_file(path);
-            std::fs::rename(&temp_path, path).is_ok()
+            // On Unix, rename() atomically replaces the target — no remove needed.
+            let ok = std::fs::rename(&temp_path, path).is_ok();
+            if ok
+                && let Some(parent) = Path::new(path).parent()
+                && let Ok(dir) = std::fs::File::open(parent)
+            {
+                let _ = dir.sync_all();
+            }
+            ok
         }
         Err(_) => {
             let _ = std::fs::remove_file(&temp_path);
@@ -682,8 +699,13 @@ fn rebuild_archive(path: &str, manifest: &ProjectManifest) {
     })();
 
     if result.is_ok() {
-        let _ = std::fs::remove_file(path);
+        // On Unix, rename() atomically replaces the target — no remove needed.
         let _ = std::fs::rename(&temp_path, path);
+        if let Some(parent) = Path::new(path).parent()
+            && let Ok(dir) = std::fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
+        }
     } else {
         let _ = std::fs::remove_file(&temp_path);
     }
