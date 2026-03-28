@@ -469,6 +469,7 @@ impl GpuEncoder {
 
 impl Drop for GpuEncoder {
     fn drop(&mut self) {
+        self.end_current();
         if !self.cmd_buf_ptr.is_null() {
             unsafe { objc_release(self.cmd_buf_ptr); }
         }

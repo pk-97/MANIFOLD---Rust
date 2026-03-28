@@ -63,8 +63,13 @@ impl GpuDevice {
     /// Create a GPU texture via device allocation (kernel call per texture).
     /// Prefer `TexturePool::acquire()` for transient textures.
     pub fn create_texture(&self, desc: &GpuTextureDesc) -> GpuTexture {
+        use metal::foreign_types::ForeignType;
         let mtl_desc = Self::build_mtl_texture_desc(desc);
         let raw = self.device.new_texture(&mtl_desc);
+        assert!(
+            !raw.as_ptr().is_null(),
+            "Metal: texture allocation failed — GPU memory exhausted",
+        );
         GpuTexture {
             raw,
             width: desc.width,
@@ -76,9 +81,14 @@ impl GpuDevice {
 
     /// Create a GPU buffer with private storage (GPU-only).
     pub fn create_buffer(&self, size: u64, _usage: GpuBufferUsage) -> GpuBuffer {
+        use metal::foreign_types::ForeignType;
         let raw = self.device.new_buffer(
             size,
             metal::MTLResourceOptions::StorageModePrivate,
+        );
+        assert!(
+            !raw.as_ptr().is_null(),
+            "Metal: buffer allocation failed ({size} bytes) — GPU memory exhausted",
         );
         GpuBuffer {
             raw,
@@ -90,9 +100,14 @@ impl GpuDevice {
     /// Create a GPU buffer with shared memory (CPU+GPU coherent).
     /// Returns a buffer with a persistent mapped pointer for zero-copy writes.
     pub fn create_buffer_shared(&self, size: u64) -> GpuBuffer {
+        use metal::foreign_types::ForeignType;
         let raw = self.device.new_buffer(
             size,
             metal::MTLResourceOptions::StorageModeShared,
+        );
+        assert!(
+            !raw.as_ptr().is_null(),
+            "Metal: shared buffer allocation failed ({size} bytes) — GPU memory exhausted",
         );
         let ptr = raw.contents() as *mut u8;
         GpuBuffer {
@@ -458,9 +473,14 @@ impl GpuDevice {
     /// Data stays in tile/cache memory — zero VRAM bandwidth.
     /// Only valid as render pass attachments, NOT for compute storage textures.
     pub fn create_texture_memoryless(&self, desc: &GpuTextureDesc) -> GpuTexture {
+        use metal::foreign_types::ForeignType;
         let mtl_desc = Self::build_mtl_texture_desc(desc);
         mtl_desc.set_storage_mode(metal::MTLStorageMode::Memoryless);
         let raw = self.device.new_texture(&mtl_desc);
+        assert!(
+            !raw.as_ptr().is_null(),
+            "Metal: memoryless texture allocation failed — GPU memory exhausted",
+        );
         GpuTexture {
             raw,
             width: desc.width,

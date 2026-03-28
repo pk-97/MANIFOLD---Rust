@@ -25,6 +25,11 @@ pub struct TexturePool {
     inner: std::cell::UnsafeCell<TexturePoolInner>,
 }
 
+/// Maximum number of textures cached in the pool.
+/// Beyond this limit, released textures are dropped (freed) immediately
+/// to prevent unbounded GPU memory growth.
+const MAX_POOL_TEXTURES: usize = 128;
+
 type PoolKey = (u32, u32, GpuTextureFormat);
 
 /// A released texture waiting to be recycled, tagged with the frame it was
@@ -52,7 +57,6 @@ struct TexturePoolInner {
 
 // Safety: TexturePool is only used on the content thread (single-threaded).
 unsafe impl Send for TexturePool {}
-unsafe impl Sync for TexturePool {}
 
 impl TexturePool {
     /// Create a new texture pool with frame-stamped recycling.
@@ -121,6 +125,13 @@ impl TexturePool {
         };
         let mtl_desc = GpuDevice::build_mtl_texture_desc(&desc);
         let raw = inner.device.new_texture(&mtl_desc);
+        {
+            use metal::foreign_types::ForeignType;
+            assert!(
+                !raw.as_ptr().is_null(),
+                "Metal: TexturePool allocation failed — GPU memory exhausted",
+            );
+        }
         GpuTexture {
             raw,
             width,
@@ -133,8 +144,15 @@ impl TexturePool {
     /// Return a texture to the pool for future reuse.
     /// Tagged with the current frame — won't be recycled until
     /// `frames_in_flight` frames have passed.
+    /// If the pool already holds MAX_POOL_TEXTURES, the texture is dropped
+    /// immediately to prevent unbounded GPU memory growth.
     pub fn release(&self, texture: GpuTexture) {
         let inner = unsafe { &mut *self.inner.get() };
+        let total: usize = inner.available.values().map(|v| v.len()).sum();
+        if total >= MAX_POOL_TEXTURES {
+            // Pool is full — let the texture drop (Metal will free it).
+            return;
+        }
         let key = (texture.width, texture.height, texture.format);
         inner.available.entry(key).or_default().push(PoolEntry {
             texture,

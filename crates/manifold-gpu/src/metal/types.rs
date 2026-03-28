@@ -170,11 +170,30 @@ impl GpuEvent {
         self.raw.signaled_value()
     }
 
-    /// Block the calling thread until the GPU has signaled `value`.
-    /// Polls with 10µs sleeps to avoid burning CPU while waiting (~2-5ms).
-    pub fn wait_until_done(&self, value: u64) {
+    /// Block the calling thread until the GPU has signaled `value`, with a timeout.
+    /// Returns `true` if the event was signaled, `false` if timed out.
+    pub fn wait_until_done_timeout(&self, value: u64, timeout_ms: u64) -> bool {
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(timeout_ms);
         while !self.is_done(value) {
-            std::thread::sleep(std::time::Duration::from_micros(10));
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::yield_now();
+        }
+        true
+    }
+
+    /// Block the calling thread until the GPU has signaled `value`.
+    /// Times out after 5 seconds and logs an error if the GPU appears hung.
+    pub fn wait_until_done(&self, value: u64) {
+        if !self.wait_until_done_timeout(value, 5000) {
+            log::error!(
+                "GpuEvent::wait_until_done timed out after 5s \
+                 (waiting for value={}, signaled={})",
+                value,
+                self.raw.signaled_value(),
+            );
         }
     }
 

@@ -217,8 +217,16 @@ impl ContentPipeline {
             && self.native_signal_value > 0
         {
             // Wait for the PREVIOUS frame to finish (the one we just submitted).
-            while !native_event.is_done(self.native_signal_value) {
-                std::thread::yield_now();
+            // Timeout after 5s — if GPU is hung, skip the frame rather than deadlock.
+            if !native_event.wait_until_done_timeout(self.native_signal_value, 5000)
+            {
+                log::error!(
+                    "[ContentPipeline] GPU timeout waiting for previous frame \
+                     (signal={}, signaled={})",
+                    self.native_signal_value,
+                    native_event.signaled_value(),
+                );
+                return;
             }
             if let Some(ref bridge) = self.shared_bridge {
                 bridge.publish_front(self.last_write_surface as u32);
@@ -230,10 +238,16 @@ impl ContentPipeline {
         #[cfg(target_os = "macos")]
         if let Some(ref native_event) = self.native_event {
             let pending = self.surface_signal_values[self.write_surface_index];
-            if pending > 0 {
-                while !native_event.is_done(pending) {
-                    std::thread::yield_now();
-                }
+            if pending > 0
+                && !native_event.wait_until_done_timeout(pending, 5000)
+            {
+                log::error!(
+                    "[ContentPipeline] GPU timeout waiting for surface {} \
+                     (signal={}, signaled={})",
+                    self.write_surface_index,
+                    pending,
+                    native_event.signaled_value(),
+                );
             }
         }
     }
