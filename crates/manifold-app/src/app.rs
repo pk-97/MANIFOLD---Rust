@@ -524,8 +524,16 @@ impl Application {
                         let old_bpm = project.settings.bpm;
                         // Unity: skip if approximately equal
                         if (old_bpm - new_bpm).abs() >= 0.01 {
-                            let cmd = manifold_editing::commands::settings::ChangeBpmCommand::new(
+                            // Must use with_tempo_map so the tempo map point at
+                            // beat 0 is updated — sync_project_bpm_from_current_beat
+                            // reads from the tempo map every tick and would revert
+                            // settings.bpm back to the old map value otherwise.
+                            let old_points = project.tempo_map.clone_points();
+                            let cmd = manifold_editing::commands::settings::ChangeBpmCommand::with_tempo_map(
                                 old_bpm, new_bpm,
+                                manifold_core::types::TempoPointSource::Manual,
+                                false,
+                                old_points,
                             );
                             { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); self.send_content_cmd(ContentCommand::Execute(boxed)); }
                         }
