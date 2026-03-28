@@ -354,7 +354,7 @@ impl ContentThread {
                     native_device,
                     source,
                     tick_result.ready_clips.len(),
-                    1.0, // TODO: wire brightness from project settings
+                    self.engine.project().map_or(1.0, |p| p.settings.led_brightness),
                 );
             }
 

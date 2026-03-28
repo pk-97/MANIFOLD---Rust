@@ -48,7 +48,7 @@ opt-level = 2
 
 # Release profile — optimise for runtime performance and binary size.
 [profile.release]
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 strip = "symbols"
 panic = "abort"
