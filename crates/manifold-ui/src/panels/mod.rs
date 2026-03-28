@@ -231,6 +231,10 @@ pub enum PanelAction {
     BrowserSearchClicked,
     PasteEffects,
 
+    // OSC — click param label to copy address to system clipboard.
+    // Unity: UIElementBuilder.CopyToClipboardLabel.
+    CopyOscAddress(String),
+
     // Dropdown results (context-routed from UIRoot)
     SetMidiNote(usize, i32),       // layer_index, note (0-127)
     SetMidiChannel(usize, i32),    // layer_index, channel (1-16)

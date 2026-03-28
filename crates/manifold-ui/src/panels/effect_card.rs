@@ -1,3 +1,4 @@
+use std::time::Instant;
 use manifold_core::EffectId;
 use crate::color;
 use crate::node::*;
@@ -38,6 +39,10 @@ pub struct EffectParamInfo {
     /// When present, the slider displays the label instead of a numeric value.
     /// Unity: ParamDef.valueLabels → EffectDefinitionRegistry.FormatValue().
     pub value_labels: Option<Vec<String>>,
+    /// OSC address for this parameter (e.g. "/master/bloom", "/layer/{id}/bloom").
+    /// When present, clicking the param label copies this address to clipboard.
+    /// Unity: UIElementBuilder.CopyToClipboardLabel.
+    pub osc_address: Option<String>,
 }
 
 /// Configuration for creating an effect card.
@@ -151,6 +156,13 @@ pub struct EffectCardPanel {
     trim_ids: Vec<Option<TrimHandleIds>>,
     target_ids: Vec<Option<EnvelopeTargetIds>>,
 
+    // Per-param OSC addresses (for click-to-copy). Indexed by param index.
+    osc_addresses: Vec<Option<String>>,
+
+    // "Copied" flash: (label_node_id, original_text, flash_start_time).
+    // Reverted after ~0.6s in sync_values().
+    copied_flash: Option<(u32, String, Instant)>,
+
     // Drag state
     drag: ParamDragState,
 
@@ -198,6 +210,8 @@ impl EffectCardPanel {
             envelope_config_ids: Vec::new(),
             trim_ids: Vec::new(),
             target_ids: Vec::new(),
+            osc_addresses: Vec::new(),
+            copied_flash: None,
             drag: ParamDragState::new(),
             param_cache: Vec::new(),
             first_node: 0,
@@ -241,6 +255,8 @@ impl EffectCardPanel {
             &config.driver_dotted,
             &config.driver_triplet,
         );
+        self.osc_addresses = config.params.iter().map(|p| p.osc_address.clone()).collect();
+        self.copied_flash = None;
         self.slider_ids = vec![None; n];
         self.driver_btn_ids = vec![-1; n];
         self.envelope_btn_ids = vec![-1; n];
@@ -521,6 +537,14 @@ impl EffectCardPanel {
                 FONT_SIZE, crate::slider::DEFAULT_LABEL_WIDTH,
             ));
 
+            // Make label interactive for click-to-copy OSC address
+            if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some()
+                && let Some(ids) = &self.slider_ids[i]
+                && ids.label >= 0
+            {
+                tree.set_flag(ids.label as u32, UIFlags::INTERACTIVE);
+            }
+
             // Trim handles (if driver expanded)
             if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false)
                 && let Some(ref slider) = self.slider_ids[i] {
@@ -581,6 +605,36 @@ impl EffectCardPanel {
     /// Unity: EffectCardBitmapPanel.SyncValues — dirty-checks enabled, badges,
     /// and per-param values. Only updates tree when values actually changed.
     pub fn sync_values(&mut self, tree: &mut UITree, values: &[f32]) {
+        // "Copied" flash — apply on first sync, revert after 0.6s
+        if let Some((label_id, ref original_text, start)) = self.copied_flash {
+            let elapsed = start.elapsed().as_secs_f32();
+            if original_text.is_empty() {
+                // First sync after click — apply the flash
+                let name = self.slider_ids.iter().enumerate().find_map(|(pi, s)| {
+                    s.as_ref().filter(|ids| ids.label >= 0 && ids.label as u32 == label_id)
+                        .and_then(|_| self.param_info.get(pi).map(|p| p.name.clone()))
+                }).unwrap_or_default();
+                tree.set_text(label_id, "Copied");
+                tree.set_style(label_id, UIStyle {
+                    text_color: color::ACCENT_BLUE_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                });
+                self.copied_flash = Some((label_id, name, start));
+            } else if elapsed > 0.6 {
+                // Revert to original
+                tree.set_text(label_id, original_text);
+                tree.set_style(label_id, UIStyle {
+                    text_color: color::SLIDER_TEXT_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                });
+                self.copied_flash = None;
+            }
+        }
+
         // Toggle state dirty-check (Unity: state.enabled != cachedEnabled)
         if self.enabled != self.cached_enabled {
             self.cached_enabled = self.enabled;
@@ -664,6 +718,18 @@ impl EffectCardPanel {
                 DriverClickResult::Reverse => DriverConfigAction::Reverse,
             };
             return vec![PanelAction::EffectDriverConfig(ei, pi, action)];
+        }
+
+        // Param label click → copy OSC address to clipboard
+        for (pi, slider) in self.slider_ids.iter().enumerate() {
+            if let Some(ids) = slider
+                && ids.label >= 0 && id == ids.label
+                && let Some(addr) = self.osc_addresses.get(pi).and_then(|a| a.clone())
+            {
+                // Schedule "Copied" flash — applied in sync_values() which has tree access
+                self.copied_flash = Some((ids.label as u32, String::new(), Instant::now()));
+                return vec![PanelAction::CopyOscAddress(addr)];
+            }
         }
 
         // Card selection — any click on card background, border, or header triggers selection
@@ -969,8 +1035,8 @@ mod tests {
             collapsed: false,
             supports_envelopes: true,
             params: vec![
-                EffectParamInfo { name: "Radius".into(), min: 0.0, max: 100.0, default: 10.0, whole_numbers: true, value_labels: None },
-                EffectParamInfo { name: "Strength".into(), min: 0.0, max: 1.0, default: 0.5, whole_numbers: false, value_labels: None },
+                EffectParamInfo { name: "Radius".into(), min: 0.0, max: 100.0, default: 10.0, whole_numbers: true, value_labels: None, osc_address: None },
+                EffectParamInfo { name: "Strength".into(), min: 0.0, max: 1.0, default: 0.5, whole_numbers: false, value_labels: None, osc_address: None },
             ],
             has_drv: false,
             has_env: false,

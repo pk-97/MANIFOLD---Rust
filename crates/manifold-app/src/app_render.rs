@@ -288,6 +288,12 @@ impl Application {
         for action in &actions {
             // Intercept actions that need Application-level access
             match action {
+                PanelAction::CopyOscAddress(addr) => {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        let _ = clipboard.set_text(addr.clone());
+                    }
+                    continue;
+                }
                 PanelAction::ToggleMonitor => { self.pending_toggle_output = true; continue; }
                 PanelAction::SaveProject => { self.save_project(); continue; }
                 PanelAction::SaveProjectAs => { self.save_project_as(); continue; }

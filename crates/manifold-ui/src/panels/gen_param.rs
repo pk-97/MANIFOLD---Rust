@@ -1,3 +1,4 @@
+use std::time::Instant;
 use manifold_core::LayerId;
 use crate::color;
 use crate::node::*;
@@ -34,6 +35,10 @@ pub struct GenParamInfo {
     /// When present, the slider displays the label instead of a numeric value.
     /// Unity: ParamDef.valueLabels → GeneratorDefinitionRegistry.FormatValue().
     pub value_labels: Option<Vec<String>>,
+    /// OSC address for this parameter (e.g. "/layer/{id}/gen/generator/tesseract/rotXY").
+    /// When present, clicking the param label copies this address to clipboard.
+    /// Unity: UIElementBuilder.CopyToClipboardLabel.
+    pub osc_address: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +107,12 @@ pub struct GenParamPanel {
     trim_ids: Vec<Option<TrimHandleIds>>,
     target_ids: Vec<Option<EnvelopeTargetIds>>,
 
+    // Per-param OSC addresses (for click-to-copy)
+    osc_addresses: Vec<Option<String>>,
+
+    // "Copied" flash state
+    copied_flash: Option<(u32, String, Instant)>,
+
     // Drag state
     drag: ParamDragState,
 
@@ -131,6 +142,8 @@ impl GenParamPanel {
             envelope_config_ids: Vec::new(),
             trim_ids: Vec::new(),
             target_ids: Vec::new(),
+            osc_addresses: Vec::new(),
+            copied_flash: None,
             drag: ParamDragState::new(),
             param_cache: Vec::new(),
             toggle_cache: Vec::new(),
@@ -162,6 +175,8 @@ impl GenParamPanel {
             &config.driver_dotted,
             &config.driver_triplet,
         );
+        self.osc_addresses = config.params.iter().map(|p| p.osc_address.clone()).collect();
+        self.copied_flash = None;
         self.slider_ids = vec![None; n];
         self.toggle_ids = Vec::new();
         self.toggle_ids.resize_with(n, || None);
@@ -295,6 +310,11 @@ impl GenParamPanel {
                     if on { "ON" } else { "OFF" },
                 ) as i32;
 
+                // Make toggle label interactive for click-to-copy OSC address
+                if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some() && label_id >= 0 {
+                    tree.set_flag(label_id as u32, UIFlags::INTERACTIVE);
+                }
+
                 self.toggle_ids[i] = Some(ToggleParamIds { _label_id: label_id, button_id });
                 self.toggle_cache[i] = on;
                 cy += ROW_HEIGHT + ROW_SPACING;
@@ -309,6 +329,14 @@ impl GenParamPanel {
                     &val_text, &SliderColors::default_slider(),
                     FONT_SIZE, crate::slider::DEFAULT_LABEL_WIDTH,
                 ));
+
+                // Make label interactive for click-to-copy OSC address
+                if self.osc_addresses.get(i).and_then(|a| a.as_ref()).is_some()
+                    && let Some(ids) = &self.slider_ids[i]
+                    && ids.label >= 0
+                {
+                    tree.set_flag(ids.label as u32, UIFlags::INTERACTIVE);
+                }
 
                 // Trim handles (if driver expanded)
                 if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false)
@@ -368,6 +396,31 @@ impl GenParamPanel {
     // ── Sync methods ─────────────────────────────────────────────
 
     pub fn sync_values(&mut self, tree: &mut UITree, values: &[f32]) {
+        // "Copied" flash — apply on first sync, revert after 0.6s
+        if let Some((label_id, ref original_text, start)) = self.copied_flash {
+            let elapsed = start.elapsed().as_secs_f32();
+            if original_text.is_empty() {
+                let name = self.find_label_name(label_id);
+                tree.set_text(label_id, "Copied");
+                tree.set_style(label_id, UIStyle {
+                    text_color: color::ACCENT_BLUE_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                });
+                self.copied_flash = Some((label_id, name, start));
+            } else if elapsed > 0.6 {
+                tree.set_text(label_id, original_text);
+                tree.set_style(label_id, UIStyle {
+                    text_color: color::SLIDER_TEXT_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    ..UIStyle::default()
+                });
+                self.copied_flash = None;
+            }
+        }
+
         for (i, &val) in values.iter().enumerate().take(self.param_info.len()) {
             let info = &self.param_info[i];
             if info.is_toggle {
@@ -388,6 +441,25 @@ impl GenParamPanel {
                 }
             }
         }
+    }
+
+    /// Find the original param name for a label node ID (slider or toggle).
+    fn find_label_name(&self, label_id: u32) -> String {
+        for (pi, s) in self.slider_ids.iter().enumerate() {
+            if let Some(ids) = s
+                && ids.label >= 0 && ids.label as u32 == label_id
+            {
+                return self.param_info.get(pi).map(|p| p.name.clone()).unwrap_or_default();
+            }
+        }
+        for (pi, t) in self.toggle_ids.iter().enumerate() {
+            if let Some(ids) = t
+                && ids._label_id >= 0 && ids._label_id as u32 == label_id
+            {
+                return self.param_info.get(pi).map(|p| p.name.clone()).unwrap_or_default();
+            }
+        }
+        String::new()
     }
 
     pub fn set_layer_id(&mut self, id: Option<LayerId>) {
@@ -429,6 +501,28 @@ impl GenParamPanel {
             if self.param_info.get(pi).map(|i| i.is_toggle).unwrap_or(false) { continue; }
             if id == btn_id {
                 return vec![PanelAction::GenEnvelopeToggle(pi)];
+            }
+        }
+
+        // Param label click → copy OSC address to clipboard (slider labels)
+        for (pi, slider) in self.slider_ids.iter().enumerate() {
+            if let Some(ids) = slider
+                && ids.label >= 0 && id == ids.label
+                && let Some(addr) = self.osc_addresses.get(pi).and_then(|a| a.clone())
+            {
+                self.copied_flash = Some((ids.label as u32, String::new(), Instant::now()));
+                return vec![PanelAction::CopyOscAddress(addr)];
+            }
+        }
+
+        // Param label click → copy OSC address to clipboard (toggle labels)
+        for (pi, toggle) in self.toggle_ids.iter().enumerate() {
+            if let Some(t) = toggle
+                && t._label_id >= 0 && id == t._label_id
+                && let Some(addr) = self.osc_addresses.get(pi).and_then(|a| a.clone())
+            {
+                self.copied_flash = Some((t._label_id as u32, String::new(), Instant::now()));
+                return vec![PanelAction::CopyOscAddress(addr)];
             }
         }
 
@@ -663,9 +757,9 @@ mod tests {
         GenParamConfig {
             gen_type_name: "Plasma".into(),
             params: vec![
-                GenParamInfo { name: "Speed".into(), min: 0.0, max: 10.0, default: 1.0, whole_numbers: false, is_toggle: false, value_labels: None },
-                GenParamInfo { name: "Invert".into(), min: 0.0, max: 1.0, default: 0.0, whole_numbers: false, is_toggle: true, value_labels: None },
-                GenParamInfo { name: "Scale".into(), min: 0.1, max: 5.0, default: 1.0, whole_numbers: false, is_toggle: false, value_labels: None },
+                GenParamInfo { name: "Speed".into(), min: 0.0, max: 10.0, default: 1.0, whole_numbers: false, is_toggle: false, value_labels: None, osc_address: None },
+                GenParamInfo { name: "Invert".into(), min: 0.0, max: 1.0, default: 0.0, whole_numbers: false, is_toggle: true, value_labels: None, osc_address: None },
+                GenParamInfo { name: "Scale".into(), min: 0.1, max: 5.0, default: 1.0, whole_numbers: false, is_toggle: false, value_labels: None, osc_address: None },
             ],
             driver_active: vec![false; 3],
             envelope_active: vec![false; 3],

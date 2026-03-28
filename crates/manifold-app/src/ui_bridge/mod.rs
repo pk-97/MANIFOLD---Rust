@@ -250,6 +250,9 @@ pub fn dispatch(
         | PanelAction::StemSoloToggled(_) => {
             project::dispatch_project(action, project, content_tx, content_state, ui, selection, active_layer, user_prefs)
         }
+
+        // Handled in app_render.rs (Application-level intercept, never reaches dispatch)
+        PanelAction::CopyOscAddress(_) => DispatchResult::handled(),
     }
 }
 

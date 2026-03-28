@@ -673,7 +673,7 @@ pub fn sync_inspector_data(
 ) {
 
     // Master effects → inspector (master has no envelopes)
-    let master_configs = effects_to_configs(&project.settings.master_effects, &[]);
+    let master_configs = effects_to_configs(&project.settings.master_effects, &[], OscScope::Master);
     ui.inspector.configure_master_effects(&master_configs);
 
     // Active layer effects + gen params → inspector
@@ -681,15 +681,16 @@ pub fn sync_inspector_data(
         if let Some(layer) = project.timeline.layers.get(idx) {
             // Layer effects — envelopes live on the layer
             let envs = layer.envelopes.as_deref().unwrap_or(&[]);
+            let lid = layer.layer_id.as_str();
             let layer_effects = layer.effects.as_ref()
-                .map(|e| effects_to_configs(e, envs))
+                .map(|e| effects_to_configs(e, envs, OscScope::Layer(lid)))
                 .unwrap_or_default();
             ui.inspector.configure_layer_effects(&layer_effects);
 
             // Generator params
             let gen_config = layer.gen_params()
                 .filter(|gp| *gp.generator_type() != GeneratorTypeId::NONE)
-                .map(gen_params_to_config);
+                .map(|gp| gen_params_to_config(gp, lid));
             let layer_id = layer.layer_id.clone();
             ui.inspector.configure_gen_params(gen_config.as_ref(), Some(layer_id));
         } else {
@@ -708,7 +709,7 @@ pub fn sync_inspector_data(
             .find(|c| c.id == *clip_id);
         if let Some(clip) = clip {
             let clip_envs = clip.envelopes.as_deref().unwrap_or(&[]);
-            let clip_configs = effects_to_configs(&clip.effects, clip_envs);
+            let clip_configs = effects_to_configs(&clip.effects, clip_envs, OscScope::None);
             ui.inspector.configure_clip_effects(&clip_configs);
         } else {
             ui.inspector.configure_clip_effects(&[]);
@@ -720,14 +721,27 @@ pub fn sync_inspector_data(
 
 // ── Helpers ──────────────────────────────────────────────────────
 
+/// OSC address scope for effect param configs.
+/// Master effects use `/master/`, layer effects use `/layer/{id}/`, clips have no OSC.
+enum OscScope<'a> {
+    Master,
+    Layer(&'a str),
+    None,
+}
+
 /// Convert a slice of `EffectInstance` into `EffectCardConfig` for the UI.
 /// Build EffectCardConfig from EffectInstance + envelopes.
 /// Unity: EffectCardState.SyncFromDataModel — populates all data-derived visual state.
-fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -> Vec<EffectCardConfig> {
+fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope], osc_scope: OscScope<'_>) -> Vec<EffectCardConfig> {
     effects.iter().enumerate().filter_map(|(i, fx)| {
         let reg_def = manifold_core::effect_definition_registry::try_get(fx.effect_type())?;
         let n = reg_def.param_count;
-        let params: Vec<EffectParamInfo> = reg_def.param_defs.iter().map(|pd| {
+        let params: Vec<EffectParamInfo> = reg_def.param_defs.iter().enumerate().map(|(pi, pd)| {
+            let osc_address = match osc_scope {
+                OscScope::Master => manifold_core::effect_definition_registry::get_osc_address(fx.effect_type(), pi),
+                OscScope::Layer(lid) => manifold_core::effect_definition_registry::get_osc_address_for_layer(fx.effect_type(), lid, pi),
+                OscScope::None => None,
+            };
             EffectParamInfo {
                 name: pd.name.clone(),
                 min: pd.min,
@@ -735,6 +749,7 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope]) -
                 default: pd.default_value,
                 whole_numbers: pd.whole_numbers,
                 value_labels: pd.value_labels.clone(),
+                osc_address,
             }
         }).collect();
 
@@ -836,7 +851,7 @@ fn beat_div_to_button_index(div: BeatDivision) -> i32 {
 }
 
 /// Convert a `GeneratorParamState` into `GenParamConfig` for the UI.
-fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState) -> GenParamConfig {
+fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState, layer_id: &str) -> GenParamConfig {
     let reg_def = match manifold_core::generator_definition_registry::try_get(gp.generator_type()) {
         Some(d) => d,
         None => {
@@ -851,7 +866,10 @@ fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState) -> G
         }
     };
     let n = reg_def.param_defs.len();
-    let params: Vec<GenParamInfo> = reg_def.param_defs.iter().map(|pd| {
+    let params: Vec<GenParamInfo> = reg_def.param_defs.iter().enumerate().map(|(pi, pd)| {
+        let osc_address = manifold_core::generator_definition_registry::get_osc_address_for_layer(
+            gp.generator_type(), layer_id, pi,
+        );
         GenParamInfo {
             name: pd.name.clone(),
             min: pd.min,
@@ -860,6 +878,7 @@ fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState) -> G
             whole_numbers: pd.whole_numbers,
             is_toggle: pd.is_toggle,
             value_labels: pd.value_labels.clone(),
+            osc_address,
         }
     }).collect();
 
