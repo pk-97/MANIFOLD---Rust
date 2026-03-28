@@ -26,6 +26,32 @@ impl GeneratorRegistry {
         Self { target_format }
     }
 
+    /// Pre-compile all generator pipelines into the binary archive.
+    /// Creates and immediately drops each generator — the compiled Metal pipeline
+    /// binaries persist in the archive. Call at startup before `save_pipeline_archive()`.
+    pub fn prewarm_all(&self, device: &GpuDevice) {
+        let all_types = [
+            GeneratorTypeId::PLASMA,
+            GeneratorTypeId::BASIC_SHAPES_SNAP,
+            GeneratorTypeId::CONCENTRIC_TUNNEL,
+            GeneratorTypeId::TESSERACT,
+            GeneratorTypeId::DUOCYLINDER,
+            GeneratorTypeId::LISSAJOUS,
+            GeneratorTypeId::WIREFRAME_ZOO,
+            GeneratorTypeId::OSCILLOSCOPE_XY,
+            GeneratorTypeId::PARAMETRIC_SURFACE,
+            GeneratorTypeId::MYCELIUM,
+            GeneratorTypeId::FLUID_SIMULATION,
+            GeneratorTypeId::FLUID_SIMULATION_3D,
+            GeneratorTypeId::MRI_VOLUME,
+        ];
+        log::info!("Pre-warming {} generator pipelines...", all_types.len());
+        for gen_type in &all_types {
+            let _ = self.create(device, gen_type);
+        }
+        log::info!("Generator pipeline pre-warm complete");
+    }
+
     /// Create a new generator instance for the given type.
     pub fn create(
         &self,

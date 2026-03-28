@@ -410,10 +410,34 @@ impl GpuDevice {
                 .set_destination_alpha_blend_factor(to_mtl_blend_factor(blend.dst_alpha_factor));
         }
 
-        let state = self
-            .device
-            .new_render_pipeline_state(&desc)
-            .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"));
+        // Use binary archive for render pipelines (same pattern as compute).
+        let mut archive_guard = self.archive.lock().unwrap();
+        let state = if let Some(ref mut arch) = *archive_guard {
+            let hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
+            desc.set_binary_archives(&[arch.raw_archive()]);
+
+            let state = self
+                .device
+                .new_render_pipeline_state(&desc)
+                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"));
+
+            if !arch.was_added(hash) {
+                if let Err(e) = arch
+                    .raw_archive()
+                    .add_render_pipeline_functions_with_descriptor(&desc)
+                {
+                    log::warn!("{label}: failed to add render PSO to binary archive: {e}");
+                } else {
+                    arch.mark_added(hash);
+                }
+            }
+            state
+        } else {
+            self.device
+                .new_render_pipeline_state(&desc)
+                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"))
+        };
+        drop(archive_guard);
 
         GpuRenderPipeline {
             state,

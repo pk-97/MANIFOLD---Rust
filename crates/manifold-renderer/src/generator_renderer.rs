@@ -104,12 +104,18 @@ impl GeneratorRenderer {
         let uniform_arena = UniformArena::new(device);
         let upscaler = manifold_gpu::metalfx::TextureUpscaler::new(device, format);
 
+        let registry = GeneratorRegistry::new(format);
+        // Pre-compile all generator pipelines into the binary archive.
+        // Generators are created and immediately dropped — compiled Metal pipeline
+        // binaries persist in the archive. Eliminates first-use stutter.
+        registry.prewarm_all(device);
+
         Self {
             device_ptr: device as *const GpuDevice,
             width,
             height,
             format,
-            registry: GeneratorRegistry::new(format),
+            registry,
             active_clips: AHashMap::with_capacity(16),
             layer_generators: AHashMap::with_capacity(8),
             available_rts,
