@@ -415,6 +415,17 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
         // Entirely GPU-side -- no PCIe transfer.
         id<MTLTexture> srcTexture = (__bridge id<MTLTexture>)metalTexturePtr;
 
+        // Diagnostic: verify source texture is valid and dimensions match
+        if (frameIndex < 5 || frameIndex % 120 == 0)
+        {
+            NSLog(@"[MetalEncoder] frame=%d src=%dx%d fmt=%lu dst=%dx%d spinWait=%d",
+                  frameIndex,
+                  (int)srcTexture.width, (int)srcTexture.height,
+                  (unsigned long)srcTexture.pixelFormat,
+                  state->width, state->height,
+                  spinCount);
+        }
+
         id<MTLCommandBuffer> cmdBuf = [state->commandQueue commandBuffer];
         if (cmdBuf == nil)
         {
@@ -465,10 +476,14 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
 
         if (!appended)
         {
-            NSLog(@"[MetalEncoder] appendPixelBuffer failed at frame %d: %@",
-                  frameIndex, state->assetWriter.error);
+            NSLog(@"[MetalEncoder] appendPixelBuffer failed at frame %d: %@ (status=%ld)",
+                  frameIndex, state->assetWriter.error,
+                  (long)state->assetWriter.status);
             return ME_ERR_APPEND_FAILED;
         }
+
+        // Flush aged entries from the texture cache to prevent stale texture reuse.
+        CVMetalTextureCacheFlush(state->textureCache, 0);
 
         state->frameCount++;
         return ME_OK;

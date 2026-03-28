@@ -1873,6 +1873,8 @@ impl ContentThread {
             );
         }
 
+        let render_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
+
         let tex_ptr = if export_config.hdr {
             let paper_white = 200.0f32;
             let max_nits = 10000.0f32;
@@ -1886,6 +1888,17 @@ impl ContentThread {
         };
 
         self.content_pipeline.wait_for_render_complete();
+        let gpu_wait_ms = frame_start.elapsed().as_secs_f64() * 1000.0 - render_ms;
+
+        // Log GPU wait time — if it stays near zero, the GPU is finishing
+        // before we even check. If it grows, we're GPU-bound.
+        if frame_idx < 5 || frame_idx.is_multiple_of(30) {
+            eprintln!(
+                "[Export] frame={} render={:.1}ms gpu_wait={:.1}ms tex={:?}",
+                frame_idx, render_ms, gpu_wait_ms,
+                tex_ptr.map(|p| p as usize),
+            );
+        }
 
         match tex_ptr {
             Some(ptr) => {
