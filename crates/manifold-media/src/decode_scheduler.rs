@@ -211,6 +211,22 @@ impl DecodeScheduler {
         results
     }
 
+    /// Block until at least one result arrives, then drain remaining.
+    /// Returns empty only if the channel is disconnected.
+    pub fn recv_results_blocking(&self) -> Vec<DecodeResult> {
+        let mut results = Vec::new();
+        // Block for the first result
+        match self.result_rx.recv() {
+            Ok(result) => results.push(result),
+            Err(_) => return results,
+        }
+        // Drain any additional results that arrived
+        while let Ok(result) = self.result_rx.try_recv() {
+            results.push(result);
+        }
+        results
+    }
+
     /// Get a reference to the shared decoder pool.
     pub fn pool(&self) -> &Arc<DecoderPool> {
         &self.pool

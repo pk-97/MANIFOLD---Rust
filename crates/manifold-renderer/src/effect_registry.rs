@@ -129,6 +129,14 @@ impl EffectRegistry {
         }
     }
 
+    /// Flush all in-flight background work across all processors.
+    /// Called after each export frame for deterministic async pipeline resolution.
+    pub fn flush_all_background_work(&mut self) {
+        for processor in self.processors.values_mut() {
+            processor.flush_background_work();
+        }
+    }
+
     /// Check if any processor is registered.
     pub fn has_any(&self) -> bool {
         !self.processors.is_empty()

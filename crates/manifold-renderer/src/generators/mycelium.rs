@@ -538,4 +538,15 @@ impl Generator for MyceliumGenerator {
     fn internal_resolution_scale(&self) -> f32 {
         0.5
     }
+
+    fn reset_state(&mut self, _device: &manifold_gpu::GpuDevice) {
+        self.initialized = false;
+        self.frame_count = 0;
+        self.agent_buffer = None;
+        self.accum_buffer = None;
+        self.trail_a = None;
+        self.trail_b = None;
+        self.trail_width = 0;
+        self.trail_height = 0;
+    }
 }

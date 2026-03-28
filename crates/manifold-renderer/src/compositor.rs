@@ -60,6 +60,12 @@ pub trait Compositor: Send {
     /// Clean up per-owner effect state for a stopped clip.
     fn cleanup_clip_owner(&mut self, clip_id: &str);
 
+    /// Clear all temporal effect state (e.g., on export warmup re-seek).
+    fn clear_all_effect_state(&mut self);
+
+    /// Flush in-flight background work in all effect processors.
+    fn flush_all_background_work(&mut self);
+
     /// LED tap texture: pre-tonemap composite captured when led_exit_index == 0.
     /// Returns None if exit index is -1.
     fn led_tap_texture(&self) -> Option<&manifold_gpu::GpuTexture>;

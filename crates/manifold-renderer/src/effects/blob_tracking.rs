@@ -22,6 +22,8 @@ use manifold_gpu::{
 struct BlobRequest {
     owner_key: i64,
     pixel_buffer: Vec<u8>,
+    width: i32,
+    height: i32,
     threshold: f32,
     sensitivity: f32,
 }
@@ -32,12 +34,24 @@ struct BlobResponse {
     blob_count: i32,
 }
 
-// BlobTrackingFX.cs line 14-17 (tuned up from Unity: 320x180 @ every-3-frames)
-// M4 Max unified memory makes per-frame readback essentially free.
-const READBACK_WIDTH: u32 = 640;
-const READBACK_HEIGHT: u32 = 360;
+// Unity hardcodes 320x180, but that squashes vertical projects into landscape.
+// Instead, preserve source aspect ratio with the same pixel budget (57,600 px).
+const READBACK_PIXEL_BUDGET: u32 = 320 * 180; // 57,600
 const MAX_BLOBS: usize = 16;
-const READBACK_INTERVAL_FRAMES: i64 = 1;
+const READBACK_INTERVAL_FRAMES: i64 = 3;
+
+/// Compute readback dimensions that preserve source aspect ratio.
+/// Keeps total pixel count ≈ READBACK_PIXEL_BUDGET, rounds to multiples of 16
+/// for compute workgroup alignment.
+fn readback_dims(source_w: u32, source_h: u32) -> (u32, u32) {
+    let aspect = source_w as f64 / source_h as f64;
+    let h = (READBACK_PIXEL_BUDGET as f64 / aspect).sqrt();
+    let w = h * aspect;
+    // Round to multiples of 16 (compute workgroup size), clamp to at least 16
+    let rw = ((w as u32).max(16) + 15) & !15;
+    let rh = ((h as u32).max(16) + 15) & !15;
+    (rw, rh)
+}
 
 // BlobTrackingFX.cs line 35
 const MATCH_RADIUS_SQ: f32 = 0.08;
@@ -60,8 +74,10 @@ struct TrackedBlob {
 struct OwnerState {
     downsample_rt: RenderTarget,
     readback: ReadbackRequest,
+    readback_w: u32,
+    readback_h: u32,
     has_blob_data: bool,
-    _pixel_buffer: Vec<u8>, // new byte[READBACK_WIDTH * READBACK_HEIGHT * 4]
+    _pixel_buffer: Vec<u8>,
     native_blob_output: Vec<f32>, // new float[MAX_BLOBS * 4]
     blob_data_for_shader: Vec<[f32; 4]>, // Vector4[MAX_BLOBS]
     connection_lines: Vec<[f32; 4]>, // Vector4[MAX_BLOBS]
@@ -140,8 +156,8 @@ impl BlobTrackingFX {
                 let mut blob_data = vec![0f32; MAX_BLOBS * 4];
                 let blob_count = detector.process(
                     &req.pixel_buffer,
-                    READBACK_WIDTH as i32,
-                    READBACK_HEIGHT as i32,
+                    req.width,
+                    req.height,
                     req.threshold,
                     req.sensitivity,
                     &mut blob_data,
@@ -197,44 +213,46 @@ impl BlobTrackingFX {
     }
 
     // BlobTrackingFX.cs lines 72-95 — GetOrCreateOwner
+    // Readback dimensions are computed from source aspect ratio to avoid distortion.
     fn get_or_create_owner(
         &mut self,
         device: &GpuDevice,
         pool: Option<&manifold_gpu::TexturePool>,
         owner_key: i64,
+        source_w: u32,
+        source_h: u32,
     ) -> &mut OwnerState {
         self.owner_states.entry(owner_key).or_insert_with(|| {
-            // BlobTrackingFX.cs line 78: RenderTextureUtil.Create(320, 180, name)
-            // Unity creates an RGBA32 RT; we use Rgba8Unorm for readback compatibility.
+            let (rw, rh) = readback_dims(source_w, source_h);
             let downsample_rt = if let Some(p) = pool {
                 RenderTarget::new_pooled(
                     p,
-                    READBACK_WIDTH,
-                    READBACK_HEIGHT,
+                    rw,
+                    rh,
                     GpuTextureFormat::Rgba8Unorm,
                     &format!("BlobAnalysis_{owner_key}"),
                 )
             } else {
                 RenderTarget::new(
                     device,
-                    READBACK_WIDTH,
-                    READBACK_HEIGHT,
+                    rw,
+                    rh,
                     GpuTextureFormat::Rgba8Unorm,
                     &format!("BlobAnalysis_{owner_key}"),
                 )
             };
 
-            // BlobTrackingFX.cs lines 80-84
-            let pixel_buffer = vec![0u8; (READBACK_WIDTH * READBACK_HEIGHT * 4) as usize];
+            let pixel_buffer = vec![0u8; (rw * rh * 4) as usize];
             let native_blob_output = vec![0f32; MAX_BLOBS * 4];
             let blob_data_for_shader = vec![[0f32; 4]; MAX_BLOBS];
             let connection_lines = vec![[0f32; 4]; MAX_BLOBS];
-            // BlobTrackingFX.cs line 84: tracked = new TrackedBlob[MAX_BLOBS]
             let tracked = vec![TrackedBlob::default(); MAX_BLOBS];
 
             OwnerState {
                 downsample_rt,
                 readback: ReadbackRequest::new(),
+                readback_w: rw,
+                readback_h: rh,
                 has_blob_data: false,
                 _pixel_buffer: pixel_buffer,
                 native_blob_output,
@@ -300,6 +318,8 @@ impl BlobTrackingFX {
         worker.submit(BlobRequest {
             owner_key,
             pixel_buffer: pixels,
+            width: state.readback_w as i32,
+            height: state.readback_h as i32,
             threshold: state.pending_threshold,
             sensitivity: state.pending_sensitivity,
         });
@@ -617,12 +637,16 @@ impl PostProcessEffect for BlobTrackingFX {
         let connect_dist = fx.param_values.get(4).copied().unwrap_or(0.35);
 
         // BlobTrackingFX.cs line 133
-        self.get_or_create_owner(gpu.device, gpu.pool, ctx.owner_key);
+        let source_w = source.width;
+        let source_h = source.height;
+        self.get_or_create_owner(gpu.device, gpu.pool, ctx.owner_key, source_w, source_h);
 
         // ---- Phase 0: poll any pending readback from a previous frame ----
         self.poll_readback(ctx.owner_key);
 
         let state = self.owner_states.get_mut(&ctx.owner_key).unwrap();
+        let rb_w = state.readback_w;
+        let rb_h = state.readback_h;
 
         // ---- Phase 1: Blit to downsample RT and request readback (throttled) ----
         let frame = ctx.frame_count;
@@ -646,7 +670,7 @@ impl PostProcessEffect for BlobTrackingFX {
                         texture: &state.downsample_rt.texture,
                     },
                 ],
-                [READBACK_WIDTH.div_ceil(16), READBACK_HEIGHT.div_ceil(16), 1],
+                [rb_w.div_ceil(16), rb_h.div_ceil(16), 1],
                 "BlobTracking Downsample",
             );
 
@@ -654,8 +678,8 @@ impl PostProcessEffect for BlobTrackingFX {
             state.readback.submit(
                 gpu,
                 &state.downsample_rt.texture,
-                READBACK_WIDTH,
-                READBACK_HEIGHT,
+                rb_w,
+                rb_h,
             );
             state.pending_threshold = threshold;
             state.pending_sensitivity = sensitivity;
@@ -739,6 +763,15 @@ impl PostProcessEffect for BlobTrackingFX {
     fn clear_state(&mut self) {
         for state in self.owner_states.values_mut() {
             clear_owner_state(state);
+        }
+    }
+
+    fn flush_background_work(&mut self) {
+        let Some(worker) = &mut self.worker else { return; };
+        if let Some(response) = worker.recv_blocking()
+            && let Some(state) = self.owner_states.get_mut(&response.owner_key)
+        {
+            Self::apply_blob_response(state, &response);
         }
     }
 

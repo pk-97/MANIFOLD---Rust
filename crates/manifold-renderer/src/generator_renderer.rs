@@ -462,6 +462,15 @@ impl GeneratorRenderer {
         }
     }
 
+    /// Reset all generator simulation state to initial conditions.
+    /// Called after export warmup re-seek.
+    pub fn reset_all_generator_state(&mut self) {
+        let device = unsafe { &*self.device_ptr };
+        for layer_state in self.layer_generators.values_mut() {
+            layer_state.generator.reset_state(device);
+        }
+    }
+
     /// Update active clip types for a layer after generator type change.
     /// Port of C# GeneratorRenderer.UpdateActiveTypesForLayer().
     pub fn update_active_types_for_layer(

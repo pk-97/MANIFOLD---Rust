@@ -253,6 +253,23 @@ impl PlaybackEngine {
     pub fn is_export_mode(&self) -> bool { self.is_export_mode }
     pub fn video_sync_interval(&self) -> f32 { self.video_sync_interval }
     pub fn active_clip_count(&self) -> usize { self.active_clip_renderers.len() }
+    /// True when all active clips that need a prepare phase are ready.
+    /// Used by export warmup to wait for video decoders.
+    pub fn all_active_clips_ready(&self) -> bool {
+        self.active_clip_renderers.iter().all(|(clip_id, &idx)| {
+            !self.renderers[idx].needs_prepare_phase()
+                || self.renderers[idx].is_clip_ready(clip_id)
+        })
+    }
+    /// Block until all in-flight video decode jobs complete.
+    /// Called in export loop to ensure decode keeps up with render speed.
+    pub fn flush_pending_decodes(&mut self) {
+        for renderer in &mut self.renderers {
+            if renderer.has_pending_decodes() {
+                renderer.flush_pending_decodes();
+            }
+        }
+    }
     pub fn project(&self) -> Option<&Project> { self.project.as_ref() }
     pub fn project_mut(&mut self) -> Option<&mut Project> { self.project.as_mut() }
     pub fn live_clip_manager(&self) -> Option<&LiveClipManager> { self.live_clip_manager.as_ref() }
@@ -1635,8 +1652,12 @@ impl PlaybackEngine {
             };
             if !self.renderers[renderer_idx].is_clip_ready(&clip_id) { continue; }
 
-            // Skip clips whose RenderTexture hasn't had time to decode (video-specific)
-            if self.renderers[renderer_idx].needs_prepare_phase() {
+            // Skip clips whose RenderTexture hasn't had time to decode (video-specific).
+            // Bypass in export mode — the gate prevents glitches during interactive
+            // scrubbing but causes black frames and clip-transition gaps in export.
+            if !self.is_export_mode
+                && self.renderers[renderer_idx].needs_prepare_phase()
+            {
                 let is_live_clip = self.live_clip_manager.as_ref()
                     .is_some_and(|mgr| mgr.is_live_slot_clip(&clip_id));
                 // Inline beat_to_timeline_time to avoid &mut self borrow
@@ -1649,7 +1670,11 @@ impl PlaybackEngine {
                 } else {
                     clip.end_beat() * 0.5
                 };
-                if self.should_exclude_recently_started(&clip_id, clip_end_time, is_live_clip) {
+                if self.should_exclude_recently_started(
+                    &clip_id,
+                    clip_end_time,
+                    is_live_clip,
+                ) {
                     continue;
                 }
             }

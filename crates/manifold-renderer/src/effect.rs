@@ -74,6 +74,11 @@ pub trait PostProcessEffect: Send {
     /// Clear all temporal state (called on seek to prevent stale trails/feedback).
     fn clear_state(&mut self) {}
 
+    /// Block until any in-flight background work completes.
+    /// Called after each export frame to ensure async pipelines (GPU readback →
+    /// background worker → result) resolve deterministically. Default: no-op.
+    fn flush_background_work(&mut self) {}
+
     /// Recreate resolution-dependent resources.
     fn resize(&mut self, _device: &manifold_gpu::GpuDevice, _width: u32, _height: u32) {}
 

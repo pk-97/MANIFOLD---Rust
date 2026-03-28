@@ -698,6 +698,23 @@ impl Generator for FluidSimulation3DGenerator {
     fn internal_resolution_scale(&self) -> f32 {
         0.5
     }
+
+    fn reset_state(&mut self, _device: &manifold_gpu::GpuDevice) {
+        self.initialized = false;
+        self.frame_count = 0;
+        self.particle_buffer = None;
+        self.accum_3d = None;
+        self.display_accum = None;
+        self.density_volume = None;
+        self.density_blur_temp = None;
+        self.vector_volume = None;
+        self.vector_blur_temp = None;
+        self.display_density_tex = None;
+        self.disp_w = 0;
+        self.disp_h = 0;
+        self.snap_envelope = 0.0;
+        self.inject_frames_remaining = 0;
+    }
 }
 
 fn lcg_next_f32(state: &mut u64) -> f32 {

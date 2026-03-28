@@ -626,10 +626,31 @@ impl ContentPipeline {
         }
     }
 
+    /// Clear all temporal effect state (Feedback, Bloom, etc.).
+    /// Called after export warmup re-seek to prevent stale state.
+    pub fn clear_all_effect_state(&mut self) {
+        self.compositor.clear_all_effect_state();
+    }
+
+    /// Flush in-flight background work in all effect processors.
+    /// Called after each export frame for deterministic async pipeline resolution.
+    pub fn flush_all_background_work(&mut self) {
+        self.compositor.flush_all_background_work();
+    }
+
     /// Pre-tonemap HDR output for export pipeline.
     #[allow(dead_code)]
     pub fn pre_tonemap_output(&self) -> &manifold_gpu::GpuTexture {
         self.compositor.pre_tonemap_output()
+    }
+
+    /// Block until the last render's GPU command buffer has completed.
+    /// Must be called before reading the output texture on a different queue.
+    #[cfg(target_os = "macos")]
+    pub fn wait_for_render_complete(&self) {
+        if let Some(ref event) = self.native_event {
+            event.wait_until_done(self.native_signal_value);
+        }
     }
 
     /// Export output texture (post-tonemap, post-effects).
@@ -688,6 +709,11 @@ impl ContentPipeline {
                 paper_white_nits,
                 max_nits,
             );
+        }
+        // Signal the same event so wait_for_render_complete covers PQ output.
+        if let Some(ref event) = self.native_event {
+            enc.signal_event(event);
+            self.native_signal_value = event.current_value();
         }
         enc.commit();
 

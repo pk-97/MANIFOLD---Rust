@@ -1797,6 +1797,69 @@ impl PostProcessEffect for WireframeDepthFX {
         Self::release_transient(gpu, history_next);
     }
 
+    fn flush_background_work(&mut self) {
+        match &mut self.workers {
+            Some(WorkerMode::Parallel {
+                depth_worker, flow_worker, subject_worker,
+            }) => {
+                if let Some(resp) = depth_worker.recv_blocking()
+                    && let Some(state) = self.owner_states.get_mut(&resp.owner_key)
+                    && let Some(ref depth) = resp.depth_buffer
+                {
+                    let n = depth.len().min(state.dnn_depth_buffer.len());
+                    state.dnn_depth_buffer[..n].copy_from_slice(&depth[..n]);
+                    state.dnn_has_depth = true;
+                    state.dnn_depth_dirty = true;
+                }
+                if let Some(resp) = flow_worker.recv_blocking()
+                    && let Some(state) = self.owner_states.get_mut(&resp.owner_key)
+                {
+                    if let Some(ref flow) = resp.flow_buffer {
+                        let n = flow.len().min(state.native_flow_buffer.len());
+                        state.native_flow_buffer[..n].copy_from_slice(&flow[..n]);
+                        state.native_flow_has_data = true;
+                        state.native_flow_dirty = true;
+                        state.native_flow_ready = true;
+                        state.latest_cut_score = resp.cut_score;
+                    } else {
+                        state.native_flow_has_data = false;
+                        state.native_flow_ready = false;
+                        state.latest_cut_score = 0.0;
+                    }
+                }
+                if let Some(resp) = subject_worker.recv_blocking() {
+                    if resp.subject_api_failed {
+                        self.dnn_subject_api_available = false;
+                    }
+                    if let Some(state) = self.owner_states.get_mut(&resp.owner_key)
+                        && let Some(ref blended) = resp.subject_history_blended
+                    {
+                        let n = blended.len().min(
+                            state.dnn_subject_history_buffer.len(),
+                        );
+                        state.dnn_subject_history_buffer[..n]
+                            .copy_from_slice(&blended[..n]);
+                        state.dnn_has_subject_mask = true;
+                        state.dnn_subject_dirty = true;
+                    }
+                }
+            }
+            Some(WorkerMode::Monolithic { worker }) => {
+                if let Some(response) = worker.recv_blocking() {
+                    if let Some(state) =
+                        self.owner_states.get_mut(&response.owner_key)
+                    {
+                        Self::apply_depth_response(state, &response);
+                    }
+                    if response.subject_api_failed {
+                        self.dnn_subject_api_available = false;
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+
     // WireframeDepthFX.cs line 915-919 — ClearState (all owners)
     fn clear_state(&mut self) {
         // We can't call encoder from trait — clear flags + CPU buffers,

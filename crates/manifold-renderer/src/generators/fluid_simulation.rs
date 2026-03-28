@@ -833,6 +833,23 @@ impl Generator for FluidSimulationGenerator {
     fn internal_resolution_scale(&self) -> f32 {
         0.5
     }
+
+    fn reset_state(&mut self, _device: &manifold_gpu::GpuDevice) {
+        // Force full re-initialization on next render.
+        self.initialized = false;
+        self.frame_count = 0;
+        self.particle_buffer = None;
+        self.scatter_accum = None;
+        self.density_tex = None;
+        self.blur_density_tex = None;
+        self.vector_field_tex = None;
+        self.blur_temp_tex = None;
+        self.scatter_width = 0;
+        self.scatter_height = 0;
+        self.snap_envelope = 0.0;
+        self.inject_active = false;
+        self.inject_frames_remaining = 0;
+    }
 }
 
 // ── Helpers ──

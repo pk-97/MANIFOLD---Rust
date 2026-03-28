@@ -1639,6 +1639,15 @@ impl ContentThread {
         // 3. Enter export mode
         self.engine.stop();
         self.engine.set_export_mode(true);
+        // Ensure content pipeline matches export resolution
+        let (cur_w, cur_h) = self.content_pipeline.dimensions();
+        if cur_w != export_config.width || cur_h != export_config.height {
+            self.content_pipeline.resize(
+                &mut self.engine,
+                export_config.width,
+                export_config.height,
+            );
+        }
         // Seek to start
         let start_time = self.engine.beat_to_timeline_time(start_beat);
         self.engine.seek_to(start_time);
@@ -1663,32 +1672,44 @@ impl ContentThread {
             }
         };
 
-        // 4b. Warmup frame — tick + render one throwaway frame to initialize
-        // effect state, generator buffers, and warm the texture pool.
-        // Without this, the first encoded frame is black.
+        // 4b. Wait for video decoders to produce their first frame.
+        // Only ticks the engine (which drives pre_render → decode result drain).
+        // No GPU rendering — we re-seek afterward, clearing all temporal state.
         {
-            let warmup_ctx = TickContext {
-                dt_seconds: frame_dt,
-                realtime_now: 0.0,
-                pre_render_dt: frame_dt as f32,
-                frame_count: -1,
-                export_fixed_dt: frame_dt,
-            };
-            let warmup_result = self.engine.tick(warmup_ctx);
-            self.content_pipeline.render_content(
-                &self.gpu, &mut self.engine, &warmup_result, frame_dt, 0,
-            );
-            if !warmup_result.stopped_clips.is_empty() {
-                self.content_pipeline.cleanup_stopped_clips(&warmup_result.stopped_clips);
+            const MAX_WARMUP_TICKS: u32 = 120;
+            for warmup_i in 0..MAX_WARMUP_TICKS {
+                let warmup_ctx = TickContext {
+                    dt_seconds: frame_dt,
+                    realtime_now: 0.0,
+                    pre_render_dt: frame_dt as f32,
+                    frame_count: -1,
+                    export_fixed_dt: frame_dt,
+                };
+                let warmup_result = self.engine.tick(warmup_ctx);
+                self.engine.reclaim_tick_result(warmup_result);
+
+                if self.engine.all_active_clips_ready() {
+                    break;
+                }
+                if warmup_i % 30 == 29 {
+                    log::warn!(
+                        "[Export] Still waiting for decoders after {} warmup ticks",
+                        warmup_i + 1,
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
-            self.engine.reclaim_tick_result(warmup_result);
-            // Re-seek to start — the warmup frame advanced the engine by one tick
+            // Re-seek to start — warmup ticks advanced the engine
             let start_time = self.engine.beat_to_timeline_time(start_beat);
             self.engine.seek_to(start_time);
         }
 
-        // 5. Export frame loop — runs as fast as GPU can encode (no sleep)
+        // 5. Export frame loop — runs as fast as GPU can encode (no sleep).
+        //    Each iteration is wrapped in an autoreleasepool to drain Metal's
+        //    autoreleased ObjC objects per-frame (command buffers, texture views).
+        //    Without this, memory grows unboundedly for the entire export duration.
         let mut cancelled = false;
+        let mut encode_error: Option<String> = None;
         for frame_idx in 0..total_frames {
             // Check for cancel command (non-blocking drain)
             while let Ok(cmd) = cmd_rx.try_recv() {
@@ -1696,78 +1717,37 @@ impl ContentThread {
                     cancelled = true;
                     break;
                 }
-                // Ignore other commands during export
             }
             if cancelled {
                 session.cancel();
                 break;
             }
 
-            // Tick engine with fixed delta
-            let ctx = TickContext {
-                dt_seconds: frame_dt,
-                realtime_now: frame_idx as f64 * frame_dt,
-                pre_render_dt: frame_dt as f32,
-                frame_count: frame_idx as i32,
-                export_fixed_dt: frame_dt,
-            };
-            let tick_result = self.engine.tick(ctx);
-
-            // Render
-            self.content_pipeline.render_content(
-                &self.gpu,
-                &mut self.engine,
-                &tick_result,
-                frame_dt,
-                frame_idx as u64,
+            #[cfg(target_os = "macos")]
+            let frame_err: Option<String> = objc::rc::autoreleasepool(|| {
+                self.export_one_frame(
+                    &mut session, &export_config, frame_idx, total_frames,
+                    frame_dt, state_tx,
+                )
+            });
+            #[cfg(not(target_os = "macos"))]
+            let frame_err: Option<String> = self.export_one_frame(
+                &mut session, &export_config, frame_idx, total_frames,
+                frame_dt, state_tx,
             );
 
-            // Get Metal texture pointer from native GpuTexture.
-            // SDR: capture compositor output directly.
-            // HDR: run PQ encoder on compositor output, capture PQ result.
-            let texture = if export_config.hdr {
-                let paper_white = 200.0f32; // TODO: from project settings
-                let max_nits = 10000.0f32;
-                self.content_pipeline.pq_encode_for_export(
-                    paper_white, max_nits,
-                )
-            } else {
-                self.content_pipeline.export_output_texture()
-            };
-            let tex_ptr = unsafe { Self::get_metal_texture_ptr(texture) };
-
-            match tex_ptr {
-                Some(ptr) => {
-                    if let Err(e) = unsafe { session.encode_frame(ptr) } {
-                        log::error!("[ContentThread] Encode failed at frame {frame_idx}: {e}");
-                        cancelled = true;
-                        break;
-                    }
-                }
-                None => {
-                    log::error!("[ContentThread] Failed to get Metal texture pointer at frame {frame_idx}");
-                    cancelled = true;
-                    break;
-                }
-            }
-
-            // Cleanup stopped clips
-            if !tick_result.stopped_clips.is_empty() {
-                self.content_pipeline
-                    .cleanup_stopped_clips(&tick_result.stopped_clips);
-            }
-            // Reclaim tick_result buffers for reuse on next frame.
-            self.engine.reclaim_tick_result(tick_result);
-
-            // Send progress to UI (throttle: every 10 frames)
-            if frame_idx % 10 == 0 {
-                self.send_export_progress(state_tx, &session);
+            if let Some(err) = frame_err {
+                encode_error = Some(err);
+                break;
             }
         }
 
         // 6. Finalize
-        if cancelled {
-            log::info!("[ContentThread] Export cancelled at frame {}", session.frames_encoded());
+        let failed = cancelled || encode_error.is_some();
+        if failed {
+            if cancelled {
+                log::info!("[ContentThread] Export cancelled at frame {}", session.frames_encoded());
+            }
             // Clean up partial file
             let _ = std::fs::remove_file(&export_config.output_path);
             let temp_video = format!("{}.video_only.mp4", export_config.output_path);
@@ -1800,6 +1780,10 @@ impl ContentThread {
 
         // 7. Restore playback state
         self.engine.set_export_mode(false);
+        // Restore content pipeline resolution if it was changed for export
+        if cur_w != export_config.width || cur_h != export_config.height {
+            self.content_pipeline.resize(&mut self.engine, cur_w, cur_h);
+        }
         self.engine.stop();
         let restore_time = self.engine.beat_to_timeline_time(saved_beat);
         self.engine.seek_to(restore_time);
@@ -1807,11 +1791,82 @@ impl ContentThread {
             self.engine.play();
         }
 
-        if cancelled {
+        if failed {
+            let msg = if let Some(err) = encode_error {
+                format!("Export failed: {err}")
+            } else {
+                "Export cancelled".into()
+            };
             self.send_export_finished(
-                state_tx, false, "Export cancelled".into(), &export_config.output_path,
+                state_tx, false, msg, &export_config.output_path,
             );
         }
+    }
+
+    /// Render and encode a single export frame. Returns Some(error) on failure.
+    fn export_one_frame(
+        &mut self,
+        session: &mut manifold_media::export_session::ExportSession,
+        export_config: &manifold_media::export_config::ExportConfig,
+        frame_idx: u32,
+        _total_frames: u32,
+        frame_dt: f64,
+        state_tx: &crossbeam_channel::Sender<ContentState>,
+    ) -> Option<String> {
+        let ctx = TickContext {
+            dt_seconds: frame_dt,
+            realtime_now: frame_idx as f64 * frame_dt,
+            pre_render_dt: frame_dt as f32,
+            frame_count: frame_idx as i32,
+            export_fixed_dt: frame_dt,
+        };
+        let tick_result = self.engine.tick(ctx);
+
+        self.engine.flush_pending_decodes();
+
+        self.content_pipeline.render_content(
+            &self.gpu, &mut self.engine, &tick_result, frame_dt, frame_idx as u64,
+        );
+
+        self.content_pipeline.flush_all_background_work();
+
+        let tex_ptr = if export_config.hdr {
+            let paper_white = 200.0f32;
+            let max_nits = 10000.0f32;
+            let texture = self.content_pipeline.pq_encode_for_export(
+                paper_white, max_nits,
+            );
+            unsafe { Self::get_metal_texture_ptr(texture) }
+        } else {
+            let texture = self.content_pipeline.export_output_texture();
+            unsafe { Self::get_metal_texture_ptr(texture) }
+        };
+
+        self.content_pipeline.wait_for_render_complete();
+
+        match tex_ptr {
+            Some(ptr) => {
+                if let Err(e) = unsafe { session.encode_frame(ptr) } {
+                    log::error!("[ContentThread] Encode failed at frame {frame_idx}: {e}");
+                    return Some(format!("Encode failed at frame {frame_idx}: {e}"));
+                }
+            }
+            None => {
+                log::error!("[ContentThread] No Metal texture at frame {frame_idx}");
+                return Some(format!("No texture at frame {frame_idx}"));
+            }
+        }
+
+        if !tick_result.stopped_clips.is_empty() {
+            self.content_pipeline.cleanup_stopped_clips(&tick_result.stopped_clips);
+        }
+        self.engine.reclaim_tick_result(tick_result);
+
+        if frame_idx.is_multiple_of(10) {
+            self.send_export_progress(state_tx, session);
+        }
+
+        None
     }
 
     /// Extract the raw Metal texture pointer from a native GpuTexture.

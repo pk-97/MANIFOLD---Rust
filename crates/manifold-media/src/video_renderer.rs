@@ -247,6 +247,105 @@ impl VideoRenderer {
     ) -> bool {
         false
     }
+
+    /// Process a batch of decode results — shared by `pre_render` and
+    /// `flush_pending_decodes` to avoid duplicating the match arms.
+    fn process_decode_results(
+        &mut self,
+        results: Vec<crate::decode_scheduler::DecodeResult>,
+    ) {
+        let pool = Arc::clone(self.scheduler.pool());
+        for result in results {
+            let clip_id = result.clip_id;
+            match result.status {
+                DecodeResultStatus::Opened {
+                    duration, frame_rate, ..
+                } => {
+                    if let Some(clip) =
+                        self.active_clips.get_mut(clip_id.as_str())
+                    {
+                        clip.media_length = duration;
+                        clip.frame_rate = frame_rate.max(1.0);
+                    }
+                }
+                DecodeResultStatus::Prepared { handle_ptr } => {
+                    if let Some(clip) =
+                        self.active_clips.get_mut(clip_id.as_str())
+                    {
+                        clip.ready = true;
+                        clip.decode_pending = false;
+                        if unsafe {
+                            Self::copy_frame_to_rt(
+                                &pool, handle_ptr, &clip.render_target,
+                            )
+                        } {
+                            clip.has_frame = true;
+                        }
+                    }
+                }
+                DecodeResultStatus::FrameReady {
+                    frame_time, handle_ptr,
+                } => {
+                    if let Some(clip) =
+                        self.active_clips.get_mut(clip_id.as_str())
+                    {
+                        clip.playback_time = frame_time;
+                        clip.decode_pending = false;
+                        if unsafe {
+                            Self::copy_frame_to_rt(
+                                &pool, handle_ptr, &clip.render_target,
+                            )
+                        } {
+                            clip.has_frame = true;
+                        }
+                    }
+                }
+                DecodeResultStatus::EndOfFile => {
+                    if let Some(clip) =
+                        self.active_clips.get_mut(clip_id.as_str())
+                    {
+                        clip.decode_pending = false;
+                        if clip.looping {
+                            clip.decode_pending = true;
+                            self.scheduler.submit(DecodeJob::Seek {
+                                clip_id: clip_id.clone(),
+                                target_time: 0.0,
+                            });
+                        } else {
+                            clip.playing = false;
+                        }
+                    }
+                }
+                DecodeResultStatus::Seeked {
+                    frame_time, handle_ptr,
+                } => {
+                    if let Some(clip) =
+                        self.active_clips.get_mut(clip_id.as_str())
+                    {
+                        clip.playback_time = frame_time;
+                        clip.decode_pending = false;
+                        clip.time_accumulator = 0.0;
+                        if unsafe {
+                            Self::copy_frame_to_rt(
+                                &pool, handle_ptr, &clip.render_target,
+                            )
+                        } {
+                            clip.has_frame = true;
+                        }
+                    }
+                }
+                DecodeResultStatus::WarmReady { .. } => {}
+                DecodeResultStatus::Error(msg) => {
+                    eprintln!("[VideoRenderer] Error for {clip_id}: {msg}");
+                    if let Some(clip) =
+                        self.active_clips.get_mut(clip_id.as_str())
+                    {
+                        clip.decode_pending = false;
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl ClipRenderer for VideoRenderer {
@@ -426,99 +525,7 @@ impl ClipRenderer for VideoRenderer {
     fn pre_render(&mut self, _time: f32, _beat: f32, dt: f32) {
         // 1. Drain decode results and update clip state
         let results = self.scheduler.drain_results();
-        let pool = Arc::clone(self.scheduler.pool());
-
-        for result in results {
-            let clip_id = result.clip_id;
-
-            match result.status {
-                DecodeResultStatus::Opened {
-                    duration,
-                    width: _,
-                    height: _,
-                    frame_rate,
-                } => {
-                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
-                        clip.media_length = duration;
-                        clip.frame_rate = frame_rate.max(1.0);
-                    }
-                }
-
-                DecodeResultStatus::Prepared { handle_ptr } => {
-                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
-                        clip.ready = true;
-                        clip.decode_pending = false;
-
-                        let copied = unsafe {
-                            Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target)
-                        };
-                        if copied {
-                            clip.has_frame = true;
-                        }
-                        // Don't auto-submit DecodeNext — pacing loop below handles it
-                    }
-                }
-
-                DecodeResultStatus::FrameReady {
-                    frame_time,
-                    handle_ptr,
-                } => {
-                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
-                        clip.playback_time = frame_time;
-                        clip.decode_pending = false;
-
-                        if unsafe {
-                            Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target)
-                        } {
-                            clip.has_frame = true;
-                        }
-                        // Don't auto-submit — pacing loop below handles it
-                    }
-                }
-
-                DecodeResultStatus::EndOfFile => {
-                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
-                        clip.decode_pending = false;
-                        if clip.looping {
-                            clip.decode_pending = true;
-                            self.scheduler.submit(DecodeJob::Seek {
-                                clip_id: clip_id.clone(),
-                                target_time: 0.0,
-                            });
-                        } else {
-                            clip.playing = false;
-                        }
-                    }
-                }
-
-                DecodeResultStatus::Seeked {
-                    frame_time,
-                    handle_ptr,
-                } => {
-                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
-                        clip.playback_time = frame_time;
-                        clip.decode_pending = false;
-                        clip.time_accumulator = 0.0; // reset after seek
-
-                        if unsafe {
-                            Self::copy_frame_to_rt(&pool, handle_ptr, &clip.render_target)
-                        } {
-                            clip.has_frame = true;
-                        }
-                        // Don't auto-submit — pacing loop below handles it
-                    }
-                }
-
-                DecodeResultStatus::WarmReady { .. } => {}
-
-                DecodeResultStatus::Error(msg) => {
-                    eprintln!("[VideoRenderer] Error for {clip_id}: {msg}");
-                    if let Some(clip) = self.active_clips.get_mut(clip_id.as_str()) {
-                        clip.decode_pending = false;
-                    }
-                }
-            }
-        }
+        self.process_decode_results(results);
 
         // 2. Dispatch any queued seeks that were coalesced while decode was pending.
         let pending: Vec<(String, f32)> = self.active_clips.iter_mut()
@@ -603,6 +610,20 @@ impl ClipRenderer for VideoRenderer {
                 VideoRenderTarget::new(device, w, h, fmt, self.rt_counter);
             self.rt_counter += 1;
             clip.has_frame = false;
+        }
+    }
+
+    fn has_pending_decodes(&self) -> bool {
+        self.active_clips.values().any(|c| c.decode_pending)
+    }
+
+    fn flush_pending_decodes(&mut self) {
+        while self.active_clips.values().any(|c| c.decode_pending) {
+            let results = self.scheduler.recv_results_blocking();
+            if results.is_empty() {
+                break; // Channel disconnected
+            }
+            self.process_decode_results(results);
         }
     }
 

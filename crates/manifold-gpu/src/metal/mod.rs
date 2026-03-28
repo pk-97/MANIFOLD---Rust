@@ -686,6 +686,14 @@ impl GpuEvent {
         self.raw.signaled_value()
     }
 
+    /// Block the calling thread until the GPU has signaled `value`.
+    /// Polls with 10µs sleeps to avoid burning CPU while waiting (~2-5ms).
+    pub fn wait_until_done(&self, value: u64) {
+        while !self.is_done(value) {
+            std::thread::sleep(std::time::Duration::from_micros(10));
+        }
+    }
+
     /// Raw Metal shared event reference.
     pub fn raw(&self) -> &metal::SharedEventRef {
         &self.raw

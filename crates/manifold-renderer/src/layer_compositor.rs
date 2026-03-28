@@ -1215,6 +1215,14 @@ impl Compositor for LayerCompositor {
         self.cleanup_clip_owner_internal(clip_id);
     }
 
+    fn clear_all_effect_state(&mut self) {
+        self.effect_registry.clear_all_state();
+    }
+
+    fn flush_all_background_work(&mut self) {
+        self.effect_registry.flush_all_background_work();
+    }
+
     fn led_tap_texture(&self) -> Option<&GpuTexture> {
         self.led_tap.as_ref().map(|t| &t.texture)
     }

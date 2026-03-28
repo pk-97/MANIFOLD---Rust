@@ -37,6 +37,13 @@ pub trait ClipRenderer: Any + Send {
     fn pre_render(&mut self, time: f32, beat: f32, dt: f32);
     fn resize(&mut self, width: i32, height: i32);
 
+    /// True if any active clip has a decode job in-flight.
+    fn has_pending_decodes(&self) -> bool { false }
+
+    /// Block until all in-flight decode jobs complete and process results.
+    /// No-op for renderers without async decode.
+    fn flush_pending_decodes(&mut self) {}
+
     /// Downcast support for typed renderer access from app layer.
     fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;

@@ -34,4 +34,9 @@ pub trait Generator: Send {
     fn internal_resolution_scale(&self) -> f32 {
         1.0
     }
+
+    /// Reset all simulation state to initial conditions.
+    /// Called after export warmup re-seek to avoid stale particle/density state.
+    /// Default: no-op (stateless generators don't need this).
+    fn reset_state(&mut self, _device: &manifold_gpu::GpuDevice) {}
 }

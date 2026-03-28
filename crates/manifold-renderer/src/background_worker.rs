@@ -154,6 +154,25 @@ impl<Req: Send + 'static, Res: Send + 'static> BackgroundWorker<Req, Res> {
     pub fn is_busy(&self) -> bool {
         self.in_flight
     }
+
+    /// Block until the worker finishes its current request and return the result.
+    /// Returns None if no request is in-flight.
+    /// Used by export mode to ensure deterministic per-frame results.
+    pub fn recv_blocking(&mut self) -> Option<Res> {
+        if !self.in_flight {
+            return None;
+        }
+        match self.res_rx.recv() {
+            Ok(res) => {
+                self.in_flight = false;
+                Some(res)
+            }
+            Err(_) => {
+                self.in_flight = false;
+                None
+            }
+        }
+    }
 }
 
 impl<Req: Send + 'static, Res: Send + 'static> Drop for BackgroundWorker<Req, Res> {
