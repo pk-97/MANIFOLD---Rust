@@ -234,6 +234,9 @@ pub struct Application {
 
     // File I/O
     pub(crate) current_project_path: Option<std::path::PathBuf>,
+    /// Last export path — remembered across exports so the file dialog
+    /// opens at the previous directory with the previous filename.
+    pub(crate) last_export_path: Option<std::path::PathBuf>,
     pub(crate) user_prefs: UserPrefs,
     pub(crate) project_io: ProjectIOService,
 
@@ -348,6 +351,7 @@ impl Application {
             split_dragging: false,
             split_was_hovered: false,
             current_project_path: None,
+            last_export_path: None,
             project_io: {
                 let prefs = UserPrefs::load();
                 ProjectIOService::new(&prefs)

@@ -62,25 +62,40 @@ impl Application {
             project.settings.output_height.max(1) as u32,
         );
 
-        let project_name = if project.project_name.is_empty() {
-            "MANIFOLD_Export"
-        } else {
-            &project.project_name
-        };
-
         // Pause rendering while native file dialog is open (macOS GPU contention)
         self.send_content_cmd(ContentCommand::PauseRendering);
+
+        // Use previous export location if available, otherwise default to Desktop.
+        let (start_dir, start_name) = if let Some(ref prev) = self.last_export_path {
+            let dir = prev.parent().map(|p| p.to_path_buf());
+            let name = prev.file_name()
+                .map(|n| n.to_string_lossy().to_string());
+            (dir, name)
+        } else {
+            (None, None)
+        };
+        let default_name = start_name.unwrap_or_else(|| {
+            let project_name = if project.project_name.is_empty() {
+                "MANIFOLD_Export"
+            } else {
+                &project.project_name
+            };
+            format!("{project_name}.mp4")
+        });
 
         let mut dialog = rfd::FileDialog::new()
             .set_title("Export Video")
             .add_filter("MP4 Video", &["mp4"])
-            .set_file_name(format!("{project_name}.mp4"));
+            .set_file_name(&default_name);
 
-        // Default to Desktop
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let desktop = std::path::Path::new(&home).join("Desktop");
-        if desktop.exists() {
-            dialog = dialog.set_directory(&desktop);
+        if let Some(ref dir) = start_dir {
+            dialog = dialog.set_directory(dir);
+        } else {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            let desktop = std::path::Path::new(&home).join("Desktop");
+            if desktop.exists() {
+                dialog = dialog.set_directory(&desktop);
+            }
         }
 
         let result = dialog.save_file();
@@ -94,6 +109,9 @@ impl Application {
         if path.extension().is_none_or(|e| e != "mp4") {
             path.set_extension("mp4");
         }
+
+        // Remember for next export dialog
+        self.last_export_path = Some(path.clone());
 
         let output_path = path.to_string_lossy().to_string();
 
