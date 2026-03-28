@@ -91,8 +91,8 @@ impl Generator for ConcentricTunnelGenerator {
         };
 
         let uniforms = ConcentricTunnelUniforms {
-            time: ctx.time,
-            beat: ctx.beat,
+            time: ctx.time as f32,
+            beat: ctx.beat as f32,
             aspect_ratio: ctx.aspect,
             line_thickness: line,
             anim_speed,

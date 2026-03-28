@@ -192,7 +192,7 @@ pub struct FluidSimulationGenerator {
     active_count: u32,
     scatter_width: u32,
     scatter_height: u32,
-    frame_count: u32,
+    frame_count: u64,
     initialized: bool,
     current_density_res: f32,
 
@@ -533,7 +533,7 @@ impl Generator for FluidSimulationGenerator {
                         self.inject_active = true;
                         self.inject_point = random_inject_uv(
                             trigger_count as u32,
-                            self.frame_count,
+                            self.frame_count as u32,
                         );
                         self.inject_color_counter = (self.inject_color_counter + 1) % 4;
                         self.inject_frames_remaining = INJECT_FRAMES_PER_ZONE;
@@ -739,12 +739,12 @@ impl Generator for FluidSimulationGenerator {
             refresh_rate: refresh,
             density_refresh_scale: density_refresh,
             color_mode: color_mode as u32,
-            frame_count: self.frame_count,
+            frame_count: self.frame_count as u32,
             inject_point_x: if self.inject_active { self.inject_point[0] } else { 0.0 },
             inject_point_y: if self.inject_active { self.inject_point[1] } else { 0.0 },
             inject_force: active_inject_force,
             inject_phase,
-            time_val: ctx.time,
+            time_val: ctx.time as f32,
             inject_color_index: self.inject_color_counter + 1,
             _pad0: 0, _pad1: 0, _pad2: 0,
         };

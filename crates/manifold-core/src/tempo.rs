@@ -314,6 +314,75 @@ impl TempoMapConverter {
         let tail_spb = Self::seconds_per_beat_from_bpm(current_bpm);
         if tail_spb > 0.0 { current_beat + remaining_seconds / tail_spb } else { current_beat }
     }
+
+    // ── f64 precision versions ─────────────────────────────────────────
+    // CPU-side beat/time math uses f64 to prevent precision loss during
+    // long shows. f32 wrappers above delegate to these.
+
+    #[must_use]
+    fn seconds_per_beat_from_bpm_f64(bpm: f32) -> f64 {
+        60.0_f64 / (bpm.clamp(20.0, 300.0) as f64)
+    }
+
+    /// Convert seconds to beat position using tempo map (f64 precision).
+    #[must_use]
+    pub fn seconds_to_beat_f64(
+        tempo_map: &mut TempoMap,
+        seconds: f64,
+        fallback_bpm: f32,
+    ) -> f64 {
+        tempo_map.ensure_sorted();
+        let bpm_at_zero = Self::get_bpm_at_beat_zero(tempo_map, fallback_bpm);
+        let spb_at_zero = Self::seconds_per_beat_from_bpm_f64(bpm_at_zero);
+
+        if tempo_map.points.is_empty() {
+            return if spb_at_zero > 0.0 { seconds / spb_at_zero } else { 0.0 };
+        }
+
+        if seconds <= 0.0 {
+            return if spb_at_zero > 0.0 { seconds / spb_at_zero } else { 0.0 };
+        }
+
+        let mut remaining_seconds = seconds;
+        let mut current_beat = 0.0_f64;
+        let mut current_bpm = bpm_at_zero;
+
+        for point in &tempo_map.points {
+            if point.beat <= 0.0 {
+                current_bpm = point.bpm;
+                continue;
+            }
+
+            let segment_beats = (point.beat as f64) - current_beat;
+            if segment_beats <= 0.0 {
+                current_beat = point.beat as f64;
+                current_bpm = point.bpm;
+                continue;
+            }
+
+            let segment_seconds =
+                segment_beats * Self::seconds_per_beat_from_bpm_f64(current_bpm);
+            if remaining_seconds <= segment_seconds {
+                let spb = Self::seconds_per_beat_from_bpm_f64(current_bpm);
+                return if spb > 0.0 {
+                    current_beat + remaining_seconds / spb
+                } else {
+                    current_beat
+                };
+            }
+
+            remaining_seconds -= segment_seconds;
+            current_beat = point.beat as f64;
+            current_bpm = point.bpm;
+        }
+
+        let tail_spb = Self::seconds_per_beat_from_bpm_f64(current_bpm);
+        if tail_spb > 0.0 {
+            current_beat + remaining_seconds / tail_spb
+        } else {
+            current_beat
+        }
+    }
 }
 
 fn default_neg_one() -> f32 { -1.0 }

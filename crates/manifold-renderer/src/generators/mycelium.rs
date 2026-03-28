@@ -92,7 +92,7 @@ pub struct MyceliumGenerator {
     agent_count: u32,
     trail_width: u32,
     trail_height: u32,
-    frame_count: u32,
+    frame_count: u64,
     initialized: bool,
     current_seeds: u32,
 }
@@ -345,8 +345,8 @@ impl Generator for MyceliumGenerator {
             rotation_angle: turn,
             step_size: step,
             deposit_scaled: deposit_scaled as f32,
-            frame_count: self.frame_count,
-            beat: ctx.beat,
+            frame_count: self.frame_count as u32,
+            beat: ctx.beat as f32,
             reactivity,
             _pad: 0.0,
         };
@@ -499,7 +499,7 @@ impl Generator for MyceliumGenerator {
             hue: color_hue,
             glow,
             uv_scale,
-            time: ctx.time,
+            time: ctx.time as f32,
         };
         gpu.native_enc.dispatch_compute(
             &self.display_pipeline,

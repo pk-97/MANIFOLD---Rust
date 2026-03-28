@@ -284,6 +284,8 @@ impl ContentPipeline {
         // Extract timing values before split borrow
         let time = engine.current_time();
         let beat = engine.current_beat();
+        let time_f64 = engine.current_time_double();
+        let beat_f64 = engine.current_beat_f64();
 
         // === NATIVE METAL PATH ===
         // When manifold-gpu is initialized, use raw Metal encoding.
@@ -292,14 +294,15 @@ impl ContentPipeline {
         if self.native_device.is_some() {
             self.render_content_native(
                 gpu, engine, tick_result, dt, frame_count,
-                time, beat, _t_frame, _poll_ms, export_mode,
+                time, beat, time_f64, beat_f64,
+                _t_frame, _poll_ms, export_mode,
             );
         }
 
         // Non-macOS: not yet supported (native Metal path required).
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = (gpu, engine, tick_result, dt, frame_count, time, beat);
+            let _ = (gpu, engine, tick_result, dt, frame_count, time, beat, time_f64, beat_f64);
             log::warn!("[ContentPipeline] Non-macOS render path not available");
         }
     }
@@ -320,6 +323,8 @@ impl ContentPipeline {
         frame_count: u64,
         time: f32,
         beat: f32,
+        time_f64: f64,
+        beat_f64: f64,
         _t_frame: std::time::Instant,
         _poll_ms: f64,
         export_mode: bool,
@@ -379,7 +384,7 @@ impl ContentPipeline {
                         }
                     }
                     gen_renderer.render_all(
-                        &mut gpu_gen, time, beat, dt as f32, layers,
+                        &mut gpu_gen, time_f64, beat_f64, dt as f32, layers,
                     );
                     break;
                 }

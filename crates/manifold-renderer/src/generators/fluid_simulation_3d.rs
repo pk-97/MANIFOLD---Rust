@@ -226,7 +226,7 @@ pub struct FluidSimulation3DGenerator {
     vol_res: u32,
     disp_w: u32,
     disp_h: u32,
-    frame_count: u32,
+    frame_count: u64,
     initialized: bool,
     last_trigger_count: u32,
     snap_envelope: f32,
@@ -498,7 +498,7 @@ impl Generator for FluidSimulation3DGenerator {
         let angle_rad = curl_angle.to_radians();
         let curl_strength = cur_flow * FORCE_SCALE * angle_rad.sin();
         let slope_strength = cur_flow * FORCE_SCALE * angle_rad.cos();
-        let t_ref = ctx.time * 0.3;
+        let t_ref = ctx.time as f32 * 0.3;
         let ref_axis = normalize3([(t_ref * 1.0).sin(), (t_ref * 0.7).cos(), (t_ref * 0.5).sin()]);
 
         let volume_frame_parity = self.frame_count.is_multiple_of(2);
@@ -622,12 +622,12 @@ impl Generator for FluidSimulation3DGenerator {
         let blurred_density = if vol_res >= 8 { density_temp } else { density_vol };
 
         let sim_uni = Sim3DUniforms {
-            active_count, frame_count: self.frame_count, use_vector_field: 1,
+            active_count, frame_count: self.frame_count as u32, use_vector_field: 1,
             container: container_type, ctr_scale, speed, turbulence, anti_clump,
             wander, respawn_rate: respawn, dense_respawn, flatten,
             cam_fwd_x: cam_fwd_sim[0], cam_fwd_y: cam_fwd_sim[1], cam_fwd_z: cam_fwd_sim[2],
             color_mode, inject_index: self.inject_zone_index,
-            inject_force: inject_force_val, inject_phase, time2: ctx.time,
+            inject_force: inject_force_val, inject_phase, time2: ctx.time as f32,
             _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
         };
         gpu.native_enc.dispatch_compute(&self.simulate_pipeline, &[

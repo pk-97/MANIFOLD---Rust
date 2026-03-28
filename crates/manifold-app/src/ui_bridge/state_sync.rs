@@ -27,7 +27,7 @@ pub fn check_auto_scroll(ui: &mut UIRoot, content_state: &crate::content_state::
         return false;
     }
 
-    let playhead_beat = content_state.current_beat;
+    let playhead_beat = content_state.current_beat as f32;
     let ppb = ui.viewport.pixels_per_beat();
     let viewport_w = ui.viewport.tracks_rect().width;
     if viewport_w <= 0.0 || ppb <= 0.0 {
@@ -91,7 +91,7 @@ pub fn push_state(
     ui.transport.set_play_state(tree, play_text, play_color);
 
     // Time display + BPM
-    let beat = content_state.current_beat;
+    let beat = content_state.current_beat as f32;
     let time = content_state.current_time;
 
     {
@@ -273,7 +273,7 @@ pub fn push_state(
     }
 
     // Playhead + playing state
-    let playhead_beat = content_state.current_beat;
+    let playhead_beat = content_state.current_beat as f32;
     ui.viewport.set_playhead(playhead_beat);
     ui.viewport.set_playing(content_state.is_playing);
 

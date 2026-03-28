@@ -164,7 +164,7 @@ impl Generator for ParametricSurfaceGenerator {
 
         // Raymarch — every frame (camera orbits with time)
         let rm_uniforms = RaymarchUniforms {
-            time_val: ctx.time * speed,
+            time_val: ctx.time as f32 * speed,
             speed,
             aspect_ratio: ctx.aspect,
             uv_scale,

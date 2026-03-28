@@ -88,7 +88,7 @@ impl TransportStateCache {
         project_path: Option<&std::path::Path>,
         is_dirty: bool,
     ) {
-        let beat = content_state.current_beat;
+        let beat = content_state.current_beat as f32;
         let time = content_state.current_time;
 
         {

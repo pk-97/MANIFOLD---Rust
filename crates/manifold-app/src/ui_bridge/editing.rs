@@ -109,7 +109,7 @@ pub(super) fn dispatch_editing(
 
         // ── Context menu actions ──────────────────────────────────
         PanelAction::ContextSplitAtPlayhead(clip_id) => {
-            let beat = content_state.current_beat;
+            let beat = content_state.current_beat as f32;
             {
                 let spb = 60.0 / project.settings.bpm;
                 if let Some(cmd) = EditingService::split_clip_at_beat(project, clip_id, beat, spb) {

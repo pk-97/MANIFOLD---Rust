@@ -163,7 +163,7 @@ impl ContentThread {
                     dt_seconds: frame_dt,
                     realtime_now: 0.0,
                     pre_render_dt: frame_dt as f32,
-                    frame_count: -1,
+                    frame_count: u64::MAX,
                     export_fixed_dt: frame_dt,
                 };
                 let warmup_result = self.engine.tick(warmup_ctx);
@@ -298,7 +298,7 @@ impl ContentThread {
             dt_seconds: frame_dt,
             realtime_now: frame_idx as f64 * frame_dt,
             pre_render_dt: frame_dt as f32,
-            frame_count: frame_idx as i32,
+            frame_count: frame_idx as u64,
             export_fixed_dt: frame_dt,
         };
         let tick_result = self.engine.tick(ctx);
@@ -378,7 +378,7 @@ impl ContentThread {
             is_exporting: true,
             export_progress: session.progress(),
             export_status: session.status_text(),
-            current_beat: self.engine.current_beat(),
+            current_beat: self.engine.current_beat_f64(),
             current_time: self.engine.current_time(),
             is_playing: self.engine.is_playing(),
             ..ContentState::default()

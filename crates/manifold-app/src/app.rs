@@ -456,7 +456,7 @@ impl Application {
     fn navigate_cursor(&mut self, direction: manifold_ui::cursor_nav::Direction) {
         use manifold_ui::cursor_nav::{navigate_cursor, NavResult, NavLayerInfo, NavClipInfo};
 
-        let current_beat = self.selection.insert_cursor_beat.unwrap_or(self.content_state.current_beat);
+        let current_beat = self.selection.insert_cursor_beat.unwrap_or(self.content_state.current_beat as f32);
         let active_idx = self.active_layer_id.as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
         let insert_cursor_idx = self.selection.insert_cursor_layer_id.as_ref()
@@ -1815,7 +1815,7 @@ impl ApplicationHandler for Application {
                     self.import_video_files(std::slice::from_ref(&path));
                 } else if crate::project_io::is_supported_midi_extension(&path) {
                     // MIDI files → route through ProjectIOService
-                    let drop_beat = self.content_state.current_beat;
+                    let drop_beat = self.content_state.current_beat as f32;
                     let drop_layer = self.active_layer_id.as_ref()
                         .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
                         .unwrap_or(0) as i32;

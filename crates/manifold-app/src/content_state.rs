@@ -24,7 +24,7 @@ pub struct ExportFinishedEvent {
 #[allow(dead_code)]
 pub struct ContentState {
     // ── Transport ──────────────────────────────────────────────────
-    pub current_beat: f32,
+    pub current_beat: f64,
     pub current_time: f32,
     pub is_playing: bool,
     pub is_recording: bool,

@@ -640,7 +640,7 @@ impl Application {
                 render_target_fps: self.content_state.frame_rate as f32,
                 active_clips: self.content_state.active_clips,
                 preparing_clips: 0,
-                current_beat: self.content_state.current_beat,
+                current_beat: self.content_state.current_beat as f32,
                 current_time_secs: self.content_state.current_time,
                 bpm,
                 clock_source,

@@ -73,7 +73,7 @@ impl Generator for LissajousGenerator {
         let snap = if ctx.param_count > SNAP as u32 { ctx.params[SNAP] > 0.5 } else { false };
 
         // Use clip-relative time from context (matches Unity ctx.Time)
-        let time = ctx.time;
+        let time = ctx.time as f32;
 
         let (a, b, phase) = if snap {
             // Snap mode: use trigger_count to select from preset table
@@ -136,7 +136,7 @@ impl Generator for LissajousGenerator {
             gpu, target,
             positions, instances, num_edges,
             edge_half_thick, dot_half_thick,
-            ctx.beat, "Lissajous", ctx.width, ctx.height,
+            ctx.beat as f32, "Lissajous", ctx.width, ctx.height,
         );
         self.helper.anim_progress
     }

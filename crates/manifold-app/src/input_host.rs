@@ -134,7 +134,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn get_playhead_viewport_x(&self) -> f32 {
-        let beat = self.content_state.current_beat;
+        let beat = self.content_state.current_beat as f32;
         let ppb = self.ui_root.viewport.pixels_per_beat();
         let scroll = self.ui_root.viewport.scroll_x_beats();
         (beat - scroll) * ppb
@@ -403,7 +403,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn current_beat(&self) -> f32 {
-        self.content_state.current_beat
+        self.content_state.current_beat as f32
     }
 
     fn is_playing(&self) -> bool {
@@ -585,7 +585,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn split_clips_at_playhead(&mut self, clip_ids: &[ClipId]) {
-        let beat = self.content_state.current_beat;
+        let beat = self.content_state.current_beat as f32;
         if let Some(project) = Some(&mut *self.project) {
             let spb = 60.0 / project.settings.bpm;
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
@@ -773,7 +773,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn set_export_in_at_playhead(&mut self) {
-        let beat = self.content_state.current_beat;
+        let beat = self.content_state.current_beat as f32;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
         let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
         self.project.timeline.export_in_beat = snapped;
@@ -794,7 +794,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn set_export_out_at_playhead(&mut self) {
-        let beat = self.content_state.current_beat;
+        let beat = self.content_state.current_beat as f32;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
         let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
         self.project.timeline.export_out_beat = snapped;
@@ -919,7 +919,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         // Step 4f: read cursor position from UIState (not viewport scroll)
         let current_beat = self.selection.insert_cursor_beat
-            .unwrap_or(self.content_state.current_beat);
+            .unwrap_or(self.content_state.current_beat as f32);
         let active_idx = self.active_layer.as_ref()
             .and_then(|id| self.project.timeline.find_layer_index_by_id(id));
         let insert_cursor_idx = self.selection.insert_cursor_layer_id.as_ref()
@@ -1075,7 +1075,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn calibrate_percussion_downbeat(&mut self) {
         use crate::content_command::ContentCommand;
-        let beat = self.content_state.current_beat;
+        let beat = self.content_state.current_beat as f32;
         let bpb = self.project.settings.time_signature_numerator.max(1);
         ContentCommand::send(
             self.content_tx,
@@ -1108,7 +1108,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         use manifold_core::marker::TimelineMarker;
         use manifold_editing::commands::marker::AddMarkerCommand;
 
-        let beat = self.content_state.current_beat;
+        let beat = self.content_state.current_beat as f32;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
         let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
         let marker = TimelineMarker::new(snapped);

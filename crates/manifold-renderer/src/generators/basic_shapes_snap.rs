@@ -49,8 +49,8 @@ impl Generator for BasicShapesSnapGenerator {
         let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
 
         let uniforms = BasicShapesSnapUniforms {
-            time: ctx.time,
-            beat: ctx.beat,
+            time: ctx.time as f32,
+            beat: ctx.beat as f32,
             aspect_ratio: ctx.aspect,
             line_thickness: line,
             uv_scale: if scale > 0.0 { 1.0 / scale } else { 1.0 },

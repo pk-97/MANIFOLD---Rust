@@ -284,8 +284,8 @@ impl GeneratorRenderer {
     pub fn render_all(
         &mut self,
         gpu: &mut GpuEncoder,
-        time: f32,
-        beat: f32,
+        time: f64,
+        beat: f64,
         dt: f32,
         layers: &[Layer],
     ) {

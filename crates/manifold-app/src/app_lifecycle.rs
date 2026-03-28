@@ -188,7 +188,7 @@ impl Application {
         let content_tx = content_tx.clone();
 
         let bpm = self.local_project.settings.bpm;
-        let insert_beat = self.content_state.current_beat;
+        let insert_beat = self.content_state.current_beat as f32;
         let layer_id = self.active_layer_id.as_ref()
             .and_then(|lid| {
                 self.local_project.timeline.layer_index_for_id(lid)

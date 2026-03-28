@@ -181,16 +181,16 @@ pub(super) fn dispatch_layer(
             log::info!("Folder clicked (file picker not yet implemented)");
             DispatchResult::handled()
         }
-        PanelAction::NewClipClicked(idx) => {
-            let beat = content_state.current_beat;
+PanelAction::NewClipClicked(idx) => {
+            let beat = content_state.current_beat as f32;
             {
                 let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
                 { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
             }
             DispatchResult::structural()
         }
-        PanelAction::AddGenClipClicked(idx) => {
-            let beat = content_state.current_beat;
+PanelAction::AddGenClipClicked(idx) => {
+            let beat = content_state.current_beat as f32;
             {
                 let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, 4.0);
                 { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }

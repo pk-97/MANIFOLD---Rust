@@ -70,7 +70,7 @@ fn engine_advances_time_when_playing() {
             dt_seconds: dt,
             realtime_now: realtime,
             pre_render_dt: dt as f32,
-            frame_count: i,
+            frame_count: i as u64,
             export_fixed_dt: 0.0,
         };
         engine.tick(ctx);
@@ -113,7 +113,7 @@ fn engine_schedules_clips_at_correct_beats() {
             dt_seconds: dt,
             realtime_now: realtime,
             pre_render_dt: dt as f32,
-            frame_count: i,
+            frame_count: i as u64,
             export_fixed_dt: 0.0,
         };
         let result = engine.tick(ctx);
@@ -146,7 +146,7 @@ fn engine_tick_1000_frames_no_panic() {
             dt_seconds: dt,
             realtime_now: realtime,
             pre_render_dt: dt as f32,
-            frame_count: i,
+            frame_count: i as u64,
             export_fixed_dt: 0.0,
         };
         let _result = engine.tick(ctx);
@@ -214,7 +214,7 @@ fn engine_waypoints_stress_test() {
             dt_seconds: dt,
             realtime_now: realtime,
             pre_render_dt: dt as f32,
-            frame_count: i,
+            frame_count: i as u64,
             export_fixed_dt: 0.0,
         };
         let result = engine.tick(ctx);

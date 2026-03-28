@@ -7,7 +7,7 @@ pub struct StatefulState {
     state_a: RenderTarget,
     state_b: RenderTarget,
     use_a: bool,
-    frame_count: u32,
+    frame_count: u64,
 }
 
 impl StatefulState {
@@ -63,7 +63,7 @@ impl StatefulState {
         self.frame_count = 0;
     }
 
-    pub fn frame_count(&self) -> u32 {
+    pub fn frame_count(&self) -> u64 {
         self.frame_count
     }
 

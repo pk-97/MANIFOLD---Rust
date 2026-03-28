@@ -305,7 +305,7 @@ impl ContentThread {
                 dt_seconds: dt,
                 realtime_now: realtime,
                 pre_render_dt: dt as f32,
-                frame_count: self.frame_count as i32,
+                frame_count: self.frame_count,
                 export_fixed_dt: 0.0,
             };
             let tick_result = self.engine.tick(ctx);
@@ -653,7 +653,7 @@ impl ContentThread {
                 && !self.cached_perc_message.is_empty();
 
             let state = ContentState {
-                current_beat: self.engine.current_beat(),
+                current_beat: self.engine.current_beat_f64(),
                 current_time: self.engine.current_time(),
                 is_playing: self.engine.is_playing(),
                 is_recording: self.engine.is_recording(),

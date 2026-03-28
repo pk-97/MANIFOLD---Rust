@@ -53,7 +53,7 @@ pub struct TickContext {
     pub dt_seconds: f64,
     pub realtime_now: f64,
     pub pre_render_dt: f32,
-    pub frame_count: i32,
+    pub frame_count: u64,
     /// Fixed delta for export mode (0.0 = use real dt_seconds).
     /// Port of C# PlaybackController.exportFixedDeltaSeconds (line 42).
     pub export_fixed_dt: f64,
@@ -90,7 +90,7 @@ pub struct PlaybackEngine {
     current_state: PlaybackState,
     current_time_double: f64,
     current_time: f32,
-    current_beat: f32,
+    current_beat: f64,
     playback_speed: f32,
     is_recording: bool,
     external_time_sync: bool,
@@ -135,7 +135,7 @@ pub struct PlaybackEngine {
 
     // Clock state (for out-of-tick operations)
     last_realtime_now: f64,
-    last_frame_count: i32,
+    last_frame_count: u64,
 
     // Pre-allocated scratch buffers
     stop_buffer: Vec<ClipId>,
@@ -241,7 +241,8 @@ impl PlaybackEngine {
     pub fn current_state(&self) -> PlaybackState { self.current_state }
     pub fn current_time_double(&self) -> f64 { self.current_time_double }
     pub fn current_time(&self) -> f32 { self.current_time }
-    pub fn current_beat(&self) -> f32 { self.current_beat }
+    pub fn current_beat(&self) -> f32 { self.current_beat as f32 }
+    pub fn current_beat_f64(&self) -> f64 { self.current_beat }
     pub fn playback_speed(&self) -> f32 { self.playback_speed }
     pub fn is_playing(&self) -> bool { self.current_state == PlaybackState::Playing }
     pub fn is_recording(&self) -> bool { self.is_recording }
@@ -331,7 +332,7 @@ impl PlaybackEngine {
 
     /// Update clock state for non-tick operations (Play, Stop, Seek).
     /// Port of C# PlaybackEngine.SetClock (lines 560-564).
-    pub fn set_clock(&mut self, realtime_now: f64, frame_count: i32) {
+    pub fn set_clock(&mut self, realtime_now: f64, frame_count: u64) {
         self.last_realtime_now = realtime_now;
         self.last_frame_count = frame_count;
     }
@@ -406,7 +407,7 @@ impl PlaybackEngine {
     }
 
     pub fn set_beat(&mut self, beat: f32) {
-        self.current_beat = beat;
+        self.current_beat = beat as f64;
     }
 
     pub fn set_playback_speed(&mut self, speed: f32) {
@@ -485,7 +486,7 @@ impl PlaybackEngine {
         // Port of Unity SeekActiveClips() setting compositorDirtyDeadline.
         self.compositor_dirty_deadline = self.last_realtime_now + COMPOSITOR_DIRTY_TIME as f64;
 
-        beat_delta
+        beat_delta as f32
     }
 
     // ─── Core tick ───
@@ -583,7 +584,7 @@ impl PlaybackEngine {
         // 3. Activate pending live MIDI launches whose target tick has arrived.
         //    Port of C# line 1152: engine.LiveClipMgr.ActivateDuePendingLiveLaunches().
         let live_activated = if let Some(ref mut mgr) = self.live_clip_manager {
-            let now_tick = self.last_frame_count; // absolute tick from frame count
+            let now_tick = self.last_frame_count as i32; // absolute tick from frame count
             mgr.activate_due_pending_launches_at_tick(now_tick)
         } else {
             false
@@ -608,7 +609,7 @@ impl PlaybackEngine {
         // 7. Evaluate modulation pipeline (LFO drivers + ADSR envelopes).
         //    Port of C# DriverController.Update() [ExecutionOrder 50, after PlaybackController].
         let modulation_dirty = if let Some(project) = &mut self.project {
-            crate::modulation::evaluate_modulation(project, self.current_beat)
+            crate::modulation::evaluate_modulation(project, self.current_beat as f32)
         } else {
             false
         };
@@ -667,7 +668,7 @@ impl PlaybackEngine {
         // 3. Evaluate modulation pipeline even when stopped (for scrub preview / inspector).
         //    Port of C# DriverController — runs in all states.
         let modulation_dirty = if let Some(project) = &mut self.project {
-            let dirty = crate::modulation::evaluate_modulation(project, self.current_beat);
+            let dirty = crate::modulation::evaluate_modulation(project, self.current_beat as f32);
             if dirty {
                 self.mark_compositor_dirty(ctx.realtime_now);
             }
@@ -712,7 +713,7 @@ impl PlaybackEngine {
         // Step 2: query active clips (split borrow: &self.project + &mut self.timeline_active_scratch)
         self.timeline_active_scratch.clear();
         if let Some(project) = &self.project {
-            let beat = self.current_beat;
+            let beat = self.current_beat as f32;
             let active_indices = project.timeline.get_active_clips_at_beat_ref(beat);
             for (li, ci) in &active_indices {
                 if let Some(clip) = project.timeline.layers.get(*li).and_then(|l| l.clips.get(*ci)) {
@@ -933,7 +934,7 @@ impl PlaybackEngine {
 
         let sync_result = self.scheduler.compute_sync(
             self.current_time,
-            self.current_beat,
+            self.current_beat as f32,
             &self.timeline_active_scratch,
             live_slots,
             &self.active_clip_ids,
@@ -962,9 +963,9 @@ impl PlaybackEngine {
 
     fn update_beat_from_time(&mut self) {
         if let Some(project) = &mut self.project {
-            self.current_beat = TempoMapConverter::seconds_to_beat(
+            self.current_beat = TempoMapConverter::seconds_to_beat_f64(
                 &mut project.tempo_map,
-                self.current_time,
+                self.current_time_double,
                 project.settings.bpm,
             );
         }
@@ -1009,7 +1010,7 @@ impl PlaybackEngine {
     }
 
     pub fn get_seconds_per_beat(&mut self) -> f32 {
-        self.get_seconds_per_beat_at_beat(self.current_beat)
+        self.get_seconds_per_beat_at_beat(self.current_beat as f32)
     }
 
     /// Get seconds-per-beat at a given beat. Checks live external tempo first.
@@ -1114,7 +1115,7 @@ impl PlaybackEngine {
             let bpm = if let Some((live_bpm, _)) = live_tempo {
                 live_bpm
             } else if !project.tempo_map.points().is_empty() {
-                project.tempo_map.get_bpm_at_beat(self.current_beat, project.settings.bpm)
+                project.tempo_map.get_bpm_at_beat(self.current_beat as f32, project.settings.bpm)
             } else {
                 project.settings.bpm
             };
@@ -1242,7 +1243,7 @@ impl PlaybackEngine {
         let recorded_bpm = self.resolve_clip_recorded_bpm(clip);
         if recorded_bpm <= 0.0 { return 1.0; }
 
-        let timeline_bpm = self.get_bpm_at_beat(self.current_beat).clamp(20.0, 300.0);
+        let timeline_bpm = self.get_bpm_at_beat(self.current_beat as f32).clamp(20.0, 300.0);
         let rate = timeline_bpm / recorded_bpm;
         rate.clamp(MIN_CLIP_PLAYBACK_RATE, MAX_CLIP_PLAYBACK_RATE)
     }
@@ -1260,7 +1261,7 @@ impl PlaybackEngine {
     /// Port of C# PlaybackEngine.GetClipSourceElapsedSeconds (lines 1519-1532).
     pub fn get_clip_source_elapsed_seconds(&mut self, clip: &TimelineClip) -> f32 {
         if let Some(recorded_spb) = self.try_get_clip_recorded_spb(clip) {
-            let elapsed_beats = (self.current_beat - clip.start_beat).max(0.0);
+            let elapsed_beats = (self.current_beat as f32 - clip.start_beat).max(0.0);
             return elapsed_beats * recorded_spb;
         }
         let clip_start_time = self.get_clip_start_time_seconds(clip);
@@ -1628,7 +1629,7 @@ impl PlaybackEngine {
 
         // Pre-render all renderers (generators blit shaders, video is no-op)
         for renderer in &mut self.renderers {
-            renderer.pre_render(self.current_time, self.current_beat, pre_render_dt);
+            renderer.pre_render(self.current_time, self.current_beat as f32, pre_render_dt);
         }
 
         // Filter to ready clips (index-based to avoid borrow conflict)
@@ -1779,7 +1780,7 @@ use crate::live_clip_manager::LiveClipHost;
 /// ClipLauncher / LiveClipManager without a separate adapter type.
 /// Port of C# PlaybackController implementing ILiveClipHost.
 impl LiveClipHost for PlaybackEngine {
-    fn current_beat(&self) -> f32 { self.current_beat }
+    fn current_beat(&self) -> f32 { self.current_beat as f32 }
     fn current_time(&self) -> f32 { self.current_time }
     fn is_recording(&self) -> bool { self.is_recording }
     fn is_playing(&self) -> bool { self.current_state == PlaybackState::Playing }
@@ -1823,7 +1824,7 @@ impl LiveClipHost for PlaybackEngine {
         if let Some(ref resolver) = self.beat_snapped_beat_resolver {
             resolver()
         } else {
-            self.current_beat
+            self.current_beat as f32
         }
     }
 
@@ -1831,7 +1832,7 @@ impl LiveClipHost for PlaybackEngine {
         if let Some(ref resolver) = self.absolute_tick_resolver {
             resolver()
         } else {
-            self.last_frame_count
+            self.last_frame_count as i32
         }
     }
 

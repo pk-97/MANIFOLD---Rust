@@ -127,7 +127,7 @@ pub(super) fn dispatch_transport(
             let new_idx = (current_idx + 1).min(levels.len() - 1);
             if new_idx != current_idx {
                 let new_ppb = levels[new_idx];
-                let playhead = content_state.current_beat;
+                let playhead = content_state.current_beat as f32;
                 let tracks_x = ui.viewport.get_tracks_rect().x;
                 let viewport_w = ui.viewport.get_tracks_rect().width;
                 // Anchor on playhead: place it at the same relative screen position,
@@ -152,7 +152,7 @@ pub(super) fn dispatch_transport(
             let new_idx = current_idx.saturating_sub(1);
             if new_idx != current_idx {
                 let new_ppb = levels[new_idx];
-                let playhead = content_state.current_beat;
+                let playhead = content_state.current_beat as f32;
                 let tracks_x = ui.viewport.get_tracks_rect().x;
                 let viewport_w = ui.viewport.get_tracks_rect().width;
                 let playhead_px = ui.viewport.beat_to_pixel(playhead);

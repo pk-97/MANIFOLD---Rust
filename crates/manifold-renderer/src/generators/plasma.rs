@@ -88,8 +88,8 @@ impl Generator for PlasmaGenerator {
         };
 
         let uniforms = PlasmaUniforms {
-            time: ctx.time,
-            beat: ctx.beat,
+            time: ctx.time as f32,
+            beat: ctx.beat as f32,
             aspect_ratio: ctx.aspect,
             anim_speed: speed,
             uv_scale: if scale > 0.0 { 1.0 / scale } else { 1.0 },

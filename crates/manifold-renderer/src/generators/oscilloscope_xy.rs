@@ -84,8 +84,8 @@ impl Generator for OscilloscopeXYGenerator {
             b_harm = RATIO_B[harm_idx];
         } else {
             // Beat-driven: hash-based ratio selection with smooth interpolation (Unity lines 77-95)
-            let beat_idx = ctx.beat.floor() as i32;
-            let beat_frac = ctx.beat - beat_idx as f32;
+            let beat_idx = (ctx.beat as f32).floor() as i32;
+            let beat_frac = ctx.beat as f32 - beat_idx as f32;
 
             let seed1 = hash_beat(beat_idx as f32);
             let ratio_idx1 = ((seed1 * RATIO_A.len() as f32) as usize) % RATIO_A.len();
@@ -119,7 +119,7 @@ impl Generator for OscilloscopeXYGenerator {
         let b2_lerp = b_harm - b2_lo;
 
         // Phase from clip time (Unity line 103)
-        let phase = ctx.time * wave_speed * 0.3;
+        let phase = ctx.time as f32 * wave_speed * 0.3;
         let proj_scale = PROJ_SCALE;
         let two_pi = std::f32::consts::TAU;
 
@@ -165,7 +165,7 @@ impl Generator for OscilloscopeXYGenerator {
             gpu, target,
             positions, instances, num_edges,
             edge_half_thick, dot_half_thick,
-            ctx.beat, "OscilloscopeXY", ctx.width, ctx.height,
+            ctx.beat as f32, "OscilloscopeXY", ctx.width, ctx.height,
         );
         self.helper.anim_progress
     }

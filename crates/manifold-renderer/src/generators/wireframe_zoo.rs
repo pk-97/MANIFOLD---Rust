@@ -188,7 +188,7 @@ impl Generator for WireframeZooGenerator {
             self.helper.edge_b.push(e[1]);
         }
 
-        let t = ctx.time;
+        let t = ctx.time as f32;
         // Use rot params as 3D rotation speeds (repurpose XY=X, ZW=Y, XW=Z)
         let (cos_x, sin_x) = (t * rot_xy).sin_cos();
         let (cos_y, sin_y) = (t * rot_zw).sin_cos();
@@ -228,7 +228,7 @@ impl Generator for WireframeZooGenerator {
             gpu, target,
             positions, instances, num_edges,
             edge_half_thick, dot_half_thick,
-            ctx.beat, "WireframeZoo", ctx.width, ctx.height,
+            ctx.beat as f32, "WireframeZoo", ctx.width, ctx.height,
         );
         self.helper.anim_progress
     }

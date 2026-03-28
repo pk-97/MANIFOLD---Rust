@@ -7,8 +7,8 @@ pub const MAX_GEN_PARAMS: usize = 32;
 /// Copy + fixed-size array = zero allocation on the hot path.
 #[derive(Clone, Copy)]
 pub struct GeneratorContext {
-    pub time: f32,
-    pub beat: f32,
+    pub time: f64,
+    pub beat: f64,
     pub dt: f32,
     pub width: u32,
     pub height: u32,

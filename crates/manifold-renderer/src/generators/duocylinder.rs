@@ -94,7 +94,7 @@ impl Generator for DuocylinderGenerator {
         let window = if ctx.param_count > WINDOW as u32 { ctx.params[WINDOW] } else { 0.1 };
         let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
 
-        let t = ctx.time;
+        let t = ctx.time as f32;
         let angle_xy = t * rot_xy;
         let angle_zw = t * rot_zw;
         let angle_xw = t * rot_xw;
@@ -127,7 +127,7 @@ impl Generator for DuocylinderGenerator {
             gpu, target,
             positions, instances, num_edges,
             edge_half_thick, dot_half_thick,
-            ctx.beat, "Duocylinder", ctx.width, ctx.height,
+            ctx.beat as f32, "Duocylinder", ctx.width, ctx.height,
         );
         self.helper.anim_progress
     }
