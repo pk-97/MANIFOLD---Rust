@@ -16,12 +16,12 @@ struct EdgeDetectUniforms {
 }
 
 /// Edge Detect WGSL source — shared across all specialized mode variants.
-const EDGE_DETECT_WGSL: &str = include_str!("shaders/fx_edge_glow.wgsl");
+const EDGE_DETECT_WGSL: &str = include_str!("shaders/fx_edge_detect.wgsl");
 
 /// Edge detection effect — Sobel, Laplacian, or Frei-Chen edge detection.
 /// Pure edge detect without glow. Use Bloom or Halation after for glow.
 /// Stateless single-pass fragment shader.
-pub struct EdgeGlowFX {
+pub struct EdgeDetectFX {
     helper: FragmentBlitHelper,
     /// Specialized render pipelines per edge detection mode: Sobel=0, Laplacian=1, Frei-Chen=2.
     pipeline_sobel: manifold_gpu::GpuRenderPipeline,
@@ -29,7 +29,7 @@ pub struct EdgeGlowFX {
     pipeline_frei_chen: manifold_gpu::GpuRenderPipeline,
 }
 
-impl EdgeGlowFX {
+impl EdgeDetectFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         let spec = |mode: &str, label: &str| {
             device.create_specialized_render_pipeline(
@@ -50,9 +50,9 @@ impl EdgeGlowFX {
     }
 }
 
-impl PostProcessEffect for EdgeGlowFX {
+impl PostProcessEffect for EdgeDetectFX {
     fn effect_type(&self) -> &EffectTypeId {
-        &EffectTypeId::EDGE_GLOW
+        &EffectTypeId::EDGE_DETECT
     }
 
     fn apply(
@@ -64,11 +64,17 @@ impl PostProcessEffect for EdgeGlowFX {
         ctx: &EffectContext,
     ) {
         let p = &fx.param_values;
+        // Legacy project files have 4 params (p[2] was glow, now removed).
+        // New projects have 3 params. Read mode from the correct index.
+        let mode_raw = if p.len() >= 4 {
+            p[3] // legacy layout: skip removed p[2]
+        } else {
+            p.get(2).copied().unwrap_or(0.0)
+        };
         let uniforms = EdgeDetectUniforms {
             amount:       p.first().copied().unwrap_or(0.0),
-            threshold:    p.get(1).copied().unwrap_or(0.3),
-            // p[2] was glow — ignored, kept for project file compatibility
-            mode:         p.get(3).copied().unwrap_or(0.0).round() as u32,
+            threshold:    p.get(1).copied().unwrap_or(0.1),
+            mode:         mode_raw.round() as u32,
             texel_size_x: 1.0 / ctx.width as f32,
             texel_size_y: 1.0 / ctx.height as f32,
             _pad: [0.0; 3],

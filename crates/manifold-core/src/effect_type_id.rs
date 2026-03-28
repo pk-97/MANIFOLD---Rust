@@ -55,7 +55,8 @@ impl EffectTypeId {
     pub const BLOB_TRACKING: Self = Self(Cow::Borrowed("BlobTracking"));
     pub const CRT: Self = Self(Cow::Borrowed("CRT"));
     pub const FLUID_DISTORTION: Self = Self(Cow::Borrowed("FluidDistortion"));
-    pub const EDGE_GLOW: Self = Self(Cow::Borrowed("EdgeGlow"));
+    /// Serialized as "EdgeGlow" for backward compatibility with project files.
+    pub const EDGE_DETECT: Self = Self(Cow::Borrowed("EdgeGlow"));
     pub const DATAMOSH: Self = Self(Cow::Borrowed("Datamosh"));
     pub const SLIT_SCAN: Self = Self(Cow::Borrowed("SlitScan"));
     pub const COLOR_GRADE: Self = Self(Cow::Borrowed("ColorGrade"));
@@ -98,7 +99,7 @@ impl EffectTypeId {
             22 => Self::BLOB_TRACKING,
             23 => Self::CRT,
             24 => Self::FLUID_DISTORTION,
-            25 => Self::EDGE_GLOW,
+            25 => Self::EDGE_DETECT,
             26 => Self::DATAMOSH,
             27 => Self::SLIT_SCAN,
             28 => Self::COLOR_GRADE,

@@ -84,10 +84,12 @@ fn edge_frei_chen(uv: vec2<f32>) -> f32 {
 }
 
 fn detect_edge(uv: vec2<f32>) -> f32 {
+    // Normalize all modes to ~[0,1] so the threshold behaves consistently.
+    // Sobel max ≈ 4.0, Laplacian max ≈ 4.0, Frei-Chen already ~1.0.
     if uniforms.mode == 0u {
-        return edge_sobel(uv);
+        return edge_sobel(uv) * 0.25;
     } else if uniforms.mode == 1u {
-        return edge_laplacian(uv);
+        return edge_laplacian(uv) * 0.25;
     } else {
         return edge_frei_chen(uv);
     }

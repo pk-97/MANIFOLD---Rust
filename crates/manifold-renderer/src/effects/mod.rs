@@ -17,7 +17,7 @@ pub mod edge_stretch;
 pub mod quad_mirror;
 pub mod strobe;
 pub mod stylized_feedback;
-pub mod edge_glow;
+pub mod edge_detect;
 pub mod transform;
 pub mod infrared;
 pub mod voronoi_prism;

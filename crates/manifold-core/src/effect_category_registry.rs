@@ -62,7 +62,7 @@ fn build_effect_categories() -> HashMap<EffectTypeId, &'static str> {
     m.insert(EffectTypeId::MIRROR, POST_PROCESS);
     m.insert(EffectTypeId::BLOB_TRACKING, POST_PROCESS);
     m.insert(EffectTypeId::FLUID_DISTORTION, POST_PROCESS);
-    m.insert(EffectTypeId::EDGE_GLOW, POST_PROCESS);
+    m.insert(EffectTypeId::EDGE_DETECT, POST_PROCESS);
     m.insert(EffectTypeId::DATAMOSH, POST_PROCESS);
     m.insert(EffectTypeId::SLIT_SCAN, POST_PROCESS);
     m.insert(EffectTypeId::COLOR_GRADE, POST_PROCESS);

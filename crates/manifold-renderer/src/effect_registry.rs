@@ -15,7 +15,7 @@ use crate::effects::edge_stretch::EdgeStretchFX;
 use crate::effects::quad_mirror::QuadMirrorFX;
 use crate::effects::strobe::StrobeFX;
 use crate::effects::stylized_feedback::StylizedFeedbackFX;
-use crate::effects::edge_glow::EdgeGlowFX;
+use crate::effects::edge_detect::EdgeDetectFX;
 use crate::effects::transform::TransformFX;
 use crate::effects::infrared::InfraredFX;
 use crate::effects::voronoi_prism::VoronoiPrismFX;
@@ -67,8 +67,8 @@ impl EffectRegistry {
             Box::new(StylizedFeedbackFX::new(device)),
         );
         processors.insert(
-            EffectTypeId::EDGE_GLOW,
-            Box::new(EdgeGlowFX::new(device)),
+            EffectTypeId::EDGE_DETECT,
+            Box::new(EdgeDetectFX::new(device)),
         );
         processors.insert(
             EffectTypeId::TRANSFORM,

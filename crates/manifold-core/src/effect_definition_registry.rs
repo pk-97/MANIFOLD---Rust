@@ -376,18 +376,17 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
     });
 
     // EdgeDetect (formerly EdgeGlow — glow removed, use Bloom/Halation for glow)
-    m.insert(EffectTypeId::EDGE_GLOW, EffectDef {
+    m.insert(EffectTypeId::EDGE_DETECT, EffectDef {
         display_name: "Edge Detect",
-        param_count: 4,
+        param_count: 3,
         param_defs: vec![
             pd("Amount", 0.0, 1.0, 0.0),
-            pd_osc("Thresh", 0.0, 1.0, 0.3, "Threshold"),
-            pd("_unused", 0.0, 1.0, 0.0), // p[2] was Glow — kept for project file compat
+            pd_osc("Thresh", 0.0, 1.0, 0.1, "Threshold"),
             pd_whole_labels("Mode", 0.0, 2.0, 0.0,
                 &["Sobel", "Laplacian", "Frei-Chen"],
                 "Mode"),
         ],
-        osc_prefix: Some("edgeGlow"),
+        osc_prefix: Some("edgeDetect"),
     });
 
     // Datamosh

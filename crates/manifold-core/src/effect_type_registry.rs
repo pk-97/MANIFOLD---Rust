@@ -48,7 +48,7 @@ fn build_registry() -> Vec<EffectTypeRegistration> {
         reg(E::MIRROR,               "Mirror",               POST_PROCESS,  true),
         reg(E::BLOB_TRACKING,        "Blob Tracking",        POST_PROCESS,  true),
         reg(E::FLUID_DISTORTION,     "Fluid Distortion",     POST_PROCESS,  false),
-        reg(E::EDGE_GLOW,            "Edge Glow",            POST_PROCESS,  true),
+        reg(E::EDGE_DETECT,          "Edge Detect",          POST_PROCESS,  true),
         reg(E::DATAMOSH,             "Datamosh",             POST_PROCESS,  false),
         reg(E::SLIT_SCAN,            "Slit Scan",            POST_PROCESS,  false),
         reg(E::COLOR_GRADE,          "Color Grade",          POST_PROCESS,  true),
