@@ -1,4 +1,4 @@
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{Beats, ClipId, LayerId};
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::timeline::Timeline;
@@ -23,13 +23,13 @@ pub struct ActiveTimelineClipWindow {
     indexed_layer_clip_counts: Vec<usize>,
 
     initialized: bool,
-    last_beat: f32,
+    last_beat: Beats,
     start_cursor: usize,
     end_cursor: usize,
 }
 
-const BACKWARD_EPSILON: f32 = 0.0001;
-const LARGE_JUMP_BEATS: f32 = 32.0;
+const BACKWARD_EPSILON: Beats = Beats(0.0001);
+const LARGE_JUMP_BEATS: Beats = Beats(32.0);
 
 impl ActiveTimelineClipWindow {
     pub fn new() -> Self {
@@ -43,7 +43,7 @@ impl ActiveTimelineClipWindow {
             visible_layers: Vec::new(),
             indexed_layer_clip_counts: Vec::new(),
             initialized: false,
-            last_beat: 0.0,
+            last_beat: Beats::ZERO,
             start_cursor: 0,
             end_cursor: 0,
         }
@@ -52,7 +52,7 @@ impl ActiveTimelineClipWindow {
     /// Clear all state. Unity ActiveTimelineClipWindow.Reset (lines 41-53).
     pub fn reset(&mut self) {
         self.initialized = false;
-        self.last_beat = 0.0;
+        self.last_beat = Beats::ZERO;
         self.start_cursor = 0;
         self.end_cursor = 0;
         self.indexed_layer_clip_counts.clear();
@@ -67,7 +67,7 @@ impl ActiveTimelineClipWindow {
     pub fn get_active_clips(
         &mut self,
         project: &Project,
-        beat: f32,
+        beat: Beats,
         results: &mut Vec<TimelineClip>,
     ) {
         results.clear();
@@ -163,7 +163,7 @@ impl ActiveTimelineClipWindow {
 
     /// Rebuild the active set from scratch at the given beat.
     /// Unity ActiveTimelineClipWindow.RebuildActiveSetAtBeat (lines 147-184).
-    fn rebuild_active_set_at_beat(&mut self, beat: f32) {
+    fn rebuild_active_set_at_beat(&mut self, beat: Beats) {
         self.active_by_id.clear();
         self.active_by_id_values.clear();
 
@@ -198,7 +198,7 @@ impl ActiveTimelineClipWindow {
 
     /// Incrementally advance the active set forward to `beat`.
     /// Unity ActiveTimelineClipWindow.AdvanceActiveSetForward (lines 186-222).
-    fn advance_active_set_forward(&mut self, beat: f32) {
+    fn advance_active_set_forward(&mut self, beat: Beats) {
         // Walk start_cursor forward: add clips that have started
         while self.start_cursor < self.clips_by_start.len() {
             let clip = &self.clips_by_start[self.start_cursor];
@@ -235,7 +235,7 @@ impl ActiveTimelineClipWindow {
 
     /// Collect visible (non-muted, solo-respecting) clips into `results`.
     /// Unity ActiveTimelineClipWindow.CollectVisible (lines 224-249).
-    fn collect_visible(&mut self, timeline: &Timeline, beat: f32, results: &mut Vec<TimelineClip>) {
+    fn collect_visible(&mut self, timeline: &Timeline, beat: Beats, results: &mut Vec<TimelineClip>) {
         self.build_layer_visibility_cache(timeline);
 
         self.visible_scratch.clear();
@@ -325,7 +325,7 @@ impl Default for ActiveTimelineClipWindow {
 
 /// Count of clips with start_beat <= beat (upper bound on start).
 /// Unity ActiveTimelineClipWindow.UpperBoundStart (lines 320-334).
-fn upper_bound_start(sorted_by_start: &[TimelineClip], beat: f32) -> usize {
+fn upper_bound_start(sorted_by_start: &[TimelineClip], beat: Beats) -> usize {
     let mut lo = 0usize;
     let mut hi = sorted_by_start.len();
     while lo < hi {
@@ -341,7 +341,7 @@ fn upper_bound_start(sorted_by_start: &[TimelineClip], beat: f32) -> usize {
 
 /// First index where end_beat > beat (lower bound on end).
 /// Unity ActiveTimelineClipWindow.LowerBoundEnd (lines 336-350).
-fn lower_bound_end(sorted_by_end: &[TimelineClip], beat: f32) -> usize {
+fn lower_bound_end(sorted_by_end: &[TimelineClip], beat: Beats) -> usize {
     let mut lo = 0usize;
     let mut hi = sorted_by_end.len();
     while lo < hi {
@@ -423,8 +423,8 @@ mod tests {
     fn make_clip(id: &str, _layer_index: i32, start_beat: f32, duration_beats: f32) -> TimelineClip {
         TimelineClip {
             id: ClipId::new(id),
-            start_beat,
-            duration_beats,
+            start_beat: Beats::from_f32(start_beat),
+            duration_beats: Beats::from_f32(duration_beats),
             ..Default::default()
         }
     }
@@ -466,25 +466,25 @@ mod tests {
         let mut results = Vec::new();
 
         // At beat 1.0: only A active
-        window.get_active_clips(&project, 1.0, &mut results);
+        window.get_active_clips(&project, Beats(1.0), &mut results);
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"A"), "expected A at beat 1.0, got {:?}", ids);
         assert!(!ids.contains(&"B"), "expected no B at beat 1.0, got {:?}", ids);
 
         // At beat 3.0: A and B active (forward advance from 1.0)
-        window.get_active_clips(&project, 3.0, &mut results);
+        window.get_active_clips(&project, Beats(3.0), &mut results);
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"A"), "expected A at beat 3.0, got {:?}", ids);
         assert!(ids.contains(&"B"), "expected B at beat 3.0, got {:?}", ids);
 
         // At beat 5.0: only B active (A ended at 4.0)
-        window.get_active_clips(&project, 5.0, &mut results);
+        window.get_active_clips(&project, Beats(5.0), &mut results);
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
         assert!(!ids.contains(&"A"), "expected no A at beat 5.0, got {:?}", ids);
         assert!(ids.contains(&"B"), "expected B at beat 5.0, got {:?}", ids);
 
         // At beat 7.0: nothing active
-        window.get_active_clips(&project, 7.0, &mut results);
+        window.get_active_clips(&project, Beats(7.0), &mut results);
         assert!(results.is_empty(), "expected empty at beat 7.0, got {:?}", results);
     }
 
@@ -496,11 +496,11 @@ mod tests {
         let mut window = ActiveTimelineClipWindow::new();
         let mut results = Vec::new();
 
-        window.get_active_clips(&project, 5.0, &mut results);
+        window.get_active_clips(&project, Beats(5.0), &mut results);
         assert_eq!(results.len(), 1);
 
         // Jitter within epsilon — must NOT trigger rebuild (clip still active)
-        let jitter = 5.0 - (BACKWARD_EPSILON * 0.5);
+        let jitter = Beats(5.0) - BACKWARD_EPSILON * 0.5_f64;
         window.get_active_clips(&project, jitter, &mut results);
         assert_eq!(results.len(), 1, "clip should still be active after tiny backward jitter");
     }
@@ -517,13 +517,13 @@ mod tests {
         let mut results = Vec::new();
 
         // Advance to beat 9 (B is active)
-        window.get_active_clips(&project, 9.0, &mut results);
+        window.get_active_clips(&project, Beats(9.0), &mut results);
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"B"));
         assert!(!ids.contains(&"A"));
 
         // Seek backward to beat 1 — must rebuild, A should be active, B not
-        window.get_active_clips(&project, 1.0, &mut results);
+        window.get_active_clips(&project, Beats(1.0), &mut results);
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"A"), "expected A after backward seek, got {:?}", ids);
         assert!(!ids.contains(&"B"), "expected no B after backward seek, got {:?}", ids);
@@ -543,7 +543,7 @@ mod tests {
         let mut window = ActiveTimelineClipWindow::new();
         let mut results = Vec::new();
 
-        window.get_active_clips(&project, 2.0, &mut results);
+        window.get_active_clips(&project, Beats(2.0), &mut results);
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
         assert!(!ids.contains(&"A"), "non-solo layer clip A should be hidden, got {:?}", ids);
         assert!(ids.contains(&"B"), "solo layer clip B should be visible, got {:?}", ids);
@@ -566,7 +566,7 @@ mod tests {
         let mut window = ActiveTimelineClipWindow::new();
         let mut results = Vec::new();
 
-        window.get_active_clips(&project, 2.0, &mut results);
+        window.get_active_clips(&project, Beats(2.0), &mut results);
         assert!(
             results.is_empty(),
             "child of muted group must be invisible, got {:?}",
@@ -586,7 +586,7 @@ mod tests {
         let mut window = ActiveTimelineClipWindow::new();
         let mut results = Vec::new();
 
-        window.get_active_clips(&project, 2.0, &mut results);
+        window.get_active_clips(&project, Beats(2.0), &mut results);
         assert_eq!(results.len(), 3);
 
         // Visible order: LayerIndex → StartBeat → EndBeat → Id (lexicographic)
@@ -602,7 +602,7 @@ mod tests {
         let mut window = ActiveTimelineClipWindow::new();
         let mut results = Vec::new();
 
-        window.get_active_clips(&project_v1, 2.0, &mut results);
+        window.get_active_clips(&project_v1, Beats(2.0), &mut results);
         assert_eq!(results.len(), 1);
 
         // Add a second clip — new project instance with two clips
@@ -610,7 +610,7 @@ mod tests {
         let clip_a2 = make_clip("A", 0, 0.0, 4.0);
         let project_v2 = make_project(vec![make_video_layer(0, vec![clip_a2, clip_b])]);
 
-        window.get_active_clips(&project_v2, 2.0, &mut results);
+        window.get_active_clips(&project_v2, Beats(2.0), &mut results);
         assert_eq!(results.len(), 2, "after adding a clip, both clips must be active");
         let ids: Vec<&str> = results.iter().map(|c| c.id.as_str()).collect();
         assert!(ids.contains(&"A"));

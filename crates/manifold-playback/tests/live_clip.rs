@@ -1,3 +1,4 @@
+use manifold_core::{Beats};
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::layer::Layer;
@@ -10,7 +11,7 @@ use std::collections::HashMap;
 
 /// Mock host for tests.
 struct MockHost {
-    beat: f32,
+    beat: Beats,
     time: f32,
     bpm: f32,
     recording: bool,
@@ -26,7 +27,7 @@ struct MockHost {
 impl MockHost {
     fn new() -> Self {
         Self {
-            beat: 0.0,
+            beat: Beats::ZERO,
             time: 0.0,
             bpm: 120.0,
             recording: false,
@@ -47,22 +48,22 @@ impl MockHost {
 
     fn at_tick(mut self, tick: i32) -> Self {
         self.current_tick = tick;
-        self.beat = tick as f32 / MIDI_CLOCK_TICKS_PER_BEAT as f32;
+        self.beat = Beats(tick as f64 / MIDI_CLOCK_TICKS_PER_BEAT as f64);
         self
     }
 }
 
 impl LiveClipHost for MockHost {
-    fn current_beat(&self) -> f32 { self.beat }
+    fn current_beat(&self) -> Beats { self.beat }
     fn current_time(&self) -> f32 { self.time }
     fn is_recording(&self) -> bool { self.recording }
     fn is_playing(&self) -> bool { self.playing }
     fn show_debug_logs(&self) -> bool { false }
-    fn get_bpm_at_beat(&self, _beat: f32) -> f32 { self.bpm }
-    fn get_tempo_source_at_beat(&self, _beat: f32) -> manifold_core::types::TempoPointSource {
+    fn get_bpm_at_beat(&self, _beat: Beats) -> f32 { self.bpm }
+    fn get_tempo_source_at_beat(&self, _beat: Beats) -> manifold_core::types::TempoPointSource {
         manifold_core::types::TempoPointSource::Unknown
     }
-    fn get_beat_snapped_beat(&self) -> f32 { self.beat }
+    fn get_beat_snapped_beat(&self) -> Beats { self.beat }
     fn get_current_absolute_tick(&self) -> i32 { self.current_tick }
     fn stop_clip(&mut self, clip_id: &str) { self.stopped_clips.push(clip_id.to_string()); }
     fn mark_sync_dirty(&mut self) { self.sync_dirty = true; }
@@ -74,8 +75,8 @@ impl LiveClipHost for MockHost {
     fn record_command(&mut self, cmd: Box<dyn Command>) {
         self.recorded_commands.push(cmd);
     }
-    fn beat_to_timeline_time(&self, beat: f32) -> f32 {
-        beat * 60.0 / self.bpm
+    fn beat_to_timeline_time(&self, beat: Beats) -> f32 {
+        beat.as_f32() * 60.0 / self.bpm
     }
 }
 
@@ -176,7 +177,7 @@ fn commit_with_recording_adds_to_timeline() {
     ).unwrap();
     let clip_id = clip.id.clone();
 
-    host.beat = 4.0; // held for 4 beats
+    host.beat = Beats(4.0); // held for 4 beats
     mgr.commit_live_clip(&mut project, &mut host, 0, Some(&clip_id), Some(4.0), -1, 1.0, -1);
 
     // Clip should be committed to timeline
