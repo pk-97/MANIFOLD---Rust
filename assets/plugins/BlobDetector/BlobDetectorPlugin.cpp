@@ -102,15 +102,19 @@ int BlobDetector_Process(
     if (blurSize < 3) blurSize = 3;
     cv::GaussianBlur(state->gray, state->blurred, cv::Size(blurSize, blurSize), 0);
 
-    // --- Otsu adaptive Canny thresholds ---
-    // Compute optimal threshold for this frame's content, then scale by user param.
-    // Replaces fixed thresholds, making detection content-agnostic.
+    // --- Hybrid adaptive Canny thresholds ---
+    // Otsu adapts to bimodal content (clear objects on background), but fails on
+    // continuous gradients (fluids, particles) where it picks too-high thresholds.
+    // The fixed range is reliable for gradient content.
+    // We take the MORE SENSITIVE (lower) of the two — Otsu can never regress
+    // detection on gradient content, and the downstream morphology + area
+    // filtering cleans up any extra noise from being too sensitive.
     cv::Mat otsuDummy;
     double otsuThresh = cv::threshold(state->blurred, otsuDummy, 0, 255,
                                        cv::THRESH_BINARY | cv::THRESH_OTSU);
-    // threshold 0 → 30% of Otsu (very sensitive, many edges)
-    // threshold 1 → 100% of Otsu (strict, only strong edges)
-    double lowThresh = otsuThresh * (0.3 + threshold * 0.7);
+    double otsuLow = otsuThresh * (0.3 + threshold * 0.7);
+    double fixedLow = 20.0 + threshold * 130.0;
+    double lowThresh = std::min(otsuLow, fixedLow);
     double highThresh = lowThresh * 2.0;
     lowThresh = std::max(lowThresh, 10.0);
     highThresh = std::min(highThresh, 500.0);
