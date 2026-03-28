@@ -1,21 +1,15 @@
 /*
  * BlobDetectorPlugin.cpp
  *
- * Native OpenCV plugin for MANIFOLD that performs blob detection on RGBA pixel data.
- *
- * Detection pipeline (3 cues fused):
- *   1. Otsu-adaptive Canny edge detection — auto-selects thresholds per frame
- *   2. Optical flow motion detection — finds motion regardless of contrast
- *   3. Multi-cue fusion — bitwise OR of edge + flow masks before contour extraction
- *
- * Tracking (Kalman + Hungarian) is handled on the Rust side.
+ * Native OpenCV plugin for Unity that performs blob detection on RGBA pixel data.
+ * Uses Canny edge detection + morphological dilation to find regions of visual
+ * interest (edges/contrast), then extracts contour bounding rects.
  *
  * Build: see build.sh (requires Homebrew OpenCV)
  */
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/video.hpp>
 #include <algorithm>
 #include <vector>
 #include <cstring>
@@ -26,22 +20,15 @@ struct BlobDetectorState
 
     // Pre-allocated buffers (avoid per-frame alloc)
     cv::Mat gray;
-    cv::Mat prevGray;      // Previous frame for optical flow
     cv::Mat blurred;
     cv::Mat edges;
     cv::Mat dilated;
     cv::Mat morphKernel;
-    cv::Mat flow;          // Optical flow output (CV_32FC2)
-    cv::Mat flowMag;       // Flow magnitude
-    cv::Mat flowMask;      // Thresholded flow binary mask
-    cv::Mat fusedMask;     // Combined edge + flow mask
     std::vector<std::vector<cv::Point>> contours;
     std::vector<cv::Vec4i> hierarchy;
 
     // Sorted contour indices by area (reused each frame)
     std::vector<std::pair<double, int>> areaIndex;
-
-    bool hasPrevFrame = false;
 };
 
 extern "C"
@@ -61,17 +48,17 @@ void BlobDetector_Destroy(void* ptr)
 }
 
 /*
- * Process an RGBA frame and detect blobs via edge detection + optical flow.
+ * Process an RGBA frame and detect blobs via edge detection.
  *
- * Pipeline:
- *   Edge path: Grayscale → GaussianBlur → Otsu-adaptive Canny → Dilate → Close
- *   Flow path: Farneback optical flow → magnitude → threshold → dilate
- *   Fusion:    bitwise OR of edge mask + flow mask → FindContours
+ * Pipeline: Grayscale → GaussianBlur → Canny edges → Dilate → FindContours
+ * This finds regions of visual interest (edges/contrast/detail) regardless of
+ * whether they are bright or dark — much better for detecting people, objects, etc.
  *
  * rgbaData:     raw RGBA pixel bytes (width * height * 4)
  * width/height: frame dimensions
- * threshold:    0-1, scales Otsu-derived Canny sensitivity
- * sensitivity:  0-1, controls blur + dilation + min area + flow threshold
+ * threshold:    0-1, Canny edge sensitivity (low = more edges, high = fewer edges)
+ * sensitivity:  0-1, controls blur + dilation + min area
+ *               low = big blobs only, high = many small blobs
  * outBlobData:  output array of [cx, cy, w, h] * maxBlobs (normalized 0-1)
  *
  * Returns: number of blobs found (0..maxBlobs)
@@ -102,22 +89,12 @@ int BlobDetector_Process(
     if (blurSize < 3) blurSize = 3;
     cv::GaussianBlur(state->gray, state->blurred, cv::Size(blurSize, blurSize), 0);
 
-    // --- Hybrid adaptive Canny thresholds ---
-    // Otsu adapts to bimodal content (clear objects on background), but fails on
-    // continuous gradients (fluids, particles) where it picks too-high thresholds.
-    // The fixed range is reliable for gradient content.
-    // We take the MORE SENSITIVE (lower) of the two — Otsu can never regress
-    // detection on gradient content, and the downstream morphology + area
-    // filtering cleans up any extra noise from being too sensitive.
-    cv::Mat otsuDummy;
-    double otsuThresh = cv::threshold(state->blurred, otsuDummy, 0, 255,
-                                       cv::THRESH_BINARY | cv::THRESH_OTSU);
-    double otsuLow = otsuThresh * (0.3 + threshold * 0.7);
-    double fixedLow = 20.0 + threshold * 130.0;
-    double lowThresh = std::min(otsuLow, fixedLow);
+    // Canny edge detection
+    // threshold controls edge sensitivity:
+    // threshold 0 → lowThresh=20, highThresh=60 (very sensitive, many edges)
+    // threshold 1 → lowThresh=150, highThresh=300 (strict, only strong edges)
+    double lowThresh  = 20.0 + threshold * 130.0;
     double highThresh = lowThresh * 2.0;
-    lowThresh = std::max(lowThresh, 10.0);
-    highThresh = std::min(highThresh, 500.0);
     cv::Canny(state->blurred, state->edges, lowThresh, highThresh);
 
     // Dilate edges to connect nearby edges into solid blobs
@@ -132,56 +109,10 @@ int BlobDetector_Process(
     // Close small gaps
     cv::morphologyEx(state->dilated, state->dilated, cv::MORPH_CLOSE, state->morphKernel);
 
-    // --- Optical flow secondary detection cue ---
-    // Detects motion regardless of edge contrast — works on gradients, particles,
-    // subtle animations that Canny misses.
-    if (state->hasPrevFrame)
-    {
-        cv::calcOpticalFlowFarneback(
-            state->prevGray, state->gray, state->flow,
-            0.5,   // pyr_scale
-            3,     // levels
-            15,    // winsize
-            3,     // iterations
-            5,     // poly_n
-            1.2,   // poly_sigma
-            0      // flags
-        );
-
-        // Compute flow magnitude
-        cv::Mat flowParts[2];
-        cv::split(state->flow, flowParts);
-        cv::magnitude(flowParts[0], flowParts[1], state->flowMag);
-
-        // Threshold flow magnitude — sensitivity controls detection threshold
-        // sensitivity 0 → flowThresh=4.0 (only fast/large motion)
-        // sensitivity 1 → flowThresh=1.0 (subtle motion too)
-        double flowThresh = 1.0 + (1.0 - sensitivity) * 3.0;
-        cv::threshold(state->flowMag, state->flowMask, flowThresh, 255, cv::THRESH_BINARY);
-        state->flowMask.convertTo(state->flowMask, CV_8U);
-
-        // Dilate flow mask to connect nearby motion regions
-        cv::dilate(state->flowMask, state->flowMask, state->morphKernel);
-
-        // --- Fuse edge + flow masks ---
-        // Union: a region detected by either cue is included.
-        // Overlapping regions merge naturally via findContours(RETR_EXTERNAL).
-        cv::bitwise_or(state->dilated, state->flowMask, state->fusedMask);
-    }
-    else
-    {
-        // First frame — edge detection only (no previous frame for flow)
-        state->dilated.copyTo(state->fusedMask);
-    }
-
-    // Store current frame for next optical flow computation
-    state->gray.copyTo(state->prevGray);
-    state->hasPrevFrame = true;
-
-    // Find contours on the fused mask
+    // Find contours
     state->contours.clear();
     state->hierarchy.clear();
-    cv::findContours(state->fusedMask, state->contours, state->hierarchy,
+    cv::findContours(state->dilated, state->contours, state->hierarchy,
                      cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
     // Minimum contour area from sensitivity

@@ -53,101 +53,24 @@ fn readback_dims(source_w: u32, source_h: u32) -> (u32, u32) {
     (rw, rh)
 }
 
-// Tracking constants.
+// BlobTrackingFX.cs line 35
 const MATCH_RADIUS_SQ: f32 = 0.08;
-const UNASSIGNED_COST: f32 = 1e6;
-const MAX_UNSEEN_FRAMES: u32 = 10; // ~0.5s at readback every 3 frames
+const SIZE_SMOOTH_FACTOR: f32 = 0.85;
 
-// 1D Kalman filter for position+velocity tracking.
-// State: [position, velocity]. Constant-velocity motion model.
-#[derive(Clone, Copy)]
-struct KalmanFilter1D {
-    x: f32,   // position estimate
-    v: f32,   // velocity estimate
-    p00: f32, // covariance: position variance
-    p01: f32, // covariance: position-velocity
-    p10: f32, // covariance: velocity-position
-    p11: f32, // covariance: velocity variance
-}
+// Connection distance threshold is now param 4 ("Connect", 0.0–1.0, default 0.35).
+// Squared before use in compute_connections().
 
-impl Default for KalmanFilter1D {
-    fn default() -> Self {
-        Self { x: 0.0, v: 0.0, p00: 0.0, p01: 0.0, p10: 0.0, p11: 0.0 }
-    }
-}
-
-impl KalmanFilter1D {
-    fn new(pos: f32) -> Self {
-        Self {
-            x: pos,
-            v: 0.0,
-            p00: 0.001, // known initial position
-            p01: 0.0,
-            p10: 0.0,
-            p11: 1.0, // unknown initial velocity
-        }
-    }
-
-    /// Predict step: advance state by dt using constant-velocity model.
-    fn predict(&mut self, dt: f32, q_pos: f32, q_vel: f32) {
-        self.x += self.v * dt;
-        // P_pred = F * P * F' + Q, where F = [[1, dt], [0, 1]]
-        let fp00 = self.p00 + dt * self.p10;
-        let fp01 = self.p01 + dt * self.p11;
-        self.p00 = fp00 + dt * fp01 + q_pos * dt;
-        self.p01 = fp01;
-        self.p10 += dt * self.p11;
-        self.p11 += q_vel * dt;
-    }
-
-    /// Update step: correct state with a measurement.
-    fn update(&mut self, measurement: f32, r: f32) {
-        let innovation = measurement - self.x;
-        let s = self.p00 + r;
-        if s.abs() < 1e-12 {
-            return;
-        }
-        let s_inv = 1.0 / s;
-        let k0 = self.p00 * s_inv;
-        let k1 = self.p10 * s_inv;
-        self.x += k0 * innovation;
-        self.v += k1 * innovation;
-        // P = (I - K*H) * P
-        let p00 = (1.0 - k0) * self.p00;
-        let p01 = (1.0 - k0) * self.p01;
-        let p10 = self.p10 - k1 * self.p00;
-        let p11 = self.p11 - k1 * self.p01;
-        self.p00 = p00;
-        self.p01 = p01;
-        self.p10 = p10;
-        self.p11 = p11;
-    }
-}
-
-/// Tracked blob with Kalman-filtered position and size.
+// BlobTrackingFX.cs line 39-46 — TrackedBlob
 #[derive(Clone, Copy, Default)]
-struct KalmanBlob {
-    kf_x: KalmanFilter1D,
-    kf_y: KalmanFilter1D,
-    kf_w: KalmanFilter1D,
-    kf_h: KalmanFilter1D,
-    frames_since_seen: u32,
-    _id: u32,
+struct TrackedBlob {
+    smooth_pos: [f32; 2],
+    smooth_size: [f32; 2],
+    raw_pos: [f32; 2],
+    raw_size: [f32; 2],
+    matched: bool,
 }
 
-impl KalmanBlob {
-    fn new(x: f32, y: f32, w: f32, h: f32, id: u32) -> Self {
-        Self {
-            kf_x: KalmanFilter1D::new(x),
-            kf_y: KalmanFilter1D::new(y),
-            kf_w: KalmanFilter1D::new(w),
-            kf_h: KalmanFilter1D::new(h),
-            frames_since_seen: 0,
-            _id: id,
-        }
-    }
-}
-
+// BlobTrackingFX.cs line 48-68 — OwnerState
 struct OwnerState {
     downsample_rt: RenderTarget,
     readback: ReadbackRequest,
@@ -155,19 +78,17 @@ struct OwnerState {
     readback_h: u32,
     has_blob_data: bool,
     _pixel_buffer: Vec<u8>,
-    native_blob_output: Vec<f32>, // MAX_BLOBS * 4: [x, y, w, h] per blob
-    blob_data_for_shader: Vec<[f32; 4]>,
-    connection_lines: Vec<[f32; 4]>,
+    native_blob_output: Vec<f32>, // new float[MAX_BLOBS * 4]
+    blob_data_for_shader: Vec<[f32; 4]>, // Vector4[MAX_BLOBS]
+    connection_lines: Vec<[f32; 4]>, // Vector4[MAX_BLOBS]
     blob_count: i32,
     connection_count: i32,
     pending_threshold: f32,
     pending_sensitivity: f32,
     last_readback_frame: i64,
-    // Kalman-filtered tracks
-    tracks: [KalmanBlob; MAX_BLOBS],
-    track_count: usize,
-    next_blob_id: u32,
-    detection_count: usize,
+    // Temporal smoothing
+    tracked: Vec<TrackedBlob>, // new TrackedBlob[MAX_BLOBS]
+    tracked_count: usize,
     has_new_detection: bool,
 }
 
@@ -325,6 +246,8 @@ impl BlobTrackingFX {
             let native_blob_output = vec![0f32; MAX_BLOBS * 4];
             let blob_data_for_shader = vec![[0f32; 4]; MAX_BLOBS];
             let connection_lines = vec![[0f32; 4]; MAX_BLOBS];
+            let tracked = vec![TrackedBlob::default(); MAX_BLOBS];
+
             OwnerState {
                 downsample_rt,
                 readback: ReadbackRequest::new(),
@@ -340,10 +263,8 @@ impl BlobTrackingFX {
                 pending_threshold: 0.0,
                 pending_sensitivity: 0.0,
                 last_readback_frame: 0,
-                tracks: [KalmanBlob::default(); MAX_BLOBS],
-                track_count: 0,
-                next_blob_id: 0,
-                detection_count: 0,
+                tracked,
+                tracked_count: 0,
                 has_new_detection: false,
             }
         })
@@ -404,106 +325,104 @@ impl BlobTrackingFX {
         });
     }
 
-    // Store detection results for processing in update_tracking.
+    // Apply a completed BlobResponse to OwnerState.
+    // BlobTrackingFX.cs lines 204-252 — greedy nearest-neighbour matching
     fn apply_blob_response(state: &mut OwnerState, response: &BlobResponse) {
+        // Copy raw blob output into state for matching
         let copy_len = response.blob_data.len().min(state.native_blob_output.len());
-        state.native_blob_output[..copy_len]
-            .copy_from_slice(&response.blob_data[..copy_len]);
-        state.detection_count = response.blob_count as usize;
+        state.native_blob_output[..copy_len].copy_from_slice(&response.blob_data[..copy_len]);
+
+        // Mark all existing tracked blobs as unmatched
+        for i in 0..state.tracked_count {
+            state.tracked[i].matched = false;
+        }
+
+        // For each new detection, find closest unmatched tracked blob
+        for d in 0..response.blob_count as usize {
+            let dx = state.native_blob_output[d * 4];
+            // The C++ plugin outputs Y in Unity UV convention (v=0 at bottom).
+            // Keep as-is: the overlay shader uses a Y-flipped draw_uv that matches
+            // Unity's convention, so blob positions flow through unchanged.
+            let dy = state.native_blob_output[d * 4 + 1];
+            let dw = state.native_blob_output[d * 4 + 2];
+            let dh = state.native_blob_output[d * 4 + 3];
+
+            let mut best_dist_sq = MATCH_RADIUS_SQ;
+            let mut best_idx: i32 = -1;
+
+            for t in 0..state.tracked_count {
+                if state.tracked[t].matched {
+                    continue;
+                }
+                let ex = state.tracked[t].raw_pos[0] - dx;
+                let ey = state.tracked[t].raw_pos[1] - dy;
+                let dist_sq = ex * ex + ey * ey;
+                if dist_sq < best_dist_sq {
+                    best_dist_sq = dist_sq;
+                    best_idx = t as i32;
+                }
+            }
+
+            if best_idx >= 0 {
+                // Update existing tracked blob target
+                let idx = best_idx as usize;
+                state.tracked[idx].raw_pos = [dx, dy];
+                state.tracked[idx].raw_size = [dw, dh];
+                state.tracked[idx].matched = true;
+            } else if state.tracked_count < MAX_BLOBS {
+                // New blob — initialize at detection position
+                let idx = state.tracked_count;
+                state.tracked_count += 1;
+                state.tracked[idx] = TrackedBlob {
+                    smooth_pos: [dx, dy],
+                    smooth_size: [dw, dh],
+                    raw_pos: [dx, dy],
+                    raw_size: [dw, dh],
+                    matched: true,
+                };
+            }
+        }
+
         state.has_new_detection = true;
         state.has_blob_data = true;
     }
 
-    // Kalman predict all tracks, then process new detections if available.
-    fn update_tracking(state: &mut OwnerState, smoothing: f32, dt: f32) {
-        let (q_pos, q_vel, r) = kalman_params(smoothing);
-        // Predict step: advance all tracks by dt
-        for i in 0..state.track_count {
-            state.tracks[i].kf_x.predict(dt, q_pos, q_vel);
-            state.tracks[i].kf_y.predict(dt, q_pos, q_vel);
-            state.tracks[i].kf_w.predict(dt, q_pos, q_vel);
-            state.tracks[i].kf_h.predict(dt, q_pos, q_vel);
-        }
-        // Update step: process new detections via Hungarian assignment
+    // BlobTrackingFX.cs lines 258-291 — UpdateSmoothing (static method)
+    fn update_smoothing(state: &mut OwnerState, smoothing: f32, dt: f32) {
+        // BlobTrackingFX.cs line 263: Mathf.Lerp(60f, 2f, smoothing)
+        // Mathf.Lerp clamps t to [0,1]
+        let lerp_speed = 60.0 + (2.0 - 60.0) * smoothing.clamp(0.0, 1.0);
+        let pos_alpha = 1.0 - (-lerp_speed * dt).exp();
+        let size_alpha = 1.0 - (-lerp_speed * SIZE_SMOOTH_FACTOR * dt).exp();
+
+        // BlobTrackingFX.cs lines 268-281 — remove unmatched blobs on new detection
         if state.has_new_detection {
-            Self::process_detections(state, r);
-            state.has_new_detection = false;
-        }
-    }
-
-    // Hungarian assignment + Kalman update for new detections.
-    #[allow(clippy::needless_range_loop)]
-    fn process_detections(state: &mut OwnerState, r: f32) {
-        let n_det = state.detection_count;
-        let n_track = state.track_count;
-
-        if n_det == 0 {
-            for i in 0..n_track {
-                state.tracks[i].frames_since_seen += 1;
-            }
-            remove_stale_tracks(state);
-            return;
-        }
-
-        if n_track == 0 {
-            for d in 0..n_det.min(MAX_BLOBS) {
-                let (dx, dy, dw, dh) = detection_at(state, d);
-                state.tracks[state.track_count] =
-                    KalmanBlob::new(dx, dy, dw, dh, state.next_blob_id);
-                state.track_count += 1;
-                state.next_blob_id = state.next_blob_id.wrapping_add(1);
-            }
-            return;
-        }
-
-        // Build cost matrix (detection × track), gated by MATCH_RADIUS_SQ
-        let n = n_det.max(n_track);
-        let mut cost = [[UNASSIGNED_COST; MAX_BLOBS]; MAX_BLOBS];
-        for d in 0..n_det {
-            let (dx, dy, _, _) = detection_at(state, d);
-            for t in 0..n_track {
-                let ex = state.tracks[t].kf_x.x - dx;
-                let ey = state.tracks[t].kf_y.x - dy;
-                let dist_sq = ex * ex + ey * ey;
-                if dist_sq < MATCH_RADIUS_SQ {
-                    cost[d][t] = dist_sq;
+            let mut write = 0usize;
+            for read in 0..state.tracked_count {
+                if state.tracked[read].matched {
+                    if write != read {
+                        state.tracked[write] = state.tracked[read];
+                    }
+                    write += 1;
                 }
             }
+            state.tracked_count = write;
+            state.has_new_detection = false;
         }
 
-        let assignment = hungarian_solve(&cost, n);
-
-        let mut track_matched = [false; MAX_BLOBS];
-
-        for d in 0..n_det {
-            let t = assignment[d];
-            if t < n_track && cost[d][t] < MATCH_RADIUS_SQ {
-                // Matched — Kalman update with measurement
-                let (dx, dy, dw, dh) = detection_at(state, d);
-                state.tracks[t].kf_x.update(dx, r);
-                state.tracks[t].kf_y.update(dy, r);
-                state.tracks[t].kf_w.update(dw, r);
-                state.tracks[t].kf_h.update(dh, r);
-                state.tracks[t].frames_since_seen = 0;
-                track_matched[t] = true;
-            } else if state.track_count < MAX_BLOBS {
-                // Unmatched detection — birth new track
-                let (dx, dy, dw, dh) = detection_at(state, d);
-                state.tracks[state.track_count] =
-                    KalmanBlob::new(dx, dy, dw, dh, state.next_blob_id);
-                state.track_count += 1;
-                state.next_blob_id = state.next_blob_id.wrapping_add(1);
-            }
+        // BlobTrackingFX.cs lines 283-290 — lerp positions and sizes
+        for i in 0..state.tracked_count {
+            let t = state.tracked[i];
+            // Vector2.Lerp(a, b, t) = a + (b-a)*clamp(t,0,1) — but alpha is already [0,1]
+            state.tracked[i].smooth_pos = [
+                t.smooth_pos[0] + (t.raw_pos[0] - t.smooth_pos[0]) * pos_alpha,
+                t.smooth_pos[1] + (t.raw_pos[1] - t.smooth_pos[1]) * pos_alpha,
+            ];
+            state.tracked[i].smooth_size = [
+                t.smooth_size[0] + (t.raw_size[0] - t.smooth_size[0]) * size_alpha,
+                t.smooth_size[1] + (t.raw_size[1] - t.smooth_size[1]) * size_alpha,
+            ];
         }
-
-        // Age unmatched tracks
-        for t in 0..n_track {
-            if !track_matched[t] {
-                state.tracks[t].frames_since_seen += 1;
-            }
-        }
-
-        remove_stale_tracks(state);
     }
 
     // BlobTrackingFX.cs lines 293-327 — ComputeConnections (static method)
@@ -548,121 +467,6 @@ impl BlobTrackingFX {
             state.connection_lines[i] = [0.0; 4];
         }
     }
-}
-
-/// Map smoothing parameter (0=responsive, 1=smooth) to Kalman noise parameters.
-/// Returns (q_pos, q_vel, r) — process noise and measurement noise.
-fn kalman_params(smoothing: f32) -> (f32, f32, f32) {
-    let s = smoothing.clamp(0.0, 1.0);
-    // Process noise: how much state can change unexpectedly per frame
-    let q_pos = 0.0001 + (1.0 - s) * 0.005; // position jitter
-    let q_vel = 0.001 + (1.0 - s) * 0.05; // velocity change
-    // Measurement noise: how much we trust detections
-    let r = 0.0005 + s * 0.05;
-    (q_pos, q_vel, r)
-}
-
-/// Read detection d from native_blob_output buffer.
-fn detection_at(state: &OwnerState, d: usize) -> (f32, f32, f32, f32) {
-    (
-        state.native_blob_output[d * 4],
-        state.native_blob_output[d * 4 + 1],
-        state.native_blob_output[d * 4 + 2],
-        state.native_blob_output[d * 4 + 3],
-    )
-}
-
-/// Remove tracks not seen for MAX_UNSEEN_FRAMES detection cycles.
-fn remove_stale_tracks(state: &mut OwnerState) {
-    let mut write = 0;
-    for read in 0..state.track_count {
-        if state.tracks[read].frames_since_seen <= MAX_UNSEEN_FRAMES {
-            if write != read {
-                state.tracks[write] = state.tracks[read];
-            }
-            write += 1;
-        }
-    }
-    state.track_count = write;
-}
-
-/// Hungarian algorithm (Kuhn-Munkres) for minimum-cost assignment.
-/// Solves the n×n assignment problem on the first n rows/cols of cost.
-/// Returns row_to_col mapping; MAX_BLOBS means unassigned.
-fn hungarian_solve(
-    cost: &[[f32; MAX_BLOBS]; MAX_BLOBS],
-    n: usize,
-) -> [usize; MAX_BLOBS] {
-    let mut result = [MAX_BLOBS; MAX_BLOBS];
-    if n == 0 {
-        return result;
-    }
-
-    // Use f64 internally to avoid precision issues with UNASSIGNED_COST (1e6).
-    let mut u = [0.0f64; MAX_BLOBS + 1]; // row potentials (1-indexed)
-    let mut v = [0.0f64; MAX_BLOBS + 1]; // col potentials (1-indexed)
-    let mut p = [0usize; MAX_BLOBS + 1]; // p[j] = row assigned to col j
-    let mut way = [0usize; MAX_BLOBS + 1];
-
-    for i in 1..=n {
-        let mut min_v = [f64::MAX; MAX_BLOBS + 1];
-        let mut used = [false; MAX_BLOBS + 1];
-        p[0] = i;
-        let mut j0 = 0usize;
-
-        loop {
-            used[j0] = true;
-            let i0 = p[j0];
-            let mut delta = f64::MAX;
-            let mut j1 = 0usize;
-
-            for j in 1..=n {
-                if !used[j] {
-                    let cur =
-                        cost[i0 - 1][j - 1] as f64 - u[i0] - v[j];
-                    if cur < min_v[j] {
-                        min_v[j] = cur;
-                        way[j] = j0;
-                    }
-                    if min_v[j] < delta {
-                        delta = min_v[j];
-                        j1 = j;
-                    }
-                }
-            }
-
-            for j in 0..=n {
-                if used[j] {
-                    u[p[j]] += delta;
-                    v[j] -= delta;
-                } else {
-                    min_v[j] -= delta;
-                }
-            }
-
-            j0 = j1;
-            if p[j0] == 0 {
-                break;
-            }
-        }
-
-        loop {
-            let j1 = way[j0];
-            p[j0] = p[j1];
-            j0 = j1;
-            if j0 == 0 {
-                break;
-            }
-        }
-    }
-
-    // Convert column→row assignment to row→column
-    for j in 1..=n {
-        if p[j] > 0 && p[j] <= n {
-            result[p[j] - 1] = j - 1;
-        }
-    }
-    result
 }
 
 // BlobTrackingFX.cs lines 385-442 — CreateFontAtlas()
@@ -889,24 +693,24 @@ impl PostProcessEffect for BlobTrackingFX {
 
         // ---- Phase 2: Per-frame temporal smoothing ----
         if state.has_blob_data {
-            Self::update_tracking(state, smoothing, ctx.dt);
+            Self::update_smoothing(state, smoothing, ctx.dt);
         }
 
         // ---- Phase 3: Render overlay with smoothed blob data ----
-        for i in 0..state.track_count {
-            let t = &state.tracks[i];
+        for i in 0..state.tracked_count {
+            let t = state.tracked[i];
             state.blob_data_for_shader[i] = [
-                t.kf_x.x,
-                t.kf_y.x,
-                t.kf_w.x.max(0.0),
-                t.kf_h.x.max(0.0),
+                t.smooth_pos[0],
+                t.smooth_pos[1],
+                t.smooth_size[0],
+                t.smooth_size[1],
             ];
         }
-        for i in state.track_count..MAX_BLOBS {
+        for i in state.tracked_count..MAX_BLOBS {
             state.blob_data_for_shader[i] = [0.0; 4];
         }
 
-        state.blob_count = state.track_count as i32;
+        state.blob_count = state.tracked_count as i32;
         Self::compute_connections(state, connect_dist);
 
         let mut blob_center_size = [[0f32; 4]; 16];
@@ -1011,7 +815,6 @@ fn clear_owner_state(state: &mut OwnerState) {
     state.has_blob_data = false;
     state.blob_count = 0;
     state.connection_count = 0;
-    state.track_count = 0;
-    state.detection_count = 0;
+    state.tracked_count = 0;
     state.has_new_detection = false;
 }
