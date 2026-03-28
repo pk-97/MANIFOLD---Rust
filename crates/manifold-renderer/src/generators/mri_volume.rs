@@ -4,6 +4,7 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use super::mri_volume_loader::{ScanInfo, discover_scans, load_tiff_slice};
 use std::path::PathBuf;
+use std::sync::mpsc;
 
 // Parameter indices matching generator_definition_registry.rs
 const SLICE_AXIS: usize = 0;
@@ -46,6 +47,11 @@ pub struct MriVolumeGenerator {
     current_scan_index: i32,
     current_axis: i32,
     current_slice_index: i32,
+    // Async slice loading — avoids blocking the 60 FPS content thread on file I/O
+    pending_load: Option<mpsc::Receiver<Result<(u32, u32, Vec<u8>), String>>>,
+    pending_scan_index: i32,
+    pending_axis: i32,
+    pending_slice_index: i32,
     // Scan library
     scans: Vec<ScanInfo>,
 }
@@ -109,6 +115,10 @@ impl MriVolumeGenerator {
             current_scan_index: -1,
             current_axis: -1,
             current_slice_index: -1,
+            pending_load: None,
+            pending_scan_index: -1,
+            pending_axis: -1,
+            pending_slice_index: -1,
             scans,
         }
     }
@@ -169,6 +179,34 @@ impl Generator for MriVolumeGenerator {
             return ctx.anim_progress;
         }
 
+        // Check if async load completed — upload data if ready
+        // Must happen before borrowing self.scans to avoid borrow conflicts
+        if self.pending_load.is_some() {
+            let rx = self.pending_load.take().unwrap();
+            match rx.try_recv() {
+                Ok(Ok((w, h, data))) => {
+                    self.ensure_texture(gpu.device, w, h);
+                    self.upload_slice(gpu, w, h, &data);
+                    self.current_scan_index = self.pending_scan_index;
+                    self.current_axis = self.pending_axis;
+                    self.current_slice_index = self.pending_slice_index;
+                    // pending_load already None from take()
+                }
+                Ok(Err(e)) => {
+                    log::error!("MRI async load: {e}");
+                    // pending_load already None from take()
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    // Still loading — put receiver back, continue displaying previous slice
+                    self.pending_load = Some(rx);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    log::error!("MRI async load: sender thread disconnected");
+                    // pending_load already None from take()
+                }
+            }
+        }
+
         // Scan selection
         let scan_index = (param(ctx, SCAN, 0.0).round() as i32)
             .clamp(0, self.scans.len() as i32 - 1);
@@ -185,27 +223,21 @@ impl Generator for MriVolumeGenerator {
         let slice_index = (slice_pos * max_idx as f32).round() as i32;
         let slice_index = slice_index.clamp(0, max_idx);
 
-        // Check if we need to load a new slice
+        // Check if we need to load a new slice — only spawn if no load in flight
         let need_load = slice_index != self.current_slice_index
             || scan_index != self.current_scan_index
             || axis != self.current_axis;
 
-        if need_load {
-            let path = &axis_slices.paths[slice_index as usize];
-            match load_tiff_slice(path) {
-                Ok((w, h, data)) => {
-                    self.ensure_texture(gpu.device, w, h);
-                    self.upload_slice(gpu, w, h, &data);
-                    self.current_scan_index = scan_index;
-                    self.current_axis = axis;
-                    self.current_slice_index = slice_index;
-                }
-                Err(e) => {
-                    log::error!("MRI: {e}");
-                    gpu.native_enc.clear_texture(target, 0.0, 0.0, 0.0, 1.0);
-                    return ctx.anim_progress;
-                }
-            }
+        if need_load && self.pending_load.is_none() {
+            let (tx, rx) = mpsc::channel();
+            let path = axis_slices.paths[slice_index as usize].clone();
+            self.pending_scan_index = scan_index;
+            self.pending_axis = axis;
+            self.pending_slice_index = slice_index;
+            std::thread::spawn(move || {
+                let _ = tx.send(load_tiff_slice(&path));
+            });
+            self.pending_load = Some(rx);
         }
 
         let Some(slice_tex) = &self.slice_texture else {

@@ -35,7 +35,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var uv = in.uv - center;
 
     // Apply zoom (>1 = zoom in = copies shrink toward center)
-    uv = uv / uniforms.zoom;
+    // Guard against division by zero — OSC/MIDI can bypass registry bounds
+    let safe_zoom = max(uniforms.zoom, 0.001);
+    uv = uv / safe_zoom;
 
     // Apply rotation (radians)
     let s = sin(uniforms.rotation);
@@ -84,5 +86,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         result.a = max(current.a, prev_alpha * amt);
     }
 
-    return result;
+    // NaN/Inf guard: prevent corrupt values from entering feedback state buffer
+    // Under fast_math, NaN comparisons are undefined, so use clamp as primary defense
+    var safe = result;
+    safe = clamp(safe, vec4<f32>(-100.0), vec4<f32>(100.0));
+    // Secondary defense: if any component is still NaN (NaN != NaN under IEEE 754)
+    if (any(safe != safe)) {
+        safe = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return safe;
 }

@@ -28,7 +28,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var transformed_uv = uv - center;
 
     // Apply zoom (>1 = zoom in = copies shrink toward center)
-    transformed_uv = transformed_uv / uniforms.zoom;
+    // Guard against division by zero — OSC/MIDI can bypass registry bounds
+    let safe_zoom = max(uniforms.zoom, 0.001);
+    transformed_uv = transformed_uv / safe_zoom;
 
     // Apply rotation (radians)
     let s = sin(uniforms.rotation);
@@ -76,5 +78,13 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         result.a = max(current.a, prev_alpha * amt);
     }
 
-    textureStore(output_tex, vec2<i32>(gid.xy), result);
+    // NaN/Inf guard: prevent corrupt values from entering feedback state buffer
+    // Under fast_math, NaN comparisons are undefined, so use clamp as primary defense
+    var safe = result;
+    safe = clamp(safe, vec4<f32>(-100.0), vec4<f32>(100.0));
+    // Secondary defense: if any component is still NaN (NaN != NaN under IEEE 754)
+    if (any(safe != safe)) {
+        safe = vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    textureStore(output_tex, vec2<i32>(gid.xy), safe);
 }

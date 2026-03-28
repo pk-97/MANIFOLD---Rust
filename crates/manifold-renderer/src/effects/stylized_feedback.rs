@@ -107,7 +107,7 @@ impl PostProcessEffect for StylizedFeedbackFX {
         let state = self.states.get(&ctx.owner_key).unwrap();
 
         let feedback_amount = fx.param_values.first().copied().unwrap_or(0.5).min(0.98);
-        let zoom = fx.param_values.get(1).copied().unwrap_or(0.95);
+        let zoom = fx.param_values.get(1).copied().unwrap_or(0.95).clamp(0.01, 10.0);
         let rotation =
             fx.param_values.get(2).copied().unwrap_or(0.0) * DEG_TO_RAD;
         let mode = fx.param_values.get(3).copied().unwrap_or(0.0).round();

@@ -189,14 +189,11 @@ pub fn supports_spatial_scaling(device: &metal::DeviceRef) -> bool {
     if !metalfx_available() {
         return false;
     }
-    // All Apple Silicon GPUs that support MetalFX also support spatial scaling.
-    // The descriptor creation will fail if the device doesn't support it,
-    // so we just check class availability here.
-    let _: BOOL = unsafe {
+    let supported: BOOL = unsafe {
         let cls = Class::get("MTLFXSpatialScalerDescriptor").unwrap();
         msg_send![cls, supportsDevice: device as *const _ as *mut Object]
     };
-    true
+    supported
 }
 
 // ─── TextureUpscaler ─────────────────────────────────────────────────

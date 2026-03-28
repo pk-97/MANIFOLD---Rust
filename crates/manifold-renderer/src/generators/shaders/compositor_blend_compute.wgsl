@@ -77,8 +77,9 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
             if u.invert_colors > 0.5 {
                 out_rgb = max(vec3<f32>(1.0) - out_rgb, vec3<f32>(0.0));
             }
-            let result = vec4<f32>(out_rgb, out_a);
-            textureStore(t_output, vec2<i32>(id.xy), mix(base, result, u.opacity));
+            var result = vec4<f32>(out_rgb, out_a);
+            result = clamp(mix(base, result, u.opacity), vec4<f32>(-100.0), vec4<f32>(100.0));
+            textureStore(t_output, vec2<i32>(id.xy), result);
             return;
         }
         case 1u: { blended = b + f_val; }
@@ -102,12 +103,13 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         case 5u: {
             let stencil_rgb = b * bl_a;
             let stencil_a = ba * bl_a;
-            let stencil_result = vec4<f32>(stencil_rgb, stencil_a);
-            textureStore(t_output, vec2<i32>(id.xy), mix(base, stencil_result, u.opacity));
+            var stencil_result = vec4<f32>(stencil_rgb, stencil_a);
+            stencil_result = clamp(mix(base, stencil_result, u.opacity), vec4<f32>(-100.0), vec4<f32>(100.0));
+            textureStore(t_output, vec2<i32>(id.xy), stencil_result);
             return;
         }
         case 6u: {
-            textureStore(t_output, vec2<i32>(id.xy), vec4<f32>(mix(b, f_val, u.opacity), 1.0));
+            textureStore(t_output, vec2<i32>(id.xy), clamp(vec4<f32>(mix(b, f_val, u.opacity), 1.0), vec4<f32>(-100.0), vec4<f32>(100.0)));
             return;
         }
         case 7u: { blended = abs(b - f_val); }
@@ -133,6 +135,8 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     let blended_result = vec4<f32>(out_rgb, out_a);
-    let final_result = mix(base, blended_result, u.opacity);
+    var final_result = mix(base, blended_result, u.opacity);
+    // NaN propagation guard: prevent corrupt values from one layer contaminating output
+    final_result = clamp(final_result, vec4<f32>(-100.0), vec4<f32>(100.0));
     textureStore(t_output, vec2<i32>(id.xy), final_result);
 }

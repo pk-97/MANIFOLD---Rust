@@ -87,8 +87,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             if u.invert_colors > 0.5 {
                 out_rgb = max(vec3<f32>(1.0) - out_rgb, vec3<f32>(0.0));
             }
-            let result = vec4<f32>(out_rgb, out_a);
-            return mix(base, result, u.opacity);
+            var result = vec4<f32>(out_rgb, out_a);
+            result = clamp(mix(base, result, u.opacity), vec4<f32>(-100.0), vec4<f32>(100.0));
+            return result;
         }
         // 1: Additive
         case 1u: {
@@ -120,12 +121,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         case 5u: {
             let stencil_rgb = b * bl_a;
             let stencil_a = ba * bl_a;
-            let stencil_result = vec4<f32>(stencil_rgb, stencil_a);
-            return mix(base, stencil_result, u.opacity);
+            var stencil_result = vec4<f32>(stencil_rgb, stencil_a);
+            stencil_result = clamp(mix(base, stencil_result, u.opacity), vec4<f32>(-100.0), vec4<f32>(100.0));
+            return stencil_result;
         }
         // 6: Opaque — fully replace, ignore alpha
         case 6u: {
-            return vec4<f32>(mix(b, f_val, u.opacity), 1.0);
+            return clamp(vec4<f32>(mix(b, f_val, u.opacity), 1.0), vec4<f32>(-100.0), vec4<f32>(100.0));
         }
         // 7: Difference
         case 7u: {
@@ -171,6 +173,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Post-blend opacity lerp (matches Unity: lerp(base, result, opacity))
     let blended_result = vec4<f32>(out_rgb, out_a);
-    let final_result = mix(base, blended_result, u.opacity);
+    var final_result = mix(base, blended_result, u.opacity);
+    // NaN propagation guard: prevent corrupt values from one layer contaminating output
+    final_result = clamp(final_result, vec4<f32>(-100.0), vec4<f32>(100.0));
     return final_result;
 }
