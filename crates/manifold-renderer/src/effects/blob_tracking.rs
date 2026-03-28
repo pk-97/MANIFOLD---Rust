@@ -56,7 +56,6 @@ fn readback_dims(source_w: u32, source_h: u32) -> (u32, u32) {
 // Tracking constants.
 const MATCH_RADIUS_SQ: f32 = 0.08;
 const UNASSIGNED_COST: f32 = 1e6;
-const MAX_UNSEEN_FRAMES: u32 = 10; // ~0.5s at readback every 3 frames
 
 // 1D Kalman filter for position+velocity tracking.
 // State: [position, velocity]. Constant-velocity motion model.
@@ -570,11 +569,11 @@ fn detection_at(state: &OwnerState, d: usize) -> (f32, f32, f32, f32) {
     )
 }
 
-/// Remove tracks not seen for MAX_UNSEEN_FRAMES detection cycles.
+/// Remove tracks not matched in the latest detection cycle.
 fn remove_stale_tracks(state: &mut OwnerState) {
     let mut write = 0;
     for read in 0..state.track_count {
-        if state.tracks[read].frames_since_seen <= MAX_UNSEEN_FRAMES {
+        if state.tracks[read].frames_since_seen == 0 {
             if write != read {
                 state.tracks[write] = state.tracks[read];
             }
