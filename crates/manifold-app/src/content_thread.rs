@@ -1613,17 +1613,6 @@ impl ContentThread {
             export_config.audio_path = Some(path.to_string());
             export_config.audio_start_beat = audio_sync.start_beat();
             export_config.audio_encoder_delay = audio_sync.encoder_delay_seconds();
-            eprintln!(
-                "[Export] Audio wired: path={}, start_beat={:.2}, delay={:.3}s",
-                path, audio_sync.start_beat(), audio_sync.encoder_delay_seconds(),
-            );
-        } else {
-            let has_sync = self.audio_sync.is_some();
-            let is_ready = self.audio_sync.as_ref().is_some_and(|a| a.is_ready());
-            let has_path = self.audio_sync.as_ref().and_then(|a| a.audio_path()).is_some();
-            eprintln!(
-                "[Export] No audio: has_sync={has_sync} is_ready={is_ready} has_path={has_path}",
-            );
         }
 
         // Calculate timing
@@ -1650,11 +1639,12 @@ impl ContentThread {
         });
         let mode_label = if generator_only { "offline" } else { "real-time" };
 
-        eprintln!(
-            "[Export] START ({mode_label}): {} frames, {:.2}s, \
-             beats {:.1}-{:.1}, {}x{} @ {} fps",
-            total_frames, duration, start_beat, end_beat,
+        log::info!(
+            "[Export] {} mode: {} frames, {:.2}s, beats {:.1}-{:.1}, \
+             {}x{} @ {} fps, audio={}",
+            mode_label, total_frames, duration, start_beat, end_beat,
             export_config.width, export_config.height, export_config.fps,
+            export_config.has_audio(),
         );
 
         // 3. Enter export mode
@@ -1784,11 +1774,6 @@ impl ContentThread {
         } else {
             // Resolve FFmpeg for audio muxing
             let ffmpeg_path = AudioMuxer::resolve_ffmpeg("");
-            eprintln!(
-                "[Export] Finalize: has_audio={} ffmpeg={:?}",
-                export_config.has_audio(),
-                ffmpeg_path,
-            );
             match session.finalize(ffmpeg_path.as_deref()) {
                 Ok(result) => {
                     log::info!(
@@ -1848,8 +1833,6 @@ impl ContentThread {
         state_tx: &crossbeam_channel::Sender<ContentState>,
         generator_only: bool,
     ) -> Option<String> {
-        let frame_start = std::time::Instant::now();
-
         let ctx = TickContext {
             dt_seconds: frame_dt,
             realtime_now: frame_idx as f64 * frame_dt,
@@ -1863,33 +1846,14 @@ impl ContentThread {
         // At GPU speed the export outruns the async decoder — without this,
         // the same stale video frame gets encoded for dozens of frames.
         // Skipped for generator-only projects (no video decoders).
-        let decode_start = std::time::Instant::now();
         if !generator_only {
             self.engine.flush_pending_decodes();
         }
-        let decode_ms = decode_start.elapsed().as_secs_f64() * 1000.0;
 
         self.content_pipeline.render_content(
             &self.gpu, &mut self.engine, &tick_result, frame_dt, frame_idx as u64,
             true,
         );
-
-        // Diagnostic logging: first 5 frames, then every 30 frames.
-        // Uses eprintln! to bypass log level filtering.
-        if frame_idx < 5 || frame_idx.is_multiple_of(30) {
-            let beat = self.engine.current_beat();
-            let time = self.engine.current_time();
-            eprintln!(
-                "[Export] frame={} beat={:.2} time={:.3}s clips={} dirty={} \
-                 decode_wait={:.1}ms",
-                frame_idx, beat, time,
-                tick_result.ready_clips.len(),
-                tick_result.compositor_dirty,
-                decode_ms,
-            );
-        }
-
-        let render_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
 
         let tex_ptr = if export_config.hdr {
             let paper_white = 200.0f32;
@@ -1904,17 +1868,6 @@ impl ContentThread {
         };
 
         self.content_pipeline.wait_for_render_complete();
-        let gpu_wait_ms = frame_start.elapsed().as_secs_f64() * 1000.0 - render_ms;
-
-        // Log GPU wait time — if it stays near zero, the GPU is finishing
-        // before we even check. If it grows, we're GPU-bound.
-        if frame_idx < 5 || frame_idx.is_multiple_of(30) {
-            eprintln!(
-                "[Export] frame={} render={:.1}ms gpu_wait={:.1}ms tex={:?}",
-                frame_idx, render_ms, gpu_wait_ms,
-                tex_ptr.map(|p| p as usize),
-            );
-        }
 
         match tex_ptr {
             Some(ptr) => {
@@ -1936,15 +1889,6 @@ impl ContentThread {
 
         if frame_idx.is_multiple_of(10) {
             self.send_export_progress(state_tx, session);
-        }
-
-        // Per-frame timing for first few frames (diagnose slow starts).
-        if frame_idx < 5 {
-            let total_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
-            eprintln!(
-                "[Export] frame={} total={:.1}ms",
-                frame_idx, total_ms,
-            );
         }
 
         None
