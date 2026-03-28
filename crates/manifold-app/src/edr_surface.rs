@@ -246,7 +246,7 @@ pub(crate) fn configure_edr(surface: &wgpu::Surface<'_>) -> f64 {
             (0.0, 0.0, 0.0)
         };
 
-        eprintln!(
+        log::debug!(
             "[HDR-DEBUG] NSScreen EDR: current={:.2} potential={:.2} reference={:.2}",
             current, potential, max_ref,
         );
@@ -267,7 +267,7 @@ pub(crate) fn configure_edr(surface: &wgpu::Surface<'_>) -> f64 {
             "[EDR] NSScreen EDR headroom: {:.2}x (1.0=SDR, >1.0=HDR capable)",
             headroom,
         );
-        eprintln!(
+        log::debug!(
             "[HDR-DEBUG] CAMetalLayer configured: colorspace=extendedLinearSRGB \
              wantsEDR={} pixelFormat={} headroom={:.2}x",
             wants_edr, pixel_format, headroom,

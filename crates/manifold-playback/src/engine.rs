@@ -125,9 +125,7 @@ pub struct PlaybackEngine {
 
     // Live external tempo (set by driver from sync controllers each frame).
     // Port of C# PlaybackEngine lines 113-116.
-    has_live_external_tempo: bool,
-    live_external_tempo_bpm: f32,
-    live_external_tempo_source: TempoPointSource,
+    live_external_tempo: Option<(f32, TempoPointSource)>,
 
     // Drift correction. Port of C# PlaybackController.videoSyncInterval (line 33).
     video_sync_interval: f32,
@@ -206,9 +204,7 @@ impl PlaybackEngine {
             live_clip_manager: None,
             compositor_dirty_deadline: 0.0,
             sync_clips_dirty: false,
-            has_live_external_tempo: false,
-            live_external_tempo_bpm: 0.0,
-            live_external_tempo_source: TempoPointSource::Unknown,
+            live_external_tempo: None,
             video_sync_interval: 2.0,
             last_sync_time: 0.0,
             drift_correction_count: 0,
@@ -505,6 +501,7 @@ impl PlaybackEngine {
     /// Port of C# PlaybackController.Update() orchestration (lines 1055-1218).
     /// The engine owns the full orchestration that Unity splits across
     /// PlaybackController (MonoBehaviour) and PlaybackEngine (plain class).
+    #[must_use]
     pub fn tick(&mut self, ctx: TickContext) -> TickResult {
         if self.is_ticking {
             return TickResult::default();
@@ -1096,9 +1093,7 @@ impl PlaybackEngine {
     /// Set live external tempo state (called by driver from sync controllers each frame).
     /// Port of C# PlaybackEngine.SetLiveExternalTempo (lines 543-548).
     pub fn set_live_external_tempo(&mut self, has_live: bool, bpm: f32, source: TempoPointSource) {
-        self.has_live_external_tempo = has_live;
-        self.live_external_tempo_bpm = bpm;
-        self.live_external_tempo_source = source;
+        self.live_external_tempo = if has_live { Some((bpm, source)) } else { None };
     }
 
     /// Try to get live external tempo from Link or MIDI Clock.
@@ -1107,14 +1102,7 @@ impl PlaybackEngine {
     /// Port of C# PlaybackEngine.TryGetLiveExternalTempo (lines 1404-1421),
     /// with authority gate removed so BPM readout works with any SRC setting.
     pub fn try_get_live_external_tempo(&self) -> Option<(f32, TempoPointSource)> {
-        if !self.has_live_external_tempo {
-            return None;
-        }
-        if self.live_external_tempo_bpm > 0.0 {
-            Some((self.live_external_tempo_bpm, self.live_external_tempo_source))
-        } else {
-            None
-        }
+        self.live_external_tempo.filter(|(bpm, _)| *bpm > 0.0)
     }
 
     /// Sync project settings BPM to the tempo at current beat position.

@@ -14,3 +14,6 @@ rustfft = "6"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSError", "NSString", "NSArray", "NSObjCRuntime"] }
 block2 = "0.6"
+
+[lints]
+workspace = true

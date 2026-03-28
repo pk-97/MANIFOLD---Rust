@@ -336,7 +336,7 @@ impl VideoRenderer {
                 }
                 DecodeResultStatus::WarmReady { .. } => {}
                 DecodeResultStatus::Error(msg) => {
-                    eprintln!("[VideoRenderer] Error for {clip_id}: {msg}");
+                    log::error!("[VideoRenderer] Error for {clip_id}: {msg}");
                     if let Some(clip) =
                         self.active_clips.get_mut(clip_id.as_str())
                     {

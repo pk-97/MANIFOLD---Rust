@@ -23,3 +23,6 @@ naga = { version = "28", features = ["wgsl-in", "msl-out"] }
 metal = "0.33"
 
 [dev-dependencies]
+
+[lints]
+workspace = true

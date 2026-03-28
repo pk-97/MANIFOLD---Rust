@@ -29,11 +29,10 @@ impl GpuContext {
             .expect("Failed to find a suitable GPU adapter");
 
         let info = adapter.get_info();
-        eprintln!(
+        log::info!(
             "[GPU] adapter={:?} backend={:?} driver={:?}",
             info.name, info.backend, info.driver
         );
-        log::info!("GPU adapter: {:?}", info.name);
 
         let (device, queue) =
             Self::create_device_from_adapter(&adapter, "MANIFOLD Device").await;

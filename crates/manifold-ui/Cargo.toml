@@ -8,3 +8,6 @@ bitflags = "2"
 manifold-core = { path = "../manifold-core" }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

@@ -71,7 +71,7 @@ impl Application {
             &mut self.user_prefs,
         );
         let saved_name = self.user_prefs.get_string("MANIFOLD_LastExportFileName", "");
-        eprintln!("[Export] Dialog prefs: dir={saved_dir:?} name={saved_name:?}");
+        log::debug!("[Export] Dialog prefs: dir={saved_dir:?} name={saved_name:?}");
 
         let default_name = if !saved_name.is_empty() {
             saved_name
@@ -222,7 +222,7 @@ impl Application {
                 let (duration_secs, res_w, res_h) = match meta {
                     Some(m) => (m.duration, m.width, m.height),
                     None => {
-                        eprintln!("[Import] Probe failed: {path_str}");
+                        log::warn!("[Import] Probe failed: {path_str}");
                         continue;
                     }
                 };
@@ -260,7 +260,7 @@ impl Application {
                     ),
                 )));
 
-                eprintln!(
+                log::warn!(
                     "[Import] Added '{file_name}' at beat {beat:.1} \
                      ({duration_secs:.1}s → {duration_beats:.1} beats, {res_w}x{res_h})"
                 );

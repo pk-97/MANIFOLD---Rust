@@ -146,6 +146,7 @@ pub struct TempoMapConverter;
 
 impl TempoMapConverter {
     /// Unity TempoMapConverter.cs line 111-113: clamps BPM to 20-300.
+    #[must_use]
     pub fn seconds_per_beat_from_bpm(bpm: f32) -> f32 {
         60.0 / bpm.clamp(20.0, 300.0)
     }
@@ -161,6 +162,7 @@ impl TempoMapConverter {
 
     /// Convert beat position to seconds using tempo map.
     /// Unity TempoMapConverter.cs lines 14-56.
+    #[must_use]
     pub fn beat_to_seconds(tempo_map: &mut TempoMap, beat: f32, fallback_bpm: f32) -> f32 {
         tempo_map.ensure_sorted();
         let bpm_at_zero = Self::get_bpm_at_beat_zero(tempo_map, fallback_bpm);
@@ -209,6 +211,7 @@ impl TempoMapConverter {
 
     /// Immutable version of beat_to_seconds. Assumes tempo map is already sorted
     /// (guaranteed after on_after_deserialize / ensure_valid).
+    #[must_use]
     pub fn beat_to_seconds_immut(tempo_map: &TempoMap, beat: f32, fallback_bpm: f32) -> f32 {
         let bpm_at_zero = if tempo_map.points.is_empty() {
             fallback_bpm.clamp(20.0, 300.0)
@@ -264,6 +267,7 @@ impl TempoMapConverter {
 
     /// Convert seconds to beat position using tempo map.
     /// Unity TempoMapConverter.cs lines 61-109.
+    #[must_use]
     pub fn seconds_to_beat(tempo_map: &mut TempoMap, seconds: f32, fallback_bpm: f32) -> f32 {
         tempo_map.ensure_sorted();
         let bpm_at_zero = Self::get_bpm_at_beat_zero(tempo_map, fallback_bpm);

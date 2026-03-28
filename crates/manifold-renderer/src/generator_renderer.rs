@@ -589,6 +589,9 @@ impl ClipRenderer for GeneratorRenderer {
                 self.available_rts.push(active.render_target);
             }
         }
+        // Release per-layer generator state (particle buffers, density textures, etc.)
+        // to prevent GPU memory leaks across project switches.
+        self.layer_generators.clear();
     }
 
     fn is_clip_ready(&self, clip_id: &str) -> bool {

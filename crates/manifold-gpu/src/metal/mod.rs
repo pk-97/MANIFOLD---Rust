@@ -33,9 +33,6 @@ mod encoder;
 mod shader_compiler;
 mod format;
 
-// Import crate types so submodules can access them via `use super::*`.
-use crate::types::*;
-
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
 pub use types::{

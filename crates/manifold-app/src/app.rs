@@ -1915,7 +1915,7 @@ impl Application {
         {
             let h = crate::edr_surface::query_window_headroom(&ws.window);
             if (h - self.edr_headroom).abs() > 0.01 {
-                eprintln!("[EDR] Primary: {:.2}x → {:.2}x", self.edr_headroom, h);
+                log::debug!("[EDR] Primary: {:.2}x → {:.2}x", self.edr_headroom, h);
                 self.edr_headroom = h;
                 self.send_content_cmd(ContentCommand::UpdateEdrHeadroom(h));
             }
@@ -1926,7 +1926,7 @@ impl Application {
             if matches!(ws.role, WindowRole::Output { .. }) {
                 let h = crate::edr_surface::query_window_headroom(&ws.window);
                 if (h - self.output_edr_headroom).abs() > 0.01 {
-                    eprintln!(
+                    log::debug!(
                         "[EDR] Output: {:.2}x → {:.2}x (blit={})",
                         self.output_edr_headroom, h,
                         if h > 1.0 { "passthrough" } else { "ACES tonemap" },

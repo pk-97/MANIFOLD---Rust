@@ -83,6 +83,7 @@ pub struct TimelineClip {
 }
 
 impl TimelineClip {
+    #[must_use]
     pub fn end_beat(&self) -> f32 {
         self.start_beat + self.duration_beats
     }

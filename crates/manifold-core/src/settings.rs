@@ -193,6 +193,7 @@ impl ProjectSettings {
 
     // ── Computed properties ──
 
+    #[must_use]
     pub fn seconds_per_beat(&self) -> f32 { 60.0 / self.bpm }
     pub fn seconds_per_bar(&self) -> f32 { self.seconds_per_beat() * self.time_signature_numerator as f32 }
     pub fn get_frame_duration(&self) -> f32 { 1.0 / self.frame_rate }

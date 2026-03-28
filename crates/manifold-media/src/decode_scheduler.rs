@@ -171,7 +171,7 @@ impl DecodeScheduler {
             workers.push(handle);
         }
 
-        eprintln!(
+        log::info!(
             "[DecodeScheduler] Started {} decode workers (affinity routing)",
             WORKER_COUNT
         );
@@ -240,7 +240,7 @@ impl DecodeScheduler {
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
-        eprintln!("[DecodeScheduler] All workers shut down");
+        log::info!("[DecodeScheduler] All workers shut down");
     }
 }
 
@@ -401,7 +401,7 @@ fn worker_loop(
                         }
                     }
                     Err(e) => {
-                        eprintln!(
+                        log::warn!(
                             "[DecodeWorker] Warm open failed for {video_clip_id}: {e}"
                         );
                     }

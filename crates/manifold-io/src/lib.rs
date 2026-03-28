@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 pub mod archive;
 pub mod loader;
 pub mod manifest;

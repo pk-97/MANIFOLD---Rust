@@ -678,8 +678,6 @@ impl ParamEnvelope {
 fn default_true() -> bool { true }
 fn default_one() -> f32 { 1.0 }
 fn generate_effect_id() -> EffectId { EffectId::new(crate::math::short_id()) }
-#[allow(dead_code)]
-fn default_quarter() -> f32 { 0.25 }
 fn default_group_name() -> String { "Group".to_string() }
 
 #[cfg(test)]

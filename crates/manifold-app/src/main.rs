@@ -7,6 +7,8 @@ mod app_render;
 mod content_command;
 mod content_pipeline;
 mod content_state;
+mod content_commands;
+mod content_export;
 mod content_thread;
 mod dialog_path_memory;
 mod editing_host;

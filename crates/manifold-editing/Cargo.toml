@@ -8,3 +8,6 @@ manifold-core = { path = "../manifold-core" }
 
 [dev-dependencies]
 manifold-io = { path = "../manifold-io" }
+
+[lints]
+workspace = true

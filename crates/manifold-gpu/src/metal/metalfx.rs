@@ -21,7 +21,8 @@
 use objc::runtime::{Class, Object, BOOL};
 use std::ffi::c_void;
 
-use super::{GpuTexture, GpuTextureFormat};
+use super::GpuTexture;
+use crate::GpuTextureFormat;
 
 // ─── Link MetalFX framework ─────────────────────────────────────────
 // Weak link: on macOS < 13 the framework doesn't exist but the binary
@@ -119,14 +120,14 @@ impl MetalFxSpatialScaler {
         unsafe { objc_release(desc as *mut c_void); }
 
         if scaler.is_null() {
-            eprintln!("[MetalFX] Failed to create spatial scaler ({}x{} -> {}x{})",
+            log::error!("[MetalFX] Failed to create spatial scaler ({}x{} -> {}x{})",
                 input_width, input_height, output_width, output_height);
             return None;
         }
 
         // `newSpatialScalerWithDevice:` follows ObjC +1 naming convention (already retained).
         // No extra retain needed — we own it, drop releases it.
-        eprintln!(
+        log::info!(
             "[MetalFX] Created spatial scaler: {}x{} -> {}x{}",
             input_width, input_height, output_width, output_height
         );
@@ -220,7 +221,7 @@ pub struct TextureUpscaler {
     mps_lanczos: mps::MpsLanczosScale,
     metalfx_scalers: Vec<MetalFxSpatialScaler>,
     mode: UpscaleMode,
-    format: super::GpuTextureFormat,
+    format: GpuTextureFormat,
 }
 
 // Safety: All inner types are Send+Sync (MPS kernels and MetalFX scalers).
@@ -229,13 +230,13 @@ unsafe impl Sync for TextureUpscaler {}
 
 impl TextureUpscaler {
     /// Create a new upscaler. Probes MetalFX availability and falls back to MPS.
-    pub fn new(device: &GpuDevice, format: super::GpuTextureFormat) -> Self {
+    pub fn new(device: &GpuDevice, format: GpuTextureFormat) -> Self {
         let mps_lanczos = mps::MpsLanczosScale::new(device.raw_device());
         let mode = if supports_spatial_scaling(device.raw_device()) {
-            eprintln!("[TextureUpscaler] MetalFX Spatial available — using ML upscaling");
+            log::info!("[TextureUpscaler] MetalFX Spatial available — using ML upscaling");
             UpscaleMode::MetalFxSpatial
         } else {
-            eprintln!("[TextureUpscaler] MetalFX unavailable — using MPS Lanczos");
+            log::warn!("[TextureUpscaler] MetalFX unavailable — using MPS Lanczos");
             UpscaleMode::MpsLanczos
         };
         Self {

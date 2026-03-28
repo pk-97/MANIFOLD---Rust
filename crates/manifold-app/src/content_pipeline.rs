@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use std::sync::Arc;
 use parking_lot::RwLock;
 
@@ -19,6 +18,7 @@ use manifold_playback::engine::{PlaybackEngine, TickResult};
 /// Both threads share a single wgpu Device, so TextureViews created by
 /// the content thread are directly usable by the UI thread — zero copy.
 pub struct SharedOutputView {
+    #[allow(dead_code)] // Used on non-macOS (fallback rendering path)
     view: RwLock<Option<wgpu::TextureView>>,
     dimensions: RwLock<(u32, u32)>,
 }
@@ -32,11 +32,13 @@ impl SharedOutputView {
     }
 
     /// Read the current front buffer view (called by UI thread).
+    #[allow(dead_code)] // Used on non-macOS (fallback rendering path)
     pub fn get_view(&self) -> Option<wgpu::TextureView> {
         self.view.read().clone()
     }
 
     /// Update the front buffer view (called by content thread after swap).
+    #[allow(dead_code)] // Used on non-macOS (fallback rendering path)
     pub fn set_view(&self, view: wgpu::TextureView) {
         *self.view.write() = Some(view);
     }
@@ -68,9 +70,6 @@ pub struct ContentPipeline {
     pub edr_headroom: f64,
     /// PQ encoder for HDR export. Lazily created on first HDR export frame.
     pq_encoder: Option<manifold_renderer::pq_encoder::PqEncoder>,
-    /// Content frame rate tracking (for separate cadence mode).
-    content_interval_secs: f64,
-    last_content_time: f64,
     /// Shared output view for cross-thread access (fallback for non-macOS).
     shared_output: Arc<SharedOutputView>,
     /// Triple-buffered IOSurface textures on the content device (native GpuTexture).
@@ -132,8 +131,6 @@ impl ContentPipeline {
             compositor,
             edr_headroom: 1.0,
             pq_encoder: None,
-            content_interval_secs: 1.0 / 60.0,
-            last_content_time: 0.0,
             shared_output: shared,
             #[cfg(target_os = "macos")]
             shared_textures: [None, None, None],
@@ -168,23 +165,6 @@ impl ContentPipeline {
     /// Initialize the native Metal GPU device, event, and texture pool.
     /// Called once at startup after the content pipeline is created.
     #[cfg(target_os = "macos")]
-    pub fn init_native_gpu(&mut self) {
-        let device = manifold_gpu::GpuDevice::new();
-        // Load pipeline binary archive for near-instant pipeline creation on warm starts.
-        if let Ok(home) = std::env::var("HOME") {
-            let cache_dir = std::path::PathBuf::from(home)
-                .join("Library/Caches/com.latentspace.manifold");
-            std::fs::create_dir_all(&cache_dir).ok();
-            device.load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
-        }
-        let event = device.create_event();
-        // 3 frames in flight (triple buffering).
-        let pool = device.create_texture_pool(3);
-        self.native_device = Some(device);
-        self.native_event = Some(event);
-        self.texture_pool = Some(pool);
-    }
-
     /// Set a pre-created native GPU device (transfers ownership).
     /// Used when the device must exist before the content pipeline (e.g. for
     /// compositor native pipeline creation).
@@ -306,7 +286,7 @@ impl ContentPipeline {
         #[cfg(not(target_os = "macos"))]
         {
             let _ = (gpu, engine, tick_result, dt, frame_count, time, beat);
-            eprintln!("[ContentPipeline] Non-macOS render path not available");
+            log::warn!("[ContentPipeline] Non-macOS render path not available");
         }
     }
 
@@ -544,7 +524,7 @@ impl ContentPipeline {
         {
             let _total_ms = _t_frame.elapsed().as_secs_f64() * 1000.0;
             if frame_count > 0 && frame_count.is_multiple_of(60) {
-                eprintln!(
+                log::warn!(
                     "[PERF/NATIVE] frame={} clips={} res={}x{} | gen={:.1}ms desc={:.1}ms \
                      comp={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
                     frame_count,
@@ -572,22 +552,6 @@ impl ContentPipeline {
         {
             self.gpu_poll_ms = _poll_ms;
         }
-    }
-
-    /// Whether it's time for a content frame (for separate cadence mode).
-    pub fn should_render_content(&self, realtime_now: f64) -> bool {
-        realtime_now - self.last_content_time >= self.content_interval_secs
-    }
-
-    /// Mark that a content frame was rendered at the given time.
-    pub fn mark_content_rendered(&mut self, realtime_now: f64) {
-        self.last_content_time = realtime_now;
-    }
-
-    /// Set content rendering frame rate (independent of UI refresh rate).
-    #[allow(dead_code)]
-    pub fn set_content_fps(&mut self, fps: f64) {
-        self.content_interval_secs = 1.0 / fps.max(1.0);
     }
 
     /// Resize compositor, generators, and IOSurface bridge to new project resolution.
@@ -639,24 +603,6 @@ impl ContentPipeline {
         }
     }
 
-    /// Clear all temporal effect state (Feedback, Bloom, etc.).
-    /// Called after export warmup re-seek to prevent stale state.
-    pub fn clear_all_effect_state(&mut self) {
-        self.compositor.clear_all_effect_state();
-    }
-
-    /// Flush in-flight background work in all effect processors.
-    /// Called after each export frame for deterministic async pipeline resolution.
-    pub fn flush_all_background_work(&mut self) {
-        self.compositor.flush_all_background_work();
-    }
-
-    /// Pre-tonemap HDR output for export pipeline.
-    #[allow(dead_code)]
-    pub fn pre_tonemap_output(&self) -> &manifold_gpu::GpuTexture {
-        self.compositor.pre_tonemap_output()
-    }
-
     /// Block until the last render's GPU command buffer has completed.
     /// Must be called before reading the output texture on a different queue.
     #[cfg(target_os = "macos")]
@@ -668,11 +614,6 @@ impl ContentPipeline {
 
     /// Export output texture (post-tonemap, post-effects).
     pub fn export_output_texture(&self) -> &manifold_gpu::GpuTexture {
-        self.compositor.output_texture()
-    }
-
-    /// Compositor output texture (post-tonemap). Used by LED output.
-    pub fn compositor_output_texture(&self) -> &manifold_gpu::GpuTexture {
         self.compositor.output_texture()
     }
 
