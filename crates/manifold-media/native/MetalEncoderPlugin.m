@@ -43,17 +43,27 @@
 
 // SDR: apply linear → sRGB gamma (compositor outputs linear light;
 // CAMetalLayer applies gamma for display, but export needs it baked in).
+// Also draws a small frame counter bar in the top-left corner (DEBUG)
+// so we can verify each frame is unique in the exported video.
 static NSString* const kCopyShaderSDR =
     @"#include <metal_stdlib>\n"
      "using namespace metal;\n"
+     "struct FrameInfo { uint frame_index; };\n"
      "kernel void copy_texture(\n"
      "    texture2d<half, access::read>  src [[texture(0)]],\n"
      "    texture2d<half, access::write> dst [[texture(1)]],\n"
+     "    constant FrameInfo& info [[buffer(0)]],\n"
      "    uint2 gid [[thread_position_in_grid]])\n"
      "{\n"
      "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
      "    half4 c = src.read(gid);\n"
      "    c.rgb = pow(max(c.rgb, half3(0.0h)), half3(1.0h / 2.2h));\n"
+     "    // DEBUG: frame counter bar — width cycles 0..200 px based on frame index.\n"
+     "    // Red bar that grows/shrinks so freezes are visually obvious.\n"
+     "    uint barW = info.frame_index % 200u;\n"
+     "    if (gid.y < 8u && gid.x < barW) {\n"
+     "        c = half4(1.0h, 0.0h, 0.0h, 1.0h);\n"
+     "    }\n"
      "    dst.write(c, gid);\n"
      "}\n";
 
@@ -61,9 +71,11 @@ static NSString* const kCopyShaderSDR =
 static NSString* const kCopyShaderHDR =
     @"#include <metal_stdlib>\n"
      "using namespace metal;\n"
+     "struct FrameInfo { uint frame_index; };\n"
      "kernel void copy_texture(\n"
      "    texture2d<half, access::read>  src [[texture(0)]],\n"
      "    texture2d<half, access::write> dst [[texture(1)]],\n"
+     "    constant FrameInfo& info [[buffer(0)]],\n"
      "    uint2 gid [[thread_position_in_grid]])\n"
      "{\n"
      "    if (gid.x >= src.get_width() || gid.y >= src.get_height()) return;\n"
@@ -445,6 +457,10 @@ int MetalEncoder_EncodeFrame(void* handle, void* metalTexturePtr, int frameIndex
         [compute setComputePipelineState:state->swizzlePipeline];
         [compute setTexture:srcTexture atIndex:0];
         [compute setTexture:destTexture atIndex:1];
+
+        // Pass frame index to compute shader (for SDR frame counter debug bar)
+        uint32_t frameInfoData = (uint32_t)frameIndex;
+        [compute setBytes:&frameInfoData length:sizeof(frameInfoData) atIndex:0];
 
         // Dispatch threads to cover the full texture
         MTLSize threadGroupSize = MTLSizeMake(16, 16, 1);
