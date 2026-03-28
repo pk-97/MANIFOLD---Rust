@@ -122,9 +122,30 @@ impl ContentThread {
             if ret != 0 {
                 log::warn!(
                     "[ContentThread] Failed to set real-time priority (err={}), \
-                     continuing with default priority",
+                     falling back to QOS_CLASS_USER_INTERACTIVE",
                     ret,
                 );
+                // Fallback: request highest QoS class so the scheduler still
+                // prioritises this thread over default work.
+                unsafe extern "C" {
+                    fn pthread_set_qos_class_self_np(
+                        qos_class: u32,
+                        relative_priority: i32,
+                    ) -> i32;
+                }
+                // QOS_CLASS_USER_INTERACTIVE = 0x21
+                let qos_ret =
+                    unsafe { pthread_set_qos_class_self_np(0x21, 0) };
+                if qos_ret != 0 {
+                    log::warn!(
+                        "[ContentThread] QoS fallback also failed (err={})",
+                        qos_ret,
+                    );
+                } else {
+                    log::info!(
+                        "[ContentThread] QoS set to USER_INTERACTIVE (fallback)"
+                    );
+                }
             } else {
                 log::info!("[ContentThread] Real-time priority set (SCHED_RR, priority=47)");
             }
