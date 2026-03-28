@@ -36,7 +36,7 @@ clang++ -dynamiclib \
     -O2 \
     -I"$OPENCV_INCLUDE" \
     -L"$OPENCV_LIB" \
-    -lopencv_core -lopencv_imgproc \
+    -lopencv_core -lopencv_imgproc -lopencv_video \
     -Wl,-rpath,@loader_path/../Frameworks \
     -install_name "@rpath/$BUNDLE_NAME" \
     -o "$MACOS_DIR/$BUNDLE_NAME" \

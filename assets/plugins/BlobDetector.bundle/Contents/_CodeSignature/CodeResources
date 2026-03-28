@@ -51,6 +51,15 @@
 			<key>requirement</key>
 			<string>cdhash H"246a103566a620c1203d972ee004653a2e338435"</string>
 		</dict>
+		<key>Frameworks/libopencv_video.413.dylib</key>
+		<dict>
+			<key>cdhash</key>
+			<data>
+			0sbSRt09+dg5qvWqgK08HpGxSt0=
+			</data>
+			<key>requirement</key>
+			<string>cdhash H"d2c6d246dd3df9d839aaf5aa80ad3c1e91b14add"</string>
+		</dict>
 		<key>Frameworks/libquadmath.0.dylib</key>
 		<dict>
 			<key>cdhash</key>
