@@ -1647,6 +1647,30 @@ impl ContentThread {
             }
         };
 
+        // 4b. Warmup frame — tick + render one throwaway frame to initialize
+        // effect state, generator buffers, and warm the texture pool.
+        // Without this, the first encoded frame is black.
+        {
+            let warmup_ctx = TickContext {
+                dt_seconds: frame_dt,
+                realtime_now: 0.0,
+                pre_render_dt: frame_dt as f32,
+                frame_count: -1,
+                export_fixed_dt: frame_dt,
+            };
+            let warmup_result = self.engine.tick(warmup_ctx);
+            self.content_pipeline.render_content(
+                &self.gpu, &mut self.engine, &warmup_result, frame_dt, 0,
+            );
+            if !warmup_result.stopped_clips.is_empty() {
+                self.content_pipeline.cleanup_stopped_clips(&warmup_result.stopped_clips);
+            }
+            self.engine.reclaim_tick_result(warmup_result);
+            // Re-seek to start — the warmup frame advanced the engine by one tick
+            let start_time = self.engine.beat_to_timeline_time(start_beat);
+            self.engine.seek_to(start_time);
+        }
+
         // 5. Export frame loop — runs as fast as GPU can encode (no sleep)
         let mut cancelled = false;
         for frame_idx in 0..total_frames {
