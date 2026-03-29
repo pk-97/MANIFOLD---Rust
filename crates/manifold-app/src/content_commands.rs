@@ -17,6 +17,14 @@ impl ContentThread {
 
             // ── Transport ──────────────────────────────────────────
             ContentCommand::Play => {
+                // When OSC sender is active, claim ownership BEFORE play so
+                // that tick_sync_controllers (which runs later this frame)
+                // sees manifold_owns=true and skips MIDI Clock transport.
+                // In Unity this worked naturally because OscPositionSender ran
+                // in LateUpdate (same frame) and MidiClockSync ran next frame.
+                if self.osc_sender.is_sender_enabled() {
+                    self.sync_arbiter.set_manifold_owns();
+                }
                 // Align transport to active external beat source BEFORE
                 // the first sync pass. Port of C# PlaybackController.Play() lines 631-643.
                 let authority = self.engine.project()
@@ -34,18 +42,28 @@ impl ContentThread {
                 self.cache_link_beat_offset();
             }
             ContentCommand::Pause => {
+                // Claim ownership so MIDI Clock doesn't re-play immediately.
+                if self.osc_sender.is_sender_enabled() {
+                    self.sync_arbiter.set_manifold_owns();
+                }
                 // End tempo recording session on pause.
                 // Port of C# PlaybackController.Pause → tempoRecorder.EndSessionIfActive.
                 self.end_tempo_recording_session();
                 self.engine.pause();
             }
             ContentCommand::Stop => {
+                if self.osc_sender.is_sender_enabled() {
+                    self.sync_arbiter.set_manifold_owns();
+                }
                 // End tempo recording session on stop.
                 self.end_tempo_recording_session();
                 self.engine.stop();
                 self.link_beat_offset = f64::NAN;
             }
             ContentCommand::TogglePlayback => {
+                if self.osc_sender.is_sender_enabled() {
+                    self.sync_arbiter.set_manifold_owns();
+                }
                 if self.engine.is_playing() {
                     self.end_tempo_recording_session();
                     self.engine.pause();
