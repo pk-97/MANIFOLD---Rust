@@ -773,6 +773,7 @@ impl LayerCompositor {
     /// the frame duration since they're owned by effect chains, layer bufs, or
     /// clip render targets that aren't reallocated between generate and blend.
     #[cfg(target_os = "macos")]
+    #[allow(dead_code)]
     fn composite_parallel(
         &mut self,
         compositor_gpu: &mut GpuEncoder,
@@ -1098,12 +1099,11 @@ impl Compositor for LayerCompositor {
         // single-layer frames).
         #[cfg(target_os = "macos")]
         {
-            let active_layers = count_active_layers(frame);
-            if active_layers >= 2 {
-                self.composite_parallel(gpu, frame);
-            } else {
-                self.composite_serial(gpu, frame);
-            }
+            // DEBUG: force serial path to test if parallel dispatch causes the glitch
+            let _active_layers = count_active_layers(frame);
+            let _ = &self.async_event;
+            let _ = self.async_signal_base;
+            self.composite_serial(gpu, frame);
         }
         #[cfg(not(target_os = "macos"))]
         self.composite_serial(gpu, frame);
