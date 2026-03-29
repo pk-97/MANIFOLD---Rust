@@ -606,21 +606,23 @@ impl ContentThread {
             self.engine.reclaim_tick_result(tick_result);
 
             // Arc<Project> snapshot: only deep-clone when data_version changes.
-            // Modulation frames send the same Arc (zero-cost pointer clone).
+            // Modulation frames send a lightweight ModulationSnapshot instead
+            // (just param_values Vec<f32> clones — no full Project clone).
             let snapshot = if version_changed {
                 // Structural change — create a new Arc with a fresh clone.
                 let arc = self.engine.project()
                     .map(|p| std::sync::Arc::new(p.clone()));
                 self.cached_project_snapshot = arc.clone();
                 arc
-            } else if modulation_active {
-                // Modulation only — reuse the existing Arc (no deep clone).
-                // If no cached snapshot exists yet, create one.
-                if self.cached_project_snapshot.is_none() {
-                    self.cached_project_snapshot = self.engine.project()
-                        .map(|p| std::sync::Arc::new(p.clone()));
-                }
-                self.cached_project_snapshot.clone()
+            } else {
+                None
+            };
+
+            // Build lightweight modulation snapshot when drivers/envelopes are
+            // active — contains only the param_values that changed this frame.
+            let modulation_snapshot = if modulation_active {
+                self.engine.project()
+                    .map(crate::content_state::ModulationSnapshot::capture)
             } else {
                 None
             };
@@ -723,6 +725,7 @@ impl ContentThread {
                 export_status: String::new(),
                 export_finished: None,
                 project_snapshot: snapshot,
+                modulation_snapshot,
             };
 
             // Non-blocking send — if the UI is behind, drop the oldest state.

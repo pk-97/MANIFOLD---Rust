@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 use manifold_core::project::Project;
-use manifold_core::types::ClockAuthority;
+use manifold_core::types::{ClockAuthority, LayerType};
 use manifold_playback::stem_audio::STEM_COUNT;
 
 /// Sent once when an export finishes.
@@ -96,11 +96,102 @@ pub struct ContentState {
     pub export_finished: Option<ExportFinishedEvent>,
 
     // ── Project snapshot ──────────────────────────────────────────
-    /// Sent when data_version changes or modulation is active so the UI
-    /// thread can update its local_project. Arc avoids deep-cloning the
-    /// entire Project struct every modulation frame — only pointer-copies
-    /// the Arc when the underlying project hasn't changed structurally.
+    /// Sent when data_version changes so the UI thread can update its
+    /// local_project. Only created on structural changes (editing commands,
+    /// undo/redo) — never on modulation-only frames.
     pub project_snapshot: Option<Arc<Project>>,
+
+    /// Lightweight modulation delta — just the param_values that
+    /// drivers/envelopes wrote this frame. Applied in-place to the UI's
+    /// local_project without a full Project clone.
+    pub modulation_snapshot: Option<ModulationSnapshot>,
+}
+
+/// Lightweight snapshot of modulated param values.
+/// Captures only the `Vec<f32>` param_values from effects and generator params,
+/// avoiding a full `Project::clone()` on every modulation frame.
+#[derive(Clone)]
+pub struct ModulationSnapshot {
+    /// Master effect param values, indexed by effect position.
+    pub master_params: Vec<Vec<f32>>,
+    /// Per-layer modulation data, indexed by layer position.
+    pub layers: Vec<ModulationLayerData>,
+}
+
+#[derive(Clone)]
+pub struct ModulationLayerData {
+    /// Layer effect param values, indexed by effect position.
+    pub effect_params: Vec<Vec<f32>>,
+    /// Generator param values (only for generator layers).
+    pub gen_param_values: Option<Vec<f32>>,
+}
+
+impl ModulationSnapshot {
+    /// Capture modulated param values from the project. Only clones small
+    /// `Vec<f32>` buffers — no strings, no clips, no video library.
+    pub fn capture(project: &Project) -> Self {
+        let master_params = project.settings.master_effects.iter()
+            .map(|fx| fx.param_values.clone())
+            .collect();
+
+        let layers = project.timeline.layers.iter()
+            .map(|layer| {
+                let effect_params = layer.effects.as_ref()
+                    .map(|effects| effects.iter().map(|fx| fx.param_values.clone()).collect())
+                    .unwrap_or_default();
+
+                let gen_param_values = if layer.layer_type == LayerType::Generator {
+                    layer.gen_params().map(|gp| gp.param_values.clone())
+                } else {
+                    None
+                };
+
+                ModulationLayerData {
+                    effect_params,
+                    gen_param_values,
+                }
+            })
+            .collect();
+
+        Self { master_params, layers }
+    }
+
+    /// Apply modulated values to a project in-place. Overwrites only
+    /// `param_values` — no structural changes, no allocations if lengths match.
+    pub fn apply(&self, project: &mut Project) {
+        // Master effects
+        for (i, params) in self.master_params.iter().enumerate() {
+            if let Some(fx) = project.settings.master_effects.get_mut(i)
+                && fx.param_values.len() == params.len()
+            {
+                fx.param_values.copy_from_slice(params);
+            }
+        }
+
+        // Layer effects + generator params
+        for (i, layer_data) in self.layers.iter().enumerate() {
+            if let Some(layer) = project.timeline.layers.get_mut(i) {
+                // Layer effects
+                if let Some(effects) = &mut layer.effects {
+                    for (j, params) in layer_data.effect_params.iter().enumerate() {
+                        if let Some(fx) = effects.get_mut(j)
+                            && fx.param_values.len() == params.len()
+                        {
+                            fx.param_values.copy_from_slice(params);
+                        }
+                    }
+                }
+
+                // Generator params
+                if let Some(ref params) = layer_data.gen_param_values
+                    && let Some(gp) = layer.gen_params_mut()
+                    && gp.param_values.len() == params.len()
+                {
+                    gp.param_values.copy_from_slice(params);
+                }
+            }
+        }
+    }
 }
 
 impl Default for ContentState {
@@ -150,6 +241,7 @@ impl Default for ContentState {
             export_status: String::new(),
             export_finished: None,
             project_snapshot: None,
+            modulation_snapshot: None,
         }
     }
 }

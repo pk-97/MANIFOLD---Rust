@@ -28,20 +28,20 @@ impl Application {
         if let Some(ref rx) = self.state_rx {
             // Drain all pending states, keep the latest
             while let Ok(state) = rx.try_recv() {
+                let drag_active = self.overlay.drag_mode() != manifold_ui::interaction_overlay::DragMode::None;
+                // Suppress snapshots until content thread catches up after a local project load.
+                // Safety net: timeout after 120 frames (~2s) to prevent indefinite suppression.
+                const MAX_SUPPRESS_FRAMES: u64 = 120;
+                let suppress_timed_out = self.suppress_snapshot_until > 0
+                    && self.frame_count.saturating_sub(self.suppress_snapshot_set_at) >= MAX_SUPPRESS_FRAMES;
+                if suppress_timed_out {
+                    log::warn!("[UI] Snapshot suppression timed out — accepting snapshot");
+                    self.suppress_snapshot_until = 0;
+                }
+                let suppressed = state.data_version < self.suppress_snapshot_until;
+
                 // Accept project snapshot if data_version changed (unless drag in progress)
                 if let Some(snapshot) = state.project_snapshot {
-                    let drag_active = self.overlay.drag_mode() != manifold_ui::interaction_overlay::DragMode::None;
-                    // Suppress snapshots until content thread catches up after a local project load.
-                    // Safety net: timeout after 120 frames (~2s) to prevent indefinite suppression.
-                    const MAX_SUPPRESS_FRAMES: u64 = 120;
-                    let suppress_timed_out = self.suppress_snapshot_until > 0
-                        && self.frame_count.saturating_sub(self.suppress_snapshot_set_at) >= MAX_SUPPRESS_FRAMES;
-                    if suppress_timed_out {
-                        log::warn!("[UI] Snapshot suppression timed out — accepting snapshot");
-                        self.suppress_snapshot_until = 0;
-                    }
-                    let suppressed = state.data_version < self.suppress_snapshot_until;
-
                     // Inspector drags (slider/trim/target/ADSR) are safe to accept
                     // snapshots through — handle_drag() writes the dragged value back
                     // to local_project in the same tick (via dispatch()), so the
@@ -130,8 +130,21 @@ impl Application {
                         }
                     }
                 }
+                // Apply lightweight modulation snapshot (param_values only)
+                // to local_project — no full Project clone needed.
+                if !drag_active && !suppressed
+                    && let Some(ref mod_snap) = state.modulation_snapshot
+                {
+                    mod_snap.apply(&mut self.local_project);
+                    // Restore actively-dragged inspector field so modulation
+                    // doesn't overwrite the value the user is manipulating.
+                    if let Some(ref drag) = self.active_inspector_drag {
+                        drag.apply(&mut self.local_project);
+                    }
+                }
                 self.content_state = ContentState {
                     project_snapshot: None, // consumed above
+                    modulation_snapshot: None, // consumed above
                     ..state
                 };
             }
