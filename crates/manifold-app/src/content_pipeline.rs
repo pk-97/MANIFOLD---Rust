@@ -336,9 +336,13 @@ impl ContentPipeline {
         let (renderers, project) = engine.split_renderer_project();
         let layers = project.map(|p| p.timeline.layers.as_slice()).unwrap_or(&[]);
 
-        // ── Create native Metal encoder for ALL GPU work ──────────────
+        // ── Generator rendering (separate command buffer) ─────────────
+        // Generators get their own CB that is committed BEFORE the compositor.
+        // This guarantees generator texture writes are visible to the compositor's
+        // per-layer command buffers in the parallel dispatch path. Metal executes
+        // CBs in commit order, so committing gen_enc first ensures generators
+        // complete before per-layer effects read their textures.
         let _t0 = std::time::Instant::now();
-        let mut native_enc = native_device.create_encoder("Frame");
 
         // Advance the pool's frame counter — drives frame-stamped recycling.
         // Prune stale textures every 300 frames (~5s at 60fps) to free GPU memory
@@ -350,47 +354,53 @@ impl ContentPipeline {
             }
         }
 
-        // Generators render via native encoder (no wgpu encoder needed)
         {
-            let mut gpu_gen = if let Some(pool) = texture_pool {
-                GpuEncoder::with_pool(&mut native_enc, native_device, pool)
-            } else {
-                GpuEncoder::new(&mut native_enc, native_device)
-            };
+            let mut gen_enc = native_device.create_encoder("Generators");
+            {
+                let mut gpu_gen = if let Some(pool) = texture_pool {
+                    GpuEncoder::with_pool(&mut gen_enc, native_device, pool)
+                } else {
+                    GpuEncoder::new(&mut gen_enc, native_device)
+                };
 
-            for renderer in renderers.iter_mut() {
-                if let Some(gen_renderer) =
-                    renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
-                {
-                    // Sync upscale mode from project settings (per-frame, zero-cost read).
-                    if let Some(p) = project {
-                        use manifold_core::types::UpscaleMode;
-                        match p.settings.upscale_mode {
-                            UpscaleMode::Native => {
-                                gen_renderer.set_scaling_enabled(false);
-                            }
-                            UpscaleMode::MetalFxSpatial => {
-                                gen_renderer.set_scaling_enabled(true);
-                                gen_renderer.set_upscale_mode(
-                                    manifold_gpu::metalfx::UpscaleMode::MetalFxSpatial,
-                                );
-                            }
-                            UpscaleMode::MpsLanczos => {
-                                gen_renderer.set_scaling_enabled(true);
-                                gen_renderer.set_upscale_mode(
-                                    manifold_gpu::metalfx::UpscaleMode::MpsLanczos,
-                                );
+                for renderer in renderers.iter_mut() {
+                    if let Some(gen_renderer) =
+                        renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
+                    {
+                        // Sync upscale mode from project settings (per-frame, zero-cost read).
+                        if let Some(p) = project {
+                            use manifold_core::types::UpscaleMode;
+                            match p.settings.upscale_mode {
+                                UpscaleMode::Native => {
+                                    gen_renderer.set_scaling_enabled(false);
+                                }
+                                UpscaleMode::MetalFxSpatial => {
+                                    gen_renderer.set_scaling_enabled(true);
+                                    gen_renderer.set_upscale_mode(
+                                        manifold_gpu::metalfx::UpscaleMode::MetalFxSpatial,
+                                    );
+                                }
+                                UpscaleMode::MpsLanczos => {
+                                    gen_renderer.set_scaling_enabled(true);
+                                    gen_renderer.set_upscale_mode(
+                                        manifold_gpu::metalfx::UpscaleMode::MpsLanczos,
+                                    );
+                                }
                             }
                         }
+                        gen_renderer.render_all(
+                            &mut gpu_gen, time_f64, beat_f64, dt as f32, layers,
+                        );
+                        break;
                     }
-                    gen_renderer.render_all(
-                        &mut gpu_gen, time_f64, beat_f64, dt as f32, layers,
-                    );
-                    break;
                 }
             }
+            gen_enc.commit();
         }
         let _gen_ms = _t0.elapsed().as_secs_f64() * 1000.0;
+
+        // ── Create compositor command buffer ─────────────────────────
+        let mut native_enc = native_device.create_encoder("Compositor");
 
         // ── Build clip + layer descriptors (CPU only) ────────────────
         let _t0 = std::time::Instant::now();
