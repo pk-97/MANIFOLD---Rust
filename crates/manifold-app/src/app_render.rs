@@ -484,6 +484,9 @@ impl Application {
                 _ => {}
             }
             let content_tx = self.content_tx.as_ref().unwrap();
+            let parent_win = self.primary_window_id
+                .and_then(|id| self.window_registry.get(&id))
+                .map(|ws| ws.window.as_ref());
             let result = crate::ui_bridge::dispatch(
                 action,
                 &mut self.local_project,
@@ -498,6 +501,7 @@ impl Application {
                 &mut self.target_snapshot,
                 &mut self.user_prefs,
                 &mut self.active_inspector_drag,
+                parent_win,
             );
             if result.structural_change {
                 needs_structural_sync = true;

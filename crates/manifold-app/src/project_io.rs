@@ -106,7 +106,11 @@ impl ProjectIOService {
     // ── Open Project ────────────────────────────────────────────────
 
     /// Unity ProjectIOService.OnOpenProject / OnOpenProjectAsync (lines 92-106).
-    pub fn open_project(&mut self, user_prefs: &mut UserPrefs) -> ProjectIOAction {
+    pub fn open_project(
+        &mut self,
+        user_prefs: &mut UserPrefs,
+        parent: Option<&winit::window::Window>,
+    ) -> ProjectIOAction {
         let last_dir = dialog_path_memory::get_last_directory(
             DialogContext::ProjectOpen,
             user_prefs,
@@ -116,6 +120,9 @@ impl ProjectIOService {
             .set_title("Open MANIFOLD Project")
             .add_filter("MANIFOLD Project", &["json", "manifold"]);
 
+        if let Some(w) = parent {
+            dialog = dialog.set_parent(w);
+        }
         if !last_dir.is_empty() {
             dialog = dialog.set_directory(&last_dir);
         }
@@ -231,7 +238,7 @@ impl ProjectIOService {
             }
         } else {
             // No existing path → trigger Save As
-            self.save_project_as(project, current_time, editing_service, user_prefs)
+            self.save_project_as(project, current_time, editing_service, user_prefs, None)
         }
     }
 
@@ -242,6 +249,7 @@ impl ProjectIOService {
         current_time: f32,
         editing_service: &mut EditingService,
         user_prefs: &mut UserPrefs,
+        parent: Option<&winit::window::Window>,
     ) -> ProjectIOAction {
         // Sync playhead before save (Unity line 205)
         project.saved_playhead_time = current_time;
@@ -262,6 +270,9 @@ impl ProjectIOService {
             .add_filter("MANIFOLD Project", &["manifold"])
             .set_file_name(project_name);
 
+        if let Some(w) = parent {
+            dialog = dialog.set_parent(w);
+        }
         if !last_dir.is_empty() {
             dialog = dialog.set_directory(&last_dir);
         }

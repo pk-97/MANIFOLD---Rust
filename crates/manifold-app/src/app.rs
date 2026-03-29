@@ -385,6 +385,13 @@ impl Application {
         }
     }
 
+    /// Get a reference to the primary window (for use as dialog parent, etc.).
+    pub(crate) fn primary_window(&self) -> Option<&winit::window::Window> {
+        self.primary_window_id
+            .and_then(|id| self.window_registry.get(&id))
+            .map(|ws| ws.window.as_ref())
+    }
+
     pub(crate) fn create_default_project() -> Project {
         let mut project = Project::default();
         project.settings.bpm = manifold_core::Bpm(120.0);
@@ -1623,6 +1630,10 @@ impl ApplicationHandler for Application {
                                 self.text_input.move_right();
                                 consumed = true;
                             }
+                            Key::Named(NamedKey::Space) => {
+                                self.text_input.insert_char(' ');
+                                consumed = true;
+                            }
                             Key::Character(c) => {
                                 // Cmd+A / Ctrl+A → select all
                                 if c == "a" && self.modifiers.command {
@@ -1655,6 +1666,9 @@ impl ApplicationHandler for Application {
                     // Port of Unity InputHandler.HandleKeyboardInput().
                     // All viewport access goes through the TimelineInputHost trait.
                     if !consumed {
+                        let primary_win = self.primary_window_id
+                            .and_then(|id| self.window_registry.get(&id))
+                            .map(|ws| ws.window.as_ref());
                         let mut host = crate::input_host::AppInputHost {
                             project: &mut self.local_project,
                             content_tx: self.content_tx.as_ref().unwrap(),
@@ -1670,6 +1684,7 @@ impl ApplicationHandler for Application {
                             pending_close_output: &mut self.pending_close_output,
                             pending_export: &mut self.pending_export,
                             effect_clipboard: &mut self.effect_clipboard,
+                            parent_window: primary_win,
                         };
                         if self.input_handler.handle_keyboard_input(
                             &logical_key, self.modifiers,

@@ -36,6 +36,7 @@ pub struct AppInputHost<'a> {
     pub pending_close_output: &'a mut bool,
     pub pending_export: &'a mut bool,
     pub effect_clipboard: &'a mut manifold_editing::clipboard::EffectClipboard,
+    pub parent_window: Option<&'a winit::window::Window>,
 }
 
 impl TimelineInputHost for AppInputHost<'_> {
@@ -1061,10 +1062,13 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Port of Unity: percussionImportController.OnImportPercussionMap().
         // Uses the same dialog pattern as audio import.
         use crate::content_command::ContentCommand;
-        if let Some(path) = rfd::FileDialog::new()
+        let mut dialog = rfd::FileDialog::new()
             .set_title("Import Percussion Map")
-            .add_filter("Audio / JSON", &["wav", "mp3", "flac", "ogg", "json"])
-            .pick_file()
+            .add_filter("Audio / JSON", &["wav", "mp3", "flac", "ogg", "json"]);
+        if let Some(w) = self.parent_window {
+            dialog = dialog.set_parent(w);
+        }
+        if let Some(path) = dialog.pick_file()
         {
             let path_str = path.to_string_lossy().to_string();
             ContentCommand::send(
