@@ -119,6 +119,15 @@ impl PostProcessEffect for StylizedFeedbackFX {
             mode,
         };
 
+        // DEBUG: trace texture pointers to detect cross-layer sharing
+        let src_ptr = source as *const _ as usize & 0xFFFF;
+        let state_ptr = &state.buffer.texture as *const _ as usize & 0xFFFF;
+        let tgt_ptr = target as *const _ as usize & 0xFFFF;
+        eprintln!(
+            "[FEEDBACK] owner={:#x} src={:#x} state={:#x} tgt={:#x} clip_level={}",
+            ctx.owner_key as u64 & 0xFFFF, src_ptr, state_ptr, tgt_ptr, ctx.is_clip_level,
+        );
+
         // Select specialized pipeline based on mode
         let pipeline = match mode.round() as u32 {
             1 => &self.pipeline_additive,
