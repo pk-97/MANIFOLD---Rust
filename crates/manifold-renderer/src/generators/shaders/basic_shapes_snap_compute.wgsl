@@ -3,6 +3,10 @@ struct Uniforms {
     line_thickness: f32,
     uv_scale: f32,
     trigger_count: f32,
+    shape_selection: f32,
+    fill_mode: f32,
+    _pad0: f32,
+    _pad1: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -47,15 +51,23 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     p_uv.x *= u.aspect_ratio;
     p_uv *= u.uv_scale;
 
-    // Cycle shape + fill from trigger count (3 shapes x 2 fill = 6 variants)
-    let tc = i32(u.trigger_count);
-    let variant = u32(tc) % 6u;
-    let shape_idx = variant % 3u;
-    let is_wireframe = variant >= 3u;
+    // Shape from param
+    let shape_idx = u32(i32(u.shape_selection + 0.5));
 
-    // Rotation cycles every 6 triggers (4 angles x 2 directions = 8 steps)
+    // Fill mode: 0 = Solid, 1 = Mixed (alternates per trigger), 2 = Wireframe
+    let tc = u32(i32(u.trigger_count));
+    var is_wireframe: bool;
+    if u.fill_mode < 0.5 {
+        is_wireframe = false;
+    } else if u.fill_mode < 1.5 {
+        is_wireframe = (tc % 2u) == 1u;
+    } else {
+        is_wireframe = true;
+    }
+
+    // Rotation cycles every 3 triggers (4 angles x 2 directions = 8 steps)
     let DEG45 = 0.78539816; // pi/4
-    let rot_step = (u32(tc) / 6u) % 8u;
+    let rot_step = (tc / 3u) % 8u;
     let target_angle = f32(rot_step % 4u) * DEG45;
     let rot_direction = select(1.0, -1.0, rot_step >= 4u);
     let rotation = target_angle * rot_direction;
@@ -78,11 +90,9 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var shape: f32;
     if is_wireframe {
-        // Hollow outline only (thinner)
         let thickness = u.line_thickness;
         shape = 1.0 - smoothstep(thickness - pw, thickness + pw, abs(d));
     } else {
-        // Solid fill
         shape = 1.0 - smoothstep(-pw, pw, d);
     }
 

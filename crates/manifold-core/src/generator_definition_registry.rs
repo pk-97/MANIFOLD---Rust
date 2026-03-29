@@ -302,8 +302,9 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
     // ── BasicShapesSnap ──
     let params = vec![
         pd("Line", 0.0005, 0.03, 0.015, Some("F4"), "line"),
-        pd_whole_labels("Shape", 0.0, 5.0, 0.0, &["Square", "Diamond", "Octagon", "Sq Wire", "Dia Wire", "Oct Wire"], "shape"),
+        pd_whole_labels("Shape", 0.0, 2.0, 0.0, &["Square", "Diamond", "Octagon"], "shape"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
+        pd_whole_labels("Fill", 0.0, 2.0, 1.0, &["Solid", "Mixed", "Wireframe"], "fill"),
     ];
     m.insert(GeneratorTypeId::BASIC_SHAPES_SNAP, create_def("Basic Shapes Snap", false, "generator/basicShapesSnap", params));
 

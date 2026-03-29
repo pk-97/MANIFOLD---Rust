@@ -178,7 +178,7 @@ use manifold_core::generator_definition_registry;
 #[test]
 fn generator_param_count_plasma() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::PLASMA).param_count, 6); }
 #[test]
-fn generator_param_count_basic_shapes() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::BASIC_SHAPES_SNAP).param_count, 3); }
+fn generator_param_count_basic_shapes() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::BASIC_SHAPES_SNAP).param_count, 4); }
 #[test]
 fn generator_param_count_concentric_tunnel() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::CONCENTRIC_TUNNEL).param_count, 6); }
 #[test]

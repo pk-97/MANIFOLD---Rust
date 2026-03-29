@@ -4,8 +4,9 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 
 const LINE: usize = 0;
-const _SHAPE: usize = 1;
+const SHAPE: usize = 1;
 const SCALE: usize = 2;
+const FILL: usize = 3;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -14,6 +15,9 @@ struct BasicShapesSnapUniforms {
     line_thickness: f32,
     uv_scale: f32,
     trigger_count: f32,
+    shape_selection: f32,
+    fill_mode: f32,
+    _pad: [f32; 2],
 }
 
 pub struct BasicShapesSnapGenerator {
@@ -43,13 +47,18 @@ impl Generator for BasicShapesSnapGenerator {
         ctx: &GeneratorContext,
     ) -> f32 {
         let line = if ctx.param_count > LINE as u32 { ctx.params[LINE] } else { 0.015 };
+        let shape = if ctx.param_count > SHAPE as u32 { ctx.params[SHAPE].round() } else { 0.0 };
         let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
+        let fill = if ctx.param_count > FILL as u32 { ctx.params[FILL].round() } else { 1.0 };
 
         let uniforms = BasicShapesSnapUniforms {
             aspect_ratio: ctx.aspect,
             line_thickness: line,
             uv_scale: if scale > 0.0 { 1.0 / scale } else { 1.0 },
             trigger_count: ctx.trigger_count as f32,
+            shape_selection: shape,
+            fill_mode: fill,
+            _pad: [0.0; 2],
         };
 
         gpu.native_enc.dispatch_compute(
