@@ -773,7 +773,6 @@ impl LayerCompositor {
     /// the frame duration since they're owned by effect chains, layer bufs, or
     /// clip render targets that aren't reallocated between generate and blend.
     #[cfg(target_os = "macos")]
-    #[allow(dead_code)]
     fn composite_parallel(
         &mut self,
         compositor_gpu: &mut GpuEncoder,
@@ -839,6 +838,15 @@ impl LayerCompositor {
         let layer_bufs_ptr = self.layer_bufs.as_mut_ptr();
         let base_signal = self.async_signal_base;
 
+        // Signal generator completion on the main command buffer.
+        // Per-layer command buffers are committed before the main CB, so without
+        // this barrier they would read generator textures that haven't been
+        // written yet (the main CB's generator work hasn't executed).
+        let gen_done_signal = base_signal + 1;
+        compositor_gpu.native_enc.signal_event_value(
+            unsafe { &*async_event }, gen_done_signal,
+        );
+
         self.layer_outputs_scratch.clear();
         let mut effect_chain_idx = 0usize;
         let mut layer_buf_idx = 0usize;
@@ -880,6 +888,11 @@ impl LayerCompositor {
 
             // Create per-layer command buffer
             let mut layer_enc = device.create_encoder("Layer");
+
+            // Wait for generator rendering on the main command buffer to complete.
+            // Without this, this per-layer CB could read generator textures before
+            // the main CB has finished writing them.
+            layer_enc.wait_event(unsafe { &*async_event }, gen_done_signal);
 
             // Scope the GpuEncoder wrapper so it drops before signal+commit
             {
@@ -1049,20 +1062,21 @@ impl LayerCompositor {
                 }
             } // gpu wrapper drops here, releasing borrow on layer_enc
 
-            // Signal completion for this layer and commit
+            // Signal completion for this layer and commit.
+            // Offset by 1 to avoid colliding with gen_done_signal.
             layer_signal_idx += 1;
-            let signal_value = base_signal + layer_signal_idx;
+            let signal_value = gen_done_signal + layer_signal_idx;
             layer_enc.signal_event_value(
                 unsafe { &*async_event }, signal_value,
             );
             layer_enc.commit();
         }
 
-        // Update base for next frame
-        self.async_signal_base = base_signal + layer_signal_idx;
+        // Update base for next frame (gen_done + all layer signals)
+        self.async_signal_base = gen_done_signal + layer_signal_idx;
 
         // Compositor command buffer waits for all layer completions
-        let final_signal = base_signal + layer_signal_idx;
+        let final_signal = gen_done_signal + layer_signal_idx;
         if layer_signal_idx > 0 {
             compositor_gpu.native_enc.wait_event(
                 unsafe { &*async_event }, final_signal,
@@ -1099,11 +1113,12 @@ impl Compositor for LayerCompositor {
         // single-layer frames).
         #[cfg(target_os = "macos")]
         {
-            // DEBUG: force serial path to test if parallel dispatch causes the glitch
-            let _active_layers = count_active_layers(frame);
-            let _ = &self.async_event;
-            let _ = self.async_signal_base;
-            self.composite_serial(gpu, frame);
+            let active_layers = count_active_layers(frame);
+            if active_layers >= 2 {
+                self.composite_parallel(gpu, frame);
+            } else {
+                self.composite_serial(gpu, frame);
+            }
         }
         #[cfg(not(target_os = "macos"))]
         self.composite_serial(gpu, frame);

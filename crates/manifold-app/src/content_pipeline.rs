@@ -442,30 +442,6 @@ impl ContentPipeline {
             }
         }
 
-        // ── DEBUG: per-frame compositor input summary ──
-        // Prints to stderr so it reaches the terminal in release mode.
-        // Remove after diagnosing the cross-layer bleed.
-        if !clip_descs.is_empty() {
-            let mut dbg = format!("[FRAME {}  beat={:.3}] clips:", frame_count, beat);
-            for cd in &clip_descs {
-                let tex_ptr = cd.texture as *const _ as usize;
-                let clip_fx = cd.effects.iter().filter(|e| e.enabled).count();
-                // Count layer-level effects for this clip's layer
-                let layer_fx = layers.get(cd.layer_index as usize)
-                    .and_then(|l| l.effects.as_ref())
-                    .map_or(0, |efx| efx.iter().filter(|e| e.enabled).count());
-                dbg.push_str(&format!(
-                    " [L{} clip={}..{} tex={:#x} cfx={} lfx={}]",
-                    cd.layer_index,
-                    &cd.clip_id[..8.min(cd.clip_id.len())],
-                    if cd.clip_id.len() > 8 { ".." } else { "" },
-                    tex_ptr & 0xFFFF,
-                    clip_fx,
-                    layer_fx,
-                ));
-            }
-            eprintln!("{}", dbg);
-        }
 
         let layer_descs: Vec<CompositeLayerDescriptor> = layers
             .iter()
