@@ -123,27 +123,38 @@ Layer 3 (intra-frame aliasing): When GPU memory pressure is a problem. If you're
 
 ## PHASE 9: ASYNC COMPUTE
 
-**Problem:** The content thread currently encodes one serial command buffer: generator 1 → effect chain 1 → generator 2 → effect chain 2 → ... → compositor. Each step waits for the previous one. With N layers running heavy generators, frame time scales linearly: N × generator_cost.
+**Problem:** With N layers running heavy effects, frame time scales linearly: N × effect_cost. Per-layer effect chains are independent and can execute concurrently.
 
-**Solution:** Split independent layer work into parallel command buffers with explicit dependencies via MTLEvent:
+**Solution:** Split per-layer effect work into parallel command buffers with explicit dependencies via MTLEvent. Generators remain on a separate shared command buffer because all generators render into their own textures sequentially (they share the uniform arena and layer state).
 
 ```
-Command Buffer A: Generator 1 → Effect Chain 1 ─┐
-Command Buffer B: Generator 2 → Effect Chain 2 ─┼→ Compositor (waits for all)
-Command Buffer C: Generator 3 → Effect Chain 3 ─┘
+Command Buffer 0 (gen_enc):    All generators ──────────────────── committed first
+Command Buffer 1 (Layer 0 CB): Effect Chain 0 ─┐
+Command Buffer 2 (Layer 1 CB): Effect Chain 1 ─┼── committed next
+Command Buffer 3 (Layer 2 CB): Effect Chain 2 ─┘
+Command Buffer 4 (compositor): Wait for layers → Blend all ───── committed last
 ```
 
-Generators on different layers are independent — they don't read each other's output. They can execute concurrently on different GPU compute units. The compositor signals a wait on all generator command buffers before blending.
+**CRITICAL: Command buffer commit ordering (hard-won lesson)**
 
-**Impact:** 8 layers each with 2ms generators: serial = 16ms, parallel = 2ms + compositor overhead. Scales with layer count — the more layers, the bigger the win.
+Metal executes command buffers from the same queue in **commit order**. Per-layer CBs read generator textures — so the generator CB MUST be committed BEFORE per-layer CBs. If generators and effects were on the same command buffer (as they were originally), per-layer CBs would be committed before the generator writes were visible, causing:
+- Cross-layer texture contamination (effects reading stale/wrong generator output)
+- Effects appearing to not apply (reading uninitialized texture)
+- Intermittent single-frame glitches at clip boundaries where multiple layers are active
 
-**Implementation:**
-- One `MTLCommandBuffer` per layer (generator + effect chain)
-- `MTLEvent` signals between layer command buffers and compositor command buffer
-- CPU encodes all layer command buffers, commits all, then encodes compositor after all complete
-- Compositor command buffer uses `waitForEvent` on each layer's completion signal
+The fix was splitting generators into their own CB (`gen_enc`) committed first. Per-layer CBs are committed next (Metal guarantees they see gen_enc's writes). The compositor CB is committed last and waits on all per-layer MTLEvent signals before blending.
 
-**When:** After function constants + binary archive. Profile first to confirm layer-parallel GPU time is the bottleneck vs CPU encoding time.
+This bug was invisible with single-layer playback, required 2+ active layers with effects, and manifested as rare single-frame visual artifacts that looked like "layer bleeding." Diagnosed via eprintln instrumentation of texture pointers, clip/layer state per frame, and beat-backward detection, then confirmed by forcing the serial path (which uses a single CB and is immune to the ordering issue).
+
+**Impact:** Per-layer effect chains run concurrently. 8 layers each with 2ms effects: serial = 16ms, parallel = 2ms + compositor overhead.
+
+**Implementation (actual):**
+- `gen_enc` command buffer for ALL generators — committed first
+- One `MTLCommandBuffer` per active layer (effect chain only, not generators)
+- `MTLEvent` signals between per-layer command buffers and compositor command buffer
+- CPU encodes all per-layer command buffers, commits all, then encodes compositor
+- Compositor command buffer uses `encodeWaitForEvent` on the final layer's completion signal
+- Serial fast path for single-layer frames (no parallel overhead)
 
 ## PHASE 10: INDIRECT COMMAND BUFFERS (ICB)
 
