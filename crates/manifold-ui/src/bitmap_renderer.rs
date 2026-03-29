@@ -9,7 +9,7 @@ use crate::color;
 use crate::node::Color32;
 use crate::panels::viewport::{SelectionRegion, ViewportClip};
 #[cfg(test)]
-use manifold_core::ClipId;
+use manifold_core::{Beats, ClipId};
 
 // ── Constants (Unity LayerBitmapRenderer lines 47-48) ──
 
@@ -292,14 +292,15 @@ impl LayerBitmapRenderer {
 
         // Paint clips on top of grid (Unity lines 210-232)
         for clip in clips {
-            let end_beat = clip.start_beat + clip.duration_beats;
-            if end_beat <= viewport_min_beat || clip.start_beat >= viewport_max_beat {
+            let clip_start_f32 = clip.start_beat.as_f32();
+            let end_beat = clip_start_f32 + clip.duration_beats;
+            if end_beat <= viewport_min_beat || clip_start_f32 >= viewport_max_beat {
                 continue;
             }
 
             // Compute pixel rect (Unity ComputeClipPixelRect, lines 297-308)
             let (x, w) = match compute_clip_pixel_rect(
-                clip.start_beat,
+                clip_start_f32,
                 end_beat,
                 viewport_min_beat,
                 scaled_ppb,
@@ -408,13 +409,14 @@ impl LayerBitmapRenderer {
 fn compute_clip_fingerprint(clips: &[ViewportClip], min_beat: f32, max_beat: f32) -> i32 {
     let mut hash = clips.len() as i32;
     for clip in clips {
-        let end = clip.start_beat + clip.duration_beats;
-        if end <= min_beat || clip.start_beat >= max_beat {
+        let start_f32 = clip.start_beat.as_f32();
+        let end = start_f32 + clip.duration_beats;
+        if end <= min_beat || start_f32 >= max_beat {
             continue;
         }
         hash = hash
             .wrapping_mul(31)
-            .wrapping_add(clip.start_beat.to_bits() as i32);
+            .wrapping_add(start_f32.to_bits() as i32);
         hash = hash.wrapping_mul(31).wrapping_add(end.to_bits() as i32);
         hash = hash
             .wrapping_mul(31)
@@ -565,7 +567,7 @@ mod tests {
         ViewportClip {
             clip_id: ClipId::new(id),
             layer_index: 0,
-            start_beat: start,
+            start_beat: Beats::from_f32(start),
             duration_beats: dur,
             name: String::new(),
             color: color::CLIP_NORMAL,

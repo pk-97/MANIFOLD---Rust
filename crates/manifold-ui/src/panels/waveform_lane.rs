@@ -7,7 +7,7 @@
 //! Unity: `ImportedAudioWaveformLane` + `ImportedAudioWaveformScrubHandler`
 //!        + `ImportedAudioWaveformDragHandler`.
 
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{Beats, ClipId, LayerId};
 
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
@@ -51,7 +51,7 @@ pub struct WaveformLanePanel {
     accumulated_beats: f32,
     total_snapped_delta: f32,
     /// Pre-drag audio_start_beat — captured on first DragDelta for undo.
-    drag_start_beat: Option<f32>,
+    drag_start_beat: Option<Beats>,
     /// Snapshot of ALL clips before drag: (clip_id, original start_beat, layer_id).
     /// Unity: `waveformDragClipSnapshots` (EditingService.cs line 1367).
     pub waveform_drag_clip_snapshots: Vec<(ClipId, f32, LayerId)>,
@@ -352,7 +352,7 @@ impl WaveformLanePanel {
 
         if has_waveform {
             let waveform_x =
-                mapper.beat_to_pixel_absolute(waveform_start_beat.max(0.0));
+                mapper.beat_to_pixel_absolute(Beats::from_f32(waveform_start_beat.max(0.0)));
             let waveform_width =
                 mapper.beat_duration_to_width(waveform_duration_beats).max(1.0);
 
@@ -552,14 +552,14 @@ impl WaveformLanePanel {
     }
 
     /// Capture the pre-drag audio start beat for undo (first call only).
-    pub fn set_drag_start_beat(&mut self, beat: f32) {
+    pub fn set_drag_start_beat(&mut self, beat: Beats) {
         if self.drag_start_beat.is_none() {
             self.drag_start_beat = Some(beat);
         }
     }
 
     /// Take and clear the pre-drag start beat (called on drag end).
-    pub fn take_drag_start_beat(&mut self) -> Option<f32> {
+    pub fn take_drag_start_beat(&mut self) -> Option<Beats> {
         self.drag_start_beat.take()
     }
 

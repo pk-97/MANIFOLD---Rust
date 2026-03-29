@@ -7,6 +7,7 @@
 use std::collections::HashSet;
 use manifold_core::{ClipId, LayerId, MarkerId};
 use manifold_core::selection::SelectionRegion;
+use manifold_core::units::Beats;
 
 pub struct UIState {
     // ── Clip Selection ──
@@ -193,8 +194,8 @@ impl UIState {
         // Populate LayerId-based fields from the layer array
         let min = start_layer.min(end_layer).max(0) as usize;
         let max = start_layer.max(end_layer).max(0) as usize;
-        self.selection_region.start_beat = start_beat;
-        self.selection_region.end_beat = end_beat;
+        self.selection_region.start_beat = Beats::from_f32(start_beat);
+        self.selection_region.end_beat = Beats::from_f32(end_beat);
         self.selection_region.is_active = true;
         self.selection_region.selected_layer_ids.clear();
         let upper = max.min(layers.len().saturating_sub(1));
@@ -220,8 +221,8 @@ impl UIState {
         let e_layer = start_layer.max(end_layer).max(0) as usize;
         let s_beat = start_beat.min(end_beat);
         let e_beat = start_beat.max(end_beat);
-        self.selection_region.start_beat = s_beat;
-        self.selection_region.end_beat = e_beat;
+        self.selection_region.start_beat = Beats::from_f32(s_beat);
+        self.selection_region.end_beat = Beats::from_f32(e_beat);
         self.selection_region.is_active = true;
         self.selection_region.selected_layer_ids.clear();
         let upper = e_layer.min(layers.len().saturating_sub(1));

@@ -90,14 +90,15 @@ impl ClipHitTester {
                 continue;
             }
 
-            let clip_end = clip.start_beat + clip.duration_beats;
+            let clip_start_f32 = clip.start_beat.as_f32();
+            let clip_end = clip_start_f32 + clip.duration_beats;
             // Unity line 76: beat range check
-            if beat_at_pointer < clip.start_beat || beat_at_pointer >= clip_end {
+            if beat_at_pointer < clip_start_f32 || beat_at_pointer >= clip_end {
                 continue;
             }
 
             // Unity lines 80-81: determine hit region
-            let local_px = (beat_at_pointer - clip.start_beat) * ppb;
+            let local_px = (beat_at_pointer - clip_start_f32) * ppb;
             let clip_width_px = clip.duration_beats * ppb;
 
             // Trim handle detection — proportional width so narrow clips
@@ -159,8 +160,9 @@ impl ClipHitTester {
                 continue;
             }
             // Unity line 125: overlap check
-            let clip_end = clip.start_beat + clip.duration_beats;
-            if clip_end > min_beat && clip.start_beat < max_beat {
+            let clip_start_f32 = clip.start_beat.as_f32();
+            let clip_end = clip_start_f32 + clip.duration_beats;
+            if clip_end > min_beat && clip_start_f32 < max_beat {
                 results.push(clip.clip_id.clone());
             }
         }
@@ -174,6 +176,7 @@ impl ClipHitTester {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use manifold_core::Beats;
     use crate::coordinate_mapper::CoordinateMapper;
     use crate::node::Color32;
 
@@ -188,7 +191,7 @@ mod tests {
         ViewportClip {
             clip_id: ClipId::new(id),
             layer_index: layer,
-            start_beat: start,
+            start_beat: Beats::from_f32(start),
             duration_beats: duration,
             name: String::new(),
             color: Color32::new(100, 100, 100, 255),

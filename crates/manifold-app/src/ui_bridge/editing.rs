@@ -61,8 +61,8 @@ pub(super) fn dispatch_editing(
             if modifiers.shift {
                 // Shift+Click on empty area: extend region from anchor to beat/layer.
                 // From Unity InteractionOverlay.OnPointerClick (line 177-180).
-                let snapped = ui.viewport.snap_to_grid(*beat);
-                super::select_region_to_with_project(snapped, *layer, selection, &*project);
+                let snapped = ui.viewport.snap_to_grid(Beats::from_f32(*beat));
+                super::select_region_to_with_project(snapped.as_f32(), *layer, selection, &*project);
             } else {
                 // Plain click: set insert cursor (clears everything, Ableton behavior).
                 // From Unity InteractionOverlay.OnPointerClick (line 183).
@@ -148,7 +148,7 @@ pub(super) fn dispatch_editing(
             DispatchResult::structural()
         }
         PanelAction::ContextPasteAtTrack(beat, _layer) => {
-            let _snapped = ui.viewport.snap_to_grid(*beat);
+            let _snapped = ui.viewport.snap_to_grid(Beats::from_f32(*beat));
             {
                 let _spb = 60.0 / project.settings.bpm;
                 // TODO: browser paste not yet wired

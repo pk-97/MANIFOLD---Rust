@@ -275,7 +275,7 @@ pub fn push_state(
 
     // Playhead + playing state
     let playhead_beat = content_state.current_beat as f32;
-    ui.viewport.set_playhead(playhead_beat);
+    ui.viewport.set_playhead(Beats::from_f32(playhead_beat));
     ui.viewport.set_playing(content_state.is_playing);
 
     // Selection → viewport
@@ -286,7 +286,7 @@ pub fn push_state(
         selection.selected_marker_ids.iter().cloned().collect()
     );
     if let Some(beat) = selection.insert_cursor_beat {
-        ui.viewport.set_insert_cursor(beat);
+        ui.viewport.set_insert_cursor(Beats::from_f32(beat));
     }
 
     // Region → viewport (sync from UIState so clearing via set_insert_cursor propagates)

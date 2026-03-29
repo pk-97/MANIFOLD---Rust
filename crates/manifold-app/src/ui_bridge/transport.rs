@@ -1,6 +1,6 @@
 //! Transport-related dispatch: Play/Pause/Stop/Seek/BPM/Recording/Clock/Zoom.
 
-use manifold_core::project::Project;
+use manifold_core::{Beats, project::Project};
 use manifold_editing::commands::settings::ChangeQuantizeModeCommand;
 use manifold_ui::PanelAction;
 
@@ -132,7 +132,7 @@ pub(super) fn dispatch_transport(
                 let viewport_w = ui.viewport.get_tracks_rect().width;
                 // Anchor on playhead: place it at the same relative screen position,
                 // clamped so the playhead pixel stays within the viewport.
-                let playhead_px = ui.viewport.beat_to_pixel(playhead);
+                let playhead_px = ui.viewport.beat_to_pixel(Beats::from_f32(playhead));
                 let anchor_x = (playhead_px - tracks_x).clamp(0.0, viewport_w);
                 let new_scroll = playhead - anchor_x / new_ppb;
                 ui.viewport.set_zoom(new_ppb);
@@ -155,7 +155,7 @@ pub(super) fn dispatch_transport(
                 let playhead = content_state.current_beat as f32;
                 let tracks_x = ui.viewport.get_tracks_rect().x;
                 let viewport_w = ui.viewport.get_tracks_rect().width;
-                let playhead_px = ui.viewport.beat_to_pixel(playhead);
+                let playhead_px = ui.viewport.beat_to_pixel(Beats::from_f32(playhead));
                 let anchor_x = (playhead_px - tracks_x).clamp(0.0, viewport_w);
                 let new_scroll = playhead - anchor_x / new_ppb;
                 ui.viewport.set_zoom(new_ppb);

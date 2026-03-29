@@ -5,6 +5,8 @@
 // - Magnetic snap finds nearest candidate within a pixel threshold
 // - Candidates include grid lines AND neighboring clip edges
 
+use manifold_core::Beats;
+
 /// Threshold in pixels — snap engages within this distance.
 pub const SNAP_THRESHOLD_PX: f32 = 12.0;
 
@@ -32,22 +34,22 @@ pub fn grid_interval_for_zoom(ppb: f32, beats_per_bar: f32) -> f32 {
 }
 
 /// Snap a beat to the nearest grid line.
-pub fn snap_beat_to_grid(beat: f32, grid_interval: f32) -> f32 {
-    if grid_interval <= 0.0 {
+pub fn snap_beat_to_grid(beat: Beats, grid_interval: Beats) -> Beats {
+    if grid_interval.0 <= 0.0 {
         return beat;
     }
-    (beat / grid_interval).round() * grid_interval
+    Beats((beat.0 / grid_interval.0).round() * grid_interval.0)
 }
 
 /// Floor a beat to the left edge of the grid cell.
 /// Used for placement operations (double-click clip creation) where the click
 /// should land in the grid cell the cursor is inside, not snap to nearest line.
 /// From Unity CoordinateMapper.FloorBeatToGrid (lines 262-266).
-pub fn floor_beat_to_grid(beat: f32, grid_interval: f32) -> f32 {
-    if grid_interval <= 0.0 {
+pub fn floor_beat_to_grid(beat: Beats, grid_interval: Beats) -> Beats {
+    if grid_interval.0 <= 0.0 {
         return beat;
     }
-    ((beat / grid_interval).floor() * grid_interval).max(0.0)
+    Beats(((beat.0 / grid_interval.0).floor() * grid_interval.0).max(0.0))
 }
 
 /// Magnetic snap: finds nearest candidate (grid line + neighbor clip edges)
@@ -141,16 +143,16 @@ mod tests {
     #[test]
     fn snap_beat_to_grid_rounds_correctly() {
         // Quarter note grid
-        assert_eq!(snap_beat_to_grid(4.1, 1.0), 4.0);
-        assert_eq!(snap_beat_to_grid(4.6, 1.0), 5.0);
-        assert_eq!(snap_beat_to_grid(4.5, 1.0), 5.0); // .5 rounds away from zero
+        assert_eq!(snap_beat_to_grid(Beats::from_f32(4.1), Beats::from_f32(1.0)), Beats::from_f32(4.0));
+        assert_eq!(snap_beat_to_grid(Beats::from_f32(4.6), Beats::from_f32(1.0)), Beats::from_f32(5.0));
+        assert_eq!(snap_beat_to_grid(Beats::from_f32(4.5), Beats::from_f32(1.0)), Beats::from_f32(5.0)); // .5 rounds away from zero
 
         // 16th note grid
-        assert!((snap_beat_to_grid(4.13, 0.25) - 4.25).abs() < 0.001);
-        assert!((snap_beat_to_grid(4.01, 0.25) - 4.0).abs() < 0.001);
+        assert!((snap_beat_to_grid(Beats::from_f32(4.13), Beats::from_f32(0.25)).as_f32() - 4.25).abs() < 0.001);
+        assert!((snap_beat_to_grid(Beats::from_f32(4.01), Beats::from_f32(0.25)).as_f32() - 4.0).abs() < 0.001);
 
         // Zero/negative grid interval returns raw beat
-        assert_eq!(snap_beat_to_grid(4.3, 0.0), 4.3);
+        assert_eq!(snap_beat_to_grid(Beats::from_f32(4.3), Beats::from_f32(0.0)), Beats::from_f32(4.3));
     }
 
     #[test]

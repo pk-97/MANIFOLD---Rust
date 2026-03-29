@@ -9,6 +9,7 @@ use crate::color;
 use crate::snap;
 use manifold_core::layer::Layer;
 use manifold_core::types::LayerType;
+use manifold_core::Beats;
 
 pub struct CoordinateMapper {
     pixels_per_beat: f32,
@@ -59,8 +60,8 @@ impl CoordinateMapper {
 
     /// Convert beat position to scroll-adjusted pixel X.
     /// Unity line 48-50.
-    pub fn beat_to_pixel(&self, beat: f32) -> f32 {
-        beat * self.pixels_per_beat - self.scroll_offset_x
+    pub fn beat_to_pixel(&self, beat: Beats) -> f32 {
+        beat.as_f32() * self.pixels_per_beat - self.scroll_offset_x
     }
 
     /// Convert pixel X position to beat.
@@ -72,8 +73,8 @@ impl CoordinateMapper {
     /// Convert beat to pixel X in content space (not scroll-adjusted).
     /// Use for positioning elements that are children of scrollable content.
     /// Unity line 65-67.
-    pub fn beat_to_pixel_absolute(&self, beat: f32) -> f32 {
-        beat * self.pixels_per_beat
+    pub fn beat_to_pixel_absolute(&self, beat: Beats) -> f32 {
+        beat.as_f32() * self.pixels_per_beat
     }
 
     /// Convert beat duration to pixel width.
@@ -222,21 +223,22 @@ impl CoordinateMapper {
 
     /// Snap a beat value to the NEAREST grid line. Result clamped >= 0.
     /// Unity line 251-255.
-    pub fn snap_beat_to_grid(&self, beat: f32, beats_per_bar: u32) -> f32 {
+    pub fn snap_beat_to_grid(&self, beat: Beats, beats_per_bar: u32) -> Beats {
         let interval = self.get_grid_interval_beats(beats_per_bar);
-        snap::snap_beat_to_grid(beat, interval).max(0.0)
+        snap::snap_beat_to_grid(beat, Beats::from_f32(interval))
+            .max(Beats::ZERO)
     }
 
     /// Floor a beat value to the LEFT EDGE of the grid cell.
     /// Used for placement operations (double-click clip creation) where the click
     /// should land in the grid cell the cursor is inside, not snap to nearest line.
     /// Unity line 262-266.
-    pub fn floor_beat_to_grid(&self, beat: f32, beats_per_bar: u32) -> f32 {
+    pub fn floor_beat_to_grid(&self, beat: Beats, beats_per_bar: u32) -> Beats {
         let interval = self.get_grid_interval_beats(beats_per_bar);
         if interval <= 0.0 {
             return beat;
         }
-        ((beat / interval).floor() * interval).max(0.0)
+        Beats(((beat.0 / interval as f64).floor() * interval as f64).max(0.0))
     }
 }
 
@@ -269,7 +271,7 @@ mod tests {
     fn beat_to_pixel_default_zoom() {
         let mapper = CoordinateMapper::new();
         // Default zoom is ZoomLevels[7] = 120 ppb, scroll = 0
-        let pixel = mapper.beat_to_pixel(4.0);
+        let pixel = mapper.beat_to_pixel(Beats::from_f32(4.0));
         assert!((pixel - 4.0 * 120.0).abs() < 0.001);
     }
 
@@ -277,7 +279,7 @@ mod tests {
     fn beat_to_pixel_with_scroll() {
         let mut mapper = CoordinateMapper::new();
         mapper.set_scroll_offset_x(100.0);
-        let pixel = mapper.beat_to_pixel(4.0);
+        let pixel = mapper.beat_to_pixel(Beats::from_f32(4.0));
         assert!((pixel - (4.0 * 120.0 - 100.0)).abs() < 0.001);
     }
 
@@ -285,7 +287,7 @@ mod tests {
     fn pixel_to_beat_roundtrip() {
         let mut mapper = CoordinateMapper::new();
         mapper.set_scroll_offset_x(50.0);
-        let pixel = mapper.beat_to_pixel(7.5);
+        let pixel = mapper.beat_to_pixel(Beats::from_f32(7.5));
         let beat = mapper.pixel_to_beat(pixel);
         assert!((beat - 7.5).abs() < 0.001);
     }
@@ -294,8 +296,8 @@ mod tests {
     fn beat_to_pixel_absolute_ignores_scroll() {
         let mut mapper = CoordinateMapper::new();
         mapper.set_scroll_offset_x(200.0);
-        let absolute = mapper.beat_to_pixel_absolute(4.0);
-        let scrolled = mapper.beat_to_pixel(4.0);
+        let absolute = mapper.beat_to_pixel_absolute(Beats::from_f32(4.0));
+        let scrolled = mapper.beat_to_pixel(Beats::from_f32(4.0));
 
         assert!((absolute - 4.0 * 120.0).abs() < 0.001);
         assert!((scrolled - (absolute - 200.0)).abs() < 0.001);

@@ -404,7 +404,7 @@ impl Application {
                         let beat = marker.beat;
                         let name = marker.name.clone();
                         // Anchor to marker flag position in the ruler
-                        let px = self.ui_root.viewport.beat_to_pixel(beat);
+                        let px = self.ui_root.viewport.beat_to_pixel(manifold_core::Beats::from_f32(beat));
                         let ruler = self.ui_root.viewport.ruler_rect();
                         let flag_w = manifold_ui::color::MARKER_FLAG_WIDTH;
                         let r = crate::text_input::AnchorRect::new(
@@ -628,7 +628,7 @@ impl Application {
 
         // 5. Push performance metrics to HUD
         if self.ui_root.perf_hud.is_visible() {
-            let bpm = Some(&self.local_project).map(|p| p.settings.bpm).unwrap_or(120.0);
+            let bpm = Some(&self.local_project).map(|p| p.settings.bpm).unwrap_or(manifold_core::Bpm(120.0));
             let clock_source = Some(&self.local_project)
                 .map(|p| p.settings.clock_authority.display_name().to_string())
                 .unwrap_or_else(|| "Internal".to_string());
@@ -640,7 +640,7 @@ impl Application {
                 render_target_fps: self.content_state.frame_rate as f32,
                 active_clips: self.content_state.active_clips,
                 preparing_clips: 0,
-                current_beat: self.content_state.current_beat as f32,
+                current_beat: manifold_core::Beats(self.content_state.current_beat),
                 current_time_secs: self.content_state.current_time,
                 bpm,
                 clock_source,

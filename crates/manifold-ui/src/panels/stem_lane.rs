@@ -8,6 +8,7 @@
 //! Unity: `StemWaveformLane` + `StemLaneGroup`.
 
 use crate::bitmap_painter::fill_rect;
+use manifold_core::units::Beats;
 use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
@@ -400,7 +401,7 @@ impl StemLaneGroupPanel {
             // Draw waveform if this stem has audio
             if lane.renderer.is_ready() && lane.renderer.clip_duration_seconds() > 0.0 {
                 let waveform_x =
-                    mapper.beat_to_pixel_absolute(self.waveform_start_beat.max(0.0));
+                    mapper.beat_to_pixel_absolute(Beats::from_f32(self.waveform_start_beat.max(0.0)));
 
                 let stem_width = mapper.beat_duration_to_width(
                     self.waveform_duration_beats_for_stem(i),

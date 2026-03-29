@@ -197,7 +197,7 @@ pub(super) fn dispatch_project(
             // audio AND all clips by the clamped delta.
             if !ui.waveform_lane.has_drag_start_beat() {
                 if let Some(state) = project.percussion_import.as_ref() {
-                    ui.waveform_lane.set_drag_start_beat(state.audio_start_beat);
+                    ui.waveform_lane.set_drag_start_beat(manifold_core::Beats::from_f32(state.audio_start_beat));
                 }
                 // Snapshot all clips (Unity lines 1366-1377)
                 ui.waveform_lane.waveform_drag_clip_snapshots.clear();

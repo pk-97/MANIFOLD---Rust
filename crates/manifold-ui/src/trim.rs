@@ -6,13 +6,15 @@
 // - Minimum clip duration is 0.25 beats (1/16 note)
 // - Right trim on non-looping video clips clamps to source length
 
+use manifold_core::Beats;
+
 /// Minimum clip duration in beats (1/16 note).
 pub const MIN_CLIP_DURATION_BEATS: f32 = 0.25;
 
 /// Result of a trim computation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrimResult {
-    pub new_start_beat: f32,
+    pub new_start_beat: Beats,
     pub new_duration_beats: f32,
     pub new_in_point: f32,
 }
@@ -64,7 +66,7 @@ pub fn compute_left_trim(
     let new_in_point = (original_in_point + beat_delta * spb).max(0.0);
 
     TrimResult {
-        new_start_beat: new_start,
+        new_start_beat: Beats::from_f32(new_start),
         new_duration_beats: new_duration,
         new_in_point,
     }
@@ -112,7 +114,7 @@ pub fn compute_right_trim(
     let new_duration = new_end - clip_start;
 
     TrimResult {
-        new_start_beat: clip_start,
+        new_start_beat: Beats::from_f32(clip_start),
         new_duration_beats: new_duration,
         new_in_point: original_in_point,
     }
@@ -128,7 +130,7 @@ mod tests {
     fn left_trim_video_clamps_to_original_start() {
         // Video clip at beat 4, duration 4. Try to extend left to beat 2.
         let result = compute_left_trim(2.0, 4.0, 4.0, 0.0, SPB, false, MIN_CLIP_DURATION_BEATS);
-        assert_eq!(result.new_start_beat, 4.0); // Clamped to original start
+        assert_eq!(result.new_start_beat, Beats::from_f32(4.0)); // Clamped to original start
         assert_eq!(result.new_duration_beats, 4.0); // Unchanged
         assert_eq!(result.new_in_point, 0.0); // Unchanged
     }
@@ -137,7 +139,7 @@ mod tests {
     fn left_trim_video_shortens_from_start() {
         // Video clip at beat 4, duration 4. Trim left to beat 6.
         let result = compute_left_trim(6.0, 4.0, 4.0, 0.0, SPB, false, MIN_CLIP_DURATION_BEATS);
-        assert_eq!(result.new_start_beat, 6.0);
+        assert_eq!(result.new_start_beat, Beats::from_f32(6.0));
         assert_eq!(result.new_duration_beats, 2.0);
         assert_eq!(result.new_in_point, 1.0); // 2 beats * 0.5 spb = 1.0s
     }
@@ -146,7 +148,7 @@ mod tests {
     fn left_trim_generator_extends_freely() {
         // Generator clip at beat 4, duration 4. Extend left to beat 2.
         let result = compute_left_trim(2.0, 4.0, 4.0, 0.0, SPB, true, MIN_CLIP_DURATION_BEATS);
-        assert_eq!(result.new_start_beat, 2.0); // Extended to beat 2
+        assert_eq!(result.new_start_beat, Beats::from_f32(2.0)); // Extended to beat 2
         assert_eq!(result.new_duration_beats, 6.0); // 8 - 2
     }
 
@@ -154,7 +156,7 @@ mod tests {
     fn left_trim_enforces_minimum_duration() {
         // Video clip at beat 4, duration 1. Try to trim to beat 7.9 (would leave 0.1 beats).
         let result = compute_left_trim(7.9, 4.0, 4.0, 0.0, SPB, false, MIN_CLIP_DURATION_BEATS);
-        assert_eq!(result.new_start_beat, 7.75); // 8.0 - 0.25
+        assert!((result.new_start_beat.as_f32() - 7.75).abs() < 0.001); // 8.0 - 0.25
         assert_eq!(result.new_duration_beats, MIN_CLIP_DURATION_BEATS);
     }
 
@@ -162,7 +164,7 @@ mod tests {
     fn left_trim_clamps_to_beat_zero() {
         // Generator clip at beat 2. Extend left to beat -1.
         let result = compute_left_trim(-1.0, 2.0, 4.0, 0.0, SPB, true, MIN_CLIP_DURATION_BEATS);
-        assert_eq!(result.new_start_beat, 0.0); // Clamped to 0
+        assert_eq!(result.new_start_beat, Beats::from_f32(0.0)); // Clamped to 0
         assert_eq!(result.new_duration_beats, 6.0);
     }
 

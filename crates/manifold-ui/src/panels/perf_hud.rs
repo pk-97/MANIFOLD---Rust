@@ -36,9 +36,9 @@ pub struct PerfMetrics {
     pub render_target_fps: f32,
     pub active_clips: usize,
     pub preparing_clips: usize,
-    pub current_beat: f32,
+    pub current_beat: manifold_core::Beats,
     pub current_time_secs: f32,
-    pub bpm: f32,
+    pub bpm: manifold_core::Bpm,
     pub clock_source: String,
     pub is_playing: bool,
     pub data_version: u64,
@@ -182,7 +182,7 @@ impl PerfHudPanel {
             tree.set_text(self.active_clips_id as u32, &format!("{} / {}", m.active_clips, m.preparing_clips));
         }
         if self.beat_id >= 0 {
-            tree.set_text(self.beat_id as u32, &format!("{:.2}", m.current_beat));
+            tree.set_text(self.beat_id as u32, &format!("{:.2}", m.current_beat.0));
         }
         if self.time_id >= 0 {
             let secs = m.current_time_secs;
@@ -191,7 +191,7 @@ impl PerfHudPanel {
             tree.set_text(self.time_id as u32, &format!("{}:{:05.2}", mins, s));
         }
         if self.bpm_id >= 0 {
-            tree.set_text(self.bpm_id as u32, &format!("{:.1}", m.bpm));
+            tree.set_text(self.bpm_id as u32, &format!("{:.1}", m.bpm.0));
         }
         if self.clock_id >= 0 {
             tree.set_text(self.clock_id as u32, &m.clock_source);

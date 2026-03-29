@@ -775,8 +775,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn set_export_in_at_playhead(&mut self) {
         let beat = self.content_state.current_beat as f32;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
-        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
-        self.project.timeline.export_in_beat = manifold_core::Beats::from_f32(snapped);
+        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(manifold_core::Beats::from_f32(beat), bpb);
+        self.project.timeline.export_in_beat = snapped;
         self.project.timeline.export_range_enabled = true;
         // Push to viewport immediately so build() sees it this frame
         self.ui_root.viewport.set_export_range(
@@ -787,7 +787,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_rebuild = true;
         ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
             Box::new(move |p| {
-                p.timeline.export_in_beat = manifold_core::Beats::from_f32(snapped);
+                p.timeline.export_in_beat = snapped;
                 p.timeline.export_range_enabled = true;
             }),
         ));
@@ -796,8 +796,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn set_export_out_at_playhead(&mut self) {
         let beat = self.content_state.current_beat as f32;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
-        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
-        self.project.timeline.export_out_beat = manifold_core::Beats::from_f32(snapped);
+        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(manifold_core::Beats::from_f32(beat), bpb);
+        self.project.timeline.export_out_beat = snapped;
         self.project.timeline.export_range_enabled = true;
         self.ui_root.viewport.set_export_range(
             self.project.timeline.export_in_beat,
@@ -807,7 +807,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_rebuild = true;
         ContentCommand::send(self.content_tx, ContentCommand::MutateProject(
             Box::new(move |p| {
-                p.timeline.export_out_beat = manifold_core::Beats::from_f32(snapped);
+                p.timeline.export_out_beat = snapped;
                 p.timeline.export_range_enabled = true;
             }),
         ));
@@ -1111,7 +1111,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         let beat = self.content_state.current_beat as f32;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
-        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(beat, bpb);
+        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(manifold_core::Beats::from_f32(beat), bpb);
         let marker = TimelineMarker::new(snapped);
 
         let mut boxed: Box<dyn manifold_editing::command::Command + Send> =
