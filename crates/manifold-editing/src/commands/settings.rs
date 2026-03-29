@@ -519,6 +519,31 @@ impl Command for SetDisplayDimensionsCommand {
     fn description(&self) -> &str { "Set Display Resolution" }
 }
 
+/// Change render scale (0.5, 0.75, or 1.0 for FSR upscaling).
+#[derive(Debug)]
+pub struct ChangeRenderScaleCommand {
+    old_scale: f32,
+    new_scale: f32,
+}
+
+impl ChangeRenderScaleCommand {
+    pub fn new(old_scale: f32, new_scale: f32) -> Self {
+        Self { old_scale, new_scale }
+    }
+}
+
+impl Command for ChangeRenderScaleCommand {
+    fn execute(&mut self, project: &mut Project) {
+        project.settings.render_scale = self.new_scale;
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        project.settings.render_scale = self.old_scale;
+    }
+
+    fn description(&self) -> &str { "Change Render Scale" }
+}
+
 /// Clear percussion import state (remove audio + stems).
 #[derive(Debug)]
 pub struct ClearPercussionCommand {

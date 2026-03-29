@@ -16,6 +16,8 @@ const QUANTIZE_LABEL_W: f32 = 20.0;
 const QUANTIZE_BUTTON_W: f32 = 44.0;
 const RESOLUTION_LABEL_W: f32 = 32.0;
 const RESOLUTION_BUTTON_W: f32 = 120.0;
+const SCALE_BUTTON_W: f32 = 28.0;
+const SCALE_BTN_GAP: f32 = 2.0;
 const FPS_LABEL_W: f32 = 32.0;
 const FPS_FIELD_W: f32 = 46.0;
 const RIGHT_GUTTER: f32 = 10.0;
@@ -24,6 +26,7 @@ const RIGHT_GUTTER: f32 = 10.0;
 
 const FOOTER_BTN_HOVER: Color32 = color::FOOTER_BTN_HOVER;
 const FOOTER_BTN_PRESSED: Color32 = color::FOOTER_BTN_PRESSED;
+const FOOTER_SCALE_ACTIVE: Color32 = color::HEADER_BUTTON_ACTIVE;
 
 const FOOTER_FONT: u16 = 11;
 
@@ -36,6 +39,9 @@ struct FooterLayout {
     quantize_button: Rect,
     resolution_label: Rect,
     resolution_button: Rect,
+    scale_100: Rect,
+    scale_75: Rect,
+    scale_50: Rect,
     fps_label: Rect,
     fps_field: Rect,
 }
@@ -53,6 +59,16 @@ impl FooterLayout {
         rx -= LABEL_GAP;
         rx -= FPS_LABEL_W;
         self.fps_label = Rect::new(rx, y, FPS_LABEL_W, elem_h);
+        rx -= SECTION_SPACER;
+
+        // Render scale buttons: [1x] [75%] [50%]
+        // Right-to-left → subtract 50% first (rightmost), 1x last (leftmost)
+        rx -= SCALE_BUTTON_W;
+        self.scale_50 = Rect::new(rx, y, SCALE_BUTTON_W, elem_h);
+        rx -= SCALE_BTN_GAP + SCALE_BUTTON_W;
+        self.scale_75 = Rect::new(rx, y, SCALE_BUTTON_W, elem_h);
+        rx -= SCALE_BTN_GAP + SCALE_BUTTON_W;
+        self.scale_100 = Rect::new(rx, y, SCALE_BUTTON_W, elem_h);
         rx -= SECTION_SPACER;
 
         rx -= RESOLUTION_BUTTON_W;
@@ -86,6 +102,9 @@ pub struct FooterPanel {
     quantize_button_id: i32,
     resolution_label_id: i32,
     resolution_button_id: i32,
+    scale_100_id: i32,
+    scale_75_id: i32,
+    scale_50_id: i32,
     fps_label_id: i32,
     fps_field_id: i32,
 
@@ -94,6 +113,7 @@ pub struct FooterPanel {
     quantize_text: String,
     resolution_text: String,
     fps_text: String,
+    current_render_scale: f32,
 }
 
 impl FooterPanel {
@@ -105,12 +125,16 @@ impl FooterPanel {
             quantize_button_id: -1,
             resolution_label_id: -1,
             resolution_button_id: -1,
+            scale_100_id: -1,
+            scale_75_id: -1,
+            scale_50_id: -1,
             fps_label_id: -1,
             fps_field_id: -1,
             selection_info: String::new(),
             quantize_text: "Off".into(),
             resolution_text: "1080p".into(),
             fps_text: "60".into(),
+            current_render_scale: 1.0,
         }
     }
 
@@ -141,6 +165,29 @@ impl FooterPanel {
         if self.fps_field_id >= 0 { tree.set_text(self.fps_field_id as u32, text); }
     }
 
+    /// Highlight the active render scale button. No-op if scale unchanged.
+    pub fn set_render_scale(&mut self, tree: &mut UITree, scale: f32) {
+        if (scale - self.current_render_scale).abs() < 0.01 { return; }
+        self.current_render_scale = scale;
+        self.refresh_scale_button_styles(tree);
+    }
+
+    fn refresh_scale_button_styles(&self, tree: &mut UITree) {
+        let ids = [
+            (self.scale_100_id, 1.0f32),
+            (self.scale_75_id,  0.75),
+            (self.scale_50_id,  0.5),
+        ];
+        for (id, val) in ids {
+            if id < 0 { continue; }
+            let active = (val - self.current_render_scale).abs() < 0.01;
+            tree.set_style(id as u32, UIStyle {
+                bg_color: if active { FOOTER_SCALE_ACTIVE } else { color::BUTTON_INACTIVE_C32 },
+                ..Self::footer_button_style()
+            });
+        }
+    }
+
     fn footer_button_style() -> UIStyle {
         UIStyle {
             bg_color: color::BUTTON_INACTIVE_C32,
@@ -154,11 +201,22 @@ impl FooterPanel {
         }
     }
 
+    fn scale_button_style_for(&self, scale: f32) -> UIStyle {
+        let active = (scale - self.current_render_scale).abs() < 0.01;
+        UIStyle {
+            bg_color: if active { FOOTER_SCALE_ACTIVE } else { color::BUTTON_INACTIVE_C32 },
+            ..Self::footer_button_style()
+        }
+    }
+
     fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
-        if id == self.quantize_button_id { return vec![PanelAction::CycleQuantize]; }
+        if id == self.quantize_button_id  { return vec![PanelAction::CycleQuantize]; }
         if id == self.resolution_button_id { return vec![PanelAction::ResolutionClicked]; }
-        if id == self.fps_field_id { return vec![PanelAction::FpsFieldClicked]; }
+        if id == self.fps_field_id         { return vec![PanelAction::FpsFieldClicked]; }
+        if id == self.scale_100_id         { return vec![PanelAction::SetRenderScale(1.0)]; }
+        if id == self.scale_75_id          { return vec![PanelAction::SetRenderScale(0.75)]; }
+        if id == self.scale_50_id          { return vec![PanelAction::SetRenderScale(0.5)]; }
         Vec::new()
     }
 }
@@ -232,6 +290,28 @@ impl Panel for FooterPanel {
             Self::footer_button_style(), &resolution_text,
         ) as i32;
 
+        // Render scale buttons: [1x] [75%] [50%]
+        self.scale_100_id = tree.add_button(
+            bg,
+            self.layout.scale_100.x, self.layout.scale_100.y,
+            self.layout.scale_100.width, self.layout.scale_100.height,
+            self.scale_button_style_for(1.0), "1×",
+        ) as i32;
+
+        self.scale_75_id = tree.add_button(
+            bg,
+            self.layout.scale_75.x, self.layout.scale_75.y,
+            self.layout.scale_75.width, self.layout.scale_75.height,
+            self.scale_button_style_for(0.75), "75%",
+        ) as i32;
+
+        self.scale_50_id = tree.add_button(
+            bg,
+            self.layout.scale_50.x, self.layout.scale_50.y,
+            self.layout.scale_50.width, self.layout.scale_50.height,
+            self.scale_button_style_for(0.5), "50%",
+        ) as i32;
+
         // FPS
         self.fps_label_id = tree.add_node(
             bg, self.layout.fps_label, UINodeType::Label,
@@ -277,8 +357,11 @@ mod tests {
         assert!(panel.selection_info_id >= 0);
         assert!(panel.quantize_button_id >= 0);
         assert!(panel.resolution_button_id >= 0);
+        assert!(panel.scale_100_id >= 0);
+        assert!(panel.scale_75_id >= 0);
+        assert!(panel.scale_50_id >= 0);
         assert!(panel.fps_field_id >= 0);
-        assert!(tree.count() >= 8); // bg + 7 elements
+        assert!(tree.count() >= 11); // bg + 10 elements
     }
 
     #[test]
@@ -291,6 +374,21 @@ mod tests {
         let a = panel.handle_click(panel.quantize_button_id as u32);
         assert_eq!(a.len(), 1);
         assert!(matches!(a[0], PanelAction::CycleQuantize));
+    }
+
+    #[test]
+    fn handle_click_scale_buttons() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = FooterPanel::new();
+        panel.build(&mut tree, &layout);
+
+        let a = panel.handle_click(panel.scale_100_id as u32);
+        assert!(matches!(a[0], PanelAction::SetRenderScale(s) if (s - 1.0).abs() < 0.01));
+        let b = panel.handle_click(panel.scale_75_id as u32);
+        assert!(matches!(b[0], PanelAction::SetRenderScale(s) if (s - 0.75).abs() < 0.01));
+        let c = panel.handle_click(panel.scale_50_id as u32);
+        assert!(matches!(c[0], PanelAction::SetRenderScale(s) if (s - 0.5).abs() < 0.01));
     }
 
     #[test]
@@ -307,5 +405,20 @@ mod tests {
             tree.get_node(panel.fps_field_id as u32).text.as_deref(),
             Some("30")
         );
+    }
+
+    #[test]
+    fn set_render_scale_updates_style() {
+        let mut tree = UITree::new();
+        let layout = ScreenLayout::new(1920.0, 1080.0);
+        let mut panel = FooterPanel::new();
+        panel.build(&mut tree, &layout);
+
+        // Default is 1.0 — scale_100 should be active
+        assert_eq!(panel.current_render_scale, 1.0);
+
+        // Switch to 0.75 — should not panic and should update state
+        panel.set_render_scale(&mut tree, 0.75);
+        assert!((panel.current_render_scale - 0.75).abs() < 0.01);
     }
 }

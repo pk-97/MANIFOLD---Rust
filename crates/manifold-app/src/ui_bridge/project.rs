@@ -119,6 +119,17 @@ pub(super) fn dispatch_project(
             { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             DispatchResult::resolution()
         }
+        PanelAction::SetRenderScale(scale) => {
+            let old_scale = project.settings.render_scale;
+            let new_scale = scale.clamp(0.01, 1.0);
+            if (new_scale - old_scale).abs() > 0.01 {
+                let cmd = manifold_editing::commands::settings::ChangeRenderScaleCommand::new(
+                    old_scale, new_scale,
+                );
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+            }
+            DispatchResult::resolution()
+        }
         PanelAction::SetGenType(opt_layer_id, gen_type_idx) => {
             let resolved_idx = opt_layer_id.as_ref()
                 .and_then(|lid| project.timeline.find_layer_index_by_id(lid));

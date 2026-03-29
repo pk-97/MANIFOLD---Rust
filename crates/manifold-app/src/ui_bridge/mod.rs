@@ -235,6 +235,7 @@ pub fn dispatch(
         | PanelAction::SetMidiChannel(..)
         | PanelAction::SetResolution(_)
         | PanelAction::SetDisplayResolution(..)
+        | PanelAction::SetRenderScale(_)
         | PanelAction::SetGenType(..)
         | PanelAction::ImportAudioClicked
         | PanelAction::RemoveAudioClicked
