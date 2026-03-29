@@ -543,8 +543,10 @@ impl MidiClockSyncController {
         }
 
         // Clear MANIFOLD ownership when CLK shows stopped (port of C# lines 283-287).
+        // Use grace-period-aware clear to avoid premature clearing during the
+        // OSC→DAW→MIDI round trip (Ableton needs time to process and reflect state).
         if manifold_owns && (!has_recent_clock_activity || !is_playing) {
-            arbiter.clear_ownership();
+            arbiter.clear_ownership_if_expired(now);
         }
 
         // Position sync — gated by arbiter authority check (port of C# lines 290-295).

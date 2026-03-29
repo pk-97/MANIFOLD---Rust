@@ -103,7 +103,7 @@ impl OscPositionSender {
 
             if is_playing {
                 self.try_send_float("/manifold/play", current_beat);
-                arbiter.set_manifold_owns();
+                arbiter.set_manifold_owns_at(now as f32);
             } else {
                 self.try_send_int("/manifold/transport", 0);
                 // Don't clear ManifoldOwnsPlayback here — CLK still shows

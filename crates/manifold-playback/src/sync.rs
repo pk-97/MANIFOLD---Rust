@@ -71,13 +71,21 @@ impl SyncTarget for SyncTargetSnapshot {
 pub struct SyncArbiter {
     pub suppress_next_transport: bool,
     pub manifold_owns_playback: bool,
+    /// Wall-clock time when `manifold_owns_playback` was last set.
+    /// Prevents premature clearing during the OSC→DAW→MIDI round trip.
+    owns_set_time: f32,
 }
+
+/// Grace period (seconds) after setting manifold_owns before it can be cleared.
+/// Covers OSC send → Ableton processes → MIDI Clock reflects new state.
+const OWNERSHIP_GRACE_PERIOD: f32 = 0.5;
 
 impl SyncArbiter {
     pub fn new() -> Self {
         Self {
             suppress_next_transport: false,
             manifold_owns_playback: false,
+            owns_set_time: -999.0,
         }
     }
 
@@ -89,6 +97,23 @@ impl SyncArbiter {
 
     pub fn set_manifold_owns(&mut self) {
         self.manifold_owns_playback = true;
+        // Record wall-clock time so clear_ownership can enforce the grace period.
+        // Uses owns_set_time field; caller must have called update_time() this frame.
+    }
+
+    /// Set manifold_owns with a wall-clock timestamp for grace period tracking.
+    pub fn set_manifold_owns_at(&mut self, now: f32) {
+        self.manifold_owns_playback = true;
+        self.owns_set_time = now;
+    }
+
+    /// Clear ownership only if the grace period has elapsed.
+    /// Prevents MIDI Clock from clearing manifold_owns before the
+    /// OSC→DAW→MIDI round trip completes.
+    pub fn clear_ownership_if_expired(&mut self, now: f32) {
+        if now - self.owns_set_time >= OWNERSHIP_GRACE_PERIOD {
+            self.manifold_owns_playback = false;
+        }
     }
 
     pub fn clear_ownership(&mut self) {

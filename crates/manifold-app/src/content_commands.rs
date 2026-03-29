@@ -23,7 +23,7 @@ impl ContentThread {
                 // In Unity this worked naturally because OscPositionSender ran
                 // in LateUpdate (same frame) and MidiClockSync ran next frame.
                 if self.osc_sender.is_sender_enabled() {
-                    self.sync_arbiter.set_manifold_owns();
+                    self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
                 }
                 // Align transport to active external beat source BEFORE
                 // the first sync pass. Port of C# PlaybackController.Play() lines 631-643.
@@ -44,7 +44,7 @@ impl ContentThread {
             ContentCommand::Pause => {
                 // Claim ownership so MIDI Clock doesn't re-play immediately.
                 if self.osc_sender.is_sender_enabled() {
-                    self.sync_arbiter.set_manifold_owns();
+                    self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
                 }
                 // End tempo recording session on pause.
                 // Port of C# PlaybackController.Pause → tempoRecorder.EndSessionIfActive.
@@ -53,7 +53,7 @@ impl ContentThread {
             }
             ContentCommand::Stop => {
                 if self.osc_sender.is_sender_enabled() {
-                    self.sync_arbiter.set_manifold_owns();
+                    self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
                 }
                 // End tempo recording session on stop.
                 self.end_tempo_recording_session();
@@ -62,7 +62,7 @@ impl ContentThread {
             }
             ContentCommand::TogglePlayback => {
                 if self.osc_sender.is_sender_enabled() {
-                    self.sync_arbiter.set_manifold_owns();
+                    self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
                 }
                 if self.engine.is_playing() {
                     self.end_tempo_recording_session();
