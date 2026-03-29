@@ -411,6 +411,21 @@ impl PlaybackEngine {
         self.current_beat = beat.0;
     }
 
+    /// Derive `current_time` / `current_time_double` from the current beat
+    /// using the active tempo map. Call after `set_beat()` when the beat is
+    /// the authoritative time source (external clock: Link, MIDI Clock).
+    pub fn sync_time_from_beat(&mut self) {
+        if let Some(project) = &mut self.project {
+            let secs = TempoMapConverter::beat_to_seconds(
+                &mut project.tempo_map,
+                Beats(self.current_beat),
+                project.settings.bpm,
+            );
+            self.current_time_double = secs.0.max(0.0);
+            self.current_time = self.current_time_double as f32;
+        }
+    }
+
     pub fn set_playback_speed(&mut self, speed: f32) {
         self.playback_speed = speed.clamp(MIN_CLIP_PLAYBACK_RATE, MAX_CLIP_PLAYBACK_RATE);
     }

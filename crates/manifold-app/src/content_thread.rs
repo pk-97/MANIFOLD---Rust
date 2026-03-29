@@ -846,6 +846,7 @@ impl ContentThread {
                     {
                         self.engine
                             .set_beat(Beats(link.current_beat.0 - self.link_beat_offset));
+                        self.engine.sync_time_from_beat();
                     }
             }
             ClockAuthority::MidiClock => {
@@ -853,6 +854,7 @@ impl ContentThread {
                     && let Some(ref clk) = self.transport_controller.midi_clock_sync
                         && clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
                             self.engine.set_beat(Beats::from_f32(clk.current_clock_beat()));
+                            self.engine.sync_time_from_beat();
                         }
                         // else: beat derived from time (engine handles this in advance_time)
             }
