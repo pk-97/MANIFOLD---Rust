@@ -63,20 +63,21 @@ impl EditingService {
         self.data_version += 1;
 
         #[cfg(debug_assertions)]
-        Self::debug_assert_no_overlaps(&project.timeline.layers);
+        Self::warn_overlapping_clips(&project.timeline.layers);
     }
 
-    /// Debug-only check: no layer should contain overlapping clips after
-    /// any editing command. Fires on debug builds only — zero cost in release.
+    /// Debug-only check: log a warning if any layer has overlapping clips.
+    /// Non-fatal — projects saved before the fix may contain pre-existing overlaps.
     #[cfg(debug_assertions)]
-    fn debug_assert_no_overlaps(layers: &[manifold_core::layer::Layer]) {
+    fn warn_overlapping_clips(layers: &[manifold_core::layer::Layer]) {
         for layer in layers {
-            debug_assert!(
-                !layer.has_overlapping_clips(),
-                "Overlap invariant violated on layer {:?} ({} clips)",
-                layer.layer_id,
-                layer.clips.len(),
-            );
+            if layer.has_overlapping_clips() {
+                eprintln!(
+                    "[overlap] WARNING: layer {:?} has overlapping clips ({} clips)",
+                    layer.layer_id,
+                    layer.clips.len(),
+                );
+            }
         }
     }
 

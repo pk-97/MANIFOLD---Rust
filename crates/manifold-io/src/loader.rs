@@ -139,6 +139,60 @@ pub fn run_post_load_validation(project: &mut Project) {
             purge_result.midi_mappings_removed
         );
     }
+
+    // Step 8: Repair pre-existing clip overlaps.
+    // Projects saved before overlap enforcement was added to all mutation paths
+    // may contain overlapping clips. Remove the shorter clip in each collision.
+    repair_overlapping_clips(project);
+}
+
+/// Repair overlapping clips by removing the shorter clip in each collision pair.
+/// Only needed for projects saved before overlap enforcement was complete.
+fn repair_overlapping_clips(project: &mut Project) {
+    let mut total_removed = 0usize;
+    for layer in &mut project.timeline.layers {
+        if !layer.has_overlapping_clips() {
+            continue;
+        }
+
+        // Sort by start_beat, sweep to find overlaps, mark shorter clip for removal.
+        // Iterate until no overlaps remain (removal may reveal new overlaps).
+        loop {
+            let mut remove_ids: Vec<manifold_core::ClipId> = Vec::new();
+            let mut sorted: Vec<(usize, manifold_core::Beats, manifold_core::Beats)> = layer.clips
+                .iter()
+                .enumerate()
+                .map(|(i, c)| (i, c.start_beat, c.end_beat()))
+                .collect();
+            sorted.sort_by(|a, b| a.1.partial_cmp(&b.1)
+                .unwrap_or(std::cmp::Ordering::Equal));
+
+            for w in sorted.windows(2) {
+                if w[0].2 > w[1].1 {
+                    // Overlap: remove the shorter clip
+                    let dur_a = w[0].2 - w[0].1;
+                    let dur_b = w[1].2 - w[1].1;
+                    let remove_idx = if dur_a <= dur_b { w[0].0 } else { w[1].0 };
+                    remove_ids.push(layer.clips[remove_idx].id.clone());
+                }
+            }
+
+            if remove_ids.is_empty() {
+                break;
+            }
+            for id in &remove_ids {
+                layer.remove_clip(id);
+                total_removed += 1;
+            }
+        }
+    }
+    if total_removed > 0 {
+        log::warn!(
+            "[Loader] Repaired {} overlapping clips across timeline layers",
+            total_removed
+        );
+        project.timeline.mark_clip_lookup_dirty();
+    }
 }
 
 #[derive(Debug)]
