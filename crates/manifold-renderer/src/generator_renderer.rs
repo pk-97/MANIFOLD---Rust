@@ -25,6 +25,10 @@ struct ActiveClip {
     layer_id: LayerId,
     layer_index: i32, // positional cache for param lookup in render_all
     anim_progress: f32,
+    /// True on the first frame after acquiring a reused render target.
+    /// Cleared to opaque black before the generator renders to prevent
+    /// stale content from a previous clip/layer leaking through.
+    needs_clear: bool,
 }
 
 impl ActiveClip {
@@ -262,6 +266,8 @@ impl GeneratorRenderer {
             None
         };
 
+        // Reused RTs may contain stale content from a different clip/layer.
+        // Clear before the generator renders to prevent cross-layer bleed.
         self.active_clips.insert(
             clip_id.to_string(),
             ActiveClip {
@@ -272,6 +278,7 @@ impl GeneratorRenderer {
                 layer_id,
                 layer_index,
                 anim_progress: 0.0,
+                needs_clear: true,
             },
         );
 
@@ -377,6 +384,12 @@ impl GeneratorRenderer {
                 && let Some(layer_state) = self.layer_generators.get_mut(&layer.layer_id)
                 && let Some(active) = self.active_clips.get_mut(id.as_str())
             {
+                // Clear reused render targets to prevent stale content from a
+                // previous clip/layer leaking through on the first frame.
+                if active.needs_clear {
+                    gpu.clear_texture(&active.render_target.texture, 0.0, 0.0, 0.0, 0.0);
+                    active.needs_clear = false;
+                }
                 let new_progress = layer_state.generator.render(
                     gpu,
                     &active.render_target.texture,
