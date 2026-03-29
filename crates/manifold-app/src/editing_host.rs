@@ -182,18 +182,36 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     fn create_clip_at_position(&mut self, beat: f32, layer: usize, grid_step: f32) -> Option<ClipId> {
         // Port of Unity EditingService.CreateClipAtPosition.
         // Beat arrives pre-snapped from the overlay. grid_step is the clip duration.
-        let duration = grid_step.max(0.25); // minimum 1/16th note
+        let mut duration = grid_step.max(0.25); // minimum 1/16th note
+
+        // Clamp duration to fit available gap — if the next clip on this layer
+        // starts before beat + duration, shrink the new clip to fill the gap
+        // instead of overlapping and destroying the neighbor.
+        if let Some(layer_ref) = self.project.timeline.layers.get(layer) {
+            let mut nearest_start = f32::MAX;
+            for clip in &layer_ref.clips {
+                let cs = clip.start_beat.as_f32();
+                if cs > beat && cs < nearest_start {
+                    nearest_start = cs;
+                }
+            }
+            if nearest_start < f32::MAX {
+                let available = nearest_start - beat;
+                duration = duration.min(available).max(0.25);
+            }
+        }
+
         let clip_id = {
             let project = Some(&mut *self.project)?;
             let (cmd, id) = EditingService::create_clip_at_position(project, manifold_core::Beats::from_f32(beat), layer, manifold_core::Beats::from_f32(duration));
             { let mut cmd = cmd; cmd.execute(project); crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(cmd)); }
             id
         };
-        // Enforce non-overlap on the newly created clip
+        // Enforce non-overlap on the newly created clip (handles edge cases
+        // like the clamped clip still overlapping due to minimum duration)
         let overlap_cmds = {
             let project = Some(&*self.project)?;
             let spb = self.get_seconds_per_beat();
-            // Linear scan — find_clip_by_id requires &mut for cache healing
             let mut found: Option<(TimelineClip, usize)> = None;
             for layer in &project.timeline.layers {
                 if let Some(clip) = layer.clips.iter().find(|c| c.id == clip_id) {
