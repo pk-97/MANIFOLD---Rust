@@ -234,6 +234,18 @@ impl ContentThread {
             }
             ContentCommand::ToggleSyncOutput => {
                 self.transport_controller.toggle_sync_output(&mut self.engine);
+                // Wire the actual socket enable/disable on OscPositionSender.
+                if self.transport_controller.osc_sender_enabled {
+                    let realtime = self.timer.realtime_since_start();
+                    self.osc_sender.enable_sender(
+                        self.transport_controller.osc_sender_port,
+                        self.engine.is_playing(),
+                        Beats::from_f32(self.engine.current_beat()),
+                        Seconds(realtime),
+                    );
+                } else {
+                    self.osc_sender.disable_sender(&mut self.sync_arbiter);
+                }
             }
             ContentCommand::SetMidiClockDevice(index) => {
                 if let Some(ref mut clk) = self.transport_controller.midi_clock_sync {
