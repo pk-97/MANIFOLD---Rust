@@ -19,7 +19,7 @@ use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::video::VideoLibrary;
-use manifold_core::Seconds;
+use manifold_core::{Beats, Seconds};
 use manifold_gpu::{GpuDevice, GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage};
 use manifold_playback::renderer::ClipRenderer;
 
@@ -529,7 +529,7 @@ impl ClipRenderer for VideoRenderer {
         }
     }
 
-    fn pre_render(&mut self, _time: f32, _beat: f32, dt: f32) {
+    fn pre_render(&mut self, _time: Seconds, _beat: Beats, dt: f32) {
         // 1. Drain decode results and update clip state.
         let results = self.scheduler.drain_results();
         self.process_decode_results(results);

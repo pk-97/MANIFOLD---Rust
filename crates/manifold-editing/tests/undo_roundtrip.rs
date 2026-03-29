@@ -88,16 +88,16 @@ fn mute_clip_undo_roundtrip() {
 fn change_bpm_undo_roundtrip() {
     let mut project = load_project("Burn V5.manifold");
 
-    let old_bpm = project.settings.bpm;
+    let old_bpm = project.settings.bpm.0;
     let new_bpm = 120.0;
 
     let mut cmd = ChangeBpmCommand::new(old_bpm, new_bpm);
 
     cmd.execute(&mut project);
-    assert!((project.settings.bpm - new_bpm).abs() < 0.01);
+    assert!((project.settings.bpm.0 - new_bpm).abs() < 0.01);
 
     cmd.undo(&mut project);
-    assert!((project.settings.bpm - old_bpm).abs() < 0.01);
+    assert!((project.settings.bpm.0 - old_bpm).abs() < 0.01);
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn undo_manager_multi_command_roundtrip() {
     let mut project = load_project("Burn V5.manifold");
     let mut undo_mgr = UndoRedoManager::new();
 
-    let original_bpm = project.settings.bpm;
+    let original_bpm = project.settings.bpm.0;
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
     let original_beat = project.timeline.layers[0].clips[0].start_beat;
 
@@ -154,7 +154,7 @@ fn undo_manager_multi_command_roundtrip() {
     undo_mgr.record(cmd2);
 
     // Verify state after both commands
-    assert!((project.settings.bpm - 120.0).abs() < 0.01);
+    assert!((project.settings.bpm.0 - 120.0).abs() < 0.01);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert!((clip.start_beat - (original_beat + Beats(8.0))).abs() < Beats(0.001));
 
@@ -163,15 +163,15 @@ fn undo_manager_multi_command_roundtrip() {
     assert!(undo_mgr.undo(&mut project));
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
     assert!((clip.start_beat - original_beat).abs() < Beats(0.001));
-    assert!((project.settings.bpm - 120.0).abs() < 0.01); // BPM unchanged
+    assert!((project.settings.bpm.0 - 120.0).abs() < 0.01); // BPM unchanged
 
     // Undo command 1
     assert!(undo_mgr.undo(&mut project));
-    assert!((project.settings.bpm - original_bpm).abs() < 0.01);
+    assert!((project.settings.bpm.0 - original_bpm).abs() < 0.01);
 
     // Redo both
     assert!(undo_mgr.redo(&mut project));
-    assert!((project.settings.bpm - 120.0).abs() < 0.01);
+    assert!((project.settings.bpm.0 - 120.0).abs() < 0.01);
 
     assert!(undo_mgr.redo(&mut project));
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();

@@ -308,6 +308,53 @@ impl Neg for Seconds {
     fn neg(self) -> Seconds { Seconds(-self.0) }
 }
 
+// ─── Bpm ─────────────────────────────────────────────────────────────────────
+
+/// A tempo value in beats per minute.
+///
+/// Distinct from `Beats` (a count/position) and `Seconds` (a duration).
+/// Clamped to 20–300 at all entry points to match Unity behaviour.
+/// `f32` precision is sufficient — BPM accuracy needs at most 0.01 BPM.
+#[derive(Clone, Copy, Debug, Default, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Bpm(pub f32);
+
+impl Bpm {
+    pub const DEFAULT: Bpm = Bpm(120.0);
+    pub const MIN: Bpm = Bpm(20.0);
+    pub const MAX: Bpm = Bpm(300.0);
+
+    #[inline]
+    pub fn clamped(v: f32) -> Self { Bpm(v.clamp(20.0, 300.0)) }
+
+    /// Beats per second derived from this BPM.
+    #[inline]
+    pub fn beats_per_second(self) -> f64 { self.0 as f64 / 60.0 }
+
+    /// Seconds per beat derived from this BPM.
+    #[inline]
+    pub fn seconds_per_beat(self) -> f64 { 60.0 / self.0 as f64 }
+
+    #[inline]
+    pub fn is_valid(self) -> bool { self.0 >= 20.0 && self.0 <= 300.0 }
+}
+
+impl fmt::Display for Bpm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:.2} BPM", self.0)
+    }
+}
+
+impl From<f32> for Bpm {
+    #[inline]
+    fn from(v: f32) -> Self { Bpm(v) }
+}
+
+impl From<Bpm> for f32 {
+    #[inline]
+    fn from(b: Bpm) -> f32 { b.0 }
+}
+
 // ─── Cross-unit helpers ───────────────────────────────────────────────────────
 
 /// `beats_per_second` = BPM / 60.

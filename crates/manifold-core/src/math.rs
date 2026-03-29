@@ -1,3 +1,5 @@
+use crate::units::{Beats, Seconds};
+
 /// Beat quantization constants matching C# BeatQuantizer.
 pub struct BeatQuantizer;
 
@@ -11,17 +13,19 @@ impl BeatQuantizer {
         (clamped / Self::BPM_STEP).round() * Self::BPM_STEP
     }
 
-    pub fn quantize_beat(beat: f32) -> f32 {
-        (beat / Self::BEAT_STEP).round() * Self::BEAT_STEP
+    pub fn quantize_beat(beat: Beats) -> Beats {
+        let step = Self::BEAT_STEP as f64;
+        Beats((beat.0 / step).round() * step)
     }
 
-    pub fn quantize_time_seconds(seconds: f32) -> f32 {
+    pub fn quantize_time_seconds(seconds: Seconds) -> Seconds {
         // Keep negative sentinel values (e.g. -1 for unknown) as-is.
         // Unity BeatQuantizer.cs lines 30-36.
-        if seconds < 0.0 {
+        if seconds.0 < 0.0 {
             return seconds;
         }
-        (seconds / Self::TIME_SECONDS_STEP).round() * Self::TIME_SECONDS_STEP
+        let step = Self::TIME_SECONDS_STEP as f64;
+        Seconds((seconds.0 / step).round() * step)
     }
 }
 

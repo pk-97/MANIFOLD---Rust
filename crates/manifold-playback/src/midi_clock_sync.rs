@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use manifold_core::types::ClockAuthority;
+use manifold_core::Beats;
 
 use crate::sync::{SyncArbiter, SyncArbiterTarget, SyncTarget};
 use crate::sync_source::SyncSource;
@@ -663,7 +664,7 @@ impl MidiClockSyncController {
         // Include sub-sixteenth tick for 24 PPQN precision (port of C# lines 375-377).
         // 6 ticks per sixteenth, 4 sixteenths per beat.
         let clock_beat = (pos_sixteenths as f32 + clock_tick as f32 / 6.0) / 4.0;
-        let clock_time = sync_target.timeline_beat_to_time(clock_beat);
+        let clock_time = sync_target.timeline_beat_to_time(Beats::from_f32(clock_beat)).as_f32();
         let mut is_transport_jump = false;
 
         if !self.transport_time_integrator_initialized {

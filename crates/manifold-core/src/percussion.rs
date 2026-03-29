@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use crate::units::Beats;
 
 /// Placement data for an imported percussion clip.
 /// Port of Unity ImportedPercussionClipPlacement (Project.cs lines 398-492).
@@ -71,7 +72,7 @@ pub struct PercussionImportState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_path: Option<String>,
     #[serde(default)]
-    pub audio_start_beat: f32,
+    pub audio_start_beat: Beats,
     #[serde(default)]
     pub clip_placements: Vec<ImportedPercussionClipPlacement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -117,6 +118,6 @@ impl PercussionImportState {
         }
 
         // Clamp audio_start_beat to >= 0
-        self.audio_start_beat = self.audio_start_beat.max(0.0);
+        self.audio_start_beat = self.audio_start_beat.max(Beats::ZERO);
     }
 }

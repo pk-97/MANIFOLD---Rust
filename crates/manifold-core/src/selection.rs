@@ -1,11 +1,12 @@
 use std::collections::HashSet;
 use crate::LayerId;
+use crate::units::Beats;
 
 /// Region-based selection on the timeline.
 #[derive(Debug, Clone, Default)]
 pub struct SelectionRegion {
-    pub start_beat: f32,
-    pub end_beat: f32,
+    pub start_beat: Beats,
+    pub end_beat: Beats,
     pub is_active: bool,
 
     // ── LayerId-based fields (stable identity) ──
@@ -17,8 +18,8 @@ pub struct SelectionRegion {
 impl SelectionRegion {
     /// Create a region with stable LayerIds. Computes `selected_layer_ids` from the layer array.
     pub fn new_with_ids(
-        start_beat: f32,
-        end_beat: f32,
+        start_beat: Beats,
+        end_beat: Beats,
         start_layer_id: LayerId,
         end_layer_id: LayerId,
         layers: &[crate::layer::Layer],
@@ -45,7 +46,7 @@ impl SelectionRegion {
         }
     }
 
-    pub fn contains_beat(&self, beat: f32) -> bool {
+    pub fn contains_beat(&self, beat: Beats) -> bool {
         beat >= self.start_beat && beat < self.end_beat
     }
 
@@ -54,15 +55,15 @@ impl SelectionRegion {
         self.selected_layer_ids.contains(id)
     }
 
-    pub fn duration_beats(&self) -> f32 {
+    pub fn duration_beats(&self) -> Beats {
         self.end_beat - self.start_beat
     }
 
     /// Set the selection region with stable LayerIds.
     pub fn set_with_ids(
         &mut self,
-        start_beat: f32,
-        end_beat: f32,
+        start_beat: Beats,
+        end_beat: Beats,
         start_layer_id: LayerId,
         end_layer_id: LayerId,
         layers: &[crate::layer::Layer],
@@ -88,8 +89,8 @@ impl SelectionRegion {
 
     /// Clear the selection region.
     pub fn clear(&mut self) {
-        self.start_beat = 0.0;
-        self.end_beat = 0.0;
+        self.start_beat = Beats::ZERO;
+        self.end_beat = Beats::ZERO;
         self.is_active = false;
         self.start_layer_id = None;
         self.end_layer_id = None;
@@ -118,8 +119,8 @@ impl SelectionRegion {
 pub trait SelectionRegionTarget {
     fn set_region(
         &mut self,
-        start_beat: f32,
-        end_beat: f32,
+        start_beat: Beats,
+        end_beat: Beats,
         start_layer_id: LayerId,
         end_layer_id: LayerId,
         layers: &[crate::layer::Layer],

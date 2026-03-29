@@ -1,5 +1,6 @@
 use crate::command::Command;
 use manifold_core::Beats;
+use manifold_core::units::Bpm;
 use manifold_core::LayerId;
 use manifold_core::project::Project;
 use manifold_core::math::BeatQuantizer;
@@ -63,7 +64,7 @@ impl ChangeBpmCommand {
     }
 
     fn apply_bpm(&self, project: &mut Project, bpm: f32, is_undo: bool) {
-        project.settings.bpm = BeatQuantizer::quantize_bpm(bpm);
+        project.settings.bpm = Bpm(BeatQuantizer::quantize_bpm(bpm));
         let applied_bpm = project.settings.bpm;
 
         if !self.has_project {
@@ -72,7 +73,7 @@ impl ChangeBpmCommand {
 
         if !self.flatten_tempo_map {
             project.tempo_map.add_or_replace_point(
-                0.0, applied_bpm, self.tempo_point_source, 0.001,
+                Beats::ZERO, applied_bpm, self.tempo_point_source, 0.001,
             );
             project.tempo_map.ensure_default_at_beat_zero(applied_bpm, self.tempo_point_source);
             return;
@@ -85,7 +86,7 @@ impl ChangeBpmCommand {
 
         project.tempo_map.clear();
         project.tempo_map.add_or_replace_point(
-            0.0, applied_bpm, self.tempo_point_source, 0.001,
+            Beats::ZERO, applied_bpm, self.tempo_point_source, 0.001,
         );
         project.tempo_map.ensure_default_at_beat_zero(applied_bpm, self.tempo_point_source);
     }
@@ -106,10 +107,10 @@ impl ChangeBpmCommand {
             }
             _ => {
                 project.tempo_map.add_or_replace_point(
-                    0.0, self.old_bpm, self.tempo_point_source, 0.001,
+                    Beats::ZERO, Bpm(self.old_bpm), self.tempo_point_source, 0.001,
                 );
                 project.tempo_map.ensure_default_at_beat_zero(
-                    self.old_bpm, self.tempo_point_source,
+                    Bpm(self.old_bpm), self.tempo_point_source,
                 );
             }
         }
@@ -565,9 +566,9 @@ impl RestoreRecordedTempoLaneCommand {
             );
         }
 
-        project.tempo_map.ensure_default_at_beat_zero(fallback_bpm, TempoPointSource::Manual);
+        project.tempo_map.ensure_default_at_beat_zero(Bpm(fallback_bpm), TempoPointSource::Manual);
 
-        let bpm_at_zero = project.tempo_map.get_bpm_at_beat(0.0, fallback_bpm);
+        let bpm_at_zero = project.tempo_map.get_bpm_at_beat(Beats::ZERO, Bpm(fallback_bpm));
         project.settings.bpm = bpm_at_zero;
     }
 }
@@ -602,12 +603,12 @@ impl Command for ClearTempoMapCommand {
     fn execute(&mut self, project: &mut Project) {
         project.tempo_map.clear();
         project.tempo_map.add_or_replace_point(
-            0.0,
-            self.current_bpm,
+            Beats::ZERO,
+            Bpm(self.current_bpm),
             TempoPointSource::Manual,
             0.001,
         );
-        project.tempo_map.ensure_default_at_beat_zero(self.current_bpm, TempoPointSource::Manual);
+        project.tempo_map.ensure_default_at_beat_zero(Bpm(self.current_bpm), TempoPointSource::Manual);
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -621,7 +622,7 @@ impl Command for ClearTempoMapCommand {
             }
         }
 
-        project.tempo_map.ensure_default_at_beat_zero(self.current_bpm, TempoPointSource::Manual);
+        project.tempo_map.ensure_default_at_beat_zero(Bpm(self.current_bpm), TempoPointSource::Manual);
     }
 
     fn description(&self) -> &str { "Clear Tempo Map" }
@@ -705,13 +706,13 @@ impl SetAudioStartBeatCommand {
 impl Command for SetAudioStartBeatCommand {
     fn execute(&mut self, project: &mut Project) {
         if let Some(state) = project.percussion_import.as_mut() {
-            state.audio_start_beat = self.new_start_beat;
+            state.audio_start_beat = Beats::from_f32(self.new_start_beat);
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
         if let Some(state) = project.percussion_import.as_mut() {
-            state.audio_start_beat = self.old_start_beat;
+            state.audio_start_beat = Beats::from_f32(self.old_start_beat);
         }
     }
 

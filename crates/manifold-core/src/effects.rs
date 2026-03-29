@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use crate::id::{EffectGroupId, EffectId};
 use crate::types::{BeatDivision, DriverWaveform};
 use crate::effect_type_id::EffectTypeId;
+use crate::units::Beats;
 
 // ─── Param Definition ───
 
@@ -456,12 +457,13 @@ impl ParameterDriver {
 
     /// Evaluate driver at given beat position -> [0, 1].
     /// Port of Unity DriverEvaluator.Evaluate.
-    pub fn evaluate(current_beat: f32, division: BeatDivision, waveform: DriverWaveform, phase_offset: f32) -> f32 {
+    pub fn evaluate(current_beat: Beats, division: BeatDivision, waveform: DriverWaveform, phase_offset: f32) -> f32 {
         let period = division.beats();
         if period <= 0.0 {
             return 0.5;
         }
-        let p = (current_beat % period) / period + phase_offset;
+        let beat = current_beat.as_f32();
+        let p = (beat % period) / period + phase_offset;
         let phase = p - p.floor(); // wrap to [0, 1)
 
         match waveform {
@@ -474,7 +476,7 @@ impl ParameterDriver {
             DriverWaveform::Random => {
                 // Deterministic per-period hash matching Unity's HashToFloat.
                 // Unity ParameterDriver.cs lines 224-236.
-                let cycle = (current_beat / period).floor() as i32;
+                let cycle = (beat / period).floor() as i32;
                 let mut h = cycle as u32;
                 h ^= h >> 16;
                 h = h.wrapping_mul(0x45d9f3b);
@@ -624,16 +626,19 @@ impl ParamEnvelope {
     /// Calculate ADSR envelope level [0, 1] at given position within clip.
     /// Port of C# EnvelopeEvaluator.CalculateADSR().
     pub fn calculate_adsr(
-        local_beat: f32,
-        clip_duration: f32,
+        local_beat: Beats,
+        clip_duration: Beats,
         attack: f32,
         decay: f32,
         sustain: f32,
         release: f32,
     ) -> f32 {
-        if clip_duration <= 0.0 || local_beat < 0.0 {
+        if clip_duration <= Beats::ZERO || local_beat < Beats::ZERO {
             return 0.0;
         }
+
+        let local_beat = local_beat.as_f32();
+        let clip_duration = clip_duration.as_f32();
 
         let mut a = attack.max(0.0);
         let mut d = decay.max(0.0);
@@ -686,28 +691,28 @@ mod tests {
 
     #[test]
     fn test_driver_sine() {
-        let val = ParameterDriver::evaluate(0.0, BeatDivision::Quarter, DriverWaveform::Sine, 0.0);
+        let val = ParameterDriver::evaluate(Beats(0.0), BeatDivision::Quarter, DriverWaveform::Sine, 0.0);
         assert!((val - 0.5).abs() < 0.01);
 
-        let val = ParameterDriver::evaluate(0.25, BeatDivision::Quarter, DriverWaveform::Sine, 0.0);
+        let val = ParameterDriver::evaluate(Beats(0.25), BeatDivision::Quarter, DriverWaveform::Sine, 0.0);
         assert!((val - 1.0).abs() < 0.01);
     }
 
     #[test]
     fn test_driver_square() {
-        let val = ParameterDriver::evaluate(0.1, BeatDivision::Quarter, DriverWaveform::Square, 0.0);
+        let val = ParameterDriver::evaluate(Beats(0.1), BeatDivision::Quarter, DriverWaveform::Square, 0.0);
         assert_eq!(val, 1.0);
 
-        let val = ParameterDriver::evaluate(0.6, BeatDivision::Quarter, DriverWaveform::Square, 0.0);
+        let val = ParameterDriver::evaluate(Beats(0.6), BeatDivision::Quarter, DriverWaveform::Square, 0.0);
         assert_eq!(val, 0.0);
     }
 
     #[test]
     fn test_driver_random_hash_matches_unity() {
-        let val = ParameterDriver::evaluate(1.0, BeatDivision::Quarter, DriverWaveform::Random, 0.0);
+        let val = ParameterDriver::evaluate(Beats(1.0), BeatDivision::Quarter, DriverWaveform::Random, 0.0);
         assert!(val >= 0.0 && val <= 1.0);
         // Same cycle should give same value
-        let val2 = ParameterDriver::evaluate(1.5, BeatDivision::Quarter, DriverWaveform::Random, 0.0);
+        let val2 = ParameterDriver::evaluate(Beats(1.5), BeatDivision::Quarter, DriverWaveform::Random, 0.0);
         assert_eq!(val, val2);
     }
 }

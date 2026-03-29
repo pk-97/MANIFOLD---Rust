@@ -111,7 +111,7 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
                             let (min, max) = (pd.min, pd.max);
 
                             let mut normalized = ParameterDriver::evaluate(
-                                current_beat.as_f32(),
+                                current_beat,
                                 driver.beat_division,
                                 driver.waveform,
                                 driver.phase,
@@ -174,7 +174,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool
             let (min, max) = (effect_defs[idx].min, effect_defs[idx].max);
 
             let mut normalized = ParameterDriver::evaluate(
-                current_beat.as_f32(),
+                current_beat,
                 driver.beat_division,
                 driver.waveform,
                 driver.phase,
@@ -261,8 +261,8 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                 }
 
                 let adsr_value = ParamEnvelope::calculate_adsr(
-                    clip_elapsed,
-                    clip.duration_beats.as_f32(),
+                    Beats::from_f32(clip_elapsed),
+                    clip.duration_beats,
                     attack,
                     decay,
                     sustain,
@@ -332,8 +332,8 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                 }
 
                 let adsr_value = ParamEnvelope::calculate_adsr(
-                    active_elapsed,
-                    active_duration,
+                    Beats::from_f32(active_elapsed),
+                    Beats::from_f32(active_duration),
                     attack,
                     decay,
                     sustain,
@@ -459,8 +459,8 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
             }
 
             let adsr_level = ParamEnvelope::calculate_adsr(
-                active_elapsed,
-                active_duration,
+                Beats::from_f32(active_elapsed),
+                Beats::from_f32(active_duration),
                 attack,
                 decay,
                 sustain,

@@ -9,6 +9,7 @@ use kira::{
     tween::Tween,
 };
 use manifold_core::types::PlaybackState;
+use manifold_core::Beats;
 use crate::engine::PlaybackEngine;
 use std::path::Path;
 use std::process::Command;
@@ -25,7 +26,7 @@ pub struct ImportedAudioSyncController {
     sound_data: Option<StaticSoundData>,
     clip_duration_seconds: f32,
     audio_path: Option<String>,
-    start_beat: f32,
+    start_beat: Beats,
     start_time_seconds: f32,
     encoder_delay_seconds: f32,
     is_ready: bool,
@@ -44,7 +45,7 @@ impl ImportedAudioSyncController {
             sound_data: None,
             clip_duration_seconds: 0.0,
             audio_path: None,
-            start_beat: 0.0,
+            start_beat: Beats::ZERO,
             start_time_seconds: 0.0,
             encoder_delay_seconds: 0.0,
             is_ready: false,
@@ -55,7 +56,7 @@ impl ImportedAudioSyncController {
     // ─── Properties (port of C# public properties) ───
 
     pub fn is_ready(&self) -> bool { self.is_ready }
-    pub fn start_beat(&self) -> f32 { self.start_beat }
+    pub fn start_beat(&self) -> Beats { self.start_beat }
     pub fn encoder_delay_seconds(&self) -> f32 { self.encoder_delay_seconds }
     pub fn audio_path(&self) -> Option<&str> { self.audio_path.as_deref() }
     pub fn clip_duration_seconds(&self) -> f32 { self.clip_duration_seconds }
@@ -105,7 +106,7 @@ impl ImportedAudioSyncController {
 
         self.clip_duration_seconds = clip_duration;
         self.audio_path = Some(path.to_string());
-        self.start_beat = start_beat_offset.max(0.0);
+        self.start_beat = Beats::from_f32(start_beat_offset.max(0.0));
         // startTimeSeconds will be recalculated on first UpdateSync call.
         self.start_time_seconds = 0.0;
         self.encoder_delay_seconds = probe_encoder_delay_seconds(path);
@@ -135,7 +136,7 @@ impl ImportedAudioSyncController {
         };
         log::info!(
             "[ImportedAudioSyncController] Imported audio attached for sync: '{}' startBeat={:.2}{}",
-            file_name, self.start_beat, delay_info
+            file_name, self.start_beat.as_f32(), delay_info
         );
 
         Ok(())
@@ -144,9 +145,9 @@ impl ImportedAudioSyncController {
     // ─── SetStartBeat ───
 
     /// Port of C# SetStartBeat(float beat, PlaybackController playbackController).
-    pub fn set_start_beat(&mut self, beat: f32, engine: &mut PlaybackEngine) {
-        self.start_beat = beat.max(0.0);
-        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
+    pub fn set_start_beat(&mut self, beat: Beats, engine: &mut PlaybackEngine) {
+        self.start_beat = Beats(beat.0.max(0.0));
+        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat).as_f32();
     }
 
     // ─── GetDurationBeats ───
@@ -157,21 +158,21 @@ impl ImportedAudioSyncController {
             return 0.0;
         }
 
-        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
+        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat).as_f32();
         let end_time = self.start_time_seconds + self.clip_duration_seconds;
         let end_beat = engine.time_to_timeline_beat(end_time);
         if !end_beat.is_finite() {
             return 0.0;
         }
 
-        (end_beat - self.start_beat).max(0.0)
+        (end_beat - self.start_beat.as_f32()).max(0.0)
     }
 
     // ─── GetEndBeat ───
 
     /// Port of C# GetEndBeat(PlaybackController playbackController).
     pub fn get_end_beat(&mut self, engine: &mut PlaybackEngine) -> f32 {
-        self.start_beat + self.get_duration_beats(engine)
+        self.start_beat.as_f32() + self.get_duration_beats(engine)
     }
 
     // ─── UpdateSync (main sync loop) ───
@@ -198,7 +199,7 @@ impl ImportedAudioSyncController {
         let clip_length = self.clip_duration_seconds;
 
         // Keep beat anchor aligned with any transport/tempo timing changes.
-        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
+        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat).as_f32();
         // Offset by encoder delay so playback cursor skips past the
         // MP3 padding that ffmpeg strips during analysis decoding.
         let expected_time = engine.current_time() - self.start_time_seconds + self.encoder_delay_seconds;
@@ -286,7 +287,7 @@ impl ImportedAudioSyncController {
         engine: &mut PlaybackEngine,
     ) -> Option<(f32, f32)> {
         let playhead_beat = engine.current_beat();
-        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
+        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat).as_f32();
         let source_seconds = engine.current_time() - self.start_time_seconds;
         if !source_seconds.is_finite() {
             return None;
@@ -313,7 +314,7 @@ impl ImportedAudioSyncController {
     pub fn reset_audio(&mut self) {
         self.is_ready = false;
         self.audio_path = None;
-        self.start_beat = 0.0;
+        self.start_beat = Beats::ZERO;
         self.start_time_seconds = 0.0;
         self.encoder_delay_seconds = 0.0;
         if let Some(ref mut cb) = self.on_clip_changed {
@@ -371,7 +372,7 @@ impl ImportedAudioSyncController {
         };
         log::info!(
             "[ImportedAudioSyncController] Imported audio attached for sync: '{}' startBeat={:.2}{}",
-            file_name, self.start_beat, delay_info
+            file_name, self.start_beat.as_f32(), delay_info
         );
 
         Ok(())
@@ -388,7 +389,7 @@ pub struct PreloadedAudioData {
     pub encoder_delay: f32,
     pub clip_duration: f32,
     pub path: String,
-    pub start_beat: f32,
+    pub start_beat: Beats,
 }
 
 /// Performs the expensive audio loading work (file I/O + decode + ffprobe).
@@ -409,7 +410,7 @@ pub fn preload_audio(path: &str, start_beat_offset: f32) -> Result<PreloadedAudi
         encoder_delay,
         clip_duration,
         path: path.to_string(),
-        start_beat: start_beat_offset.max(0.0),
+        start_beat: Beats::from_f32(start_beat_offset.max(0.0)),
     })
 }
 

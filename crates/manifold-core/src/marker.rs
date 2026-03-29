@@ -2,13 +2,14 @@ use serde::{Deserialize, Serialize};
 use crate::id::MarkerId;
 use crate::types::MarkerColor;
 use crate::math::short_id;
+use crate::units::Beats;
 
 /// A user-placed timeline marker at a specific beat position.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TimelineMarker {
     pub id: MarkerId,
-    pub beat: f32,
+    pub beat: Beats,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -16,7 +17,7 @@ pub struct TimelineMarker {
 }
 
 impl TimelineMarker {
-    pub fn new(beat: f32) -> Self {
+    pub fn new(beat: Beats) -> Self {
         Self {
             id: MarkerId::new(short_id()),
             beat,

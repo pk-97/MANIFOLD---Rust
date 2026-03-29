@@ -343,7 +343,7 @@ pub(crate) fn select_region_to_with_project(
         let start_idx = r.layer_index_range(&project.timeline.layers)
             .map(|(lo, _)| lo)
             .unwrap_or(0);
-        Some((r.start_beat, start_idx))
+        Some((r.start_beat.as_f32(), start_idx))
     } else if let Some(ref clip_id) = selection.primary_selected_clip_id.clone() {
         project.timeline.layers.iter().enumerate()
             .find_map(|(li, l)| l.clips.iter()

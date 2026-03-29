@@ -82,7 +82,7 @@ impl LiveClipHost for MockHost {
 
 fn make_project() -> Project {
     let mut project = Project::default();
-    project.settings.bpm = 120.0;
+    project.settings.bpm = manifold_core::Bpm(120.0);
     project.settings.time_signature_numerator = 4;
     project.settings.quantize_mode = QuantizeMode::Beat;
     project.timeline.insert_layer(0, Layer::new("Layer 0".into(), LayerType::Video, 0));

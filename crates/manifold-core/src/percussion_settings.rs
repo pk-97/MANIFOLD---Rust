@@ -10,6 +10,7 @@ use crate::project::Project;
 use crate::settings::ProjectSettings;
 use crate::types::QuantizeMode;
 use crate::generator_type_id::GeneratorTypeId;
+use crate::units::Beats;
 
 // ─── StemMode ───
 
@@ -408,7 +409,7 @@ impl PercussionPipelineSettings {
             start_beat_offset: start_beat_offset.max(0.0),
             quantize_to_grid: self.global.quantize_to_grid,
             quantize_step_beats: resolve_default_quantize_step(&project.settings),
-            default_clip_duration_beats: self.global.default_clip_duration_beats,
+            default_clip_duration_beats: Beats::from_f32(self.global.default_clip_duration_beats),
             onset_compensation_seconds: self.global.onset_compensation_seconds,
             minimum_energy_gate: 0.0,
             bindings: Vec::with_capacity(9),
@@ -419,7 +420,7 @@ impl PercussionPipelineSettings {
             self.kick.layer_index,
             None,
             self.kick.generator.clone(),
-            self.kick.clip_duration_beats,
+            Beats::from_f32(self.kick.clip_duration_beats),
             self.kick.min_confidence,
         ));
 
@@ -428,7 +429,7 @@ impl PercussionPipelineSettings {
             self.snare.layer_index,
             None,
             self.snare.generator.clone(),
-            self.snare.clip_duration_beats,
+            Beats::from_f32(self.snare.clip_duration_beats),
             self.snare.min_confidence,
         ));
 
@@ -437,7 +438,7 @@ impl PercussionPipelineSettings {
             self.perc.layer_index,
             None,
             self.perc.generator.clone(),
-            self.perc.clip_duration_beats,
+            Beats::from_f32(self.perc.clip_duration_beats),
             self.perc.min_confidence,
         ));
 
@@ -446,7 +447,7 @@ impl PercussionPipelineSettings {
             self.hat.layer_index,
             None,
             self.hat.generator.clone(),
-            self.hat.clip_duration_beats,
+            Beats::from_f32(self.hat.clip_duration_beats),
             self.hat.min_confidence,
         ));
 
@@ -455,7 +456,7 @@ impl PercussionPipelineSettings {
             self.vocal.layer_index,
             None,
             self.vocal.generator.clone(),
-            self.vocal.clip_duration_beats,
+            Beats::from_f32(self.vocal.clip_duration_beats),
             self.vocal.min_confidence,
         ));
 
@@ -464,7 +465,7 @@ impl PercussionPipelineSettings {
             self.synth.layer_index,
             None,
             self.synth.generator.clone(),
-            0.0,
+            Beats::ZERO,
             self.synth.min_confidence,
         ));
 
@@ -473,7 +474,7 @@ impl PercussionPipelineSettings {
             self.pad.layer_index,
             None,
             self.pad.generator.clone(),
-            0.0,
+            Beats::ZERO,
             self.pad.min_confidence,
         ));
 
@@ -482,7 +483,7 @@ impl PercussionPipelineSettings {
             self.bass.layer_index,
             None,
             self.bass.generator.clone(),
-            0.0,
+            Beats::ZERO,
             self.bass.min_confidence,
         ));
 
@@ -491,7 +492,7 @@ impl PercussionPipelineSettings {
             self.bass_sustained.layer_index,
             None,
             self.bass_sustained.generator.clone(),
-            0.0,
+            Beats::ZERO,
             self.bass_sustained.min_confidence,
         ));
 
@@ -644,7 +645,7 @@ impl PercussionImportOptionsFactory {
             start_beat_offset: start_beat_offset.max(0.0),
             quantize_to_grid: true,
             quantize_step_beats: resolve_default_quantize_step(&project.settings),
-            default_clip_duration_beats: 0.75,
+            default_clip_duration_beats: Beats(0.75),
             onset_compensation_seconds: 0.010,
             minimum_energy_gate: 0.0,
             bindings: Vec::with_capacity(8),
@@ -652,35 +653,35 @@ impl PercussionImportOptionsFactory {
 
         // Kick — punchy geometric wireframes, top of stack.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Kick, 0, None, GeneratorTypeId::WIREFRAME_ZOO, 0.5, 0.0,
+            PercussionTriggerType::Kick, 0, None, GeneratorTypeId::WIREFRAME_ZOO, Beats(0.5), 0.0,
         ));
         // Snare — snapping shapes.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Snare, 1, None, GeneratorTypeId::BASIC_SHAPES_SNAP, 0.75, 0.0,
+            PercussionTriggerType::Snare, 1, None, GeneratorTypeId::BASIC_SHAPES_SNAP, Beats(0.75), 0.0,
         ));
         // Perc — groove accents.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Perc, 3, None, GeneratorTypeId::PLASMA, 0.50, 0.0,
+            PercussionTriggerType::Perc, 3, None, GeneratorTypeId::PLASMA, Beats(0.50), 0.0,
         ));
         // Hat — high-frequency shimmer.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Hat, 4, None, GeneratorTypeId::OSCILLOSCOPE_XY, 0.50, 0.0,
+            PercussionTriggerType::Hat, 4, None, GeneratorTypeId::OSCILLOSCOPE_XY, Beats(0.50), 0.0,
         ));
         // Vocal — organic Lissajous curves.
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Vocal, 5, None, GeneratorTypeId::LISSAJOUS, 0.50, 0.0,
+            PercussionTriggerType::Vocal, 5, None, GeneratorTypeId::LISSAJOUS, Beats(0.50), 0.0,
         ));
         // Synth — bright plasma (duration from Basic Pitch).
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Synth, 6, None, GeneratorTypeId::PLASMA, 0.0, 0.0,
+            PercussionTriggerType::Synth, 6, None, GeneratorTypeId::PLASMA, Beats::ZERO, 0.0,
         ));
         // Pad — slow ambient Duocylinder (duration from Basic Pitch).
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Pad, 7, None, GeneratorTypeId::DUOCYLINDER, 0.0, 0.0,
+            PercussionTriggerType::Pad, 7, None, GeneratorTypeId::DUOCYLINDER, Beats::ZERO, 0.0,
         ));
         // Bass — heavy parametric surfaces (duration from Basic Pitch).
         options.bindings.push(PercussionClipBinding::new(
-            PercussionTriggerType::Bass, 8, None, GeneratorTypeId::PARAMETRIC_SURFACE, 0.0, 0.0,
+            PercussionTriggerType::Bass, 8, None, GeneratorTypeId::PARAMETRIC_SURFACE, Beats::ZERO, 0.0,
         ));
 
         options

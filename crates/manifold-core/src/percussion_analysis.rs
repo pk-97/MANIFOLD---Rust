@@ -9,6 +9,7 @@ use crate::percussion::ImportedPercussionClipPlacement;
 use crate::project::Project;
 use crate::tempo::TempoMapConverter;
 use crate::generator_type_id::GeneratorTypeId;
+use crate::units::{Beats, Seconds, Bpm};
 
 // ─── PercussionTriggerType ───
 
@@ -307,7 +308,7 @@ impl PercussionBeatGrid {
 #[serde(rename_all = "camelCase")]
 pub struct PercussionAnalysisData {
     pub track_id: String,
-    pub bpm: f32,
+    pub bpm: Bpm,
     pub bpm_confidence: f32,
     pub beat_grid: Option<PercussionBeatGrid>,
     pub events: Vec<PercussionEvent>,
@@ -317,7 +318,7 @@ pub struct PercussionAnalysisData {
 impl PercussionAnalysisData {
     pub fn new(
         track_id: &str,
-        bpm: f32,
+        bpm: Bpm,
         events: Vec<PercussionEvent>,
         bpm_confidence: f32,
         beat_grid: Option<PercussionBeatGrid>,
@@ -328,7 +329,7 @@ impl PercussionAnalysisData {
         } else {
             track_id.to_string()
         };
-        let bpm = if bpm > 0.0 { bpm.clamp(20.0, 300.0) } else { 0.0 };
+        let bpm = Bpm(if bpm.0 > 0.0 { bpm.0.clamp(20.0, 300.0) } else { 0.0 });
         let bpm_confidence = if bpm_confidence.is_finite() {
             bpm_confidence.clamp(0.0, 1.0)
         } else {
@@ -349,7 +350,7 @@ impl PercussionAnalysisData {
         data
     }
 
-    pub fn new_simple(track_id: &str, bpm: f32, events: Vec<PercussionEvent>) -> Self {
+    pub fn new_simple(track_id: &str, bpm: Bpm, events: Vec<PercussionEvent>) -> Self {
         Self::new(track_id, bpm, events, 0.0, None, None)
     }
 
@@ -362,11 +363,12 @@ impl PercussionAnalysisData {
     /// Port of Unity PercussionAnalysisData.EnergyAtBeat().
     /// Returns normalized energy [0,1] at the given beat via linear interpolation.
     /// Beat 0 = index 0. Returns 1.0 if no envelope data is present.
-    pub fn energy_at_beat(&self, beat: f32) -> f32 {
+    pub fn energy_at_beat(&self, beat: Beats) -> f32 {
         let envelope = match &self.energy_envelope {
             Some(e) if !e.is_empty() => e,
             _ => return 1.0,
         };
+        let beat = beat.as_f32();
         if beat <= 0.0 {
             return envelope[0];
         }
@@ -381,10 +383,10 @@ impl PercussionAnalysisData {
 
     /// Port of Unity PercussionAnalysisData.EnsureValid().
     pub fn ensure_valid(&mut self) {
-        if !self.bpm.is_finite() || self.bpm <= 0.0 {
-            self.bpm = 0.0;
+        if !self.bpm.0.is_finite() || self.bpm.0 <= 0.0 {
+            self.bpm = Bpm(0.0);
         } else {
-            self.bpm = self.bpm.clamp(20.0, 300.0);
+            self.bpm = Bpm(self.bpm.0.clamp(20.0, 300.0));
         }
 
         if !self.bpm_confidence.is_finite() {
@@ -395,10 +397,10 @@ impl PercussionAnalysisData {
         if let Some(ref mut grid) = self.beat_grid {
             grid.ensure_valid();
         }
-        if self.bpm <= 0.0
+        if self.bpm.0 <= 0.0
             && let Some(ref grid) = self.beat_grid
                 && grid.bpm_derived_clamped() > 0.0 {
-                    self.bpm = grid.bpm_derived_clamped();
+                    self.bpm = Bpm(grid.bpm_derived_clamped());
                 }
         if self.bpm_confidence <= 0.0
             && let Some(ref grid) = self.beat_grid {
@@ -424,19 +426,19 @@ impl PercussionAnalysisData {
     /// Prefers the project BPM converter for consistency with the reprojection path.
     pub fn try_map_seconds_to_beat(
         &self,
-        seconds: f32,
+        seconds: Seconds,
         fallback_converter: Option<&mut dyn BeatTimeConverter>,
-    ) -> Option<f32> {
+    ) -> Option<Beats> {
         // Prefer the project BPM converter for consistency with the
         // reprojection path (PercussionClipReprojectionPlanner), which
         // always uses the converter.
         if let Some(converter) = fallback_converter {
-            let beat = converter.seconds_to_beat(seconds);
-            return if beat.is_finite() { Some(beat) } else { None };
+            let beat = converter.seconds_to_beat(seconds.as_f32());
+            return if beat.is_finite() { Some(Beats::from_f32(beat)) } else { None };
         }
 
         if let Some(ref grid) = self.beat_grid {
-            return grid.try_map_seconds_to_beat(seconds);
+            return grid.try_map_seconds_to_beat(seconds.as_f32()).map(Beats::from_f32);
         }
 
         None
@@ -454,7 +456,7 @@ pub struct PercussionClipBinding {
     pub layer_index: i32,
     pub video_clip_id: Option<String>,
     pub generator_type: GeneratorTypeId,
-    pub duration_beats: f32,
+    pub duration_beats: Beats,
     pub minimum_confidence: f32,
 }
 
@@ -464,7 +466,7 @@ impl PercussionClipBinding {
         layer_index: i32,
         video_clip_id: Option<String>,
         generator_type: GeneratorTypeId,
-        duration_beats: f32,
+        duration_beats: Beats,
         minimum_confidence: f32,
     ) -> Self {
         Self {
@@ -472,7 +474,7 @@ impl PercussionClipBinding {
             layer_index: layer_index.max(0),
             video_clip_id,
             generator_type,
-            duration_beats: duration_beats.max(0.0),
+            duration_beats: duration_beats.max(Beats::ZERO),
             minimum_confidence: minimum_confidence.clamp(0.0, 1.0),
         }
     }
@@ -516,7 +518,7 @@ pub struct PercussionImportOptions {
     pub start_beat_offset: f32,
     pub quantize_to_grid: bool,
     pub quantize_step_beats: f32,
-    pub default_clip_duration_beats: f32,
+    pub default_clip_duration_beats: Beats,
     pub onset_compensation_seconds: f32,
     pub minimum_energy_gate: f32,
     pub bindings: Vec<PercussionClipBinding>,
@@ -528,7 +530,7 @@ impl Default for PercussionImportOptions {
             start_beat_offset: 0.0,
             quantize_to_grid: true,
             quantize_step_beats: 0.25,
-            default_clip_duration_beats: 0.25,
+            default_clip_duration_beats: Beats(0.25),
             onset_compensation_seconds: 0.0,
             minimum_energy_gate: 0.0,
             bindings: Vec::new(),
@@ -546,8 +548,8 @@ pub struct PercussionClipPlacement {
     pub layer_index: i32,
     pub video_clip_id: Option<String>,
     pub generator_type: GeneratorTypeId,
-    pub start_beat: f32,
-    pub duration_beats: f32,
+    pub start_beat: Beats,
+    pub duration_beats: Beats,
     pub confidence: f32,
     pub source_time_seconds: f32,
 }
@@ -559,8 +561,8 @@ impl PercussionClipPlacement {
         layer_index: i32,
         video_clip_id: Option<String>,
         generator_type: GeneratorTypeId,
-        start_beat: f32,
-        duration_beats: f32,
+        start_beat: Beats,
+        duration_beats: Beats,
         confidence: f32,
         source_time_seconds: f32,
     ) -> Self {
@@ -569,8 +571,8 @@ impl PercussionClipPlacement {
             layer_index: layer_index.max(0),
             video_clip_id,
             generator_type,
-            start_beat: start_beat.max(0.0),
-            duration_beats: duration_beats.max(0.0),
+            start_beat: start_beat.max(Beats::ZERO),
+            duration_beats: duration_beats.max(Beats::ZERO),
             confidence: confidence.clamp(0.0, 1.0),
             source_time_seconds: source_time_seconds.max(0.0),
         }
@@ -616,7 +618,7 @@ impl PercussionPlacementPlan {
 
     pub fn sort_placements(&mut self) {
         self.placements
-            .sort_by(|a, b| a.start_beat.partial_cmp(&b.start_beat).unwrap_or(std::cmp::Ordering::Equal));
+            .sort_by(|a, b| a.start_beat.0.partial_cmp(&b.start_beat.0).unwrap_or(std::cmp::Ordering::Equal));
     }
 }
 
@@ -644,9 +646,9 @@ impl<'a> BeatTimeConverter for ProjectBeatTimeConverter<'a> {
         let fallback_bpm = self.project.settings.bpm;
         TempoMapConverter::seconds_to_beat(
             &mut self.project.tempo_map,
-            seconds,
+            Seconds::from_f32(seconds),
             fallback_bpm,
-        )
+        ).as_f32()
     }
 }
 
@@ -793,22 +795,22 @@ mod tests {
     fn test_energy_at_beat() {
         let data = PercussionAnalysisData::new(
             "test",
-            120.0,
+            Bpm(120.0),
             vec![],
             0.9,
             None,
             Some(vec![0.0, 0.5, 1.0]),
         );
-        assert_eq!(data.energy_at_beat(0.0), 0.0);
-        assert_eq!(data.energy_at_beat(0.5), 0.25);
-        assert_eq!(data.energy_at_beat(1.0), 0.5);
-        assert_eq!(data.energy_at_beat(2.0), 1.0);
+        assert_eq!(data.energy_at_beat(Beats(0.0)), 0.0);
+        assert_eq!(data.energy_at_beat(Beats(0.5)), 0.25);
+        assert_eq!(data.energy_at_beat(Beats(1.0)), 0.5);
+        assert_eq!(data.energy_at_beat(Beats(2.0)), 1.0);
     }
 
     #[test]
     fn test_energy_at_beat_no_envelope() {
-        let data = PercussionAnalysisData::new("test", 120.0, vec![], 0.9, None, None);
-        assert_eq!(data.energy_at_beat(1.0), 1.0);
+        let data = PercussionAnalysisData::new("test", Bpm(120.0), vec![], 0.9, None, None);
+        assert_eq!(data.energy_at_beat(Beats(1.0)), 1.0);
     }
 
     #[test]
@@ -819,8 +821,8 @@ mod tests {
             0,
             None,
             GeneratorTypeId::NONE,
-            2.0,
-            0.5,
+            Beats(2.0),
+            Beats(0.5),
             0.9,
             1.0,
         ));
@@ -829,14 +831,14 @@ mod tests {
             1,
             None,
             GeneratorTypeId::NONE,
-            1.0,
-            0.75,
+            Beats(1.0),
+            Beats(0.75),
             0.8,
             0.5,
         ));
         plan.sort_placements();
-        assert_eq!(plan.placements()[0].start_beat, 1.0);
-        assert_eq!(plan.placements()[1].start_beat, 2.0);
+        assert_eq!(plan.placements()[0].start_beat, Beats(1.0));
+        assert_eq!(plan.placements()[1].start_beat, Beats(2.0));
     }
 
     #[test]
@@ -846,7 +848,7 @@ mod tests {
             0,
             None,
             GeneratorTypeId::NONE,
-            0.5,
+            Beats(0.5),
             0.0,
         );
         let resolved = binding.with_video_clip_id("clip_123");

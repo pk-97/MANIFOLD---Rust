@@ -1,4 +1,4 @@
-use manifold_core::{Beats, Seconds, ClipId, LayerId};
+use manifold_core::{Beats, Seconds, Bpm, ClipId, LayerId};
 use manifold_core::clip::TimelineClip;
 use manifold_core::math::BeatQuantizer;
 use manifold_core::project::Project;
@@ -795,7 +795,7 @@ impl LiveClipManager {
 
         // Port of C# TempoRecorder.CaptureProjectBpm (line 179).
         project.recording_provenance
-            .set_recorded_project_bpm(start_bpm, start_source, false);
+            .set_recorded_project_bpm(Bpm(start_bpm), start_source, false);
 
         // Resolve start tick. Port of C# TempoRecorder.TrackClipStart lines 181-183.
         let resolved_start_tick = if clip.start_absolute_tick >= 0 {
@@ -865,14 +865,14 @@ impl LiveClipManager {
             layer_index: saved_layer.max(0),
             layer_id: None,
             midi_note: resolved_midi_note,
-            start_time_seconds: BeatQuantizer::quantize_time_seconds(start.start_time_seconds),
-            end_time_seconds: BeatQuantizer::quantize_time_seconds(end_time),
-            start_beat: BeatQuantizer::quantize_beat(start.start_beat.as_f32()),
-            end_beat: BeatQuantizer::quantize_beat(end_beat),
+            start_time_seconds: BeatQuantizer::quantize_time_seconds(Seconds::from_f32(start.start_time_seconds)).as_f32(),
+            end_time_seconds: BeatQuantizer::quantize_time_seconds(Seconds::from_f32(end_time)).as_f32(),
+            start_beat: BeatQuantizer::quantize_beat(start.start_beat),
+            end_beat: BeatQuantizer::quantize_beat(Beats::from_f32(end_beat)),
             start_absolute_tick: start.start_absolute_tick,
             end_absolute_tick: resolved_end_tick,
-            start_bpm: BeatQuantizer::quantize_bpm(start.start_bpm),
-            end_bpm: BeatQuantizer::quantize_bpm(end_bpm),
+            start_bpm: Bpm(BeatQuantizer::quantize_bpm(start.start_bpm)),
+            end_bpm: Bpm(BeatQuantizer::quantize_bpm(end_bpm)),
             start_tempo_source: start.start_tempo_source,
             end_tempo_source: end_source,
         };

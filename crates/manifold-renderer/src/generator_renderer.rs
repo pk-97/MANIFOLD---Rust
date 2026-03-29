@@ -1,6 +1,6 @@
 use std::any::Any;
 use ahash::AHashMap;
-use manifold_core::{GeneratorTypeId, LayerId, Seconds};
+use manifold_core::{Beats, GeneratorTypeId, LayerId, Seconds};
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_gpu::{GpuDevice, GpuTextureFormat};
@@ -642,7 +642,7 @@ impl ClipRenderer for GeneratorRenderer {
     fn set_clip_looping(&mut self, _clip_id: &str, _looping: bool) { /* no-op */ }
     fn set_clip_playback_rate(&mut self, _clip_id: &str, _rate: f32) { /* no-op */ }
 
-    fn pre_render(&mut self, _time: f32, _beat: f32, _dt: f32) {
+    fn pre_render(&mut self, _time: Seconds, _beat: Beats, _dt: f32) {
         // No-op: actual GPU rendering is done via render_all() called from app
         // with encoder context that the trait can't provide.
         // Unity's PreRender delegates to RenderAll, but Rust needs explicit GPU context.

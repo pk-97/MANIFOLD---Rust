@@ -134,8 +134,8 @@ impl EditingService {
             .unwrap_or((0, 0));
         let mut results = Vec::new();
 
-        let region_start = Beats::from_f32(region.start_beat);
-        let region_end = Beats::from_f32(region.end_beat);
+        let region_start = region.start_beat;
+        let region_end = region.end_beat;
 
         for (li, layer) in project.timeline.layers.iter().enumerate() {
             if li < min_layer || li > max_layer {
@@ -260,8 +260,8 @@ impl EditingService {
         // Region mode: trim clips at boundaries, use region origin
         if let Some(region) = region
             && region.is_active {
-                let region_start = Beats::from_f32(region.start_beat);
-                let region_end = Beats::from_f32(region.end_beat);
+                let region_start = region.start_beat;
+                let region_end = region.end_beat;
 
                 // Find overlapping clips in region (matching Unity CopySelectedClips)
                 let overlapping: Vec<&TimelineClip> = project.timeline.layers.iter()
@@ -457,8 +457,8 @@ impl EditingService {
             .map(|(lo, hi)| (lo.min(layer_count.saturating_sub(1)), hi.min(layer_count.saturating_sub(1))))
             .unwrap_or((0, 0));
 
-        let region_start = Beats::from_f32(region.start_beat);
-        let region_end = Beats::from_f32(region.end_beat);
+        let region_start = region.start_beat;
+        let region_end = region.end_beat;
 
         for li in start_layer..=end_layer {
             // Snapshot clip IDs (splits add new clips)
@@ -503,8 +503,8 @@ impl EditingService {
         region: &SelectionRegion,
         spb: f32,
     ) -> TimelineClip {
-        let region_start = Beats::from_f32(region.start_beat);
-        let region_end = Beats::from_f32(region.end_beat);
+        let region_start = region.start_beat;
+        let region_end = region.end_beat;
 
         let new_start = clip.start_beat.max(region_start);
         let new_end = clip.end_beat().min(region_end);
@@ -570,9 +570,9 @@ impl EditingService {
             // Region mode: find ALL clips overlapping the region (Unity FillClipsInRegion),
             // trim to region boundaries, place copies after region end.
             // The offset is the full region duration, preserving gaps (Ableton behavior).
-            let offset = Beats::from_f32(region.duration_beats());
-            let region_start = Beats::from_f32(region.start_beat);
-            let region_end = Beats::from_f32(region.end_beat);
+            let offset = region.duration_beats();
+            let region_start = region.start_beat;
+            let region_end = region.end_beat;
             let (start_layer, end_layer) = region.layer_index_range(&project.timeline.layers)
                 .map(|(lo, hi)| (lo, hi.min(project.timeline.layers.len().saturating_sub(1))))
                 .unwrap_or((0, 0));

@@ -159,11 +159,13 @@ impl PostProcessEffect for HalationFX {
         let qw = state.buf_a.width;
         let qh = state.buf_a.height;
 
-        // Pass 0: Combined ThresholdTint + Horizontal Gaussian blur
+        // Pass 0: Combined ThresholdTint + Horizontal Gaussian blur.
+        // Use half-res texel size so the H-blur radius matches Pass 1's V-blur radius —
+        // both cover ±8 half-res pixels, giving a symmetric (isotropic) glow.
         let pass0_u = HalationUniforms {
             mode: 0,
-            main_texel_size_x: 1.0 / ctx.width as f32,
-            main_texel_size_y: 1.0 / ctx.height as f32,
+            main_texel_size_x: 1.0 / qw as f32,
+            main_texel_size_y: 1.0 / qh as f32,
             ..base
         };
         self.helper.dispatch_a_only(

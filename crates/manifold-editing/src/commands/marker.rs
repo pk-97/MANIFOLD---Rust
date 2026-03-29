@@ -1,6 +1,7 @@
 use manifold_core::id::MarkerId;
 use manifold_core::marker::TimelineMarker;
 use manifold_core::project::Project;
+use manifold_core::units::Beats;
 use crate::command::Command;
 
 // ── Add Marker ──────────────────────────────────────────────────
@@ -61,12 +62,12 @@ impl Command for DeleteMarkerCommand {
 #[derive(Debug)]
 pub struct MoveMarkerCommand {
     marker_id: MarkerId,
-    old_beat: f32,
-    new_beat: f32,
+    old_beat: Beats,
+    new_beat: Beats,
 }
 
 impl MoveMarkerCommand {
-    pub fn new(marker_id: MarkerId, old_beat: f32, new_beat: f32) -> Self {
+    pub fn new(marker_id: MarkerId, old_beat: Beats, new_beat: Beats) -> Self {
         Self { marker_id, old_beat, new_beat }
     }
 }

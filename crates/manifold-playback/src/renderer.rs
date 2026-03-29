@@ -3,7 +3,7 @@ use manifold_core::ClipId;
 use manifold_core::clip::TimelineClip;
 use manifold_core::layer::Layer;
 use manifold_core::project::Project;
-use manifold_core::Seconds;
+use manifold_core::{Seconds, Beats};
 
 /// Abstraction over clip renderers (video player pool, generator renderer, etc.).
 /// Port of C# IClipRenderer interface.
@@ -35,7 +35,7 @@ pub trait ClipRenderer: Any + Send {
     fn set_clip_looping(&mut self, clip_id: &str, looping: bool);
     fn set_clip_playback_rate(&mut self, clip_id: &str, rate: f32);
 
-    fn pre_render(&mut self, time: f32, beat: f32, dt: f32);
+    fn pre_render(&mut self, time: Seconds, beat: Beats, dt: f32);
     fn resize(&mut self, width: i32, height: i32);
 
     /// True if any active clip has a decode job in-flight.
@@ -144,7 +144,7 @@ impl ClipRenderer for StubRenderer {
         if let Some(s) = self.active_clips.get_mut(clip_id) { s.playback_rate = rate; }
     }
 
-    fn pre_render(&mut self, _time: f32, _beat: f32, _dt: f32) {}
+    fn pre_render(&mut self, _time: Seconds, _beat: Beats, _dt: f32) {}
     fn resize(&mut self, _width: i32, _height: i32) {}
 
     fn as_any(&self) -> &dyn Any { self }

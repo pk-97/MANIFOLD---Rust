@@ -7,6 +7,7 @@
 use std::fmt;
 
 use manifold_core::tempo::{TempoMap, TempoMapConverter};
+use manifold_core::units::{Beats, Bpm};
 
 use crate::export_config::ExportConfig;
 
@@ -93,10 +94,13 @@ impl ExportSession {
         bpm: f32,
         tempo_map: &mut TempoMap,
     ) -> Result<Self, ExportError> {
-        let start_seconds =
-            TempoMapConverter::beat_to_seconds(tempo_map, config.start_beat, bpm);
-        let end_seconds =
-            TempoMapConverter::beat_to_seconds(tempo_map, config.end_beat, bpm);
+        let fallback = Bpm(bpm);
+        let start_seconds = TempoMapConverter::beat_to_seconds(
+            tempo_map, Beats::from_f32(config.start_beat), fallback,
+        ).as_f32();
+        let end_seconds = TempoMapConverter::beat_to_seconds(
+            tempo_map, Beats::from_f32(config.end_beat), fallback,
+        ).as_f32();
 
         if end_seconds <= start_seconds {
             return Err(ExportError::InvalidRange {
@@ -117,9 +121,9 @@ impl ExportSession {
         let audio_offset_seconds = if config.has_audio() {
             let audio_start_seconds = TempoMapConverter::beat_to_seconds(
                 tempo_map,
-                config.audio_start_beat,
-                bpm,
-            );
+                Beats::from_f32(config.audio_start_beat),
+                fallback,
+            ).as_f32();
             audio_start_seconds - start_seconds - config.audio_encoder_delay
         } else {
             0.0
@@ -184,10 +188,13 @@ impl ExportSession {
         tempo_map: &mut TempoMap,
         device_ptr: *mut std::ffi::c_void,
     ) -> Result<Self, ExportError> {
-        let start_seconds =
-            TempoMapConverter::beat_to_seconds(tempo_map, config.start_beat, bpm);
-        let end_seconds =
-            TempoMapConverter::beat_to_seconds(tempo_map, config.end_beat, bpm);
+        let fallback = Bpm(bpm);
+        let start_seconds = TempoMapConverter::beat_to_seconds(
+            tempo_map, Beats::from_f32(config.start_beat), fallback,
+        ).as_f32();
+        let end_seconds = TempoMapConverter::beat_to_seconds(
+            tempo_map, Beats::from_f32(config.end_beat), fallback,
+        ).as_f32();
 
         if end_seconds <= start_seconds {
             return Err(ExportError::InvalidRange {
@@ -205,8 +212,8 @@ impl ExportSession {
 
         let audio_offset_seconds = if config.has_audio() {
             let audio_start_seconds = TempoMapConverter::beat_to_seconds(
-                tempo_map, config.audio_start_beat, bpm,
-            );
+                tempo_map, Beats::from_f32(config.audio_start_beat), fallback,
+            ).as_f32();
             audio_start_seconds - start_seconds - config.audio_encoder_delay
         } else {
             0.0

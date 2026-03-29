@@ -1,5 +1,6 @@
 use manifold_core::types::{ClockAuthority, PlaybackState};
 use manifold_core::project::Project;
+use manifold_core::{Beats, Seconds};
 
 /// Read-only view of playback state for sync controllers.
 /// Sync controllers hold this instead of PlaybackController to enforce
@@ -9,7 +10,7 @@ pub trait SyncTarget {
     fn current_state(&self) -> PlaybackState;
     fn current_time(&self) -> f32;
     fn is_playing(&self) -> bool;
-    fn timeline_beat_to_time(&self, beat: f32) -> f32;
+    fn timeline_beat_to_time(&self, beat: Beats) -> Seconds;
     fn current_project(&self) -> Option<&Project>;
 }
 
@@ -40,7 +41,7 @@ impl SyncTargetSnapshot {
     /// Capture a snapshot from any SyncTarget implementor.
     pub fn from_engine(target: &dyn SyncTarget) -> Self {
         let bpm = target.current_project()
-            .map_or(120.0, |p| p.settings.bpm);
+            .map_or(120.0, |p| p.settings.bpm.0);
         Self {
             state: target.current_state(),
             time: target.current_time(),
@@ -53,9 +54,14 @@ impl SyncTarget for SyncTargetSnapshot {
     fn current_state(&self) -> PlaybackState { self.state }
     fn current_time(&self) -> f32 { self.time }
     fn is_playing(&self) -> bool { self.state == PlaybackState::Playing }
-    fn timeline_beat_to_time(&self, beat: f32) -> f32 {
+    fn timeline_beat_to_time(&self, beat: Beats) -> Seconds {
         // Fallback: use BPM for beat→time conversion (no tempo map in snapshot).
-        if self.bpm > 0.0 { beat * 60.0 / self.bpm } else { beat * 0.5 }
+        let beat_f = beat.as_f32();
+        if self.bpm > 0.0 {
+            Seconds((beat_f * 60.0 / self.bpm) as f64)
+        } else {
+            Seconds((beat_f * 0.5) as f64)
+        }
     }
     fn current_project(&self) -> Option<&Project> { None }
 }

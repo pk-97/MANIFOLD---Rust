@@ -92,7 +92,7 @@ impl Application {
                             if !already_loaded && self.pending_audio_load.is_none() {
                                 let start_beat = self.local_project.percussion_import
                                     .as_ref()
-                                    .map_or(0.0, |p| p.audio_start_beat);
+                                    .map_or(0.0, |p| p.audio_start_beat.as_f32());
                                 deferred_audio_load = Some((path.clone(), start_beat));
                             }
                         } else if self.loaded_audio_path.is_some() {
@@ -351,7 +351,7 @@ impl Application {
                     continue;
                 }
                 PanelAction::BpmFieldClicked => {
-                    let bpm = Some(&self.local_project).map_or(120.0, |p| p.settings.bpm);
+                    let bpm = Some(&self.local_project).map_or(120.0, |p| p.settings.bpm.0);
                     let r = self.ui_root.tree.get_bounds(
                         self.ui_root.transport.bpm_field_id() as u32,
                     );
@@ -404,7 +404,7 @@ impl Application {
                         let beat = marker.beat;
                         let name = marker.name.clone();
                         // Anchor to marker flag position in the ruler
-                        let px = self.ui_root.viewport.beat_to_pixel(manifold_core::Beats::from_f32(beat));
+                        let px = self.ui_root.viewport.beat_to_pixel(beat);
                         let ruler = self.ui_root.viewport.ruler_rect();
                         let flag_w = manifold_ui::color::MARKER_FLAG_WIDTH;
                         let r = crate::text_input::AnchorRect::new(
@@ -663,9 +663,9 @@ impl Application {
                 let (start_beat, duration_beats) = if let Some(proj) = Some(&self.local_project) {
                     if let Some(ref perc) = proj.percussion_import {
                         let dur_sec = wf.clip_duration_seconds();
-                        let bpm = proj.settings.bpm.max(1.0);
+                        let bpm = proj.settings.bpm.0.max(1.0);
                         let dur_beats = dur_sec * bpm / 60.0;
-                        (perc.audio_start_beat, dur_beats)
+                        (perc.audio_start_beat.as_f32(), dur_beats)
                     } else {
                         (0.0, 0.0)
                     }
@@ -686,8 +686,8 @@ impl Application {
             if self.ui_root.stem_lanes.is_expanded() {
                 let start_beat = self.local_project.percussion_import
                     .as_ref()
-                    .map_or(0.0, |perc| perc.audio_start_beat);
-                let bpm = self.local_project.settings.bpm.max(1.0);
+                    .map_or(0.0, |perc| perc.audio_start_beat.as_f32());
+                let bpm = self.local_project.settings.bpm.0.max(1.0);
                 let mapper = self.ui_root.viewport.mapper();
                 self.ui_root.stem_lanes.update_overlay(
                     start_beat,

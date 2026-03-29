@@ -102,7 +102,7 @@ pub fn push_state(
         // round-trip. When an external source is active (Link, MIDI Clock, OSC),
         // use content_state.bpm which carries the live external tempo.
         let bpm = if content_state.clock_authority == manifold_core::types::ClockAuthority::Internal {
-            project.settings.bpm
+            project.settings.bpm.0
         } else {
             content_state.bpm as f32
         };
@@ -296,8 +296,8 @@ pub fn push_state(
             .unwrap_or((0, 0));
         ui.viewport.set_selection_region(Some(
             manifold_ui::panels::viewport::SelectionRegion {
-                start_beat: r.start_beat,
-                end_beat: r.end_beat,
+                start_beat: r.start_beat.as_f32(),
+                end_beat: r.end_beat.as_f32(),
                 start_layer,
                 end_layer,
             }
@@ -401,7 +401,7 @@ pub fn push_state(
                         chrome.sync_bpm(tree, "Auto");
                     }
                     // Slip range = source duration - clip duration in seconds
-                    let spb = 60.0 / Some(project).map_or(120.0, |p| p.settings.bpm);
+                    let spb = 60.0 / Some(project).map_or(120.0, |p| p.settings.bpm.0);
                     let clip_dur_s = Seconds::from_f32(clip.duration_beats.as_f32() * spb);
                     chrome.set_slip_range(clip_dur_s.max(Seconds(1.0)));
                     chrome.set_loop_range(clip.duration_beats.max(Beats(1.0)));
@@ -603,7 +603,7 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
                 viewport_clips.push(ViewportClip {
                     clip_id: clip.id.clone(),
                     layer_index: i,
-                    start_beat: clip.start_beat.as_f32(),
+                    start_beat: clip.start_beat,
                     duration_beats: clip.duration_beats.as_f32(),
                     name,
                     color: clip_color,
@@ -654,7 +654,7 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
             viewport_clips.push(ViewportClip {
                 clip_id: clip.id.clone(),
                 layer_index: i,
-                start_beat: clip.start_beat.as_f32(),
+                start_beat: clip.start_beat,
                 duration_beats: clip.duration_beats.as_f32(),
                 name,
                 color: clip_color,

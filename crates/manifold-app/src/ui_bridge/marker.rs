@@ -1,5 +1,6 @@
 //! Marker-related dispatch: click, drag, delete, rename.
 use manifold_core::MarkerId;
+use manifold_core::Beats;
 use manifold_core::project::Project;
 use manifold_editing::commands::marker::{DeleteMarkerCommand, MoveMarkerCommand};
 use manifold_ui::PanelAction;
@@ -38,7 +39,7 @@ pub(super) fn dispatch_marker(
         PanelAction::MarkerDragStarted(marker_id_str) => {
             let marker_id = MarkerId::new(marker_id_str.as_str());
             *drag_snapshot = project.timeline.find_marker(&marker_id)
-                .map(|m| m.beat);
+                .map(|m| m.beat.as_f32());
             // Select the marker being dragged
             selection.select_marker(marker_id);
             DispatchResult::handled()
@@ -48,7 +49,7 @@ pub(super) fn dispatch_marker(
         PanelAction::MarkerDragMoved(marker_id_str, new_beat) => {
             let marker_id = MarkerId::new(marker_id_str.as_str());
             if let Some(marker) = project.timeline.find_marker_mut(&marker_id) {
-                marker.beat = *new_beat;
+                marker.beat = Beats::from_f32(*new_beat);
             }
             project.timeline.sort_markers();
             DispatchResult::structural()
@@ -62,13 +63,13 @@ pub(super) fn dispatch_marker(
                 if (old_beat - *final_beat).abs() > 0.001 {
                     // Undo the live preview mutation first — the command will redo it
                     if let Some(marker) = project.timeline.find_marker_mut(&marker_id) {
-                        marker.beat = old_beat;
+                        marker.beat = Beats::from_f32(old_beat);
                     }
                     project.timeline.sort_markers();
 
                     let mut cmd: Box<dyn manifold_editing::command::Command + Send> =
                         Box::new(MoveMarkerCommand::new(
-                            marker_id, old_beat, *final_beat,
+                            marker_id, Beats::from_f32(old_beat), Beats::from_f32(*final_beat),
                         ));
                     cmd.execute(project);
                     ContentCommand::send(content_tx, ContentCommand::Execute(cmd));

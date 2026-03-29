@@ -62,7 +62,7 @@ impl SetImportedAudioCommand {
     ) {
         let state = project.percussion_import.get_or_insert_with(Default::default);
         state.audio_path = path.map(|s| s.to_string());
-        state.audio_start_beat = start_beat;
+        state.audio_start_beat = Beats::from_f32(start_beat);
         state.audio_hash = hash.map(|s| s.to_string());
         state.stem_paths = stem_paths.map(|s| s.to_vec());
     }
@@ -121,12 +121,12 @@ impl SetAudioStartBeatCommand {
 impl Command for SetAudioStartBeatCommand {
     fn execute(&mut self, project: &mut Project) {
         let state = project.percussion_import.get_or_insert_with(Default::default);
-        state.audio_start_beat = self.new_start_beat;
+        state.audio_start_beat = Beats::from_f32(self.new_start_beat);
     }
 
     fn undo(&mut self, project: &mut Project) {
         let state = project.percussion_import.get_or_insert_with(Default::default);
-        state.audio_start_beat = self.old_start_beat;
+        state.audio_start_beat = Beats::from_f32(self.old_start_beat);
     }
 
     fn description(&self) -> &str {

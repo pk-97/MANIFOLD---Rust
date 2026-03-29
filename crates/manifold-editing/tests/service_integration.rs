@@ -1,4 +1,5 @@
 use manifold_core::{Beats, ClipId};
+use manifold_core::units::Bpm;
 use manifold_editing::service::EditingService;
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
@@ -8,7 +9,7 @@ use manifold_core::types::*;
 
 fn make_project() -> Project {
     let mut project = Project::default();
-    project.settings.bpm = 120.0;
+    project.settings.bpm = Bpm(120.0);
     project.settings.time_signature_numerator = 4;
     project.timeline.insert_layer(0, Layer::new("Video 1".into(), LayerType::Video, 0));
     project.timeline.insert_layer(1, Layer::new("Video 2".into(), LayerType::Video, 1));
@@ -27,8 +28,8 @@ fn make_region(project: &Project, start_beat: f32, end_beat: f32, start_layer: u
         selected.insert(layer.layer_id.clone());
     }
     SelectionRegion {
-        start_beat,
-        end_beat,
+        start_beat: Beats::from_f32(start_beat),
+        end_beat: Beats::from_f32(end_beat),
         is_active: true,
         start_layer_id: layers.get(lo).map(|l| l.layer_id.clone()),
         end_layer_id: layers.get(hi).map(|l| l.layer_id.clone()),
@@ -65,7 +66,7 @@ fn overlap_covers_both_deletes() {
         ..Default::default()
     };
 
-    let spb = 60.0 / project.settings.bpm;
+    let spb = 60.0 / project.settings.bpm.0;
     let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default(), spb);
     assert_eq!(cmds.len(), 1);
 
@@ -88,7 +89,7 @@ fn overlap_covers_start_trims() {
         ..Default::default()
     };
 
-    let spb = 60.0 / project.settings.bpm;
+    let spb = 60.0 / project.settings.bpm.0;
     let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default(), spb);
     assert_eq!(cmds.len(), 1);
 
@@ -113,7 +114,7 @@ fn overlap_covers_end_trims() {
         ..Default::default()
     };
 
-    let spb = 60.0 / project.settings.bpm;
+    let spb = 60.0 / project.settings.bpm.0;
     let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default(), spb);
     assert_eq!(cmds.len(), 1);
 
@@ -138,7 +139,7 @@ fn overlap_splits_middle() {
         ..Default::default()
     };
 
-    let spb = 60.0 / project.settings.bpm;
+    let spb = 60.0 / project.settings.bpm.0;
     let cmds = EditingService::enforce_non_overlap(&project, &placed, 0, &Default::default(), spb);
     assert_eq!(cmds.len(), 2); // trim + add tail
 
@@ -376,7 +377,7 @@ fn split_at_beat() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 0.0, 8.0);
 
-    let spb = 60.0 / project.settings.bpm;
+    let spb = 60.0 / project.settings.bpm.0;
     let cmd = EditingService::split_clip_at_beat(&project, &id1, Beats(4.0), spb);
     assert!(cmd.is_some());
 
@@ -400,7 +401,7 @@ fn split_at_boundary_returns_none() {
     let mut project = make_project();
     let id1 = add_clip(&mut project, 0, 0.0, 8.0);
 
-    let spb = 60.0 / project.settings.bpm;
+    let spb = 60.0 / project.settings.bpm.0;
     // Split at start — invalid
     assert!(EditingService::split_clip_at_beat(&project, &id1, Beats(0.0), spb).is_none());
     // Split at end — invalid

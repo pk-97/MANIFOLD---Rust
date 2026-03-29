@@ -10,6 +10,7 @@
 //! When true, consumes the flag and skips the send (prevents echo loops).
 
 use std::net::UdpSocket;
+use manifold_core::{Beats, Seconds};
 use crate::sync::SyncArbiter;
 
 const DESTINATION_IP: &str = "127.0.0.1";
@@ -40,7 +41,7 @@ impl OscPositionSender {
 
     pub fn is_sender_enabled(&self) -> bool { self.is_enabled }
 
-    pub fn enable_sender(&mut self, port: i32, is_playing: bool, current_beat: f32, realtime: f64) {
+    pub fn enable_sender(&mut self, port: i32, is_playing: bool, current_beat: Beats, realtime: Seconds) {
         if self.is_enabled { return; }
 
         let addr = format!("{}:{}", DESTINATION_IP, port);
@@ -60,8 +61,8 @@ impl OscPositionSender {
 
         self.send_port = port;
         self.last_was_playing = is_playing;
-        self.last_sent_beat = current_beat;
-        self.last_sent_realtime = realtime;
+        self.last_sent_beat = current_beat.as_f32();
+        self.last_sent_realtime = realtime.0;
         self.is_enabled = true;
 
         log::info!("[OscPositionSender] Enabled — {}:{}", DESTINATION_IP, port);

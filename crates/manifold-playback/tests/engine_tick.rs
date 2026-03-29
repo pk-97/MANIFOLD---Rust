@@ -1,4 +1,5 @@
 use manifold_core::types::PlaybackState;
+use manifold_core::{Beats, Seconds};
 use manifold_playback::engine::{PlaybackEngine, TickContext};
 use manifold_playback::renderer::StubRenderer;
 
@@ -43,11 +44,11 @@ fn engine_tick_while_stopped_has_no_active_clips() {
     engine.initialize(project);
 
     let ctx = TickContext {
-        dt_seconds: 1.0 / 60.0,
-        realtime_now: 0.0,
+        dt_seconds: Seconds(1.0 / 60.0),
+        realtime_now: Seconds(0.0),
         pre_render_dt: 1.0 / 60.0,
         frame_count: 0,
-        export_fixed_dt: 0.0,
+        export_fixed_dt: Seconds(0.0),
     };
 
     let result = engine.tick(ctx);
@@ -67,11 +68,11 @@ fn engine_advances_time_when_playing() {
     // Tick 60 frames (1 second)
     for i in 0..60 {
         let ctx = TickContext {
-            dt_seconds: dt,
-            realtime_now: realtime,
+            dt_seconds: Seconds(dt),
+            realtime_now: Seconds(realtime),
             pre_render_dt: dt as f32,
             frame_count: i as u64,
-            export_fixed_dt: 0.0,
+            export_fixed_dt: Seconds(0.0),
         };
         engine.tick(ctx);
         realtime += dt;
@@ -110,11 +111,11 @@ fn engine_schedules_clips_at_correct_beats() {
 
     for i in 0..num_frames {
         let ctx = TickContext {
-            dt_seconds: dt,
-            realtime_now: realtime,
+            dt_seconds: Seconds(dt),
+            realtime_now: Seconds(realtime),
             pre_render_dt: dt as f32,
             frame_count: i as u64,
-            export_fixed_dt: 0.0,
+            export_fixed_dt: Seconds(0.0),
         };
         let result = engine.tick(ctx);
         if !result.ready_clips.is_empty() {
@@ -143,11 +144,11 @@ fn engine_tick_1000_frames_no_panic() {
 
     for i in 0..1000 {
         let ctx = TickContext {
-            dt_seconds: dt,
-            realtime_now: realtime,
+            dt_seconds: Seconds(dt),
+            realtime_now: Seconds(realtime),
             pre_render_dt: dt as f32,
             frame_count: i as u64,
-            export_fixed_dt: 0.0,
+            export_fixed_dt: Seconds(0.0),
         };
         let _result = engine.tick(ctx);
         realtime += dt;
@@ -182,9 +183,9 @@ fn engine_beat_time_conversion_roundtrip() {
     engine.initialize(project);
 
     // Test beat → seconds → beat roundtrip
-    let original_beat = 100.0;
-    let seconds = engine.beat_to_timeline_time(original_beat);
-    let roundtrip_beat = engine.time_to_timeline_beat(seconds);
+    let original_beat = 100.0_f32;
+    let seconds = engine.beat_to_timeline_time(Beats::from_f32(original_beat));
+    let roundtrip_beat = engine.time_to_timeline_beat(seconds.as_f32());
 
     assert!(
         (roundtrip_beat - original_beat).abs() < 0.01,
@@ -211,11 +212,11 @@ fn engine_waypoints_stress_test() {
     // Tick 500 frames (~8.3 seconds)
     for i in 0..500 {
         let ctx = TickContext {
-            dt_seconds: dt,
-            realtime_now: realtime,
+            dt_seconds: Seconds(dt),
+            realtime_now: Seconds(realtime),
             pre_render_dt: dt as f32,
             frame_count: i as u64,
-            export_fixed_dt: 0.0,
+            export_fixed_dt: Seconds(0.0),
         };
         let result = engine.tick(ctx);
         total_ready += result.ready_clips.len();

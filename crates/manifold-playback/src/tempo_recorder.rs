@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use manifold_core::recording::{RecordedClipProvenance, RecordedTempoChange, RecordingProvenance};
 use manifold_core::tempo::TempoMap;
 use manifold_core::types::TempoPointSource;
+use manifold_core::units::{Beats, Bpm};
 
 /// Handles tempo recording: tracks external tempo changes from Link/MIDI Clock,
 /// records tempo points into the TempoMap, manages recording session lifecycle,
@@ -154,7 +155,10 @@ impl TempoRecorder {
             return false;
         }
 
-        tempo_map.add_or_replace_point_with_time(current_beat, bpm, source, 0.001, current_time);
+        tempo_map.add_or_replace_point_with_time(
+            Beats::from_f32(current_beat), Bpm(bpm), source, 0.001,
+            manifold_core::units::Seconds::from_f32(current_time),
+        );
         self.last_recorded_beat = current_beat;
         self.last_recorded_bpm = bpm;
         true
@@ -173,8 +177,8 @@ impl TempoRecorder {
         Self::capture_project_bpm(provenance, bpm, source, false);
         provenance.add_tempo_change(RecordedTempoChange {
             time_seconds: current_time,
-            beat: current_beat,
-            bpm,
+            beat: Beats::from_f32(current_beat),
+            bpm: Bpm(bpm),
             source,
         });
     }
@@ -187,7 +191,7 @@ impl TempoRecorder {
         source: TempoPointSource,
         overwrite: bool,
     ) {
-        provenance.set_recorded_project_bpm(bpm, source, overwrite);
+        provenance.set_recorded_project_bpm(Bpm(bpm), source, overwrite);
     }
 
     /// Snapshot the TempoMap into RecordingProvenance as the recorded tempo lane.
@@ -207,7 +211,7 @@ impl TempoRecorder {
                 source_at_zero = TempoPointSource::Recorded;
             }
 
-            let bpm_at_zero = tempo_map.get_bpm_at_beat(0.0, default_bpm);
+            let bpm_at_zero = tempo_map.get_bpm_at_beat(Beats::ZERO, Bpm(default_bpm));
             provenance.set_recorded_project_bpm(bpm_at_zero, source_at_zero, true);
         }
     }
@@ -304,12 +308,12 @@ impl TempoRecorder {
             midi_note: resolved_midi_note,
             start_time_seconds: start.start_time_seconds,
             end_time_seconds: end_time,
-            start_beat: start.start_beat,
-            end_beat,
+            start_beat: Beats::from_f32(start.start_beat),
+            end_beat: Beats::from_f32(end_beat),
             start_absolute_tick: start.start_absolute_tick,
             end_absolute_tick: resolved_end_tick,
-            start_bpm: start.start_bpm,
-            end_bpm,
+            start_bpm: Bpm(start.start_bpm),
+            end_bpm: Bpm(end_bpm),
             start_tempo_source: start.start_tempo_source,
             end_tempo_source: end_source,
         };

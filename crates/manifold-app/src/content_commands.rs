@@ -3,6 +3,7 @@
 //! to the appropriate subsystem on the content thread.
 
 use manifold_core::types::ClockAuthority;
+use manifold_core::{Beats, Seconds};
 use manifold_playback::transport_controller::TransportController;
 
 use crate::content_command::ContentCommand;
@@ -24,10 +25,10 @@ impl ContentThread {
                     && !self.sync_arbiter.manifold_owns_playback
                     && let Some(ref clk) = self.transport_controller.midi_clock_sync
                         && clk.is_midi_clock_enabled() {
-                            let midi_beat = clk.current_clock_beat();
+                            let midi_beat = Beats::from_f32(clk.current_clock_beat());
                             self.engine.set_beat(midi_beat);
                             let time = self.engine.beat_to_timeline_time(midi_beat);
-                            self.engine.set_time(time.max(0.0) as f64);
+                            self.engine.set_time(Seconds(time.0.max(0.0)));
                         }
                 self.engine.play();
                 self.cache_link_beat_offset();
@@ -55,10 +56,10 @@ impl ContentThread {
                         && !self.sync_arbiter.manifold_owns_playback
                         && let Some(ref clk) = self.transport_controller.midi_clock_sync
                             && clk.is_midi_clock_enabled() {
-                                let midi_beat = clk.current_clock_beat();
+                                let midi_beat = Beats::from_f32(clk.current_clock_beat());
                                 self.engine.set_beat(midi_beat);
                                 let time = self.engine.beat_to_timeline_time(midi_beat);
-                                self.engine.set_time(time.max(0.0) as f64);
+                                self.engine.set_time(Seconds(time.0.max(0.0)));
                             }
                     self.engine.play();
                     self.cache_link_beat_offset();
@@ -69,8 +70,8 @@ impl ContentThread {
                 self.cache_link_beat_offset();
             }
             ContentCommand::SeekToBeat(beat) => {
-                let time = self.engine.beat_to_timeline_time(beat);
-                self.engine.seek_to(time);
+                let time = self.engine.beat_to_timeline_time(Beats::from_f32(beat));
+                self.engine.seek_to(time.as_f32());
                 self.cache_link_beat_offset();
             }
             ContentCommand::SetRecording(rec) => {
@@ -108,7 +109,7 @@ impl ContentThread {
                 if let Some(p) = self.engine.project_mut() {
                     let _ = self.editing_service.undo(p);
                 }
-                self.engine.mark_compositor_dirty(0.0);
+                self.engine.mark_compositor_dirty(Seconds::ZERO);
                 self.engine.mark_sync_dirty();
                 // Apply resolution/FPS changes if the undo altered project settings.
                 let post = self.engine.project().map(|p| {
@@ -137,7 +138,7 @@ impl ContentThread {
                 if let Some(p) = self.engine.project_mut() {
                     let _ = self.editing_service.redo(p);
                 }
-                self.engine.mark_compositor_dirty(0.0);
+                self.engine.mark_compositor_dirty(Seconds::ZERO);
                 self.engine.mark_sync_dirty();
                 // Apply resolution/FPS changes if the redo altered project settings.
                 let post = self.engine.project().map(|p| {
@@ -205,7 +206,7 @@ impl ContentThread {
             // ── Settings ───────────────────────────────────────────
             ContentCommand::SetBpm(bpm) => {
                 if let Some(p) = self.engine.project_mut() {
-                    p.settings.bpm = bpm as f32;
+                    p.settings.bpm = manifold_core::Bpm(bpm as f32);
                 }
             }
             ContentCommand::SetFrameRate(fps) => {
@@ -326,13 +327,13 @@ impl ContentThread {
             // ── Clipboard ─────────────────────────────────────────
             ContentCommand::CopyClips { clip_ids, region } => {
                 if let Some(p) = self.engine.project() {
-                    let spb = 60.0 / p.settings.bpm.max(1.0);
+                    let spb = 60.0 / p.settings.bpm.0.max(1.0);
                     self.editing_service.copy_clips(p, &clip_ids, region.as_ref(), spb);
                 }
             }
             ContentCommand::PasteClips { target_beat, target_layer, result_tx } => {
                 if let Some(p) = self.engine.project_mut() {
-                    let spb = 60.0 / p.settings.bpm.max(1.0);
+                    let spb = 60.0 / p.settings.bpm.0.max(1.0);
                     let result = self.editing_service.paste_clips(p, manifold_core::Beats::from_f32(target_beat), target_layer, spb);
                     if !result.commands.is_empty() {
                         self.editing_service.execute_batch(result.commands, "Paste clips".into(), p);
@@ -399,18 +400,18 @@ impl ContentThread {
 
             // ── Compositor ─────────────────────────────────────────
             ContentCommand::MarkCompositorDirty => {
-                self.engine.mark_compositor_dirty(0.0);
+                self.engine.mark_compositor_dirty(Seconds::ZERO);
             }
 
             // ── Display ───────────────────────────────────────────
             ContentCommand::UpdateEdrHeadroom(headroom) => {
-                log::error!(
+                log::info!(
                     "[EDR] Content thread: headroom updated to {:.2}x (mode={})",
                     headroom,
                     if headroom > 1.0 { "passthrough" } else { "ACES tonemap" },
                 );
                 self.content_pipeline.edr_headroom = headroom;
-                self.engine.mark_compositor_dirty(0.0);
+                self.engine.mark_compositor_dirty(Seconds::ZERO);
             }
 
             // ── Generator ─────────────────────────────────────────
@@ -425,7 +426,7 @@ impl ContentThread {
                         break;
                     }
                 }
-                self.engine.mark_compositor_dirty(0.0);
+                self.engine.mark_compositor_dirty(Seconds::ZERO);
             }
 
             // ── LED output ─────────────────────────────────────────────

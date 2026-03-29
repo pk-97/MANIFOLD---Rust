@@ -1,4 +1,5 @@
 use manifold_core::{Beats, Seconds, ClipId};
+use manifold_core::units::Bpm;
 // Port of Unity PercussionImportService.cs (405 lines).
 // Application-layer service for applying percussion import results to the timeline.
 // Owns layer resolution, clip creation, BPM auto-apply, and undo recording.
@@ -173,8 +174,8 @@ impl PercussionImportService {
                 TimelineClip::new_generator(
                     effective_gen_type,
                     target_layer_lid.clone(),
-                    Beats::from(placement.start_beat),
-                    Beats::from(placement.duration_beats),
+                    placement.start_beat,
+                    placement.duration_beats,
                 )
             } else {
                 let video_clip_id = match &placement.video_clip_id {
@@ -188,8 +189,8 @@ impl PercussionImportService {
                 TimelineClip::new_video(
                     video_clip_id,
                     target_layer_lid.clone(),
-                    Beats::from(placement.start_beat),
-                    Beats::from(placement.duration_beats),
+                    placement.start_beat,
+                    placement.duration_beats,
                     Seconds(0.0),
                 )
             };
@@ -295,13 +296,13 @@ impl PercussionImportService {
             None => return (PercussionBpmDecision::None, None),
         };
 
-        let detected_bpm = analysis.bpm;
-        if !MathUtils::is_finite(detected_bpm) || detected_bpm <= 0.0 {
+        let detected_bpm_raw = analysis.bpm.0;
+        if !MathUtils::is_finite(detected_bpm_raw) || detected_bpm_raw <= 0.0 {
             return (PercussionBpmDecision::None, None);
         }
 
-        let detected_bpm = detected_bpm.clamp(20.0, 300.0);
-        let current_bpm = project.settings.bpm;
+        let detected_bpm = detected_bpm_raw.clamp(20.0, 300.0);
+        let current_bpm = project.settings.bpm.0;
         if (current_bpm - detected_bpm).abs() < (BeatQuantizer::BPM_STEP * 0.5) {
             return (PercussionBpmDecision::None, None);
         }
@@ -333,7 +334,7 @@ impl PercussionImportService {
         change_bpm_command.execute(project);
 
         project.recording_provenance.set_recorded_project_bpm(
-            detected_bpm,
+            Bpm(detected_bpm),
             TempoPointSource::Recorded,
             true,
         );

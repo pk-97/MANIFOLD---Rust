@@ -387,7 +387,7 @@ impl Application {
 
     pub(crate) fn create_default_project() -> Project {
         let mut project = Project::default();
-        project.settings.bpm = 120.0;
+        project.settings.bpm = manifold_core::Bpm(120.0);
         project.settings.time_signature_numerator = 4;
 
         // One empty video layer (matches Unity startup behavior)
@@ -525,7 +525,7 @@ impl Application {
                 if let Ok(new_bpm) = text.parse::<f32>() {
                     let new_bpm = new_bpm.clamp(20.0, 300.0);
                     if let Some(project) = Some(&mut self.local_project) {
-                        let old_bpm = project.settings.bpm;
+                        let old_bpm = project.settings.bpm.0;
                         // Unity: skip if approximately equal
                         if (old_bpm - new_bpm).abs() >= 0.01 {
                             // Must use with_tempo_map so the tempo map point at
@@ -1820,7 +1820,7 @@ impl ApplicationHandler for Application {
                         .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
                         .unwrap_or(0) as i32;
                     let spb = manifold_core::tempo::TempoMapConverter::seconds_per_beat_from_bpm(
-                        self.local_project.settings.bpm,
+                        self.local_project.settings.bpm.0,
                     );
                     let action = self.project_io.process_dropped_files(
                         std::slice::from_ref(&path),

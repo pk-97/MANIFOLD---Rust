@@ -130,7 +130,7 @@ impl AudioStateSnapshot {
         let state = project.percussion_import.as_ref();
         Self {
             path: state.and_then(|s| s.audio_path.clone()),
-            start_beat: state.map_or(0.0, |s| s.audio_start_beat),
+            start_beat: state.map_or(0.0, |s| s.audio_start_beat.as_f32()),
             hash: state.and_then(|s| s.audio_hash.clone()),
             stem_paths: state.and_then(|s| s.stem_paths.clone()),
         }
@@ -545,7 +545,7 @@ impl PercussionImportOrchestrator {
         // The actual audio load is caller-driven; we record the state change for undo.
         let state = project.percussion_import.get_or_insert_with(Default::default);
         state.audio_path = Some(selected_path.clone());
-        state.audio_start_beat = start_beat;
+        state.audio_start_beat = Beats::from_f32(start_beat);
         state.audio_hash = Some(compute_audio_hash(&selected_path));
 
         self.set_percussion_import_status(
@@ -595,7 +595,7 @@ impl PercussionImportOrchestrator {
                 );
 
                 let new_path = state.audio_path.clone();
-                let new_start_beat = state.audio_start_beat;
+                let new_start_beat = state.audio_start_beat.as_f32();
                 let new_hash = state.audio_hash.clone();
                 let new_stems = state.stem_paths.clone();
                 self.record_audio_state_change(
@@ -852,7 +852,7 @@ impl PercussionImportOrchestrator {
         let old_start_beat = project
             .percussion_import
             .as_ref()
-            .map_or(0.0, |s| s.audio_start_beat);
+            .map_or(0.0, |s| s.audio_start_beat.as_f32());
         let old_hash = project
             .percussion_import
             .as_ref()
@@ -865,7 +865,7 @@ impl PercussionImportOrchestrator {
         // Apply removal immediately.
         if let Some(state) = project.percussion_import.as_mut() {
             state.audio_path = None;
-            state.audio_start_beat = 0.0;
+            state.audio_start_beat = Beats::ZERO;
             state.stem_paths = None;
             state.audio_hash = None;
         }
@@ -955,7 +955,7 @@ impl PercussionImportOrchestrator {
         let audio_start_beat = project
             .percussion_import
             .as_ref()
-            .map_or(0.0, |s| s.audio_start_beat);
+            .map_or(0.0, |s| s.audio_start_beat.as_f32());
         let audio_ready = project
             .percussion_import
             .as_ref()
@@ -1052,7 +1052,7 @@ impl PercussionImportOrchestrator {
         let current_start_beat = project
             .percussion_import
             .as_ref()
-            .map_or(0.0, |s| s.audio_start_beat);
+            .map_or(0.0, |s| s.audio_start_beat.as_f32());
         let new_start_beat = current_start_beat + delta_beats;
 
         // Clamp: the helper handles per-clip clamping, but check if the audio itself can't move.
@@ -1119,7 +1119,7 @@ impl PercussionImportOrchestrator {
         let current_start_beat = project
             .percussion_import
             .as_ref()
-            .map_or(0.0, |s| s.audio_start_beat);
+            .map_or(0.0, |s| s.audio_start_beat.as_f32());
 
         if current_start_beat.abs() < 0.0001 {
             if set_status {
@@ -1187,7 +1187,7 @@ impl PercussionImportOrchestrator {
         let audio_start = project
             .percussion_import
             .as_ref()
-            .map_or(0.0, |s| s.audio_start_beat);
+            .map_or(0.0, |s| s.audio_start_beat.as_f32());
         let audio_ready = project
             .percussion_import
             .as_ref()
@@ -1396,7 +1396,7 @@ impl PercussionImportOrchestrator {
                 let hash = compute_audio_hash(&selected_path);
                 let state = project.percussion_import.get_or_insert_with(Default::default);
                 state.audio_path = Some(selected_path.clone());
-                state.audio_start_beat = final_start_beat;
+                state.audio_start_beat = Beats::from_f32(final_start_beat);
                 state.audio_hash = Some(hash.clone());
 
                 // Resolve stems now that audio path is set.
@@ -1415,7 +1415,7 @@ impl PercussionImportOrchestrator {
                 }
 
                 let new_path = state.audio_path.clone();
-                let new_start = state.audio_start_beat;
+                let new_start = state.audio_start_beat.as_f32();
                 let new_hash = state.audio_hash.clone();
                 let new_stems = state.stem_paths.clone();
 
@@ -1540,7 +1540,7 @@ impl PercussionImportOrchestrator {
                                 let aligned_start_beat = self.align_start_beat_to_downbeat(
                                     Some(&analysis),
                                     start_beat,
-                                    settings.bpm,
+                                    settings.bpm.0,
                                     beats_per_bar,
                                 );
                                 let actual_start_beat = if (aligned_start_beat - start_beat).abs()
@@ -1548,15 +1548,15 @@ impl PercussionImportOrchestrator {
                                 {
                                     // Update project state.
                                     if let Some(s) = project.percussion_import.as_mut() {
-                                        s.audio_start_beat = aligned_start_beat;
+                                        s.audio_start_beat = Beats::from_f32(aligned_start_beat);
                                     }
                                     aligned_start_beat
                                 } else {
                                     start_beat
                                 };
 
-                                let bpm_text = if analysis.bpm > 0.0 {
-                                    format!("{:.2} BPM", analysis.bpm)
+                                let bpm_text = if analysis.bpm.0 > 0.0 {
+                                    format!("{:.2} BPM", analysis.bpm.0)
                                 } else {
                                     "BPM unknown".to_string()
                                 };
@@ -1634,7 +1634,7 @@ impl PercussionImportOrchestrator {
                 let new_start_beat = project
                     .percussion_import
                     .as_ref()
-                    .map_or(0.0, |s| s.audio_start_beat);
+                    .map_or(0.0, |s| s.audio_start_beat.as_f32());
                 let new_hash = project
                     .percussion_import
                     .as_ref()
@@ -2000,7 +2000,7 @@ impl PercussionImportOrchestrator {
         let bpm = project.settings.bpm;
         let beats_per_bar = project.settings.time_signature_numerator.max(1);
         let aligned_offset =
-            self.align_start_beat_to_downbeat(Some(&analysis), start_beat_offset, bpm, beats_per_bar);
+            self.align_start_beat_to_downbeat(Some(&analysis), start_beat_offset, bpm.0, beats_per_bar);
         self.last_import_aligned_start_beat = aligned_offset;
 
         let options = PercussionImportOptionsFactory::create_default_with_settings(

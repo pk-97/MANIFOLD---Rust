@@ -90,8 +90,8 @@ mod tests {
 
     #[derive(Debug)]
     struct SetBpmCommand {
-        old_bpm: f32,
-        new_bpm: f32,
+        old_bpm: manifold_core::units::Bpm,
+        new_bpm: manifold_core::units::Bpm,
     }
 
     impl Command for SetBpmCommand {
@@ -107,19 +107,20 @@ mod tests {
 
     #[test]
     fn test_undo_redo() {
+        use manifold_core::units::Bpm;
         let mut mgr = UndoRedoManager::new();
         let mut project = Project::default();
-        project.settings.bpm = 120.0;
+        project.settings.bpm = Bpm(120.0);
 
-        mgr.execute(Box::new(SetBpmCommand { old_bpm: 0.0, new_bpm: 140.0 }), &mut project);
-        assert_eq!(project.settings.bpm, 140.0);
+        mgr.execute(Box::new(SetBpmCommand { old_bpm: Bpm(0.0), new_bpm: Bpm(140.0) }), &mut project);
+        assert_eq!(project.settings.bpm, Bpm(140.0));
         assert!(mgr.can_undo());
 
         assert!(mgr.undo(&mut project));
-        assert_eq!(project.settings.bpm, 120.0);
+        assert_eq!(project.settings.bpm, Bpm(120.0));
         assert!(mgr.can_redo());
 
         assert!(mgr.redo(&mut project));
-        assert_eq!(project.settings.bpm, 140.0);
+        assert_eq!(project.settings.bpm, Bpm(140.0));
     }
 }

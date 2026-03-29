@@ -146,7 +146,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn get_seconds_per_beat(&self) -> f32 {
         let bpm = Some(&*self.project)
-            .map(|p| p.settings.bpm)
+            .map(|p| p.settings.bpm.0)
             .unwrap_or(120.0);
         if bpm > 0.0 { 60.0 / bpm } else { 0.5 }
     }
@@ -375,7 +375,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         } else {
             // Unity: if paused and insert cursor exists, seek to cursor first (Ableton behavior)
             if let Some(beat) = insert_cursor_beat {
-                let time = beat * (60.0 / self.project.settings.bpm);
+                let time = beat * (60.0 / self.project.settings.bpm.0);
                 ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(time));
             }
             ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Play);
@@ -394,7 +394,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                         if end > max_beat { max_beat = end; }
                     }
                 }
-                let end_time = max_beat.as_f32() * (60.0 / self.project.settings.bpm);
+                let end_time = max_beat.as_f32() * (60.0 / self.project.settings.bpm.0);
                 ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(end_time));
             }
         } else {
@@ -456,7 +456,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         });
         // Delete from local project + send commands to content thread
         let project = &mut *self.project;
-        let spb = 60.0 / project.settings.bpm.max(1.0);
+        let spb = 60.0 / project.settings.bpm.0.max(1.0);
         let del_region = if has_region {
             Some(self.selection.get_region().clone())
         } else {
@@ -505,7 +505,7 @@ impl TimelineInputHost for AppInputHost<'_> {
                 .flat_map(|l| l.clips.iter().map(|c| c.id.clone()))
                 .collect();
 
-            let spb = 60.0 / project.settings.bpm.max(1.0);
+            let spb = 60.0 / project.settings.bpm.0.max(1.0);
             let mut commands = EditingService::duplicate_clips(
                 project, clip_ids, &region, spb,
             );
@@ -540,8 +540,8 @@ impl TimelineInputHost for AppInputHost<'_> {
                     let (lo, hi) = region.layer_index_range(&project.timeline.layers)
                         .unwrap_or((0, 0));
                     self.selection.set_region(
-                        region.end_beat,
-                        region.end_beat + duration,
+                        region.end_beat.as_f32(),
+                        (region.end_beat + duration).as_f32(),
                         lo as i32,
                         hi as i32,
                         &project.timeline.layers,
@@ -558,7 +558,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn delete_clips(&mut self, clip_ids: &[ClipId], has_region: bool) {
         if let Some(project) = Some(&mut *self.project) {
-            let spb = 60.0 / project.settings.bpm;
+            let spb = 60.0 / project.settings.bpm.0;
             // Step 4i: pass actual region from UIState when active
             let region = if has_region {
                 Some(self.selection.get_region().clone())
@@ -587,7 +587,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn split_clips_at_playhead(&mut self, clip_ids: &[ClipId]) {
         let beat = self.content_state.current_beat as f32;
         if let Some(project) = Some(&mut *self.project) {
-            let spb = 60.0 / project.settings.bpm;
+            let spb = 60.0 / project.settings.bpm.0;
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
             for id in clip_ids {
                 if let Some(cmd) = EditingService::split_clip_at_beat(project, id, manifold_core::Beats::from_f32(beat), spb) {
@@ -620,7 +620,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn nudge_clips(&mut self, clip_ids: &[ClipId], beat_delta: f32) {
         if let Some(project) = Some(&mut *self.project) {
-            let spb = 60.0 / project.settings.bpm;
+            let spb = 60.0 / project.settings.bpm.0;
             let commands = EditingService::nudge_clips(project, clip_ids, manifold_core::Beats::from_f32(beat_delta), spb);
             if !commands.is_empty() {
                 ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::ExecuteBatch(commands, String::new()));

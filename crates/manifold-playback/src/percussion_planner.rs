@@ -9,6 +9,7 @@ use manifold_core::percussion_analysis::{
     PercussionPlacementPlan, PercussionTriggerType,
 };
 use manifold_core::percussion_binding::PercussionBindingResolver;
+use manifold_core::units::{Beats, Seconds};
 
 /// Port of Unity PercussionTimelinePlanner.
 /// Converts parsed seconds-domain percussion events into beat-domain timeline placements.
@@ -77,7 +78,7 @@ impl<'a> PercussionTimelinePlanner<'a> {
 
             let compensated_time = percussion_event.time_seconds + options.onset_compensation_seconds;
             let mapped_beat = match analysis.try_map_seconds_to_beat(
-                compensated_time,
+                Seconds::from_f32(compensated_time),
                 Some(self.beat_time_converter.as_mut()),
             ) {
                 Some(b) => b,
@@ -87,8 +88,8 @@ impl<'a> PercussionTimelinePlanner<'a> {
                 }
             };
 
-            let mut source_beat = mapped_beat + options.start_beat_offset;
-            source_beat = source_beat.max(0.0);
+            let mut source_beat = mapped_beat + Beats::from_f32(options.start_beat_offset);
+            source_beat = source_beat.max(Beats::ZERO);
 
             if energy_gate_enabled {
                 let energy_at_beat = analysis.energy_at_beat(source_beat);
@@ -102,16 +103,16 @@ impl<'a> PercussionTimelinePlanner<'a> {
             if quantizing {
                 placement_beat = (source_beat / quantize_step).round() * quantize_step;
             }
-            placement_beat = placement_beat.max(0.0);
+            placement_beat = placement_beat.max(Beats::ZERO);
 
             let spacing_key = ((binding.trigger_type as i32).wrapping_mul(397)) ^ binding.layer_index;
 
             // Duration priority: per-event (from model) > binding (from SO) > default.
-            let duration_beats: f32 = if percussion_event.has_duration() && analysis.bpm > 0.0 {
-                let seconds_per_beat = 60.0 / analysis.bpm;
+            let duration_beats = if percussion_event.has_duration() && analysis.bpm.0 > 0.0 {
+                let seconds_per_beat = 60.0 / analysis.bpm.0;
                 let raw = percussion_event.duration_seconds / seconds_per_beat;
-                raw.clamp(0.0625, 32.0)
-            } else if binding.duration_beats > 0.0 {
+                Beats::from_f32(raw.clamp(0.0625, 32.0))
+            } else if binding.duration_beats.0 > 0.0 {
                 binding.duration_beats
             } else {
                 options.default_clip_duration_beats
@@ -129,7 +130,7 @@ impl<'a> PercussionTimelinePlanner<'a> {
             );
 
             if quantizing {
-                let quantized_tick = (placement_beat / quantize_step).round() as i32;
+                let quantized_tick = (placement_beat / quantize_step).as_f32().round() as i32;
                 let slot_key = Self::compose_quantized_slot_key(spacing_key, quantized_tick);
                 if let Some(&existing_index) = placement_index_by_quantized_slot.get(&slot_key) {
                     let existing = &accepted_placements[existing_index];

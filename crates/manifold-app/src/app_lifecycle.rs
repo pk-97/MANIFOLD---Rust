@@ -187,7 +187,7 @@ impl Application {
         };
         let content_tx = content_tx.clone();
 
-        let bpm = self.local_project.settings.bpm;
+        let bpm = self.local_project.settings.bpm.0;
         let insert_beat = self.content_state.current_beat as f32;
         let layer_id = self.active_layer_id.as_ref()
             .and_then(|lid| {
@@ -361,7 +361,7 @@ impl Application {
             if let Some(ref perc) = self.local_project.percussion_import
                 && let Some(ref audio_path) = perc.audio_path
                     && !audio_path.is_empty() {
-                        audio_path_for_load = Some((audio_path.clone(), perc.audio_start_beat));
+                        audio_path_for_load = Some((audio_path.clone(), perc.audio_start_beat.as_f32()));
                         self.ui_root.layout.waveform_lane_visible = true;
                     }
 

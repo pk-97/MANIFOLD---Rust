@@ -3,6 +3,7 @@ use crate::id::{ClipId, LayerId};
 use crate::types::TempoPointSource;
 use crate::tempo::{TempoMap, TempoPoint};
 use crate::math::BeatQuantizer;
+use crate::units::{Beats, Bpm};
 
 /// Provenance data for a single recorded clip.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,17 +23,17 @@ pub struct RecordedClipProvenance {
     #[serde(default)]
     pub end_time_seconds: f32,
     #[serde(default)]
-    pub start_beat: f32,
+    pub start_beat: Beats,
     #[serde(default)]
-    pub end_beat: f32,
+    pub end_beat: Beats,
     #[serde(default)]
     pub start_absolute_tick: i32,
     #[serde(default)]
     pub end_absolute_tick: i32,
     #[serde(default)]
-    pub start_bpm: f32,
+    pub start_bpm: Bpm,
     #[serde(default)]
-    pub end_bpm: f32,
+    pub end_bpm: Bpm,
     #[serde(default)]
     pub start_tempo_source: TempoPointSource,
     #[serde(default)]
@@ -44,8 +45,8 @@ pub struct RecordedClipProvenance {
 #[serde(rename_all = "camelCase")]
 pub struct RecordedTempoChange {
     pub time_seconds: f32,
-    pub beat: f32,
-    pub bpm: f32,
+    pub beat: Beats,
+    pub bpm: Bpm,
     #[serde(default)]
     pub source: TempoPointSource,
 }
@@ -64,7 +65,7 @@ pub struct RecordingProvenance {
     #[serde(default)]
     pub has_recorded_project_bpm: bool,
     #[serde(default)]
-    pub recorded_project_bpm: f32,
+    pub recorded_project_bpm: Bpm,
     #[serde(default)]
     pub recorded_project_bpm_source: TempoPointSource,
 }
@@ -79,9 +80,9 @@ impl RecordingProvenance {
         });
 
         if self.has_recorded_project_bpm {
-            self.recorded_project_bpm = BeatQuantizer::quantize_bpm(self.recorded_project_bpm);
-        } else if self.recorded_project_bpm <= 0.0 {
-            self.recorded_project_bpm = 120.0;
+            self.recorded_project_bpm = Bpm(BeatQuantizer::quantize_bpm(self.recorded_project_bpm.0));
+        } else if self.recorded_project_bpm.0 <= 0.0 {
+            self.recorded_project_bpm = Bpm::DEFAULT;
         }
     }
 
@@ -158,7 +159,7 @@ impl RecordingProvenance {
 
     /// Try to restore the recorded tempo lane to a target tempo map.
     /// Unity RecordingProvenance.cs TryRestoreRecordedTempoLane lines 242-265.
-    pub fn try_restore_recorded_tempo_lane(&self, target: &mut TempoMap, fallback_bpm: f32) -> bool {
+    pub fn try_restore_recorded_tempo_lane(&self, target: &mut TempoMap, fallback_bpm: Bpm) -> bool {
         if !self.has_recorded_tempo_lane() {
             return false;
         }
@@ -174,7 +175,7 @@ impl RecordingProvenance {
             );
         }
 
-        let beat_zero_source = self.get_source_at_beat(&self.recorded_tempo_lane, 0.0, TempoPointSource::Recorded);
+        let beat_zero_source = self.get_source_at_beat(&self.recorded_tempo_lane, Beats::ZERO, TempoPointSource::Recorded);
         let source = if beat_zero_source == TempoPointSource::Unknown {
             TempoPointSource::Recorded
         } else {
@@ -187,7 +188,7 @@ impl RecordingProvenance {
 
     /// Get tempo source at a given beat from a lane.
     /// Unity RecordingProvenance.cs GetSourceAtBeat lines 267-286.
-    fn get_source_at_beat(&self, lane: &[TempoPoint], beat: f32, fallback: TempoPointSource) -> TempoPointSource {
+    fn get_source_at_beat(&self, lane: &[TempoPoint], beat: Beats, fallback: TempoPointSource) -> TempoPointSource {
         if lane.is_empty() {
             return fallback;
         }
@@ -220,10 +221,10 @@ impl RecordingProvenance {
 
         for (i, a) in current_lane.iter().enumerate() {
             let b = &self.recorded_tempo_lane[i];
-            if (a.beat - b.beat).abs() > beat_epsilon {
+            if (a.beat - b.beat).abs() > Beats::from_f32(beat_epsilon) {
                 return false;
             }
-            if (a.bpm - b.bpm).abs() > bpm_epsilon {
+            if (a.bpm.0 - b.bpm.0).abs() > bpm_epsilon {
                 return false;
             }
             if a.source != b.source {
@@ -236,9 +237,9 @@ impl RecordingProvenance {
 
     /// Try to get the recorded project BPM.
     /// Unity RecordingProvenance.cs TryGetRecordedProjectBpm lines 318-329.
-    pub fn try_get_recorded_project_bpm(&self) -> Option<f32> {
+    pub fn try_get_recorded_project_bpm(&self) -> Option<Bpm> {
         if self.has_recorded_project_bpm {
-            Some(self.recorded_project_bpm.clamp(20.0, 300.0))
+            Some(Bpm(self.recorded_project_bpm.0.clamp(20.0, 300.0)))
         } else {
             None
         }
@@ -246,12 +247,12 @@ impl RecordingProvenance {
 
     /// Set the recorded project BPM.
     /// Unity RecordingProvenance.cs SetRecordedProjectBpm lines 331-342.
-    pub fn set_recorded_project_bpm(&mut self, bpm: f32, source: TempoPointSource, overwrite: bool) {
+    pub fn set_recorded_project_bpm(&mut self, bpm: Bpm, source: TempoPointSource, overwrite: bool) {
         self.ensure_valid();
         if self.has_recorded_project_bpm && !overwrite {
             return;
         }
-        self.recorded_project_bpm = BeatQuantizer::quantize_bpm(bpm.clamp(20.0, 300.0));
+        self.recorded_project_bpm = Bpm(BeatQuantizer::quantize_bpm(bpm.0.clamp(20.0, 300.0)));
         self.recorded_project_bpm_source = source;
         self.has_recorded_project_bpm = true;
     }
@@ -260,7 +261,7 @@ impl RecordingProvenance {
     /// Unity RecordingProvenance.cs ClearRecordedProjectBpm lines 344-349.
     pub fn clear_recorded_project_bpm(&mut self) {
         self.has_recorded_project_bpm = false;
-        self.recorded_project_bpm = 120.0;
+        self.recorded_project_bpm = Bpm::DEFAULT;
         self.recorded_project_bpm_source = TempoPointSource::Unknown;
     }
 

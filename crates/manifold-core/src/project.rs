@@ -8,6 +8,7 @@ use crate::tempo::TempoMap;
 use crate::recording::RecordingProvenance;
 use crate::percussion::PercussionImportState;
 use crate::types::ClipDurationMode;
+use crate::units::Beats;
 
 /// Root project aggregate. Contains all project data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,7 +88,7 @@ impl Project {
         );
 
         // Sync BPM from tempo map at beat 0
-        self.settings.bpm = self.tempo_map.get_bpm_at_beat(0.0, self.settings.bpm);
+        self.settings.bpm = self.tempo_map.get_bpm_at_beat(Beats::ZERO, self.settings.bpm);
 
         // Clamp saved playhead
         self.saved_playhead_time = self.saved_playhead_time.max(0.0);
@@ -147,7 +148,7 @@ impl Project {
     pub fn imported_percussion_audio_start_beat(&self) -> f32 {
         self.percussion_import
             .as_ref()
-            .map_or(0.0, |s| s.audio_start_beat)
+            .map_or(0.0, |s| s.audio_start_beat.as_f32())
     }
 
     /// Port of Unity Project.ImportedPercussionAudioStartBeat setter (Mathf.Max(0f, value)).
@@ -155,7 +156,7 @@ impl Project {
         if self.percussion_import.is_none() {
             self.percussion_import = Some(crate::percussion::PercussionImportState::default());
         }
-        self.percussion_import.as_mut().unwrap().audio_start_beat = value.max(0.0);
+        self.percussion_import.as_mut().unwrap().audio_start_beat = Beats::from_f32(value.max(0.0));
     }
 
     pub fn total_clip_count(&self) -> usize {
@@ -175,8 +176,7 @@ impl Project {
     /// Sync BPM from tempo map beat 0, clamped to 20-300.
     /// Port of C# ProjectSerializer.cs lines 39-43.
     pub fn sync_bpm_from_tempo_map(&mut self) {
-        let start_bpm = self.tempo_map.get_bpm_at_beat(0.0, self.settings.bpm);
-        self.settings.bpm = start_bpm.clamp(20.0, 300.0);
+        self.settings.bpm = self.tempo_map.get_bpm_at_beat(Beats::ZERO, self.settings.bpm);
     }
 
     /// Validate project structure. Returns list of error strings.

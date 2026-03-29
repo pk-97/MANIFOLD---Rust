@@ -14,6 +14,7 @@ use manifold_core::layer::Layer;
 use manifold_core::LayerId;
 use manifold_core::types::*;
 use manifold_core::{Beats, Seconds, EffectTypeId, GeneratorTypeId};
+use manifold_core::units::Bpm;
 use manifold_core::effects::*;
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
@@ -31,7 +32,7 @@ fn load_project(name: &str) -> Project {
 
 fn make_test_project() -> Project {
     let mut project = Project::default();
-    project.settings.bpm = 120.0;
+    project.settings.bpm = manifold_core::units::Bpm(120.0);
     project.settings.time_signature_numerator = 4;
 
     // Add 2 layers
@@ -371,8 +372,8 @@ fn change_master_opacity_undo_roundtrip() {
 #[test]
 fn clear_tempo_map_undo_roundtrip() {
     let mut project = make_test_project();
-    project.tempo_map.add_or_replace_point(0.0, 120.0, TempoPointSource::Manual, 0.001);
-    project.tempo_map.add_or_replace_point(4.0, 140.0, TempoPointSource::Manual, 0.001);
+    project.tempo_map.add_or_replace_point(Beats(0.0), Bpm(120.0), TempoPointSource::Manual, 0.001);
+    project.tempo_map.add_or_replace_point(Beats(4.0), Bpm(140.0), TempoPointSource::Manual, 0.001);
 
     let old_points = project.tempo_map.clone_points();
     assert_eq!(old_points.len(), 2);
@@ -389,23 +390,23 @@ fn clear_tempo_map_undo_roundtrip() {
 #[test]
 fn restore_tempo_lane_undo_roundtrip() {
     let mut project = make_test_project();
-    project.tempo_map.add_or_replace_point(0.0, 120.0, TempoPointSource::Manual, 0.001);
+    project.tempo_map.add_or_replace_point(Beats(0.0), Bpm(120.0), TempoPointSource::Manual, 0.001);
     let old_points = project.tempo_map.clone_points();
 
     let new_points = vec![
-        manifold_core::tempo::TempoPoint { beat: 0.0, bpm: 130.0, source: TempoPointSource::Recorded, recorded_at_seconds: 0.0 },
-        manifold_core::tempo::TempoPoint { beat: 4.0, bpm: 140.0, source: TempoPointSource::Recorded, recorded_at_seconds: 2.0 },
+        manifold_core::tempo::TempoPoint { beat: Beats(0.0), bpm: Bpm(130.0), source: TempoPointSource::Recorded, recorded_at_seconds: Seconds(0.0) },
+        manifold_core::tempo::TempoPoint { beat: Beats(4.0), bpm: Bpm(140.0), source: TempoPointSource::Recorded, recorded_at_seconds: Seconds(2.0) },
     ];
 
     let mut cmd = RestoreRecordedTempoLaneCommand::new(120.0, old_points, new_points);
 
     cmd.execute(&mut project);
     assert_eq!(project.tempo_map.point_count(), 2);
-    assert!((project.settings.bpm - 130.0).abs() < 0.01);
+    assert!((project.settings.bpm.0 - 130.0).abs() < 0.01);
 
     cmd.undo(&mut project);
     assert_eq!(project.tempo_map.point_count(), 1);
-    assert!((project.settings.bpm - 120.0).abs() < 0.01);
+    assert!((project.settings.bpm.0 - 120.0).abs() < 0.01);
 }
 
 // ─── Effect Commands ───
@@ -935,7 +936,7 @@ fn clear_percussion_undo_roundtrip() {
     let mut project = make_test_project();
     // Set up percussion state
     project.percussion_import = Some(manifold_core::percussion::PercussionImportState {
-        audio_start_beat: 4.0,
+        audio_start_beat: Beats(4.0),
         audio_path: Some("/test/audio.wav".into()),
         ..Default::default()
     });
@@ -946,7 +947,7 @@ fn clear_percussion_undo_roundtrip() {
 
     cmd.undo(&mut project);
     assert!(project.percussion_import.is_some());
-    assert_eq!(project.percussion_import.as_ref().unwrap().audio_start_beat, 4.0);
+    assert_eq!(project.percussion_import.as_ref().unwrap().audio_start_beat, Beats(4.0));
     assert_eq!(
         project.percussion_import.as_ref().unwrap().audio_path.as_deref(),
         Some("/test/audio.wav"),

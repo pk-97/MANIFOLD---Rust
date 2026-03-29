@@ -19,7 +19,7 @@ fn load_burn_v5_project() {
     assert_eq!(project.project_name, "Burn V5");
 
     // Settings
-    assert!((project.settings.bpm - 138.0).abs() < 0.01, "BPM should be 138.0, got {}", project.settings.bpm);
+    assert!((project.settings.bpm.0 - 138.0).abs() < 0.01, "BPM should be 138.0, got {}", project.settings.bpm);
     assert_eq!(project.settings.output_width, 1440);
     assert_eq!(project.settings.output_height, 2560);
 
@@ -238,7 +238,7 @@ fn load_burn_v4_project() {
         .expect("Failed to load Burn V4.manifold");
 
     assert_eq!(project.project_name, "Burn V4");
-    assert!((project.settings.bpm - 138.0).abs() < 0.01);
+    assert!((project.settings.bpm.0 - 138.0).abs() < 0.01);
     assert_eq!(project.timeline.layers.len(), 9);
     assert_eq!(project.timeline.total_clip_count(), 34);
 }
@@ -252,7 +252,7 @@ fn load_waypoints_large_project() {
         .expect("Failed to load WAYPOINTS.manifold");
 
     assert_eq!(project.project_name, "WAYPOINTS");
-    assert!((project.settings.bpm - 110.0).abs() < 0.01);
+    assert!((project.settings.bpm.0 - 110.0).abs() < 0.01);
     assert_eq!(project.timeline.layers.len(), 9);
     assert_eq!(project.timeline.total_clip_count(), 2311);
 

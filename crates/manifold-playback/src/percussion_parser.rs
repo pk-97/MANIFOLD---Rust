@@ -5,6 +5,7 @@
 use manifold_core::percussion_analysis::{
     PercussionAnalysisData, PercussionBeatGrid, PercussionEvent, PercussionTriggerType,
 };
+use manifold_core::units::Bpm;
 use serde::Deserialize;
 
 // ─── Trait ───
@@ -71,7 +72,7 @@ impl PercussionAnalysisParser for JsonPercussionAnalysisParser {
 
         let mut analysis = PercussionAnalysisData::new(
             &track_id,
-            bpm,
+            Bpm(bpm),
             events,
             bpm_confidence,
             beat_grid,
@@ -621,7 +622,7 @@ mod tests {
         assert!(result.is_ok());
         let data = result.unwrap();
         assert_eq!(data.track_id, "test_track");
-        assert_eq!(data.bpm, 128.0);
+        assert_eq!(data.bpm, manifold_core::units::Bpm(128.0));
         assert_eq!(data.events.len(), 2);
         assert_eq!(data.events[0].trigger_type, PercussionTriggerType::Kick);
         assert_eq!(data.events[1].trigger_type, PercussionTriggerType::Snare);
@@ -677,7 +678,7 @@ mod tests {
         let json = r#"{"bpm": 140.0}"#;
         let result = parser.try_parse(json);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().bpm, 140.0);
+        assert_eq!(result.unwrap().bpm, manifold_core::units::Bpm(140.0));
     }
 
     #[test]

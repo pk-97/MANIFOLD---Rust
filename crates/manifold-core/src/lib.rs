@@ -35,7 +35,7 @@ pub use math::{BeatQuantizer, MathUtils, short_id};
 pub use selection::{SelectionRegion, SelectionRegionTarget};
 pub use effects::{EffectContainer, ParamSource};
 pub use id::{ClipId, LayerId, EffectGroupId, EffectId, MarkerId};
-pub use units::{Beats, Seconds, beats_to_seconds, seconds_to_beats};
+pub use units::{Beats, Seconds, Bpm, beats_to_seconds, seconds_to_beats};
 pub use marker::TimelineMarker;
 pub use effect_type_id::EffectTypeId;
 pub use generator_type_id::GeneratorTypeId;

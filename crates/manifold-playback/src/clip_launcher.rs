@@ -332,7 +332,7 @@ impl ClipLauncher {
 
         if generator_type != GeneratorTypeId::NONE {
             let bpm = project.settings.bpm;
-            let spb = TempoMapConverter::seconds_per_beat_from_bpm(bpm);
+            let spb = TempoMapConverter::seconds_per_beat_from_bpm(bpm.0);
             let generator_duration = spb * 4.0; // 1 bar at 4/4 default feel
 
             let gen_clip = live_clip_manager.trigger_live_generator_clip(

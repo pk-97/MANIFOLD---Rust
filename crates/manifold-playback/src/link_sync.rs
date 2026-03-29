@@ -5,6 +5,7 @@
 //! is selected as clock authority.
 
 use manifold_core::types::ClockAuthority;
+use manifold_core::Beats;
 use crate::sync::{SyncArbiter, SyncArbiterTarget};
 use crate::sync_source::SyncSource;
 
@@ -13,7 +14,7 @@ use crate::sync_source::SyncSource;
 pub struct LinkSyncController {
     is_link_enabled: bool,
     pub num_peers: i32,
-    pub current_beat: f64,
+    pub current_beat: Beats,
     pub current_phase: f64,
     pub link_tempo: f64,
     pub link_is_playing: bool,
@@ -34,7 +35,7 @@ impl LinkSyncController {
         Self {
             is_link_enabled: false,
             num_peers: 0,
-            current_beat: 0.0,
+            current_beat: Beats::ZERO,
             current_phase: 0.0,
             link_tempo: 120.0,
             link_is_playing: false,
@@ -91,7 +92,7 @@ impl LinkSyncController {
         if let Some(ref link) = self.link {
             link.capture_app_session_state(&mut self.session_state);
             let time = link.clock_micros();
-            self.current_beat = self.session_state.beat_at_time(time, self.quantum);
+            self.current_beat = Beats(self.session_state.beat_at_time(time, self.quantum));
             self.current_phase = self.session_state.phase_at_time(time, self.quantum);
             self.link_tempo = self.session_state.tempo();
             let new_num_peers = link.num_peers() as i32;

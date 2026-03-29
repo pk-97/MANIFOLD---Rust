@@ -8,6 +8,7 @@ use crossbeam_channel::{Receiver, Sender};
 
 use manifold_core::math::BeatQuantizer;
 use manifold_core::types::{ClockAuthority, PlaybackState, TempoPointSource};
+use manifold_core::{Beats, Bpm, Seconds};
 use manifold_editing::service::EditingService;
 use manifold_playback::audio_sync::ImportedAudioSyncController;
 use manifold_playback::stem_audio::StemAudioController;
@@ -302,17 +303,17 @@ impl ContentThread {
             let _t0 = std::time::Instant::now();
 
             let ctx = TickContext {
-                dt_seconds: dt,
-                realtime_now: realtime,
+                dt_seconds: Seconds(dt),
+                realtime_now: Seconds(realtime),
                 pre_render_dt: dt as f32,
                 frame_count: self.frame_count,
-                export_fixed_dt: 0.0,
+                export_fixed_dt: Seconds::ZERO,
             };
             let tick_result = self.engine.tick(ctx);
 
             // 4b. OscPositionSender (LateUpdate equivalent — after engine tick).
             if self.transport_controller.osc_sender_enabled {
-                let bpm = self.engine.project().map_or(120.0_f32, |p| p.settings.bpm);
+                let bpm = self.engine.project().map_or(120.0_f32, |p| p.settings.bpm.0);
                 let seconds_per_beat = if bpm > 0.0 { 60.0 / bpm } else { 0.5 };
                 self.osc_sender.late_update(
                     self.engine.is_playing(),
@@ -662,7 +663,7 @@ impl ContentThread {
                 active_clips: self.engine.active_clip_count(),
                 data_version: version,
                 editing_is_dirty: self.editing_service.is_dirty(),
-                bpm: self.engine.project().map_or(120.0, |p| p.settings.bpm as f64),
+                bpm: self.engine.project().map_or(120.0, |p| p.settings.bpm.0 as f64),
                 frame_rate: self.engine.project().map_or(60.0, |p| p.settings.frame_rate as f64),
                 clock_authority: self.engine.project()
                     .map_or(manifold_core::types::ClockAuthority::Internal, |p| p.settings.clock_authority),
@@ -770,7 +771,7 @@ impl ContentThread {
             if link.is_link_enabled() && link.has_active_peers() {
                 self.engine.set_live_external_tempo(
                     true,
-                    link.link_tempo as f32,
+                    Bpm(link.link_tempo as f32),
                     TempoPointSource::Link,
                 );
                 true
@@ -797,7 +798,7 @@ impl ContentThread {
             if !link_has_tempo && clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
                 self.engine.set_live_external_tempo(
                     true,
-                    clk.current_clock_bpm(),
+                    Bpm(clk.current_clock_bpm()),
                     TempoPointSource::MidiClock,
                 );
             }
@@ -844,14 +845,14 @@ impl ContentThread {
                         && !self.link_beat_offset.is_nan()
                     {
                         self.engine
-                            .set_beat((link.current_beat - self.link_beat_offset) as f32);
+                            .set_beat(Beats(link.current_beat.0 - self.link_beat_offset));
                     }
             }
             ClockAuthority::MidiClock => {
                 if !self.sync_arbiter.manifold_owns_playback
                     && let Some(ref clk) = self.transport_controller.midi_clock_sync
                         && clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
-                            self.engine.set_beat(clk.current_clock_beat());
+                            self.engine.set_beat(Beats::from_f32(clk.current_clock_beat()));
                         }
                         // else: beat derived from time (engine handles this in advance_time)
             }
@@ -868,7 +869,7 @@ impl ContentThread {
             if link.is_link_enabled() {
                 let manifold_beat =
                     self.engine.time_to_timeline_beat(self.engine.current_time()) as f64;
-                self.link_beat_offset = link.current_beat - manifold_beat;
+                self.link_beat_offset = link.current_beat.0 - manifold_beat;
             } else {
                 self.link_beat_offset = 0.0;
             }
@@ -893,7 +894,7 @@ impl ContentThread {
         let default_bpm = self
             .engine
             .project()
-            .map_or(120.0, |p| p.settings.bpm);
+            .map_or(120.0_f32, |p| p.settings.bpm.0);
 
         // Capture live tempo source for the get_source_at_beat callback.
         let live_tempo = self.engine.try_get_live_external_tempo();
@@ -923,7 +924,7 @@ impl ContentThread {
         // Port of C# ApplyResolvedTempo lines 260-264.
         if self.engine.project().is_none() {
             self.engine
-                .set_live_external_tempo(false, 0.0, TempoPointSource::Unknown);
+                .set_live_external_tempo(false, Bpm::DEFAULT, TempoPointSource::Unknown);
             return;
         }
 
@@ -983,11 +984,11 @@ impl ContentThread {
                     // for display only. Writing the tempo map causes beat re-derivation
                     // from stale time values, which makes the timeline stutter.
                     let map_bpm =
-                        project.tempo_map.get_bpm_at_beat(0.0, project.settings.bpm);
+                        project.tempo_map.get_bpm_at_beat(Beats::ZERO, project.settings.bpm);
                     let q_resolved_bpm = BeatQuantizer::quantize_bpm(bpm);
-                    if (map_bpm - q_resolved_bpm).abs() >= TempoRecorder::BPM_THRESHOLD {
+                    if (map_bpm.0 - q_resolved_bpm).abs() >= TempoRecorder::BPM_THRESHOLD {
                         project.tempo_map.add_or_replace_point(
-                            0.0, bpm, source, 0.001,
+                            Beats::ZERO, Bpm(bpm), source, 0.001,
                         );
                         tempo_map_changed = true;
                     }
@@ -998,7 +999,7 @@ impl ContentThread {
             // Re-derive beat from time after tempo map change.
             // Port of C# ApplyResolvedTempo line 1139.
             let new_beat = self.engine.time_to_timeline_beat(current_time);
-            self.engine.set_beat(new_beat);
+            self.engine.set_beat(Beats::from_f32(new_beat));
         }
     }
 
@@ -1012,7 +1013,7 @@ impl ContentThread {
         let default_bpm = self
             .engine
             .project()
-            .map_or(120.0, |p| p.settings.bpm);
+            .map_or(120.0, |p| p.settings.bpm.0);
         let live_tempo = self.engine.try_get_live_external_tempo();
         let get_source_at_beat = |_beat: f32| -> TempoPointSource {
             if let Some((_, source)) = live_tempo {

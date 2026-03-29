@@ -118,7 +118,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     fn get_seconds_per_beat(&self) -> f32 {
         let bpm = Some(&*self.project)
-            .map(|p| p.settings.bpm)
+            .map(|p| p.settings.bpm.0)
             .unwrap_or(120.0);
         if bpm > 0.0 { 60.0 / bpm } else { 0.5 }
     }
@@ -170,8 +170,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         if let Some(project) = Some(&*self.project) {
             let bpm = project.settings.bpm;
             manifold_core::tempo::TempoMapConverter::beat_to_seconds_immut(
-                &project.tempo_map, beat, bpm,
-            )
+                &project.tempo_map, manifold_core::Beats::from_f32(beat), bpm,
+            ).as_f32()
         } else {
             0.0
         }

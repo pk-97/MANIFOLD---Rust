@@ -76,17 +76,17 @@ pub(super) fn dispatch_editing(
         PanelAction::TrackDoubleClicked(beat, layer) => {
             // From Unity InteractionOverlay.OnPointerClick double-click path:
             // Use FloorBeatToGrid (grid cell start), NOT SnapBeatToGrid (nearest line).
-            let grid_step = ui.viewport.grid_step();
-            let snapped = manifold_ui::snap::floor_beat_to_grid(*beat, grid_step);
+            let grid_step = Beats::from_f32(ui.viewport.grid_step());
+            let snapped = manifold_ui::snap::floor_beat_to_grid(Beats::from_f32(*beat), grid_step);
             {
-                let (cmd, _clip_id) = EditingService::create_clip_at_position(project, Beats::from_f32(snapped), *layer, Beats::from_f32(4.0));
+                let (cmd, _clip_id) = EditingService::create_clip_at_position(project, snapped, *layer, Beats::from_f32(4.0));
                 { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
                 // Enforce non-overlap for the newly created clip
                 if let Some(new_layer) = project.timeline.layers.get(*layer)
                     && let Some(new_clip) = new_layer.clips.last() {
                         let new_clip_clone = new_clip.clone();
                         let ignore = std::collections::HashSet::new();
-                        let spb = 60.0 / project.settings.bpm;
+                        let spb = 60.0 / project.settings.bpm.0;
                         let overlap_cmds = EditingService::enforce_non_overlap(
                             project, &new_clip_clone, *layer, &ignore, spb,
                         );
@@ -111,7 +111,7 @@ pub(super) fn dispatch_editing(
         PanelAction::ContextSplitAtPlayhead(clip_id) => {
             let beat = content_state.current_beat as f32;
             {
-                let spb = 60.0 / project.settings.bpm;
+                let spb = 60.0 / project.settings.bpm.0;
                 if let Some(cmd) = EditingService::split_clip_at_beat(project, clip_id, Beats::from_f32(beat), spb) {
                     { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
                 }
@@ -135,11 +135,11 @@ pub(super) fn dispatch_editing(
                 // Calculate region from the single clip for proper offset
                 let mut region = manifold_core::selection::SelectionRegion::default();
                 if let Some(clip) = project.timeline.find_clip_by_id(&clip_id) {
-                    region.start_beat = clip.start_beat.as_f32();
-                    region.end_beat = (clip.start_beat + clip.duration_beats).as_f32();
+                    region.start_beat = clip.start_beat;
+                    region.end_beat = clip.start_beat + clip.duration_beats;
                     region.is_active = true;
                 }
-                let spb = 60.0 / project.settings.bpm.max(1.0);
+                let spb = 60.0 / project.settings.bpm.0.max(1.0);
                 let commands = EditingService::duplicate_clips(project, std::slice::from_ref(&clip_id), &region, spb);
                 if !commands.is_empty() {
                     for c in commands { ContentCommand::send(content_tx, ContentCommand::Execute(c)); }
@@ -150,7 +150,7 @@ pub(super) fn dispatch_editing(
         PanelAction::ContextPasteAtTrack(beat, _layer) => {
             let _snapped = ui.viewport.snap_to_grid(Beats::from_f32(*beat));
             {
-                let _spb = 60.0 / project.settings.bpm;
+                let _spb = 60.0 / project.settings.bpm.0;
                 // TODO: browser paste not yet wired
                 let result = manifold_editing::service::PasteResult { commands: Vec::new(), pasted_clip_ids: Vec::new(), skip_reason: None, skipped_count: 0 };
                 if !result.commands.is_empty() {

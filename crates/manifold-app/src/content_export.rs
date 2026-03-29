@@ -4,6 +4,7 @@
 
 use crossbeam_channel::{Receiver, Sender};
 
+use manifold_core::{Beats, Seconds};
 use manifold_playback::engine::TickContext;
 
 use crate::content_command::ContentCommand;
@@ -74,18 +75,18 @@ impl ContentThread {
             && let Some(path) = audio_sync.audio_path()
         {
             export_config.audio_path = Some(path.to_string());
-            export_config.audio_start_beat = audio_sync.start_beat();
+            export_config.audio_start_beat = audio_sync.start_beat().as_f32();
             export_config.audio_encoder_delay = audio_sync.encoder_delay_seconds();
         }
 
         // Calculate timing
         let mut tempo_map = project.tempo_map.clone();
         let start_seconds =
-            TempoMapConverter::beat_to_seconds(&mut tempo_map, start_beat, bpm);
+            TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats::from_f32(start_beat), bpm);
         let end_seconds =
-            TempoMapConverter::beat_to_seconds(&mut tempo_map, end_beat, bpm);
+            TempoMapConverter::beat_to_seconds(&mut tempo_map, Beats::from_f32(end_beat), bpm);
         let duration = end_seconds - start_seconds;
-        let total_frames = (duration * export_config.fps).round() as u32;
+        let total_frames = (duration * export_config.fps).0.round() as u32;
         let frame_dt = 1.0 / export_config.fps as f64;
 
         if total_frames == 0 {
@@ -123,8 +124,8 @@ impl ContentThread {
             );
         }
         // Seek to start
-        let start_time = self.engine.beat_to_timeline_time(start_beat);
-        self.engine.seek_to(start_time);
+        let start_time = self.engine.beat_to_timeline_time(Beats::from_f32(start_beat));
+        self.engine.seek_to(start_time.as_f32());
         self.engine.play();
 
         // 4. Create export session (initializes native Metal encoder).
@@ -133,12 +134,12 @@ impl ContentThread {
         let session_result = if let Some(ptr) = device_ptr {
             unsafe {
                 manifold_media::export_session::ExportSession::new_with_device(
-                    export_config.clone(), bpm, &mut tempo_map, ptr,
+                    export_config.clone(), bpm.0, &mut tempo_map, ptr,
                 )
             }
         } else {
             manifold_media::export_session::ExportSession::new(
-                export_config.clone(), bpm, &mut tempo_map,
+                export_config.clone(), bpm.0, &mut tempo_map,
             )
         };
         let mut session = match session_result {
@@ -147,8 +148,8 @@ impl ContentThread {
                 log::error!("[ContentThread] Failed to create export session: {e}");
                 self.engine.set_export_mode(false);
                 self.engine.stop();
-                let restore_time = self.engine.beat_to_timeline_time(saved_beat);
-                self.engine.seek_to(restore_time);
+                let restore_time = self.engine.beat_to_timeline_time(Beats::from_f32(saved_beat));
+                self.engine.seek_to(restore_time.as_f32());
                 self.send_export_finished(state_tx, false, format!("Export failed: {e}"), &export_config.output_path);
                 return;
             }
@@ -162,11 +163,11 @@ impl ContentThread {
             const MAX_WARMUP_TICKS: u32 = 120;
             for warmup_i in 0..MAX_WARMUP_TICKS {
                 let warmup_ctx = TickContext {
-                    dt_seconds: frame_dt,
-                    realtime_now: 0.0,
+                    dt_seconds: Seconds(frame_dt),
+                    realtime_now: Seconds::ZERO,
                     pre_render_dt: frame_dt as f32,
                     frame_count: u64::MAX,
-                    export_fixed_dt: frame_dt,
+                    export_fixed_dt: Seconds(frame_dt),
                 };
                 let warmup_result = self.engine.tick(warmup_ctx);
                 self.engine.reclaim_tick_result(warmup_result);
@@ -183,8 +184,8 @@ impl ContentThread {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
             // Re-seek to start — warmup ticks advanced the engine
-            let start_time = self.engine.beat_to_timeline_time(start_beat);
-            self.engine.seek_to(start_time);
+            let start_time = self.engine.beat_to_timeline_time(Beats::from_f32(start_beat));
+            self.engine.seek_to(start_time.as_f32());
         }
 
         // 5. Export frame loop.
@@ -267,8 +268,8 @@ impl ContentThread {
             self.content_pipeline.resize(&mut self.engine, cur_w, cur_h);
         }
         self.engine.stop();
-        let restore_time = self.engine.beat_to_timeline_time(saved_beat);
-        self.engine.seek_to(restore_time);
+        let restore_time = self.engine.beat_to_timeline_time(Beats::from_f32(saved_beat));
+        self.engine.seek_to(restore_time.as_f32());
         if was_playing {
             self.engine.play();
         }
@@ -297,11 +298,11 @@ impl ContentThread {
         generator_only: bool,
     ) -> Option<String> {
         let ctx = TickContext {
-            dt_seconds: frame_dt,
-            realtime_now: frame_idx as f64 * frame_dt,
+            dt_seconds: Seconds(frame_dt),
+            realtime_now: Seconds(frame_idx as f64 * frame_dt),
             pre_render_dt: frame_dt as f32,
             frame_count: frame_idx as u64,
-            export_fixed_dt: frame_dt,
+            export_fixed_dt: Seconds(frame_dt),
         };
         let tick_result = self.engine.tick(ctx);
 

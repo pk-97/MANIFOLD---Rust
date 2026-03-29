@@ -147,7 +147,7 @@ impl TransportStateCache {
 
     fn update_bpm(&mut self, ui: &mut UIRoot, project: &manifold_core::project::Project) {
         {
-            let bpm = project.settings.bpm;
+            let bpm = project.settings.bpm.0;
             if (bpm - self.bpm).abs() < 0.01 { return; }
             self.bpm = bpm;
             ui.transport.set_bpm_text(&mut ui.tree, &format!("{:.1}", bpm));

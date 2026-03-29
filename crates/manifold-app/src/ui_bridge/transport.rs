@@ -47,7 +47,7 @@ pub(super) fn dispatch_transport(
         PanelAction::ClearBpm => {
             {
                 let old_points = project.tempo_map.clone_points();
-                let bpm = project.settings.bpm;
+                let bpm = project.settings.bpm.0;
                 let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(old_points, bpm);
                 { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             }

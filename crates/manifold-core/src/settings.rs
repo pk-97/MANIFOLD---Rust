@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::types::{ClockAuthority, QuantizeMode, ResolutionPreset, UpscaleMode};
 use crate::effects::{EffectInstance, EffectGroup};
+use crate::units::{Beats, Bpm};
 
 /// Project-wide settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,7 +26,7 @@ pub struct ProjectSettings {
     pub default_recording_layer: i32,
 
     #[serde(default = "default_120")]
-    pub bpm: f32,
+    pub bpm: Bpm,
     #[serde(default = "default_4")]
     pub time_signature_numerator: i32,
     #[serde(default = "default_4")]
@@ -117,7 +118,7 @@ impl Default for ProjectSettings {
             video_player_pool_size: 10,
             max_layers: 8,
             default_recording_layer: 0,
-            bpm: 120.0,
+            bpm: Bpm::DEFAULT,
             time_signature_numerator: 4,
             time_signature_denominator: 4,
             quantize_mode: QuantizeMode::Off,
@@ -169,17 +170,17 @@ impl ProjectSettings {
     }
 
     /// Quantize a beat position to the current quantize grid.
-    pub fn quantize_beat(&self, beat: f32) -> f32 {
-        let interval = self.get_quantize_interval_beats();
+    pub fn quantize_beat(&self, beat: Beats) -> Beats {
+        let interval = self.get_quantize_interval_beats() as f64;
         if interval <= 0.0 {
             return beat;
         }
-        (beat / interval).round() * interval
+        Beats((beat.0 / interval).round() * interval)
     }
 
     // ── Clamped setters matching Unity ProjectSettings.cs ──
 
-    pub fn set_bpm(&mut self, v: f32) { self.bpm = v.clamp(20.0, 300.0); }
+    pub fn set_bpm(&mut self, v: f32) { self.bpm = Bpm::clamped(v); }
     pub fn set_output_width(&mut self, v: i32) { self.output_width = v.max(1); }
     pub fn set_output_height(&mut self, v: i32) { self.output_height = v.max(1); }
     pub fn set_frame_rate(&mut self, v: f32) { self.frame_rate = v.max(1.0); }
@@ -194,7 +195,7 @@ impl ProjectSettings {
     // ── Computed properties ──
 
     #[must_use]
-    pub fn seconds_per_beat(&self) -> f32 { 60.0 / self.bpm }
+    pub fn seconds_per_beat(&self) -> f32 { 60.0 / self.bpm.0 }
     pub fn seconds_per_bar(&self) -> f32 { self.seconds_per_beat() * self.time_signature_numerator as f32 }
     pub fn get_frame_duration(&self) -> f32 { 1.0 / self.frame_rate }
     pub fn time_to_frame(&self, seconds: f32) -> i32 { (seconds * self.frame_rate).floor() as i32 }
@@ -279,7 +280,7 @@ fn default_1080() -> i32 { 1080 }
 fn default_60() -> f32 { 60.0 }
 fn default_10() -> i32 { 10 }
 fn default_8() -> i32 { 8 }
-fn default_120() -> f32 { 120.0 }
+fn default_120() -> Bpm { Bpm::DEFAULT }
 fn default_4() -> i32 { 4 }
 fn default_one() -> f32 { 1.0 }
 fn default_9001() -> i32 { 9001 }

@@ -197,7 +197,7 @@ pub(super) fn dispatch_project(
             // audio AND all clips by the clamped delta.
             if !ui.waveform_lane.has_drag_start_beat() {
                 if let Some(state) = project.percussion_import.as_ref() {
-                    ui.waveform_lane.set_drag_start_beat(manifold_core::Beats::from_f32(state.audio_start_beat));
+                    ui.waveform_lane.set_drag_start_beat(state.audio_start_beat);
                 }
                 // Snapshot all clips (Unity lines 1366-1377)
                 ui.waveform_lane.waveform_drag_clip_snapshots.clear();
@@ -215,7 +215,7 @@ pub(super) fn dispatch_project(
             // Clamp delta so nothing goes below beat 0 (Unity lines 1380-1388)
             let mut min_current = project.percussion_import
                 .as_ref()
-                .map_or(f32::MAX, |s| s.audio_start_beat);
+                .map_or(f32::MAX, |s| s.audio_start_beat.as_f32());
             for layer in &project.timeline.layers {
                 for clip in &layer.clips {
                     if clip.start_beat.as_f32() < min_current {
@@ -227,7 +227,7 @@ pub(super) fn dispatch_project(
 
             // Move audio (Unity lines 1391-1393)
             if let Some(state) = project.percussion_import.as_mut() {
-                state.audio_start_beat = (state.audio_start_beat + clamped).max(0.0);
+                state.audio_start_beat = (state.audio_start_beat + Beats::from_f32(clamped)).max(Beats::ZERO);
             }
 
             // Move ALL clips (Unity lines 1395-1400)
@@ -242,7 +242,7 @@ pub(super) fn dispatch_project(
             let db = clamped;
             ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
                 if let Some(state) = p.percussion_import.as_mut() {
-                    state.audio_start_beat = (state.audio_start_beat + db).max(0.0);
+                    state.audio_start_beat = (state.audio_start_beat + Beats::from_f32(db)).max(Beats::ZERO);
                 }
                 for layer in &mut p.timeline.layers {
                     for clip in &mut layer.clips {
@@ -258,18 +258,19 @@ pub(super) fn dispatch_project(
             // Build CompositeCommand with SetAudioStartBeatCommand + MoveClipCommand
             // per changed clip, for a single undoable unit.
             if let Some(old_audio_start) = ui.waveform_lane.take_drag_start_beat() {
-                let new_audio_start = project.percussion_import
+                let old_audio_start_f32 = old_audio_start.as_f32();
+                let new_audio_start_f32 = project.percussion_import
                     .as_ref()
-                    .map_or(0.0, |s| s.audio_start_beat);
+                    .map_or(0.0, |s| s.audio_start_beat.as_f32());
 
                 let mut commands: Vec<Box<dyn manifold_editing::command::Command>> =
                     Vec::new();
 
                 // Audio command
-                if (new_audio_start - old_audio_start).abs() > 0.0001 {
+                if (new_audio_start_f32 - old_audio_start_f32).abs() > 0.0001 {
                     commands.push(Box::new(
                         manifold_editing::commands::settings::SetAudioStartBeatCommand::new(
-                            old_audio_start, new_audio_start,
+                            old_audio_start_f32, new_audio_start_f32,
                         ),
                     ));
                 }
