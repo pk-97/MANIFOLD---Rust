@@ -751,37 +751,51 @@ impl TimelineViewportPanel {
     }
 
     /// Magnetic snap: snap to grid lines AND neighboring clip edges within threshold.
-    /// Returns the nearest snap point within `SNAP_THRESHOLD_PX` pixels (12px),
-    /// or `beat` unchanged if nothing is within threshold.
+    ///
+    /// Grid snap uses a threshold of at least half the grid interval, ensuring clips
+    /// always jump between grid positions (standard DAW behavior). Clip edge snap
+    /// uses the pixel-based threshold for fine-grained magnetic pull.
     /// `ignore_ids` are clip IDs being dragged (don't snap to self).
     pub fn magnetic_snap(&self, beat: Beats, layer_index: usize, ignore_ids: &[ClipId]) -> Beats {
         use crate::snap::SNAP_THRESHOLD_PX;
 
-        // Clamp threshold to avoid snapping across bars at low zoom
         let max_snap_beats = 0.5_f64;
-        let threshold_beats = (SNAP_THRESHOLD_PX as f64 / self.mapper.pixels_per_beat() as f64)
-            .min(max_snap_beats);
+        let ppb = self.mapper.pixels_per_beat() as f64;
+
+        // Pixel-based threshold (for clip edge snapping)
+        let pixel_threshold_beats = if ppb > 0.0 {
+            (SNAP_THRESHOLD_PX as f64 / ppb).min(max_snap_beats)
+        } else {
+            max_snap_beats
+        };
+
+        // Grid threshold: at least half the grid interval so clips always snap
+        // to the nearest grid line. Capped by max_snap_beats for safety.
+        let half_grid = self.grid_step() as f64 / 2.0;
+        let grid_threshold = pixel_threshold_beats.max(half_grid).min(max_snap_beats);
 
         // Start with raw beat — only snap if a candidate is within threshold.
         let mut best_beat = beat;
         let mut best_dist = f64::MAX;
 
-        // Grid candidate
+        // Grid candidate (uses wider threshold for full-coverage grid snap)
         let grid_snapped = self.snap_to_grid(beat);
         let grid_dist = (grid_snapped.0 - beat.0).abs();
-        if grid_dist <= threshold_beats && grid_dist < best_dist {
+        if grid_dist <= grid_threshold && grid_dist < best_dist {
             best_dist = grid_dist;
             best_beat = grid_snapped;
         }
 
-        // Check neighboring clip edges on the same layer
+        // Neighboring clip edges on the same layer (uses pixel-based threshold).
+        // Clip edges that are closer than the grid snap win — this lets you
+        // align clip boundaries precisely even between grid lines.
         for clip in &self.clips {
             if clip.layer_index != layer_index { continue; }
             if ignore_ids.contains(&clip.clip_id) { continue; }
 
             // Check start edge
             let dist_start = (clip.start_beat.0 - beat.0).abs();
-            if dist_start < threshold_beats && dist_start < best_dist {
+            if dist_start < grid_threshold && dist_start < best_dist {
                 best_dist = dist_start;
                 best_beat = clip.start_beat;
             }
@@ -789,7 +803,7 @@ impl TimelineViewportPanel {
             // Check end edge
             let end_beat = Beats(clip.start_beat.0 + clip.duration_beats as f64);
             let dist_end = (end_beat.0 - beat.0).abs();
-            if dist_end < threshold_beats && dist_end < best_dist {
+            if dist_end < grid_threshold && dist_end < best_dist {
                 best_dist = dist_end;
                 best_beat = end_beat;
             }
