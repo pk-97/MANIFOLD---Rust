@@ -524,15 +524,14 @@ impl Application {
             }
         }
 
-        // Resize compositor + generator when resolution preset changes
+        // Resize compositor + generator when resolution preset or render scale changes.
         if needs_resolution_resize {
-            let dims = Some(&self.local_project).map(|p| {
-                (p.settings.output_width.max(1) as u32, p.settings.output_height.max(1) as u32)
-            });
-            if let Some((w, h)) = dims {
-                self.send_content_cmd(ContentCommand::ResizeContent(w, h));
-                log::info!("Resolution changed to {}x{}", w, h);
-            }
+            let p = &self.local_project;
+            let w = p.settings.output_width.max(1) as u32;
+            let h = p.settings.output_height.max(1) as u32;
+            let rs = p.settings.render_scale;
+            self.send_content_cmd(ContentCommand::ResizeContent(w, h, rs));
+            log::info!("Resolution changed to {}x{} @ {:.2}x render scale", w, h, rs);
         }
 
         // Selection version change → sync inspector so it shows the newly selected clip

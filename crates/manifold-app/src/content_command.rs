@@ -40,7 +40,9 @@ pub enum ContentCommand {
     SetFrameRate(f64),
 
     // ── GPU ────────────────────────────────────────────────────────
-    ResizeContent(u32, u32),
+    /// Resize the content pipeline to `(width, height)` output resolution
+    /// at the given `render_scale` (1.0 = native, 0.5 = FSR performance).
+    ResizeContent(u32, u32, f32),
 
     // ── Transport/sync ─────────────────────────────────────────────
     CycleClockAuthority,

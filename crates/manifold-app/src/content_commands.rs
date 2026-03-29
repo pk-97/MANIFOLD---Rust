@@ -123,7 +123,7 @@ impl ContentThread {
                 // Port of Unity WorkspaceController.OnUndoRedo() which calls
                 // ApplyProjectResolutionFromFooter() + ApplyProjectFpsFromFooter().
                 let pre = self.engine.project().map(|p| {
-                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate)
+                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate, p.settings.render_scale)
                 });
                 if let Some(p) = self.engine.project_mut() {
                     let _ = self.editing_service.undo(p);
@@ -132,13 +132,13 @@ impl ContentThread {
                 self.engine.mark_sync_dirty();
                 // Apply resolution/FPS changes if the undo altered project settings.
                 let post = self.engine.project().map(|p| {
-                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate)
+                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate, p.settings.render_scale)
                 });
-                if let (Some((pre_w, pre_h, pre_fps)), Some((post_w, post_h, post_fps))) = (pre, post) {
-                    if post_w != pre_w || post_h != pre_h {
+                if let (Some((pre_w, pre_h, pre_fps, pre_rs)), Some((post_w, post_h, post_fps, post_rs))) = (pre, post) {
+                    if post_w != pre_w || post_h != pre_h || (post_rs - pre_rs).abs() > 0.01 {
                         self.content_pipeline.resize(
                             &mut self.engine,
-                            post_w as u32, post_h as u32,
+                            post_w as u32, post_h as u32, post_rs,
                         );
                     }
                     if (post_fps - pre_fps).abs() > 0.01 {
@@ -152,7 +152,7 @@ impl ContentThread {
             ContentCommand::Redo => {
                 // Same pre/post settings detection as Undo.
                 let pre = self.engine.project().map(|p| {
-                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate)
+                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate, p.settings.render_scale)
                 });
                 if let Some(p) = self.engine.project_mut() {
                     let _ = self.editing_service.redo(p);
@@ -161,13 +161,13 @@ impl ContentThread {
                 self.engine.mark_sync_dirty();
                 // Apply resolution/FPS changes if the redo altered project settings.
                 let post = self.engine.project().map(|p| {
-                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate)
+                    (p.settings.output_width, p.settings.output_height, p.settings.frame_rate, p.settings.render_scale)
                 });
-                if let (Some((pre_w, pre_h, pre_fps)), Some((post_w, post_h, post_fps))) = (pre, post) {
-                    if post_w != pre_w || post_h != pre_h {
+                if let (Some((pre_w, pre_h, pre_fps, pre_rs)), Some((post_w, post_h, post_fps, post_rs))) = (pre, post) {
+                    if post_w != pre_w || post_h != pre_h || (post_rs - pre_rs).abs() > 0.01 {
                         self.content_pipeline.resize(
                             &mut self.engine,
-                            post_w as u32, post_h as u32,
+                            post_w as u32, post_h as u32, post_rs,
                         );
                     }
                     if (post_fps - pre_fps).abs() > 0.01 {
@@ -201,11 +201,12 @@ impl ContentThread {
                 // Clear stale temporal effect state from the previous project
                 // (feedback textures, bloom state, etc.) to prevent bleed-through.
                 self.content_pipeline.clear_all_effect_state();
-                // Resize content pipeline to project dims
+                // Resize content pipeline to project dims and render scale.
                 if let Some(p) = self.engine.project() {
                     let w = p.settings.output_width.max(1) as u32;
                     let h = p.settings.output_height.max(1) as u32;
-                    self.content_pipeline.resize(&mut self.engine, w, h);
+                    let rs = p.settings.render_scale;
+                    self.content_pipeline.resize(&mut self.engine, w, h, rs);
                 }
                 // Sync frame timer to loaded project's frame rate.
                 if let Some(p) = self.engine.project() {
@@ -236,8 +237,8 @@ impl ContentThread {
             }
 
             // ── GPU ────────────────────────────────────────────────
-            ContentCommand::ResizeContent(w, h) => {
-                self.content_pipeline.resize(&mut self.engine, w, h);
+            ContentCommand::ResizeContent(w, h, render_scale) => {
+                self.content_pipeline.resize(&mut self.engine, w, h, render_scale);
             }
 
             // ── Transport/sync ─────────────────────────────────────

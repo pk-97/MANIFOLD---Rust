@@ -72,6 +72,14 @@ pub struct ContentPipeline {
     pq_encoder: Option<manifold_renderer::pq_encoder::PqEncoder>,
     /// Shared output view for cross-thread access (fallback for non-macOS).
     shared_output: Arc<SharedOutputView>,
+    /// FSR 1.0 spatial upscaler. Present only when render_scale < 1.0.
+    /// Upscales the compositor output (render-res) to the IOSurface (output-res).
+    #[cfg(target_os = "macos")]
+    fsr1: Option<manifold_renderer::fsr1::Fsr1Upscaler>,
+    /// Full output dimensions (what the IOSurface and UI see).
+    /// May differ from compositor dimensions when FSR is active.
+    output_w: u32,
+    output_h: u32,
     /// Triple-buffered IOSurface textures on the content device (native GpuTexture).
     /// Content writes to shared_textures[write_surface_index]; UI reads the front surface.
     #[cfg(target_os = "macos")]
@@ -132,6 +140,10 @@ impl ContentPipeline {
             edr_headroom: 1.0,
             pq_encoder: None,
             shared_output: shared,
+            #[cfg(target_os = "macos")]
+            fsr1: None,
+            output_w: 1920,
+            output_h: 1080,
             #[cfg(target_os = "macos")]
             shared_textures: [None, None, None],
             #[cfg(target_os = "macos")]
@@ -510,23 +522,43 @@ impl ContentPipeline {
                 self.compositor.render(&mut gpu_comp, &frame);
         }
 
-        // IOSurface copy via native blit — skipped in export mode (export reads
-        // output_texture directly, no UI thread needs the surface).
+        // FSR upscale (render-res → output-res) + IOSurface copy.
+        // Skipped in export mode (export reads output_texture directly).
         if !export_mode {
             let (comp_w, comp_h) = self.compositor.dimensions();
-            if let Some(ref shared_tex) =
-                self.shared_textures[self.write_surface_index]
-                && shared_tex.width == comp_w
-                && shared_tex.height == comp_h
-            {
-                let src = self.compositor.output_texture();
-                native_enc.copy_texture_to_texture(
-                    src,
-                    shared_tex,
-                    comp_w,
-                    comp_h,
-                    1,
-                );
+
+            if let Some(ref fsr) = self.fsr1 {
+                // FSR active: EASU + RCAS in the same command buffer, then blit FSR output.
+                {
+                    let mut gpu_fsr = if let Some(pool) = texture_pool {
+                        GpuEncoder::with_pool(&mut native_enc, native_device, pool)
+                    } else {
+                        GpuEncoder::new(&mut native_enc, native_device)
+                    };
+                    // AMD default RCAS sharpness: exp2(−0.87) ≈ 0.547
+                    fsr.upscale(&mut gpu_fsr, self.compositor.output_texture(), 0.547);
+                }
+                if let Some(ref shared_tex) =
+                    self.shared_textures[self.write_surface_index]
+                    && shared_tex.width == self.output_w
+                    && shared_tex.height == self.output_h
+                {
+                    native_enc.copy_texture_to_texture(
+                        &fsr.output.texture, shared_tex,
+                        self.output_w, self.output_h, 1,
+                    );
+                }
+            } else {
+                // No FSR: blit compositor output directly to IOSurface.
+                if let Some(ref shared_tex) =
+                    self.shared_textures[self.write_surface_index]
+                    && shared_tex.width == comp_w
+                    && shared_tex.height == comp_h
+                {
+                    native_enc.copy_texture_to_texture(
+                        self.compositor.output_texture(), shared_tex, comp_w, comp_h, 1,
+                    );
+                }
             }
         }
 
@@ -548,6 +580,7 @@ impl ContentPipeline {
 
         // Update shared output view for UI thread
         let (comp_w, comp_h) = self.compositor.dimensions();
+        let _ = (comp_w, comp_h); // used in profiling block below; suppress lint in non-profiling builds
 
         // Periodic perf dump (profiling builds only)
         #[cfg(feature = "profiling")]
@@ -555,12 +588,14 @@ impl ContentPipeline {
             let _total_ms = _t_frame.elapsed().as_secs_f64() * 1000.0;
             if frame_count > 0 && frame_count.is_multiple_of(60) {
                 log::warn!(
-                    "[PERF/NATIVE] frame={} clips={} res={}x{} | gen={:.1}ms desc={:.1}ms \
+                    "[PERF/NATIVE] frame={} clips={} render={}x{} out={}x{} | gen={:.1}ms desc={:.1}ms \
                      comp={:.1}ms poll={:.1}ms | total={:.1}ms ({:.0}fps)",
                     frame_count,
                     tick_result.ready_clips.len(),
                     comp_w,
                     comp_h,
+                    self.output_w,
+                    self.output_h,
                     _gen_ms,
                     _desc_ms,
                     _comp_ms,
@@ -571,10 +606,10 @@ impl ContentPipeline {
             }
         }
 
-        // Update shared dimensions
+        // Update shared dimensions (always output dims, not render dims).
         let (old_w, old_h) = self.shared_output.get_dimensions();
-        if old_w != comp_w || old_h != comp_h {
-            self.shared_output.set_dimensions(comp_w, comp_h);
+        if old_w != self.output_w || old_h != self.output_h {
+            self.shared_output.set_dimensions(self.output_w, self.output_h);
         }
 
         // GPU profiler (if active): store poll timing
@@ -584,26 +619,60 @@ impl ContentPipeline {
         }
     }
 
-    /// Resize compositor, generators, and IOSurface bridge to new project resolution.
-    pub fn resize(&mut self, engine: &mut PlaybackEngine, width: u32, height: u32) {
+    /// Resize compositor, generators, and IOSurface bridge.
+    ///
+    /// `width` / `height` are the **output** dimensions (what the UI and IOSurface see).
+    /// `render_scale` ∈ (0, 1] controls the internal render resolution:
+    ///   - 1.0 → render at output resolution, FSR disabled.
+    ///   - 0.75 / 0.5 → render at 75% / 50%, FSR upscales back to output.
+    pub fn resize(
+        &mut self,
+        engine: &mut PlaybackEngine,
+        width: u32,
+        height: u32,
+        render_scale: f32,
+    ) {
+        let scale = render_scale.clamp(0.25, 1.0);
+        let render_w = ((width  as f32) * scale).round().max(1.0) as u32;
+        let render_h = ((height as f32) * scale).round().max(1.0) as u32;
+
+        self.output_w = width;
+        self.output_h = height;
+
         #[cfg(target_os = "macos")]
         let native_device = self.native_device.as_ref()
             .expect("native device required for resize");
-        #[cfg(target_os = "macos")]
-        self.compositor.resize(native_device, width, height);
 
-        // Resize generator renderer via engine downcast
+        // Compositor renders at render resolution (may be smaller than output).
+        #[cfg(target_os = "macos")]
+        self.compositor.resize(native_device, render_w, render_h);
+
+        // Resize generator renderer via engine downcast (at render resolution).
         let (renderers, _) = engine.split_renderer_project();
         for renderer in renderers.iter_mut() {
             if let Some(gen_renderer) =
                 renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
             {
-                gen_renderer.resize_gpu(width, height);
+                gen_renderer.resize_gpu(render_w, render_h);
                 break;
             }
         }
 
-        // Resize IOSurface bridge and re-import all content textures
+        // Init / resize FSR when render_scale < 1.0.
+        #[cfg(target_os = "macos")]
+        if scale < 1.0 {
+            if let Some(ref mut fsr) = self.fsr1 {
+                fsr.resize(native_device, render_w, render_h, width, height);
+            } else {
+                self.fsr1 = Some(manifold_renderer::fsr1::Fsr1Upscaler::new(
+                    native_device, render_w, render_h, width, height,
+                ));
+            }
+        } else {
+            self.fsr1 = None;
+        }
+
+        // IOSurface bridge always at output resolution.
         #[cfg(target_os = "macos")]
         if let Some(ref bridge) = self.shared_bridge {
             bridge.resize(width, height);
@@ -615,13 +684,14 @@ impl ContentPipeline {
             self.shared_generation = bridge.generation();
         }
 
-        // Update shared dimensions for UI thread
+        // UI thread reads output dimensions.
         self.shared_output.set_dimensions(width, height);
     }
 
-    /// Get current compositor output dimensions.
+    /// Get current output dimensions (= IOSurface / UI dimensions).
+    /// When FSR is active these differ from `self.compositor.dimensions()`.
     pub fn dimensions(&self) -> (u32, u32) {
-        self.compositor.dimensions()
+        (self.output_w, self.output_h)
     }
 
     /// Clean up per-owner effect state for stopped clips.

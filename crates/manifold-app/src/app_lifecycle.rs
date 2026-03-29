@@ -365,8 +365,9 @@ impl Application {
             {
                 let w = self.local_project.settings.output_width.max(1) as u32;
                 let h = self.local_project.settings.output_height.max(1) as u32;
-                self.send_content_cmd(ContentCommand::ResizeContent(w, h));
-                log::info!("[ProjectIO] GPU resize sent: {}x{}", w, h);
+                let rs = self.local_project.settings.render_scale;
+                self.send_content_cmd(ContentCommand::ResizeContent(w, h, rs));
+                log::info!("[ProjectIO] GPU resize sent: {}x{} @ {:.2}x render scale", w, h, rs);
             }
 
             // Spawn background audio loading (audio decode on background thread,

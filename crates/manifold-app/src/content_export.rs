@@ -114,13 +114,15 @@ impl ContentThread {
         // 3. Enter export mode
         self.engine.stop();
         self.engine.set_export_mode(true);
-        // Ensure content pipeline matches export resolution
+        // Ensure content pipeline matches export resolution.
+        // Export always renders at full resolution (render_scale = 1.0) for quality.
         let (cur_w, cur_h) = self.content_pipeline.dimensions();
         if cur_w != export_config.width || cur_h != export_config.height {
             self.content_pipeline.resize(
                 &mut self.engine,
                 export_config.width,
                 export_config.height,
+                1.0,
             );
         }
         // Seek to start
@@ -263,9 +265,11 @@ impl ContentThread {
 
         // 7. Restore playback state
         self.engine.set_export_mode(false);
-        // Restore content pipeline resolution if it was changed for export
+        // Restore content pipeline resolution (and render scale) after export.
         if cur_w != export_config.width || cur_h != export_config.height {
-            self.content_pipeline.resize(&mut self.engine, cur_w, cur_h);
+            let render_scale = self.engine.project()
+                .map_or(1.0, |p| p.settings.render_scale);
+            self.content_pipeline.resize(&mut self.engine, cur_w, cur_h, render_scale);
         }
         self.engine.stop();
         let restore_time = self.engine.beat_to_timeline_time(saved_beat);
