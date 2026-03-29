@@ -701,6 +701,10 @@ impl ContentPipeline {
                     );
                 }
                 self.fsr1 = None; // MetalFX takes over
+                log::info!(
+                    "[Upscaler] MetalFX Spatial: {}x{} → {}x{} ({:.0}% render scale)",
+                    render_w, render_h, width, height, scale * 100.0,
+                );
             } else {
                 // MetalFX not available — use FSR 1.0.
                 self.metalfx = None;
@@ -711,8 +715,15 @@ impl ContentPipeline {
                         native_device, render_w, render_h, width, height,
                     ));
                 }
+                log::info!(
+                    "[Upscaler] FSR 1.0: {}x{} → {}x{} ({:.0}% render scale)",
+                    render_w, render_h, width, height, scale * 100.0,
+                );
             }
         } else {
+            if self.metalfx.is_some() || self.fsr1.is_some() {
+                log::info!("[Upscaler] Disabled — rendering at native {}x{}", width, height);
+            }
             self.metalfx = None;
             self.fsr1 = None;
         }
