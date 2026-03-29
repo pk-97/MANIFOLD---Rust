@@ -579,17 +579,13 @@ impl ClipRenderer for GeneratorRenderer {
                 self.available_rts.push(active.render_target);
             }
 
-            // If no remaining active clips reference this layer, remove the
-            // layer generator state to free GPU resources (particle buffers,
-            // density textures, etc.).
-            let layer_id = &active.layer_id;
-            let has_remaining = self
-                .active_clips
-                .values()
-                .any(|a| a.layer_id == *layer_id);
-            if !has_remaining {
-                self.layer_generators.remove(layer_id);
-            }
+            // Layer generator state (generator instance + trigger_count) persists
+            // across clip boundaries. This is required for snap parameters to work:
+            // trigger_count must accumulate across clips so generators can detect
+            // new triggers. Matches Unity: "Generators persist on the layer across
+            // clips to maintain state (particle positions, attractor trajectories,
+            // etc.)." Cleanup happens in release_all() or when the generator type
+            // changes via update_active_types_for_layer().
         }
     }
 
