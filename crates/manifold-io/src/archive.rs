@@ -107,16 +107,21 @@ pub fn save_v2_archive(
             .compression_method(zip::CompressionMethod::Stored);
 
         // Copy existing history entries from old archive (Unity lines 186-190)
-        if Path::new(path).exists() && is_v2_archive(path) {
-            copy_history_entries(path, &mut zip)?;
-        }
+        let copied_entries = if Path::new(path).exists() && is_v2_archive(path) {
+            copy_history_entries(path, &mut zip)?
+        } else {
+            HashSet::new()
+        };
 
         // Push previous state to history (Unity lines 192-196)
+        // Skip if already copied from the existing archive to avoid duplicate entries
         if let (Some(prev_bytes), Some(prev_hash)) =
             (&previous_project_bytes, &previous_hash)
             && !prev_hash.is_empty() {
                 let entry_name = format!("{}{}.json.gz", HISTORY_FOLDER, prev_hash);
-                write_gzip_entry(&mut zip, &entry_name, prev_bytes)?;
+                if !copied_entries.contains(&entry_name) {
+                    write_gzip_entry(&mut zip, &entry_name, prev_bytes)?;
+                }
             }
 
         // Write current project.json — uncompressed for fast reads (Unity line 199)
@@ -287,13 +292,13 @@ pub fn revert_to(path: &str, hash: &str) -> bool {
             .compression_method(zip::CompressionMethod::Stored);
 
         // Copy all existing history entries
-        copy_history_entries(path, &mut zip)?;
+        let copied_entries = copy_history_entries(path, &mut zip)?;
 
         // Push current state to history (if not already there as a file)
         if let Some(ref cur_bytes) = current_bytes
             && !current_hash.is_empty() {
                 let current_history_entry = format!("{}{}.json.gz", HISTORY_FOLDER, current_hash);
-                if !history_entry_exists(path, &current_history_entry) {
+                if !copied_entries.contains(&current_history_entry) {
                     write_gzip_entry(&mut zip, &current_history_entry, cur_bytes)?;
                 }
             }
@@ -483,26 +488,13 @@ fn read_gzip_entry_bytes(archive_path: &str, entry_name: &str) -> Option<Vec<u8>
     Some(decompressed)
 }
 
-/// Check if a history entry exists in the archive.
-/// Port of C# ProjectArchive.HistoryEntryExists (lines 541-545).
-fn history_entry_exists(archive_path: &str, entry_name: &str) -> bool {
-    let file_bytes = match std::fs::read(archive_path) {
-        Ok(b) => b,
-        Err(_) => return false,
-    };
-    let cursor = Cursor::new(&file_bytes);
-    match ZipArchive::new(cursor) {
-        Ok(mut archive) => archive.by_name(entry_name).is_ok(),
-        Err(_) => false,
-    }
-}
-
 /// Copy all history/ entries from source archive to destination zip writer.
+/// Returns the set of entry names that were copied (used to avoid duplicates).
 /// Port of C# ProjectArchive.CopyHistoryEntries (lines 547-564).
 fn copy_history_entries<W: Write + std::io::Seek>(
     source_path: &str,
     dest_zip: &mut ZipWriter<W>,
-) -> Result<(), String> {
+) -> Result<HashSet<String>, String> {
     let file_bytes = std::fs::read(source_path)
         .map_err(|e| format!("Failed to read source archive: {e}"))?;
     let cursor = Cursor::new(&file_bytes);
@@ -511,6 +503,8 @@ fn copy_history_entries<W: Write + std::io::Seek>(
 
     let options = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Stored);
+
+    let mut copied = HashSet::new();
 
     for i in 0..source_archive.len() {
         let mut entry = source_archive.by_index(i)
@@ -529,9 +523,11 @@ fn copy_history_entries<W: Write + std::io::Seek>(
             .map_err(|e| format!("Failed to start dest entry {}: {}", name, e))?;
         dest_zip.write_all(&data)
             .map_err(|e| format!("Failed to write dest entry {}: {}", name, e))?;
+
+        copied.insert(name);
     }
 
-    Ok(())
+    Ok(copied)
 }
 
 /// Prune auto-save entries from the history list (in-place).
