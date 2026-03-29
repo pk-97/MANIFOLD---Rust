@@ -29,6 +29,8 @@ struct ActiveClip {
     /// Cleared to opaque black before the generator renders to prevent
     /// stale content from a previous clip/layer leaking through.
     needs_clear: bool,
+    /// Same as needs_clear but for the upscale target (reduced-res generators).
+    upscale_needs_clear: bool,
 }
 
 impl ActiveClip {
@@ -279,6 +281,7 @@ impl GeneratorRenderer {
                 layer_index,
                 anim_progress: 0.0,
                 needs_clear: true,
+                upscale_needs_clear: needs_upscale,
             },
         );
 
@@ -410,11 +413,15 @@ impl GeneratorRenderer {
         // Safety: device_ptr is valid for the lifetime of ContentPipeline.
         let device = unsafe { &*self.device_ptr };
         for id in &self.render_scratch {
-            let active = match self.active_clips.get(id) {
+            let active = match self.active_clips.get_mut(id) {
                 Some(a) => a,
                 None => continue,
             };
             if let Some(ref upscale_rt) = active.upscale_target {
+                if active.upscale_needs_clear {
+                    gpu.clear_texture(&upscale_rt.texture, 0.0, 0.0, 0.0, 0.0);
+                    active.upscale_needs_clear = false;
+                }
                 // Get raw pointers to avoid borrow conflicts with self.upscaler
                 let src_tex = &active.render_target.texture as *const manifold_gpu::GpuTexture;
                 let dst_tex = &upscale_rt.texture as *const manifold_gpu::GpuTexture;
