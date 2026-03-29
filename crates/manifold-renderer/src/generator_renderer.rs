@@ -225,6 +225,12 @@ impl GeneratorRenderer {
         let render_target = if !needs_upscale {
             // Full-res generator: try to reuse from pool
             if let Some(rt) = self.available_rts.pop() {
+                eprintln!(
+                    "[RT REUSE] clip={} layer={} tex={:#x} (from pool)",
+                    &clip_id[..8.min(clip_id.len())],
+                    layer_index,
+                    &rt.texture as *const _ as usize & 0xFFFF,
+                );
                 rt
             } else {
                 RenderTarget::new(
@@ -592,6 +598,12 @@ impl ClipRenderer for GeneratorRenderer {
 
     fn stop_clip(&mut self, clip_id: &str) {
         if let Some(active) = self.active_clips.remove(clip_id) {
+            eprintln!(
+                "[RT RELEASE] clip={} layer={} tex={:#x}",
+                &clip_id[..8.min(clip_id.len())],
+                active.layer_index,
+                active.output_texture() as *const _ as usize & 0xFFFF,
+            );
             // Return full-res RTs to pool (reduced-res RTs are dropped)
             if let Some(upscale_rt) = active.upscale_target {
                 self.available_rts.push(upscale_rt);
