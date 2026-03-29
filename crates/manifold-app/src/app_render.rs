@@ -1166,7 +1166,7 @@ fn render_text_input_overlay(
 
     // Selection highlight (when select_all)
     if ti.select_all && !ti.text.is_empty() {
-        let text_w = ti.text.len() as f32 * fs * 0.6;
+        let text_w = ui.measure_text_cached(&ti.text, fs as u16).x;
         ui.draw_rect(
             bg_x + pad_h, bg_y + pad_v,
             text_w.min(bg_w - pad_h * 2.0), bg_h - pad_v * 2.0,
@@ -1184,8 +1184,8 @@ fn render_text_input_overlay(
         let elapsed = timer.realtime_since_start();
         let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
         if blink_on {
-            let chars_before = ti.text[..ti.cursor].chars().count();
-            let cursor_x = text_x + chars_before as f32 * fs * 0.6;
+            let before = &ti.text[..ti.cursor];
+            let cursor_x = text_x + ui.measure_text_cached(before, fs as u16).x;
             ui.draw_rect(
                 cursor_x, bg_y + pad_v,
                 TEXT_INPUT_CURSOR_W, bg_h - pad_v * 2.0,

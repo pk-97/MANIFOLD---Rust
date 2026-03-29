@@ -549,7 +549,7 @@ impl UIRenderer {
     /// Matches Unity's approach: Font.GetCharacterInfo() returns cached glyph metrics
     /// from the font atlas. Here, we cache shaped TextBuffers so the same text
     /// across frames is measured without re-shaping.
-    fn measure_text_cached(&mut self, text: &str, font_size: u16) -> Vec2 {
+    pub fn measure_text_cached(&mut self, text: &str, font_size: u16) -> Vec2 {
         let key = (text.to_string(), font_size);
 
         // Mark as used this frame
