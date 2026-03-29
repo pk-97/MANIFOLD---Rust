@@ -10,13 +10,10 @@ const SCALE: usize = 2;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BasicShapesSnapUniforms {
-    time: f32,
-    beat: f32,
     aspect_ratio: f32,
     line_thickness: f32,
     uv_scale: f32,
     trigger_count: f32,
-    _pad: [f32; 2],
 }
 
 pub struct BasicShapesSnapGenerator {
@@ -49,13 +46,10 @@ impl Generator for BasicShapesSnapGenerator {
         let scale = if ctx.param_count > SCALE as u32 { ctx.params[SCALE] } else { 1.0 };
 
         let uniforms = BasicShapesSnapUniforms {
-            time: ctx.time as f32,
-            beat: ctx.beat as f32,
             aspect_ratio: ctx.aspect,
             line_thickness: line,
             uv_scale: if scale > 0.0 { 1.0 / scale } else { 1.0 },
             trigger_count: ctx.trigger_count as f32,
-            _pad: [0.0; 2],
         };
 
         gpu.native_enc.dispatch_compute(

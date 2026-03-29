@@ -1,23 +1,14 @@
 struct Uniforms {
-    time_val: f32,
-    beat: f32,
     aspect_ratio: f32,
     line_thickness: f32,
     uv_scale: f32,
     trigger_count: f32,
-    _pad0: f32,
-    _pad1: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var output: texture_storage_2d<rgba16float, write>;
 
 // ── Utility ──
-
-fn ease_out_cubic(t: f32) -> f32 {
-    let t1 = 1.0 - t;
-    return 1.0 - t1 * t1 * t1;
-}
 
 fn rotate2d(p: vec2<f32>, angle: f32) -> vec2<f32> {
     let s = sin(angle);
@@ -56,8 +47,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     p_uv.x *= u.aspect_ratio;
     p_uv *= u.uv_scale;
 
-    let beat_frac = fract(u.beat);
-
     // Cycle shape + fill from trigger count (3 shapes x 2 fill = 6 variants)
     let tc = i32(u.trigger_count);
     let variant = u32(tc) % 6u;
@@ -69,16 +58,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let rot_step = (u32(tc) / 6u) % 8u;
     let target_angle = f32(rot_step % 4u) * DEG45;
     let rot_direction = select(1.0, -1.0, rot_step >= 4u);
-
-    // Animated rotation: eased arrival at target angle
-    let rotation = target_angle * rot_direction * ease_out_cubic(saturate(beat_frac * 4.0));
-
-    // Sharp scale snap: instant appearance at beat 0, fast ease-out
-    // Reduced by 10%: 0.35 -> 0.315
-    let scale_anim = ease_out_cubic(saturate(beat_frac * 6.0));
+    let rotation = target_angle * rot_direction;
 
     // Transform UV
-    var p = p_uv / (0.315 * scale_anim + 0.001);
+    var p = p_uv / 0.315;
     p = rotate2d(p, rotation);
 
     // Evaluate SDF
@@ -91,7 +74,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     // Anti-aliased edge — compute shaders have no fwidth, use analytical estimate
     let texel_size = 1.0 / vec2<f32>(dims);
-    let pw = length(texel_size) * u.uv_scale * (1.0 / (0.315 * scale_anim + 0.001));
+    let pw = length(texel_size) * u.uv_scale * (1.0 / 0.315);
 
     var shape: f32;
     if is_wireframe {
@@ -103,12 +86,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         shape = 1.0 - smoothstep(-pw, pw, d);
     }
 
-    // Beat flash: bright burst on downbeat
-    let flash = smoothstep(0.1, 0.0, beat_frac) * 0.4;
-
-    // Black and white: white shape on black (no fade)
-    var lum = shape + flash * shape;
-    lum = saturate(lum);
+    let lum = saturate(shape);
 
     textureStore(output, vec2<i32>(id.xy), vec4<f32>(lum, lum, lum, lum));
 }
