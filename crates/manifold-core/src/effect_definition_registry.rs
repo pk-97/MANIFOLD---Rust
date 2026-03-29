@@ -564,16 +564,13 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
     // Infrared
     m.insert(EffectTypeId::INFRARED, EffectDef {
         display_name: "Infrared",
-        param_count: 6,
+        param_count: 3,
         param_defs: vec![
             pd("Amount", 0.0, 1.0, 0.0),
             pd_whole_labels("Palette", 0.0, 9.0, 0.0,
                 &["White Hot", "Black Hot", "Green NV", "Iron Bow", "Rainbow", "Lava", "Arctic", "Magenta", "Electric", "Toxic"],
                 "Palette"),
             pd_osc("Contrast", 0.5, 3.0, 1.0, "Contrast"),
-            pd_osc("Noise", 0.0, 1.0, 0.15, "Noise"),
-            pd_osc("Scanline", 0.0, 1.0, 0.0, "Scanline"),
-            pd_osc("HotSpot", 0.0, 1.0, 0.0, "HotSpot"),
         ],
         osc_prefix: Some("infrared"),
     });

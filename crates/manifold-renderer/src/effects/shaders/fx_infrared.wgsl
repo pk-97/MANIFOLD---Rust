@@ -5,14 +5,6 @@ struct Uniforms {
     amount: f32,
     palette: f32,
     contrast: f32,
-    noise: f32,
-    scanline: f32,
-    hot_spot: f32,
-    time: f32,
-    texel_size_x: f32,  // 1/width
-    texel_size_y: f32,  // 1/height
-    texel_size_z: f32,  // width
-    texel_size_w: f32,  // height
     _pad0: f32,
 }
 
@@ -33,12 +25,6 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     out.position = vec4<f32>(x, y, 0.0, 1.0);
     out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
     return out;
-}
-
-// Hash matching Unity InfraredEffect.shader hash()
-fn hash(p: vec2<f32>) -> f32 {
-    let h = dot(p, vec2<f32>(127.1, 311.7));
-    return fract(sin(h) * 43758.5453123);
 }
 
 // --- Palette functions ---
@@ -218,27 +204,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     } else {
         thermal = palette_toxic(lum);
     }
-
-    // Hot spot bloom (bright region glow)
-    // hotMask is computed but never used — only hotGlow contributes (matches Unity exactly)
-    let hot_mask = smoothstep(0.7, 1.0, lum) * uniforms.hot_spot;
-    _ = hot_mask;
-    let texel = vec2<f32>(uniforms.texel_size_x, uniforms.texel_size_y) * 4.0;
-    let hot_l = dot(textureSample(source_tex, tex_sampler, in.uv + vec2<f32>(-texel.x, 0.0)).rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let hot_r = dot(textureSample(source_tex, tex_sampler, in.uv + vec2<f32>( texel.x, 0.0)).rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let hot_u = dot(textureSample(source_tex, tex_sampler, in.uv + vec2<f32>(0.0,  texel.y)).rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let hot_d = dot(textureSample(source_tex, tex_sampler, in.uv + vec2<f32>(0.0, -texel.y)).rgb, vec3<f32>(0.299, 0.587, 0.114));
-    let hot_avg = (hot_l + hot_r + hot_u + hot_d) * 0.25;
-    let hot_glow = smoothstep(0.6, 1.0, hot_avg);
-    thermal += hot_glow * uniforms.hot_spot * 0.4;
-
-    // Sensor noise
-    let noise = (hash(in.uv * vec2<f32>(uniforms.texel_size_z, uniforms.texel_size_w) + uniforms.time * 137.0) * 2.0 - 1.0) * uniforms.noise * 0.15;
-    thermal += noise;
-
-    // Scanline overlay
-    let scanline = 1.0 - uniforms.scanline * 0.3 * step(0.5, fract(in.uv.y * uniforms.texel_size_w * 0.5));
-    thermal *= scanline;
 
     let result = mix(src.rgb, thermal, uniforms.amount);
     return vec4<f32>(result, src.a);
