@@ -175,9 +175,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // directions match Unity's shader exactly. Source texture sampling uses in.uv.
     let draw_uv = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
 
-    // BlobTrackingEffect.shader lines 188-193
-    let px_u = uniforms.texel_size.x;
-    let px_v = uniforms.texel_size.y;
+    // Scale drawing sizes relative to 1080p so overlays look the same at any resolution.
+    // At 1080p dpi_scale=1.0, at 4K dpi_scale=2.0 (lines are 2x more texels = same visual size).
+    let dpi_scale = uniforms.resolution.y / 1080.0;
+    let px_u = uniforms.texel_size.x * dpi_scale;
+    let px_v = uniforms.texel_size.y * dpi_scale;
     let line_thick = 2.0 * px_u;
     let thin_line   = 1.5 * px_u;
     let digit_size  = px_u * 2.0;
