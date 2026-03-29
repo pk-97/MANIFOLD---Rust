@@ -8,8 +8,14 @@ pub struct EffectContext {
     pub time: f32,
     pub beat: f32,
     pub dt: f32,
+    /// Render-resolution dimensions (may be < output dims when scaling is active).
     pub width: u32,
     pub height: u32,
+    /// Final output dimensions after upscaling. Use these for pixel-count-dependent
+    /// logic (texel sizes, block counts, pattern spacing) so effects are
+    /// resolution-invariant across render scales.
+    pub output_width: u32,
+    pub output_height: u32,
     /// Owner key for per-owner state management in stateful effects.
     /// 0 = master, layer_index+1 = layer, hash(clip_id) = clip.
     pub owner_key: i64,

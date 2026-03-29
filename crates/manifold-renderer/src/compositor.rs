@@ -33,6 +33,10 @@ pub struct CompositorFrame<'a> {
     /// LED exit path index: 0 = capture pre-tonemap composite for LED output,
     /// -1 = use final output (default).
     pub led_exit_index: i32,
+    /// Final output dimensions after upscaling. Used by effects that must be
+    /// resolution-invariant (edge detect texel size, glitch/dither pixel counts).
+    pub output_width: u32,
+    pub output_height: u32,
 }
 
 /// Trait for compositing layers into a final output.

@@ -48,8 +48,8 @@ impl PostProcessEffect for DitherFX {
         let uniforms = DitherUniforms {
             amount: p.first().copied().unwrap_or(0.0),
             algorithm: (p.get(1).copied().unwrap_or(0.0).round() as u32).min(5),
-            resolution_x: ctx.width as f32,
-            resolution_y: ctx.height as f32,
+            resolution_x: ctx.output_width as f32,
+            resolution_y: ctx.output_height as f32,
         };
 
         self.helper.dispatch(

@@ -75,8 +75,8 @@ impl PostProcessEffect for EdgeDetectFX {
             amount:       p.first().copied().unwrap_or(0.0),
             threshold:    p.get(1).copied().unwrap_or(0.1),
             mode:         mode_raw.round() as u32,
-            texel_size_x: 1.0 / ctx.width as f32,
-            texel_size_y: 1.0 / ctx.height as f32,
+            texel_size_x: 1.0 / ctx.output_width as f32,
+            texel_size_y: 1.0 / ctx.output_height as f32,
             _pad: [0.0; 3],
         };
 

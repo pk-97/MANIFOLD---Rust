@@ -57,8 +57,8 @@ impl PostProcessEffect for GlitchFX {
             scanline: p.get(3).copied().unwrap_or(0.3),               // line 16: _Scanline
             speed: p.get(4).copied().unwrap_or(2.0),                  // line 17: _Speed
             time: ctx.time,                                            // line 18: Time.time
-            resolution_x: ctx.width as f32,
-            resolution_y: ctx.height as f32,
+            resolution_x: ctx.output_width as f32,
+            resolution_y: ctx.output_height as f32,
         };
 
         self.helper.dispatch(

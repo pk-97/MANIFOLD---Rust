@@ -512,6 +512,8 @@ impl ContentPipeline {
                 paper_white_nits: 200.0,
                 max_display_nits: (200.0 * self.edr_headroom as f32).min(10000.0),
             },
+            output_width: self.output_w,
+            output_height: self.output_h,
         };
         let _desc_ms = _t0.elapsed().as_secs_f64() * 1000.0;
 
