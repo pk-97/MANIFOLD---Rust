@@ -739,14 +739,9 @@ impl TimelineViewportPanel {
         None
     }
 
-    /// Snap a beat position to the current grid subdivision.
+    /// Snap a beat position to the snap grid (matches prominently visible grid lines).
     pub fn snap_to_grid(&self, beat: Beats) -> Beats {
-        let step = match self.grid_subdivision() {
-            GridSubdivision::Bar => self.beats_per_bar as f64,
-            GridSubdivision::Beat => 1.0,
-            GridSubdivision::Eighth => 0.5,
-            GridSubdivision::Sixteenth => 0.25,
-        };
+        let step = self.snap_grid_step() as f64;
         Beats((beat.0 / step).round() * step)
     }
 
@@ -769,9 +764,9 @@ impl TimelineViewportPanel {
             max_snap_beats
         };
 
-        // Grid threshold: at least half the grid interval so clips always snap
+        // Grid threshold: at least half the snap grid interval so clips always snap
         // to the nearest grid line. Capped by max_snap_beats for safety.
-        let half_grid = self.grid_step() as f64 / 2.0;
+        let half_grid = self.snap_grid_step() as f64 / 2.0;
         let grid_threshold = pixel_threshold_beats.max(half_grid).min(max_snap_beats);
 
         // Start with raw beat — only snap if a candidate is within threshold.
@@ -813,21 +808,40 @@ impl TimelineViewportPanel {
     }
 
 
-    /// Floor-snap a beat to the current grid subdivision.
+    /// Floor-snap a beat to the snap grid subdivision.
     /// Unlike `snap_to_grid` (rounds to nearest), this floors to the grid line
     /// at or before the beat. Used for clip creation (Unity: FloorBeatToGrid).
     pub fn floor_to_grid(&self, beat: Beats) -> Beats {
-        let step = self.grid_step() as f64;
+        let step = self.snap_grid_step() as f64;
         Beats((beat.0 / step).floor() * step)
     }
 
-    /// Current grid step size in beats.
+    /// Current visual grid step size in beats (for rendering: ruler ticks, etc.).
     pub fn grid_step(&self) -> f32 {
         match self.grid_subdivision() {
             GridSubdivision::Bar => self.beats_per_bar as f32,
             GridSubdivision::Beat => 1.0,
             GridSubdivision::Eighth => 0.5,
             GridSubdivision::Sixteenth => 0.25,
+        }
+    }
+
+    /// Snap grid step — coarser than the visual grid so snapping matches
+    /// the prominently visible grid lines. Subdivisions only activate when
+    /// each cell is wide enough to be clearly distinguishable (roughly 2×
+    /// the visual grid thresholds).
+    pub fn snap_grid_step(&self) -> f32 {
+        let ppb = self.mapper.pixels_per_beat();
+        let sixteenth_px = ppb * 0.25;
+        let eighth_px = ppb * 0.5;
+        if sixteenth_px >= 8.0 {       // ppb >= 32 (visual: 4px / ppb >= 16)
+            0.25
+        } else if eighth_px >= 12.0 {  // ppb >= 24 (visual: 6px / ppb >= 12)
+            0.5
+        } else if ppb >= 12.0 {        // (visual: 6px)
+            1.0
+        } else {
+            self.beats_per_bar as f32
         }
     }
 
@@ -844,7 +858,7 @@ impl TimelineViewportPanel {
             1.0,
             self.beats_per_bar as f32,
         ];
-        let grid = self.grid_step();
+        let grid = self.snap_grid_step();
         for &step in &candidates {
             if step >= grid && step * ppb >= Self::MIN_CREATION_PX {
                 return step;
@@ -856,7 +870,7 @@ impl TimelineViewportPanel {
 
     // ── Grid subdivision ──────────────────────────────────────────
 
-    /// Determine grid subdivision level based on zoom.
+    /// Determine visual grid subdivision level based on zoom.
     /// Uses per-note pixel widths (matching Unity's GridOverlay thresholds):
     ///   - Show 16ths when a 16th-note ≥ 4px wide
     ///   - Show 8ths  when an 8th-note ≥ 6px wide
