@@ -37,6 +37,7 @@ The Rust codebase is the authoritative implementation. The Unity codebase at `/U
 
 - **Edition 2024** — all crates
 - **Typed IDs** — `ClipId`, `LayerId`, `EffectGroupId` newtypes wrapping String (`#[serde(transparent)]`)
+- **Typed time** — `Beats(pub f64)`, `Seconds(pub f64)`, `Bpm(pub f32)` newtypes in `manifold-core`. All timing function signatures use these types. Extract to `f32` only at GPU uniform boundaries (`.as_f32()`), serialized `f32` fields, or legacy f32 APIs. Never use raw `f32`/`f64` for time in function signatures.
 - **AHashMap** — on all hot-path maps (clip lookups, effect state, scheduler)
 - **parking_lot** — `RwLock`/`Mutex` replacing std (no poisoning, smaller, faster)
 - **Lock-free MIDI** — `AtomicClockState` packed `AtomicU64` CAS for real-time-safe MIDI clock callbacks
@@ -228,7 +229,7 @@ For features ported from Unity, the Unity source is the behavioral specification
 
 ### Behavioral Invariants
 
-- Primary time model is **beats** (`start_beat`, `duration_beats`); seconds ONLY for `in_point`, player time, delta_time, OSC, export
+- Primary time model is **beats** (`start_beat`, `duration_beats` as `Beats`); `Seconds` only for `in_point`, player time, delta_time, OSC, export. `Bpm` for all tempo values. See **Typed time** in Current Patterns.
 - `sync_clips_to_time()` is the SOLE idempotent authority for playback state
 - `EditingService` is the SOLE mutation gateway — no direct model writes from UI
 - All mutations: `EditingService` → `UndoRedoManager` → `Command`. Undo stack capped at 200.
