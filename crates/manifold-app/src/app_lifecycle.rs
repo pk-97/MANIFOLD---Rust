@@ -414,6 +414,21 @@ impl Application {
             self.send_content_cmd(ContentCommand::MarkClean);
         }
 
+        // Send record_commands to content thread so clips exist on both sides.
+        // Without this, clips added directly to local_project (e.g. MIDI import)
+        // are invisible to the content thread and vanish on next sync.
+        if !action.record_commands.is_empty() {
+            if action.record_commands.len() == 1 {
+                let cmd = action.record_commands.into_iter().next().unwrap();
+                self.send_content_cmd(ContentCommand::Execute(cmd));
+            } else {
+                self.send_content_cmd(ContentCommand::ExecuteBatch(
+                    action.record_commands,
+                    "Drop clips".to_string(),
+                ));
+            }
+        }
+
         // Clip sync
         if action.needs_clip_sync {
             self.needs_rebuild = true;
