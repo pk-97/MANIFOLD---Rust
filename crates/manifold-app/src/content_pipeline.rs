@@ -628,6 +628,14 @@ impl ContentPipeline {
         self.compositor.clear_all_effect_state();
     }
 
+    /// Block until all in-flight background work in effect processors completes.
+    /// Called after each export frame so async pipelines (GPU readback → CPU worker
+    /// → result) resolve deterministically before the frame is encoded.
+    /// Affected effects: BlobTracking, WireframeDepth, DepthOfField (depth mode).
+    pub fn flush_all_background_work(&mut self) {
+        self.compositor.flush_all_background_work();
+    }
+
     /// Block until the last render's GPU command buffer has completed.
     /// Must be called before reading the output texture on a different queue.
     #[cfg(target_os = "macos")]

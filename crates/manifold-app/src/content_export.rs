@@ -319,6 +319,12 @@ impl ContentThread {
             true,
         );
 
+        // Block until async effect workers complete (blob tracking, wireframe depth,
+        // depth-of-field). During live playback 1-2 frame latency is acceptable, but
+        // export must be frame-perfect: each frame's async results must resolve before
+        // the frame is encoded.
+        self.content_pipeline.flush_all_background_work();
+
         let tex_ptr = if export_config.hdr {
             let paper_white = 200.0f32;
             let max_nits = 10000.0f32;
