@@ -10,8 +10,13 @@ pub struct GeneratorContext {
     pub time: f64,
     pub beat: f64,
     pub dt: f32,
+    /// Render-resolution dimensions (may be < output dims when scaling is active).
     pub width: u32,
     pub height: u32,
+    /// Final output dimensions after upscaling. Use for pixel-count-dependent
+    /// logic (line thickness, pattern spacing) to stay resolution-invariant.
+    pub output_width: u32,
+    pub output_height: u32,
     pub aspect: f32,
     pub anim_progress: f32,
     pub trigger_count: u32,

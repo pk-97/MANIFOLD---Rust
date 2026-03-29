@@ -63,6 +63,9 @@ pub struct GeneratorRenderer {
     device_ptr: *const GpuDevice,
     width: u32,
     height: u32,
+    /// Final output dimensions after upscaling. Stored for GeneratorContext.
+    output_width: u32,
+    output_height: u32,
     format: GpuTextureFormat,
     registry: GeneratorRegistry,
     active_clips: AHashMap<String, ActiveClip>,
@@ -120,6 +123,8 @@ impl GeneratorRenderer {
             device_ptr: device as *const GpuDevice,
             width,
             height,
+            output_width: width,
+            output_height: height,
             format,
             registry,
             active_clips: AHashMap::with_capacity(16),
@@ -372,7 +377,9 @@ impl GeneratorRenderer {
                 dt,
                 width: ctx_w,
                 height: ctx_h,
-                aspect: self.width as f32 / self.height as f32, // aspect stays at output ratio
+                output_width: self.output_width,
+                output_height: self.output_height,
+                aspect: self.output_width as f32 / self.output_height as f32, // aspect at output ratio
                 anim_progress,
                 trigger_count,
                 params,
@@ -455,9 +462,11 @@ impl GeneratorRenderer {
     }
 
     /// Resize all render targets and generators.
-    pub fn resize_gpu(&mut self, width: u32, height: u32) {
+    pub fn resize_gpu(&mut self, width: u32, height: u32, output_width: u32, output_height: u32) {
         self.width = width;
         self.height = height;
+        self.output_width = output_width;
+        self.output_height = output_height;
         // Invalidate cached MetalFX scalers (dimension-specific).
         self.upscaler.invalidate();
         // Safety: device_ptr points to GpuDevice owned by ContentPipeline,
@@ -665,7 +674,9 @@ impl ClipRenderer for GeneratorRenderer {
     }
 
     fn resize(&mut self, width: i32, height: i32) {
-        self.resize_gpu(width as u32, height as u32);
+        let w = width as u32;
+        let h = height as u32;
+        self.resize_gpu(w, h, w, h);
     }
 
     fn as_any(&self) -> &dyn Any {

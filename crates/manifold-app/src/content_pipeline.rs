@@ -683,7 +683,7 @@ impl ContentPipeline {
             if let Some(gen_renderer) =
                 renderer.as_any_mut().downcast_mut::<GeneratorRenderer>()
             {
-                gen_renderer.resize_gpu(render_w, render_h);
+                gen_renderer.resize_gpu(render_w, render_h, width, height);
                 break;
             }
         }

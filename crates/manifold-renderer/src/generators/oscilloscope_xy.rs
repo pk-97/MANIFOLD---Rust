@@ -149,7 +149,7 @@ impl Generator for OscilloscopeXYGenerator {
 
         let (positions, instances, num_edges, edge_half_thick, dot_half_thick) =
             self.helper.prepare_instances(
-                ctx.height as f32,
+                ctx.output_height as f32,
                 ctx.aspect,
                 line,
                 show_verts,
