@@ -72,8 +72,12 @@ pub struct ContentPipeline {
     pq_encoder: Option<manifold_renderer::pq_encoder::PqEncoder>,
     /// Shared output view for cross-thread access (fallback for non-macOS).
     shared_output: Arc<SharedOutputView>,
-    /// FSR 1.0 spatial upscaler. Present only when render_scale < 1.0.
-    /// Upscales the compositor output (render-res) to the IOSurface (output-res).
+    /// MetalFX Spatial full-frame upscaler. Present only when render_scale < 1.0
+    /// and MetalFX is supported (macOS 13+, Apple Silicon). Preferred over FSR.
+    #[cfg(target_os = "macos")]
+    metalfx: Option<manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler>,
+    /// FSR 1.0 spatial upscaler. Present only when render_scale < 1.0
+    /// AND MetalFX is not available. Fallback for older hardware.
     #[cfg(target_os = "macos")]
     fsr1: Option<manifold_renderer::fsr1::Fsr1Upscaler>,
     /// Full output dimensions (what the IOSurface and UI see).
@@ -140,6 +144,8 @@ impl ContentPipeline {
             edr_headroom: 1.0,
             pq_encoder: None,
             shared_output: shared,
+            #[cfg(target_os = "macos")]
+            metalfx: None,
             #[cfg(target_os = "macos")]
             fsr1: None,
             output_w: 1920,
@@ -522,13 +528,34 @@ impl ContentPipeline {
                 self.compositor.render(&mut gpu_comp, &frame);
         }
 
-        // FSR upscale (render-res → output-res) + IOSurface copy.
+        // Upscale (render-res → output-res) + IOSurface copy.
+        // MetalFX preferred; FSR 1.0 as fallback; direct blit when scale = 1.0.
         // Skipped in export mode (export reads output_texture directly).
         if !export_mode {
             let (comp_w, comp_h) = self.compositor.dimensions();
 
-            if let Some(ref fsr) = self.fsr1 {
-                // FSR active: EASU + RCAS in the same command buffer, then blit FSR output.
+            if let Some(ref mfx) = self.metalfx {
+                // MetalFX Spatial: ML-based upscale directly on the command buffer.
+                {
+                    let mut gpu_upscale = if let Some(pool) = texture_pool {
+                        GpuEncoder::with_pool(&mut native_enc, native_device, pool)
+                    } else {
+                        GpuEncoder::new(&mut native_enc, native_device)
+                    };
+                    mfx.upscale(&mut gpu_upscale, self.compositor.output_texture());
+                }
+                if let Some(ref shared_tex) =
+                    self.shared_textures[self.write_surface_index]
+                    && shared_tex.width == self.output_w
+                    && shared_tex.height == self.output_h
+                {
+                    native_enc.copy_texture_to_texture(
+                        &mfx.output.texture, shared_tex,
+                        self.output_w, self.output_h, 1,
+                    );
+                }
+            } else if let Some(ref fsr) = self.fsr1 {
+                // FSR 1.0 fallback: EASU + RCAS compute dispatches.
                 {
                     let mut gpu_fsr = if let Some(pool) = texture_pool {
                         GpuEncoder::with_pool(&mut native_enc, native_device, pool)
@@ -549,7 +576,7 @@ impl ContentPipeline {
                     );
                 }
             } else {
-                // No FSR: blit compositor output directly to IOSurface.
+                // No upscaling: blit compositor output directly to IOSurface.
                 if let Some(ref shared_tex) =
                     self.shared_textures[self.write_surface_index]
                     && shared_tex.width == comp_w
@@ -623,8 +650,9 @@ impl ContentPipeline {
     ///
     /// `width` / `height` are the **output** dimensions (what the UI and IOSurface see).
     /// `render_scale` ∈ (0, 1] controls the internal render resolution:
-    ///   - 1.0 → render at output resolution, FSR disabled.
-    ///   - 0.75 / 0.5 → render at 75% / 50%, FSR upscales back to output.
+    ///   - 1.0 → render at output resolution, upscaling disabled.
+    ///   - 0.75 / 0.5 → render at 75% / 50%, MetalFX Spatial upscales back to output
+    ///     (FSR 1.0 used as fallback if MetalFX is unavailable).
     pub fn resize(
         &mut self,
         engine: &mut PlaybackEngine,
@@ -658,17 +686,34 @@ impl ContentPipeline {
             }
         }
 
-        // Init / resize FSR when render_scale < 1.0.
+        // Init / resize upscaler when render_scale < 1.0.
+        // Prefer MetalFX Spatial (ML-based, faster, better quality on Apple Silicon).
+        // Fall back to FSR 1.0 if MetalFX is unavailable (older hardware).
         #[cfg(target_os = "macos")]
         if scale < 1.0 {
-            if let Some(ref mut fsr) = self.fsr1 {
-                fsr.resize(native_device, render_w, render_h, width, height);
+            // Try MetalFX first.
+            if manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler::is_available(native_device) {
+                if let Some(ref mut mfx) = self.metalfx {
+                    mfx.resize(native_device, render_w, render_h, width, height);
+                } else {
+                    self.metalfx = manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler::new(
+                        native_device, render_w, render_h, width, height,
+                    );
+                }
+                self.fsr1 = None; // MetalFX takes over
             } else {
-                self.fsr1 = Some(manifold_renderer::fsr1::Fsr1Upscaler::new(
-                    native_device, render_w, render_h, width, height,
-                ));
+                // MetalFX not available — use FSR 1.0.
+                self.metalfx = None;
+                if let Some(ref mut fsr) = self.fsr1 {
+                    fsr.resize(native_device, render_w, render_h, width, height);
+                } else {
+                    self.fsr1 = Some(manifold_renderer::fsr1::Fsr1Upscaler::new(
+                        native_device, render_w, render_h, width, height,
+                    ));
+                }
             }
         } else {
+            self.metalfx = None;
             self.fsr1 = None;
         }
 

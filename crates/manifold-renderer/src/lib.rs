@@ -23,6 +23,7 @@ pub mod tonemap;
 pub mod tonemap_blit;
 pub mod pq_encoder;
 pub mod fsr1;
+pub mod metalfx_upscaler;
 pub mod wet_dry_lerp;
 pub mod ui_renderer;
 pub mod layer_bitmap_gpu;
