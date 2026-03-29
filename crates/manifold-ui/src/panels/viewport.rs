@@ -1353,7 +1353,11 @@ impl TimelineViewportPanel {
                 self.ruler_tick_ids.push(id);
 
                 // Label (only at label_step intervals to prevent overlap)
-                if is_label_beat {
+                // Skip labels at beats where a marker exists — markers take priority.
+                let has_marker_at_beat = self.markers.iter().any(|m| {
+                    (m.beat.as_f32() - beat).abs() < 0.001 && !m.name.is_empty()
+                });
+                if is_label_beat && !has_marker_at_beat {
                     let bar_num = (beat / bpb).floor() as i32 + 1;
                     let beat_in_bar = ((beat % bpb) + 0.001).floor() as i32 + 1;
                     let label = if is_bar {
@@ -1532,6 +1536,7 @@ impl TimelineViewportPanel {
                     color::MARKER_LABEL_WIDTH, color::MARKER_LABEL_HEIGHT,
                     &marker.name,
                     UIStyle {
+                        bg_color: color::MARKER_LABEL_BG,
                         text_color: mc,
                         font_size: RULER_FONT_SIZE,
                         text_align: TextAlign::Left,
