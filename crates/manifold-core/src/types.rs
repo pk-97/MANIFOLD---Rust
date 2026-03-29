@@ -597,6 +597,7 @@ impl BeatDivision {
     /// Button labels: "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8", "16", "32", "64"
     pub fn from_button_index(idx: usize) -> Option<Self> {
         const MAP: [BeatDivision; 11] = [
+            BeatDivision::ThirtySecond,
             BeatDivision::Sixteenth,
             BeatDivision::Eighth,
             BeatDivision::Quarter,
@@ -607,7 +608,6 @@ impl BeatDivision {
             BeatDivision::EightWhole,
             BeatDivision::SixteenWhole,
             BeatDivision::ThirtyTwoWhole,
-            BeatDivision::ThirtyTwoWhole, // "64" — clamp to max
         ];
         MAP.get(idx).copied()
     }

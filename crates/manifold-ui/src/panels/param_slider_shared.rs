@@ -43,7 +43,7 @@ pub(crate) const ENV_ADR_MAX: f32 = 8.0;
 pub(crate) const ENV_S_MAX: f32 = 1.0;
 
 pub(crate) const BEAT_DIV_LABELS: [&str; BEAT_DIV_COUNT] = [
-    "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8", "16", "32", "64",
+    "1/32", "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8", "16", "32",
 ];
 
 pub(crate) const WAVEFORM_LABELS: [&str; WAVEFORM_COUNT] = ["Sin", "Tri", "Saw", "Sqr", "Rnd"];

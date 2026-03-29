@@ -842,17 +842,17 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope], o
 /// Reverse of BeatDivision::from_button_index.
 fn beat_div_to_button_index(div: BeatDivision) -> i32 {
     match div {
-        BeatDivision::ThirtySecond => -1, // No button for 1/32
-        BeatDivision::Sixteenth => 0,
-        BeatDivision::Eighth | BeatDivision::EighthDotted | BeatDivision::EighthTriplet => 1,
-        BeatDivision::Quarter | BeatDivision::QuarterDotted | BeatDivision::QuarterTriplet => 2,
-        BeatDivision::Half | BeatDivision::HalfDotted | BeatDivision::HalfTriplet => 3,
-        BeatDivision::Whole | BeatDivision::WholeDotted | BeatDivision::WholeTriplet => 4,
-        BeatDivision::TwoWhole | BeatDivision::TwoWholeDotted => 5,
-        BeatDivision::FourWhole => 6,
-        BeatDivision::EightWhole => 7,
-        BeatDivision::SixteenWhole => 8,
-        BeatDivision::ThirtyTwoWhole => 9,
+        BeatDivision::ThirtySecond => 0,
+        BeatDivision::Sixteenth => 1,
+        BeatDivision::Eighth | BeatDivision::EighthDotted | BeatDivision::EighthTriplet => 2,
+        BeatDivision::Quarter | BeatDivision::QuarterDotted | BeatDivision::QuarterTriplet => 3,
+        BeatDivision::Half | BeatDivision::HalfDotted | BeatDivision::HalfTriplet => 4,
+        BeatDivision::Whole | BeatDivision::WholeDotted | BeatDivision::WholeTriplet => 5,
+        BeatDivision::TwoWhole | BeatDivision::TwoWholeDotted => 6,
+        BeatDivision::FourWhole => 7,
+        BeatDivision::EightWhole => 8,
+        BeatDivision::SixteenWhole => 9,
+        BeatDivision::ThirtyTwoWhole => 10,
     }
 }
 
