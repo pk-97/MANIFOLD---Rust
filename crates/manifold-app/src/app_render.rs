@@ -826,12 +826,23 @@ impl Application {
                 .map_or(0, |b| b.front_index()) as usize;
             let view = self.ui_shared_views[front].clone();
             if let Some(ref v) = view {
+                // Only blit the output window when the content thread published a new frame.
+                // At 96 UI FPS vs 60 content FPS, front_index changes ~60×/s. Skipping
+                // unchanged frames avoids get_current_texture() blocking on the output
+                // surface's drawable pool and eliminates redundant GPU blits.
+                let front_changed = front != self.last_output_front_index;
+                if front_changed {
+                    self.last_output_front_index = front;
+                }
+                self.output_needs_blit = front_changed;
                 self.present_all_windows(v);
             }
         }
         #[cfg(not(target_os = "macos"))]
         {
-            // Fallback: single-device SharedOutputView (non-macOS)
+            // Fallback: single-device SharedOutputView (non-macOS).
+            // No IOSurface frame tracking — always blit.
+            self.output_needs_blit = true;
             let compositor_view = self.content_pipeline_output.as_ref()
                 .and_then(|shared| shared.get_view());
             if let Some(ref view) = compositor_view {
@@ -861,6 +872,15 @@ impl Application {
 
         for window_id in window_ids {
             let is_workspace = Some(window_id) == self.primary_window_id;
+
+            // Skip output windows when no new content frame is available.
+            // This avoids calling get_current_texture() (Metal nextDrawable) on the output
+            // surface drawable pool, which blocks when drawables are exhausted at high
+            // UI frame rates (e.g. 96 FPS UI vs 60 FPS content). The workspace always
+            // renders — it has live UI elements that update every frame regardless.
+            if !is_workspace && !self.output_needs_blit {
+                continue;
+            }
 
             let ws = match self.window_registry.get_mut(&window_id) {
                 Some(ws) => ws,

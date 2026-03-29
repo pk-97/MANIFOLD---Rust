@@ -197,6 +197,13 @@ pub struct Application {
     /// Last seen bridge generation — detects resize (not per-frame).
     #[cfg(target_os = "macos")]
     pub(crate) last_bridge_generation: u64,
+    /// Last IOSurface front_index rendered to output windows.
+    /// Used to skip output blits when no new content frame is available.
+    #[cfg(target_os = "macos")]
+    pub(crate) last_output_front_index: usize,
+    /// True when a new content frame is ready for the output window blit.
+    /// Set each tick: true when front_index changed (macOS), always true (non-macOS).
+    pub(crate) output_needs_blit: bool,
     pub(crate) blit_pipeline: Option<BlitPipeline>,
     pub(crate) output_blit_pipeline: Option<manifold_renderer::tonemap_blit::TonemapBlitPipeline>,
     pub(crate) output_blit_format: Option<wgpu::TextureFormat>,
@@ -325,6 +332,9 @@ impl Application {
             ui_shared_views: [None, None, None],
             #[cfg(target_os = "macos")]
             last_bridge_generation: 0,
+            #[cfg(target_os = "macos")]
+            last_output_front_index: usize::MAX,
+            output_needs_blit: true,
             blit_pipeline: None,
             output_blit_pipeline: None,
             output_blit_format: None,
