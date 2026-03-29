@@ -566,18 +566,26 @@ fn duplicate_clips_region_mode_trims() {
 
     let region = make_region(&project, 2.0, 6.0, 0, 0);
 
-    let cmds = EditingService::duplicate_clips(&project, &[id1], &region, 0.5);
-    assert_eq!(cmds.len(), 1);
+    let cmds = EditingService::duplicate_clips(&project, &[id1.clone()], &region, 0.5);
+    // 2 commands: overlap trim of original (0..8 → 0..6) + add duplicate (6..10)
+    assert_eq!(cmds.len(), 2);
 
     let mut service = EditingService::new();
     service.execute_batch(cmds, "dup".into(), &mut project);
 
-    // Should have 2 clips: original (0..8) + trimmed duplicate (6..10)
+    // Should have 2 clips: original (0..6, trimmed) + duplicate (6..10)
     assert_eq!(project.timeline.layers[0].clips.len(), 2);
+    let orig = project.timeline.layers[0].clips.iter()
+        .find(|c| c.id == id1)
+        .unwrap();
+    assert!((orig.duration_beats - Beats(6.0)).abs() < Beats(0.001),
+        "original should be trimmed to 6 beats, got {}", orig.duration_beats.0);
     let dup = project.timeline.layers[0].clips.iter()
         .find(|c| c.start_beat > Beats(5.0))
         .unwrap();
     // Region duration is 4.0, so duplicate starts at 2.0 + 4.0 = 6.0
     assert!((dup.start_beat - Beats(6.0)).abs() < Beats(0.001));
     assert!((dup.duration_beats - Beats(4.0)).abs() < Beats(0.001));
+    // No overlaps
+    assert!(!project.timeline.layers[0].has_overlapping_clips());
 }

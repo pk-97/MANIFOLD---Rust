@@ -7,6 +7,7 @@ use manifold_core::types::{QuantizeMode, TempoPointSource};
 use manifold_core::GeneratorTypeId;
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::AddClipCommand;
+use manifold_editing::service::EditingService;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -741,6 +742,19 @@ impl LiveClipManager {
                 .map(|l| l.layer_id.clone())
                 .unwrap_or_default();
             committed.layer_id = layer_lid.clone();
+
+            // Enforce non-overlap BEFORE adding the new clip (same pattern as
+            // paste_clips / duplicate_clips). Overlap commands trim/delete
+            // existing clips that the committed clip will collide with.
+            let spb = 60.0 / host.get_bpm_at_beat(committed.start_beat).max(1.0);
+            let overlap_cmds = EditingService::enforce_non_overlap(
+                project, &committed, layer_index as usize,
+                &HashSet::new(), spb,
+            );
+            for mut cmd in overlap_cmds {
+                cmd.execute(project);
+                host.record_command(cmd);
+            }
 
             if let Some(layer) = project.timeline.layers.get_mut(layer_index as usize) {
                 layer.add_clip(committed.clone());

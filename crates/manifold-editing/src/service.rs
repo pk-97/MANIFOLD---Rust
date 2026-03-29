@@ -61,6 +61,23 @@ impl EditingService {
     pub fn execute(&mut self, command: Box<dyn Command>, project: &mut Project) {
         self.undo_manager.execute(command, project);
         self.data_version += 1;
+
+        #[cfg(debug_assertions)]
+        Self::debug_assert_no_overlaps(&project.timeline.layers);
+    }
+
+    /// Debug-only check: no layer should contain overlapping clips after
+    /// any editing command. Fires on debug builds only — zero cost in release.
+    #[cfg(debug_assertions)]
+    fn debug_assert_no_overlaps(layers: &[manifold_core::layer::Layer]) {
+        for layer in layers {
+            debug_assert!(
+                !layer.has_overlapping_clips(),
+                "Overlap invariant violated on layer {:?} ({} clips)",
+                layer.layer_id,
+                layer.clips.len(),
+            );
+        }
     }
 
     /// Record an already-executed command (e.g., end of drag).
@@ -557,7 +574,7 @@ impl EditingService {
     /// Duplicate selected clips, shifting them forward.
     /// Region mode: trims clips to region boundaries, places copies after region end.
     /// Individual mode: places copies offset by the selected clips' span.
-    /// Matches Unity DuplicateSelectedClips.
+    /// Enforces non-overlap for each new clip (same pattern as paste_clips).
     pub fn duplicate_clips(
         project: &Project,
         clip_ids: &[ClipId],
@@ -565,6 +582,7 @@ impl EditingService {
         spb: f32,
     ) -> Vec<Box<dyn Command>> {
         let mut commands: Vec<Box<dyn Command>> = Vec::new();
+        let empty_ignore = HashSet::new();
 
         if region.is_active {
             // Region mode: find ALL clips overlapping the region (Unity FillClipsInRegion),
@@ -589,7 +607,15 @@ impl EditingService {
                     let trimmed = Self::trim_clip_to_region(clip, region, spb);
                     let mut new_clip = trimmed;
                     new_clip.start_beat += offset;
-                    commands.push(Box::new(AddClipCommand::new(new_clip, layer.layer_id.clone())));
+
+                    // Enforce non-overlap before adding the new clip
+                    let overlap_cmds = Self::enforce_non_overlap(
+                        project, &new_clip, li, &empty_ignore, spb,
+                    );
+                    commands.extend(overlap_cmds);
+                    commands.push(Box::new(AddClipCommand::new(
+                        new_clip, layer.layer_id.clone(),
+                    )));
                 }
             }
         } else {
@@ -611,7 +637,17 @@ impl EditingService {
                     if clip_ids.contains(&clip.id) {
                         let mut new_clip = clip.clone_with_new_id();
                         new_clip.start_beat += shift;
-                        commands.push(Box::new(AddClipCommand::new(new_clip, layer.layer_id.clone())));
+
+                        let li = project.timeline.layer_index_for_id(&layer.layer_id)
+                            .unwrap_or(0);
+                        // Enforce non-overlap before adding the new clip
+                        let overlap_cmds = Self::enforce_non_overlap(
+                            project, &new_clip, li, &empty_ignore, spb,
+                        );
+                        commands.extend(overlap_cmds);
+                        commands.push(Box::new(AddClipCommand::new(
+                            new_clip, layer.layer_id.clone(),
+                        )));
                     }
                 }
             }

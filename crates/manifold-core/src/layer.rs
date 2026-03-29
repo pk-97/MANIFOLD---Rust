@@ -343,6 +343,25 @@ impl Layer {
         self.mark_clips_unsorted();
     }
 
+    /// Check whether any clips on this layer overlap in beat range.
+    /// O(n log n) — sorts a temporary copy by start_beat, then sweeps.
+    pub fn has_overlapping_clips(&self) -> bool {
+        if self.clips.len() < 2 {
+            return false;
+        }
+        let mut sorted: Vec<(Beats, Beats)> = self.clips.iter()
+            .map(|c| (c.start_beat, c.end_beat()))
+            .collect();
+        sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        for w in sorted.windows(2) {
+            // If the previous clip's end exceeds the next clip's start, they overlap
+            if w[0].1 > w[1].0 {
+                return true;
+            }
+        }
+        false
+    }
+
     /// Get the effects list, creating it if None.
     pub fn effects_mut(&mut self) -> &mut Vec<EffectInstance> {
         if self.effects.is_none() {
