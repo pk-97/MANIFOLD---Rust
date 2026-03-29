@@ -321,7 +321,7 @@ impl GenParamPanel {
             } else {
                 // Slider row
                 let norm = BitmapSlider::value_to_normalized(info.default, info.min, info.max);
-                let val_text = format_param_value(info.default, info.whole_numbers, info.value_labels.as_deref());
+                let val_text = format_param_value(info.default, info.min, info.whole_numbers, info.value_labels.as_deref());
                 let slider_rect = Rect::new(cx, cy, slider_w, ROW_HEIGHT);
                 self.slider_ids[i] = Some(BitmapSlider::build(
                     tree, -1, slider_rect,
@@ -436,7 +436,7 @@ impl GenParamPanel {
                 self.param_cache[i] = val;
                 if let Some(ref ids) = self.slider_ids[i] {
                     let norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
-                    let text = format_param_value(val, info.whole_numbers, info.value_labels.as_deref());
+                    let text = format_param_value(val, info.min, info.whole_numbers, info.value_labels.as_deref());
                     BitmapSlider::update_value(tree, ids, norm, &text);
                 }
             }
@@ -697,7 +697,7 @@ impl GenParamPanel {
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
                 let val = if info.whole_numbers { val.round() } else { val };
                 let display_norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
-                let text = format_param_value(val, info.whole_numbers, info.value_labels.as_deref());
+                let text = format_param_value(val, info.min, info.whole_numbers, info.value_labels.as_deref());
                 BitmapSlider::update_value(tree, ids, display_norm, &text);
                 self.param_cache[pi] = val;
                 return vec![PanelAction::GenParamChanged(pi, val)];

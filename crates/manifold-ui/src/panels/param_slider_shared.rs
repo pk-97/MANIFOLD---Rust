@@ -190,9 +190,9 @@ impl ParamDragState {
 
 // ── Shared helper functions ─────────────────────────────────────
 
-pub(crate) fn format_param_value(val: f32, whole_numbers: bool, value_labels: Option<&[String]>) -> String {
+pub(crate) fn format_param_value(val: f32, min: f32, whole_numbers: bool, value_labels: Option<&[String]>) -> String {
     if let Some(labels) = value_labels {
-        let idx = (val.round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
+        let idx = ((val - min).round() as i32).clamp(0, labels.len() as i32 - 1) as usize;
         return labels[idx].clone();
     }
     if whole_numbers { format!("{}", val.round() as i32) } else { format!("{:.2}", val) }

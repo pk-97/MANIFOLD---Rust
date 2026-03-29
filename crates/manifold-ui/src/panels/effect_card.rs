@@ -526,7 +526,7 @@ impl EffectCardPanel {
         for i in 0..self.param_info.len() {
             let info = self.param_info[i].clone();
             let norm = BitmapSlider::value_to_normalized(info.default, info.min, info.max);
-            let val_text = format_param_value(info.default, info.whole_numbers, info.value_labels.as_deref());
+            let val_text = format_param_value(info.default, info.min, info.whole_numbers, info.value_labels.as_deref());
 
             // Param slider
             let slider_rect = Rect::new(x + PADDING, cy, slider_w, ROW_HEIGHT);
@@ -662,7 +662,7 @@ impl EffectCardPanel {
                 if let Some(ref ids) = self.slider_ids[i] {
                     let info = &self.param_info[i];
                     let norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
-                    let text = format_param_value(val, info.whole_numbers, info.value_labels.as_deref());
+                    let text = format_param_value(val, info.min, info.whole_numbers, info.value_labels.as_deref());
                     BitmapSlider::update_value(tree, ids, norm, &text);
                 }
             }
@@ -966,7 +966,7 @@ impl EffectCardPanel {
                 let val = BitmapSlider::normalized_to_value(norm, info.min, info.max);
                 let val = if info.whole_numbers { val.round() } else { val };
                 let display_norm = BitmapSlider::value_to_normalized(val, info.min, info.max);
-                let text = format_param_value(val, info.whole_numbers, info.value_labels.as_deref());
+                let text = format_param_value(val, info.min, info.whole_numbers, info.value_labels.as_deref());
                 BitmapSlider::update_value(tree, ids, display_norm, &text);
                 self.param_cache[pi] = val;
                 return vec![PanelAction::EffectParamChanged(ei, pi, val)];
