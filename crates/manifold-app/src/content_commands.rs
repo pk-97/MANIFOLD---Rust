@@ -17,12 +17,11 @@ impl ContentThread {
 
             // ── Transport ──────────────────────────────────────────
             ContentCommand::Play => {
-                // When OSC sender is active, claim ownership BEFORE play so
-                // that tick_sync_controllers (which runs later this frame)
-                // sees manifold_owns=true and skips MIDI Clock transport.
-                // In Unity this worked naturally because OscPositionSender ran
-                // in LateUpdate (same frame) and MidiClockSync ran next frame.
+                // User-initiated transport: clear any stale suppress flag so
+                // OscPositionSender doesn't silently swallow this change.
+                // Also claim ownership so MIDI Clock doesn't fight us.
                 if self.osc_sender.is_sender_enabled() {
+                    self.sync_arbiter.suppress_next_transport = false;
                     self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
                 }
                 // Align transport to active external beat source BEFORE
@@ -42,8 +41,8 @@ impl ContentThread {
                 self.cache_link_beat_offset();
             }
             ContentCommand::Pause => {
-                // Claim ownership so MIDI Clock doesn't re-play immediately.
                 if self.osc_sender.is_sender_enabled() {
+                    self.sync_arbiter.suppress_next_transport = false;
                     self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
                 }
                 // End tempo recording session on pause.
@@ -53,6 +52,7 @@ impl ContentThread {
             }
             ContentCommand::Stop => {
                 if self.osc_sender.is_sender_enabled() {
+                    self.sync_arbiter.suppress_next_transport = false;
                     self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
                 }
                 // End tempo recording session on stop.
@@ -62,6 +62,7 @@ impl ContentThread {
             }
             ContentCommand::TogglePlayback => {
                 if self.osc_sender.is_sender_enabled() {
+                    self.sync_arbiter.suppress_next_transport = false;
                     self.sync_arbiter.set_manifold_owns_at(self.time_since_start);
                 }
                 if self.engine.is_playing() {

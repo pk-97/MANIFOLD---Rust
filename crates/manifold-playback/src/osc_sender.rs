@@ -15,6 +15,14 @@ use crate::sync::SyncArbiter;
 
 const DESTINATION_IP: &str = "127.0.0.1";
 const SEEK_THRESHOLD_BEATS: f32 = 0.5;
+/// Number of redundant sends for transport state changes (play/stop).
+/// UDP is fire-and-forget; redundancy guards against packet loss on localhost
+/// under load (Ableton + MIDI + OSC traffic).
+const TRANSPORT_SEND_COUNT: u8 = 3;
+/// After a transport change, re-confirm for this many seconds.
+/// If OscSender detects the engine state still diverges from what was last
+/// sent, it re-sends the command. Covers M4L scheduler misses.
+const CONFIRM_WINDOW_SECS: f64 = 0.3;
 
 /// OSC position sender — sends play/stop/seek messages to DAW.
 /// Port of Unity OscPositionSender.cs.
@@ -25,6 +33,10 @@ pub struct OscPositionSender {
     last_was_playing: bool,
     last_sent_beat: f32,
     last_sent_realtime: f64,
+    /// The transport state we last told the DAW about.
+    last_sent_playing: Option<bool>,
+    /// Wall-clock time of the last transport send (for confirmation window).
+    last_transport_send_time: f64,
 }
 
 impl OscPositionSender {
@@ -36,6 +48,8 @@ impl OscPositionSender {
             last_was_playing: false,
             last_sent_beat: 0.0,
             last_sent_realtime: 0.0,
+            last_sent_playing: None,
+            last_transport_send_time: 0.0,
         }
     }
 
@@ -102,19 +116,45 @@ impl OscPositionSender {
             }
 
             if is_playing {
-                self.try_send_float("/manifold/play", current_beat);
+                for _ in 0..TRANSPORT_SEND_COUNT {
+                    self.try_send_float("/manifold/play", current_beat);
+                }
                 arbiter.set_manifold_owns_at(now as f32);
             } else {
-                self.try_send_int("/manifold/transport", 0);
+                for _ in 0..TRANSPORT_SEND_COUNT {
+                    self.try_send_int("/manifold/transport", 0);
+                }
                 // Don't clear ManifoldOwnsPlayback here — CLK still shows
                 // playing until Ableton processes the stop. MidiClockSyncController
                 // clears it once both sides agree they're stopped.
             }
 
+            self.last_sent_playing = Some(is_playing);
+            self.last_transport_send_time = now;
             self.last_was_playing = is_playing;
             self.last_sent_beat = current_beat;
             self.last_sent_realtime = now;
             return;
+        }
+
+        // 1b. Confirmation: re-send transport if engine state still diverges
+        // from what the DAW was last told, within the confirmation window.
+        if let Some(sent_playing) = self.last_sent_playing {
+            if (now - self.last_transport_send_time) < CONFIRM_WINDOW_SECS {
+                if is_playing != sent_playing {
+                    // Engine changed again — send the new state
+                    if is_playing {
+                        self.try_send_float("/manifold/play", current_beat);
+                    } else {
+                        self.try_send_int("/manifold/transport", 0);
+                    }
+                    self.last_sent_playing = Some(is_playing);
+                    self.last_transport_send_time = now;
+                }
+            } else {
+                // Confirmation window expired — stop checking
+                self.last_sent_playing = None;
+            }
         }
 
         // 2. Seek detection: compare current beat to expected beat
