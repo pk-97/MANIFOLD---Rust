@@ -1389,9 +1389,18 @@ impl PlaybackEngine {
 
             // Apply rate and seek
             let rate = self.get_clip_playback_rate(&clip);
+            let resolved_bpm = self.resolve_clip_recorded_bpm(&clip);
+            let project_bpm = self.project.as_ref().map(|p| p.settings.bpm.0).unwrap_or(120.0);
+            let media_length = self.renderers[renderer_idx].get_clip_media_length(clip_id);
             self.renderers[renderer_idx].set_clip_playback_rate(clip_id, rate);
             let video_time = self.compute_video_time(&clip, clip_id);
             self.renderers[renderer_idx].seek_clip(clip_id, video_time);
+            log::info!(
+                "[PlaybackEngine] Clip ready: {} | recorded_bpm={:.1} project_bpm={:.1} rate={:.4} \
+                 seek={:.3}s media={:.1}s beat={:.2} start_beat={:.2}",
+                clip_id, resolved_bpm, project_bpm, rate,
+                video_time, media_length, self.current_beat, clip.start_beat.as_f32(),
+            );
 
             if self.looping_clip_ids.contains(clip_id) {
                 self.renderers[renderer_idx].set_clip_looping(clip_id, true);
