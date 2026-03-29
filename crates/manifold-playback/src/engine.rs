@@ -402,12 +402,25 @@ impl PlaybackEngine {
     }
 
     pub fn set_time(&mut self, time_double: Seconds) {
+        let old_beat = self.current_beat;
         self.current_time_double = time_double.0;
         self.current_time = time_double.0 as f32;
         self.update_beat_from_time();
+        if self.current_beat < old_beat - 0.0001 {
+            eprintln!(
+                "[BEAT BACKWARD] set_time: {:.6} → {:.6} (time={:.6})",
+                old_beat, self.current_beat, time_double.0,
+            );
+        }
     }
 
     pub fn set_beat(&mut self, beat: Beats) {
+        if beat.0 < self.current_beat - 0.0001 {
+            eprintln!(
+                "[BEAT BACKWARD] set_beat: {:.6} → {:.6}",
+                self.current_beat, beat.0,
+            );
+        }
         self.current_beat = beat.0;
     }
 
@@ -447,19 +460,33 @@ impl PlaybackEngine {
     }
 
     pub fn advance_time(&mut self, dt_seconds: Seconds) -> Seconds {
+        let old_beat = self.current_beat;
         self.current_time_double += dt_seconds.0;
         self.current_time = self.current_time_double as f32;
         self.update_beat_from_time();
+        if self.current_beat < old_beat - 0.0001 {
+            eprintln!(
+                "[BEAT BACKWARD] advance_time: {:.6} → {:.6} (dt={:.6})",
+                old_beat, self.current_beat, dt_seconds.0,
+            );
+        }
         Seconds(self.current_time_double)
     }
 
     /// Set time from an external sync source (NudgeTime path).
     /// Port of C# PlaybackEngine.NudgeTime (lines 519-525).
     pub fn nudge_time(&mut self, time: f32) {
+        let old_beat = self.current_beat;
         self.current_time_double = time as f64;
         self.current_time = time;
         self.update_beat_from_time();
         self.sync_project_bpm_from_current_beat();
+        if self.current_beat < old_beat - 0.0001 {
+            eprintln!(
+                "[BEAT BACKWARD] nudge_time: {:.6} → {:.6} (time={:.6})",
+                old_beat, self.current_beat, time,
+            );
+        }
     }
 
     /// Set time from a seek. Returns beat delta for feedback buffer clearing.
