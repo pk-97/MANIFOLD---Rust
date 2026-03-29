@@ -1,6 +1,6 @@
 use manifold_core::ClipId;
 use manifold_core::clip::TimelineClip;
-use manifold_core::Beats;
+use manifold_core::{Beats, Seconds};
 use ahash::AHashSet;
 
 /// Result of a sync computation.
@@ -58,7 +58,7 @@ impl ClipScheduler {
     /// - `min_remaining_beats`: Don't start clips with less than this remaining
     pub fn compute_sync(
         &mut self,
-        _current_time: f32,
+        _current_time: Seconds,
         current_beat: Beats,
         timeline_active_clips: &[TimelineClip],
         live_slots: &[(i32, TimelineClip)],
@@ -158,7 +158,7 @@ mod tests {
         let mut sched = ClipScheduler::new();
         let active = AHashSet::new();
         let looping = AHashSet::new();
-        let result = sched.compute_sync(0.0, Beats(0.0), &[], &[], &active, &looping, Beats(0.1));
+        let result = sched.compute_sync(Seconds(0.0), Beats(0.0), &[], &[], &active, &looping, Beats(0.1));
         assert!(result.should_be_active.is_empty());
         assert!(result.to_stop.is_empty());
         assert!(result.to_start.is_empty());
@@ -170,7 +170,7 @@ mod tests {
         let clip = make_clip("c1", 2.0, 4.0);
         let active = AHashSet::new();
         let looping = AHashSet::new();
-        let result = sched.compute_sync(3.0, Beats(3.0), &[clip.clone()], &[], &active, &looping, Beats(0.1));
+        let result = sched.compute_sync(Seconds(3.0), Beats(3.0), &[clip.clone()], &[], &active, &looping, Beats(0.1));
         assert_eq!(result.should_be_active.len(), 1);
         assert_eq!(result.to_start.len(), 1);
         assert_eq!(result.to_start[0].id, "c1");
@@ -183,7 +183,7 @@ mod tests {
         let mut active = AHashSet::new();
         active.insert(ClipId::new("c1"));
         let looping = AHashSet::new();
-        let result = sched.compute_sync(3.0, Beats(3.0), &[clip], &[], &active, &looping, Beats(0.1));
+        let result = sched.compute_sync(Seconds(3.0), Beats(3.0), &[clip], &[], &active, &looping, Beats(0.1));
         assert_eq!(result.to_start.len(), 0);
         assert_eq!(result.to_stop.len(), 0);
     }
@@ -194,7 +194,7 @@ mod tests {
         let mut active = AHashSet::new();
         active.insert(ClipId::new("gone"));
         let looping = AHashSet::new();
-        let result = sched.compute_sync(7.0, Beats(7.0), &[], &[], &active, &looping, Beats(0.1));
+        let result = sched.compute_sync(Seconds(7.0), Beats(7.0), &[], &[], &active, &looping, Beats(0.1));
         assert_eq!(result.to_stop.len(), 1);
         assert_eq!(result.to_stop[0], "gone");
     }
@@ -206,7 +206,7 @@ mod tests {
         let active = AHashSet::new();
         let looping = AHashSet::new();
         // current_beat = 5.95, remaining = 0.05 < 0.1 threshold
-        let result = sched.compute_sync(5.95, Beats(5.95), &[clip], &[], &active, &looping, Beats(0.1));
+        let result = sched.compute_sync(Seconds(5.95), Beats(5.95), &[clip], &[], &active, &looping, Beats(0.1));
         assert_eq!(result.to_start.len(), 0);
     }
 
@@ -217,7 +217,7 @@ mod tests {
         let active = AHashSet::new();
         let mut looping = AHashSet::new();
         looping.insert(ClipId::new("loop"));
-        let result = sched.compute_sync(5.95, Beats(5.95), &[clip], &[], &active, &looping, Beats(0.1));
+        let result = sched.compute_sync(Seconds(5.95), Beats(5.95), &[clip], &[], &active, &looping, Beats(0.1));
         assert_eq!(result.to_start.len(), 1);
     }
 
@@ -231,7 +231,7 @@ mod tests {
         let active = AHashSet::new();
         let looping = AHashSet::new();
         // current_beat = 3.0 >= live_clip.start_beat (2.0) + 0.0001
-        let result = sched.compute_sync(3.0, Beats(3.0), &[], &live_slots, &active, &looping, Beats(0.1));
+        let result = sched.compute_sync(Seconds(3.0), Beats(3.0), &[], &live_slots, &active, &looping, Beats(0.1));
         assert_eq!(result.should_be_active.len(), 1);
         assert_eq!(result.to_start.len(), 1);
         assert_eq!(result.to_start[0].id, "live1");
@@ -245,7 +245,7 @@ mod tests {
         let active = AHashSet::new();
         let looping = AHashSet::new();
         // current_beat = 3.0 < live_clip.start_beat (5.0) - 0.0001
-        let result = sched.compute_sync(3.0, Beats(3.0), &[], &live_slots, &active, &looping, Beats(0.1));
+        let result = sched.compute_sync(Seconds(3.0), Beats(3.0), &[], &live_slots, &active, &looping, Beats(0.1));
         assert_eq!(result.should_be_active.len(), 0);
         assert_eq!(result.to_start.len(), 0);
     }
@@ -258,7 +258,7 @@ mod tests {
         let active = AHashSet::new();
         let looping = AHashSet::new();
         // current_beat = 5.0 > EndBeat (4.0) — but live slots persist until NoteOff
-        let result = sched.compute_sync(5.0, Beats(5.0), &[], &live_slots, &active, &looping, Beats(0.1));
+        let result = sched.compute_sync(Seconds(5.0), Beats(5.0), &[], &live_slots, &active, &looping, Beats(0.1));
         assert_eq!(result.should_be_active.len(), 1);
     }
 
@@ -270,7 +270,7 @@ mod tests {
         let live_slots = vec![(1i32, live_clip)];
         let active = AHashSet::new();
         let looping = AHashSet::new();
-        let result = sched.compute_sync(5.0, Beats(5.0), &[timeline_clip], &live_slots, &active, &looping, Beats(0.1));
+        let result = sched.compute_sync(Seconds(5.0), Beats(5.0), &[timeline_clip], &live_slots, &active, &looping, Beats(0.1));
         assert_eq!(result.should_be_active.len(), 2);
         assert_eq!(result.to_start.len(), 2);
     }
@@ -284,7 +284,7 @@ mod tests {
         let live_slots = vec![(0i32, live)];
         let active = AHashSet::new();
         let looping = AHashSet::new();
-        let result = sched.compute_sync(5.0, Beats(5.0), &[t1, t2], &live_slots, &active, &looping, Beats(0.1));
+        let result = sched.compute_sync(Seconds(5.0), Beats(5.0), &[t1, t2], &live_slots, &active, &looping, Beats(0.1));
         assert_eq!(result.should_be_active.len(), 3);
         let ids: AHashSet<ClipId> = result.should_be_active.iter().map(|c| c.id.clone()).collect();
         assert!(ids.contains("t1"));
@@ -301,7 +301,7 @@ mod tests {
         let active = AHashSet::new();
         let looping = AHashSet::new();
         let original_count = clips.len();
-        let _ = sched.compute_sync(3.0, Beats(3.0), &clips, &live_slots, &active, &looping, Beats(0.1));
+        let _ = sched.compute_sync(Seconds(3.0), Beats(3.0), &clips, &live_slots, &active, &looping, Beats(0.1));
         assert_eq!(clips.len(), original_count);
     }
 
@@ -312,14 +312,14 @@ mod tests {
         let active = AHashSet::new();
         let looping = AHashSet::new();
 
-        let result = sched.compute_sync(1.0, Beats(1.0), &[clip.clone()], &[], &active, &looping, Beats(0.1));
+        let result = sched.compute_sync(Seconds(1.0), Beats(1.0), &[clip.clone()], &[], &active, &looping, Beats(0.1));
         assert_eq!(result.to_start.len(), 1);
 
         // Reclaim and run again — should reuse buffers without new allocation
         sched.reclaim(result);
         let mut active2 = AHashSet::new();
         active2.insert(ClipId::new("c1"));
-        let result2 = sched.compute_sync(1.0, Beats(1.0), &[clip], &[], &active2, &looping, Beats(0.1));
+        let result2 = sched.compute_sync(Seconds(1.0), Beats(1.0), &[clip], &[], &active2, &looping, Beats(0.1));
         assert_eq!(result2.to_start.len(), 0);
         assert_eq!(result2.to_stop.len(), 0);
     }

@@ -354,7 +354,7 @@ impl WaveformLanePanel {
             let waveform_x =
                 mapper.beat_to_pixel_absolute(Beats::from_f32(waveform_start_beat.max(0.0)));
             let waveform_width =
-                mapper.beat_duration_to_width(waveform_duration_beats).max(1.0);
+                mapper.beat_duration_to_width(Beats::from_f32(waveform_duration_beats)).max(1.0);
 
             if (waveform_x - self.cached_waveform_x).abs() > 0.5
                 || (waveform_width - self.cached_waveform_width).abs() > 0.5

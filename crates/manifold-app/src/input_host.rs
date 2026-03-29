@@ -3,7 +3,7 @@
 //! Wraps Application fields to implement the TimelineInputHost trait.
 //! Same split-borrow pattern as AppEditingHost — borrows individual fields
 //! so InputHandler, UIState, and viewport can be borrowed separately.
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{Beats, ClipId, LayerId, Seconds};
 use manifold_editing::commands::clip::MuteClipCommand;
 use manifold_editing::commands::effects::RemoveEffectCommand;
 use manifold_editing::commands::effect_target::EffectTarget;
@@ -135,9 +135,9 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn get_playhead_viewport_x(&self) -> f32 {
-        let beat = self.content_state.current_beat as f32;
+        let beat = self.content_state.current_beat.as_f32();
         let ppb = self.ui_root.viewport.pixels_per_beat();
-        let scroll = self.ui_root.viewport.scroll_x_beats();
+        let scroll = self.ui_root.viewport.scroll_x_beats().as_f32();
         (beat - scroll) * ppb
     }
 
@@ -370,32 +370,32 @@ impl TimelineInputHost for AppInputHost<'_> {
         log::info!("New project requested via keyboard shortcut");
     }
 
-    fn play_pause(&mut self, insert_cursor_beat: Option<f32>) {
+    fn play_pause(&mut self, insert_cursor_beat: Option<Beats>) {
         if self.content_state.is_playing {
             ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Pause);
         } else {
             // Unity: if paused and insert cursor exists, seek to cursor first (Ableton behavior)
             if let Some(beat) = insert_cursor_beat {
-                let time = beat * (60.0 / self.project.settings.bpm.0);
+                let time = Seconds(beat.0 * (60.0 / self.project.settings.bpm.0 as f64));
                 ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(time));
             }
             ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Play);
         }
     }
 
-    fn seek_to(&mut self, time: f32) {
-        if time == f32::MAX {
+    fn seek_to(&mut self, time: Seconds) {
+        if time.0 == f64::MAX {
             // Sentinel for "seek to end" — Unity InputHandler line 380-390
             // Uses beat_to_timeline_time for tempo map consistency (Step 8 fix)
             if let Some(project) = Some(&*self.project) {
-                let mut max_beat = manifold_core::Beats::ZERO;
+                let mut max_beat = Beats::ZERO;
                 for layer in &project.timeline.layers {
                     for clip in &layer.clips {
                         let end = clip.start_beat + clip.duration_beats;
                         if end > max_beat { max_beat = end; }
                     }
                 }
-                let end_time = max_beat.as_f32() * (60.0 / self.project.settings.bpm.0);
+                let end_time = Seconds(max_beat.0 * (60.0 / self.project.settings.bpm.0 as f64));
                 ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(end_time));
             }
         } else {
@@ -404,7 +404,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn current_beat(&self) -> f32 {
-        self.content_state.current_beat as f32
+        self.content_state.current_beat.as_f32()
     }
 
     fn is_playing(&self) -> bool {
@@ -474,7 +474,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         // Send paste to content thread and wait for result (pasted clip IDs)
         let (tx, rx) = std::sync::mpsc::channel();
         ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::PasteClips {
-            target_beat,
+            target_beat: Beats::from_f32(target_beat),
             target_layer,
             result_tx: tx,
         });
@@ -586,7 +586,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn split_clips_at_playhead(&mut self, clip_ids: &[ClipId]) {
-        let beat = self.content_state.current_beat as f32;
+        let beat = self.content_state.current_beat.as_f32();
         if let Some(project) = Some(&mut *self.project) {
             let spb = 60.0 / project.settings.bpm.0;
             let mut commands: Vec<Box<dyn manifold_editing::command::Command>> = Vec::new();
@@ -774,9 +774,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn set_export_in_at_playhead(&mut self) {
-        let beat = self.content_state.current_beat as f32;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
-        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(manifold_core::Beats::from_f32(beat), bpb);
+        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(self.content_state.current_beat, bpb);
         self.project.timeline.export_in_beat = snapped;
         self.project.timeline.export_range_enabled = true;
         // Push to viewport immediately so build() sees it this frame
@@ -795,9 +794,8 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn set_export_out_at_playhead(&mut self) {
-        let beat = self.content_state.current_beat as f32;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
-        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(manifold_core::Beats::from_f32(beat), bpb);
+        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(self.content_state.current_beat, bpb);
         self.project.timeline.export_out_beat = snapped;
         self.project.timeline.export_range_enabled = true;
         self.ui_root.viewport.set_export_range(
@@ -920,7 +918,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         // Step 4f: read cursor position from UIState (not viewport scroll)
         let current_beat = self.selection.insert_cursor_beat
-            .unwrap_or(self.content_state.current_beat as f32);
+            .unwrap_or(self.content_state.current_beat.as_f32());
         let active_idx = self.active_layer.as_ref()
             .and_then(|id| self.project.timeline.find_layer_index_by_id(id));
         let insert_cursor_idx = self.selection.insert_cursor_layer_id.as_ref()
@@ -1080,7 +1078,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
     fn calibrate_percussion_downbeat(&mut self) {
         use crate::content_command::ContentCommand;
-        let beat = self.content_state.current_beat as f32;
+        let beat = self.content_state.current_beat;
         let bpb = self.project.settings.time_signature_numerator.max(1);
         ContentCommand::send(
             self.content_tx,
@@ -1095,7 +1093,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         use crate::content_command::ContentCommand;
         ContentCommand::send(
             self.content_tx,
-            ContentCommand::PercussionNudgeAlignment(delta_beats),
+            ContentCommand::PercussionNudgeAlignment(Beats::from_f32(delta_beats)),
         );
     }
 
@@ -1113,9 +1111,8 @@ impl TimelineInputHost for AppInputHost<'_> {
         use manifold_core::marker::TimelineMarker;
         use manifold_editing::commands::marker::AddMarkerCommand;
 
-        let beat = self.content_state.current_beat as f32;
         let bpb = self.project.settings.time_signature_numerator.max(1) as u32;
-        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(manifold_core::Beats::from_f32(beat), bpb);
+        let snapped = self.ui_root.viewport.mapper().snap_beat_to_grid(self.content_state.current_beat, bpb);
         let marker = TimelineMarker::new(snapped);
 
         let mut boxed: Box<dyn manifold_editing::command::Command + Send> =

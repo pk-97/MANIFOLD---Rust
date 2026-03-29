@@ -32,8 +32,8 @@ fn engine_initializes_with_project() {
     engine.initialize(project);
 
     assert_eq!(engine.current_state(), PlaybackState::Stopped);
-    assert_eq!(engine.current_time(), 0.0);
-    assert_eq!(engine.current_beat(), 0.0);
+    assert_eq!(engine.current_time(), Seconds(0.0));
+    assert_eq!(engine.current_beat(), Beats(0.0));
     assert!((engine.get_timeline_fallback_bpm() - 138.0).abs() < 0.01);
 }
 
@@ -46,7 +46,7 @@ fn engine_tick_while_stopped_has_no_active_clips() {
     let ctx = TickContext {
         dt_seconds: Seconds(1.0 / 60.0),
         realtime_now: Seconds(0.0),
-        pre_render_dt: 1.0 / 60.0,
+        pre_render_dt: Seconds(1.0 / 60.0),
         frame_count: 0,
         export_fixed_dt: Seconds(0.0),
     };
@@ -70,7 +70,7 @@ fn engine_advances_time_when_playing() {
         let ctx = TickContext {
             dt_seconds: Seconds(dt),
             realtime_now: Seconds(realtime),
-            pre_render_dt: dt as f32,
+            pre_render_dt: Seconds(dt),
             frame_count: i as u64,
             export_fixed_dt: Seconds(0.0),
         };
@@ -81,12 +81,12 @@ fn engine_advances_time_when_playing() {
     // After 1 second at 138 BPM, should be at ~2.3 beats (138/60 = 2.3)
     let expected_beat = 138.0 / 60.0;
     assert!(
-        (engine.current_beat() - expected_beat).abs() < 0.1,
+        (engine.current_beat().0 - expected_beat).abs() < 0.1,
         "After 1s at 138 BPM, expected ~{expected_beat} beats, got {}",
         engine.current_beat()
     );
     assert!(
-        (engine.current_time() - 1.0).abs() < 0.02,
+        (engine.current_time().0 - 1.0).abs() < 0.02,
         "After 60 frames at 1/60, expected ~1.0s, got {}",
         engine.current_time()
     );
@@ -113,7 +113,7 @@ fn engine_schedules_clips_at_correct_beats() {
         let ctx = TickContext {
             dt_seconds: Seconds(dt),
             realtime_now: Seconds(realtime),
-            pre_render_dt: dt as f32,
+            pre_render_dt: Seconds(dt),
             frame_count: i as u64,
             export_fixed_dt: Seconds(0.0),
         };
@@ -146,7 +146,7 @@ fn engine_tick_1000_frames_no_panic() {
         let ctx = TickContext {
             dt_seconds: Seconds(dt),
             realtime_now: Seconds(realtime),
-            pre_render_dt: dt as f32,
+            pre_render_dt: Seconds(dt),
             frame_count: i as u64,
             export_fixed_dt: Seconds(0.0),
         };
@@ -155,8 +155,8 @@ fn engine_tick_1000_frames_no_panic() {
     }
 
     // Just verify it doesn't panic and time advanced
-    assert!(engine.current_time() > 0.0);
-    assert!(engine.current_beat() > 0.0);
+    assert!(engine.current_time() > Seconds(0.0));
+    assert!(engine.current_beat() > Beats(0.0));
 }
 
 #[test]
@@ -166,11 +166,11 @@ fn engine_seek_updates_beat() {
     engine.initialize(project);
 
     // Seek to a specific time
-    engine.seek_to(30.0);
+    engine.seek_to(Seconds(30.0));
     // At 138 BPM, 30s = 69 beats
     let expected_beat = 30.0 * 138.0 / 60.0;
     assert!(
-        (engine.current_beat() - expected_beat).abs() < 0.1,
+        (engine.current_beat().0 - expected_beat).abs() < 0.1,
         "After seek to 30s at 138 BPM, expected ~{expected_beat} beats, got {}",
         engine.current_beat()
     );
@@ -185,10 +185,10 @@ fn engine_beat_time_conversion_roundtrip() {
     // Test beat → seconds → beat roundtrip
     let original_beat = 100.0_f32;
     let seconds = engine.beat_to_timeline_time(Beats::from_f32(original_beat));
-    let roundtrip_beat = engine.time_to_timeline_beat(seconds.as_f32());
+    let roundtrip_beat = engine.time_to_timeline_beat(seconds);
 
     assert!(
-        (roundtrip_beat - original_beat).abs() < 0.01,
+        (roundtrip_beat.0 as f32 - original_beat).abs() < 0.01,
         "Beat→seconds→beat roundtrip failed: {original_beat} → {seconds}s → {roundtrip_beat}"
     );
 }
@@ -215,7 +215,7 @@ fn engine_waypoints_stress_test() {
         let ctx = TickContext {
             dt_seconds: Seconds(dt),
             realtime_now: Seconds(realtime),
-            pre_render_dt: dt as f32,
+            pre_render_dt: Seconds(dt),
             frame_count: i as u64,
             export_fixed_dt: Seconds(0.0),
         };
@@ -224,7 +224,7 @@ fn engine_waypoints_stress_test() {
         realtime += dt;
     }
 
-    assert!(engine.current_time() > 8.0, "Should have ticked ~8.3 seconds");
+    assert!(engine.current_time() > Seconds(8.0), "Should have ticked ~8.3 seconds");
     // WAYPOINTS has clips starting early in the timeline, so we should have seen some
     assert!(total_ready > 0, "WAYPOINTS should have active clips in the first 8 seconds");
 }

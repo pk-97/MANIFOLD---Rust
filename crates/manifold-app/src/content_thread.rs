@@ -40,7 +40,7 @@ pub struct ContentThread {
     pub transport_controller: TransportController,
     pub gpu: GpuContext,
     pub frame_count: u64,
-    pub time_since_start: f32,
+    pub time_since_start: Seconds,
     pub last_data_version: u64,
     /// MIDI device input — routes hardware note events to ClipLauncher.
     pub midi_input: MidiInputController,
@@ -83,7 +83,7 @@ pub struct ContentThread {
     // ── MIDI device cache ──
     /// Cached MIDI device names, refreshed every ~2 seconds.
     pub cached_midi_device_names: Vec<String>,
-    pub last_midi_device_scan_time: f32,
+    pub last_midi_device_scan_time: Seconds,
 
     // ── Cached project snapshot (Arc avoids deep clone every modulation frame) ──
     pub cached_project_snapshot: Option<std::sync::Arc<manifold_core::project::Project>>,
@@ -250,10 +250,10 @@ impl ContentThread {
     fn tick_frame(&mut self, state_tx: &Sender<ContentState>) {
             let dt = self.timer.consume_tick();
             let realtime = self.timer.realtime_since_start();
-            self.time_since_start = realtime as f32;
+            self.time_since_start = Seconds(realtime);
 
             // Refresh MIDI device list every ~2 seconds
-            if self.time_since_start - self.last_midi_device_scan_time >= 2.0 {
+            if (self.time_since_start - self.last_midi_device_scan_time).0 >= 2.0 {
                 self.cached_midi_device_names =
                     manifold_playback::midi_clock_sync::MidiClockSyncController::available_source_names();
                 self.last_midi_device_scan_time = self.time_since_start;
@@ -305,7 +305,7 @@ impl ContentThread {
             let ctx = TickContext {
                 dt_seconds: Seconds(dt),
                 realtime_now: Seconds(realtime),
-                pre_render_dt: dt as f32,
+                pre_render_dt: Seconds(dt),
                 frame_count: self.frame_count,
                 export_fixed_dt: Seconds::ZERO,
             };
@@ -317,7 +317,7 @@ impl ContentThread {
                 let seconds_per_beat = if bpm > 0.0 { 60.0 / bpm } else { 0.5 };
                 self.osc_sender.late_update(
                     self.engine.is_playing(),
-                    self.engine.current_beat(),
+                    self.engine.current_beat().as_f32(),
                     seconds_per_beat,
                     realtime,
                     &mut self.sync_arbiter,
@@ -339,10 +339,10 @@ impl ContentThread {
             let beat = self.engine.current_beat();
             if let Some(p) = self.engine.project_mut() {
                 self.percussion_orchestrator.tick(
-                    self.time_since_start,
+                    self.time_since_start.as_f32(),
                     p,
                     &mut self.editing_service,
-                    beat,
+                    beat.as_f32(),
                 );
             }
 
@@ -656,7 +656,7 @@ impl ContentThread {
                 && !self.cached_perc_message.is_empty();
 
             let state = ContentState {
-                current_beat: self.engine.current_beat_f64(),
+                current_beat: self.engine.current_beat(),
                 current_time: self.engine.current_time(),
                 is_playing: self.engine.is_playing(),
                 is_recording: self.engine.is_recording(),
@@ -682,7 +682,7 @@ impl ContentThread {
                 midi_clock_enabled: self.transport_controller.midi_clock_sync.as_ref()
                     .is_some_and(|s| s.is_midi_clock_enabled()),
                 midi_clock_bpm: self.transport_controller.midi_clock_sync.as_ref()
-                    .map_or(120.0, |s| s.current_clock_bpm()),
+                    .map_or(Bpm(120.0), |s| Bpm(s.current_clock_bpm())),
                 midi_clock_position_display: self.cached_midi_clock_position.clone(),
                 midi_clock_receiving: self.transport_controller.midi_clock_sync.as_ref()
                     .is_some_and(|s| s.is_receiving_clock()),
@@ -873,7 +873,7 @@ impl ContentThread {
         if let Some(ref link) = self.transport_controller.link_sync {
             if link.is_link_enabled() {
                 let manifold_beat =
-                    self.engine.time_to_timeline_beat(self.engine.current_time()) as f64;
+                    self.engine.time_to_timeline_beat(self.engine.current_time()).0;
                 self.link_beat_offset = link.current_beat.0 - manifold_beat;
             } else {
                 self.link_beat_offset = 0.0;
@@ -962,16 +962,16 @@ impl ContentThread {
                     // Port of C# ApplyResolvedTempo lines 1117-1122.
                     tempo_map_changed = self.tempo_recorder.try_record_tempo_point(
                         &mut project.tempo_map,
-                        current_beat,
-                        current_time,
+                        current_beat.as_f32(),
+                        current_time.as_f32(),
                         bpm,
                         source,
                     );
                     if tempo_map_changed {
                         self.tempo_recorder.append_tempo_change(
                             &mut project.recording_provenance,
-                            current_time,
-                            current_beat,
+                            current_time.as_f32(),
+                            current_beat.as_f32(),
                             bpm,
                             source,
                         );
@@ -1004,7 +1004,7 @@ impl ContentThread {
             // Re-derive beat from time after tempo map change.
             // Port of C# ApplyResolvedTempo line 1139.
             let new_beat = self.engine.time_to_timeline_beat(current_time);
-            self.engine.set_beat(Beats::from_f32(new_beat));
+            self.engine.set_beat(new_beat);
         }
     }
 

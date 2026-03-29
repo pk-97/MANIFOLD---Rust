@@ -182,7 +182,7 @@ pub(super) fn dispatch_layer(
             DispatchResult::handled()
         }
 PanelAction::NewClipClicked(idx) => {
-            let beat = Beats(content_state.current_beat);
+            let beat = content_state.current_beat;
             {
                 let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, Beats(4.0));
                 { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }
@@ -190,7 +190,7 @@ PanelAction::NewClipClicked(idx) => {
             DispatchResult::structural()
         }
 PanelAction::AddGenClipClicked(idx) => {
-            let beat = Beats(content_state.current_beat);
+            let beat = content_state.current_beat;
             {
                 let (cmd, _) = EditingService::create_clip_at_position(project, beat, *idx, Beats(4.0));
                 { ContentCommand::send(content_tx, ContentCommand::Execute(cmd)); }

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use manifold_core::types::ClockAuthority;
-use manifold_core::Beats;
+use manifold_core::{Beats, Seconds};
 
 use crate::sync::{SyncArbiter, SyncArbiterTarget, SyncTarget};
 use crate::sync_source::SyncSource;
@@ -269,7 +269,7 @@ pub struct MidiClockSyncController {
     last_observed_sixteenths: i32,
     last_observed_clock_tick: i32,
     last_observed_playing: bool,
-    last_clock_activity_time: f32,
+    last_clock_activity_time: Seconds,
     cached_display_sixteenths: i32,
 
     // BPM estimation
@@ -281,7 +281,7 @@ pub struct MidiClockSyncController {
     // Transport time integrator
     transport_time_integrator_initialized: bool,
     last_transport_absolute_tick: i32,
-    integrated_clock_time_seconds: f32,
+    integrated_clock_time_seconds: Seconds,
 
     // midir receiver (replaces Unity's MidiClock native plugin instance)
     receiver: Option<MidiClockReceiver>,
@@ -309,7 +309,7 @@ impl MidiClockSyncController {
             last_observed_sixteenths: 0,
             last_observed_clock_tick: 0,
             last_observed_playing: false,
-            last_clock_activity_time: -999.0,
+            last_clock_activity_time: Seconds(-999.0),
             cached_display_sixteenths: -1,
 
             last_tempo_abs_tick: -1,
@@ -319,7 +319,7 @@ impl MidiClockSyncController {
 
             transport_time_integrator_initialized: false,
             last_transport_absolute_tick: -1,
-            integrated_clock_time_seconds: 0.0,
+            integrated_clock_time_seconds: Seconds::ZERO,
 
             receiver: None,
         }
@@ -403,7 +403,7 @@ impl MidiClockSyncController {
         self.last_observed_sixteenths = pos_sixteenths;
         self.last_observed_clock_tick = clock_tick;
         self.last_observed_playing = is_playing;
-        self.last_clock_activity_time = if has_received_clock { 0.0 } else { -999.0 };
+        self.last_clock_activity_time = if has_received_clock { Seconds::ZERO } else { Seconds(-999.0) };
 
         self.last_is_playing = false;
         self.last_position_sixteenths = -1;
@@ -415,7 +415,7 @@ impl MidiClockSyncController {
         // Transport time integrator will be initialized on first SyncPositionToPlayback call.
         self.transport_time_integrator_initialized = false;
         self.last_transport_absolute_tick = -1;
-        self.integrated_clock_time_seconds = 0.0;
+        self.integrated_clock_time_seconds = Seconds::ZERO;
         self.is_midi_clock_enabled = true;
 
         let source_name = MidiClockReceiver::source_name(source_index);
@@ -442,13 +442,13 @@ impl MidiClockSyncController {
         self.is_receiving_clock = false;
         self.current_position_display = "---".into();
         self.last_is_playing = false;
-        self.last_clock_activity_time = -999.0;
+        self.last_clock_activity_time = Seconds(-999.0);
         self.hard_seek_count = 0;
         self.last_hard_seek_delta_seconds = 0.0;
         self.reset_bpm_estimator(0.0, 0);
         self.transport_time_integrator_initialized = false;
         self.last_transport_absolute_tick = -1;
-        self.integrated_clock_time_seconds = 0.0;
+        self.integrated_clock_time_seconds = Seconds::ZERO;
 
         // Drop connection — equivalent to MidiClock.Shutdown() in Unity.
         if let Some(mut receiver) = self.receiver.take() {
@@ -465,7 +465,7 @@ impl MidiClockSyncController {
     /// as fields. Rust passes them as arguments to avoid unsafe shared mutable state.
     pub fn update(
         &mut self,
-        now: f32,
+        now: Seconds,
         arbiter: &mut SyncArbiter,
         arb_target: &mut dyn SyncArbiterTarget,
         sync_target: &dyn SyncTarget,
@@ -495,7 +495,7 @@ impl MidiClockSyncController {
 
         // Activity timeout check (port of C# lines 239-240).
         let was_receiving = self.is_receiving_clock;
-        let has_recent_clock_activity = (now - self.last_clock_activity_time) <= self.clock_signal_timeout;
+        let has_recent_clock_activity = (now - self.last_clock_activity_time).0 as f32 <= self.clock_signal_timeout;
         self.is_receiving_clock = has_recent_clock_activity;
 
         // Log sync state transitions for live monitoring.
@@ -511,7 +511,7 @@ impl MidiClockSyncController {
         let manifold_owns = arbiter.manifold_owns_playback;
 
         // BPM estimation from clock ticks (port of C# line 247).
-        self.update_bpm_from_clock(now, pos_sixteenths, clock_tick, has_recent_clock_activity, is_playing);
+        self.update_bpm_from_clock(now.as_f32(), pos_sixteenths, clock_tick, has_recent_clock_activity, is_playing);
 
         // Suppress local deltaTime when CLK is active authority and playing (port of C# lines 251-253).
         arbiter.set_external_time_sync(
@@ -569,7 +569,7 @@ impl MidiClockSyncController {
     pub fn reset_transport_time_integrator(&mut self) {
         self.transport_time_integrator_initialized = false;
         self.last_transport_absolute_tick = -1;
-        self.integrated_clock_time_seconds = 0.0;
+        self.integrated_clock_time_seconds = Seconds::ZERO;
     }
 
     // ── BPM estimation ───────────────────────────────────────────────
@@ -666,12 +666,12 @@ impl MidiClockSyncController {
         // Include sub-sixteenth tick for 24 PPQN precision (port of C# lines 375-377).
         // 6 ticks per sixteenth, 4 sixteenths per beat.
         let clock_beat = (pos_sixteenths as f32 + clock_tick as f32 / 6.0) / 4.0;
-        let clock_time = sync_target.timeline_beat_to_time(Beats::from_f32(clock_beat)).as_f32();
+        let clock_time = sync_target.timeline_beat_to_time(Beats::from_f32(clock_beat));
         let mut is_transport_jump = false;
 
         if !self.transport_time_integrator_initialized {
             // First call: anchor integrator (port of C# lines 380-383).
-            self.integrated_clock_time_seconds = clock_time.max(0.0);
+            self.integrated_clock_time_seconds = clock_time.max(Seconds::ZERO);
             self.last_transport_absolute_tick = absolute_tick;
             self.transport_time_integrator_initialized = true;
         } else {
@@ -690,20 +690,20 @@ impl MidiClockSyncController {
         let delta = (clock_time - current_time).abs();
 
         if sync_target.is_playing() {
-            if !is_transport_jump && delta < 0.5 {
+            if !is_transport_jump && delta < Seconds(0.5) {
                 // NudgeTime for smooth per-frame tracking (port of C# line 407).
                 arbiter.nudge_time(ClockAuthority::MidiClock, authority, arb_target, clock_time);
             } else {
                 // Large jump via full Seek (port of C# lines 412-419).
                 self.hard_seek_count += 1;
-                self.last_hard_seek_delta_seconds = delta;
+                self.last_hard_seek_delta_seconds = delta.as_f32();
                 arbiter.seek(ClockAuthority::MidiClock, authority, arb_target, clock_time);
             }
         } else {
             // Not playing: Seek on position change (port of C# lines 425-432).
             if current_sixteenths != self.last_position_sixteenths {
                 self.hard_seek_count += 1;
-                self.last_hard_seek_delta_seconds = delta;
+                self.last_hard_seek_delta_seconds = delta.as_f32();
                 arbiter.seek(ClockAuthority::MidiClock, authority, arb_target, clock_time);
             }
         }

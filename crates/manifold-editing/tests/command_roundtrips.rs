@@ -378,7 +378,7 @@ fn clear_tempo_map_undo_roundtrip() {
     let old_points = project.tempo_map.clone_points();
     assert_eq!(old_points.len(), 2);
 
-    let mut cmd = ClearTempoMapCommand::new(old_points, 120.0);
+    let mut cmd = ClearTempoMapCommand::new(old_points, Bpm(120.0));
 
     cmd.execute(&mut project);
     assert_eq!(project.tempo_map.point_count(), 1); // just the beat-zero point
@@ -398,7 +398,7 @@ fn restore_tempo_lane_undo_roundtrip() {
         manifold_core::tempo::TempoPoint { beat: Beats(4.0), bpm: Bpm(140.0), source: TempoPointSource::Recorded, recorded_at_seconds: Seconds(2.0) },
     ];
 
-    let mut cmd = RestoreRecordedTempoLaneCommand::new(120.0, old_points, new_points);
+    let mut cmd = RestoreRecordedTempoLaneCommand::new(Bpm(120.0), old_points, new_points);
 
     cmd.execute(&mut project);
     assert_eq!(project.tempo_map.point_count(), 2);

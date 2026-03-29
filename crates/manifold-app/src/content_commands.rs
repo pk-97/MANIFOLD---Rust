@@ -89,8 +89,8 @@ impl ContentThread {
                 self.cache_link_beat_offset();
             }
             ContentCommand::SeekToBeat(beat) => {
-                let time = self.engine.beat_to_timeline_time(Beats::from_f32(beat));
-                self.engine.seek_to(time.as_f32());
+                let time = self.engine.beat_to_timeline_time(beat);
+                self.engine.seek_to(time);
                 self.cache_link_beat_offset();
             }
             ContentCommand::SetRecording(rec) => {
@@ -225,7 +225,7 @@ impl ContentThread {
             // ── Settings ───────────────────────────────────────────
             ContentCommand::SetBpm(bpm) => {
                 if let Some(p) = self.engine.project_mut() {
-                    p.settings.bpm = manifold_core::Bpm(bpm as f32);
+                    p.settings.bpm = bpm;
                 }
             }
             ContentCommand::SetFrameRate(fps) => {
@@ -259,7 +259,7 @@ impl ContentThread {
                     self.osc_sender.enable_sender(
                         self.transport_controller.osc_sender_port,
                         self.engine.is_playing(),
-                        Beats::from_f32(self.engine.current_beat()),
+                        self.engine.current_beat(),
                         Seconds(realtime),
                     );
                 } else {
@@ -365,7 +365,7 @@ impl ContentThread {
             ContentCommand::PasteClips { target_beat, target_layer, result_tx } => {
                 if let Some(p) = self.engine.project_mut() {
                     let spb = 60.0 / p.settings.bpm.0.max(1.0);
-                    let result = self.editing_service.paste_clips(p, manifold_core::Beats::from_f32(target_beat), target_layer, spb);
+                    let result = self.editing_service.paste_clips(p, target_beat, target_layer, spb);
                     if !result.commands.is_empty() {
                         self.editing_service.execute_batch(result.commands, "Paste clips".into(), p);
                     }
@@ -385,7 +385,7 @@ impl ContentThread {
                         Some(path),
                         p,
                         &mut self.editing_service,
-                        beat,
+                        beat.as_f32(),
                         beats_per_bar,
                     );
                 }
@@ -408,7 +408,7 @@ impl ContentThread {
                     self.percussion_orchestrator
                         .calibrate_imported_percussion_downbeat_at_playhead(
                             p, &mut self.editing_service,
-                            playhead_beat, beats_per_bar, true,
+                            playhead_beat.as_f32(), beats_per_bar, true,
                         );
                 }
             }
@@ -416,7 +416,7 @@ impl ContentThread {
                 if let Some(p) = self.engine.project_mut() {
                     self.percussion_orchestrator
                         .nudge_imported_percussion_alignment(
-                            delta_beats, p, &mut self.editing_service, true,
+                            delta_beats.as_f32(), p, &mut self.editing_service, true,
                         );
                 }
             }

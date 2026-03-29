@@ -20,7 +20,7 @@ const TICKS_PER_SIXTEENTH: i32 = MIDI_CLOCK_TICKS_PER_BEAT / 4; // 6
 /// Port of C# ILiveClipHost.cs.
 pub trait LiveClipHost {
     fn current_beat(&self) -> Beats;
-    fn current_time(&self) -> f32;
+    fn current_time(&self) -> Seconds;
     fn is_recording(&self) -> bool;
     fn is_playing(&self) -> bool;
     fn show_debug_logs(&self) -> bool;
@@ -34,7 +34,7 @@ pub trait LiveClipHost {
     fn invalidate_lookahead_prewarm(&mut self);
     fn register_clip_lookup(&mut self, clip_id: &str, clip: &TimelineClip);
     fn record_command(&mut self, cmd: Box<dyn Command>);
-    fn beat_to_timeline_time(&self, beat: Beats) -> f32;
+    fn beat_to_timeline_time(&self, beat: Beats) -> Seconds;
 }
 
 /// Queued launch waiting for a target tick.
@@ -60,10 +60,10 @@ struct RecordingClipStartInfo {
     video_clip_id: String,
     layer_index: i32,
     midi_note: i32,
-    start_time_seconds: f32,
+    start_time_seconds: Seconds,
     start_beat: Beats,
     start_absolute_tick: i32,
-    start_bpm: f32,
+    start_bpm: Bpm,
     start_tempo_source: TempoPointSource,
 }
 
@@ -804,12 +804,12 @@ impl LiveClipManager {
         }
 
         let start_beat = clip.start_beat;
-        let start_bpm = host.get_bpm_at_beat(start_beat);
+        let start_bpm = Bpm(host.get_bpm_at_beat(start_beat));
         let start_source = host.get_tempo_source_at_beat(start_beat);
 
         // Port of C# TempoRecorder.CaptureProjectBpm (line 179).
         project.recording_provenance
-            .set_recorded_project_bpm(Bpm(start_bpm), start_source, false);
+            .set_recorded_project_bpm(start_bpm, start_source, false);
 
         // Resolve start tick. Port of C# TempoRecorder.TrackClipStart lines 181-183.
         let resolved_start_tick = if clip.start_absolute_tick >= 0 {
@@ -879,13 +879,13 @@ impl LiveClipManager {
             layer_index: saved_layer.max(0),
             layer_id: None,
             midi_note: resolved_midi_note,
-            start_time_seconds: BeatQuantizer::quantize_time_seconds(Seconds::from_f32(start.start_time_seconds)).as_f32(),
-            end_time_seconds: BeatQuantizer::quantize_time_seconds(Seconds::from_f32(end_time)).as_f32(),
+            start_time_seconds: BeatQuantizer::quantize_time_seconds(start.start_time_seconds).as_f32(),
+            end_time_seconds: BeatQuantizer::quantize_time_seconds(end_time).as_f32(),
             start_beat: BeatQuantizer::quantize_beat(start.start_beat),
             end_beat: BeatQuantizer::quantize_beat(Beats::from_f32(end_beat)),
             start_absolute_tick: start.start_absolute_tick,
             end_absolute_tick: resolved_end_tick,
-            start_bpm: Bpm(BeatQuantizer::quantize_bpm(start.start_bpm)),
+            start_bpm: Bpm(BeatQuantizer::quantize_bpm(start.start_bpm.0)),
             end_bpm: Bpm(BeatQuantizer::quantize_bpm(end_bpm)),
             start_tempo_source: start.start_tempo_source,
             end_tempo_source: end_source,

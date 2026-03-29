@@ -12,7 +12,7 @@
 //! on manifold-editing.
 
 use std::collections::HashSet;
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{Beats, ClipId, LayerId, Seconds};
 use manifold_core::selection::SelectionRegion;
 use crate::node::Vec2;
 
@@ -93,13 +93,13 @@ pub trait TimelineEditingHost {
     // for operations that need the full screen→content transform.
 
     /// Convert a screen position to a beat value. Unity: ScreenPositionToBeat(Vector2).
-    fn screen_position_to_beat(&self, pos: Vec2) -> f32;
+    fn screen_position_to_beat(&self, pos: Vec2) -> Beats;
 
     /// Resolve a screen position to a layer index. Unity: GetLayerIndexAtScreenPosition(Vector2).
     fn get_layer_index_at_position(&self, pos: Vec2) -> Option<usize>;
 
     /// Convert a beat to seconds. Unity: BeatToTime(float).
-    fn beat_to_time(&self, beat: f32) -> f32;
+    fn beat_to_time(&self, beat: Beats) -> Seconds;
 
     // ── Clip operations ─────────────────────────────────────────────
 
@@ -107,7 +107,7 @@ pub trait TimelineEditingHost {
     /// Beat should be pre-snapped by the caller. `grid_step` is the current
     /// grid interval in beats (used as the new clip's default duration).
     /// Unity: CreateClipAtPosition(float, int).
-    fn create_clip_at_position(&mut self, beat: f32, layer: usize, grid_step: f32) -> Option<ClipId>;
+    fn create_clip_at_position(&mut self, beat: Beats, layer: usize, grid_step: Beats) -> Option<ClipId>;
 
     /// Move a clip to a different layer (cross-layer drag).
     /// Unity: MoveClipToLayer(TimelineClip, int).
@@ -124,7 +124,7 @@ pub trait TimelineEditingHost {
 
     /// Show track/layer context menu on empty area right-click.
     /// Unity: InputHandler.HandleEmptyAreaRightClick → ShowLayerContextMenu.
-    fn on_track_right_click(&mut self, beat: f32, layer_index: usize, screen_pos: Vec2);
+    fn on_track_right_click(&mut self, beat: Beats, layer_index: usize, screen_pos: Vec2);
 
     /// Inspect a layer (shows layer inspector). Unity: InspectLayer(int).
     fn inspect_layer(&mut self, layer_index: usize);
@@ -158,7 +158,7 @@ pub trait TimelineEditingHost {
     // ── Playback ────────────────────────────────────────────────────
 
     /// Scrub the playhead to a time in seconds. Unity: ScrubToTime(float).
-    fn scrub_to_time(&mut self, time: f32);
+    fn scrub_to_time(&mut self, time: Seconds);
 
     // ── Overlap enforcement ─────────────────────────────────────────
 
@@ -185,7 +185,7 @@ pub trait TimelineEditingHost {
     fn record_move(
         &mut self,
         clip_id: &str,
-        old_start: f32, new_start: f32,
+        old_start: Beats, new_start: Beats,
         old_layer: usize, new_layer: usize,
     );
 
@@ -193,9 +193,9 @@ pub trait TimelineEditingHost {
     fn record_trim(
         &mut self,
         clip_id: &str,
-        old_start: f32, new_start: f32,
-        old_duration: f32, new_duration: f32,
-        old_in_point: f32, new_in_point: f32,
+        old_start: Beats, new_start: Beats,
+        old_duration: Beats, new_duration: Beats,
+        old_in_point: Seconds, new_in_point: Seconds,
     );
 
     /// Commit the current command batch as a single undo entry.
@@ -205,15 +205,15 @@ pub trait TimelineEditingHost {
 
     /// Set a clip's start beat. Used during move drag to update position live.
     /// Unity: movingClip.StartBeat = ... (InteractionOverlay line 533).
-    fn set_clip_start_beat(&mut self, clip_id: &str, beat: f32);
+    fn set_clip_start_beat(&mut self, clip_id: &str, beat: Beats);
 
     /// Set a clip's trim state. Used during trim drag to update live.
     /// Unity: trimClip.StartBeat/DurationBeats/InPoint = ... (lines 554-557).
-    fn set_clip_trim(&mut self, clip_id: &str, start_beat: f32, duration_beats: f32, in_point: f32);
+    fn set_clip_trim(&mut self, clip_id: &str, start_beat: Beats, duration_beats: Beats, in_point: Seconds);
 
     // ── Video metadata ──────────────────────────────────────────────
 
     /// Maximum clip duration in beats based on video source length and InPoint.
     /// Returns 0 if unavailable. Unity: GetMaxDurationBeats (InteractionOverlay line 960-971).
-    fn get_max_duration_beats(&self, clip_id: &str) -> f32;
+    fn get_max_duration_beats(&self, clip_id: &str) -> Beats;
 }

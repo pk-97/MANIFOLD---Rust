@@ -1,4 +1,4 @@
-use manifold_core::{Beats};
+use manifold_core::{Beats, Seconds};
 use manifold_core::clip::TimelineClip;
 use manifold_core::project::Project;
 use manifold_core::layer::Layer;
@@ -12,7 +12,7 @@ use std::collections::HashMap;
 /// Mock host for tests.
 struct MockHost {
     beat: Beats,
-    time: f32,
+    time: Seconds,
     bpm: f32,
     recording: bool,
     playing: bool,
@@ -28,7 +28,7 @@ impl MockHost {
     fn new() -> Self {
         Self {
             beat: Beats::ZERO,
-            time: 0.0,
+            time: Seconds::ZERO,
             bpm: 120.0,
             recording: false,
             playing: true,
@@ -55,7 +55,7 @@ impl MockHost {
 
 impl LiveClipHost for MockHost {
     fn current_beat(&self) -> Beats { self.beat }
-    fn current_time(&self) -> f32 { self.time }
+    fn current_time(&self) -> Seconds { self.time }
     fn is_recording(&self) -> bool { self.recording }
     fn is_playing(&self) -> bool { self.playing }
     fn show_debug_logs(&self) -> bool { false }
@@ -75,8 +75,8 @@ impl LiveClipHost for MockHost {
     fn record_command(&mut self, cmd: Box<dyn Command>) {
         self.recorded_commands.push(cmd);
     }
-    fn beat_to_timeline_time(&self, beat: Beats) -> f32 {
-        beat.as_f32() * 60.0 / self.bpm
+    fn beat_to_timeline_time(&self, beat: Beats) -> Seconds {
+        Seconds(beat.0 * 60.0 / self.bpm as f64)
     }
 }
 

@@ -240,13 +240,13 @@ impl PercussionImportService {
 
             import_provenance.push(ImportedPercussionClipPlacement {
                 clip_id: clip_id.into(),
-                source_time_seconds: placement.source_time_seconds,
-                start_beat_offset: options.map_or(0.0, |o| o.start_beat_offset),
+                source_time_seconds: Seconds(placement.source_time_seconds as f64),
+                start_beat_offset: options.map_or(Beats::ZERO, |o| o.start_beat_offset),
                 quantize_to_grid: options.is_some_and(|o| o.quantize_to_grid),
-                quantize_step_beats: options.map_or(0.0, |o| o.quantize_step_beats),
-                alignment_offset_beats: 0.0,
+                quantize_step_beats: options.map_or(Beats::ZERO, |o| o.quantize_step_beats),
+                alignment_offset_beats: Beats::ZERO,
                 alignment_slope_beats_per_second: 0.0,
-                alignment_pivot_seconds: 0.0,
+                alignment_pivot_seconds: Seconds::ZERO,
             });
         }
 
@@ -324,8 +324,8 @@ impl PercussionImportService {
         let old_tempo_points = project.tempo_map.clone_points();
 
         let mut change_bpm_command = ChangeBpmCommand::with_tempo_map(
-            current_bpm,
-            detected_bpm,
+            Bpm(current_bpm),
+            Bpm(detected_bpm),
             TempoPointSource::Recorded,
             flatten_tempo_map,
             old_tempo_points,

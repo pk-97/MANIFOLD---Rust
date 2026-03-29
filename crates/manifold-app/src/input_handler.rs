@@ -4,7 +4,7 @@
 //! Plain Rust struct — NOT a MonoBehaviour equivalent.
 //! Calls through TimelineInputHost trait for all operations that need
 //! engine/editing/UI access. Owns zoom state and inspector focus.
-use manifold_core::ClipId;
+use manifold_core::{Beats, ClipId, Seconds};
 use manifold_ui::input::Modifiers;
 use manifold_ui::timeline_input_host::TimelineInputHost;
 
@@ -250,21 +250,21 @@ impl InputHandler {
 
         // ── Space — Play/Pause (Unity line 352) ──
         if matches!(logical_key, Key::Named(NamedKey::Space)) && m.is_none() {
-            let cursor_beat = host.insert_cursor_beat();
+            let cursor_beat = host.insert_cursor_beat().map(Beats::from_f32);
             host.play_pause(cursor_beat);
             return true;
         }
 
         // ── Home — seek to start (Unity line 375) ──
         if matches!(logical_key, Key::Named(NamedKey::Home)) && m.is_none() {
-            host.seek_to(0.0);
+            host.seek_to(Seconds::ZERO);
             return true;
         }
 
         // ── End — seek to end (Unity line 380) ──
         if matches!(logical_key, Key::Named(NamedKey::End)) && m.is_none() {
             // Host computes end time from project timeline
-            host.seek_to(f32::MAX); // sentinel — host clamps to actual end
+            host.seek_to(Seconds(f64::MAX)); // sentinel — host clamps to actual end
             return true;
         }
 

@@ -10,7 +10,7 @@ use crate::project::Project;
 use crate::settings::ProjectSettings;
 use crate::types::QuantizeMode;
 use crate::generator_type_id::GeneratorTypeId;
-use crate::units::Beats;
+use crate::units::{Beats, Bpm, Seconds};
 
 // ─── StemMode ───
 
@@ -26,23 +26,23 @@ pub enum StemMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalSettings {
-    pub min_bpm: f32,
-    pub max_bpm: f32,
-    pub onset_compensation_seconds: f32,
+    pub min_bpm: Bpm,
+    pub max_bpm: Bpm,
+    pub onset_compensation_seconds: Seconds,
     pub quantize_to_grid: bool,
     pub bpm_auto_apply_confidence: f32,
-    pub default_clip_duration_beats: f32,
+    pub default_clip_duration_beats: Beats,
 }
 
 impl Default for GlobalSettings {
     fn default() -> Self {
         Self {
-            min_bpm: 55.0,
-            max_bpm: 215.0,
-            onset_compensation_seconds: 0.010,
+            min_bpm: Bpm(55.0),
+            max_bpm: Bpm(215.0),
+            onset_compensation_seconds: Seconds(0.010),
             quantize_to_grid: true,
             bpm_auto_apply_confidence: 0.72,
-            default_clip_duration_beats: 0.75,
+            default_clip_duration_beats: Beats(0.75),
         }
     }
 }
@@ -80,7 +80,7 @@ impl Default for DemucsSettings {
 pub struct KickSettings {
     pub generator: GeneratorTypeId,
     pub layer_index: i32,
-    pub clip_duration_beats: f32,
+    pub clip_duration_beats: Beats,
     pub min_confidence: f32,
     pub band_hz: [f32; 2],
     pub hat_suppression_window: f32,
@@ -91,7 +91,7 @@ impl Default for KickSettings {
         Self {
             generator: GeneratorTypeId::WIREFRAME_ZOO,
             layer_index: 0,
-            clip_duration_beats: 0.5,
+            clip_duration_beats: Beats(0.5),
             min_confidence: 0.0,
             band_hz: [28.0, 180.0],
             hat_suppression_window: 0.020,
@@ -103,7 +103,7 @@ impl Default for KickSettings {
 pub struct SnareSettings {
     pub generator: GeneratorTypeId,
     pub layer_index: i32,
-    pub clip_duration_beats: f32,
+    pub clip_duration_beats: Beats,
     pub min_confidence: f32,
     pub band_hz: [f32; 2],
     pub hat_suppression_window: f32,
@@ -117,7 +117,7 @@ impl Default for SnareSettings {
         Self {
             generator: GeneratorTypeId::BASIC_SHAPES_SNAP,
             layer_index: 1,
-            clip_duration_beats: 0.75,
+            clip_duration_beats: Beats(0.75),
             min_confidence: 0.0,
             band_hz: [180.0, 2800.0],
             hat_suppression_window: 0.010,
@@ -132,7 +132,7 @@ impl Default for SnareSettings {
 pub struct PercSettings {
     pub generator: GeneratorTypeId,
     pub layer_index: i32,
-    pub clip_duration_beats: f32,
+    pub clip_duration_beats: Beats,
     pub min_confidence: f32,
     pub band_hz: [f32; 2],
     pub weight_in_mix: f32,
@@ -143,7 +143,7 @@ impl Default for PercSettings {
         Self {
             generator: GeneratorTypeId::PLASMA,
             layer_index: 3,
-            clip_duration_beats: 0.50,
+            clip_duration_beats: Beats(0.50),
             min_confidence: 0.0,
             band_hz: [2800.0, 9000.0],
             weight_in_mix: 0.50,
@@ -155,7 +155,7 @@ impl Default for PercSettings {
 pub struct HatSettings {
     pub generator: GeneratorTypeId,
     pub layer_index: i32,
-    pub clip_duration_beats: f32,
+    pub clip_duration_beats: Beats,
     pub min_confidence: f32,
     pub band_hz: [f32; 2],
     pub weight_in_mix: f32,
@@ -166,7 +166,7 @@ impl Default for HatSettings {
         Self {
             generator: GeneratorTypeId::OSCILLOSCOPE_XY,
             layer_index: 4,
-            clip_duration_beats: 0.50,
+            clip_duration_beats: Beats(0.50),
             min_confidence: 0.0,
             band_hz: [5000.0, 16000.0],
             weight_in_mix: 0.45,
@@ -179,7 +179,7 @@ pub struct BassSettings {
     pub generator: GeneratorTypeId,
     pub layer_index: i32,
     pub min_confidence: f32,
-    pub duration_threshold_sec: f32,
+    pub duration_threshold_sec: Seconds,
 }
 
 impl Default for BassSettings {
@@ -188,7 +188,7 @@ impl Default for BassSettings {
             generator: GeneratorTypeId::PARAMETRIC_SURFACE,
             layer_index: 8,
             min_confidence: 0.0,
-            duration_threshold_sec: 1.7144,
+            duration_threshold_sec: Seconds(1.7144),
         }
     }
 }
@@ -231,7 +231,7 @@ impl Default for SynthSettings {
 pub struct VocalSettings {
     pub generator: GeneratorTypeId,
     pub layer_index: i32,
-    pub clip_duration_beats: f32,
+    pub clip_duration_beats: Beats,
     pub min_confidence: f32,
     pub chest_band_hz: [f32; 2],
     pub formant_band_hz: [f32; 2],
@@ -246,7 +246,7 @@ impl Default for VocalSettings {
         Self {
             generator: GeneratorTypeId::LISSAJOUS,
             layer_index: 5,
-            clip_duration_beats: 0.50,
+            clip_duration_beats: Beats(0.50),
             min_confidence: 0.0,
             chest_band_hz: [80.0, 500.0],
             formant_band_hz: [500.0, 3000.0],
@@ -301,7 +301,7 @@ pub struct AlgorithmSettings {
     pub grid_edge_coverage_weight: f32,
     pub grid_rel_var_scale: f32,
     pub synthetic_grid_penalty: f32,
-    pub downbeat_tolerance: f32,
+    pub downbeat_tolerance: Beats,
     pub downbeat_min_agreement: f32,
     pub non_downbeat_weight: f32,
     pub adtof_kick_threshold: f32,
@@ -350,7 +350,7 @@ impl Default for AlgorithmSettings {
             grid_edge_coverage_weight: 0.15,
             grid_rel_var_scale: 5.5,
             synthetic_grid_penalty: 0.72,
-            downbeat_tolerance: 0.120,
+            downbeat_tolerance: Beats(0.120),
             downbeat_min_agreement: 0.40,
             non_downbeat_weight: -0.18,
             adtof_kick_threshold: 0.12,
@@ -403,13 +403,13 @@ impl PercussionPipelineSettings {
     pub fn build_import_options(
         &self,
         project: &Project,
-        start_beat_offset: f32,
+        start_beat_offset: Beats,
     ) -> PercussionImportOptions {
         let mut options = PercussionImportOptions {
-            start_beat_offset: start_beat_offset.max(0.0),
+            start_beat_offset: start_beat_offset.max(Beats::ZERO),
             quantize_to_grid: self.global.quantize_to_grid,
             quantize_step_beats: resolve_default_quantize_step(&project.settings),
-            default_clip_duration_beats: Beats::from_f32(self.global.default_clip_duration_beats),
+            default_clip_duration_beats: self.global.default_clip_duration_beats,
             onset_compensation_seconds: self.global.onset_compensation_seconds,
             minimum_energy_gate: 0.0,
             bindings: Vec::with_capacity(9),
@@ -420,7 +420,7 @@ impl PercussionPipelineSettings {
             self.kick.layer_index,
             None,
             self.kick.generator.clone(),
-            Beats::from_f32(self.kick.clip_duration_beats),
+            self.kick.clip_duration_beats,
             self.kick.min_confidence,
         ));
 
@@ -429,7 +429,7 @@ impl PercussionPipelineSettings {
             self.snare.layer_index,
             None,
             self.snare.generator.clone(),
-            Beats::from_f32(self.snare.clip_duration_beats),
+            self.snare.clip_duration_beats,
             self.snare.min_confidence,
         ));
 
@@ -438,7 +438,7 @@ impl PercussionPipelineSettings {
             self.perc.layer_index,
             None,
             self.perc.generator.clone(),
-            Beats::from_f32(self.perc.clip_duration_beats),
+            self.perc.clip_duration_beats,
             self.perc.min_confidence,
         ));
 
@@ -447,7 +447,7 @@ impl PercussionPipelineSettings {
             self.hat.layer_index,
             None,
             self.hat.generator.clone(),
-            Beats::from_f32(self.hat.clip_duration_beats),
+            self.hat.clip_duration_beats,
             self.hat.min_confidence,
         ));
 
@@ -456,7 +456,7 @@ impl PercussionPipelineSettings {
             self.vocal.layer_index,
             None,
             self.vocal.generator.clone(),
-            Beats::from_f32(self.vocal.clip_duration_beats),
+            self.vocal.clip_duration_beats,
             self.vocal.min_confidence,
         ));
 
@@ -640,13 +640,13 @@ pub struct PercussionImportOptionsFactory;
 
 impl PercussionImportOptionsFactory {
     /// Port of Unity PercussionImportOptionsFactory.CreateDefault(Project, float).
-    pub fn create_default(project: &Project, start_beat_offset: f32) -> PercussionImportOptions {
+    pub fn create_default(project: &Project, start_beat_offset: Beats) -> PercussionImportOptions {
         let mut options = PercussionImportOptions {
-            start_beat_offset: start_beat_offset.max(0.0),
+            start_beat_offset: start_beat_offset.max(Beats::ZERO),
             quantize_to_grid: true,
             quantize_step_beats: resolve_default_quantize_step(&project.settings),
             default_clip_duration_beats: Beats(0.75),
-            onset_compensation_seconds: 0.010,
+            onset_compensation_seconds: Seconds(0.010),
             minimum_energy_gate: 0.0,
             bindings: Vec::with_capacity(8),
         };
@@ -691,7 +691,7 @@ impl PercussionImportOptionsFactory {
     pub fn create_default_with_settings(
         project: &Project,
         settings: Option<&PercussionPipelineSettings>,
-        start_beat_offset: f32,
+        start_beat_offset: Beats,
     ) -> PercussionImportOptions {
         match settings {
             Some(s) => s.build_import_options(project, start_beat_offset),
@@ -701,10 +701,10 @@ impl PercussionImportOptionsFactory {
 }
 
 /// Shared helper for resolving the default quantize step from project settings.
-fn resolve_default_quantize_step(settings: &ProjectSettings) -> f32 {
+fn resolve_default_quantize_step(settings: &ProjectSettings) -> Beats {
     match settings.quantize_mode {
-        QuantizeMode::Off | QuantizeMode::QuarterBeat => 0.25,
-        QuantizeMode::Beat => 1.0,
-        QuantizeMode::Bar => (settings.time_signature_numerator as f32).max(1.0),
+        QuantizeMode::Off | QuantizeMode::QuarterBeat => Beats(0.25),
+        QuantizeMode::Beat => Beats(1.0),
+        QuantizeMode::Bar => Beats((settings.time_signature_numerator as f64).max(1.0)),
     }
 }

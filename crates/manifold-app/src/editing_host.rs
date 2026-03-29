@@ -6,7 +6,7 @@
 //! The wrapper struct `AppEditingHost` borrows individual Application fields
 //! to avoid borrowing the entire Application — this lets the overlay
 //! simultaneously borrow ui_root and selection from Application.
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{Beats, ClipId, LayerId, Seconds};
 use std::collections::HashSet;
 
 use manifold_core::clip::TimelineClip;
@@ -154,9 +154,9 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Coordinate conversion ───────────────────────────────────
 
-    fn screen_position_to_beat(&self, _pos: Vec2) -> f32 {
+    fn screen_position_to_beat(&self, _pos: Vec2) -> Beats {
         // Delegated to viewport.pixel_to_beat() by the overlay
-        0.0
+        Beats::ZERO
     }
 
     fn get_layer_index_at_position(&self, _pos: Vec2) -> Option<usize> {
@@ -164,46 +164,47 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         None
     }
 
-    fn beat_to_time(&self, beat: f32) -> f32 {
+    fn beat_to_time(&self, beat: Beats) -> Seconds {
         // Unity delegates to playbackController.TimelineBeatToTime() which uses
         // the full tempo map. Use the immutable version of beat_to_seconds.
         if let Some(project) = Some(&*self.project) {
             let bpm = project.settings.bpm;
             manifold_core::tempo::TempoMapConverter::beat_to_seconds_immut(
-                &project.tempo_map, manifold_core::Beats::from_f32(beat), bpm,
-            ).as_f32()
+                &project.tempo_map, beat, bpm,
+            )
         } else {
-            0.0
+            Seconds::ZERO
         }
     }
 
     // ── Clip operations ─────────────────────────────────────────
 
-    fn create_clip_at_position(&mut self, beat: f32, layer: usize, grid_step: f32) -> Option<ClipId> {
+    fn create_clip_at_position(&mut self, beat: Beats, layer: usize, grid_step: Beats) -> Option<ClipId> {
         // Port of Unity EditingService.CreateClipAtPosition.
         // Beat arrives pre-snapped from the overlay. grid_step is the clip duration.
-        let mut duration = grid_step.max(0.25); // minimum 1/16th note
+        let min_duration = Beats(0.25); // minimum 1/16th note
+        let mut duration = if grid_step < min_duration { min_duration } else { grid_step };
 
         // Clamp duration to fit available gap — if the next clip on this layer
         // starts before beat + duration, shrink the new clip to fill the gap
         // instead of overlapping and destroying the neighbor.
         if let Some(layer_ref) = self.project.timeline.layers.get(layer) {
-            let mut nearest_start = f32::MAX;
+            let mut nearest_start = Beats(f64::MAX);
             for clip in &layer_ref.clips {
-                let cs = clip.start_beat.as_f32();
-                if cs > beat && cs < nearest_start {
-                    nearest_start = cs;
+                if clip.start_beat > beat && clip.start_beat < nearest_start {
+                    nearest_start = clip.start_beat;
                 }
             }
-            if nearest_start < f32::MAX {
-                let available = nearest_start - beat;
-                duration = duration.min(available).max(0.25);
+            if nearest_start.0 < f64::MAX {
+                let available = Beats(nearest_start.0 - beat.0);
+                duration = if duration < available { duration } else { available };
+                if duration < min_duration { duration = min_duration; }
             }
         }
 
         let clip_id = {
             let project = Some(&mut *self.project)?;
-            let (cmd, id) = EditingService::create_clip_at_position(project, manifold_core::Beats::from_f32(beat), layer, manifold_core::Beats::from_f32(duration));
+            let (cmd, id) = EditingService::create_clip_at_position(project, beat, layer, duration);
             { let mut cmd = cmd; cmd.execute(project); crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Execute(cmd)); }
             id
         };
@@ -307,8 +308,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
         self.pending_actions.push(PanelAction::ClipRightClicked(clip_id.to_string()));
     }
 
-    fn on_track_right_click(&mut self, beat: f32, layer_index: usize, _screen_pos: Vec2) {
-        self.pending_actions.push(PanelAction::TrackRightClicked(beat, layer_index));
+    fn on_track_right_click(&mut self, beat: Beats, layer_index: usize, _screen_pos: Vec2) {
+        self.pending_actions.push(PanelAction::TrackRightClicked(beat.as_f32(), layer_index));
     }
 
     fn inspect_layer(&mut self, layer_index: usize) {
@@ -355,7 +356,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Playback ────────────────────────────────────────────────
 
-    fn scrub_to_time(&mut self, time: f32) {
+    fn scrub_to_time(&mut self, time: Seconds) {
         crate::content_command::ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(time));
     }
 
@@ -454,7 +455,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     fn record_move(
         &mut self,
         clip_id: &str,
-        old_start: f32, new_start: f32,
+        old_start: Beats, new_start: Beats,
         old_layer: usize, new_layer: usize,
     ) {
         let old_layer_id = self.project.timeline.layers.get(old_layer)
@@ -465,7 +466,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             .unwrap_or_default();
         let cmd = manifold_editing::commands::clip::MoveClipCommand::new(
             ClipId::new(clip_id),
-            manifold_core::Beats::from_f32(old_start), manifold_core::Beats::from_f32(new_start),
+            old_start, new_start,
             old_layer_id, new_layer_id,
         );
         self.command_batch.push(Box::new(cmd));
@@ -474,15 +475,15 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     fn record_trim(
         &mut self,
         clip_id: &str,
-        old_start: f32, new_start: f32,
-        old_duration: f32, new_duration: f32,
-        old_in_point: f32, new_in_point: f32,
+        old_start: Beats, new_start: Beats,
+        old_duration: Beats, new_duration: Beats,
+        old_in_point: Seconds, new_in_point: Seconds,
     ) {
         let cmd = manifold_editing::commands::clip::TrimClipCommand::new(
             ClipId::new(clip_id),
-            manifold_core::Beats::from_f32(old_start), manifold_core::Beats::from_f32(new_start),
-            manifold_core::Beats::from_f32(old_duration), manifold_core::Beats::from_f32(new_duration),
-            manifold_core::Seconds::from_f32(old_in_point), manifold_core::Seconds::from_f32(new_in_point),
+            old_start, new_start,
+            old_duration, new_duration,
+            old_in_point, new_in_point,
         );
         self.command_batch.push(Box::new(cmd));
     }
@@ -514,21 +515,21 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Live clip mutation ──────────────────────────────────────
 
-    fn set_clip_start_beat(&mut self, clip_id: &str, beat: f32) {
+    fn set_clip_start_beat(&mut self, clip_id: &str, beat: Beats) {
         if let Some(project) = Some(&mut *self.project) {
             if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                clip.start_beat = manifold_core::Beats::from_f32(beat);
+                clip.start_beat = beat;
             }
             project.timeline.mark_clip_lookup_dirty();
         }
     }
 
-    fn set_clip_trim(&mut self, clip_id: &str, start_beat: f32, duration_beats: f32, in_point: f32) {
+    fn set_clip_trim(&mut self, clip_id: &str, start_beat: Beats, duration_beats: Beats, in_point: Seconds) {
         if let Some(project) = Some(&mut *self.project) {
             if let Some(clip) = project.timeline.find_clip_by_id_mut(clip_id) {
-                clip.start_beat = manifold_core::Beats::from_f32(start_beat);
-                clip.duration_beats = manifold_core::Beats::from_f32(duration_beats);
-                clip.in_point = manifold_core::Seconds::from_f32(in_point);
+                clip.start_beat = start_beat;
+                clip.duration_beats = duration_beats;
+                clip.in_point = in_point;
             }
             project.timeline.mark_clip_lookup_dirty();
         }
@@ -536,7 +537,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Video metadata ──────────────────────────────────────────
 
-    fn get_max_duration_beats(&self, clip_id: &str) -> f32 {
+    fn get_max_duration_beats(&self, clip_id: &str) -> Beats {
         // Linear scan — find_clip_by_id requires &mut self (self-healing cache)
         let clip = self.project.timeline.layers.iter()
             .flat_map(|l| l.clips.iter())
@@ -544,25 +545,25 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
         let clip = match clip {
             Some(c) => c,
-            None => return 0.0,
+            None => return Beats::ZERO,
         };
         if clip.is_generator() {
-            return 0.0;
+            return Beats::ZERO;
         }
 
         let video_clip = match self.project.video_library.find_clip_by_id(
             &clip.video_clip_id,
         ) {
             Some(vc) => vc,
-            None => return 0.0,
+            None => return Beats::ZERO,
         };
 
         if video_clip.duration <= 0.0 {
-            return 0.0;
+            return Beats::ZERO;
         }
 
         let available_seconds = (video_clip.duration - clip.in_point.as_f32()).max(0.0);
         let spb = self.get_seconds_per_beat();
-        if spb > 0.0 { available_seconds / spb } else { 0.0 }
+        if spb > 0.0 { Beats(available_seconds as f64 / spb as f64) } else { Beats::ZERO }
     }
 }

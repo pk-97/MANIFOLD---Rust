@@ -181,7 +181,7 @@ impl ClipLauncher {
 
         let current_time = host.current_time();
         if let Some(cb) = &mut self.on_clip_launched {
-            cb(midi_note, video_clip_id, layer_index, current_time, in_point);
+            cb(midi_note, video_clip_id, layer_index, current_time.as_f32(), in_point);
         }
 
         if self.show_debug_logs {
@@ -256,7 +256,7 @@ impl ClipLauncher {
 
         let current_time = host.current_time();
         if let Some(cb) = &mut self.on_clip_stopped {
-            cb(midi_note, layer_index, current_time);
+            cb(midi_note, layer_index, current_time.as_f32());
         }
 
         if self.show_debug_logs {
@@ -371,7 +371,7 @@ impl ClipLauncher {
                     midi_note,
                     format!("generator:{:?}", generator_type),
                     layer_index,
-                    current_time,
+                    current_time.as_f32(),
                     0.0,
                 );
             }
@@ -473,7 +473,7 @@ impl ClipLauncher {
 
         let current_time = host.current_time();
         if let Some(cb) = &mut self.on_clip_launched {
-            cb(midi_note, video_clip_id, layer_index, current_time, in_point);
+            cb(midi_note, video_clip_id, layer_index, current_time.as_f32(), in_point);
         }
 
         if self.show_debug_logs {

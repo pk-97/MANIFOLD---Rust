@@ -88,16 +88,17 @@ impl TransportStateCache {
         project_path: Option<&std::path::Path>,
         is_dirty: bool,
     ) {
-        let beat = content_state.current_beat as f32;
+        let beat = content_state.current_beat.as_f32();
         let time = content_state.current_time;
 
         {
             let tree = &mut ui.tree;
 
             // Unity FormatTime: "{minutes:D2}:{seconds:D2}.{tenths}"
-            let mins = (time / 60.0).floor() as i32;
-            let secs = (time % 60.0).floor() as i32;
-            let tenths = ((time * 10.0) % 10.0).floor() as i32;
+            let t = time.0;
+            let mins = (t / 60.0).floor() as i32;
+            let secs = (t % 60.0).floor() as i32;
+            let tenths = ((t * 10.0) % 10.0).floor() as i32;
             let time_str = format!("{:02}:{:02}.{}", mins, secs, tenths);
 
             let bpb = project.settings.time_signature_numerator.max(1) as f32;

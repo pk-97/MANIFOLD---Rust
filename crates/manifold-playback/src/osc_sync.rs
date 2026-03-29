@@ -15,6 +15,7 @@
 //! Note: BPM sync uses Ableton Link, not OSC (LiveMTC does not send BPM).
 
 use manifold_core::types::{ClockAuthority, PlaybackState};
+use manifold_core::Seconds;
 
 use crate::sync::{SyncArbiter, SyncArbiterTarget, SyncTarget};
 use crate::sync_source::SyncSource;
@@ -65,7 +66,7 @@ pub struct OscSyncController {
     /// Port of `IsReceivingTimecode`.
     pub is_receiving_timecode: bool,
     /// Port of `CurrentTimecodeSeconds`.
-    pub current_timecode_seconds: f32,
+    pub current_timecode_seconds: Seconds,
     /// Port of `CurrentTimecodeDisplay`.
     pub current_timecode_display: String,
 
@@ -79,11 +80,11 @@ pub struct OscSyncController {
     // ── State tracking ────────────────────────────────────────────────
     // Port of `wasReceiving`, `lastTimecodeReceivedTime`.
     was_receiving: bool,
-    last_timecode_received_time: f32,
+    last_timecode_received_time: Seconds,
 
     // ── Pending values (set by OSC callbacks, consumed in update()) ───
     // Port of `pendingTimecodeSeconds`, `hasNewTimecode`.
-    pending_timecode_seconds: f32,
+    pending_timecode_seconds: Seconds,
     has_new_timecode: bool,
 }
 
@@ -103,7 +104,7 @@ impl OscSyncController {
 
             is_osc_enabled: false,
             is_receiving_timecode: false,
-            current_timecode_seconds: 0.0,
+            current_timecode_seconds: Seconds::ZERO,
             current_timecode_display: "--:--:--:--".to_string(),
 
             cached_tc_h: -1,
@@ -112,9 +113,9 @@ impl OscSyncController {
             cached_tc_f: -1,
 
             was_receiving: false,
-            last_timecode_received_time: 0.0,
+            last_timecode_received_time: Seconds::ZERO,
 
-            pending_timecode_seconds: -1.0,
+            pending_timecode_seconds: Seconds(-1.0),
             has_new_timecode: false,
         }
     }
@@ -197,7 +198,7 @@ impl OscSyncController {
     /// Port of Unity OscSyncController.OnTimecodeReceived(string address, float[] values).
     ///
     /// `now` = current wall-clock time in seconds (replaces Unity's `Time.time`).
-    pub fn on_timecode_received(&mut self, _address: &str, values: &[f32], now: f32) {
+    pub fn on_timecode_received(&mut self, _address: &str, values: &[f32], now: Seconds) {
         if values.len() >= 4 {
             let hours   = values[0] as i32;
             let minutes = values[1] as i32;
@@ -205,7 +206,7 @@ impl OscSyncController {
             let frames  = values[3] as i32;
 
             self.pending_timecode_seconds =
-                self.timecode_to_seconds(hours, minutes, seconds, frames) + self.timecode_offset;
+                Seconds((self.timecode_to_seconds(hours, minutes, seconds, frames) + self.timecode_offset) as f64);
 
             if hours != self.cached_tc_h
                 || minutes != self.cached_tc_m
@@ -220,12 +221,12 @@ impl OscSyncController {
                     format!("{:02}:{:02}:{:02}:{:02}", hours, minutes, seconds, frames);
             }
         } else if !values.is_empty() {
-            self.pending_timecode_seconds = values[0] + self.timecode_offset;
-            let total_sec = self.pending_timecode_seconds as i32;
+            self.pending_timecode_seconds = Seconds((values[0] + self.timecode_offset) as f64);
+            let total_sec = self.pending_timecode_seconds.0 as i32;
             let h = total_sec / 3600;
             let m = (total_sec % 3600) / 60;
             let s = total_sec % 60;
-            let f = ((self.pending_timecode_seconds - total_sec as f32) * self.timecode_frame_rate) as i32;
+            let f = ((self.pending_timecode_seconds.0 as f32 - total_sec as f32) * self.timecode_frame_rate) as i32;
 
             if h != self.cached_tc_h
                 || m != self.cached_tc_m
@@ -262,7 +263,7 @@ impl OscSyncController {
     /// Port of Unity OscSyncController.Update().
     pub fn update(
         &mut self,
-        now: f32,
+        now: Seconds,
         sync_target: &dyn SyncTarget,
         arbiter: &mut SyncArbiter,
         arb_target: &mut dyn SyncArbiterTarget,
@@ -271,7 +272,7 @@ impl OscSyncController {
         if !self.is_osc_enabled { return; }
 
         // Determine if timecode is actively being received.
-        let receiving = (now - self.last_timecode_received_time) < self.transport_timeout;
+        let receiving = (now - self.last_timecode_received_time).0 < self.transport_timeout as f64;
         self.is_receiving_timecode = receiving;
 
         // Only suppress local deltaTime when OSC is the selected authority and
@@ -319,10 +320,10 @@ impl OscSyncController {
         let current_time = sync_target.current_time();
         let delta = (osc_time - current_time).abs();
 
-        if delta < 0.001 { return; } // identical
+        if delta.0 < 0.001 { return; } // identical
 
         if sync_target.is_playing() {
-            if delta < 0.5 {
+            if delta.0 < 0.5 {
                 // Normal sync: set time directly. No threshold — apply every OSC frame
                 // so drift never accumulates. ExternalTimeSync prevents deltaTime from
                 // fighting this, so the playhead advances purely from OSC timecode.
@@ -340,7 +341,7 @@ impl OscSyncController {
             }
         } else {
             // Not playing: only Seek when drift exceeds threshold (avoid churn while paused).
-            if delta > self.seek_threshold {
+            if delta.0 > self.seek_threshold as f64 {
                 arbiter.seek(ClockAuthority::Osc, authority, arb_target, osc_time);
 
                 if self.show_debug_logs {

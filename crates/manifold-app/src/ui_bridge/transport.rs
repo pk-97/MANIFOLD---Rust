@@ -23,7 +23,7 @@ pub(super) fn dispatch_transport(
                 ContentCommand::send(content_tx, ContentCommand::Pause);
             } else {
                 if let Some(cursor_beat) = selection.insert_cursor_beat {
-                    ContentCommand::send(content_tx, ContentCommand::SeekToBeat(cursor_beat));
+                    ContentCommand::send(content_tx, ContentCommand::SeekToBeat(Beats::from_f32(cursor_beat)));
                 }
                 ContentCommand::send(content_tx, ContentCommand::Play);
             }
@@ -32,7 +32,7 @@ pub(super) fn dispatch_transport(
         PanelAction::Stop => {
             ContentCommand::send(content_tx, ContentCommand::Stop);
             if let Some(cursor_beat) = selection.insert_cursor_beat {
-                ContentCommand::send(content_tx, ContentCommand::SeekToBeat(cursor_beat));
+                ContentCommand::send(content_tx, ContentCommand::SeekToBeat(Beats::from_f32(cursor_beat)));
             }
             DispatchResult::handled()
         }
@@ -47,7 +47,7 @@ pub(super) fn dispatch_transport(
         PanelAction::ClearBpm => {
             {
                 let old_points = project.tempo_map.clone_points();
-                let bpm = project.settings.bpm.0;
+                let bpm = project.settings.bpm;
                 let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(old_points, bpm);
                 { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
             }
@@ -58,7 +58,7 @@ pub(super) fn dispatch_transport(
             DispatchResult::handled()
         }
         PanelAction::Seek(beat) => {
-            ContentCommand::send(content_tx, ContentCommand::SeekToBeat(*beat));
+            ContentCommand::send(content_tx, ContentCommand::SeekToBeat(Beats::from_f32(*beat)));
             DispatchResult::handled()
         }
         PanelAction::OverviewScrub(norm) => {
@@ -127,7 +127,7 @@ pub(super) fn dispatch_transport(
             let new_idx = (current_idx + 1).min(levels.len() - 1);
             if new_idx != current_idx {
                 let new_ppb = levels[new_idx];
-                let playhead = content_state.current_beat as f32;
+                let playhead = content_state.current_beat.as_f32();
                 let tracks_x = ui.viewport.get_tracks_rect().x;
                 let viewport_w = ui.viewport.get_tracks_rect().width;
                 // Anchor on playhead: place it at the same relative screen position,
@@ -152,7 +152,7 @@ pub(super) fn dispatch_transport(
             let new_idx = current_idx.saturating_sub(1);
             if new_idx != current_idx {
                 let new_ppb = levels[new_idx];
-                let playhead = content_state.current_beat as f32;
+                let playhead = content_state.current_beat.as_f32();
                 let tracks_x = ui.viewport.get_tracks_rect().x;
                 let viewport_w = ui.viewport.get_tracks_rect().width;
                 let playhead_px = ui.viewport.beat_to_pixel(Beats::from_f32(playhead));

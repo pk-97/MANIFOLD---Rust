@@ -548,6 +548,7 @@ impl Application {
             crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
         } else if self.active_layer_id != prev_active_layer {
             let active_idx = self.active_layer_id.as_ref().and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
+            crate::ui_bridge::sync_project_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
             crate::ui_bridge::sync_inspector_data(&mut self.ui_root, &self.local_project, active_idx, &self.selection);
             needs_structural_sync = true; // Inspector content changed — needs rebuild
         }
@@ -657,8 +658,8 @@ impl Application {
                 render_target_fps: self.content_state.frame_rate as f32,
                 active_clips: self.content_state.active_clips,
                 preparing_clips: 0,
-                current_beat: manifold_core::Beats(self.content_state.current_beat),
-                current_time_secs: self.content_state.current_time,
+                current_beat: self.content_state.current_beat,
+                current_time_secs: self.content_state.current_time.as_f32(),
                 bpm,
                 clock_source,
                 is_playing: self.content_state.is_playing,
@@ -673,7 +674,7 @@ impl Application {
 
         // 6a. Update waveform lane overlay (position for dirty-checking)
         {
-            let scroll_x = self.ui_root.viewport.scroll_x_beats() * self.ui_root.viewport.pixels_per_beat();
+            let scroll_x = self.ui_root.viewport.scroll_x_beats().as_f32() * self.ui_root.viewport.pixels_per_beat();
             let wf = &mut self.ui_root.waveform_lane;
             if wf.is_ready() {
                 // Get start beat and duration from project percussion import state
@@ -721,7 +722,7 @@ impl Application {
             let hovered = self.ui_root.viewport.hovered_clip_id().map(|s| s.to_string());
             let sel_region = self.ui_root.viewport.selection_region_ref().cloned();
             let has_region = sel_region.is_some();
-            let insert_cursor_beat = self.ui_root.viewport.insert_cursor_beat();
+            let insert_cursor_beat = self.ui_root.viewport.insert_cursor_beat().as_f32();
             let insert_layer = self.selection.insert_cursor_layer_id.as_ref()
                 .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
             let has_insert = self.selection.has_insert_cursor();

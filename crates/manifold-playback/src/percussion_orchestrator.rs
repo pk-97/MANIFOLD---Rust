@@ -1861,7 +1861,7 @@ impl PercussionImportOrchestrator {
         let options = PercussionImportOptionsFactory::create_default_with_settings(
             project,
             self.pipeline_settings.as_ref(),
-            start_beat_offset,
+            Beats::from_f32(start_beat_offset),
         );
 
         let binding_resolver = ProjectPercussionBindingResolver::new(project, &options);
@@ -2006,7 +2006,7 @@ impl PercussionImportOrchestrator {
         let options = PercussionImportOptionsFactory::create_default_with_settings(
             project,
             self.pipeline_settings.as_ref(),
-            aligned_offset,
+            Beats::from_f32(aligned_offset),
         );
         let binding_resolver = ProjectPercussionBindingResolver::new(project, &options);
         let plan = {

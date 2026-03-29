@@ -957,7 +957,7 @@ impl EditingService {
     pub fn compute_region_from_clip_selection(
         project: &Project,
         selected_clip_ids: &[ClipId],
-    ) -> Option<(f32, f32, i32, i32)> {
+    ) -> Option<(Beats, Beats, i32, i32)> {
         if selected_clip_ids.len() < 2 {
             return None;
         }
@@ -981,7 +981,7 @@ impl EditingService {
         }
 
         if min_beat < max_beat {
-            Some((min_beat.as_f32(), max_beat.as_f32(), min_layer, max_layer))
+            Some((min_beat, max_beat, min_layer, max_layer))
         } else {
             None
         }

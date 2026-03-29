@@ -76,7 +76,7 @@ impl ContentThread {
         {
             export_config.audio_path = Some(path.to_string());
             export_config.audio_start_beat = audio_sync.start_beat().as_f32();
-            export_config.audio_encoder_delay = audio_sync.encoder_delay_seconds();
+            export_config.audio_encoder_delay = audio_sync.encoder_delay_seconds().as_f32();
         }
 
         // Calculate timing
@@ -125,7 +125,7 @@ impl ContentThread {
         }
         // Seek to start
         let start_time = self.engine.beat_to_timeline_time(Beats::from_f32(start_beat));
-        self.engine.seek_to(start_time.as_f32());
+        self.engine.seek_to(start_time);
         self.engine.play();
 
         // 4. Create export session (initializes native Metal encoder).
@@ -148,8 +148,8 @@ impl ContentThread {
                 log::error!("[ContentThread] Failed to create export session: {e}");
                 self.engine.set_export_mode(false);
                 self.engine.stop();
-                let restore_time = self.engine.beat_to_timeline_time(Beats::from_f32(saved_beat));
-                self.engine.seek_to(restore_time.as_f32());
+                let restore_time = self.engine.beat_to_timeline_time(saved_beat);
+                self.engine.seek_to(restore_time);
                 self.send_export_finished(state_tx, false, format!("Export failed: {e}"), &export_config.output_path);
                 return;
             }
@@ -165,7 +165,7 @@ impl ContentThread {
                 let warmup_ctx = TickContext {
                     dt_seconds: Seconds(frame_dt),
                     realtime_now: Seconds::ZERO,
-                    pre_render_dt: frame_dt as f32,
+                    pre_render_dt: Seconds(frame_dt),
                     frame_count: u64::MAX,
                     export_fixed_dt: Seconds(frame_dt),
                 };
@@ -185,7 +185,7 @@ impl ContentThread {
             }
             // Re-seek to start — warmup ticks advanced the engine
             let start_time = self.engine.beat_to_timeline_time(Beats::from_f32(start_beat));
-            self.engine.seek_to(start_time.as_f32());
+            self.engine.seek_to(start_time);
         }
 
         // 5. Export frame loop.
@@ -268,8 +268,8 @@ impl ContentThread {
             self.content_pipeline.resize(&mut self.engine, cur_w, cur_h);
         }
         self.engine.stop();
-        let restore_time = self.engine.beat_to_timeline_time(Beats::from_f32(saved_beat));
-        self.engine.seek_to(restore_time.as_f32());
+        let restore_time = self.engine.beat_to_timeline_time(saved_beat);
+        self.engine.seek_to(restore_time);
         if was_playing {
             self.engine.play();
         }
@@ -300,7 +300,7 @@ impl ContentThread {
         let ctx = TickContext {
             dt_seconds: Seconds(frame_dt),
             realtime_now: Seconds(frame_idx as f64 * frame_dt),
-            pre_render_dt: frame_dt as f32,
+            pre_render_dt: Seconds(frame_dt),
             frame_count: frame_idx as u64,
             export_fixed_dt: Seconds(frame_dt),
         };
@@ -387,7 +387,7 @@ impl ContentThread {
             is_exporting: true,
             export_progress: session.progress(),
             export_status: session.status_text(),
-            current_beat: self.engine.current_beat_f64(),
+            current_beat: self.engine.current_beat(),
             current_time: self.engine.current_time(),
             is_playing: self.engine.is_playing(),
             ..ContentState::default()

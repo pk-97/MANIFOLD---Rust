@@ -6,7 +6,7 @@
 
 use manifold_core::project::Project;
 use manifold_core::types::ClockAuthority;
-use manifold_core::Beats;
+use manifold_core::{Beats, Bpm};
 
 use crate::engine::PlaybackEngine;
 use crate::link_sync::LinkSyncController;
@@ -162,7 +162,7 @@ impl TransportController {
         } else {
             if cursor.has_insert_cursor {
                 let time = engine.beat_to_timeline_time(cursor.insert_cursor_beat);
-                engine.seek_to(time.as_f32());
+                engine.seek_to(time);
             }
             engine.play();
         }
@@ -174,7 +174,7 @@ impl TransportController {
         engine.stop();
         if cursor.has_insert_cursor {
             let time = engine.beat_to_timeline_time(cursor.insert_cursor_beat);
-            engine.seek_to(time.as_f32());
+            engine.seek_to(time);
         }
     }
 
@@ -239,13 +239,13 @@ impl TransportController {
     /// Port of Unity TransportController.SetBpm.
     pub fn set_bpm(engine: &mut PlaybackEngine, editing: &mut manifold_editing::service::EditingService, value: &str) {
         let new_bpm = match value.parse::<f32>() {
-            Ok(v) => v.clamp(20.0, 300.0),
+            Ok(v) => Bpm(v.clamp(20.0, 300.0)),
             Err(_) => return,
         };
 
         if let Some(project) = engine.project_mut() {
-            let old_bpm = project.settings.bpm.0;
-            if (old_bpm - new_bpm).abs() < 0.01 { return; }
+            let old_bpm = project.settings.bpm;
+            if (old_bpm.0 - new_bpm.0).abs() < 0.01 { return; }
 
             let bpm_cmd = manifold_editing::commands::settings::ChangeBpmCommand::new(old_bpm, new_bpm);
 
@@ -261,7 +261,7 @@ impl TransportController {
                 ];
                 let composite = manifold_editing::command::CompositeCommand::new(
                     commands,
-                    format!("Change BPM {:.1} → {:.1}", old_bpm, new_bpm),
+                    format!("Change BPM {:.1} → {:.1}", old_bpm.0, new_bpm.0),
                 );
                 editing.execute(Box::new(composite), project);
             } else {
@@ -276,7 +276,7 @@ impl TransportController {
         if let Some(project) = engine.project_mut() {
             // Try recorded tempo lane first
             if !project.recording_provenance.recorded_tempo_lane.is_empty() {
-                let old_bpm = project.settings.bpm.0;
+                let old_bpm = project.settings.bpm;
                 let old_points = project.tempo_map.clone_points();
                 let new_points = project.recording_provenance.recorded_tempo_lane.clone();
                 let cmd = manifold_editing::commands::settings::RestoreRecordedTempoLaneCommand::new(
@@ -288,9 +288,9 @@ impl TransportController {
 
             // Fall back to recorded project BPM
             if project.recording_provenance.has_recorded_project_bpm {
-                let recorded_bpm = project.recording_provenance.recorded_project_bpm.0;
-                let old_bpm = project.settings.bpm.0;
-                if (old_bpm - recorded_bpm).abs() < 0.0001 { return; }
+                let recorded_bpm = project.recording_provenance.recorded_project_bpm;
+                let old_bpm = project.settings.bpm;
+                if (old_bpm.0 - recorded_bpm.0).abs() < 0.0001 { return; }
 
                 let cmd = manifold_editing::commands::settings::ChangeBpmCommand::new(old_bpm, recorded_bpm);
                 editing.execute(Box::new(cmd), project);
@@ -304,7 +304,7 @@ impl TransportController {
         if let Some(project) = engine.project_mut() {
             if project.tempo_map.point_count() <= 1 { return; }
             let old_points = project.tempo_map.clone_points();
-            let bpm = project.settings.bpm.0;
+            let bpm = project.settings.bpm;
             let cmd = manifold_editing::commands::settings::ClearTempoMapCommand::new(old_points, bpm);
             editing.execute(Box::new(cmd), project);
         }

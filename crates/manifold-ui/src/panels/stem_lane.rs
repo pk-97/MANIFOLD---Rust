@@ -404,7 +404,7 @@ impl StemLaneGroupPanel {
                     mapper.beat_to_pixel_absolute(Beats::from_f32(self.waveform_start_beat.max(0.0)));
 
                 let stem_width = mapper.beat_duration_to_width(
-                    self.waveform_duration_beats_for_stem(i),
+                    Beats::from_f32(self.waveform_duration_beats_for_stem(i)),
                 );
 
                 if stem_width > 0.0

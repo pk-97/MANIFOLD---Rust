@@ -9,7 +9,7 @@ use kira::{
     tween::Tween,
 };
 use manifold_core::types::PlaybackState;
-use manifold_core::Beats;
+use manifold_core::{Beats, Seconds};
 use crate::engine::PlaybackEngine;
 use std::path::Path;
 use std::process::Command;
@@ -24,11 +24,11 @@ pub struct ImportedAudioSyncController {
     audio_manager: AudioManager<DefaultBackend>,
     sound_handle: Option<StaticSoundHandle>,
     sound_data: Option<StaticSoundData>,
-    clip_duration_seconds: f32,
+    clip_duration_seconds: Seconds,
     audio_path: Option<String>,
     start_beat: Beats,
-    start_time_seconds: f32,
-    encoder_delay_seconds: f32,
+    start_time_seconds: Seconds,
+    encoder_delay_seconds: Seconds,
     is_ready: bool,
     on_clip_changed: Option<Box<dyn FnMut(bool) + Send>>,
 }
@@ -43,11 +43,11 @@ impl ImportedAudioSyncController {
             audio_manager,
             sound_handle: None,
             sound_data: None,
-            clip_duration_seconds: 0.0,
+            clip_duration_seconds: Seconds::ZERO,
             audio_path: None,
             start_beat: Beats::ZERO,
-            start_time_seconds: 0.0,
-            encoder_delay_seconds: 0.0,
+            start_time_seconds: Seconds::ZERO,
+            encoder_delay_seconds: Seconds::ZERO,
             is_ready: false,
             on_clip_changed: None,
         })
@@ -57,9 +57,9 @@ impl ImportedAudioSyncController {
 
     pub fn is_ready(&self) -> bool { self.is_ready }
     pub fn start_beat(&self) -> Beats { self.start_beat }
-    pub fn encoder_delay_seconds(&self) -> f32 { self.encoder_delay_seconds }
+    pub fn encoder_delay_seconds(&self) -> Seconds { self.encoder_delay_seconds }
     pub fn audio_path(&self) -> Option<&str> { self.audio_path.as_deref() }
-    pub fn clip_duration_seconds(&self) -> f32 { self.clip_duration_seconds }
+    pub fn clip_duration_seconds(&self) -> Seconds { self.clip_duration_seconds }
 
     pub fn set_on_clip_changed(&mut self, callback: Option<Box<dyn FnMut(bool) + Send>>) {
         self.on_clip_changed = callback;
@@ -78,7 +78,7 @@ impl ImportedAudioSyncController {
 
     /// Loads and decodes an audio file synchronously (kira decodes into memory).
     /// Port of Unity LoadAudioAsync(string path, float startBeatOffset).
-    pub fn load_audio(&mut self, path: &str, start_beat_offset: f32) -> Result<(), String> {
+    pub fn load_audio(&mut self, path: &str, start_beat_offset: Beats) -> Result<(), String> {
         if path.is_empty() {
             return Ok(());
         }
@@ -104,11 +104,11 @@ impl ImportedAudioSyncController {
         }
         self.sound_handle = None;
 
-        self.clip_duration_seconds = clip_duration;
+        self.clip_duration_seconds = Seconds(clip_duration as f64);
         self.audio_path = Some(path.to_string());
-        self.start_beat = Beats::from_f32(start_beat_offset.max(0.0));
+        self.start_beat = start_beat_offset.max(Beats::ZERO);
         // startTimeSeconds will be recalculated on first UpdateSync call.
-        self.start_time_seconds = 0.0;
+        self.start_time_seconds = Seconds::ZERO;
         self.encoder_delay_seconds = probe_encoder_delay_seconds(path);
 
         // Play the sound immediately paused (equivalent to audioSource.clip = audioClip).
@@ -129,14 +129,14 @@ impl ImportedAudioSyncController {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let delay_info = if self.encoder_delay_seconds > 0.0 {
-            format!(" encoderDelay={:.1}ms", self.encoder_delay_seconds * 1000.0)
+        let delay_info = if self.encoder_delay_seconds > Seconds::ZERO {
+            format!(" encoderDelay={:.1}ms", self.encoder_delay_seconds.0 * 1000.0)
         } else {
             String::new()
         };
         log::info!(
             "[ImportedAudioSyncController] Imported audio attached for sync: '{}' startBeat={:.2}{}",
-            file_name, self.start_beat.as_f32(), delay_info
+            file_name, self.start_beat.0, delay_info
         );
 
         Ok(())
@@ -147,32 +147,28 @@ impl ImportedAudioSyncController {
     /// Port of C# SetStartBeat(float beat, PlaybackController playbackController).
     pub fn set_start_beat(&mut self, beat: Beats, engine: &mut PlaybackEngine) {
         self.start_beat = Beats(beat.0.max(0.0));
-        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat).as_f32();
+        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
     }
 
     // ─── GetDurationBeats ───
 
     /// Port of C# GetDurationBeats(PlaybackController playbackController).
-    pub fn get_duration_beats(&mut self, engine: &mut PlaybackEngine) -> f32 {
-        if !self.is_ready || self.clip_duration_seconds <= 0.0 {
-            return 0.0;
+    pub fn get_duration_beats(&mut self, engine: &mut PlaybackEngine) -> Beats {
+        if !self.is_ready || self.clip_duration_seconds <= Seconds::ZERO {
+            return Beats::ZERO;
         }
 
-        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat).as_f32();
+        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
         let end_time = self.start_time_seconds + self.clip_duration_seconds;
         let end_beat = engine.time_to_timeline_beat(end_time);
-        if !end_beat.is_finite() {
-            return 0.0;
-        }
-
-        (end_beat - self.start_beat.as_f32()).max(0.0)
+        (end_beat - self.start_beat).max(Beats::ZERO)
     }
 
     // ─── GetEndBeat ───
 
     /// Port of C# GetEndBeat(PlaybackController playbackController).
-    pub fn get_end_beat(&mut self, engine: &mut PlaybackEngine) -> f32 {
-        self.start_beat.as_f32() + self.get_duration_beats(engine)
+    pub fn get_end_beat(&mut self, engine: &mut PlaybackEngine) -> Beats {
+        self.start_beat + self.get_duration_beats(engine)
     }
 
     // ─── UpdateSync (main sync loop) ───
@@ -180,7 +176,7 @@ impl ImportedAudioSyncController {
     /// Port of C# UpdateSync(PlaybackController playbackController).
     /// Called every frame from the app tick loop.
     pub fn update_sync(&mut self, engine: &mut PlaybackEngine) {
-        if !self.is_ready || self.clip_duration_seconds <= 0.0 {
+        if !self.is_ready || self.clip_duration_seconds <= Seconds::ZERO {
             return;
         }
         if self.sound_handle.is_none() {
@@ -199,12 +195,12 @@ impl ImportedAudioSyncController {
         let clip_length = self.clip_duration_seconds;
 
         // Keep beat anchor aligned with any transport/tempo timing changes.
-        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat).as_f32();
+        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
         // Offset by encoder delay so playback cursor skips past the
         // MP3 padding that ffmpeg strips during analysis decoding.
         let expected_time = engine.current_time() - self.start_time_seconds + self.encoder_delay_seconds;
-        let in_range = expected_time >= 0.0 && expected_time < clip_length;
-        let clamped_expected = expected_time.clamp(0.0, (clip_length - 0.001).max(0.0));
+        let in_range = expected_time >= Seconds::ZERO && expected_time < clip_length;
+        let clamped_expected = expected_time.clamp(Seconds::ZERO, (clip_length - Seconds(0.001)).max(Seconds::ZERO));
 
         let handle_state = self.sound_handle.as_ref().unwrap().state();
         let is_source_playing = handle_state == KiraPlaybackState::Playing;
@@ -228,7 +224,7 @@ impl ImportedAudioSyncController {
                         if let Some(ref data) = self.sound_data {
                             match self.audio_manager.play(data.clone()) {
                                 Ok(mut new_handle) => {
-                                    new_handle.seek_to(clamped_expected as f64);
+                                    new_handle.seek_to(clamped_expected.0);
                                     self.sound_handle = Some(new_handle);
                                 }
                                 Err(e) => {
@@ -238,16 +234,16 @@ impl ImportedAudioSyncController {
                         }
                     } else {
                         let handle = self.sound_handle.as_mut().unwrap();
-                        handle.seek_to(clamped_expected as f64);
+                        handle.seek_to(clamped_expected.0);
                         handle.resume(Tween::default());
                     }
                     return;
                 }
 
                 let handle = self.sound_handle.as_mut().unwrap();
-                let current_pos = handle.position() as f32;
-                if (current_pos - clamped_expected).abs() > HARD_RESYNC_SECONDS {
-                    handle.seek_to(clamped_expected as f64);
+                let current_pos = Seconds(handle.position());
+                if (current_pos - clamped_expected).abs() > Seconds(HARD_RESYNC_SECONDS as f64) {
+                    handle.seek_to(clamped_expected.0);
                 }
             }
             PlaybackState::Paused => {
@@ -257,9 +253,9 @@ impl ImportedAudioSyncController {
                 }
 
                 if in_range {
-                    let current_pos = handle.position() as f32;
-                    if (current_pos - clamped_expected).abs() > SEEK_TOLERANCE_SECONDS {
-                        handle.seek_to(clamped_expected as f64);
+                    let current_pos = Seconds(handle.position());
+                    if (current_pos - clamped_expected).abs() > Seconds(SEEK_TOLERANCE_SECONDS as f64) {
+                        handle.seek_to(clamped_expected.0);
                     }
                 }
             }
@@ -270,7 +266,7 @@ impl ImportedAudioSyncController {
                     handle.pause(Tween::default());
                 }
 
-                let current_pos = handle.position() as f32;
+                let current_pos = handle.position();
                 if current_pos > 0.0 {
                     handle.seek_to(0.0);
                 }
@@ -285,23 +281,23 @@ impl ImportedAudioSyncController {
     pub fn try_get_source_seconds_at_playhead(
         &mut self,
         engine: &mut PlaybackEngine,
-    ) -> Option<(f32, f32)> {
+    ) -> Option<(Seconds, Beats)> {
         let playhead_beat = engine.current_beat();
-        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat).as_f32();
+        self.start_time_seconds = engine.beat_to_timeline_time(self.start_beat);
         let source_seconds = engine.current_time() - self.start_time_seconds;
-        if !source_seconds.is_finite() {
+        if !source_seconds.0.is_finite() {
             return None;
         }
 
-        if self.clip_duration_seconds > 0.0 {
-            if source_seconds < -0.0001 || source_seconds > self.clip_duration_seconds + 0.0001 {
+        if self.clip_duration_seconds > Seconds::ZERO {
+            if source_seconds < Seconds(-0.0001) || source_seconds > self.clip_duration_seconds + Seconds(0.0001) {
                 return None;
             }
-            let clamped = source_seconds.clamp(0.0, self.clip_duration_seconds);
+            let clamped = source_seconds.clamp(Seconds::ZERO, self.clip_duration_seconds);
             return Some((clamped, playhead_beat));
         }
 
-        if source_seconds >= 0.0 {
+        if source_seconds >= Seconds::ZERO {
             Some((source_seconds, playhead_beat))
         } else {
             None
@@ -315,8 +311,8 @@ impl ImportedAudioSyncController {
         self.is_ready = false;
         self.audio_path = None;
         self.start_beat = Beats::ZERO;
-        self.start_time_seconds = 0.0;
-        self.encoder_delay_seconds = 0.0;
+        self.start_time_seconds = Seconds::ZERO;
+        self.encoder_delay_seconds = Seconds::ZERO;
         if let Some(ref mut cb) = self.on_clip_changed {
             cb(false);
         }
@@ -329,7 +325,7 @@ impl ImportedAudioSyncController {
         }
         self.sound_handle = None;
         self.sound_data = None;
-        self.clip_duration_seconds = 0.0;
+        self.clip_duration_seconds = Seconds::ZERO;
     }
 
     /// Applies pre-loaded audio data to the controller. Fast — only does
@@ -344,7 +340,7 @@ impl ImportedAudioSyncController {
         self.clip_duration_seconds = preloaded.clip_duration;
         self.audio_path = Some(preloaded.path.clone());
         self.start_beat = preloaded.start_beat;
-        self.start_time_seconds = 0.0;
+        self.start_time_seconds = Seconds::ZERO;
         self.encoder_delay_seconds = preloaded.encoder_delay;
 
         // Play the sound immediately paused (equivalent to audioSource.clip = audioClip).
@@ -365,14 +361,14 @@ impl ImportedAudioSyncController {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let delay_info = if self.encoder_delay_seconds > 0.0 {
-            format!(" encoderDelay={:.1}ms", self.encoder_delay_seconds * 1000.0)
+        let delay_info = if self.encoder_delay_seconds > Seconds::ZERO {
+            format!(" encoderDelay={:.1}ms", self.encoder_delay_seconds.0 * 1000.0)
         } else {
             String::new()
         };
         log::info!(
             "[ImportedAudioSyncController] Imported audio attached for sync: '{}' startBeat={:.2}{}",
-            file_name, self.start_beat.as_f32(), delay_info
+            file_name, self.start_beat.0, delay_info
         );
 
         Ok(())
@@ -386,19 +382,19 @@ impl ImportedAudioSyncController {
 /// AudioManager::play call happens on the main thread via `apply_preloaded`.
 pub struct PreloadedAudioData {
     pub sound_data: StaticSoundData,
-    pub encoder_delay: f32,
-    pub clip_duration: f32,
+    pub encoder_delay: Seconds,
+    pub clip_duration: Seconds,
     pub path: String,
     pub start_beat: Beats,
 }
 
 /// Performs the expensive audio loading work (file I/O + decode + ffprobe).
 /// Safe to call from any thread — returns data to be applied on main thread.
-pub fn preload_audio(path: &str, start_beat_offset: f32) -> Result<PreloadedAudioData, String> {
+pub fn preload_audio(path: &str, start_beat_offset: Beats) -> Result<PreloadedAudioData, String> {
     let sound_data = StaticSoundData::from_file(path)
         .map_err(|e| format!("Failed to load audio: {}", e))?;
 
-    let clip_duration = sound_data.duration().as_secs_f32();
+    let clip_duration = sound_data.duration().as_secs_f64();
     if clip_duration <= 0.0 {
         return Err("Decoded audio clip has zero duration".to_string());
     }
@@ -408,9 +404,9 @@ pub fn preload_audio(path: &str, start_beat_offset: f32) -> Result<PreloadedAudi
     Ok(PreloadedAudioData {
         sound_data,
         encoder_delay,
-        clip_duration,
+        clip_duration: Seconds(clip_duration),
         path: path.to_string(),
-        start_beat: Beats::from_f32(start_beat_offset.max(0.0)),
+        start_beat: start_beat_offset.max(Beats::ZERO),
     })
 }
 
@@ -418,9 +414,9 @@ pub fn preload_audio(path: &str, start_beat_offset: f32) -> Result<PreloadedAudi
 
 /// Port of C# ProbeEncoderDelaySeconds(string audioPath).
 /// Returns 0 for lossless formats or when ffprobe is unavailable.
-fn probe_encoder_delay_seconds(audio_path: &str) -> f32 {
+fn probe_encoder_delay_seconds(audio_path: &str) -> Seconds {
     if audio_path.is_empty() {
-        return 0.0;
+        return Seconds::ZERO;
     }
 
     let ext = Path::new(audio_path)
@@ -431,26 +427,26 @@ fn probe_encoder_delay_seconds(audio_path: &str) -> f32 {
 
     // Lossless formats have no encoder delay.
     if ext == "wav" || ext == "aif" || ext == "aiff" {
-        return 0.0;
+        return Seconds::ZERO;
     }
 
     let ffprobe = match resolve_ffprobe_binary() {
         Some(p) => p,
-        None => return 0.0,
+        None => return Seconds::ZERO,
     };
 
     let output = match run_ffprobe_query(&ffprobe, audio_path) {
         Some(o) => o,
-        None => return 0.0,
+        None => return Seconds::ZERO,
     };
 
     let trimmed = output.trim();
     if let Ok(start_time) = trimmed.parse::<f32>()
         && start_time > 0.0001 && start_time <= MAX_ENCODER_DELAY_SECONDS {
-            return start_time;
+            return Seconds(start_time as f64);
         }
 
-    0.0
+    Seconds::ZERO
 }
 
 /// Port of C# RunFfprobeQuery(string ffprobePath, string audioPath).

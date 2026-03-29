@@ -1,4 +1,4 @@
-use manifold_core::Beats;
+use manifold_core::{Beats, Bpm};
 use manifold_editing::command::Command;
 use manifold_editing::commands::clip::{MoveClipCommand, TrimClipCommand, MuteClipCommand, AddClipCommand, DeleteClipCommand};
 use manifold_editing::commands::settings::ChangeBpmCommand;
@@ -91,7 +91,7 @@ fn change_bpm_undo_roundtrip() {
     let old_bpm = project.settings.bpm.0;
     let new_bpm = 120.0;
 
-    let mut cmd = ChangeBpmCommand::new(old_bpm, new_bpm);
+    let mut cmd = ChangeBpmCommand::new(Bpm(old_bpm), Bpm(new_bpm));
 
     cmd.execute(&mut project);
     assert!((project.settings.bpm.0 - new_bpm).abs() < 0.01);
@@ -143,7 +143,7 @@ fn undo_manager_multi_command_roundtrip() {
     let original_beat = project.timeline.layers[0].clips[0].start_beat;
 
     // Command 1: change BPM
-    let mut cmd1 = Box::new(ChangeBpmCommand::new(original_bpm, 120.0));
+    let mut cmd1 = Box::new(ChangeBpmCommand::new(Bpm(original_bpm), Bpm(120.0)));
     cmd1.execute(&mut project);
     undo_mgr.record(cmd1);
 

@@ -91,7 +91,7 @@ impl ClipHitTester {
             }
 
             let clip_start_f32 = clip.start_beat.as_f32();
-            let clip_end = clip_start_f32 + clip.duration_beats;
+            let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
             // Unity line 76: beat range check
             if beat_at_pointer < clip_start_f32 || beat_at_pointer >= clip_end {
                 continue;
@@ -99,7 +99,7 @@ impl ClipHitTester {
 
             // Unity lines 80-81: determine hit region
             let local_px = (beat_at_pointer - clip_start_f32) * ppb;
-            let clip_width_px = clip.duration_beats * ppb;
+            let clip_width_px = clip.duration_beats.as_f32() * ppb;
 
             // Trim handle detection — proportional width so narrow clips
             // stay grabbable (≥70% body). Caps at 8px for wide clips.
@@ -161,7 +161,7 @@ impl ClipHitTester {
             }
             // Unity line 125: overlap check
             let clip_start_f32 = clip.start_beat.as_f32();
-            let clip_end = clip_start_f32 + clip.duration_beats;
+            let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
             if clip_end > min_beat && clip_start_f32 < max_beat {
                 results.push(clip.clip_id.clone());
             }
@@ -192,7 +192,7 @@ mod tests {
             clip_id: ClipId::new(id),
             layer_index: layer,
             start_beat: Beats::from_f32(start),
-            duration_beats: duration,
+            duration_beats: Beats::from_f32(duration),
             name: String::new(),
             color: Color32::new(100, 100, 100, 255),
             is_muted: false,

@@ -293,7 +293,7 @@ impl LayerBitmapRenderer {
         // Paint clips on top of grid (Unity lines 210-232)
         for clip in clips {
             let clip_start_f32 = clip.start_beat.as_f32();
-            let end_beat = clip_start_f32 + clip.duration_beats;
+            let end_beat = clip_start_f32 + clip.duration_beats.as_f32();
             if end_beat <= viewport_min_beat || clip_start_f32 >= viewport_max_beat {
                 continue;
             }
@@ -347,8 +347,8 @@ impl LayerBitmapRenderer {
                     && self.layer_index <= region.end_layer
                 {
                     let region_start_px =
-                        (region.start_beat - viewport_min_beat) * scaled_ppb;
-                    let region_end_px = (region.end_beat - viewport_min_beat) * scaled_ppb;
+                        (region.start_beat.as_f32() - viewport_min_beat) * scaled_ppb;
+                    let region_end_px = (region.end_beat.as_f32() - viewport_min_beat) * scaled_ppb;
                     let rx = region_start_px.round().max(0.0) as i32;
                     let rx1 = region_end_px.round().min(tex_w as f32) as i32;
                     let rw = rx1 - rx;
@@ -410,7 +410,7 @@ fn compute_clip_fingerprint(clips: &[ViewportClip], min_beat: f32, max_beat: f32
     let mut hash = clips.len() as i32;
     for clip in clips {
         let start_f32 = clip.start_beat.as_f32();
-        let end = start_f32 + clip.duration_beats;
+        let end = start_f32 + clip.duration_beats.as_f32();
         if end <= min_beat || start_f32 >= max_beat {
             continue;
         }
@@ -568,7 +568,7 @@ mod tests {
             clip_id: ClipId::new(id),
             layer_index: 0,
             start_beat: Beats::from_f32(start),
-            duration_beats: dur,
+            duration_beats: Beats::from_f32(dur),
             name: String::new(),
             color: color::CLIP_NORMAL,
             is_muted: false,

@@ -52,8 +52,8 @@ impl<'a> PercussionTimelinePlanner<'a> {
         let mut accepted_placements: Vec<PercussionClipPlacement> = Vec::with_capacity(events.len());
         let mut placement_index_by_quantized_slot: HashMap<i64, usize> = HashMap::new();
 
-        let quantizing = options.quantize_to_grid && options.quantize_step_beats > 0.0;
-        let quantize_step = if quantizing { options.quantize_step_beats } else { 0.0 };
+        let quantizing = options.quantize_to_grid && options.quantize_step_beats > Beats::ZERO;
+        let quantize_step = if quantizing { options.quantize_step_beats } else { Beats::ZERO };
         let energy_gate = options.minimum_energy_gate;
         let energy_gate_enabled = energy_gate > 0.0 && analysis.has_energy_envelope();
 
@@ -76,9 +76,9 @@ impl<'a> PercussionTimelinePlanner<'a> {
                 continue;
             }
 
-            let compensated_time = percussion_event.time_seconds + options.onset_compensation_seconds;
+            let compensated_time = Seconds(percussion_event.time_seconds as f64) + options.onset_compensation_seconds;
             let mapped_beat = match analysis.try_map_seconds_to_beat(
-                Seconds::from_f32(compensated_time),
+                compensated_time,
                 Some(self.beat_time_converter.as_mut()),
             ) {
                 Some(b) => b,
@@ -88,7 +88,7 @@ impl<'a> PercussionTimelinePlanner<'a> {
                 }
             };
 
-            let mut source_beat = mapped_beat + Beats::from_f32(options.start_beat_offset);
+            let mut source_beat = mapped_beat + options.start_beat_offset;
             source_beat = source_beat.max(Beats::ZERO);
 
             if energy_gate_enabled {
@@ -101,7 +101,7 @@ impl<'a> PercussionTimelinePlanner<'a> {
 
             let mut placement_beat = source_beat;
             if quantizing {
-                placement_beat = (source_beat / quantize_step).round() * quantize_step;
+                placement_beat = quantize_step * (source_beat / quantize_step).round();
             }
             placement_beat = placement_beat.max(Beats::ZERO);
 
@@ -130,7 +130,7 @@ impl<'a> PercussionTimelinePlanner<'a> {
             );
 
             if quantizing {
-                let quantized_tick = (placement_beat / quantize_step).as_f32().round() as i32;
+                let quantized_tick = (placement_beat / quantize_step).round() as i32;
                 let slot_key = Self::compose_quantized_slot_key(spacing_key, quantized_tick);
                 if let Some(&existing_index) = placement_index_by_quantized_slot.get(&slot_key) {
                     let existing = &accepted_placements[existing_index];

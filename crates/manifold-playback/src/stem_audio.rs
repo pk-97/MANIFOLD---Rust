@@ -356,7 +356,7 @@ impl StemAudioController {
         // (handled externally — master volume is set by set_expanded and caller)
 
         let start_time_seconds = engine.beat_to_timeline_time_immut(master.start_beat()).as_f32();
-        let expected_time = engine.current_time() - start_time_seconds;
+        let expected_time = engine.current_time().as_f32() - start_time_seconds;
         // No encoder delay for WAV stems.
 
         let state = engine.current_state();

@@ -28,14 +28,14 @@ pub fn check_auto_scroll(ui: &mut UIRoot, content_state: &crate::content_state::
         return false;
     }
 
-    let playhead_beat = content_state.current_beat as f32;
+    let playhead_beat = content_state.current_beat.as_f32();
     let ppb = ui.viewport.pixels_per_beat();
     let viewport_w = ui.viewport.tracks_rect().width;
     if viewport_w <= 0.0 || ppb <= 0.0 {
         return false;
     }
 
-    let scroll_x_beats = ui.viewport.scroll_x_beats();
+    let scroll_x_beats = ui.viewport.scroll_x_beats().as_f32();
     let playhead_px = (playhead_beat - scroll_x_beats) * ppb; // pixel offset from viewport left
 
     // Content expansion: if playhead approaches end of content, grow it.
@@ -92,7 +92,7 @@ pub fn push_state(
     ui.transport.set_play_state(tree, play_text, play_color);
 
     // Time display + BPM
-    let beat = content_state.current_beat as f32;
+    let beat = content_state.current_beat.as_f32();
     let time = content_state.current_time;
 
     {
@@ -109,9 +109,10 @@ pub fn push_state(
 
         // Unity FormatTime: "{minutes:D2}:{seconds:D2}.{tenths}"
         // Time first, then bar.beat.sixteenth — matches Unity exactly
-        let mins = (time / 60.0).floor() as i32;
-        let secs = (time % 60.0).floor() as i32;
-        let tenths = ((time * 10.0) % 10.0).floor() as i32;
+        let t = time.0;
+        let mins = (t / 60.0).floor() as i32;
+        let secs = (t % 60.0).floor() as i32;
+        let tenths = ((t * 10.0) % 10.0).floor() as i32;
         let time_str = format!("{:02}:{:02}.{}", mins, secs, tenths);
 
         // Beat display uses time_signature_numerator (not hardcoded 4)
@@ -274,7 +275,7 @@ pub fn push_state(
     }
 
     // Playhead + playing state
-    let playhead_beat = content_state.current_beat as f32;
+    let playhead_beat = content_state.current_beat.as_f32();
     ui.viewport.set_playhead(Beats::from_f32(playhead_beat));
     ui.viewport.set_playing(content_state.is_playing);
 
@@ -296,8 +297,8 @@ pub fn push_state(
             .unwrap_or((0, 0));
         ui.viewport.set_selection_region(Some(
             manifold_ui::panels::viewport::SelectionRegion {
-                start_beat: r.start_beat.as_f32(),
-                end_beat: r.end_beat.as_f32(),
+                start_beat: r.start_beat,
+                end_beat: r.end_beat,
                 start_layer,
                 end_layer,
             }
@@ -604,7 +605,7 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
                     clip_id: clip.id.clone(),
                     layer_index: i,
                     start_beat: clip.start_beat,
-                    duration_beats: clip.duration_beats.as_f32(),
+                    duration_beats: clip.duration_beats,
                     name,
                     color: clip_color,
                     is_muted: clip.is_muted,
@@ -655,7 +656,7 @@ pub fn sync_clip_positions(ui: &mut UIRoot, project: &Project) {
                 clip_id: clip.id.clone(),
                 layer_index: i,
                 start_beat: clip.start_beat,
-                duration_beats: clip.duration_beats.as_f32(),
+                duration_beats: clip.duration_beats,
                 name,
                 color: clip_color,
                 is_muted: clip.is_muted,

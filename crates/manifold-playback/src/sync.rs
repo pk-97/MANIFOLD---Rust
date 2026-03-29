@@ -8,7 +8,7 @@ use manifold_core::{Beats, Seconds};
 /// Port of C# ISyncTarget.cs lines 8-16.
 pub trait SyncTarget {
     fn current_state(&self) -> PlaybackState;
-    fn current_time(&self) -> f32;
+    fn current_time(&self) -> Seconds;
     fn is_playing(&self) -> bool;
     fn timeline_beat_to_time(&self, beat: Beats) -> Seconds;
     fn current_project(&self) -> Option<&Project>;
@@ -24,8 +24,8 @@ pub trait SyncArbiterTarget {
     fn set_external_time_sync(&mut self, value: bool);
     fn play(&mut self);
     fn pause(&mut self, clear_recording: bool);
-    fn nudge_time(&mut self, time: f32);
-    fn seek(&mut self, time: f32);
+    fn nudge_time(&mut self, time: Seconds);
+    fn seek(&mut self, time: Seconds);
 }
 
 /// Snapshot of read-only playback state for use when the engine is also
@@ -33,7 +33,7 @@ pub trait SyncArbiterTarget {
 /// then passed to sync controllers that need both read and write access.
 pub struct SyncTargetSnapshot {
     state: PlaybackState,
-    time: f32,
+    time: Seconds,
     bpm: f32,
 }
 
@@ -52,7 +52,7 @@ impl SyncTargetSnapshot {
 
 impl SyncTarget for SyncTargetSnapshot {
     fn current_state(&self) -> PlaybackState { self.state }
-    fn current_time(&self) -> f32 { self.time }
+    fn current_time(&self) -> Seconds { self.time }
     fn is_playing(&self) -> bool { self.state == PlaybackState::Playing }
     fn timeline_beat_to_time(&self, beat: Beats) -> Seconds {
         // Fallback: use BPM for beat→time conversion (no tempo map in snapshot).
@@ -73,7 +73,7 @@ pub struct SyncArbiter {
     pub manifold_owns_playback: bool,
     /// Wall-clock time when `manifold_owns_playback` was last set.
     /// Prevents premature clearing during the OSC→DAW→MIDI round trip.
-    owns_set_time: f32,
+    owns_set_time: Seconds,
 }
 
 /// Grace period (seconds) after setting manifold_owns before it can be cleared.
@@ -85,7 +85,7 @@ impl SyncArbiter {
         Self {
             suppress_next_transport: false,
             manifold_owns_playback: false,
-            owns_set_time: -999.0,
+            owns_set_time: Seconds(-999.0),
         }
     }
 
@@ -102,7 +102,7 @@ impl SyncArbiter {
     }
 
     /// Set manifold_owns with a wall-clock timestamp for grace period tracking.
-    pub fn set_manifold_owns_at(&mut self, now: f32) {
+    pub fn set_manifold_owns_at(&mut self, now: Seconds) {
         self.manifold_owns_playback = true;
         self.owns_set_time = now;
     }
@@ -110,8 +110,8 @@ impl SyncArbiter {
     /// Clear ownership only if the grace period has elapsed.
     /// Prevents MIDI Clock from clearing manifold_owns before the
     /// OSC→DAW→MIDI round trip completes.
-    pub fn clear_ownership_if_expired(&mut self, now: f32) {
-        if now - self.owns_set_time >= OWNERSHIP_GRACE_PERIOD {
+    pub fn clear_ownership_if_expired(&mut self, now: Seconds) {
+        if (now - self.owns_set_time).0 >= OWNERSHIP_GRACE_PERIOD as f64 {
             self.manifold_owns_playback = false;
         }
     }
@@ -134,13 +134,13 @@ impl SyncArbiter {
         true
     }
 
-    pub fn nudge_time(&self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, time: f32) -> bool {
+    pub fn nudge_time(&self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, time: Seconds) -> bool {
         if source != authority { return false; }
         target.nudge_time(time);
         true
     }
 
-    pub fn seek(&mut self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, time: f32) -> bool {
+    pub fn seek(&mut self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget, time: Seconds) -> bool {
         if source != authority { return false; }
         // NOTE: Unity's Seek() does NOT set SuppressNextTransport.
         // Only Play() and Pause() suppress echo. Seeks during playback are

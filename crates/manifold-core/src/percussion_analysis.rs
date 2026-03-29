@@ -213,7 +213,8 @@ impl PercussionBeatGrid {
     }
 
     /// Port of Unity PercussionBeatGrid.TryMapSecondsToBeat().
-    pub fn try_map_seconds_to_beat(&self, seconds: f32) -> Option<f32> {
+    pub fn try_map_seconds_to_beat(&self, seconds: Seconds) -> Option<Beats> {
+        let seconds = seconds.as_f32();
         if !self.has_usable_beats() || !seconds.is_finite() {
             return None;
         }
@@ -235,14 +236,14 @@ impl PercussionBeatGrid {
 
         if target_seconds <= first_beat_seconds {
             let beat = beat_offset + ((target_seconds - first_beat_seconds) / interval);
-            return if beat.is_finite() { Some(beat) } else { None };
+            return if beat.is_finite() { Some(Beats::from_f32(beat)) } else { None };
         }
 
         if target_seconds >= self.beat_times_seconds[last_index] {
             let beat = beat_offset
                 + last_index as f32
                 + ((target_seconds - self.beat_times_seconds[last_index]) / interval);
-            return if beat.is_finite() { Some(beat) } else { None };
+            return if beat.is_finite() { Some(Beats::from_f32(beat)) } else { None };
         }
 
         // Binary search for the containing segment.
@@ -267,7 +268,7 @@ impl PercussionBeatGrid {
         let t = (target_seconds - start) / segment;
         let beat = beat_offset + lo as f32 + t;
         if beat.is_finite() {
-            Some(beat)
+            Some(Beats::from_f32(beat))
         } else {
             None
         }
@@ -433,12 +434,12 @@ impl PercussionAnalysisData {
         // reprojection path (PercussionClipReprojectionPlanner), which
         // always uses the converter.
         if let Some(converter) = fallback_converter {
-            let beat = converter.seconds_to_beat(seconds.as_f32());
-            return if beat.is_finite() { Some(Beats::from_f32(beat)) } else { None };
+            let beat = converter.seconds_to_beat(seconds);
+            return if beat.0.is_finite() { Some(beat) } else { None };
         }
 
         if let Some(ref grid) = self.beat_grid {
-            return grid.try_map_seconds_to_beat(seconds.as_f32()).map(Beats::from_f32);
+            return grid.try_map_seconds_to_beat(seconds);
         }
 
         None
@@ -515,11 +516,11 @@ impl PercussionClipBinding {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PercussionImportOptions {
-    pub start_beat_offset: f32,
+    pub start_beat_offset: Beats,
     pub quantize_to_grid: bool,
-    pub quantize_step_beats: f32,
+    pub quantize_step_beats: Beats,
     pub default_clip_duration_beats: Beats,
-    pub onset_compensation_seconds: f32,
+    pub onset_compensation_seconds: Seconds,
     pub minimum_energy_gate: f32,
     pub bindings: Vec<PercussionClipBinding>,
 }
@@ -527,11 +528,11 @@ pub struct PercussionImportOptions {
 impl Default for PercussionImportOptions {
     fn default() -> Self {
         Self {
-            start_beat_offset: 0.0,
+            start_beat_offset: Beats::ZERO,
             quantize_to_grid: true,
-            quantize_step_beats: 0.25,
+            quantize_step_beats: Beats(0.25),
             default_clip_duration_beats: Beats(0.25),
-            onset_compensation_seconds: 0.0,
+            onset_compensation_seconds: Seconds::ZERO,
             minimum_energy_gate: 0.0,
             bindings: Vec::new(),
         }
@@ -626,7 +627,7 @@ impl PercussionPlacementPlan {
 
 /// Port of Unity IBeatTimeConverter interface.
 pub trait BeatTimeConverter {
-    fn seconds_to_beat(&mut self, seconds: f32) -> f32;
+    fn seconds_to_beat(&mut self, seconds: Seconds) -> Beats;
 }
 
 /// Port of Unity ProjectBeatTimeConverter class.
@@ -642,13 +643,13 @@ impl<'a> ProjectBeatTimeConverter<'a> {
 }
 
 impl<'a> BeatTimeConverter for ProjectBeatTimeConverter<'a> {
-    fn seconds_to_beat(&mut self, seconds: f32) -> f32 {
+    fn seconds_to_beat(&mut self, seconds: Seconds) -> Beats {
         let fallback_bpm = self.project.settings.bpm;
         TempoMapConverter::seconds_to_beat(
             &mut self.project.tempo_map,
-            Seconds::from_f32(seconds),
+            seconds,
             fallback_bpm,
-        ).as_f32()
+        )
     }
 }
 
@@ -663,17 +664,17 @@ impl PercussionClipReprojectionPlanner {
     /// Port of Unity TryComputeAlignedSourceBeat().
     pub fn try_compute_aligned_source_beat(
         placement: &ImportedPercussionClipPlacement,
-        source_time_seconds: f32,
+        source_time_seconds: Seconds,
         beat_time_converter: &mut dyn BeatTimeConverter,
-    ) -> Option<f32> {
+    ) -> Option<Beats> {
         if placement.clip_id.is_empty() {
             return None;
         }
 
-        let seconds = source_time_seconds.max(0.0);
+        let seconds = source_time_seconds.max(Seconds::ZERO);
         let mut source_beat =
             beat_time_converter.seconds_to_beat(seconds) + placement.start_beat_offset;
-        if !source_beat.is_finite() {
+        if !source_beat.0.is_finite() {
             return None;
         }
 
@@ -682,11 +683,11 @@ impl PercussionClipReprojectionPlanner {
         let slope = placement.alignment_slope_beats_per_second;
         if slope != 0.0 {
             let pivot = placement.alignment_pivot_seconds;
-            source_beat += slope * (seconds - pivot);
+            source_beat += Beats(slope as f64 * (seconds - pivot).0);
         }
 
-        source_beat = source_beat.max(0.0);
-        if source_beat.is_finite() {
+        source_beat = source_beat.max(Beats::ZERO);
+        if source_beat.0.is_finite() {
             Some(source_beat)
         } else {
             None
@@ -697,7 +698,7 @@ impl PercussionClipReprojectionPlanner {
     pub fn try_compute_placement_beat(
         placement: &ImportedPercussionClipPlacement,
         beat_time_converter: &mut dyn BeatTimeConverter,
-    ) -> Option<(f32, f32)> {
+    ) -> Option<(Beats, Beats)> {
         let source_beat = Self::try_compute_aligned_source_beat(
             placement,
             placement.source_time_seconds,
@@ -705,13 +706,13 @@ impl PercussionClipReprojectionPlanner {
         )?;
 
         let mut placement_beat = source_beat;
-        if placement.quantize_to_grid && placement.quantize_step_beats > 0.0 {
-            placement_beat =
-                (source_beat / placement.quantize_step_beats).round() * placement.quantize_step_beats;
+        if placement.quantize_to_grid && placement.quantize_step_beats > Beats::ZERO {
+            let ratio = (source_beat / placement.quantize_step_beats).round();
+            placement_beat = placement.quantize_step_beats * ratio;
         }
-        placement_beat = placement_beat.max(0.0);
+        placement_beat = placement_beat.max(Beats::ZERO);
 
-        if source_beat.is_finite() && placement_beat.is_finite() {
+        if source_beat.0.is_finite() && placement_beat.0.is_finite() {
             Some((source_beat, placement_beat))
         } else {
             None
@@ -787,8 +788,8 @@ mod tests {
             0.0,
         );
         // Beat 0 at 0.0s, beat 1 at 0.5s, etc.
-        let beat = grid.try_map_seconds_to_beat(0.25).unwrap();
-        assert!((beat - 0.5).abs() < 0.01); // Halfway between beat 0 and 1
+        let beat = grid.try_map_seconds_to_beat(Seconds(0.25)).unwrap();
+        assert!((beat.0 - 0.5).abs() < 0.01); // Halfway between beat 0 and 1
     }
 
     #[test]

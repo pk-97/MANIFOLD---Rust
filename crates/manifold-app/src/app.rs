@@ -6,7 +6,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
-use manifold_core::LayerId;
+use manifold_core::{Bpm, LayerId};
 use manifold_core::project::Project;
 use manifold_core::types::LayerType;
 use manifold_core::layer::Layer;
@@ -463,7 +463,7 @@ impl Application {
     fn navigate_cursor(&mut self, direction: manifold_ui::cursor_nav::Direction) {
         use manifold_ui::cursor_nav::{navigate_cursor, NavResult, NavLayerInfo, NavClipInfo};
 
-        let current_beat = self.selection.insert_cursor_beat.unwrap_or(self.content_state.current_beat as f32);
+        let current_beat = self.selection.insert_cursor_beat.unwrap_or(self.content_state.current_beat.as_f32());
         let active_idx = self.active_layer_id.as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
         let insert_cursor_idx = self.selection.insert_cursor_layer_id.as_ref()
@@ -530,11 +530,11 @@ impl Application {
         match field {
             TextInputField::Bpm => {
                 if let Ok(new_bpm) = text.parse::<f32>() {
-                    let new_bpm = new_bpm.clamp(20.0, 300.0);
+                    let new_bpm = Bpm(new_bpm.clamp(20.0, 300.0));
                     if let Some(project) = Some(&mut self.local_project) {
-                        let old_bpm = project.settings.bpm.0;
+                        let old_bpm = project.settings.bpm;
                         // Unity: skip if approximately equal
-                        if (old_bpm - new_bpm).abs() >= 0.01 {
+                        if (old_bpm.0 - new_bpm.0).abs() >= 0.01 {
                             // Must use with_tempo_map so the tempo map point at
                             // beat 0 is updated — sync_project_bpm_from_current_beat
                             // reads from the tempo map every tick and would revert
@@ -1200,7 +1200,7 @@ impl ApplicationHandler for Application {
                     queue: Arc::clone(&gpu.queue),
                 },
                 frame_count: 0,
-                time_since_start: 0.0,
+                time_since_start: manifold_core::Seconds::ZERO,
                 last_data_version: 0,
                 midi_input,
                 clip_launcher: manifold_playback::clip_launcher::ClipLauncher::new(),
@@ -1217,7 +1217,7 @@ impl ApplicationHandler for Application {
                 link_beat_offset: f64::NAN,
                 led_controller: None,
                 cached_midi_device_names: Vec::new(),
-                last_midi_device_scan_time: -10.0,
+                last_midi_device_scan_time: manifold_core::Seconds(-10.0),
                 cached_project_snapshot: None,
                 cached_midi_clock_position: String::new(),
                 cached_midi_clock_device: String::new(),
@@ -1539,7 +1539,7 @@ impl ApplicationHandler for Application {
                             // Shift + scroll Y → horizontal pan
                             let ppb = self.ui_root.viewport.pixels_per_beat();
                             let beat_delta = dy * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
-                            let new_x = (self.ui_root.viewport.scroll_x_beats() - beat_delta).max(0.0);
+                            let new_x = (self.ui_root.viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
                             if self.ui_root.viewport.set_scroll(
                                 new_x,
                                 self.ui_root.viewport.scroll_y_px(),
@@ -1550,7 +1550,7 @@ impl ApplicationHandler for Application {
                             // Plain scroll → vertical track scroll
                             let new_y = (self.ui_root.viewport.scroll_y_px() - dy).max(0.0);
                             if self.ui_root.viewport.set_scroll(
-                                self.ui_root.viewport.scroll_x_beats(),
+                                self.ui_root.viewport.scroll_x_beats().as_f32(),
                                 new_y,
                             ) {
                                 // Sync layer headers with viewport vertical scroll
@@ -1564,7 +1564,7 @@ impl ApplicationHandler for Application {
                         if dx.abs() > 0.01 && !self.modifiers.alt {
                             let ppb = self.ui_root.viewport.pixels_per_beat();
                             let beat_delta = dx * manifold_ui::color::SCROLL_SENSITIVITY / ppb;
-                            let new_x = (self.ui_root.viewport.scroll_x_beats() - beat_delta).max(0.0);
+                            let new_x = (self.ui_root.viewport.scroll_x_beats().as_f32() - beat_delta).max(0.0);
                             if self.ui_root.viewport.set_scroll(
                                 new_x,
                                 self.ui_root.viewport.scroll_y_px(),
@@ -1830,7 +1830,7 @@ impl ApplicationHandler for Application {
                     self.import_video_files(std::slice::from_ref(&path));
                 } else if crate::project_io::is_supported_midi_extension(&path) {
                     // MIDI files → route through ProjectIOService
-                    let drop_beat = self.content_state.current_beat as f32;
+                    let drop_beat = self.content_state.current_beat.as_f32();
                     let drop_layer = self.active_layer_id.as_ref()
                         .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
                         .unwrap_or(0) as i32;

@@ -13,6 +13,7 @@ use manifold_playback::audio_decoder::DecodedAudio;
 use manifold_renderer::surface::SurfaceWrapper;
 
 use crate::app::{Application, PendingAudioLoadResult};
+use manifold_core::Seconds;
 use crate::content_command::ContentCommand;
 use crate::project_io::ProjectIOAction;
 use crate::window_registry::{WindowRole, WindowState};
@@ -25,7 +26,7 @@ impl Application {
         let current_time = self.content_state.current_time;
         let current_path = self.current_project_path.clone();
         // Save the local project snapshot (best effort — authoritative is on content thread)
-        self.local_project.saved_playhead_time = current_time;
+        self.local_project.saved_playhead_time = current_time.as_f32();
         if let Some(path) = current_path.as_deref() {
             match manifold_io::saver::save_project(&mut self.local_project, path, None, false) {
                 Ok(()) => {
@@ -43,13 +44,13 @@ impl Application {
     pub(crate) fn save_project_as(&mut self) {
         self.send_content_cmd(ContentCommand::PauseRendering);
         let current_time = self.content_state.current_time;
-        self.local_project.saved_playhead_time = current_time;
+        self.local_project.saved_playhead_time = current_time.as_f32();
         let parent_win = self.primary_window_id
             .and_then(|id| self.window_registry.get(&id))
             .map(|ws| ws.window.as_ref());
         let action = self.project_io.save_project_as(
             &mut self.local_project,
-            current_time,
+            current_time.as_f32(),
             &mut EditingService::new(), // placeholder — mark clean via content thread
             &mut self.user_prefs,
             parent_win,
@@ -198,7 +199,7 @@ impl Application {
         let content_tx = content_tx.clone();
 
         let bpm = self.local_project.settings.bpm.0;
-        let insert_beat = self.content_state.current_beat as f32;
+        let insert_beat = self.content_state.current_beat.as_f32();
         let layer_id = self.active_layer_id.as_ref()
             .and_then(|lid| {
                 self.local_project.timeline.layer_index_for_id(lid)
@@ -357,7 +358,7 @@ impl Application {
 
             // Restore playhead position
             if saved_time > 0.0 {
-                self.send_content_cmd(ContentCommand::SeekTo(saved_time));
+                self.send_content_cmd(ContentCommand::SeekTo(Seconds::from_f32(saved_time)));
             }
 
             // Resize compositor + generators to project resolution
@@ -486,7 +487,7 @@ impl Application {
             .spawn(move || {
                 let t_audio = std::time::Instant::now();
                 let preloaded =
-                    match manifold_playback::audio_sync::preload_audio(&audio_path, start_beat) {
+                    match manifold_playback::audio_sync::preload_audio(&audio_path, manifold_core::Beats::from_f32(start_beat)) {
                         Ok(p) => p,
                         Err(e) => {
                             log::warn!("[Audio] Background audio load failed: {}", e);

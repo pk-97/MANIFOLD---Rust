@@ -1,4 +1,4 @@
-use manifold_core::{Beats, ClipId};
+use manifold_core::{Beats, Seconds, ClipId};
 // Port of Unity PercussionAlignmentService.cs (538 lines).
 // Application-layer service for percussion alignment calibration, nudge, reset, and reprojection.
 // No UI dependencies.
@@ -20,23 +20,23 @@ const CALIBRATION_EPSILON_BEATS: f32 = 0.0001;
 #[derive(Debug, Clone)]
 pub struct PercussionAlignmentSnapshot {
     pub clip_id: ClipId,
-    pub old_offset_beats: f32,
+    pub old_offset_beats: Beats,
     pub old_slope_beats_per_second: f32,
-    pub old_pivot_seconds: f32,
-    pub new_offset_beats: f32,
+    pub old_pivot_seconds: Seconds,
+    pub new_offset_beats: Beats,
     pub new_slope_beats_per_second: f32,
-    pub new_pivot_seconds: f32,
+    pub new_pivot_seconds: Seconds,
 }
 
 impl PercussionAlignmentSnapshot {
     pub fn new(
         clip_id: ClipId,
-        old_offset_beats: f32,
+        old_offset_beats: Beats,
         old_slope_beats_per_second: f32,
-        old_pivot_seconds: f32,
-        new_offset_beats: f32,
+        old_pivot_seconds: Seconds,
+        new_offset_beats: Beats,
         new_slope_beats_per_second: f32,
-        new_pivot_seconds: f32,
+        new_pivot_seconds: Seconds,
     ) -> Self {
         Self {
             clip_id,
@@ -107,6 +107,9 @@ impl PercussionAlignmentService {
         source_seconds: f32,
         current_audio_start_beat: f32,
     ) -> AlignmentResult {
+        let playhead_beat = Beats::from_f32(playhead_beat);
+        let source_seconds = Seconds::from_f32(source_seconds);
+        let current_audio_start_beat = Beats::from_f32(current_audio_start_beat);
         let has_placements = project
             .imported_percussion_clip_placements()
             .is_some_and(|p| !p.is_empty());
@@ -165,8 +168,8 @@ impl PercussionAlignmentService {
     ) -> AlignmentResult {
         self.apply_alignment_delta(
             project,
-            delta_beats,
-            current_audio_start_beat,
+            Beats::from_f32(delta_beats),
+            Beats::from_f32(current_audio_start_beat),
             "Nudge percussion alignment",
         )
     }
@@ -177,6 +180,7 @@ impl PercussionAlignmentService {
         project: &mut Project,
         current_audio_start_beat: f32,
     ) -> AlignmentResult {
+        let current_audio_start_beat = Beats::from_f32(current_audio_start_beat);
         if project.timeline.layers.is_empty() {
             return AlignmentResult::default();
         }
@@ -206,7 +210,7 @@ impl PercussionAlignmentService {
                 .iter()
                 .find(|p| p.clip_id == reference_clip_id)
                 .map(|p| p.start_beat_offset)
-                .unwrap_or(0.0)
+                .unwrap_or(Beats::ZERO)
         };
 
         let provenance_snapshot: Vec<ImportedPercussionClipPlacement> = project
@@ -227,9 +231,9 @@ impl PercussionAlignmentService {
             let old_slope = placement.alignment_slope_beats_per_second;
             let old_pivot = placement.alignment_pivot_seconds;
 
-            if old_offset.abs() > CALIBRATION_EPSILON_BEATS
+            if old_offset.abs() > Beats(CALIBRATION_EPSILON_BEATS as f64)
                 || old_slope.abs() > CALIBRATION_EPSILON_BEATS
-                || old_pivot.abs() > CALIBRATION_EPSILON_BEATS
+                || old_pivot.abs() > Seconds(CALIBRATION_EPSILON_BEATS as f64)
             {
                 any_alignment_change = true;
             }
@@ -239,9 +243,9 @@ impl PercussionAlignmentService {
                 old_offset,
                 old_slope,
                 old_pivot,
+                Beats::ZERO,
                 0.0,
-                0.0,
-                0.0,
+                Seconds::ZERO,
             ));
         }
 
@@ -251,7 +255,7 @@ impl PercussionAlignmentService {
 
         if !any_alignment_change
             && (current_audio_start_beat - target_audio_start_beat).abs()
-                <= CALIBRATION_EPSILON_BEATS
+                <= Beats(CALIBRATION_EPSILON_BEATS as f64)
         {
             return AlignmentResult::default();
         }
@@ -288,7 +292,7 @@ impl PercussionAlignmentService {
         // Compute projected beats for all placements using the beat-time converter.
         // The converter borrows project mutably, so resolve timeline clip positions
         // separately before and after to avoid simultaneous borrows.
-        let projected_beats: Vec<Option<f32>> = {
+        let projected_beats: Vec<Option<Beats>> = {
             let mut converter = ProjectBeatTimeConverter::new(project);
             provenance_snapshot
                 .iter()
@@ -307,7 +311,7 @@ impl PercussionAlignmentService {
 
         for (placement, projected_beat_opt) in provenance_snapshot.iter().zip(projected_beats.iter()) {
             let projected_beat = match projected_beat_opt {
-                Some(pb) => Beats::from(*pb),
+                Some(pb) => *pb,
                 None => {
                     result.invalid += 1;
                     continue;
@@ -379,19 +383,19 @@ impl PercussionAlignmentService {
     fn apply_alignment_delta(
         &mut self,
         project: &mut Project,
-        delta_beats: f32,
-        current_audio_start_beat: f32,
+        delta_beats: Beats,
+        current_audio_start_beat: Beats,
         undo_description: &str,
     ) -> AlignmentResult {
         if project.timeline.layers.is_empty() {
             return AlignmentResult::default();
         }
 
-        if !delta_beats.is_finite() {
+        if !delta_beats.0.is_finite() {
             return AlignmentResult::default();
         }
 
-        if delta_beats.abs() <= CALIBRATION_EPSILON_BEATS {
+        if delta_beats.abs() <= Beats(CALIBRATION_EPSILON_BEATS as f64) {
             return AlignmentResult::default();
         }
 
@@ -449,8 +453,8 @@ impl PercussionAlignmentService {
         &mut self,
         project: &mut Project,
         snapshots: Vec<PercussionAlignmentSnapshot>,
-        old_audio_start_beat: f32,
-        target_audio_start_beat: f32,
+        old_audio_start_beat: Beats,
+        target_audio_start_beat: Beats,
         undo_description: &str,
     ) -> AlignmentResult {
         let mut result = AlignmentResult::default();
@@ -459,12 +463,12 @@ impl PercussionAlignmentService {
             return result;
         }
 
-        let new_audio_start_beat = target_audio_start_beat.max(0.0);
+        let new_audio_start_beat = target_audio_start_beat.max(Beats::ZERO);
 
         let alignment_command = Box::new(ApplyPercussionAlignmentCommand::new(
             snapshots.clone(),
-            old_audio_start_beat,
-            new_audio_start_beat,
+            old_audio_start_beat.as_f32(),
+            new_audio_start_beat.as_f32(),
             undo_description.to_string(),
         ));
 
@@ -492,7 +496,7 @@ impl PercussionAlignmentService {
                 .unwrap()
                 .clone();
             // Compute projected beats first (converter borrows project mutably).
-            let projected_beats: Vec<Option<f32>> = {
+            let projected_beats: Vec<Option<Beats>> = {
                 let mut converter = ProjectBeatTimeConverter::new(project);
                 provenance_snapshot
                     .iter()
@@ -583,10 +587,9 @@ fn find_first_valid_placement_id(
 }
 
 /// Port of Unity PercussionAlignmentService.SnapBeatToNearestBarStart().
-fn snap_beat_to_nearest_bar_start(beat: f32, project: &Project) -> f32 {
-    let beats_per_bar = (project.settings.time_signature_numerator).max(1);
-    let beats_per_bar = beats_per_bar as f32;
-    ((beat / beats_per_bar).round() * beats_per_bar).max(0.0)
+fn snap_beat_to_nearest_bar_start(beat: Beats, project: &Project) -> Beats {
+    let beats_per_bar = (project.settings.time_signature_numerator).max(1) as f64;
+    Beats(((beat.0 / beats_per_bar).round() * beats_per_bar).max(0.0))
 }
 
 /// Port of Unity PercussionAlignmentService.BuildReprojectionMoveCommands().
@@ -594,7 +597,7 @@ fn snap_beat_to_nearest_bar_start(beat: f32, project: &Project) -> f32 {
 /// `projected_beats` is pre-computed (one entry per provenance entry, None = invalid).
 fn build_reprojection_move_commands_inner(
     provenance: &[ImportedPercussionClipPlacement],
-    projected_beats: &[Option<f32>],
+    projected_beats: &[Option<Beats>],
     project: &mut Project,
 ) -> (Vec<Box<dyn Command>>, i32, i32, i32) {
     let mut moved = 0i32;
@@ -604,7 +607,7 @@ fn build_reprojection_move_commands_inner(
 
     for (placement, projected_beat_opt) in provenance.iter().zip(projected_beats.iter()) {
         let projected_beat = match projected_beat_opt {
-            Some(pb) => Beats::from(*pb),
+            Some(pb) => *pb,
             None => {
                 invalid += 1;
                 continue;

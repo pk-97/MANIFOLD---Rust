@@ -66,8 +66,8 @@ impl CoordinateMapper {
 
     /// Convert pixel X position to beat.
     /// Unity line 56-58.
-    pub fn pixel_to_beat(&self, pixel_x: f32) -> f32 {
-        (pixel_x + self.scroll_offset_x) / self.pixels_per_beat
+    pub fn pixel_to_beat(&self, pixel_x: f32) -> Beats {
+        Beats::from_f32((pixel_x + self.scroll_offset_x) / self.pixels_per_beat)
     }
 
     /// Convert beat to pixel X in content space (not scroll-adjusted).
@@ -79,14 +79,14 @@ impl CoordinateMapper {
 
     /// Convert beat duration to pixel width.
     /// Unity line 73-75.
-    pub fn beat_duration_to_width(&self, beats: f32) -> f32 {
-        beats * self.pixels_per_beat
+    pub fn beat_duration_to_width(&self, beats: Beats) -> f32 {
+        beats.as_f32() * self.pixels_per_beat
     }
 
     /// Convert pixel width to beat duration.
     /// Unity line 81-83.
-    pub fn width_to_beat_duration(&self, width: f32) -> f32 {
-        width / self.pixels_per_beat
+    pub fn width_to_beat_duration(&self, width: f32) -> Beats {
+        Beats::from_f32(width / self.pixels_per_beat)
     }
 
     // ── Zoom management ─────────────────────────────────────────────
@@ -106,16 +106,16 @@ impl CoordinateMapper {
 
     /// Calculate zoom level to fit timeline duration in viewport width.
     /// Unity line 109-115.
-    pub fn calculate_fit_zoom(&self, timeline_beats: f32, viewport_width: f32) -> f32 {
-        if timeline_beats <= 0.0 || viewport_width <= 0.0 {
+    pub fn calculate_fit_zoom(&self, timeline_beats: Beats, viewport_width: f32) -> f32 {
+        if timeline_beats.as_f32() <= 0.0 || viewport_width <= 0.0 {
             return self.pixels_per_beat;
         }
-        viewport_width / timeline_beats
+        viewport_width / timeline_beats.as_f32()
     }
 
     /// Get content width needed for timeline duration at current zoom.
     /// Unity line 120-123.
-    pub fn get_content_width(&self, timeline_beats: f32) -> f32 {
+    pub fn get_content_width(&self, timeline_beats: Beats) -> f32 {
         self.beat_duration_to_width(timeline_beats)
     }
 
@@ -289,7 +289,7 @@ mod tests {
         mapper.set_scroll_offset_x(50.0);
         let pixel = mapper.beat_to_pixel(Beats::from_f32(7.5));
         let beat = mapper.pixel_to_beat(pixel);
-        assert!((beat - 7.5).abs() < 0.001);
+        assert!((beat.as_f32() - 7.5).abs() < 0.001);
     }
 
     #[test]
@@ -306,10 +306,10 @@ mod tests {
     #[test]
     fn duration_width_roundtrip() {
         let mapper = CoordinateMapper::new();
-        let beats = 3.5;
+        let beats = Beats::from_f32(3.5);
         let width = mapper.beat_duration_to_width(beats);
         let result = mapper.width_to_beat_duration(width);
-        assert!((result - beats).abs() < 0.001);
+        assert!((result.as_f32() - beats.as_f32()).abs() < 0.001);
     }
 
     // ── Zoom management ──────────────────────────────────────────────
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn calculate_fit_zoom() {
         let mapper = CoordinateMapper::new();
-        let fit = mapper.calculate_fit_zoom(16.0, 800.0);
+        let fit = mapper.calculate_fit_zoom(Beats::from_f32(16.0), 800.0);
         assert!((fit - 800.0 / 16.0).abs() < 0.001);
     }
 
@@ -351,8 +351,8 @@ mod tests {
     fn calculate_fit_zoom_zero_input() {
         let mapper = CoordinateMapper::new();
         let current = mapper.pixels_per_beat();
-        assert!((mapper.calculate_fit_zoom(0.0, 800.0) - current).abs() < 0.001);
-        assert!((mapper.calculate_fit_zoom(16.0, 0.0) - current).abs() < 0.001);
+        assert!((mapper.calculate_fit_zoom(Beats::from_f32(0.0), 800.0) - current).abs() < 0.001);
+        assert!((mapper.calculate_fit_zoom(Beats::from_f32(16.0), 0.0) - current).abs() < 0.001);
     }
 
     // ── Y-axis layout ────────────────────────────────────────────────

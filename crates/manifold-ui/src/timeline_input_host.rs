@@ -4,7 +4,7 @@
 //! Implemented by the app layer (WorkspaceController equivalent) as thin delegations.
 //! InputHandler calls through this trait for operations that need engine/UI access.
 
-use manifold_core::ClipId;
+use manifold_core::{Beats, ClipId, Seconds};
 
 /// Callback interface for InputHandler → host communication.
 /// Port of ITimelineInputHost.cs — every method maps 1:1.
@@ -107,10 +107,10 @@ pub trait TimelineInputHost {
     fn new_project(&mut self);
 
     /// Play or pause playback. If paused and insert cursor exists, seek to cursor first.
-    fn play_pause(&mut self, insert_cursor_beat: Option<f32>);
+    fn play_pause(&mut self, insert_cursor_beat: Option<Beats>);
 
     /// Seek to a specific time in seconds.
-    fn seek_to(&mut self, time: f32);
+    fn seek_to(&mut self, time: Seconds);
 
     /// Get the current playback beat.
     fn current_beat(&self) -> f32;

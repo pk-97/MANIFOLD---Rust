@@ -18,8 +18,8 @@ use manifold_core::effects::ParameterDriver;
 /// - Undo: restores the old tempo map points completely
 #[derive(Debug)]
 pub struct ChangeBpmCommand {
-    old_bpm: f32,
-    new_bpm: f32,
+    old_bpm: Bpm,
+    new_bpm: Bpm,
     tempo_point_source: TempoPointSource,
     flatten_tempo_map: bool,
     /// Cloned snapshot of tempo map points at construction time.
@@ -32,10 +32,10 @@ pub struct ChangeBpmCommand {
 impl ChangeBpmCommand {
     /// Settings-only constructor (no tempo map manipulation).
     /// Equivalent to Unity's `ChangeBpmCommand(ProjectSettings, float, float)`.
-    pub fn new(old_bpm: f32, new_bpm: f32) -> Self {
+    pub fn new(old_bpm: Bpm, new_bpm: Bpm) -> Self {
         Self {
-            old_bpm: BeatQuantizer::quantize_bpm(old_bpm),
-            new_bpm: BeatQuantizer::quantize_bpm(new_bpm),
+            old_bpm: Bpm(BeatQuantizer::quantize_bpm(old_bpm.0)),
+            new_bpm: Bpm(BeatQuantizer::quantize_bpm(new_bpm.0)),
             tempo_point_source: TempoPointSource::Manual,
             flatten_tempo_map: false,
             old_tempo_points: None,
@@ -47,15 +47,15 @@ impl ChangeBpmCommand {
     /// Equivalent to Unity's `ChangeBpmCommand(Project, float, float, TempoPointSource, bool)`.
     /// `old_tempo_points` should be `project.tempo_map.clone_points()` captured by the caller.
     pub fn with_tempo_map(
-        old_bpm: f32,
-        new_bpm: f32,
+        old_bpm: Bpm,
+        new_bpm: Bpm,
         tempo_point_source: TempoPointSource,
         flatten_tempo_map: bool,
         old_tempo_points: Vec<TempoPoint>,
     ) -> Self {
         Self {
-            old_bpm: BeatQuantizer::quantize_bpm(old_bpm),
-            new_bpm: BeatQuantizer::quantize_bpm(new_bpm),
+            old_bpm: Bpm(BeatQuantizer::quantize_bpm(old_bpm.0)),
+            new_bpm: Bpm(BeatQuantizer::quantize_bpm(new_bpm.0)),
             tempo_point_source,
             flatten_tempo_map,
             old_tempo_points: Some(old_tempo_points),
@@ -63,8 +63,8 @@ impl ChangeBpmCommand {
         }
     }
 
-    fn apply_bpm(&self, project: &mut Project, bpm: f32, is_undo: bool) {
-        project.settings.bpm = Bpm(BeatQuantizer::quantize_bpm(bpm));
+    fn apply_bpm(&self, project: &mut Project, bpm: Bpm, is_undo: bool) {
+        project.settings.bpm = Bpm(BeatQuantizer::quantize_bpm(bpm.0));
         let applied_bpm = project.settings.bpm;
 
         if !self.has_project {
@@ -107,10 +107,10 @@ impl ChangeBpmCommand {
             }
             _ => {
                 project.tempo_map.add_or_replace_point(
-                    Beats::ZERO, Bpm(self.old_bpm), self.tempo_point_source, 0.001,
+                    Beats::ZERO, self.old_bpm, self.tempo_point_source, 0.001,
                 );
                 project.tempo_map.ensure_default_at_beat_zero(
-                    Bpm(self.old_bpm), self.tempo_point_source,
+                    self.old_bpm, self.tempo_point_source,
                 );
             }
         }
@@ -547,17 +547,17 @@ impl Command for ClearPercussionCommand {
 /// Matches Unity's RestoreRecordedTempoLaneCommand exactly.
 #[derive(Debug)]
 pub struct RestoreRecordedTempoLaneCommand {
-    old_bpm: f32,
+    old_bpm: Bpm,
     old_points: Vec<TempoPoint>,
     new_points: Vec<TempoPoint>,
 }
 
 impl RestoreRecordedTempoLaneCommand {
-    pub fn new(old_bpm: f32, old_points: Vec<TempoPoint>, new_points: Vec<TempoPoint>) -> Self {
+    pub fn new(old_bpm: Bpm, old_points: Vec<TempoPoint>, new_points: Vec<TempoPoint>) -> Self {
         Self { old_bpm, old_points, new_points }
     }
 
-    fn apply_lane(project: &mut Project, lane: &[TempoPoint], fallback_bpm: f32) {
+    fn apply_lane(project: &mut Project, lane: &[TempoPoint], fallback_bpm: Bpm) {
         project.tempo_map.clear();
 
         for point in lane {
@@ -566,9 +566,9 @@ impl RestoreRecordedTempoLaneCommand {
             );
         }
 
-        project.tempo_map.ensure_default_at_beat_zero(Bpm(fallback_bpm), TempoPointSource::Manual);
+        project.tempo_map.ensure_default_at_beat_zero(fallback_bpm, TempoPointSource::Manual);
 
-        let bpm_at_zero = project.tempo_map.get_bpm_at_beat(Beats::ZERO, Bpm(fallback_bpm));
+        let bpm_at_zero = project.tempo_map.get_bpm_at_beat(Beats::ZERO, fallback_bpm);
         project.settings.bpm = bpm_at_zero;
     }
 }
@@ -590,11 +590,11 @@ impl Command for RestoreRecordedTempoLaneCommand {
 #[derive(Debug)]
 pub struct ClearTempoMapCommand {
     old_points: Vec<TempoPoint>,
-    current_bpm: f32,
+    current_bpm: Bpm,
 }
 
 impl ClearTempoMapCommand {
-    pub fn new(old_points: Vec<TempoPoint>, current_bpm: f32) -> Self {
+    pub fn new(old_points: Vec<TempoPoint>, current_bpm: Bpm) -> Self {
         Self { old_points, current_bpm }
     }
 }
@@ -604,11 +604,11 @@ impl Command for ClearTempoMapCommand {
         project.tempo_map.clear();
         project.tempo_map.add_or_replace_point(
             Beats::ZERO,
-            Bpm(self.current_bpm),
+            self.current_bpm,
             TempoPointSource::Manual,
             0.001,
         );
-        project.tempo_map.ensure_default_at_beat_zero(Bpm(self.current_bpm), TempoPointSource::Manual);
+        project.tempo_map.ensure_default_at_beat_zero(self.current_bpm, TempoPointSource::Manual);
     }
 
     fn undo(&mut self, project: &mut Project) {
@@ -622,7 +622,7 @@ impl Command for ClearTempoMapCommand {
             }
         }
 
-        project.tempo_map.ensure_default_at_beat_zero(Bpm(self.current_bpm), TempoPointSource::Manual);
+        project.tempo_map.ensure_default_at_beat_zero(self.current_bpm, TempoPointSource::Manual);
     }
 
     fn description(&self) -> &str { "Clear Tempo Map" }
@@ -635,20 +635,20 @@ impl Command for ClearTempoMapCommand {
 /// Stores old/new positions for undo.
 #[derive(Debug)]
 pub struct RescaleBeatsForBpmChangeCommand {
-    _old_bpm: f32,
-    _new_bpm: f32,
+    _old_bpm: Bpm,
+    _new_bpm: Bpm,
     /// (layer_index, clip_index, old_start_beat, new_start_beat)
     clip_moves: Vec<(usize, usize, Beats, Beats)>,
 }
 
 impl RescaleBeatsForBpmChangeCommand {
     /// Build the command. Returns None if no rescaling is needed.
-    pub fn build(project: &Project, old_bpm: f32, new_bpm: f32) -> Option<Self> {
-        if old_bpm <= 0.0 || new_bpm <= 0.0 || (old_bpm - new_bpm).abs() < 0.01 {
+    pub fn build(project: &Project, old_bpm: Bpm, new_bpm: Bpm) -> Option<Self> {
+        if old_bpm.0 <= 0.0 || new_bpm.0 <= 0.0 || (old_bpm.0 - new_bpm.0).abs() < 0.01 {
             return None;
         }
 
-        let ratio = new_bpm / old_bpm;
+        let ratio = new_bpm.0 / old_bpm.0;
         let mut clip_moves = Vec::new();
 
         for (li, layer) in project.timeline.layers.iter().enumerate() {
@@ -693,12 +693,12 @@ impl Command for RescaleBeatsForBpmChangeCommand {
 /// Port of Unity SetImportedAudioCommand (audio_start_beat portion).
 #[derive(Debug)]
 pub struct SetAudioStartBeatCommand {
-    old_start_beat: f32,
-    new_start_beat: f32,
+    old_start_beat: Beats,
+    new_start_beat: Beats,
 }
 
 impl SetAudioStartBeatCommand {
-    pub fn new(old_start_beat: f32, new_start_beat: f32) -> Self {
+    pub fn new(old_start_beat: Beats, new_start_beat: Beats) -> Self {
         Self { old_start_beat, new_start_beat }
     }
 }
@@ -706,13 +706,13 @@ impl SetAudioStartBeatCommand {
 impl Command for SetAudioStartBeatCommand {
     fn execute(&mut self, project: &mut Project) {
         if let Some(state) = project.percussion_import.as_mut() {
-            state.audio_start_beat = Beats::from_f32(self.new_start_beat);
+            state.audio_start_beat = self.new_start_beat;
         }
     }
 
     fn undo(&mut self, project: &mut Project) {
         if let Some(state) = project.percussion_import.as_mut() {
-            state.audio_start_beat = Beats::from_f32(self.old_start_beat);
+            state.audio_start_beat = self.old_start_beat;
         }
     }
 

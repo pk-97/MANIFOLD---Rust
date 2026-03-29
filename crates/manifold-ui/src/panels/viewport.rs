@@ -31,7 +31,7 @@ pub struct ViewportClip {
     pub clip_id: ClipId,
     pub layer_index: usize,
     pub start_beat: Beats,
-    pub duration_beats: f32,
+    pub duration_beats: Beats,
     pub name: String,
     pub color: Color32,
     pub is_muted: bool,
@@ -58,8 +58,8 @@ pub struct ClipHitResult {
 /// Region-based selection in the timeline.
 #[derive(Debug, Clone, Copy)]
 pub struct SelectionRegion {
-    pub start_beat: f32,
-    pub end_beat: f32,
+    pub start_beat: Beats,
+    pub end_beat: Beats,
     pub start_layer: usize,
     pub end_layer: usize,
 }
@@ -98,7 +98,7 @@ pub struct TimelineViewportPanel {
     mapper: CoordinateMapper,
 
     // Viewport-specific scroll state (in beats, not pixels)
-    scroll_x_beats: f32,
+    scroll_x_beats: Beats,
     scroll_y_px: f32,
     beats_per_bar: u32,
 
@@ -119,8 +119,8 @@ pub struct TimelineViewportPanel {
     render_scale: f32,
 
     // Playback state
-    playhead_beat: f32,
-    insert_cursor_beat: f32,
+    playhead_beat: Beats,
+    insert_cursor_beat: Beats,
     is_playing: bool,
     selection_region: Option<SelectionRegion>,
     selected_clip_ids: Vec<ClipId>,
@@ -142,8 +142,8 @@ pub struct TimelineViewportPanel {
     // selection_region_id: removed — painted into bitmap
 
     // Export range
-    export_in_beat: f32,
-    export_out_beat: f32,
+    export_in_beat: Beats,
+    export_out_beat: Beats,
     export_range_enabled: bool,
 
     // Node IDs — fixed export elements
@@ -178,7 +178,7 @@ pub struct TimelineViewportPanel {
     marker_flag_rects: Vec<(MarkerId, Rect)>,
     marker_node_ids: Vec<i32>,
     marker_drag_id: Option<MarkerId>,
-    marker_drag_start_beat: f32,
+    marker_drag_start_beat: Beats,
 }
 
 /// Viewport-local drag mode. Only tracks ruler scrub — all clip interaction
@@ -195,7 +195,7 @@ impl TimelineViewportPanel {
     pub fn new() -> Self {
         Self {
             mapper: CoordinateMapper::new(),
-            scroll_x_beats: 0.0,
+            scroll_x_beats: Beats::ZERO,
             scroll_y_px: 0.0,
             beats_per_bar: 4,
             layer_ids: Vec::new(),
@@ -206,8 +206,8 @@ impl TimelineViewportPanel {
             clips_by_layer: Vec::new(),
             bitmap_renderers: Vec::new(),
             render_scale: 2.0, // default HiDPI (macOS Retina)
-            playhead_beat: 0.0,
-            insert_cursor_beat: 0.0,
+            playhead_beat: Beats::ZERO,
+            insert_cursor_beat: Beats::ZERO,
             is_playing: false,
             selection_region: None,
             selected_clip_ids: Vec::new(),
@@ -220,8 +220,8 @@ impl TimelineViewportPanel {
             overview_btn_id: -1,
             ruler_bg_id: -1,
             insert_cursor_ruler_id: -1,
-            export_in_beat: 0.0,
-            export_out_beat: 0.0,
+            export_in_beat: Beats::ZERO,
+            export_out_beat: Beats::ZERO,
             export_range_enabled: false,
             export_range_id: -1,
             export_in_marker_id: -1,
@@ -239,7 +239,7 @@ impl TimelineViewportPanel {
             marker_flag_rects: Vec::new(),
             marker_node_ids: Vec::new(),
             marker_drag_id: None,
-            marker_drag_start_beat: 0.0,
+            marker_drag_start_beat: Beats::ZERO,
         }
     }
 
@@ -255,7 +255,7 @@ impl TimelineViewportPanel {
         let (min_beat, max_beat) = self.visible_beat_range();
         let mut hash = self.clips.len() as u64;
         hash = hash.wrapping_mul(31).wrapping_add(self.mapper.pixels_per_beat().to_bits() as u64);
-        hash = hash.wrapping_mul(31).wrapping_add(self.scroll_x_beats.to_bits() as u64);
+        hash = hash.wrapping_mul(31).wrapping_add(self.scroll_x_beats.as_f32().to_bits() as u64);
         hash = hash.wrapping_mul(31).wrapping_add(self.scroll_y_px.to_bits() as u64);
         hash = hash.wrapping_mul(31).wrapping_add(self.tracks.len() as u64);
         hash = hash.wrapping_mul(31).wrapping_add(self.selected_clip_ids.len() as u64);
@@ -268,7 +268,7 @@ impl TimelineViewportPanel {
         );
         // Per-visible-clip fingerprint
         for clip in &self.clips {
-            let clip_end = clip.start_beat.as_f32() + clip.duration_beats;
+            let clip_end = (clip.start_beat + clip.duration_beats).as_f32();
             if clip_end <= min_beat || clip.start_beat.as_f32() >= max_beat {
                 continue;
             }
@@ -356,7 +356,7 @@ impl TimelineViewportPanel {
     /// Playhead pixel X position in the tracks area (for overlay rendering in app.rs).
     /// Returns None if the playhead is outside the visible viewport.
     pub fn playhead_pixel(&self) -> Option<f32> {
-        let px = self.beat_to_pixel(Beats::from_f32(self.playhead_beat));
+        let px = self.beat_to_pixel(self.playhead_beat);
         if px >= self.tracks_rect.x && px <= self.tracks_rect.x_max() {
             Some(px)
         } else {
@@ -380,7 +380,7 @@ impl TimelineViewportPanel {
     }
 
     /// Current insert cursor beat (for bitmap painting).
-    pub fn insert_cursor_beat(&self) -> f32 {
+    pub fn insert_cursor_beat(&self) -> Beats {
         self.insert_cursor_beat
     }
 
@@ -473,9 +473,9 @@ impl TimelineViewportPanel {
         let max_scroll_y = (self.total_tracks_height - viewport_h).max(0.0);
         let new_y = scroll_y_px.clamp(0.0, max_scroll_y);
 
-        let changed = (new_x - self.scroll_x_beats).abs() > 0.001
+        let changed = (new_x - self.scroll_x_beats.as_f32()).abs() > 0.001
             || (new_y - self.scroll_y_px).abs() > 0.001;
-        self.scroll_x_beats = new_x;
+        self.scroll_x_beats = Beats(new_x as f64);
         self.scroll_y_px = new_y;
         changed
     }
@@ -485,16 +485,16 @@ impl TimelineViewportPanel {
     }
 
     pub fn set_playhead(&mut self, beat: Beats) {
-        self.playhead_beat = beat.as_f32();
+        self.playhead_beat = beat;
     }
 
     pub fn set_insert_cursor(&mut self, beat: Beats) {
-        self.insert_cursor_beat = beat.as_f32();
+        self.insert_cursor_beat = beat;
     }
 
     pub fn set_export_range(&mut self, in_beat: Beats, out_beat: Beats, enabled: bool) {
-        self.export_in_beat = in_beat.as_f32();
-        self.export_out_beat = out_beat.as_f32();
+        self.export_in_beat = in_beat;
+        self.export_out_beat = out_beat;
         self.export_range_enabled = enabled;
     }
 
@@ -536,7 +536,7 @@ impl TimelineViewportPanel {
     // ── Accessors ─────────────────────────────────────────────────
 
     pub fn pixels_per_beat(&self) -> f32 { self.mapper.pixels_per_beat() }
-    pub fn scroll_x_beats(&self) -> f32 { self.scroll_x_beats }
+    pub fn scroll_x_beats(&self) -> Beats { self.scroll_x_beats }
     pub fn scroll_y_px(&self) -> f32 { self.scroll_y_px }
     pub fn viewport_rect(&self) -> Rect { self.viewport_rect }
     pub fn ruler_rect(&self) -> Rect { self.ruler_rect }
@@ -545,7 +545,7 @@ impl TimelineViewportPanel {
     /// Max beat across all clips (for overview strip normalization).
     pub fn max_content_beat(&self) -> f32 {
         self.clips.iter()
-            .map(|c| c.start_beat.as_f32() + c.duration_beats)
+            .map(|c| c.start_beat.as_f32() + c.duration_beats.as_f32())
             .fold(0.0f32, f32::max)
     }
 
@@ -588,18 +588,18 @@ impl TimelineViewportPanel {
 
     /// Convert beat position to pixel X in the tracks area (screen-space).
     pub fn beat_to_pixel(&self, beat: Beats) -> f32 {
-        (beat.as_f32() - self.scroll_x_beats) * self.mapper.pixels_per_beat() + self.tracks_rect.x
+        (beat.as_f32() - self.scroll_x_beats.as_f32()) * self.mapper.pixels_per_beat() + self.tracks_rect.x
     }
 
     /// Convert pixel X in the tracks area to beat position.
     pub fn pixel_to_beat(&self, px: f32) -> f32 {
-        (px - self.tracks_rect.x) / self.mapper.pixels_per_beat() + self.scroll_x_beats
+        (px - self.tracks_rect.x) / self.mapper.pixels_per_beat() + self.scroll_x_beats.as_f32()
     }
 
     /// Convert panel-local pixel X (0 = left edge of tracks area) to beat position.
     /// Used by waveform/stem scrub where events are already offset to local coords.
     pub fn local_pixel_to_beat(&self, local_px: f32) -> f32 {
-        local_px / self.mapper.pixels_per_beat() + self.scroll_x_beats
+        local_px / self.mapper.pixels_per_beat() + self.scroll_x_beats.as_f32()
     }
 
     /// Snap a beat to the grid for ruler scrubbing, unless free-scrub is active.
@@ -626,7 +626,7 @@ impl TimelineViewportPanel {
 
     /// Convert beat duration to pixel width.
     pub fn beat_duration_to_width(&self, beats: f32) -> f32 {
-        self.mapper.beat_duration_to_width(beats)
+        self.mapper.beat_duration_to_width(Beats::from_f32(beats))
     }
 
     /// Get Y position of a track (relative to tracks_rect top, before scroll).
@@ -644,7 +644,7 @@ impl TimelineViewportPanel {
 
     /// Visible beat range (with buffer).
     fn visible_beat_range(&self) -> (f32, f32) {
-        let min_beat = self.scroll_x_beats;
+        let min_beat = self.scroll_x_beats.as_f32();
         let max_beat = min_beat + self.tracks_rect.width / self.mapper.pixels_per_beat();
         (min_beat, max_beat)
     }
@@ -677,12 +677,12 @@ impl TimelineViewportPanel {
             }
 
             let clip_start_f32 = clip.start_beat.as_f32();
-            let clip_end = clip_start_f32 + clip.duration_beats;
+            let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
             if beat < clip_start_f32 || beat >= clip_end {
                 continue;
             }
 
-            let clip_width_px = clip.duration_beats * self.mapper.pixels_per_beat();
+            let clip_width_px = clip.duration_beats.as_f32() * self.mapper.pixels_per_beat();
             let local_px = (beat - clip_start_f32) * self.mapper.pixels_per_beat();
 
             let region = if clip_width_px > color::TRIM_HANDLE_MIN_CLIP_WIDTH_PX && local_px < color::TRIM_HANDLE_THRESHOLD_PX {
@@ -796,7 +796,7 @@ impl TimelineViewportPanel {
             }
 
             // Check end edge
-            let end_beat = Beats(clip.start_beat.0 + clip.duration_beats as f64);
+            let end_beat = Beats(clip.start_beat.0 + clip.duration_beats.0);
             let dist_end = (end_beat.0 - beat.0).abs();
             if dist_end < grid_threshold && dist_end < best_dist {
                 best_dist = dist_end;
@@ -895,7 +895,7 @@ impl TimelineViewportPanel {
     /// Track-area cursor is painted into bitmap.
     fn sync_insert_cursor_ruler(&self, tree: &mut UITree) {
         if self.insert_cursor_ruler_id >= 0 {
-            let px = self.beat_to_pixel(Beats::from_f32(self.insert_cursor_beat));
+            let px = self.beat_to_pixel(self.insert_cursor_beat);
             let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();
             tree.set_visible(self.insert_cursor_ruler_id as u32, in_view);
             if in_view {
@@ -1053,8 +1053,8 @@ impl Panel for TimelineViewportPanel {
                     // Store start beat for undo
                     self.marker_drag_start_beat = self.markers.iter()
                         .find(|m| m.id == marker_id)
-                        .map(|m| m.beat.as_f32())
-                        .unwrap_or(0.0);
+                        .map(|m| m.beat)
+                        .unwrap_or(Beats::ZERO);
                     self.marker_drag_id = Some(marker_id.clone());
                     return vec![PanelAction::MarkerDragStarted(marker_id.to_string())];
                 }
@@ -1156,7 +1156,7 @@ impl TimelineViewportPanel {
         // Compute total content duration for normalization
         let mut max_beat = 0.0f32;
         for clip in &self.clips {
-            let end = clip.start_beat.as_f32() + clip.duration_beats;
+            let end = clip.start_beat.as_f32() + clip.duration_beats.as_f32();
             if end > max_beat { max_beat = end; }
         }
         if max_beat <= 0.0 { return; }
@@ -1172,7 +1172,7 @@ impl TimelineViewportPanel {
             if overview_count >= MAX_OVERVIEW_CLIPS { break; }
             let start_f32 = clip.start_beat.as_f32();
             let start_norm = start_f32 / max_beat;
-            let end_norm = (start_f32 + clip.duration_beats) / max_beat;
+            let end_norm = (start_f32 + clip.duration_beats.as_f32()) / max_beat;
             let x = overview_rect.x + start_norm * overview_rect.width;
             let w = ((end_norm - start_norm) * overview_rect.width).max(1.0);
             // Layer 0 at bottom, layer N-1 at top (matching Unity line 230)
@@ -1188,7 +1188,7 @@ impl TimelineViewportPanel {
         let ppb = self.mapper.pixels_per_beat();
         if ppb > 0.0 {
             let viewport_width_beats = self.tracks_rect.width / ppb;
-            let vp_start_norm = self.scroll_x_beats / max_beat;
+            let vp_start_norm = self.scroll_x_beats.as_f32() / max_beat;
             let vp_width_norm = viewport_width_beats / max_beat;
             let vp_x = overview_rect.x + vp_start_norm * overview_rect.width;
             let vp_w = (vp_width_norm * overview_rect.width).min(overview_rect.width);
@@ -1198,7 +1198,7 @@ impl TimelineViewportPanel {
         }
 
         // Playhead in overview
-        let ph_norm = self.playhead_beat / max_beat;
+        let ph_norm = self.playhead_beat.as_f32() / max_beat;
         let ph_x = overview_rect.x + (ph_norm * overview_rect.width).clamp(0.0, overview_rect.width);
         tree.add_panel(-1, ph_x, overview_rect.y, 1.0, overview_rect.height,
             UIStyle { bg_color: color::OVERVIEW_PLAYHEAD, ..UIStyle::default() },
@@ -1275,7 +1275,7 @@ impl TimelineViewportPanel {
                     for clip in &self.clips {
                         if clip.layer_index != child_idx { continue; }
                         let clip_start_f32 = clip.start_beat.as_f32();
-                        let clip_end = clip_start_f32 + clip.duration_beats;
+                        let clip_end = clip_start_f32 + clip.duration_beats.as_f32();
                         if clip_end < min_beat || clip_start_f32 > max_beat { continue; }
 
                         let cx = self.beat_to_pixel(clip.start_beat).max(tr.x);
@@ -1435,7 +1435,7 @@ impl TimelineViewportPanel {
         let has_out = self.export_out_beat > self.export_in_beat;
 
         // In marker (vertical line on ruler + tracks) — always shown if range enabled
-        let in_px = self.beat_to_pixel(Beats::from_f32(self.export_in_beat));
+        let in_px = self.beat_to_pixel(self.export_in_beat);
         let in_visible = in_px >= self.tracks_rect.x && in_px <= self.tracks_rect.x_max();
         if in_visible {
             self.export_in_marker_id = tree.add_panel(
@@ -1448,7 +1448,7 @@ impl TimelineViewportPanel {
         }
 
         if has_out {
-            let out_px = self.beat_to_pixel(Beats::from_f32(self.export_out_beat));
+            let out_px = self.beat_to_pixel(self.export_out_beat);
 
             // Range highlight across tracks
             let range_left = in_px.max(self.tracks_rect.x);
@@ -1483,7 +1483,7 @@ impl TimelineViewportPanel {
     /// Build insert cursor ruler marker only. Track-area cursor is painted
     /// into the per-layer bitmap by LayerBitmapRenderer.
     fn build_insert_cursor_ruler(&mut self, tree: &mut UITree) {
-        let px = self.beat_to_pixel(Beats::from_f32(self.insert_cursor_beat));
+        let px = self.beat_to_pixel(self.insert_cursor_beat);
         let in_view = px >= self.tracks_rect.x && px <= self.tracks_rect.x_max();
 
         let marker_s = color::INSERT_CURSOR_RULER_MARKER_SIZE;
@@ -1616,7 +1616,7 @@ mod tests {
                 clip_id: "clip_001".into(),
                 layer_index: 0,
                 start_beat: Beats::from_f32(0.0),
-                duration_beats: 4.0,
+                duration_beats: Beats(4.0),
                 name: "Intro".into(),
                 color: color::CLIP_NORMAL,
                 is_muted: false,
@@ -1627,7 +1627,7 @@ mod tests {
                 clip_id: "clip_002".into(),
                 layer_index: 1,
                 start_beat: Beats::from_f32(4.0),
-                duration_beats: 8.0,
+                duration_beats: Beats(8.0),
                 name: "Main".into(),
                 color: color::CLIP_GEN_NORMAL,
                 is_muted: false,
@@ -1673,7 +1673,7 @@ mod tests {
         let mut panel = TimelineViewportPanel::new();
         panel.tracks_rect = Rect::new(100.0, 0.0, 1000.0, 500.0);
         panel.set_zoom(120.0);
-        panel.scroll_x_beats = 0.0;
+        panel.scroll_x_beats = Beats(0.0);
 
         let beat = Beats::from_f32(4.0);
         let px = panel.beat_to_pixel(beat);
@@ -1686,7 +1686,7 @@ mod tests {
         let mut panel = TimelineViewportPanel::new();
         panel.tracks_rect = Rect::new(0.0, 0.0, 1000.0, 500.0);
         panel.set_zoom(100.0);
-        panel.scroll_x_beats = 4.0;
+        panel.scroll_x_beats = Beats(4.0);
 
         // Beat 4 should be at x=0 when scrolled to beat 4
         let px = panel.beat_to_pixel(Beats::from_f32(4.0));
@@ -1826,7 +1826,7 @@ mod tests {
                 clip_id: "clip_099".into(),
                 layer_index: 0,
                 start_beat: Beats::from_f32(1000.0),
-                duration_beats: 4.0,
+                duration_beats: Beats(4.0),
                 name: "Far".into(),
                 color: color::CLIP_NORMAL,
                 is_muted: false,

@@ -5,6 +5,7 @@
 //! PlaybackEngine or EditingService directly.
 
 use std::sync::Arc;
+use manifold_core::{Beats, Bpm, Seconds};
 use manifold_core::project::Project;
 use manifold_core::types::{ClockAuthority, LayerType};
 use manifold_playback::stem_audio::STEM_COUNT;
@@ -24,8 +25,8 @@ pub struct ExportFinishedEvent {
 #[allow(dead_code)]
 pub struct ContentState {
     // ── Transport ──────────────────────────────────────────────────
-    pub current_beat: f64,
-    pub current_time: f32,
+    pub current_beat: Beats,
+    pub current_time: Seconds,
     pub is_playing: bool,
     pub is_recording: bool,
 
@@ -50,7 +51,7 @@ pub struct ContentState {
     pub link_peers: i32,
     pub link_is_playing: bool,
     pub midi_clock_enabled: bool,
-    pub midi_clock_bpm: f32,
+    pub midi_clock_bpm: Bpm,
     pub midi_clock_position_display: String,
     pub midi_clock_receiving: bool,
     pub midi_clock_device_name: String,
@@ -197,8 +198,8 @@ impl ModulationSnapshot {
 impl Default for ContentState {
     fn default() -> Self {
         Self {
-            current_beat: 0.0,
-            current_time: 0.0,
+            current_beat: Beats::ZERO,
+            current_time: Seconds::ZERO,
             is_playing: false,
             is_recording: false,
             content_fps: 0.0,
@@ -215,7 +216,7 @@ impl Default for ContentState {
             link_peers: 0,
             link_is_playing: false,
             midi_clock_enabled: false,
-            midi_clock_bpm: 120.0,
+            midi_clock_bpm: Bpm(120.0),
             midi_clock_position_display: String::new(),
             midi_clock_receiving: false,
             midi_clock_device_name: String::new(),

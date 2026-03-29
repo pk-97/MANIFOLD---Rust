@@ -3,7 +3,7 @@
 //! The UI thread communicates with the content thread via a bounded
 //! crossbeam channel. Each variant represents an action that must
 //! execute on the content thread where PlaybackEngine and EditingService live.
-use manifold_core::{ClipId, LayerId};
+use manifold_core::{Beats, Bpm, ClipId, LayerId, Seconds};
 use manifold_core::project::Project;
 use manifold_editing::command::Command;
 use manifold_media::export_config::ExportConfig;
@@ -18,8 +18,8 @@ pub enum ContentCommand {
     Pause,
     Stop,
     TogglePlayback,
-    SeekTo(f32),
-    SeekToBeat(f32),
+    SeekTo(Seconds),
+    SeekToBeat(Beats),
     SetRecording(bool),
 
     // ── Editing (commands cross thread boundary) ───────────────────
@@ -36,7 +36,7 @@ pub enum ContentCommand {
     LoadProject(Box<Project>),
 
     // ── Settings ───────────────────────────────────────────────────
-    SetBpm(f64),
+    SetBpm(Bpm),
     SetFrameRate(f64),
 
     // ── GPU ────────────────────────────────────────────────────────
@@ -81,7 +81,7 @@ pub enum ContentCommand {
     /// Paste from clipboard at target position. Content thread mutates project and
     /// sends updated snapshot. `result_tx` receives pasted clip IDs for UI selection.
     PasteClips {
-        target_beat: f32,
+        target_beat: Beats,
         target_layer: i32,
         result_tx: std::sync::mpsc::Sender<Vec<ClipId>>,
     },
@@ -107,10 +107,10 @@ pub enum ContentCommand {
     ReImportStems,
     /// Calibrate percussion downbeat at the current playhead beat.
     /// Port of Unity: percussionImportController.CalibrateImportedPercussionDownbeatAtPlayhead().
-    PercussionCalibrateDownbeat { playhead_beat: f32, beats_per_bar: i32 },
+    PercussionCalibrateDownbeat { playhead_beat: Beats, beats_per_bar: i32 },
     /// Nudge percussion alignment by delta_beats.
     /// Port of Unity: percussionImportController.NudgeImportedPercussionAlignment(delta).
-    PercussionNudgeAlignment(f32),
+    PercussionNudgeAlignment(Beats),
     /// Reset percussion alignment to beat 0.
     /// Port of Unity: percussionImportController.ResetImportedPercussionAlignment().
     PercussionResetAlignment,

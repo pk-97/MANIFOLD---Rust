@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::units::Beats;
+use crate::units::{Beats, Seconds};
 
 /// Placement data for an imported percussion clip.
 /// Port of Unity ImportedPercussionClipPlacement (Project.cs lines 398-492).
@@ -8,34 +8,34 @@ use crate::units::Beats;
 pub struct ImportedPercussionClipPlacement {
     pub clip_id: String,
     #[serde(default)]
-    pub source_time_seconds: f32,
+    pub source_time_seconds: Seconds,
     #[serde(default)]
-    pub start_beat_offset: f32,
+    pub start_beat_offset: Beats,
     #[serde(default)]
     pub quantize_to_grid: bool,
     #[serde(default)]
-    pub quantize_step_beats: f32,
+    pub quantize_step_beats: Beats,
     #[serde(default)]
-    pub alignment_offset_beats: f32,
+    pub alignment_offset_beats: Beats,
     #[serde(default)]
     pub alignment_slope_beats_per_second: f32,
     #[serde(default)]
-    pub alignment_pivot_seconds: f32,
+    pub alignment_pivot_seconds: Seconds,
 }
 
 impl ImportedPercussionClipPlacement {
     /// Port of Unity ImportedPercussionClipPlacement.SetAlignmentState() (Project.cs lines 447-452).
     pub fn set_alignment_state(
         &mut self,
-        offset_beats: f32,
+        offset_beats: Beats,
         slope_beats_per_second: f32,
-        pivot_seconds: f32,
+        pivot_seconds: Seconds,
     ) {
-        self.alignment_offset_beats = if offset_beats.is_finite() { offset_beats } else { 0.0 };
+        self.alignment_offset_beats = if offset_beats.0.is_finite() { offset_beats } else { Beats::ZERO };
         self.alignment_slope_beats_per_second =
             if slope_beats_per_second.is_finite() { slope_beats_per_second } else { 0.0 };
         self.alignment_pivot_seconds =
-            if pivot_seconds.is_finite() { pivot_seconds.max(0.0) } else { 0.0 };
+            if pivot_seconds.0.is_finite() { pivot_seconds.max(Seconds::ZERO) } else { Seconds::ZERO };
     }
 
     /// Port of Unity ImportedPercussionClipPlacement.IsValid() (Project.cs lines 468-490).
@@ -43,22 +43,22 @@ impl ImportedPercussionClipPlacement {
         if self.clip_id.trim().is_empty() {
             return false;
         }
-        if !self.source_time_seconds.is_finite() || self.source_time_seconds < 0.0 {
+        if !self.source_time_seconds.0.is_finite() || self.source_time_seconds < Seconds::ZERO {
             return false;
         }
-        if !self.start_beat_offset.is_finite() || self.start_beat_offset < 0.0 {
+        if !self.start_beat_offset.0.is_finite() || self.start_beat_offset < Beats::ZERO {
             return false;
         }
-        if !self.quantize_step_beats.is_finite() || self.quantize_step_beats < 0.0 {
+        if !self.quantize_step_beats.0.is_finite() || self.quantize_step_beats < Beats::ZERO {
             return false;
         }
-        if !self.alignment_offset_beats.is_finite() {
+        if !self.alignment_offset_beats.0.is_finite() {
             return false;
         }
         if !self.alignment_slope_beats_per_second.is_finite() {
             return false;
         }
-        if !self.alignment_pivot_seconds.is_finite() || self.alignment_pivot_seconds < 0.0 {
+        if !self.alignment_pivot_seconds.0.is_finite() || self.alignment_pivot_seconds < Seconds::ZERO {
             return false;
         }
         true

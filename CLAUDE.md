@@ -149,10 +149,11 @@ The content thread uses `manifold-gpu` with the `metal` crate directly. **Zero w
 - Zero per-frame allocations after 3-frame warmup
 - Persistent state textures (feedback, stylized_feedback) are NOT pooled
 
-### Resolution Scaling (matching Unity)
-- Generators with organic/particle content run at reduced resolution (0.5× or 0.75×) with bilinear upscale
-- Sharp geometric generators (Lissajous, Tesseract, BasicShapes) run at full resolution
-- Effect intermediates (Halation blur, CRT glow, FluidDistortion velocity) run at reduced resolution
+### Resolution Scaling
+- Controlled by `project.settings.upscale_mode` (`UpscaleMode` enum). **Default is `Native`.**
+- `Native` (default) → all generators render at full resolution (`scaling_enabled = false`)
+- `MetalFxSpatial` / `MpsLanczos` → generators with `internal_resolution_scale() < 1.0` render at reduced resolution, upscaled via MetalFX Spatial or MPS Lanczos
+- Four generators have sub-1.0 overrides (only active in non-Native mode): `FluidSimulation` (0.5×), `FluidSimulation3D` (0.5×), `Mycelium` (0.5×), `ParametricSurface` (0.75×)
 
 ---
 

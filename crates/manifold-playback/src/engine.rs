@@ -53,7 +53,7 @@ pub const COMBINED_PREWARM_MAX_UNIQUE_CLIPS: usize = 20;
 pub struct TickContext {
     pub dt_seconds: Seconds,
     pub realtime_now: Seconds,
-    pub pre_render_dt: f32,
+    pub pre_render_dt: Seconds,
     pub frame_count: u64,
     /// Fixed delta for export mode (0.0 = use real dt_seconds).
     /// Port of C# PlaybackController.exportFixedDeltaSeconds (line 42).
@@ -90,7 +90,7 @@ pub struct PlaybackEngine {
     // Transport state
     current_state: PlaybackState,
     current_time_double: f64,
-    current_time: f32,
+    current_time: Seconds,
     current_beat: f64,
     playback_speed: f32,
     is_recording: bool,
@@ -129,8 +129,8 @@ pub struct PlaybackEngine {
     live_external_tempo: Option<(f32, TempoPointSource)>,
 
     // Drift correction. Port of C# PlaybackController.videoSyncInterval (line 33).
-    video_sync_interval: f32,
-    last_sync_time: f32,
+    video_sync_interval: Seconds,
+    last_sync_time: Seconds,
     drift_correction_count: i32,
     is_export_mode: bool,
 
@@ -174,7 +174,7 @@ pub struct PlaybackEngine {
 
     // Callback: fires each frame during playback after AdvanceTime.
     // Port of C# PlaybackController.OnTimeChanged (line 1149).
-    pub on_time_changed: Option<Box<dyn Fn(f32) + Send>>,
+    pub on_time_changed: Option<Box<dyn Fn(Seconds) + Send>>,
 
     // Sort comparator scratch. Port of C# PlaybackEngine lines 211-214.
     // Rust uses closures for sorting — no static delegates needed, but
@@ -187,7 +187,7 @@ impl PlaybackEngine {
         Self {
             current_state: PlaybackState::Stopped,
             current_time_double: 0.0,
-            current_time: 0.0,
+            current_time: Seconds::ZERO,
             current_beat: 0.0,
             playback_speed: 1.0,
             is_recording: false,
@@ -206,8 +206,8 @@ impl PlaybackEngine {
             compositor_dirty_deadline: 0.0,
             sync_clips_dirty: false,
             live_external_tempo: None,
-            video_sync_interval: 2.0,
-            last_sync_time: 0.0,
+            video_sync_interval: Seconds(2.0),
+            last_sync_time: Seconds::ZERO,
             drift_correction_count: 0,
             is_export_mode: false,
             last_realtime_now: 0.0,
@@ -241,15 +241,15 @@ impl PlaybackEngine {
 
     pub fn current_state(&self) -> PlaybackState { self.current_state }
     pub fn current_time_double(&self) -> f64 { self.current_time_double }
-    pub fn current_time(&self) -> f32 { self.current_time }
-    pub fn current_beat(&self) -> f32 { self.current_beat as f32 }
+    pub fn current_time(&self) -> Seconds { self.current_time }
+    pub fn current_beat(&self) -> Beats { Beats(self.current_beat) }
     pub fn current_beat_f64(&self) -> f64 { self.current_beat }
     pub fn playback_speed(&self) -> f32 { self.playback_speed }
     pub fn is_playing(&self) -> bool { self.current_state == PlaybackState::Playing }
     pub fn is_recording(&self) -> bool { self.is_recording }
     pub fn external_time_sync(&self) -> bool { self.external_time_sync }
     pub fn is_export_mode(&self) -> bool { self.is_export_mode }
-    pub fn video_sync_interval(&self) -> f32 { self.video_sync_interval }
+    pub fn video_sync_interval(&self) -> Seconds { self.video_sync_interval }
     pub fn active_clip_count(&self) -> usize { self.active_clip_renderers.len() }
     /// True when all active clips that need a prepare phase are ready.
     /// Used by export warmup to wait for video decoders.
@@ -303,9 +303,9 @@ impl PlaybackEngine {
         self.project = Some(project);
         self.active_window.reset();
         self.current_time_double = 0.0;
-        self.current_time = 0.0;
+        self.current_time = Seconds::ZERO;
         self.current_beat = 0.0;
-        self.last_sync_time = 0.0;
+        self.last_sync_time = Seconds::ZERO;
         self.drift_correction_count = 0;
         self.sync_clips_dirty = false;
         self.last_realtime_now = 0.0;
@@ -387,7 +387,7 @@ impl PlaybackEngine {
             mgr.clear_all();
         }
         self.current_time_double = 0.0;
-        self.current_time = 0.0;
+        self.current_time = Seconds::ZERO;
         self.current_beat = 0.0;
         self.compositor_dirty_deadline = 0.0; // Force one more compositor update
         self.active_window.reset();
@@ -403,7 +403,7 @@ impl PlaybackEngine {
 
     pub fn set_time(&mut self, time_double: Seconds) {
         self.current_time_double = time_double.0;
-        self.current_time = time_double.0 as f32;
+        self.current_time = time_double;
         self.update_beat_from_time();
     }
 
@@ -422,7 +422,7 @@ impl PlaybackEngine {
                 project.settings.bpm,
             );
             self.current_time_double = secs.0.max(0.0);
-            self.current_time = self.current_time_double as f32;
+            self.current_time = Seconds(self.current_time_double);
         }
     }
 
@@ -442,21 +442,21 @@ impl PlaybackEngine {
         self.is_export_mode = value;
     }
 
-    pub fn set_video_sync_interval(&mut self, interval: f32) {
+    pub fn set_video_sync_interval(&mut self, interval: Seconds) {
         self.video_sync_interval = interval;
     }
 
     pub fn advance_time(&mut self, dt_seconds: Seconds) -> Seconds {
         self.current_time_double += dt_seconds.0;
-        self.current_time = self.current_time_double as f32;
+        self.current_time = Seconds(self.current_time_double);
         self.update_beat_from_time();
         Seconds(self.current_time_double)
     }
 
     /// Set time from an external sync source (NudgeTime path).
     /// Port of C# PlaybackEngine.NudgeTime (lines 519-525).
-    pub fn nudge_time(&mut self, time: f32) {
-        self.current_time_double = time as f64;
+    pub fn nudge_time(&mut self, time: Seconds) {
+        self.current_time_double = time.0;
         self.current_time = time;
         self.update_beat_from_time();
         self.sync_project_bpm_from_current_beat();
@@ -464,9 +464,9 @@ impl PlaybackEngine {
 
     /// Set time from a seek. Returns beat delta for feedback buffer clearing.
     /// Port of C# PlaybackEngine.SeekTo (lines 530-538).
-    pub fn seek_to(&mut self, time: f32) -> f32 {
+    pub fn seek_to(&mut self, time: Seconds) -> f32 {
         let old_beat = self.current_beat;
-        self.set_time(Seconds(time.max(0.0) as f64));
+        self.set_time(Seconds(time.0.max(0.0)));
         self.sync_project_bpm_from_current_beat();
         self.active_window.reset();
 
@@ -754,7 +754,7 @@ impl PlaybackEngine {
         let renderer_idx = self.renderers.iter().position(|r| r.can_handle(clip));
         if let Some(idx) = renderer_idx {
             let layers = self.project.as_ref().map_or(&[] as &[_], |p| &p.timeline.layers);
-            let success = self.renderers[idx].start_clip(clip, Seconds::from_f32(self.current_time), layers);
+            let success = self.renderers[idx].start_clip(clip, self.current_time, layers);
             if success {
                 self.active_clip_renderers.insert(clip.id.clone(), idx);
                 self.active_clip_ids.insert(clip.id.clone());
@@ -881,7 +881,7 @@ impl PlaybackEngine {
                 let loop_dur_seconds = clip.loop_duration_beats.as_f32() * spb;
                 let media_length = self.renderers[renderer_idx].get_clip_media_length(clip_id);
                 let video_time = crate::video_time::compute_video_time(
-                    self.current_time,
+                    self.current_time.as_f32(),
                     clip_start_time,
                     clip.in_point,
                     clip.is_looping,
@@ -987,15 +987,15 @@ impl PlaybackEngine {
         }
     }
 
-    pub fn time_to_timeline_beat(&mut self, time_seconds: f32) -> f32 {
+    pub fn time_to_timeline_beat(&mut self, time_seconds: Seconds) -> Beats {
         if let Some(project) = &mut self.project {
             TempoMapConverter::seconds_to_beat(
                 &mut project.tempo_map,
-                Seconds::from_f32(time_seconds),
+                time_seconds,
                 project.settings.bpm,
-            ).as_f32()
+            )
         } else {
-            time_seconds * 2.0 // fallback: 120 bpm
+            Beats(time_seconds.0 * 2.0) // fallback: 120 bpm
         }
     }
 
@@ -1210,21 +1210,21 @@ impl PlaybackEngine {
 
     /// Get clip start time in timeline seconds.
     /// Port of C# PlaybackEngine.GetClipStartTimeSeconds (lines 1449-1453).
-    pub fn get_clip_start_time_seconds(&mut self, clip: &TimelineClip) -> f32 {
-        self.beat_to_timeline_time(clip.start_beat).as_f32()
+    pub fn get_clip_start_time_seconds(&mut self, clip: &TimelineClip) -> Seconds {
+        self.beat_to_timeline_time(clip.start_beat)
     }
 
     /// Get clip end time in timeline seconds.
     /// Port of C# PlaybackEngine.GetClipEndTimeSeconds (lines 1456-1460).
-    pub fn get_clip_end_time_seconds(&mut self, clip: &TimelineClip) -> f32 {
-        self.beat_to_timeline_time(clip.end_beat()).as_f32()
+    pub fn get_clip_end_time_seconds(&mut self, clip: &TimelineClip) -> Seconds {
+        self.beat_to_timeline_time(clip.end_beat())
     }
 
     /// Get clip duration in timeline seconds.
     /// Port of C# PlaybackEngine.GetClipDurationSeconds (lines 1463-1468).
-    pub fn get_clip_duration_seconds(&mut self, clip: &TimelineClip) -> f32 {
+    pub fn get_clip_duration_seconds(&mut self, clip: &TimelineClip) -> Seconds {
         let duration = self.get_clip_end_time_seconds(clip) - self.get_clip_start_time_seconds(clip);
-        duration.max(0.0)
+        duration.max(Seconds::ZERO)
     }
 
     /// Get clip loop duration in timeline seconds.
@@ -1232,7 +1232,7 @@ impl PlaybackEngine {
     pub fn get_clip_loop_duration_seconds(&mut self, clip: &TimelineClip) -> f32 {
         if clip.loop_duration_beats <= Beats::ZERO { return 0.0; }
         let loop_end = self.beat_to_timeline_time(clip.start_beat + clip.loop_duration_beats).as_f32();
-        let loop_start = self.get_clip_start_time_seconds(clip);
+        let loop_start = self.get_clip_start_time_seconds(clip).as_f32();
         (loop_end - loop_start).max(0.0)
     }
 
@@ -1276,14 +1276,14 @@ impl PlaybackEngine {
 
     /// Get elapsed source-time seconds for a clip at the current playhead.
     /// Port of C# PlaybackEngine.GetClipSourceElapsedSeconds (lines 1519-1532).
-    pub fn get_clip_source_elapsed_seconds(&mut self, clip: &TimelineClip) -> f32 {
+    pub fn get_clip_source_elapsed_seconds(&mut self, clip: &TimelineClip) -> Seconds {
         if let Some(recorded_spb) = self.try_get_clip_recorded_spb(clip) {
-            let elapsed_beats = (self.current_beat as f32 - clip.start_beat.as_f32()).max(0.0);
-            return elapsed_beats * recorded_spb;
+            let elapsed_beats = (self.current_beat - clip.start_beat.0).max(0.0);
+            return Seconds(elapsed_beats * recorded_spb as f64);
         }
         let clip_start_time = self.get_clip_start_time_seconds(clip);
-        let clip_local_time = (self.current_time - clip_start_time).max(0.0);
-        clip_local_time * self.get_clip_playback_rate(clip)
+        let clip_local_time = (self.current_time - clip_start_time).max(Seconds::ZERO);
+        Seconds(clip_local_time.0 * self.get_clip_playback_rate(clip) as f64)
     }
 
     /// Get total source duration in seconds for a clip.
@@ -1292,7 +1292,7 @@ impl PlaybackEngine {
         if let Some(recorded_spb) = self.try_get_clip_recorded_spb(clip) {
             return (clip.duration_beats.as_f32() * recorded_spb).max(0.0);
         }
-        (self.get_clip_duration_seconds(clip) * self.get_clip_playback_rate(clip)).max(0.0)
+        (self.get_clip_duration_seconds(clip).as_f32() * self.get_clip_playback_rate(clip)).max(0.0)
     }
 
     /// Get source-time loop duration in seconds for a clip.
@@ -1309,7 +1309,7 @@ impl PlaybackEngine {
     /// Uses source-elapsed and in-point. Port of C# PlaybackEngine.ComputeVideoTime
     /// (lines 1561-1581).
     pub fn compute_video_time(&mut self, clip: &TimelineClip, clip_id: &str) -> f32 {
-        let source_elapsed = self.get_clip_source_elapsed_seconds(clip);
+        let source_elapsed = self.get_clip_source_elapsed_seconds(clip).as_f32();
 
         // Get media length from renderer if looping
         let media_length = if clip.is_looping {
@@ -1496,7 +1496,7 @@ impl PlaybackEngine {
             if self.looping_clip_ids.contains(clip_id) { continue; }
 
             let in_point = clip.in_point.as_f32();
-            let expected_video_time = in_point + self.get_clip_source_elapsed_seconds(&clip);
+            let expected_video_time = in_point + self.get_clip_source_elapsed_seconds(&clip).as_f32();
             let out_point = in_point + self.get_clip_source_duration_seconds(&clip);
 
             let playback_time = self.renderers[*renderer_idx].get_clip_playback_time(clip_id);
@@ -1621,7 +1621,7 @@ impl PlaybackEngine {
     fn should_exclude_recently_started(
         &self,
         clip_id: &str,
-        clip_end_time_seconds: f32,
+        clip_end_time_seconds: Seconds,
         is_live_clip: bool,
     ) -> bool {
         let start_time = match self.recently_started_times.get(clip_id) {
@@ -1629,23 +1629,23 @@ impl PlaybackEngine {
             None => return false,
         };
 
-        let mut gate_time = if is_live_clip {
-            LIVE_RECENTLY_STARTED_TIME
+        let mut gate_time: f64 = if is_live_clip {
+            LIVE_RECENTLY_STARTED_TIME as f64
         } else {
-            RECENTLY_STARTED_TIME
+            RECENTLY_STARTED_TIME as f64
         };
         let remaining = clip_end_time_seconds - self.current_time;
-        if remaining > 0.0 {
-            gate_time = gate_time.min(remaining * 0.4);
+        if remaining > Seconds::ZERO {
+            gate_time = gate_time.min(remaining.0 * 0.4);
         }
 
-        (self.last_realtime_now - start_time) < gate_time as f64
+        (self.last_realtime_now - start_time) < gate_time
     }
 
     /// Filter active clips to only those ready for compositing.
     /// Applies recently-started gate for video clips.
     /// Port of C# PlaybackEngine.FilterReadyClips (lines 1193-1239).
-    pub fn filter_ready_clips(&mut self, pre_render_dt: f32) -> Vec<TimelineClip> {
+    pub fn filter_ready_clips(&mut self, pre_render_dt: Seconds) -> Vec<TimelineClip> {
         // Resolve should-be-active clips (timeline + live slots)
         self.compositor_fallback_clips.clear();
         self.query_active_timeline_clips();
@@ -1658,7 +1658,7 @@ impl PlaybackEngine {
 
         // Pre-render all renderers (generators blit shaders, video is no-op)
         for renderer in &mut self.renderers {
-            renderer.pre_render(Seconds::from_f32(self.current_time), Beats(self.current_beat), pre_render_dt);
+            renderer.pre_render(self.current_time, Beats(self.current_beat), pre_render_dt.as_f32());
         }
 
         // Filter to ready clips (index-based to avoid borrow conflict)
@@ -1686,9 +1686,9 @@ impl PlaybackEngine {
                         &project.tempo_map,
                         clip.end_beat(),
                         project.settings.bpm,
-                    ).as_f32()
+                    )
                 } else {
-                    clip.end_beat().as_f32() * 0.5
+                    Seconds(clip.end_beat().0 * 0.5)
                 };
                 if self.should_exclude_recently_started(
                     &clip_id,
@@ -1742,8 +1742,8 @@ impl PlaybackEngine {
         self.next_prewarm_at = self.last_realtime_now
             + if in_live_burst { LIVE_PREWARM_INTERVAL } else { LOOKAHEAD_PREWARM_INTERVAL } as f64;
 
-        let window_start = self.current_time - LOOKAHEAD_PREWARM_BEHIND_TIME;
-        let window_end = self.current_time + LOOKAHEAD_PREWARM_AHEAD_TIME;
+        let window_start = self.current_time - Seconds(LOOKAHEAD_PREWARM_BEHIND_TIME as f64);
+        let window_end = self.current_time + Seconds(LOOKAHEAD_PREWARM_AHEAD_TIME as f64);
 
         // Collect candidate clips (use immutable beat_to_seconds to avoid &mut self borrow)
         self.prewarm_candidates.clear();
@@ -1760,9 +1760,9 @@ impl PlaybackEngine {
                     if clip.video_clip_id.is_empty() { continue; }
 
                     let clip_start = TempoMapConverter::beat_to_seconds_immut(
-                        &project.tempo_map, clip.start_beat, fallback_bpm).as_f32();
+                        &project.tempo_map, clip.start_beat, fallback_bpm);
                     let clip_end = TempoMapConverter::beat_to_seconds_immut(
-                        &project.tempo_map, clip.end_beat(), fallback_bpm).as_f32();
+                        &project.tempo_map, clip.end_beat(), fallback_bpm);
                     if clip_end < window_start { continue; }
                     if clip_start > window_end { continue; }
                     self.prewarm_candidates.push(clip.clone());
@@ -1810,7 +1810,7 @@ use crate::live_clip_manager::LiveClipHost;
 /// Port of C# PlaybackController implementing ILiveClipHost.
 impl LiveClipHost for PlaybackEngine {
     fn current_beat(&self) -> Beats { Beats(self.current_beat) }
-    fn current_time(&self) -> f32 { self.current_time }
+    fn current_time(&self) -> Seconds { self.current_time }
     fn is_recording(&self) -> bool { self.is_recording }
     fn is_playing(&self) -> bool { self.current_state == PlaybackState::Playing }
     fn show_debug_logs(&self) -> bool { self.show_debug_logs }
@@ -1894,15 +1894,15 @@ impl LiveClipHost for PlaybackEngine {
         }
     }
 
-    fn beat_to_timeline_time(&self, beat: Beats) -> f32 {
+    fn beat_to_timeline_time(&self, beat: Beats) -> Seconds {
         if let Some(project) = &self.project {
             TempoMapConverter::beat_to_seconds_immut(
                 &project.tempo_map,
                 beat,
                 project.settings.bpm,
-            ).as_f32()
+            )
         } else {
-            beat.as_f32() * 0.5 // fallback: 120 bpm
+            Seconds(beat.0 * 0.5) // fallback: 120 bpm
         }
     }
 }
@@ -1914,7 +1914,7 @@ impl LiveClipHost for PlaybackEngine {
 
 impl crate::sync::SyncTarget for PlaybackEngine {
     fn current_state(&self) -> PlaybackState { self.current_state }
-    fn current_time(&self) -> f32 { self.current_time }
+    fn current_time(&self) -> Seconds { self.current_time }
     fn is_playing(&self) -> bool { self.current_state == PlaybackState::Playing }
 
     fn timeline_beat_to_time(&self, beat: Beats) -> Seconds {
@@ -1944,11 +1944,11 @@ impl crate::sync::SyncArbiterTarget for PlaybackEngine {
         if clear_recording { self.set_recording(false); }
     }
 
-    fn nudge_time(&mut self, time: f32) {
-        self.set_time(Seconds(time as f64));
+    fn nudge_time(&mut self, time: Seconds) {
+        self.set_time(time);
     }
 
-    fn seek(&mut self, time: f32) {
+    fn seek(&mut self, time: Seconds) {
         self.seek_to(time);
     }
 }

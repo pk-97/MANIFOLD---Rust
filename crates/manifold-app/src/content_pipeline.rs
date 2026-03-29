@@ -294,7 +294,7 @@ impl ContentPipeline {
         if self.native_device.is_some() {
             self.render_content_native(
                 gpu, engine, tick_result, dt, frame_count,
-                time, beat, time_f64, beat_f64,
+                time.as_f32(), beat.as_f32(), time_f64, beat_f64,
                 _t_frame, _poll_ms, export_mode,
             );
         }

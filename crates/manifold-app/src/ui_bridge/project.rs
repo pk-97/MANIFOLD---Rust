@@ -194,7 +194,7 @@ pub(super) fn dispatch_project(
             // Events arrive in panel-local coords (offset by wf_rect.x in ui_root),
             // so use local_pixel_to_beat which doesn't subtract tracks_rect.x again.
             let beat = ui.viewport.local_pixel_to_beat(*local_x).max(0.0);
-            ContentCommand::send(content_tx, ContentCommand::SeekToBeat(beat));
+            ContentCommand::send(content_tx, ContentCommand::SeekToBeat(Beats::from_f32(beat)));
             DispatchResult::handled()
         }
         PanelAction::WaveformDragDelta(delta_beats) => {
@@ -265,19 +265,18 @@ pub(super) fn dispatch_project(
             // Build CompositeCommand with SetAudioStartBeatCommand + MoveClipCommand
             // per changed clip, for a single undoable unit.
             if let Some(old_audio_start) = ui.waveform_lane.take_drag_start_beat() {
-                let old_audio_start_f32 = old_audio_start.as_f32();
-                let new_audio_start_f32 = project.percussion_import
+                let new_audio_start = project.percussion_import
                     .as_ref()
-                    .map_or(0.0, |s| s.audio_start_beat.as_f32());
+                    .map_or(Beats::ZERO, |s| s.audio_start_beat);
 
                 let mut commands: Vec<Box<dyn manifold_editing::command::Command>> =
                     Vec::new();
 
                 // Audio command
-                if (new_audio_start_f32 - old_audio_start_f32).abs() > 0.0001 {
+                if (new_audio_start - old_audio_start).abs() > Beats(0.0001) {
                     commands.push(Box::new(
                         manifold_editing::commands::settings::SetAudioStartBeatCommand::new(
-                            old_audio_start_f32, new_audio_start_f32,
+                            old_audio_start, new_audio_start,
                         ),
                     ));
                 }

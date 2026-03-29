@@ -119,7 +119,7 @@ impl OscPositionSender {
                 for _ in 0..TRANSPORT_SEND_COUNT {
                     self.try_send_float("/manifold/play", current_beat);
                 }
-                arbiter.set_manifold_owns_at(now as f32);
+                arbiter.set_manifold_owns_at(Seconds(now));
             } else {
                 for _ in 0..TRANSPORT_SEND_COUNT {
                     self.try_send_int("/manifold/transport", 0);
