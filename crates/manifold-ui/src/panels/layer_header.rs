@@ -741,14 +741,6 @@ impl LayerHeaderPanel {
 
         // Contrast text color for readability on the layer's background
         let text_clr = color::contrast_text_color(layer.color);
-        // Secondary text: soften toward the background instead of using alpha
-        let text_dim = if text_clr.r > 128 {
-            // White text → dim to light gray
-            Color32::new(200, 200, 200, 255)
-        } else {
-            // Black text → dim to dark gray
-            Color32::new(55, 55, 55, 255)
-        };
 
         // Group accent bar
         if row.has_accent_bar {
@@ -787,7 +779,7 @@ impl LayerHeaderPanel {
                     bg_color: Color32::TRANSPARENT,
                     hover_bg_color: color::BUTTON_HIGHLIGHTED,
                     pressed_bg_color: color::BUTTON_PRESSED,
-                    text_color: text_dim,
+                    text_color: text_clr,
                     font_size: SMALL_FONT,
                     corner_radius: color::SMALL_RADIUS,
                     text_align: TextAlign::Center,
@@ -821,7 +813,7 @@ impl LayerHeaderPanel {
                 bg_color: color::HANDLE_BG,
                 hover_bg_color: color::BUTTON_HIGHLIGHTED,
                 pressed_bg_color: color::BUTTON_PRESSED,
-                text_color: text_dim,
+                text_color: text_clr,
                 font_size: HANDLE_FONT,
                 corner_radius: LH_BTN_RADIUS,
                 text_align: TextAlign::Center,
@@ -838,7 +830,7 @@ impl LayerHeaderPanel {
                 clip_parent, r.x, r.y, r.width, r.height,
                 gen_text,
                 UIStyle {
-                    text_color: text_dim,
+                    text_color: text_clr,
                     font_size: SMALL_FONT,
                     text_align: TextAlign::Left,
                     ..UIStyle::default()
@@ -886,7 +878,7 @@ impl LayerHeaderPanel {
             clip_parent, ir.x, ir.y, ir.width, ir.height,
             &info,
             UIStyle {
-                text_color: text_dim,
+                text_color: text_clr,
                 font_size: SMALL_FONT,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
@@ -908,7 +900,7 @@ impl LayerHeaderPanel {
                 clip_parent, pr.x, pr.y, pr.width, pr.height,
                 &path_text,
                 UIStyle {
-                    text_color: text_dim,
+                    text_color: text_clr,
                     font_size: SMALL_FONT,
                     text_align: TextAlign::Left,
                     ..UIStyle::default()
@@ -931,7 +923,7 @@ impl LayerHeaderPanel {
                 clip_parent, mlr.x, mlr.y, mlr.width, mlr.height,
                 "MIDI",
                 UIStyle {
-                    text_color: text_dim,
+                    text_color: text_clr,
                     font_size: SMALL_FONT,
                     text_align: TextAlign::Left,
                     ..UIStyle::default()
@@ -951,7 +943,7 @@ impl LayerHeaderPanel {
                 clip_parent, clr.x, clr.y, clr.width, clr.height,
                 "CH",
                 UIStyle {
-                    text_color: text_dim,
+                    text_color: text_clr,
                     font_size: SMALL_FONT,
                     text_align: TextAlign::Left,
                     ..UIStyle::default()

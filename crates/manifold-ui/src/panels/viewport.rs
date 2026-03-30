@@ -754,20 +754,19 @@ impl TimelineViewportPanel {
     pub fn magnetic_snap(&self, beat: Beats, layer_index: usize, ignore_ids: &[ClipId]) -> Beats {
         use crate::snap::SNAP_THRESHOLD_PX;
 
-        let max_snap_beats = 0.5_f64;
         let ppb = self.mapper.pixels_per_beat() as f64;
 
         // Pixel-based threshold (for clip edge snapping)
         let pixel_threshold_beats = if ppb > 0.0 {
-            (SNAP_THRESHOLD_PX as f64 / ppb).min(max_snap_beats)
+            SNAP_THRESHOLD_PX as f64 / ppb
         } else {
-            max_snap_beats
+            0.0
         };
 
-        // Grid threshold: at least half the snap grid interval so clips always snap
-        // to the nearest grid line. Capped by max_snap_beats for safety.
+        // Grid threshold: half the grid interval so every position snaps to the
+        // nearest visible grid line (full cell coverage, standard DAW behavior).
         let half_grid = self.snap_grid_step() as f64 / 2.0;
-        let grid_threshold = pixel_threshold_beats.max(half_grid).min(max_snap_beats);
+        let grid_threshold = pixel_threshold_beats.max(half_grid);
 
         // Start with raw beat — only snap if a candidate is within threshold.
         let mut best_beat = beat;
@@ -826,23 +825,10 @@ impl TimelineViewportPanel {
         }
     }
 
-    /// Snap grid step — coarser than the visual grid so snapping matches
-    /// the prominently visible grid lines. Subdivisions only activate when
-    /// each cell is wide enough to be clearly distinguishable (roughly 2×
-    /// the visual grid thresholds).
+    /// Snap grid step — matches the visible grid lines so snapping targets
+    /// exactly what the user sees. Delegates to `grid_step()`.
     pub fn snap_grid_step(&self) -> f32 {
-        let ppb = self.mapper.pixels_per_beat();
-        let sixteenth_px = ppb * 0.25;
-        let eighth_px = ppb * 0.5;
-        if sixteenth_px >= 8.0 {       // ppb >= 32 (visual: 4px / ppb >= 16)
-            0.25
-        } else if eighth_px >= 12.0 {  // ppb >= 24 (visual: 6px / ppb >= 12)
-            0.5
-        } else if ppb >= 12.0 {        // (visual: 6px)
-            1.0
-        } else {
-            self.beats_per_bar as f32
-        }
+        self.grid_step()
     }
 
     /// Grid-aligned step for clip creation, guaranteed to produce a clip

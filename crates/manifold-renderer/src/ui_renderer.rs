@@ -585,7 +585,7 @@ impl UIRenderer {
             &mut self.font_system,
             text,
             &Attrs::new().family(Family::Name("Inter")).weight(weight),
-            Shaping::Basic,
+            Shaping::Advanced,
             None,
         );
         buffer.shape_until_scroll(&mut self.font_system, false);
@@ -711,7 +711,7 @@ impl UIRenderer {
                         &mut self.font_system,
                         &cmd.text,
                         &Attrs::new().family(Family::Name("Inter")).weight(weight),
-                        Shaping::Basic,
+                        Shaping::Advanced,
                         None,
                     );
                     buffer.shape_until_scroll(&mut self.font_system, false);
