@@ -1,13 +1,12 @@
-//! MetalFX Spatial full-frame upscaler.
+//! MetalFX Spatial full-frame upscaler with RCAS sharpening.
 //!
-//! Wraps `manifold_gpu::metalfx::MetalFxSpatialScaler` for compositor-output
-//! upscaling (render-res → output-res). This is distinct from the per-generator
-//! upscaling in `GeneratorRenderer` — this operates on the final composited frame.
+//! Two-pass pipeline:
+//!   1. MetalFX Spatial: render-res → output-res (ML-based, Apple Silicon)
+//!   2. RCAS: output-res sharpening pass (Robust Contrast-Adaptive Sharpening)
 //!
-//! MetalFX Spatial uses Apple's ML-based perceptual upscaling algorithm tuned for
-//! Apple Silicon. It produces better results than FSR 1.0 and runs faster (driver-
-//! integrated, AMX/ANE acceleration on Apple Silicon). Used automatically when
-//! available (macOS 13+); FSR 1.0 is the fallback.
+//! MetalFX handles the upscaling better than FSR EASU; RCAS recovers the
+//! edge definition that spatial upscaling softens. The combination matches
+//! or exceeds FSR 1.0 quality while running faster on Apple Silicon.
 //!
 //! Usage:
 //! ```ignore
@@ -22,11 +21,27 @@ mod imp {
     use crate::gpu_encoder::GpuEncoder;
     use crate::render_target::RenderTarget;
 
-    /// GPU full-frame upscaler using MetalFX Spatial Scaler.
+    /// RCAS uniform layout. 16-byte aligned.
+    #[repr(C)]
+    #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+    struct RcasUniforms {
+        /// `exp2(−user_sharpness)`. Lower → stronger. Default `exp2(−0.87) ≈ 0.547`.
+        sharpness: f32,
+        _pad0: f32,
+        _pad1: f32,
+        _pad2: f32,
+    }
+
+    /// GPU full-frame upscaler: MetalFX Spatial + RCAS sharpening.
     /// Created once per (src_dims, dst_dims); call `resize()` on dimension change.
     pub struct MetalFxFullFrameUpscaler {
         scaler: manifold_gpu::metalfx::MetalFxSpatialScaler,
-        /// Output at dst_w × dst_h. Blit this to IOSurface after upscaling.
+        /// RCAS compute pipeline (reuses the FSR1 RCAS shader).
+        rcas_pipeline: manifold_gpu::GpuComputePipeline,
+        rcas_sampler: manifold_gpu::GpuSampler,
+        /// MetalFX output at dst_w × dst_h. Input for RCAS.
+        metalfx_intermediate: RenderTarget,
+        /// Final output at dst_w × dst_h (RCAS output). Blit this to IOSurface.
         pub output: RenderTarget,
         pub src_w: u32,
         pub src_h: u32,
@@ -50,8 +65,28 @@ mod imp {
                 src_w, src_h, dst_w, dst_h,
                 fmt,
             )?;
-            let output = RenderTarget::new(device, dst_w, dst_h, fmt, "MetalFX Full Frame Output");
-            Some(Self { scaler, output, src_w, src_h, dst_w, dst_h })
+            let rcas_pipeline = device.create_compute_pipeline(
+                include_str!("effects/shaders/fsr1_rcas_compute.wgsl"),
+                "cs_main",
+                "MetalFX RCAS",
+            );
+            let rcas_sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                address_mode_u: manifold_gpu::GpuAddressMode::ClampToEdge,
+                address_mode_v: manifold_gpu::GpuAddressMode::ClampToEdge,
+                address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
+                min_filter: manifold_gpu::GpuFilterMode::Linear,
+                mag_filter: manifold_gpu::GpuFilterMode::Linear,
+                ..Default::default()
+            });
+            let metalfx_intermediate = RenderTarget::new(
+                device, dst_w, dst_h, fmt, "MetalFX Intermediate",
+            );
+            let output = RenderTarget::new(device, dst_w, dst_h, fmt, "MetalFX+RCAS Output");
+            Some(Self {
+                scaler, rcas_pipeline, rcas_sampler,
+                metalfx_intermediate, output,
+                src_w, src_h, dst_w, dst_h,
+            })
         }
 
         /// Returns `true` if MetalFX Spatial Scaler is supported on this device.
@@ -60,17 +95,53 @@ mod imp {
         }
 
         /// Upscale `source` (at src_w × src_h) → `self.output` (at dst_w × dst_h).
-        /// Ends any active compute/render encoder before encoding MetalFX.
+        ///
+        /// Pass 1: MetalFX Spatial → intermediate (ends any active encoder).
+        /// Pass 2: RCAS sharpening → output (new compute encoder).
+        ///
+        /// `sharpness_exp` = `exp2(−user_sharpness)` for RCAS. Pass 0.547 for
+        /// AMD's default sharpening level (same as the FSR 1.0 fallback path).
         pub fn upscale(
             &self,
             gpu: &mut GpuEncoder,
             source: &manifold_gpu::GpuTexture,
+            sharpness_exp: f32,
         ) {
+            // Pass 1: MetalFX Spatial — source → metalfx_intermediate
             let cmd_buf = gpu.native_enc.raw_cmd_buf();
-            self.scaler.encode(cmd_buf, source, &self.output.texture);
+            self.scaler.encode(cmd_buf, source, &self.metalfx_intermediate.texture);
+
+            // Pass 2: RCAS — intermediate → output
+            let rcas_u = RcasUniforms {
+                sharpness: sharpness_exp.clamp(0.01, 1.0),
+                _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
+            };
+            gpu.native_enc.dispatch_compute(
+                &self.rcas_pipeline,
+                &[
+                    manifold_gpu::GpuBinding::Bytes {
+                        binding: 0,
+                        data: bytemuck::bytes_of(&rcas_u),
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 1,
+                        texture: &self.metalfx_intermediate.texture,
+                    },
+                    manifold_gpu::GpuBinding::Sampler {
+                        binding: 2,
+                        sampler: &self.rcas_sampler,
+                    },
+                    manifold_gpu::GpuBinding::Texture {
+                        binding: 3,
+                        texture: &self.output.texture,
+                    },
+                ],
+                [self.dst_w.div_ceil(16), self.dst_h.div_ceil(16), 1],
+                "MetalFX RCAS",
+            );
         }
 
-        /// Resize both the scaler and the output texture when dimensions change.
+        /// Resize both the scaler and internal textures when dimensions change.
         /// Returns `false` if the new scaler could not be created (MetalFX unavailable).
         pub fn resize(
             &mut self,
@@ -93,6 +164,7 @@ mod imp {
             self.src_h = src_h;
             self.dst_w = dst_w;
             self.dst_h = dst_h;
+            self.metalfx_intermediate.resize(device, dst_w, dst_h);
             self.output.resize(device, dst_w, dst_h);
             true
         }

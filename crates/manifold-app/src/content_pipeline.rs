@@ -544,7 +544,8 @@ impl ContentPipeline {
                     } else {
                         GpuEncoder::new(&mut native_enc, native_device)
                     };
-                    mfx.upscale(&mut gpu_upscale, self.compositor.output_texture());
+                    // AMD default RCAS sharpness: exp2(−0.87) ≈ 0.547
+                    mfx.upscale(&mut gpu_upscale, self.compositor.output_texture(), 0.547);
                 }
                 if let Some(ref shared_tex) =
                     self.shared_textures[self.write_surface_index]
