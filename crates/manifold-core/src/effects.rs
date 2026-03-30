@@ -149,6 +149,11 @@ impl EffectInstance {
         self.clone()
     }
 
+    /// Assign a fresh EffectId (used when deep-cloning a layer or effect chain).
+    pub fn regenerate_id(&mut self) {
+        self.id = EffectId::new(crate::math::short_id());
+    }
+
     /// Number of parameters currently allocated. Unity line 84.
     pub fn param_count(&self) -> usize {
         self.param_values.len()

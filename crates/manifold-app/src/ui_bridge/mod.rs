@@ -100,6 +100,7 @@ pub fn dispatch(
         | PanelAction::ContextAddVideoLayer(_)
         | PanelAction::ContextAddGeneratorLayer(_)
         | PanelAction::ContextDeleteLayer(_)
+        | PanelAction::ContextDuplicateLayer(_)
         | PanelAction::ContextPasteAtLayer(_)
         | PanelAction::ContextImportMidi(_)
         | PanelAction::ContextGroupSelectedLayers

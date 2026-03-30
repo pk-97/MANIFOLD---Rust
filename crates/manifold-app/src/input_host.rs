@@ -761,6 +761,27 @@ impl TimelineInputHost for AppInputHost<'_> {
         *self.needs_structural_sync = true;
     }
 
+    fn duplicate_selected_layers(&mut self) {
+        if self.selection.layer_selection_count() == 0 {
+            return;
+        }
+        let selected_ids: Vec<manifold_core::LayerId> =
+            self.selection.selected_layer_ids.iter().cloned().collect();
+        if let Some(cmd) = EditingService::duplicate_layers(self.project, &selected_ids) {
+            let mut boxed: Box<dyn manifold_editing::command::Command> = cmd;
+            boxed.execute(self.project);
+            ContentCommand::send(
+                self.content_tx,
+                crate::content_command::ContentCommand::ExecuteBatch(
+                    vec![boxed],
+                    "Duplicate Layers".to_string(),
+                ),
+            );
+        }
+        *self.needs_rebuild = true;
+        *self.needs_structural_sync = true;
+    }
+
     fn layer_count(&self) -> usize {
         Some(&*self.project)
             .map(|p| p.timeline.layers.len())

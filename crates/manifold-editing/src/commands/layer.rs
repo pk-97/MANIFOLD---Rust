@@ -278,3 +278,38 @@ impl Command for UngroupLayersCommand {
 
     fn description(&self) -> &str { "Ungroup Layers" }
 }
+
+/// Duplicate one or more layers (with full deep copy of all nested IDs).
+/// The pre-cloned layers are stored in the command so redo works correctly.
+#[derive(Debug)]
+pub struct DuplicateLayersCommand {
+    /// Pre-built clones (with fresh IDs) ready to insert, in insertion order.
+    new_layers: Vec<Layer>,
+    /// Index in the timeline Vec to start inserting at.
+    insert_after_index: usize,
+}
+
+impl DuplicateLayersCommand {
+    pub fn new(new_layers: Vec<Layer>, insert_after_index: usize) -> Self {
+        Self { new_layers, insert_after_index }
+    }
+}
+
+impl Command for DuplicateLayersCommand {
+    fn execute(&mut self, project: &mut Project) {
+        for (i, layer) in self.new_layers.iter().cloned().enumerate() {
+            project.timeline.insert_layer(self.insert_after_index + i, layer);
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        // Remove in reverse insertion order (highest index first) by ID for robustness.
+        for layer in self.new_layers.iter().rev() {
+            if let Some(idx) = project.timeline.find_layer_index_by_id(&layer.layer_id) {
+                project.timeline.remove_layer(idx);
+            }
+        }
+    }
+
+    fn description(&self) -> &str { "Duplicate Layers" }
+}

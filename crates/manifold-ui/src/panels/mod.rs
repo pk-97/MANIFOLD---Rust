@@ -256,6 +256,7 @@ pub enum PanelAction {
     ContextAddVideoLayer(usize),                     // after_layer
     ContextAddGeneratorLayer(usize),                 // after_layer
     ContextDeleteLayer(usize),                       // layer_index
+    ContextDuplicateLayer(usize),                    // layer_index
     ContextPasteAtLayer(usize),                      // layer_index
     ContextImportMidi(usize),                        // layer_index
     ContextGroupSelectedLayers,

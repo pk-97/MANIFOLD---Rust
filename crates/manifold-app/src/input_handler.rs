@@ -189,10 +189,13 @@ impl InputHandler {
         }
 
         // ── Duplicate: Cmd+D (Unity line 316) ──
+        // Context-sensitive: clips take priority; layers if no clips selected.
         if matches!(logical_key, Key::Character(c) if c.as_str() == "d") && m.is_command_only() {
             let ids: Vec<ClipId> = host.get_selected_clip_ids();
             if !ids.is_empty() {
                 host.duplicate_clips(&ids);
+            } else if host.layer_selection_count() > 0 {
+                host.duplicate_selected_layers();
             }
             return true;
         }

@@ -160,6 +160,9 @@ pub trait TimelineInputHost {
     /// Delete selected layers.
     fn delete_selected_layers(&mut self);
 
+    /// Duplicate selected layers (Ableton-style: deep copy inserted below last selected).
+    fn duplicate_selected_layers(&mut self);
+
     /// Number of layers in the project.
     fn layer_count(&self) -> usize;
 

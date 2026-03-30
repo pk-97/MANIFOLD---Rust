@@ -209,6 +209,29 @@ pub(super) fn dispatch_editing(
             DispatchResult::structural()
         }
 
+        PanelAction::ContextDuplicateLayer(layer_idx) => {
+            {
+                let idx = *layer_idx;
+                if idx < project.timeline.layers.len() {
+                    let layer_id = project.timeline.layers[idx].layer_id.clone();
+                    // If the right-clicked layer is among the selected layers, duplicate the
+                    // full selection; otherwise duplicate just this layer.
+                    let ids: Vec<LayerId> = if selection.selected_layer_ids.contains(&layer_id) {
+                        selection.selected_layer_ids.iter().cloned().collect()
+                    } else {
+                        vec![layer_id]
+                    };
+                    if let Some(mut cmd) = EditingService::duplicate_layers(project, &ids) {
+                        cmd.execute(project);
+                        ContentCommand::send(content_tx, ContentCommand::ExecuteBatch(
+                            vec![cmd], "Duplicate Layers".to_string(),
+                        ));
+                    }
+                }
+            }
+            DispatchResult::structural()
+        }
+
         PanelAction::LayerHeaderRightClicked(_) => {
             // Handled by UIRoot::try_open_dropdown — should not reach dispatch
             DispatchResult::handled()

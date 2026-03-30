@@ -1,12 +1,14 @@
 use crate::command::{Command, CompositeCommand};
 use crate::undo::UndoRedoManager;
 use crate::commands::clip::*;
+use crate::commands::layer::DuplicateLayersCommand;
 use manifold_core::{Beats, ClipId, LayerId, Seconds};
 use manifold_core::clip::TimelineClip;
+use manifold_core::layer::Layer;
 use manifold_core::project::Project;
 use manifold_core::selection::SelectionRegion;
 use manifold_core::types::LayerType;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Host trait for EditingService — replaces C#'s UIState/CoordinateMapper/PlaybackController.
 pub trait EditingHost {
@@ -1111,6 +1113,60 @@ impl EditingService {
         };
 
         (commands, new_region)
+    }
+
+    /// Duplicate one or more layers (Ableton-style: deep copy inserted below the last selected).
+    /// Groups are expanded to include all descendants; parent_layer_id refs are remapped.
+    pub fn duplicate_layers(project: &Project, layer_ids: &[LayerId]) -> Option<Box<dyn Command>> {
+        if layer_ids.is_empty() {
+            return None;
+        }
+
+        // 1. Expand selection to include all descendants (deep-copy groups).
+        let mut expanded_ids: HashSet<LayerId> = layer_ids.iter().cloned().collect();
+        let mut to_check: Vec<LayerId> = layer_ids.to_vec();
+        while let Some(parent_id) = to_check.pop() {
+            for layer in &project.timeline.layers {
+                if layer.parent_layer_id.as_ref() == Some(&parent_id)
+                    && !expanded_ids.contains(&layer.layer_id)
+                {
+                    expanded_ids.insert(layer.layer_id.clone());
+                    to_check.push(layer.layer_id.clone());
+                }
+            }
+        }
+
+        // 2. Collect expanded set in timeline order; find the last index.
+        let expanded_in_order: Vec<(usize, &Layer)> = project.timeline.layers
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| expanded_ids.contains(&l.layer_id))
+            .collect();
+
+        if expanded_in_order.is_empty() {
+            return None;
+        }
+
+        let insert_after_index = expanded_in_order.last().unwrap().0 + 1;
+
+        // 3. Clone each layer with fresh IDs; build old→new LayerId map for parent remapping.
+        let mut id_map: HashMap<LayerId, LayerId> = HashMap::new();
+        let mut new_layers: Vec<Layer> = expanded_in_order.iter().map(|(_, l)| {
+            let cloned = l.clone_with_new_ids();
+            id_map.insert(l.layer_id.clone(), cloned.layer_id.clone());
+            cloned
+        }).collect();
+
+        // 4. Remap parent_layer_id on cloned layers whose parent was also duplicated.
+        for layer in &mut new_layers {
+            if let Some(ref old_parent) = layer.parent_layer_id.clone()
+                && let Some(new_parent) = id_map.get(old_parent)
+            {
+                layer.parent_layer_id = Some(new_parent.clone());
+            }
+        }
+
+        Some(Box::new(DuplicateLayersCommand::new(new_layers, insert_after_index)))
     }
 }
 

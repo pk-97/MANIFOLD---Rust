@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use crate::id::LayerId;
+use ahash::AHashMap;
+use crate::id::{LayerId, EffectGroupId};
 use crate::types::{BlendMode, ClipDurationMode, LayerType};
 use crate::generator_type_id::GeneratorTypeId;
 use crate::effect_type_id::EffectTypeId;
@@ -459,6 +460,45 @@ impl Layer {
     /// Get duration in beats (max end_beat across all clips). Unity Layer.cs line 530.
     pub fn get_duration_beats(&self) -> Beats {
         self.clips.iter().map(|c| c.end_beat()).fold(Beats::ZERO, |a, b| a.max(b))
+    }
+
+    /// Deep-clone this layer with all nested IDs regenerated.
+    /// Used for duplicate-layer: new LayerId, new ClipIds, new EffectIds, remapped EffectGroupIds.
+    /// `parent_layer_id` is NOT remapped here — callers handle group subtree remapping.
+    pub fn clone_with_new_ids(&self) -> Self {
+        let mut cloned = self.clone();
+        cloned.layer_id = LayerId::new(crate::short_id());
+
+        // Fresh clip IDs.
+        cloned.clips = self.clips.iter().map(|c| c.clone_with_new_id()).collect();
+
+        // Remap effect groups: build old→new EffectGroupId map, update group_id refs on effects.
+        if let Some(groups) = &self.effect_groups {
+            let mut id_map: AHashMap<EffectGroupId, EffectGroupId> = AHashMap::new();
+            let new_groups: Vec<EffectGroup> = groups.iter().map(|g| {
+                let new_group = g.clone_with_new_id();
+                id_map.insert(g.id.clone(), new_group.id.clone());
+                new_group
+            }).collect();
+            cloned.effect_groups = Some(new_groups);
+
+            if let Some(effects) = &mut cloned.effects {
+                for effect in effects.iter_mut() {
+                    effect.regenerate_id();
+                    if let Some(ref old_gid) = effect.group_id.clone()
+                        && let Some(new_gid) = id_map.get(old_gid)
+                    {
+                        effect.group_id = Some(new_gid.clone());
+                    }
+                }
+            }
+        } else if let Some(effects) = &mut cloned.effects {
+            for effect in effects.iter_mut() {
+                effect.regenerate_id();
+            }
+        }
+
+        cloned
     }
 
     /// Set a generator param base value at index.

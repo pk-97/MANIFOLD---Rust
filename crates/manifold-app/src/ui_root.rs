@@ -760,6 +760,7 @@ impl UIRoot {
                     DropdownItem::new("Import MIDI File"),
                     DropdownItem::new("Insert Video Layer"),
                     DropdownItem::new("Insert Generator Layer"),
+                    DropdownItem::new("Duplicate Layer"),
                     DropdownItem::new("Group Selected Layers"),
                     DropdownItem::new("Ungroup"),
                 ];
@@ -839,9 +840,10 @@ impl UIRoot {
                     1 => Some(PanelAction::ContextImportMidi(layer_idx)),
                     2 => Some(PanelAction::ContextAddVideoLayer(layer_idx)),
                     3 => Some(PanelAction::ContextAddGeneratorLayer(layer_idx)),
-                    4 => Some(PanelAction::ContextGroupSelectedLayers),
-                    5 => Some(PanelAction::ContextUngroup(layer_idx)),
-                    6 => Some(PanelAction::ContextDeleteLayer(layer_idx)),
+                    4 => Some(PanelAction::ContextDuplicateLayer(layer_idx)),
+                    5 => Some(PanelAction::ContextGroupSelectedLayers),
+                    6 => Some(PanelAction::ContextUngroup(layer_idx)),
+                    7 => Some(PanelAction::ContextDeleteLayer(layer_idx)),
                     _ => None,
                 }
             }
