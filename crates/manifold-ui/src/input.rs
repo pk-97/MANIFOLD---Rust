@@ -165,9 +165,9 @@ pub struct UIInputSystem {
     last_drag_pos: Vec2,
     is_dragging: bool,
 
-    // Double-click detection
+    // Double-click detection (position-based, survives tree rebuilds)
     last_click_time: f32,
-    last_click_id: i32,
+    last_click_pos: Vec2,
 
     // Current modifier state (set by app on ModifiersChanged)
     modifiers: Modifiers,
@@ -189,7 +189,7 @@ impl UIInputSystem {
             last_drag_pos: Vec2::ZERO,
             is_dragging: false,
             last_click_time: 0.0,
-            last_click_id: -1,
+            last_click_pos: Vec2::new(-100.0, -100.0),
             modifiers: Modifiers::default(),
             pending_events: Vec::new(),
         }
@@ -320,20 +320,25 @@ impl UIInputSystem {
                             modifiers: self.modifiers,
                         });
 
-                        // Double-click detection
-                        if hit_id == self.last_click_id
-                            && time - self.last_click_time < DOUBLE_CLICK_TIME
+                        // Double-click detection — position-based (matches OS behavior).
+                        // Node IDs can change between clicks due to structural tree
+                        // rebuilds (e.g. inspect_layer), so we use position proximity
+                        // like macOS/Windows do natively.
+                        if time - self.last_click_time < DOUBLE_CLICK_TIME
+                            && screen_pos.distance(self.last_click_pos) < DRAG_THRESHOLD
                         {
                             self.pending_events.push(UIEvent::DoubleClick {
                                 node_id: uid,
                                 pos: screen_pos,
                                 modifiers: self.modifiers,
                             });
-                            self.last_click_id = -1; // prevent triple-click
+                            // Reset to prevent triple-click
+                            self.last_click_time = 0.0;
+                            self.last_click_pos = Vec2::new(-100.0, -100.0);
                         } else {
-                            self.last_click_id = hit_id;
+                            self.last_click_pos = screen_pos;
+                            self.last_click_time = time;
                         }
-                        self.last_click_time = time;
                     }
 
                     self.pending_events.push(UIEvent::PointerUp {
