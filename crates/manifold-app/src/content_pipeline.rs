@@ -544,8 +544,9 @@ impl ContentPipeline {
                     } else {
                         GpuEncoder::new(&mut native_enc, native_device)
                     };
-                    // AMD default RCAS sharpness: exp2(−0.87) ≈ 0.547
-                    mfx.upscale(&mut gpu_upscale, self.compositor.output_texture(), 0.547);
+                    // RCAS sharpness: lower = sharper. AMD default 0.547.
+                    // 0.35 ≈ exp2(-1.5) — crisper without ringing.
+                    mfx.upscale(&mut gpu_upscale, self.compositor.output_texture(), 0.35);
                 }
                 if let Some(ref shared_tex) =
                     self.shared_textures[self.write_surface_index]
@@ -565,8 +566,9 @@ impl ContentPipeline {
                     } else {
                         GpuEncoder::new(&mut native_enc, native_device)
                     };
-                    // AMD default RCAS sharpness: exp2(−0.87) ≈ 0.547
-                    fsr.upscale(&mut gpu_fsr, self.compositor.output_texture(), 0.547);
+                    // RCAS sharpness: lower = sharper. AMD default 0.547.
+                    // 0.35 ≈ exp2(-1.5) — crisper without ringing.
+                    fsr.upscale(&mut gpu_fsr, self.compositor.output_texture(), 0.35);
                 }
                 if let Some(ref shared_tex) =
                     self.shared_textures[self.write_surface_index]
