@@ -220,7 +220,7 @@ impl Default for UIStyle {
             corner_radius: 0.0,
             border_width: 0.0,
             font_size: 14,
-            font_weight: FontWeight::Regular,
+            font_weight: FontWeight::Bold,
             text_align: TextAlign::Left,
         }
     }

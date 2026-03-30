@@ -280,10 +280,10 @@ impl UIRenderer {
             mapped_at_creation: false,
         });
 
-        // Empty font database — no system fonts. Only our bundled Inter files.
-        // This prevents system-installed fonts from shadowing our bold weight.
-        let db = glyphon::cosmic_text::fontdb::Database::new();
-        let mut font_system = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
+        // Load system fonts (needed for Unicode symbol fallback: ▶▼≡ etc),
+        // then load our bundled Inter Regular + Bold. Family::Name("Inter") with
+        // Weight::BOLD/NORMAL selects the correct weight from our bundled files.
+        let mut font_system = FontSystem::new();
         let font_data = include_bytes!("../assets/fonts/Inter-Regular.ttf");
         font_system.db_mut().load_font_data(font_data.to_vec());
         let bold_font_data = include_bytes!("../assets/fonts/Inter-Bold.ttf");
