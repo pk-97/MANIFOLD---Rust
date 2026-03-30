@@ -1,5 +1,14 @@
-// Compute variant of compositor_blend.wgsl — same blend logic, no TBDR tile overhead.
-// Reads base + blend textures, writes to storage texture output.
+// Compute compositor blend — reads base + blend textures, writes to storage output.
+//
+// Two specialization axes (function constants via text replacement):
+//   u.blend_mode  → 0u..12u  (dead-code eliminates inactive switch branches)
+//   u.has_transform → 0u/1u  (eliminates UV transform math when identity)
+//
+// When has_transform == 0, the Metal compiler removes all trig, aspect-ratio
+// division, and bounds checking — blend UV is just the pixel UV.
+//
+// Opaque (mode 6) with has_transform == 0 further eliminates the base texture
+// read since the result is just the blend RGB with alpha = 1.
 
 struct Uniforms {
     blend_mode: u32,
@@ -9,7 +18,7 @@ struct Uniforms {
     scale_val: f32,
     rotation: f32,
     aspect_ratio: f32,
-    _pad: f32, // keeps struct at 32 bytes — WGSL uniform structs must be multiples of 16 bytes
+    has_transform: u32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -18,18 +27,15 @@ struct Uniforms {
 @group(0) @binding(3) var samp: sampler;
 @group(0) @binding(4) var t_output: texture_storage_2d<rgba16float, write>;
 
-@compute @workgroup_size(16, 16)
-fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
-    let dims = textureDimensions(t_base);
-    if id.x >= dims.x || id.y >= dims.y {
-        return;
+// ── UV transform ──────────────────────────────────────────────────
+// Separated from blend logic so the compiler can eliminate it entirely
+// when has_transform is specialized to 0.
+
+fn compute_blend_uv(uv: vec2<f32>) -> vec2<f32> {
+    if u.has_transform == 0u {
+        return uv;
     }
 
-    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
-
-    let base = textureSampleLevel(t_base, samp, uv, 0.0);
-
-    // Transform blend UVs (center → rotate → scale → translate → uncenter)
     var blend_uv = uv - vec2<f32>(0.5);
     blend_uv.x *= u.aspect_ratio;
 
@@ -48,19 +54,63 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     blend_uv -= vec2<f32>(u.translate_x, u.translate_y);
     blend_uv += vec2<f32>(0.5);
 
-    var blend: vec4<f32>;
-    if blend_uv.x < 0.0 || blend_uv.x > 1.0 || blend_uv.y < 0.0 || blend_uv.y > 1.0 {
-        blend = vec4<f32>(0.0);
-    } else {
-        blend = textureSampleLevel(t_blend, samp, blend_uv, 0.0);
+    return blend_uv;
+}
+
+fn sample_blend(uv: vec2<f32>) -> vec4<f32> {
+    let blend_uv = compute_blend_uv(uv);
+
+    if u.has_transform != 0u {
+        // Out-of-bounds check only needed when transform is active
+        if blend_uv.x < 0.0 || blend_uv.x > 1.0 || blend_uv.y < 0.0 || blend_uv.y > 1.0 {
+            return vec4<f32>(0.0);
+        }
     }
 
+    return textureSampleLevel(t_blend, samp, blend_uv, 0.0);
+}
+
+// ── Main ──────────────────────────────────────────────────────────
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(t_base);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+
+    let blend = sample_blend(uv);
+
+    // ── Opaque fast path ──────────────────────────────────────────
+    // Opaque ignores base entirely — write blend RGB with alpha = 1.
+    // When specialized, the compiler eliminates the base texture read below.
+    if u.blend_mode == 6u {
+        let b_rgb = blend.rgb;
+        // Read base only if we need it for opacity mix
+        if u.opacity < 1.0 {
+            let base = textureSampleLevel(t_base, samp, uv, 0.0);
+            textureStore(t_output, vec2<i32>(id.xy),
+                clamp(vec4<f32>(mix(base.rgb, b_rgb, u.opacity), 1.0),
+                      vec4<f32>(-100.0), vec4<f32>(100.0)));
+        } else {
+            textureStore(t_output, vec2<i32>(id.xy),
+                clamp(vec4<f32>(b_rgb, 1.0),
+                      vec4<f32>(-100.0), vec4<f32>(100.0)));
+        }
+        return;
+    }
+
+    // ── All other modes need the base texture ─────────────────────
+    let base = textureSampleLevel(t_base, samp, uv, 0.0);
     let ba = base.a;
     let bl_a = blend.a;
     let b = base.rgb;
 
+    // Unpremultiply blend for modes that need straight-alpha blending
     var f_val = blend.rgb;
-    if u.blend_mode != 0u && u.blend_mode != 5u && u.blend_mode != 6u {
+    if u.blend_mode != 0u && u.blend_mode != 5u {
         if blend.a > 0.001 {
             f_val = blend.rgb / max(blend.a, 0.01);
         } else {
@@ -72,6 +122,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     switch u.blend_mode {
         case 0u: {
+            // Normal — premultiplied alpha-over
             let out_a = bl_a + ba * (1.0 - bl_a);
             let out_rgb = f_val + b * (1.0 - bl_a);
             var result = vec4<f32>(out_rgb, out_a);
@@ -98,6 +149,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
                     + max(vec3<f32>(0.0), f_val - vec3<f32>(1.0));
         }
         case 5u: {
+            // Stencil — alpha mask
             let stencil_rgb = b * bl_a;
             let stencil_a = ba * bl_a;
             var stencil_result = vec4<f32>(stencil_rgb, stencil_a);
@@ -105,10 +157,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
             textureStore(t_output, vec2<i32>(id.xy), stencil_result);
             return;
         }
-        case 6u: {
-            textureStore(t_output, vec2<i32>(id.xy), clamp(vec4<f32>(mix(b, f_val, u.opacity), 1.0), vec4<f32>(-100.0), vec4<f32>(100.0)));
-            return;
-        }
+        // case 6u handled above (opaque fast path)
         case 7u: { blended = abs(b - f_val); }
         case 8u: { blended = max(vec3<f32>(0.0), b + f_val - 2.0 * b * f_val); }
         case 9u: { blended = max(b - f_val, vec3<f32>(0.0)); }
@@ -129,7 +178,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let blended_result = vec4<f32>(out_rgb, out_a);
     var final_result = mix(base, blended_result, u.opacity);
-    // NaN propagation guard: prevent corrupt values from one layer contaminating output
+    // NaN propagation guard
     final_result = clamp(final_result, vec4<f32>(-100.0), vec4<f32>(100.0));
     textureStore(t_output, vec2<i32>(id.xy), final_result);
 }

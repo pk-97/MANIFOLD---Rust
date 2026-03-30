@@ -4,6 +4,10 @@ pub struct BlitPipeline {
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     bind_group_layout: wgpu::BindGroupLayout,
+
+    // Prepared state for split prepare/draw — survives between prepare_rect() and draw_in_pass()
+    prepared_bind_group: Option<wgpu::BindGroup>,
+    prepared_viewport: Option<(f32, f32, f32, f32)>,
 }
 
 const BLIT_SHADER: &str = r#"
@@ -107,6 +111,8 @@ impl BlitPipeline {
             pipeline,
             sampler,
             bind_group_layout,
+            prepared_bind_group: None,
+            prepared_viewport: None,
         }
     }
 
@@ -240,14 +246,67 @@ impl BlitPipeline {
         }
         let rect_aspect = rect_w / rect_h;
         let (fit_w, fit_h) = if source_aspect > rect_aspect {
-            // Source wider than rect — fit to width, letterbox top/bottom
             (rect_w, rect_w / source_aspect)
         } else {
-            // Source taller than rect — fit to height, pillarbox left/right
             (rect_h * source_aspect, rect_h)
         };
         let fit_x = rect_x + (rect_w - fit_w) * 0.5;
         let fit_y = rect_y + (rect_h - fit_h) * 0.5;
         self.blit_to_rect(device, encoder, source, target, fit_x, fit_y, fit_w, fit_h);
+    }
+
+    /// Prepare bind group and viewport for drawing into an external render pass.
+    /// Call before creating the pass. Returns `true` if there is content to draw.
+    pub fn prepare_rect_fit(
+        &mut self,
+        device: &wgpu::Device,
+        source: &wgpu::TextureView,
+        rect_x: f32,
+        rect_y: f32,
+        rect_w: f32,
+        rect_h: f32,
+        source_aspect: f32,
+    ) -> bool {
+        if rect_w <= 0.0 || rect_h <= 0.0 || source_aspect <= 0.0 {
+            self.prepared_bind_group = None;
+            self.prepared_viewport = None;
+            return false;
+        }
+        let rect_aspect = rect_w / rect_h;
+        let (fit_w, fit_h) = if source_aspect > rect_aspect {
+            (rect_w, rect_w / source_aspect)
+        } else {
+            (rect_h * source_aspect, rect_h)
+        };
+        let fit_x = rect_x + (rect_w - fit_w) * 0.5;
+        let fit_y = rect_y + (rect_h - fit_h) * 0.5;
+
+        self.prepared_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Blit Rect Bind Group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(source),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        }));
+        self.prepared_viewport = Some((fit_x, fit_y, fit_w, fit_h));
+        true
+    }
+
+    /// Issue blit draw commands into an existing render pass.
+    /// Must call `prepare_rect_fit()` first.
+    pub fn draw_in_pass<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        let Some(bg) = &self.prepared_bind_group else { return };
+        let Some((x, y, w, h)) = self.prepared_viewport else { return };
+        pass.set_viewport(x, y, w, h, 0.0, 1.0);
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, bg, &[]);
+        pass.draw(0..3, 0..1);
     }
 }

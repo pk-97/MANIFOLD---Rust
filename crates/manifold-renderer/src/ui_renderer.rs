@@ -186,6 +186,15 @@ pub struct UIRenderer {
 
     // Clip stack for render_tree (mathematical clipping)
     clip_stack: Vec<Rect>,
+
+    // Prepared state for split prepare/draw — survives between prepare() and draw()
+    prepared_vertex_buffer: Option<wgpu::Buffer>,
+    prepared_index_buffer: Option<wgpu::Buffer>,
+    prepared_index_count: u32,
+    prepared_globals_bg: Option<wgpu::BindGroup>,
+    prepared_has_text: bool,
+    prepared_text_mode: Option<TextMode>,
+    prepared_overlay_idx: Option<usize>,
 }
 
 impl UIRenderer {
@@ -327,6 +336,13 @@ impl UIRenderer {
             vertices: Vec::with_capacity(1024),
             indices: Vec::with_capacity(1536),
             clip_stack: Vec::with_capacity(8),
+            prepared_vertex_buffer: None,
+            prepared_index_buffer: None,
+            prepared_index_count: 0,
+            prepared_globals_bg: None,
+            prepared_has_text: false,
+            prepared_text_mode: None,
+            prepared_overlay_idx: None,
         }
     }
 
@@ -625,17 +641,17 @@ impl UIRenderer {
     /// `width`/`height`: logical pixel dimensions (matches UITree coordinates).
     /// `scale_factor`: HiDPI scale (e.g. 2.0 on Retina). Used for crisp text.
     /// `text_mode`: which TextRenderer to use, or `Skip` for rects only.
-    pub fn render(
+    /// Prepare vertex/index buffers and text for drawing. Call before creating
+    /// the render pass. Returns `true` if there is content to draw.
+    pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
         width: u32,
         height: u32,
         scale_factor: f64,
         text_mode: TextMode,
-    ) {
+    ) -> bool {
         let physical_w = (width as f64 * scale_factor) as u32;
         let physical_h = (height as f64 * scale_factor) as u32;
 
@@ -643,14 +659,14 @@ impl UIRenderer {
         let globals_data: [f32; 4] = [width as f32, height as f32, 0.0, 0.0];
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals_data));
 
-        let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        self.prepared_globals_bg = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("UI Globals BG"),
             layout: &self.globals_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: self.globals_buffer.as_entire_binding(),
             }],
-        });
+        }));
 
         // Build vertex/index buffers from rect commands
         self.vertices.clear();
@@ -693,12 +709,31 @@ impl UIRenderer {
             ]);
         }
 
+        // Store vertex/index buffers as fields so they outlive the render pass
+        if !self.vertices.is_empty() {
+            self.prepared_vertex_buffer =
+                Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("UI Vertices"),
+                    contents: bytemuck::cast_slice(&self.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                }));
+            self.prepared_index_buffer =
+                Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("UI Indices"),
+                    contents: bytemuck::cast_slice(&self.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                }));
+            self.prepared_index_count = self.indices.len() as u32;
+        } else {
+            self.prepared_vertex_buffer = None;
+            self.prepared_index_buffer = None;
+            self.prepared_index_count = 0;
+        }
+
         // ── Text preparation (skipped for TextMode::Skip) ──────────
         let has_text = !matches!(text_mode, TextMode::Skip) && !self.text_commands.is_empty();
-
-        // Index into overlay_text_renderers pool for this render() call.
-        // Computed during prepare, used during the render pass.
-        let mut overlay_idx: Option<usize> = None;
+        self.prepared_has_text = has_text;
+        self.prepared_overlay_idx = None;
 
         if has_text {
             // Prepare text buffers for glyphon — reuse cached buffers where possible.
@@ -714,7 +749,11 @@ impl UIRenderer {
                         &mut self.font_system,
                         Metrics::new(cmd.font_size, cmd.font_size * 1.2),
                     );
-                    buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+                    buffer.set_size(
+                        &mut self.font_system,
+                        Some(width as f32),
+                        Some(height as f32),
+                    );
                     let weight = font_weight_to_cosmic(cmd.font_weight);
                     buffer.set_text(
                         &mut self.font_system,
@@ -735,7 +774,9 @@ impl UIRenderer {
                 self.text_cache_generation += 1;
                 if self.text_cache_generation.is_multiple_of(60) {
                     let current_gen = self.text_cache_generation;
-                    let stale: Vec<_> = self.text_cache_used.iter()
+                    let stale: Vec<_> = self
+                        .text_cache_used
+                        .iter()
                         .filter(|(_, last_used)| current_gen - **last_used > 120)
                         .map(|(k, _)| k.clone())
                         .collect();
@@ -771,12 +812,18 @@ impl UIRenderer {
                     top: cmd.y * sf,
                     scale: sf,
                     bounds,
-                    default_color: GlyphonColor::rgba(cmd.color[0], cmd.color[1], cmd.color[2], cmd.color[3]),
+                    default_color: GlyphonColor::rgba(
+                        cmd.color[0],
+                        cmd.color[1],
+                        cmd.color[2],
+                        cmd.color[3],
+                    ),
                     custom_glyphs: &[],
                 });
             }
 
-            self.viewport.update(queue, Resolution { width: physical_w, height: physical_h });
+            self.viewport
+                .update(queue, Resolution { width: physical_w, height: physical_h });
 
             // Prepare the appropriate TextRenderer — each has its own vertex buffer.
             // Overlay passes use a pool: each call within one encoder gets a fresh
@@ -784,7 +831,6 @@ impl UIRenderer {
             if matches!(text_mode, TextMode::Overlay) {
                 let idx = self.overlay_pass_index;
                 self.overlay_pass_index += 1;
-                // Grow pool on demand
                 while self.overlay_text_renderers.len() <= idx {
                     self.overlay_text_renderers.push(TextRenderer::new(
                         &mut self.text_atlas,
@@ -793,11 +839,13 @@ impl UIRenderer {
                         None,
                     ));
                 }
-                overlay_idx = Some(idx);
+                self.prepared_overlay_idx = Some(idx);
             }
             let renderer = match text_mode {
                 TextMode::Main => &mut self.text_renderer,
-                TextMode::Overlay => &mut self.overlay_text_renderers[overlay_idx.unwrap()],
+                TextMode::Overlay => {
+                    &mut self.overlay_text_renderers[self.prepared_overlay_idx.unwrap()]
+                }
                 TextMode::Skip => unreachable!(),
             };
             renderer
@@ -813,70 +861,81 @@ impl UIRenderer {
                 .expect("Failed to prepare text renderer");
         }
 
-        if self.vertices.is_empty() && !has_text {
-            self.rect_commands.clear();
+        self.prepared_text_mode = Some(text_mode);
+
+        let has_content = self.prepared_vertex_buffer.is_some() || has_text;
+
+        self.rect_commands.clear();
+        if !matches!(self.prepared_text_mode.as_ref().unwrap(), TextMode::Skip) {
             self.text_commands.clear();
+        }
+
+        has_content
+    }
+
+    /// Issue draw commands into an existing render pass. Must call `prepare()`
+    /// first. The render pass borrows prepared buffers stored on `self`.
+    pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
+        if let (Some(vb), Some(ib)) =
+            (&self.prepared_vertex_buffer, &self.prepared_index_buffer)
+        {
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, self.prepared_globals_bg.as_ref().unwrap(), &[]);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..self.prepared_index_count, 0, 0..1);
+        }
+
+        if self.prepared_has_text {
+            let text_mode = self.prepared_text_mode.as_ref().unwrap();
+            let renderer = match text_mode {
+                TextMode::Main => &self.text_renderer,
+                TextMode::Overlay => {
+                    &self.overlay_text_renderers[self.prepared_overlay_idx.unwrap()]
+                }
+                TextMode::Skip => return,
+            };
+            renderer
+                .render(&self.text_atlas, &self.viewport, pass)
+                .expect("Failed to render text");
+        }
+    }
+
+    /// Convenience: prepare + create render pass + draw. Used for standalone
+    /// overlay passes that don't need to share a pass with other pipelines.
+    pub fn render(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        scale_factor: f64,
+        text_mode: TextMode,
+    ) {
+        if !self.prepare(device, queue, width, height, scale_factor, text_mode) {
             return;
         }
 
-        // Single render pass: all rects then all text
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("UI Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("UI Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
 
-            if !self.vertices.is_empty() {
-                let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("UI Vertices"),
-                    contents: bytemuck::cast_slice(&self.vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
-                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("UI Indices"),
-                    contents: bytemuck::cast_slice(&self.indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                });
-
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &globals_bind_group, &[]);
-                pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..self.indices.len() as u32, 0, 0..1);
-            }
-
-            if has_text {
-                let renderer = match text_mode {
-                    TextMode::Main => &self.text_renderer,
-                    TextMode::Overlay => {
-                        // overlay_pass_index was already incremented, so the
-                        // renderer we prepared is at index - 1.
-                        &self.overlay_text_renderers[overlay_idx.unwrap()]
-                    }
-                    TextMode::Skip => unreachable!(),
-                };
-                renderer
-                    .render(&self.text_atlas, &self.viewport, &mut pass)
-                    .expect("Failed to render text");
-            }
-        }
-
-        self.rect_commands.clear();
-        if !matches!(text_mode, TextMode::Skip) {
-            self.text_commands.clear();
-        }
+        self.draw(&mut pass);
     }
 }
 

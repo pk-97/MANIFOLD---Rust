@@ -39,7 +39,9 @@ struct BlendUniforms {
     scale_val: f32,
     rotation: f32,
     aspect_ratio: f32,
-    _pad: f32, // keeps struct at 32 bytes — WGSL uniform structs must be multiples of 16 bytes
+    /// 1 = apply UV transform, 0 = identity (skip trig/division).
+    /// Also used as a function-constant specialization axis.
+    has_transform: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<BlendUniforms>() == 32);
@@ -50,12 +52,22 @@ const BLEND_WGSL: &str = include_str!("generators/shaders/compositor_blend_compu
 /// Number of blend modes (Normal=0 through Darken=12).
 const BLEND_MODE_COUNT: u32 = 13;
 
+/// Pipeline key: `(blend_mode, has_transform)`.
+/// Specializing both axes lets the Metal compiler eliminate dead code in each variant.
+/// 13 modes × 2 transform states = 26 pipelines, cached in MTLBinaryArchive.
+type BlendPipelineKey = (u32, bool);
+
 /// GPU resources for blend operations using native Metal compute.
-/// Holds one specialized pipeline per blend mode — Metal compiler dead-code
-/// eliminates inactive switch branches in each variant.
+///
+/// Two specialization axes produce a 2D pipeline matrix:
+/// - **blend_mode** (0..12): dead-code eliminates inactive switch branches
+/// - **has_transform** (true/false): eliminates UV transform math when identity
+///
+/// When has_transform == false AND blend_mode == Opaque, the compiler also
+/// eliminates the base texture read (opaque ignores base entirely when opacity == 1.0).
 struct BlendResources {
-    /// Specialized pipelines indexed by blend mode (0..12).
-    blend_pipelines: AHashMap<u32, manifold_gpu::GpuComputePipeline>,
+    /// Specialized pipelines indexed by (blend_mode, has_transform).
+    pipelines: AHashMap<BlendPipelineKey, manifold_gpu::GpuComputePipeline>,
     sampler: manifold_gpu::GpuSampler,
     /// Compositor width/height — needed for dispatch_workgroups.
     width: u32,
@@ -64,17 +76,26 @@ struct BlendResources {
 
 impl BlendResources {
     fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
-        let mut blend_pipelines = AHashMap::with_capacity(BLEND_MODE_COUNT as usize);
+        let mut pipelines = AHashMap::with_capacity(BLEND_MODE_COUNT as usize * 2);
         for mode in 0..BLEND_MODE_COUNT {
-            let label = format!("Blend Mode {mode}");
-            let mode_str = format!("{mode}u");
-            let pipeline = device.create_specialized_compute_pipeline(
-                BLEND_WGSL,
-                "cs_main",
-                &[("u.blend_mode", &mode_str)],
-                &label,
-            );
-            blend_pipelines.insert(mode, pipeline);
+            for has_transform in [false, true] {
+                let transform_str = if has_transform { "1u" } else { "0u" };
+                let label = format!(
+                    "Blend Mode {mode}{}",
+                    if has_transform { " +Transform" } else { "" },
+                );
+                let mode_str = format!("{mode}u");
+                let pipeline = device.create_specialized_compute_pipeline(
+                    BLEND_WGSL,
+                    "cs_main",
+                    &[
+                        ("u.blend_mode", &mode_str),
+                        ("u.has_transform", transform_str),
+                    ],
+                    &label,
+                );
+                pipelines.insert((mode, has_transform), pipeline);
+            }
         }
 
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
@@ -86,16 +107,11 @@ impl BlendResources {
             address_mode_w: manifold_gpu::GpuAddressMode::ClampToEdge,
         });
 
-        Self {
-            blend_pipelines,
-            sampler,
-            width,
-            height,
-        }
+        Self { pipelines, sampler, width, height }
     }
 
-    /// Execute a compute blend: reads source + blend textures, writes to target storage texture.
-    /// Selects the specialized pipeline matching the blend mode in uniforms.
+    /// Execute a compute blend. Selects the specialized pipeline matching the
+    /// blend mode and transform state in the uniforms.
     fn blend_pass(
         &self,
         gpu: &mut GpuEncoder,
@@ -105,12 +121,12 @@ impl BlendResources {
         target_texture: &GpuTexture,
         uniforms: &BlendUniforms,
     ) {
-        // Push to arena for offset tracking (arena buffer not read on native path)
         let _offset = arena.push(uniforms);
 
-        // Select specialized pipeline for this blend mode (fall back to mode 0 if unknown)
-        let pipeline = self.blend_pipelines.get(&uniforms.blend_mode)
-            .or_else(|| self.blend_pipelines.get(&0))
+        let has_transform = uniforms.has_transform != 0;
+        let key = (uniforms.blend_mode, has_transform);
+        let pipeline = self.pipelines.get(&key)
+            .or_else(|| self.pipelines.get(&(0, has_transform)))
             .unwrap();
 
         gpu.native_enc.dispatch_compute(
@@ -570,6 +586,11 @@ impl LayerCompositor {
 
                 // Composite each clip into layer buffer with Normal blend
                 for clip in group {
+                    let clip_has_transform =
+                        clip.translate_x.abs() >= f32::EPSILON
+                            || clip.translate_y.abs() >= f32::EPSILON
+                            || (clip.scale - 1.0).abs() >= f32::EPSILON
+                            || clip.rotation.abs() >= f32::EPSILON;
                     let uniforms = BlendUniforms {
                         blend_mode: BlendMode::Normal as u32,
                         opacity: clip.opacity,
@@ -578,7 +599,7 @@ impl LayerCompositor {
                         scale_val: clip.scale,
                         rotation: clip.rotation,
                         aspect_ratio: aspect,
-                        _pad: 0.0,
+                        has_transform: u32::from(clip_has_transform),
                     };
                     self.blend.blend_pass(
                         gpu,
@@ -660,6 +681,12 @@ impl LayerCompositor {
 
         for (idx, output) in layer_outputs.iter().enumerate() {
             let transform = &self.single_clip_transforms[idx];
+
+            let is_identity = transform.translate_x.abs() < f32::EPSILON
+                && transform.translate_y.abs() < f32::EPSILON
+                && (transform.scale - 1.0).abs() < f32::EPSILON
+                && transform.rotation.abs() < f32::EPSILON;
+
             let uniforms = BlendUniforms {
                 blend_mode: output.blend_mode as u32,
                 opacity: output.opacity,
@@ -668,7 +695,7 @@ impl LayerCompositor {
                 scale_val: transform.scale,
                 rotation: transform.rotation,
                 aspect_ratio: output.aspect,
-                _pad: 0.0,
+                has_transform: u32::from(!is_identity),
             };
             self.blend.blend_pass(
                 gpu,
@@ -855,6 +882,11 @@ impl LayerCompositor {
                     layer_buf.clear_source(&mut gpu, false);
 
                     for clip in group {
+                        let clip_has_transform =
+                            clip.translate_x.abs() >= f32::EPSILON
+                                || clip.translate_y.abs() >= f32::EPSILON
+                                || (clip.scale - 1.0).abs() >= f32::EPSILON
+                                || clip.rotation.abs() >= f32::EPSILON;
                         let uniforms = BlendUniforms {
                             blend_mode: BlendMode::Normal as u32,
                             opacity: clip.opacity,
@@ -863,7 +895,7 @@ impl LayerCompositor {
                             scale_val: clip.scale,
                             rotation: clip.rotation,
                             aspect_ratio: aspect,
-                            _pad: 0.0,
+                            has_transform: u32::from(clip_has_transform),
                         };
                         self.blend.blend_pass(
                             &mut gpu,
