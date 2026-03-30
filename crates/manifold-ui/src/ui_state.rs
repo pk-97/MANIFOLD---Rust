@@ -258,6 +258,15 @@ impl UIState {
     /// Set insert cursor. Clears EVERYTHING (clips, layers, region) per Ableton behavior.
     /// Unity UIState.cs SetInsertCursor (lines 111-122).
     pub fn set_insert_cursor(&mut self, beat: Beats, layer_id: LayerId) {
+        // Skip if nothing would change — same position, no active selection to clear.
+        if self.insert_cursor_beat == Some(beat)
+            && self.insert_cursor_layer_id.as_ref() == Some(&layer_id)
+            && self.selected_clip_ids.is_empty()
+            && self.selected_layer_ids.is_empty()
+            && !self.selection_region.is_active
+        {
+            return;
+        }
         self.insert_cursor_beat = Some(beat);
         self.insert_cursor_layer_id = Some(layer_id);
         self.selection_region = SelectionRegion::default(); // cursor replaces region

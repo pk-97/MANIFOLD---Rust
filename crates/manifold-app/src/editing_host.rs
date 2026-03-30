@@ -285,16 +285,18 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     // ── Selection & UI ──────────────────────────────────────────
 
     fn on_clip_selected(&mut self, clip_id: &str) {
-        // Find clip's layer and set active_layer
-        if let Some(project) = Some(&*self.project) {
-            for layer in &project.timeline.layers {
-                if layer.clips.iter().any(|c| c.id == clip_id) {
-                    *self.active_layer = Some(layer.layer_id.clone());
-                    break;
-                }
+        // Find clip's layer and set active_layer only if it changed.
+        let mut new_layer: Option<LayerId> = None;
+        for layer in &self.project.timeline.layers {
+            if layer.clips.iter().any(|c| c.id == clip_id) {
+                new_layer = Some(layer.layer_id.clone());
+                break;
             }
         }
-        *self.needs_structural_sync = true;
+        if new_layer != *self.active_layer {
+            *self.active_layer = new_layer;
+            *self.needs_structural_sync = true;
+        }
     }
 
     fn on_clip_right_click(&mut self, clip_id: &str, _screen_pos: Vec2) {
@@ -306,10 +308,13 @@ impl TimelineEditingHost for AppEditingHost<'_> {
     }
 
     fn inspect_layer(&mut self, layer_index: usize) {
-        *self.active_layer = self.project.timeline.layers
+        let new_layer = self.project.timeline.layers
             .get(layer_index)
             .map(|l| l.layer_id.clone());
-        *self.needs_structural_sync = true;
+        if new_layer != *self.active_layer {
+            *self.active_layer = new_layer;
+            *self.needs_structural_sync = true;
+        }
     }
 
     // ── Auto-scroll ─────────────────────────────────────────────

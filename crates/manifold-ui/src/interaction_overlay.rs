@@ -120,10 +120,6 @@ pub struct InteractionOverlay {
     region_drag_start_beat: Beats,
     region_drag_start_layer: usize,
 
-    // Click suppression (Unity line 133: if currentDragMode != None return)
-    // Set true in on_end_drag, checked+cleared at TOP of on_pointer_click.
-    was_dragging: bool,
-
     // Current modifier state — set by app before each event.
     // Unity reads Keyboard.current inline; Rust stores latest modifiers here.
     modifiers: Modifiers,
@@ -145,7 +141,6 @@ impl InteractionOverlay {
             drag_layer_blocked: false,
             region_drag_start_beat: Beats::ZERO,
             region_drag_start_layer: 0,
-            was_dragging: false,
             modifiers: Modifiers::NONE,
         }
     }
@@ -202,12 +197,6 @@ impl InteractionOverlay {
         ui_state: &mut UIState,
         viewport: &TimelineViewportPanel,
     ) {
-        // Unity line 133: suppress click if preceded by a drag
-        if self.was_dragging {
-            self.was_dragging = false;
-            return;
-        }
-
         let hit = self.hit_test_at(pos, viewport);
 
         if hit.is_none() {
@@ -485,7 +474,6 @@ impl InteractionOverlay {
         if self.drag_mode == DragMode::RegionSelect {
             host.invalidate_all_layer_bitmaps();
             self.drag_mode = DragMode::None;
-            self.was_dragging = true;
             return;
         }
 
@@ -546,7 +534,6 @@ impl InteractionOverlay {
         self.drag_snapshot_clip_ids.clear();
         self.drag_anchor_clip_id = None;
         self.trim_clip_id = None;
-        self.was_dragging = true;
 
         // Unity lines 444-445
         self.drag_layer_blocked = false;
