@@ -1,5 +1,19 @@
 use crate::node::Color32;
 
+// ── Contrast text color ────────────────────────────────────────────
+// W3C relative luminance: L = 0.2126*R + 0.7152*G + 0.0722*B
+// Returns white text on dark backgrounds, black text on bright backgrounds.
+pub fn contrast_text_color(bg: Color32) -> Color32 {
+    let luminance = 0.2126 * (bg.r as f32 / 255.0)
+        + 0.7152 * (bg.g as f32 / 255.0)
+        + 0.0722 * (bg.b as f32 / 255.0);
+    if luminance > 0.5 {
+        Color32::new(0, 0, 0, 255)
+    } else {
+        Color32::new(255, 255, 255, 255)
+    }
+}
+
 // All UI color constants ported from UIConstants.cs.
 //
 // PALETTE: "Studio"

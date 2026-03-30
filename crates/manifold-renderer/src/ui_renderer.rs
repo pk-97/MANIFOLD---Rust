@@ -3,6 +3,7 @@ use wgpu::util::DeviceExt;
 use glyphon::{
     Attrs, Buffer as TextBuffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics,
     Resolution, Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    Weight,
 };
 
 use manifold_ui::node::*;
@@ -116,6 +117,7 @@ struct TextCommand {
     text: String,
     font_size: f32,
     color: [u8; 4],
+    bold: bool,
     /// Clip bounds for this text (None = full viewport).
     clip_bounds: Option<[f32; 4]>,
 }
@@ -160,11 +162,11 @@ pub struct UIRenderer {
     /// Matches Unity's approach: Font.GetCharacterInfo() serves cached glyph data
     /// from the font atlas; only new glyphs trigger rasterization. Here, we cache
     /// shaped TextBuffers so identical text across frames avoids re-shaping.
-    text_buffer_cache: ahash::AHashMap<(String, u16), TextBuffer>,
+    text_buffer_cache: ahash::AHashMap<(String, u16, bool), TextBuffer>,
     /// Frame generation counter for cache eviction.
     text_cache_generation: u64,
     /// Per-entry generation (tracks last-used frame for eviction).
-    text_cache_used: ahash::AHashMap<(String, u16), u64>,
+    text_cache_used: ahash::AHashMap<(String, u16, bool), u64>,
 
     // Draw queues
     rect_commands: Vec<RectCommand>,
@@ -281,6 +283,8 @@ impl UIRenderer {
         let mut font_system = FontSystem::new();
         let font_data = include_bytes!("../assets/fonts/Inter-Regular.ttf");
         font_system.db_mut().load_font_data(font_data.to_vec());
+        let bold_font_data = include_bytes!("../assets/fonts/Inter-Bold.otf");
+        font_system.db_mut().load_font_data(bold_font_data.to_vec());
 
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
@@ -367,6 +371,7 @@ impl UIRenderer {
             text: text.to_string(),
             font_size,
             color,
+            bold: true, // default all direct text draws to bold
             clip_bounds: None,
         });
     }
@@ -518,7 +523,8 @@ impl UIRenderer {
             && !text.is_empty() {
                 // Cached measurement — only shapes on first encounter or content change.
                 // Matches Unity's Font.GetCharacterInfo() which returns cached glyph metrics.
-                let text_size = self.measure_text_cached(text, style.font_size);
+                let bold = matches!(style.font_weight, FontWeight::Bold);
+                let text_size = self.measure_text_cached(text, style.font_size, bold);
                 let text_y = bounds.y + (bounds.height - text_size.y) * 0.5;
 
                 let text_x = match style.text_align {
@@ -540,6 +546,7 @@ impl UIRenderer {
                     text: text.clone(),
                     font_size: style.font_size as f32,
                     color: text_color,
+                    bold: matches!(style.font_weight, FontWeight::Bold),
                     clip_bounds,
                 });
             }
@@ -549,8 +556,8 @@ impl UIRenderer {
     /// Matches Unity's approach: Font.GetCharacterInfo() returns cached glyph metrics
     /// from the font atlas. Here, we cache shaped TextBuffers so the same text
     /// across frames is measured without re-shaping.
-    pub fn measure_text_cached(&mut self, text: &str, font_size: u16) -> Vec2 {
-        let key = (text.to_string(), font_size);
+    pub fn measure_text_cached(&mut self, text: &str, font_size: u16, bold: bool) -> Vec2 {
+        let key = (text.to_string(), font_size, bold);
 
         // Mark as used this frame
         self.text_cache_used.insert(key.clone(), self.text_cache_generation);
@@ -570,10 +577,11 @@ impl UIRenderer {
         let metrics = Metrics::new(font_size as f32, font_size as f32 * 1.2);
         let mut buffer = TextBuffer::new(&mut self.font_system, metrics);
         buffer.set_size(&mut self.font_system, Some(10000.0), Some(font_size as f32 * 2.0));
+        let weight = if bold { Weight::BOLD } else { Weight::NORMAL };
         buffer.set_text(
             &mut self.font_system,
             text,
-            &Attrs::new().family(Family::SansSerif),
+            &Attrs::new().family(Family::SansSerif).weight(weight),
             Shaping::Basic,
             None,
         );
@@ -685,7 +693,7 @@ impl UIRenderer {
             self.text_buffers.clear();
 
             for cmd in &self.text_commands {
-                let key = (cmd.text.clone(), cmd.font_size as u16);
+                let key = (cmd.text.clone(), cmd.font_size as u16, cmd.bold);
 
                 if let Some(buffer) = self.text_buffer_cache.get(&key) {
                     self.text_buffers.push(buffer.clone());
@@ -695,10 +703,11 @@ impl UIRenderer {
                         Metrics::new(cmd.font_size, cmd.font_size * 1.2),
                     );
                     buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
+                    let weight = if cmd.bold { Weight::BOLD } else { Weight::NORMAL };
                     buffer.set_text(
                         &mut self.font_system,
                         &cmd.text,
-                        &Attrs::new().family(Family::SansSerif),
+                        &Attrs::new().family(Family::SansSerif).weight(weight),
                         Shaping::Basic,
                         None,
                     );
@@ -865,9 +874,12 @@ impl TextMeasure for UIRenderer {
         // TextMeasure requires &self, but glyphon needs &mut FontSystem.
         // Use an approximate measurement: Inter is ~0.5em per character on average.
         // This is good enough for layout; exact measurement happens in draw_node.
-        let _ = font_weight;
         let em = font_size as f32;
-        let avg_char_width = em * 0.52; // Inter average glyph width
+        let avg_char_width = if matches!(font_weight, FontWeight::Bold) {
+            em * 0.56 // Bold glyphs are ~8% wider
+        } else {
+            em * 0.52
+        };
         let width = text.len() as f32 * avg_char_width;
         Vec2::new(width, em)
     }
