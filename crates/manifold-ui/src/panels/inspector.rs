@@ -19,6 +19,9 @@ const SCROLLBAR_W: f32 = 4.0;
 const SCROLLBAR_MIN_THUMB_H: f32 = 16.0;
 const SCROLL_SPEED: f32 = 1.0;
 const SECTION_GAP: f32 = 2.0;
+const SECTION_CARD_RADIUS: f32 = 6.0;
+const SECTION_CARD_PAD: f32 = 4.0;
+const SECTION_CARD_BG: Color32 = Color32::new(22, 22, 23, 255);
 
 const SCROLLBAR_TRACK_COLOR: Color32 = color::SCROLLBAR_TRACK_C32;
 const SCROLLBAR_THUMB_COLOR: Color32 = color::SCROLLBAR_THUMB_C32;
@@ -85,16 +88,24 @@ pub struct InspectorCompositePanel {
     add_master_effect_btn: i32,
     add_layer_effect_btn: i32,
 
-    // Scroll state
-    scroll_offset: f32,
-    max_scroll: f32,
-    content_height: f32,
+    // Scroll state — two independent columns
+    master_scroll_offset: f32,
+    master_max_scroll: f32,
+    master_content_height: f32,
+    layer_scroll_offset: f32,
+    layer_max_scroll: f32,
+    layer_content_height: f32,
     viewport_rect: Rect,
+    /// X boundary between master (left) and layer (right) columns.
+    column_split_x: f32,
 
-    // Scrollbar node IDs
-    scrollbar_track_id: i32,
-    scrollbar_thumb_id: i32,
+    // Scrollbar node IDs — one per column
+    master_scrollbar_track_id: i32,
+    master_scrollbar_thumb_id: i32,
+    layer_scrollbar_track_id: i32,
+    layer_scrollbar_thumb_id: i32,
     dragging_scrollbar: bool,
+    dragging_scrollbar_master: bool,
 
     // Event routing
     pressed_target: Option<PressedTarget>,
@@ -137,13 +148,20 @@ impl InspectorCompositePanel {
             clip_visible: true,
             add_master_effect_btn: -1,
             add_layer_effect_btn: -1,
-            scroll_offset: 0.0,
-            max_scroll: 0.0,
-            content_height: 0.0,
+            master_scroll_offset: 0.0,
+            master_max_scroll: 0.0,
+            master_content_height: 0.0,
+            layer_scroll_offset: 0.0,
+            layer_max_scroll: 0.0,
+            layer_content_height: 0.0,
             viewport_rect: Rect::ZERO,
-            scrollbar_track_id: -1,
-            scrollbar_thumb_id: -1,
+            column_split_x: 0.0,
+            master_scrollbar_track_id: -1,
+            master_scrollbar_thumb_id: -1,
+            layer_scrollbar_track_id: -1,
+            layer_scrollbar_thumb_id: -1,
             dragging_scrollbar: false,
+            dragging_scrollbar_master: false,
             pressed_target: None,
             last_effect_tab: InspectorTab::Layer,
             bg_panel_id: -1,
@@ -218,7 +236,7 @@ impl InspectorCompositePanel {
         self.layer_effects.get_mut(idx)
     }
     pub fn viewport_rect(&self) -> Rect { self.viewport_rect }
-    pub fn scroll_offset(&self) -> f32 { self.scroll_offset }
+    pub fn scroll_offset(&self) -> f32 { self.layer_scroll_offset }
     /// Which inspector tab the last effect interaction targeted.
     /// Dispatch uses this to route EffectParamChanged etc. to the
     /// correct data location (master / layer / clip effects).
@@ -240,81 +258,113 @@ impl InspectorCompositePanel {
     /// Call on mouse wheel within the inspector viewport.
     /// Positive delta scrolls down.
     pub fn handle_scroll(&mut self, delta: f32) {
-        self.scroll_offset = (self.scroll_offset - delta * SCROLL_SPEED)
-            .clamp(0.0, self.max_scroll);
+        self.handle_scroll_at(delta, self.viewport_rect.x + self.viewport_rect.width * 0.5);
     }
 
-    fn compute_content_height(&self) -> f32 {
-        let mut h = 0.0;
-
-        if self.master_visible {
-            h += self.master_chrome.compute_height();
-            if !self.master_chrome.is_collapsed() {
-                for card in &self.master_effects {
-                    h += card.compute_height() + SECTION_GAP;
-                }
-                h += ADD_EFFECT_BTN_H + SECTION_GAP;
-            }
-            h += SECTION_GAP;
+    pub fn handle_scroll_at(&mut self, delta: f32, cursor_x: f32) {
+        if cursor_x < self.column_split_x {
+            self.master_scroll_offset = (self.master_scroll_offset - delta * SCROLL_SPEED)
+                .clamp(0.0, self.master_max_scroll);
+        } else {
+            self.layer_scroll_offset = (self.layer_scroll_offset - delta * SCROLL_SPEED)
+                .clamp(0.0, self.layer_max_scroll);
         }
+    }
 
+    /// Content height for the master column (left).
+    fn master_column_height(&self) -> f32 {
+        if !self.master_visible { return 0.0; }
+        let mut h = SECTION_CARD_PAD + self.master_chrome.compute_height();
+        if !self.master_chrome.is_collapsed() {
+            for card in &self.master_effects {
+                h += card.compute_height() + SECTION_GAP;
+            }
+            h += ADD_EFFECT_BTN_H + SECTION_GAP;
+        }
+        h + SECTION_CARD_PAD
+    }
+
+    /// Content height for the layer column (right).
+    fn layer_column_height(&self) -> f32 {
+        let mut h = 0.0;
         if self.layer_visible {
-            h += self.layer_chrome.compute_height();
+            h += SECTION_CARD_PAD + self.layer_chrome.compute_height();
             if !self.layer_chrome.is_collapsed() {
                 for card in &self.layer_effects {
                     h += card.compute_height() + SECTION_GAP;
                 }
                 h += ADD_EFFECT_BTN_H + SECTION_GAP;
             }
-            h += SECTION_GAP;
+            h += SECTION_CARD_PAD + SECTION_GAP;
         }
-
         if self.clip_visible {
-            h += self.clip_chrome.compute_height();
+            h += SECTION_CARD_PAD + self.clip_chrome.compute_height();
             if !self.clip_chrome.is_collapsed()
                 && let Some(ref gp) = self.gen_params {
                     h += gp.compute_height() + SECTION_GAP;
-                }
-            h += SECTION_GAP;
+            }
+            h += SECTION_CARD_PAD + SECTION_GAP;
         }
-
         h
     }
 
     fn update_scroll_bounds(&mut self) {
-        self.content_height = self.compute_content_height();
-        self.max_scroll = (self.content_height - self.viewport_rect.height).max(0.0);
-        self.scroll_offset = self.scroll_offset.clamp(0.0, self.max_scroll);
+        let vp_h = self.viewport_rect.height;
+        self.master_content_height = self.master_column_height();
+        self.master_max_scroll = (self.master_content_height - vp_h).max(0.0);
+        self.master_scroll_offset = self.master_scroll_offset.clamp(0.0, self.master_max_scroll);
+
+        self.layer_content_height = self.layer_column_height();
+        self.layer_max_scroll = (self.layer_content_height - vp_h).max(0.0);
+        self.layer_scroll_offset = self.layer_scroll_offset.clamp(0.0, self.layer_max_scroll);
     }
 
     fn update_scrollbar(&self, tree: &mut UITree) {
-        if self.scrollbar_track_id < 0 { return; }
+        self.update_column_scrollbar(
+            tree,
+            self.master_scrollbar_track_id,
+            self.master_scrollbar_thumb_id,
+            self.master_content_height,
+            self.master_scroll_offset,
+            self.master_max_scroll,
+            true,
+        );
+        self.update_column_scrollbar(
+            tree,
+            self.layer_scrollbar_track_id,
+            self.layer_scrollbar_thumb_id,
+            self.layer_content_height,
+            self.layer_scroll_offset,
+            self.layer_max_scroll,
+            false,
+        );
+    }
 
+    fn update_column_scrollbar(
+        &self, tree: &mut UITree,
+        track_id: i32, thumb_id: i32,
+        content_h: f32, scroll_offset: f32, max_scroll: f32,
+        is_master: bool,
+    ) {
+        if track_id < 0 { return; }
         let vp_h = self.viewport_rect.height;
-        if self.content_height <= vp_h || vp_h <= 0.0 {
-            tree.set_visible(self.scrollbar_track_id as u32, false);
-            tree.set_visible(self.scrollbar_thumb_id as u32, false);
+        if content_h <= vp_h || vp_h <= 0.0 {
+            tree.set_visible(track_id as u32, false);
+            tree.set_visible(thumb_id as u32, false);
             return;
         }
+        tree.set_visible(track_id as u32, true);
+        tree.set_visible(thumb_id as u32, true);
 
-        tree.set_visible(self.scrollbar_track_id as u32, true);
-        tree.set_visible(self.scrollbar_thumb_id as u32, true);
-
-        let ratio = vp_h / self.content_height;
+        let ratio = vp_h / content_h;
         let thumb_h = (vp_h * ratio).max(SCROLLBAR_MIN_THUMB_H);
         let scroll_range = vp_h - thumb_h;
-        let scroll_frac = if self.max_scroll > 0.0 {
-            self.scroll_offset / self.max_scroll
-        } else {
-            0.0
-        };
+        let scroll_frac = if max_scroll > 0.0 { scroll_offset / max_scroll } else { 0.0 };
 
-        let thumb_x = self.viewport_rect.x + self.viewport_rect.width - SCROLLBAR_W;
+        let col_right = if is_master { self.column_split_x } else { self.viewport_rect.x_max() };
+        let thumb_x = col_right - SCROLLBAR_W;
         let thumb_y = self.viewport_rect.y + scroll_frac * scroll_range;
-        tree.set_bounds(
-            self.scrollbar_thumb_id as u32,
-            Rect::new(thumb_x, thumb_y, SCROLLBAR_W, thumb_h),
-        );
+        tree.set_bounds(thumb_id as u32, Rect::new(thumb_x, thumb_y, SCROLLBAR_W, thumb_h));
     }
 
     // ── Tab tracking for dispatch routing ────────────────────────
@@ -518,8 +568,9 @@ impl InspectorCompositePanel {
         let idx = node_id as usize;
         let id = node_id as i32;
 
-        // Scrollbar
-        if id == self.scrollbar_track_id || id == self.scrollbar_thumb_id {
+        // Scrollbars
+        if id == self.master_scrollbar_track_id || id == self.master_scrollbar_thumb_id
+            || id == self.layer_scrollbar_track_id || id == self.layer_scrollbar_thumb_id {
             return Some(PressedTarget::Scrollbar);
         }
 
@@ -589,15 +640,25 @@ impl InspectorCompositePanel {
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         if self.dragging_scrollbar {
             let vp = self.viewport_rect;
-            let ratio = vp.height / self.content_height;
-            let thumb_h = (vp.height * ratio).max(SCROLLBAR_MIN_THUMB_H);
-            let scroll_range = vp.height - thumb_h;
-            if scroll_range > 0.0 {
-                let frac = ((pos.y - vp.y) / scroll_range).clamp(0.0, 1.0);
-                self.scroll_offset = frac * self.max_scroll;
-                self.update_scrollbar(tree);
+            if self.dragging_scrollbar_master {
+                let ratio = vp.height / self.master_content_height;
+                let thumb_h = (vp.height * ratio).max(SCROLLBAR_MIN_THUMB_H);
+                let scroll_range = vp.height - thumb_h;
+                if scroll_range > 0.0 {
+                    let frac = ((pos.y - vp.y) / scroll_range).clamp(0.0, 1.0);
+                    self.master_scroll_offset = frac * self.master_max_scroll;
+                }
+            } else {
+                let ratio = vp.height / self.layer_content_height;
+                let thumb_h = (vp.height * ratio).max(SCROLLBAR_MIN_THUMB_H);
+                let scroll_range = vp.height - thumb_h;
+                if scroll_range > 0.0 {
+                    let frac = ((pos.y - vp.y) / scroll_range).clamp(0.0, 1.0);
+                    self.layer_scroll_offset = frac * self.layer_max_scroll;
+                }
             }
-            return vec![PanelAction::InspectorScrolled(self.scroll_offset)];
+            self.update_scrollbar(tree);
+            return vec![PanelAction::InspectorScrolled(0.0)];
         }
 
         if let Some(target) = self.pressed_target {
@@ -1037,6 +1098,9 @@ impl InspectorCompositePanel {
                 }
                 PressedTarget::Scrollbar => {
                     self.dragging_scrollbar = true;
+                    let id = node_id as i32;
+                    self.dragging_scrollbar_master =
+                        id == self.master_scrollbar_track_id || id == self.master_scrollbar_thumb_id;
                     Vec::new()
                 }
             };
@@ -1088,7 +1152,13 @@ impl Panel for InspectorCompositePanel {
         }
 
         self.viewport_rect = rect;
-        let content_w = rect.width - SCROLLBAR_W;
+        let col_gap = 2.0_f32;
+        let half_w = ((rect.width - col_gap) * 0.5).floor();
+        let left_x = rect.x;
+        let right_x = rect.x + half_w + col_gap;
+        let left_content_w = half_w - SCROLLBAR_W;
+        let right_content_w = (rect.width - half_w - col_gap) - SCROLLBAR_W;
+        self.column_split_x = right_x;
 
         // Background panel
         self.bg_panel_id = tree.add_panel(
@@ -1096,137 +1166,187 @@ impl Panel for InspectorCompositePanel {
             UIStyle { bg_color: color::INSPECTOR_BG, ..UIStyle::default() },
         ) as i32;
 
-        // ClipRegion — clips all scrolled content to the inspector viewport.
-        // Unity: InspectorCompositeBitmapPanel uses a viewport-sized RT for natural clipping.
-        // Rust equivalent: a ClipRegion node with CLIPS_CHILDREN flag.
-        let clip_id = tree.add_node(
-            -1,
-            rect,
+        // ── LEFT COLUMN: Master FX ──────────────────────────────────
+        let left_clip_rect = Rect::new(left_x, rect.y, half_w, rect.height);
+        let left_clip_id = tree.add_node(
+            -1, left_clip_rect,
             crate::node::UINodeType::ClipRegion,
-            UIStyle::default(),
-            None,
+            UIStyle::default(), None,
             UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
         ) as i32;
+        let left_start = tree.count();
 
-        // Track the start index so we can reparent all content nodes under the clip region
-        let content_start = tree.count();
-
-        let mut cy = rect.y - self.scroll_offset;
-
-        // Master section
-        if self.master_visible {
-            let chrome_h = self.master_chrome.compute_height();
-            self.master_chrome.build(tree, Rect::new(rect.x, cy, content_w, chrome_h));
-            cy += chrome_h;
-
-            if !self.master_chrome.is_collapsed() {
-                for card in &mut self.master_effects {
-                    let card_h = card.compute_height();
-                    card.build(tree, Rect::new(rect.x, cy, content_w, card_h));
-                    cy += card_h + SECTION_GAP;
-                }
-                // "+ Add Effect" button for master
-                self.add_master_effect_btn = tree.add_button(
-                    -1, rect.x + 4.0, cy, content_w - 8.0, ADD_EFFECT_BTN_H,
+        {
+            let mut cy = rect.y - self.master_scroll_offset;
+            if self.master_visible {
+                // Section card background
+                let section_h = self.master_column_height();
+                tree.add_panel(
+                    -1, left_x, cy, left_content_w, section_h,
                     UIStyle {
-                        bg_color: ADD_EFFECT_BTN_BG,
-                        hover_bg_color: ADD_EFFECT_BTN_HOVER,
-                        text_color: ADD_EFFECT_BTN_TEXT,
-                        corner_radius: 4.0,
-                        text_align: TextAlign::Center,
-                        font_size: 11,
+                        bg_color: SECTION_CARD_BG,
+                        corner_radius: SECTION_CARD_RADIUS,
                         ..UIStyle::default()
                     },
-                    "+ Add Effect",
-                ) as i32;
-                cy += ADD_EFFECT_BTN_H + SECTION_GAP;
-            }
-            cy += SECTION_GAP;
-        }
+                );
+                cy += SECTION_CARD_PAD;
 
-        // Layer section
-        if self.layer_visible {
-            let chrome_h = self.layer_chrome.compute_height();
-            self.layer_chrome.build(tree, Rect::new(rect.x, cy, content_w, chrome_h));
-            cy += chrome_h;
+                let chrome_h = self.master_chrome.compute_height();
+                self.master_chrome.build(tree, Rect::new(left_x, cy, left_content_w, chrome_h));
+                cy += chrome_h;
 
-            if !self.layer_chrome.is_collapsed() {
-                for card in &mut self.layer_effects {
-                    let card_h = card.compute_height();
-                    card.build(tree, Rect::new(rect.x, cy, content_w, card_h));
-                    cy += card_h + SECTION_GAP;
+                if !self.master_chrome.is_collapsed() {
+                    for card in &mut self.master_effects {
+                        let card_h = card.compute_height();
+                        card.build(tree, Rect::new(left_x, cy, left_content_w, card_h));
+                        cy += card_h + SECTION_GAP;
+                    }
+                    self.add_master_effect_btn = tree.add_button(
+                        -1, left_x + 4.0, cy, left_content_w - 8.0, ADD_EFFECT_BTN_H,
+                        UIStyle {
+                            bg_color: ADD_EFFECT_BTN_BG,
+                            hover_bg_color: ADD_EFFECT_BTN_HOVER,
+                            text_color: ADD_EFFECT_BTN_TEXT,
+                            corner_radius: 4.0,
+                            text_align: TextAlign::Center,
+                            font_size: 11,
+                            ..UIStyle::default()
+                        },
+                        "+ Add Effect",
+                    ) as i32;
                 }
-                // "+ Add Effect" button for layer
-                self.add_layer_effect_btn = tree.add_button(
-                    -1, rect.x + 4.0, cy, content_w - 8.0, ADD_EFFECT_BTN_H,
-                    UIStyle {
-                        bg_color: ADD_EFFECT_BTN_BG,
-                        hover_bg_color: ADD_EFFECT_BTN_HOVER,
-                        text_color: ADD_EFFECT_BTN_TEXT,
-                        corner_radius: 4.0,
-                        text_align: TextAlign::Center,
-                        font_size: 11,
-                        ..UIStyle::default()
-                    },
-                    "+ Add Effect",
-                ) as i32;
-                cy += ADD_EFFECT_BTN_H + SECTION_GAP;
             }
-            cy += SECTION_GAP;
         }
+        let left_count = tree.count() - left_start;
+        tree.reparent_root_nodes(left_start, left_count, left_clip_id);
 
-        // Clip section
-        if self.clip_visible {
-            let chrome_h = self.clip_chrome.compute_height();
-            self.clip_chrome.build(tree, Rect::new(rect.x, cy, content_w, chrome_h));
-            cy += chrome_h;
-
-            if !self.clip_chrome.is_collapsed()
-                && let Some(ref mut gp) = self.gen_params {
-                    let gp_h = gp.compute_height();
-                    gp.build(tree, Rect::new(rect.x, cy, content_w, gp_h));
-                    // cy not read after this point — total content height used by scroll logic
-                }
-        }
-
-        // Reparent all content nodes (chrome + cards + buttons) under the clip region.
-        // This ensures scrolled content is clipped to the inspector viewport and
-        // doesn't bleed over the transport bar when scroll_offset > 0.
-        let content_count = tree.count() - content_start;
-        tree.reparent_root_nodes(content_start, content_count, clip_id);
-
-        // Scrollbar track + thumb (NOT clipped — always visible at viewport edge)
-        let sb_x = rect.x + content_w;
-        self.scrollbar_track_id = tree.add_button(
-            -1, sb_x, rect.y, SCROLLBAR_W, rect.height,
-            UIStyle {
-                bg_color: SCROLLBAR_TRACK_COLOR,
-                hover_bg_color: Color32::new(
-                    SCROLLBAR_TRACK_COLOR.r.saturating_add(10),
-                    SCROLLBAR_TRACK_COLOR.g.saturating_add(10),
-                    SCROLLBAR_TRACK_COLOR.b.saturating_add(10),
-                    SCROLLBAR_TRACK_COLOR.a,
-                ),
-                ..UIStyle::default()
-            },
-            "",
+        // Left scrollbar
+        let left_sb_x = left_x + left_content_w;
+        self.master_scrollbar_track_id = tree.add_button(
+            -1, left_sb_x, rect.y, SCROLLBAR_W, rect.height,
+            UIStyle { bg_color: SCROLLBAR_TRACK_COLOR, ..UIStyle::default() }, "",
         ) as i32;
-
-        self.scrollbar_thumb_id = tree.add_button(
-            -1, sb_x, rect.y, SCROLLBAR_W, SCROLLBAR_MIN_THUMB_H,
+        self.master_scrollbar_thumb_id = tree.add_button(
+            -1, left_sb_x, rect.y, SCROLLBAR_W, SCROLLBAR_MIN_THUMB_H,
             UIStyle {
                 bg_color: SCROLLBAR_THUMB_COLOR,
                 hover_bg_color: SCROLLBAR_THUMB_HOVER,
-                pressed_bg_color: Color32::new(
-                    SCROLLBAR_THUMB_HOVER.r.saturating_sub(15),
-                    SCROLLBAR_THUMB_HOVER.g.saturating_sub(15),
-                    SCROLLBAR_THUMB_HOVER.b.saturating_sub(15),
-                    SCROLLBAR_THUMB_HOVER.a,
-                ),
                 corner_radius: 2.0,
                 ..UIStyle::default()
-            },
-            "",
+            }, "",
+        ) as i32;
+
+        // ── RIGHT COLUMN: Layer + Clip ──────────────────────────────
+        let right_clip_rect = Rect::new(right_x, rect.y, rect.width - half_w - col_gap, rect.height);
+        let right_clip_id = tree.add_node(
+            -1, right_clip_rect,
+            crate::node::UINodeType::ClipRegion,
+            UIStyle::default(), None,
+            UIFlags::VISIBLE | UIFlags::CLIPS_CHILDREN,
+        ) as i32;
+        let right_start = tree.count();
+
+        {
+            let mut cy = rect.y - self.layer_scroll_offset;
+
+            // Layer section
+            if self.layer_visible {
+                let section_h = {
+                    let mut h = SECTION_CARD_PAD + self.layer_chrome.compute_height();
+                    if !self.layer_chrome.is_collapsed() {
+                        for card in &self.layer_effects {
+                            h += card.compute_height() + SECTION_GAP;
+                        }
+                        h += ADD_EFFECT_BTN_H + SECTION_GAP;
+                    }
+                    h + SECTION_CARD_PAD
+                };
+                tree.add_panel(
+                    -1, right_x, cy, right_content_w, section_h,
+                    UIStyle {
+                        bg_color: SECTION_CARD_BG,
+                        corner_radius: SECTION_CARD_RADIUS,
+                        ..UIStyle::default()
+                    },
+                );
+                cy += SECTION_CARD_PAD;
+
+                let chrome_h = self.layer_chrome.compute_height();
+                self.layer_chrome.build(tree, Rect::new(right_x, cy, right_content_w, chrome_h));
+                cy += chrome_h;
+
+                if !self.layer_chrome.is_collapsed() {
+                    for card in &mut self.layer_effects {
+                        let card_h = card.compute_height();
+                        card.build(tree, Rect::new(right_x, cy, right_content_w, card_h));
+                        cy += card_h + SECTION_GAP;
+                    }
+                    self.add_layer_effect_btn = tree.add_button(
+                        -1, right_x + 4.0, cy, right_content_w - 8.0, ADD_EFFECT_BTN_H,
+                        UIStyle {
+                            bg_color: ADD_EFFECT_BTN_BG,
+                            hover_bg_color: ADD_EFFECT_BTN_HOVER,
+                            text_color: ADD_EFFECT_BTN_TEXT,
+                            corner_radius: 4.0,
+                            text_align: TextAlign::Center,
+                            font_size: 11,
+                            ..UIStyle::default()
+                        },
+                        "+ Add Effect",
+                    ) as i32;
+                    cy += ADD_EFFECT_BTN_H + SECTION_GAP;
+                }
+                cy += SECTION_CARD_PAD + SECTION_GAP;
+            }
+
+            // Clip section
+            if self.clip_visible {
+                let section_h = {
+                    let mut h = SECTION_CARD_PAD + self.clip_chrome.compute_height();
+                    if !self.clip_chrome.is_collapsed()
+                        && let Some(ref gp) = self.gen_params {
+                            h += gp.compute_height() + SECTION_GAP;
+                    }
+                    h + SECTION_CARD_PAD
+                };
+                tree.add_panel(
+                    -1, right_x, cy, right_content_w, section_h,
+                    UIStyle {
+                        bg_color: SECTION_CARD_BG,
+                        corner_radius: SECTION_CARD_RADIUS,
+                        ..UIStyle::default()
+                    },
+                );
+                cy += SECTION_CARD_PAD;
+
+                let chrome_h = self.clip_chrome.compute_height();
+                self.clip_chrome.build(tree, Rect::new(right_x, cy, right_content_w, chrome_h));
+                cy += chrome_h;
+
+                if !self.clip_chrome.is_collapsed()
+                    && let Some(ref mut gp) = self.gen_params {
+                        let gp_h = gp.compute_height();
+                        gp.build(tree, Rect::new(right_x, cy, right_content_w, gp_h));
+                    }
+            }
+        }
+        let right_count = tree.count() - right_start;
+        tree.reparent_root_nodes(right_start, right_count, right_clip_id);
+
+        // Right scrollbar
+        let right_sb_x = rect.x + rect.width - SCROLLBAR_W;
+        self.layer_scrollbar_track_id = tree.add_button(
+            -1, right_sb_x, rect.y, SCROLLBAR_W, rect.height,
+            UIStyle { bg_color: SCROLLBAR_TRACK_COLOR, ..UIStyle::default() }, "",
+        ) as i32;
+        self.layer_scrollbar_thumb_id = tree.add_button(
+            -1, right_sb_x, rect.y, SCROLLBAR_W, SCROLLBAR_MIN_THUMB_H,
+            UIStyle {
+                bg_color: SCROLLBAR_THUMB_COLOR,
+                hover_bg_color: SCROLLBAR_THUMB_HOVER,
+                corner_radius: 2.0,
+                ..UIStyle::default()
+            }, "",
         ) as i32;
 
         self.update_scroll_bounds();

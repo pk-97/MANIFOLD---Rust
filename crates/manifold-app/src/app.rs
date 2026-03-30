@@ -1494,7 +1494,7 @@ impl ApplicationHandler for Application {
 
                     if inspector_rect.contains(pos) {
                         // Scroll the inspector panel — full rebuild (inspector is static)
-                        self.ui_root.inspector.handle_scroll(dy);
+                        self.ui_root.inspector.handle_scroll_at(dy, pos.x);
                         self.needs_rebuild = true;
                     } else if tracks_rect.contains(pos) {
                         if self.modifiers.alt {
