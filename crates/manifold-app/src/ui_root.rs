@@ -163,6 +163,15 @@ impl UIRoot {
                 .clamp(manifold_ui::color::MIN_TIMELINE_SPLIT_RATIO,
                        manifold_ui::color::MAX_TIMELINE_SPLIT_RATIO);
         }
+        // Restore viewport scroll + zoom
+        if settings.viewport_pixels_per_beat > 0.0 {
+            self.viewport.set_zoom(settings.viewport_pixels_per_beat);
+        }
+        self.viewport.set_scroll(
+            settings.viewport_scroll_x_beats,
+            settings.viewport_scroll_y_px,
+        );
+        self.layer_headers.set_scroll_y(settings.viewport_scroll_y_px);
     }
 
     /// Build all panels. Call once after creation and after resize.

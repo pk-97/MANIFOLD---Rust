@@ -73,6 +73,14 @@ pub struct ProjectSettings {
     #[serde(default)]
     pub effect_browser_open: bool,
 
+    // ── Viewport state (saved/restored on project load) ──
+    #[serde(default)]
+    pub viewport_scroll_x_beats: f32,
+    #[serde(default)]
+    pub viewport_scroll_y_px: f32,
+    #[serde(default = "default_ppb")]
+    pub viewport_pixels_per_beat: f32,
+
     // ── Legacy flat effect fields (V1.0.0) ──
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "bloomAmount")]
     pub legacy_bloom_amount: Option<f32>,
@@ -142,6 +150,9 @@ impl Default for ProjectSettings {
             timeline_height_percent: -1.0,
             effect_browser_width: -1.0,
             effect_browser_open: false,
+            viewport_scroll_x_beats: 0.0,
+            viewport_scroll_y_px: 0.0,
+            viewport_pixels_per_beat: 120.0,
             legacy_bloom_amount: None,
             legacy_feedback_amount: None,
             legacy_pixel_sort_amount: None,
@@ -289,6 +300,7 @@ fn default_8() -> i32 { 8 }
 fn default_120() -> Bpm { Bpm::DEFAULT }
 fn default_4() -> i32 { 4 }
 fn default_one() -> f32 { 1.0 }
+fn default_ppb() -> f32 { 120.0 }
 fn default_9001() -> i32 { 9001 }
 fn default_neg_one_f() -> f32 { -1.0 }
 fn default_neg_one_i32() -> i32 { -1 }

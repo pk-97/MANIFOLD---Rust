@@ -21,12 +21,23 @@ use crate::window_registry::{WindowRole, WindowState};
 impl Application {
     // ── Project I/O — delegates to ProjectIOService ────────────────────
 
+    /// Persist current viewport scroll + zoom into project settings.
+    fn save_viewport_state(&mut self) {
+        self.local_project.settings.viewport_scroll_x_beats =
+            self.ui_root.viewport.scroll_x_beats().as_f32();
+        self.local_project.settings.viewport_scroll_y_px =
+            self.ui_root.viewport.scroll_y_px();
+        self.local_project.settings.viewport_pixels_per_beat =
+            self.ui_root.viewport.pixels_per_beat();
+    }
+
     /// Save. Delegates to ProjectIOService.save_project.
     pub(crate) fn save_project(&mut self) {
         let current_time = self.content_state.current_time;
         let current_path = self.current_project_path.clone();
         // Save the local project snapshot (best effort — authoritative is on content thread)
         self.local_project.saved_playhead_time = current_time.as_f32();
+        self.save_viewport_state();
         if let Some(path) = current_path.as_deref() {
             match manifold_io::saver::save_project(&mut self.local_project, path, None, false) {
                 Ok(()) => {
@@ -45,6 +56,7 @@ impl Application {
         self.send_content_cmd(ContentCommand::PauseRendering);
         let current_time = self.content_state.current_time;
         self.local_project.saved_playhead_time = current_time.as_f32();
+        self.save_viewport_state();
         let parent_win = self.primary_window_id
             .and_then(|id| self.window_registry.get(&id))
             .map(|ws| ws.window.as_ref());
