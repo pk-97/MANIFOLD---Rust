@@ -14,7 +14,7 @@ use super::{Panel, PanelAction};
 const RULER_HEIGHT: f32 = color::RULER_HEIGHT;
 const CLIP_VERTICAL_PAD: f32 = 12.0;
 
-const RULER_FONT_SIZE: u16 = 9;
+const RULER_FONT_SIZE: u16 = color::FONT_SMALL;
 const RULER_TICK_W: f32 = 1.0;
 const RULER_BEAT_TICK_H: f32 = 8.0;
 const RULER_BAR_TICK_H: f32 = 14.0;

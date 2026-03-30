@@ -195,56 +195,38 @@ pub fn draw_clip(
 }
 
 /// Get the background color for a clip based on its visual state.
-/// Unity: LayerBitmapPainter.GetClipColor (lines 94-120).
-/// Priority: locked → selected → hovered → normal. Muted post-blend 50% with MUTED_COLOR.
-/// `layer_color` tints the clip to match the layer's user-chosen color.
+/// Uses the exact layer color. Selected/hovered lighten, locked dims.
 pub fn get_clip_color(
     is_selected: bool,
     is_hovered: bool,
     is_muted: bool,
     is_locked: bool,
-    is_generator: bool,
+    _is_generator: bool,
     layer_color: Color32,
 ) -> Color32 {
-    // Brightness multiplier for each state (1.0 = normal).
-    let (brightness, alpha) = if is_locked {
-        return color::CLIP_LOCKED; // locked ignores layer color
-    } else if is_selected {
-        (1.3_f32, 255u8)
+    if is_locked {
+        return color::CLIP_LOCKED;
+    }
+
+    // Exact layer color with lighten/darken for state (matches layer header)
+    let base = if is_selected {
+        Color32::new(
+            layer_color.r.saturating_add(30),
+            layer_color.g.saturating_add(30),
+            layer_color.b.saturating_add(30),
+            255,
+        )
     } else if is_hovered {
-        (1.15, 255)
-    } else {
-        (1.0, 255)
-    };
-
-    // Darken the layer color slightly so clips sit well on dark backgrounds,
-    // then apply brightness for state. Generators keep their cyan tint mixed in.
-    let base = if is_generator {
-        let gen_tint = if is_selected {
-            color::CLIP_GEN_SELECTED
-        } else if is_hovered {
-            color::CLIP_GEN_HOVER
-        } else {
-            color::CLIP_GEN_NORMAL
-        };
-        // 50/50 blend of layer color and generator tint.
         Color32::new(
-            ((layer_color.r as u16 + gen_tint.r as u16) / 2) as u8,
-            ((layer_color.g as u16 + gen_tint.g as u16) / 2) as u8,
-            ((layer_color.b as u16 + gen_tint.b as u16) / 2) as u8,
-            alpha,
+            layer_color.r.saturating_add(15),
+            layer_color.g.saturating_add(15),
+            layer_color.b.saturating_add(15),
+            255,
         )
     } else {
-        // Scale layer color by brightness for selected/hovered.
-        Color32::new(
-            (layer_color.r as f32 * brightness).min(255.0) as u8,
-            (layer_color.g as f32 * brightness).min(255.0) as u8,
-            (layer_color.b as f32 * brightness).min(255.0) as u8,
-            alpha,
-        )
+        Color32::new(layer_color.r, layer_color.g, layer_color.b, 255)
     };
 
-    // Muted post-process: blend 50% with MutedColor (rust-orange tint)
     if is_muted {
         let m = color::MUTED_COLOR;
         Color32::new(
@@ -392,22 +374,22 @@ mod tests {
     }
 
     #[test]
-    fn get_clip_color_selected_brightens() {
+    fn get_clip_color_selected_lightens() {
         let lc = Color32::new(100, 100, 100, 255);
         let selected = get_clip_color(true, false, false, false, false, lc);
-        // Selected brightness = 1.3
+        // Selected = +30 lighten
         assert_eq!(selected.r, 130);
         assert_eq!(selected.g, 130);
     }
 
     #[test]
-    fn get_clip_color_generator_blends_tint() {
+    fn get_clip_color_generator_uses_exact_layer_color() {
         let lc = Color32::new(200, 100, 50, 255);
         let gen_normal = get_clip_color(false, false, false, false, true, lc);
-        // 50/50 blend with CLIP_GEN_NORMAL
-        let g = color::CLIP_GEN_NORMAL;
-        assert_eq!(gen_normal.r, ((200u16 + g.r as u16) / 2) as u8);
-        assert_eq!(gen_normal.g, ((100u16 + g.g as u16) / 2) as u8);
+        // Generator clips use exact layer color, no tinting
+        assert_eq!(gen_normal.r, 200);
+        assert_eq!(gen_normal.g, 100);
+        assert_eq!(gen_normal.b, 50);
     }
 
     #[test]

@@ -41,10 +41,10 @@ const DRAG_SOURCE_DIM: Color32 = color::LAYER_DRAG_SOURCE_DIM;
 const INSERT_LINE_CLR: Color32 = color::LAYER_INSERT_LINE;
 const INSERT_LINE_H: f32 = 2.0;
 
-const NAME_FONT: u16 = color::LAYER_CTRL_NAME_FONT_SIZE;
-const SMALL_FONT: u16 = color::LAYER_CTRL_SMALL_FONT_SIZE;
-const HANDLE_FONT: u16 = color::LAYER_CTRL_HANDLE_FONT_SIZE;
-const BTN_FONT: u16 = 10;
+const NAME_FONT: u16 = color::FONT_LABEL;
+const SMALL_FONT: u16 = color::FONT_SMALL;
+const HANDLE_FONT: u16 = color::FONT_HEADING;
+const BTN_FONT: u16 = color::FONT_BODY;
 const LH_BTN_RADIUS: f32 = 2.0;
 
 // ── Style helpers ───────────────────────────────────────────────────
@@ -741,7 +741,14 @@ impl LayerHeaderPanel {
 
         // Contrast text color for readability on the layer's background
         let text_clr = color::contrast_text_color(layer.color);
-        let text_dim = Color32::new(text_clr.r, text_clr.g, text_clr.b, 180);
+        // Secondary text: soften toward the background instead of using alpha
+        let text_dim = if text_clr.r > 128 {
+            // White text → dim to light gray
+            Color32::new(200, 200, 200, 255)
+        } else {
+            // Black text → dim to dark gray
+            Color32::new(55, 55, 55, 255)
+        };
 
         // Group accent bar
         if row.has_accent_bar {

@@ -15,7 +15,7 @@ pub(crate) const ROW_HEIGHT: f32 = 20.0;
 pub(crate) const ROW_SPACING: f32 = 4.0;
 pub(crate) const PADDING: f32 = 6.0;
 pub(crate) const GAP: f32 = 4.0;
-pub(crate) const FONT_SIZE: u16 = 10;
+pub(crate) const FONT_SIZE: u16 = color::FONT_BODY;
 
 pub(crate) const DE_BUTTON_SIZE: f32 = 20.0;
 pub(crate) const DE_BUTTON_GAP: f32 = 2.0;
@@ -214,7 +214,7 @@ pub(crate) fn de_btn_style(active: bool, active_color: Color32) -> UIStyle {
                 active_color.a,
             ),
             text_color: color::TEXT_WHITE_C32,
-            font_size: 8,
+            font_size: color::FONT_CAPTION,
             corner_radius: 2.0,
             text_align: TextAlign::Center,
             ..UIStyle::default()
@@ -225,7 +225,7 @@ pub(crate) fn de_btn_style(active: bool, active_color: Color32) -> UIStyle {
             hover_bg_color: color::DRIVER_INACTIVE_HOVER_C32,
             pressed_bg_color: color::DRIVER_INACTIVE_PRESS_C32,
             text_color: color::TEXT_DIMMED_C32,
-            font_size: 8,
+            font_size: color::FONT_CAPTION,
             corner_radius: 2.0,
             text_align: TextAlign::Center,
             ..UIStyle::default()
@@ -268,8 +268,7 @@ pub(crate) fn toggle_btn_style(enabled: bool) -> UIStyle {
             hover_bg_color: color::ACCENT_BLUE_HOVER_C32,
             pressed_bg_color: color::ACCENT_BLUE_PRESS_C32,
             text_color: color::TEXT_WHITE_C32,
-            font_size: 8,
-            font_weight: FontWeight::Bold,
+            font_size: color::FONT_CAPTION,
             corner_radius: color::BUTTON_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()
@@ -280,8 +279,7 @@ pub(crate) fn toggle_btn_style(enabled: bool) -> UIStyle {
             hover_bg_color: color::BUTTON_INACTIVE_HOVER_C32,
             pressed_bg_color: color::BUTTON_INACTIVE_PRESS_C32,
             text_color: color::TEXT_DIMMED_C32,
-            font_size: 8,
-            font_weight: FontWeight::Bold,
+            font_size: color::FONT_CAPTION,
             corner_radius: color::BUTTON_RADIUS,
             text_align: TextAlign::Center,
             ..UIStyle::default()

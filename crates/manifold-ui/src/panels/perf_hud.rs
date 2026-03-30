@@ -12,8 +12,8 @@ use super::{Panel, PanelAction};
 const HUD_WIDTH: f32 = 250.0;
 const HUD_HEIGHT: f32 = 380.0;
 const ROW_HEIGHT: f32 = 14.0;
-const LABEL_FONT: u16 = 9;
-const VALUE_FONT: u16 = 9;
+const LABEL_FONT: u16 = color::FONT_SMALL;
+const VALUE_FONT: u16 = color::FONT_SMALL;
 const SECTION_GAP: f32 = 6.0;
 const PAD: f32 = 8.0;
 
@@ -366,7 +366,7 @@ impl Panel for PerfHudPanel {
         tree.add_label(-1, x + PAD, cy, inner_w, 14.0, "PERFORMANCE",
             UIStyle {
                 text_color: color::TEXT_NEAR_WHITE,
-                font_size: 10,
+                font_size: color::FONT_BODY,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },

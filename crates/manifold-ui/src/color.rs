@@ -562,13 +562,14 @@ pub const SMALL_RADIUS: f32 = 2.0;
 pub const POPUP_RADIUS: f32 = 6.0;
 
 // ── Font sizes ──────────────────────────────────────────────────────
-pub const FONT_CAPTION: u16 = 8;
-pub const FONT_SMALL: u16 = 9;
-pub const FONT_BODY: u16 = 10;
-pub const FONT_LABEL: u16 = 11;
-pub const FONT_SUBHEADING: u16 = 12;
-pub const FONT_HEADING: u16 = 14;
-pub const FONT_TITLE: u16 = 16;
+// Semantic scale — all panel font sizes should reference these.
+pub const FONT_CAPTION: u16 = 8;       // tiny badges, config buttons
+pub const FONT_SMALL: u16 = 9;         // layer info, perf hud, ruler
+pub const FONT_BODY: u16 = 10;         // sliders, params, chrome, buttons
+pub const FONT_LABEL: u16 = 11;        // layer names, footer, search, clip names
+pub const FONT_SUBHEADING: u16 = 12;   // chrome headings, transport buttons
+pub const FONT_HEADING: u16 = 14;      // section titles, drag handle
+pub const FONT_TITLE: u16 = 16;        // top-level headings
 
 // ── Zoom levels (pixels per beat) ───────────────────────────────────
 pub const ZOOM_LEVELS: [f32; 10] = [1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 80.0, 120.0, 200.0, 400.0];

@@ -29,8 +29,8 @@ const CELL_RADIUS: f32 = 6.0;
 const CHIP_PAD_H: f32 = 10.0;
 const CHIP_SPACING: f32 = 5.0;
 const CHIP_FONT: f32 = 12.5;
-const CELL_FONT: u16 = 11;
-const SEARCH_FONT: u16 = 11;
+const CELL_FONT: u16 = color::FONT_LABEL;
+const SEARCH_FONT: u16 = color::FONT_LABEL;
 const SCROLL_SPEED: f32 = 12.5;
 const ACCENT_BAR_W: f32 = 3.0;
 

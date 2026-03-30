@@ -13,7 +13,7 @@ use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
-use crate::node::{Color32, Rect, UIStyle, TextAlign, FontWeight};
+use crate::node::{Color32, Rect, UIStyle, TextAlign};
 use crate::tree::UITree;
 use crate::waveform_painter;
 use crate::waveform_renderer::WaveformRenderer;
@@ -110,7 +110,6 @@ fn reanalyze_btn_style() -> UIStyle {
         pressed_bg_color: color::WAVEFORM_BTN_PRESSED,
         text_color: Color32::new(173, 173, 179, 255), // Unity: DropdownInactiveText
         font_size: color::FONT_SMALL,
-        font_weight: FontWeight::Regular,
         corner_radius: color::BUTTON_RADIUS,
         text_align: TextAlign::Center,
         ..UIStyle::default()

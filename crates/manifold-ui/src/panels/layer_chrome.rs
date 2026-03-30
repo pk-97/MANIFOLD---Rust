@@ -15,8 +15,8 @@ const PAD_V: f32 = 2.0;
 const GAP: f32 = 4.0;
 const CHEVRON_W: f32 = 18.0;
 const OPACITY_LABEL_W: f32 = 50.0;
-const FONT_SIZE: u16 = 10;
-const NAME_FONT_SIZE: u16 = 12;
+const FONT_SIZE: u16 = color::FONT_BODY;
+const NAME_FONT_SIZE: u16 = color::FONT_SUBHEADING;
 
 fn fmt_opacity(v: f32) -> String { format!("{:.2}", v) }
 
@@ -117,7 +117,6 @@ impl LayerChromePanel {
             UIStyle {
                 text_color: color::TEXT_PRIMARY_C32,
                 font_size: color::FONT_HEADING,
-                font_weight: FontWeight::Bold,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },

@@ -17,9 +17,9 @@ const PAD_V: f32 = 2.0;
 const GAP: f32 = 4.0;
 const SOURCE_LABEL_W: f32 = 52.0;
 const BPM_LABEL_W: f32 = 52.0;
-const FONT_SIZE: u16 = 10;
-const NAME_FONT_SIZE: u16 = 12;
-const SMALL_FONT_SIZE: u16 = 11;
+const FONT_SIZE: u16 = color::FONT_BODY;
+const NAME_FONT_SIZE: u16 = color::FONT_SUBHEADING;
+const SMALL_FONT_SIZE: u16 = color::FONT_LABEL;
 
 // ── Panel-specific colors (imported from color module) ───────────
 
@@ -193,7 +193,6 @@ impl ClipChromePanel {
                 UIStyle {
                     text_color: color::TEXT_DIMMED_C32,
                     font_size: SMALL_FONT_SIZE,
-                    font_weight: FontWeight::Bold,
                     text_align: TextAlign::Left,
                     ..UIStyle::default()
                 },
@@ -215,7 +214,6 @@ impl ClipChromePanel {
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
                 font_size: SMALL_FONT_SIZE,
-                font_weight: FontWeight::Bold,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },

@@ -275,7 +275,6 @@ impl GenParamPanel {
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
                 font_size: FONT_SIZE,
-                font_weight: FontWeight::Bold,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },

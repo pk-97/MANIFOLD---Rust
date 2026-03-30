@@ -22,8 +22,7 @@ const BORDER_W: f32 = 1.0;
 const CORNER_RADIUS: f32 = 4.0;
 const CARD_BOTTOM_MARGIN: f32 = 6.0;
 
-/// Font size for config buttons in effect card (effect uses 8, not FONT_SIZE=10).
-const CONFIG_BTN_FONT_SIZE: u16 = 8;
+const CONFIG_BTN_FONT_SIZE: u16 = color::FONT_CAPTION;
 
 // ── Data types ───────────────────────────────────────────────────
 
@@ -438,7 +437,6 @@ impl EffectCardPanel {
             UIStyle {
                 text_color: color::EFFECT_HEADER_NAME,
                 font_size: FONT_SIZE,
-                font_weight: FontWeight::Bold,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },
@@ -459,8 +457,7 @@ impl EffectCardPanel {
             "ENV",
             UIStyle {
                 text_color: color::TEXT_WHITE_C32,
-                font_size: 7,
-                font_weight: FontWeight::Bold,
+                font_size: color::FONT_CAPTION,
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
@@ -483,8 +480,7 @@ impl EffectCardPanel {
             "DRV",
             UIStyle {
                 text_color: color::TEXT_WHITE_C32,
-                font_size: 7,
-                font_weight: FontWeight::Bold,
+                font_size: color::FONT_CAPTION,
                 text_align: TextAlign::Center,
                 ..UIStyle::default()
             },

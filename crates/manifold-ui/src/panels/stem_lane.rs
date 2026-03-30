@@ -13,7 +13,7 @@ use crate::color;
 use crate::coordinate_mapper::CoordinateMapper;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
-use crate::node::{Color32, Rect, UIStyle, TextAlign, FontWeight};
+use crate::node::{Color32, Rect, UIStyle, TextAlign};
 use crate::tree::UITree;
 use crate::waveform_painter;
 use crate::waveform_renderer::WaveformRenderer;
@@ -250,7 +250,6 @@ impl StemLaneGroupPanel {
                 UIStyle {
                     text_color: Color32::new(166, 166, 166, 255),
                     font_size: color::FONT_SMALL,
-                    font_weight: FontWeight::Regular,
                     text_align: TextAlign::Left,
                     ..UIStyle::default()
                 },
@@ -514,7 +513,6 @@ fn mute_btn_style(active: bool) -> UIStyle {
         pressed_bg_color: bg,
         text_color: Color32::new(255, 255, 255, 255),
         font_size: color::FONT_SMALL,
-        font_weight: FontWeight::Bold,
         corner_radius: color::BUTTON_RADIUS,
         text_align: TextAlign::Center,
         ..UIStyle::default()
@@ -530,7 +528,6 @@ fn solo_btn_style(active: bool) -> UIStyle {
         pressed_bg_color: bg,
         text_color: Color32::new(255, 255, 255, 255),
         font_size: color::FONT_SMALL,
-        font_weight: FontWeight::Bold,
         corner_radius: color::BUTTON_RADIUS,
         text_align: TextAlign::Center,
         ..UIStyle::default()

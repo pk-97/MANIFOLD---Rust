@@ -17,7 +17,7 @@ const CHEVRON_W: f32 = 18.0;
 const LED_LABEL_W: f32 = 28.0;
 const LED_SLIDER_W: f32 = 80.0;
 const OPACITY_LABEL_W: f32 = 50.0;
-const FONT_SIZE: u16 = 10;
+const FONT_SIZE: u16 = color::FONT_BODY;
 
 // ── Panel-specific colors (imported from color module) ───────────
 
@@ -104,7 +104,6 @@ impl MasterChromePanel {
             UIStyle {
                 text_color: color::TEXT_PRIMARY_C32,
                 font_size: color::FONT_HEADING,
-                font_weight: FontWeight::Bold,
                 text_align: TextAlign::Left,
                 ..UIStyle::default()
             },

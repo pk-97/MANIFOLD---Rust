@@ -28,7 +28,7 @@ const FOOTER_BTN_HOVER: Color32 = color::FOOTER_BTN_HOVER;
 const FOOTER_BTN_PRESSED: Color32 = color::FOOTER_BTN_PRESSED;
 const FOOTER_SCALE_ACTIVE: Color32 = color::HEADER_BUTTON_ACTIVE;
 
-const FOOTER_FONT: u16 = 11;
+const FOOTER_FONT: u16 = color::FONT_LABEL;
 
 // ── FooterLayout ───────────────────────────────────────────────────
 

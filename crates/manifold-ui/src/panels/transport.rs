@@ -46,8 +46,8 @@ const BUTTON_HOVER_C: Color32 = color::TRANSPORT_BUTTON_HOVER;
 const SAVE_DIRTY_BG: Color32 = color::TRANSPORT_SAVE_DIRTY_BG;
 const BPM_FIELD_HOVER: Color32 = color::TRANSPORT_BPM_FIELD_HOVER;
 
-const BUTTON_FONT: u16 = 12;
-const STATUS_FONT: u16 = 10;
+const BUTTON_FONT: u16 = color::FONT_SUBHEADING;
+const STATUS_FONT: u16 = color::FONT_BODY;
 // ── Style helpers ──────────────────────────────────────────────────
 
 fn lighten(c: Color32, amount: u8) -> Color32 {
@@ -665,7 +665,7 @@ impl TransportPanel {
                 hover_bg_color: BUTTON_HOVER_C,
                 pressed_bg_color: color::BUTTON_PRESSED,
                 text_color: color::TEXT_WHITE_C32,
-                font_size: 11,
+                font_size: color::FONT_LABEL,
                 corner_radius: color::BUTTON_RADIUS,
                 text_align: TextAlign::Center,
                 ..UIStyle::default()

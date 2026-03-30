@@ -253,7 +253,6 @@ impl Panel for HeaderPanel {
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
                 font_size: color::FONT_SUBHEADING,
-                font_weight: FontWeight::Bold,
                 ..UIStyle::default()
             },
         ) as i32;

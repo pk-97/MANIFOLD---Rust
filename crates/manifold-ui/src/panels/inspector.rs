@@ -34,7 +34,7 @@ const ADD_EFFECT_BTN_H: f32 = 26.0;
 
 // ── Effect card drag-reorder constants (Unity EffectsListBitmapPanel) ──
 const DRAG_GHOST_H: f32 = 24.0;
-const DRAG_GHOST_FONT_SIZE: u16 = 10;
+const DRAG_GHOST_FONT_SIZE: u16 = color::FONT_BODY;
 const DRAG_GHOST_BG: Color32 = Color32::new(60, 80, 120, 200);
 const DRAG_GHOST_TEXT: Color32 = Color32::new(220, 220, 230, 255);
 const DRAG_INDICATOR_H: f32 = 2.0;
@@ -1233,7 +1233,7 @@ impl Panel for InspectorCompositePanel {
                             text_color: ADD_EFFECT_BTN_TEXT,
                             corner_radius: 4.0,
                             text_align: TextAlign::Center,
-                            font_size: 11,
+                            font_size: color::FONT_LABEL,
                             ..UIStyle::default()
                         },
                         "+ Add Effect",
@@ -1322,7 +1322,7 @@ impl Panel for InspectorCompositePanel {
                             text_color: ADD_EFFECT_BTN_TEXT,
                             corner_radius: 4.0,
                             text_align: TextAlign::Center,
-                            font_size: 11,
+                            font_size: color::FONT_LABEL,
                             ..UIStyle::default()
                         },
                         "+ Add Effect",

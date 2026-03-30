@@ -219,7 +219,7 @@ impl Default for UIStyle {
             border_color: Color32::TRANSPARENT,
             corner_radius: 0.0,
             border_width: 0.0,
-            font_size: 14,
+            font_size: crate::color::FONT_HEADING,
             font_weight: FontWeight::Bold,
             text_align: TextAlign::Left,
         }
