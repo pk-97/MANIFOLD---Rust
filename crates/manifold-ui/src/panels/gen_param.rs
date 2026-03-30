@@ -375,15 +375,17 @@ impl GenParamPanel {
 
                 cy += ROW_HEIGHT + ROW_SPACING;
 
+                let config_w = content_w; // full width (no D/E button reservation)
+
                 // Envelope config
                 if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
-                    self.envelope_config_ids[i] = Some(build_envelope_config(tree, -1, cx, cy, slider_w, &self.state.mod_state, i));
+                    self.envelope_config_ids[i] = Some(build_envelope_config(tree, -1, cx, cy, config_w, &self.state.mod_state, i));
                     cy += ENV_CONFIG_HEIGHT;
                 }
 
                 // Driver config
                 if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
-                    self.driver_config_ids[i] = Some(build_driver_config(tree, -1, cx, cy, slider_w, &self.state.mod_state, i, FONT_SIZE));
+                    self.driver_config_ids[i] = Some(build_driver_config(tree, -1, cx, cy, config_w, &self.state.mod_state, i, FONT_SIZE));
                     cy += DRIVER_CONFIG_HEIGHT;
                 }
             }

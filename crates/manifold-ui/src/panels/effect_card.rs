@@ -584,15 +584,17 @@ impl EffectCardPanel {
 
             cy += ROW_HEIGHT + ROW_SPACING;
 
+            let config_w = w - PADDING * 2.0; // full card width (no D/E button reservation)
+
             // Envelope config drawer
             if self.state.mod_state.envelope_expanded.get(i).copied().unwrap_or(false) {
-                self.envelope_config_ids[i] = Some(build_envelope_config(tree, parent, x + PADDING, cy, slider_w, &self.state.mod_state, i));
+                self.envelope_config_ids[i] = Some(build_envelope_config(tree, parent, x + PADDING, cy, config_w, &self.state.mod_state, i));
                 cy += ENV_CONFIG_HEIGHT;
             }
 
             // Driver config drawer
             if self.state.mod_state.driver_expanded.get(i).copied().unwrap_or(false) {
-                self.driver_config_ids[i] = Some(build_driver_config(tree, parent, x + PADDING, cy, slider_w, &self.state.mod_state, i, CONFIG_BTN_FONT_SIZE));
+                self.driver_config_ids[i] = Some(build_driver_config(tree, parent, x + PADDING, cy, config_w, &self.state.mod_state, i, CONFIG_BTN_FONT_SIZE));
                 cy += DRIVER_CONFIG_HEIGHT;
             }
         }
