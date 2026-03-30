@@ -31,8 +31,7 @@ const BORDER_H: f32 = color::GROUP_BOTTOM_BORDER_HEIGHT;
 
 // ── Panel-specific colors ───────────────────────────────────────────
 
-const BG_COLOR: Color32 = color::CONTROL_BG;
-const BG_SELECTED: Color32 = color::SELECTED_LAYER_CONTROL;
+// Layer background now uses the layer color directly (no tinting into a dark base).
 const SEP_COLOR: Color32 = color::SEPARATOR_COLOR;
 const ACCENT_COLOR: Color32 = color::DEFAULT_GROUP_ACCENT;
 const BORDER_CLR: Color32 = color::GROUP_BOTTOM_BORDER;
@@ -122,20 +121,10 @@ fn field_style() -> UIStyle {
     }
 }
 
-/// Blend `tint` into `base` at the given fraction (0.0 = all base, 1.0 = all tint).
-fn tint_bg(base: Color32, tint: Color32, amount: f32) -> Color32 {
-    let blend = |b: u8, t: u8| -> u8 {
-        (b as f32 * (1.0 - amount) + t as f32 * amount) as u8
-    };
-    Color32::new(blend(base.r, tint.r), blend(base.g, tint.g), blend(base.b, tint.b), base.a)
-}
-
 fn bg_style(selected: bool, layer_color: Color32) -> UIStyle {
-    let base = if selected { BG_SELECTED } else { BG_COLOR };
-    let amount = if selected { 0.55 } else { 0.35 };
-    let bg = tint_bg(base, layer_color, amount);
-    let hover = lighten(bg, if selected { 10 } else { 12 });
-    let pressed = darken(bg, 8);
+    let bg = if selected { lighten(layer_color, 30) } else { layer_color };
+    let hover = lighten(bg, 15);
+    let pressed = darken(bg, 10);
     UIStyle {
         bg_color: bg,
         hover_bg_color: hover,
