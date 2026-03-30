@@ -4,7 +4,7 @@ use crate::tree::UITree;
 
 // ── Layout constants ────────────────────────────────────────────────
 
-pub const DEFAULT_LABEL_WIDTH: f32 = 80.0;
+pub const DEFAULT_LABEL_WIDTH: f32 = 60.0;
 pub const VALUE_WIDTH: f32 = 44.0;
 pub const GAP: f32 = 4.0;
 pub const TRACK_RADIUS: f32 = 2.0;

@@ -25,7 +25,6 @@ pub(crate) const DRIVER_ROW_HEIGHT: f32 = 22.0;
 #[allow(dead_code)]
 pub(crate) const BEAT_DIV_BTN_W: f32 = 27.0;
 pub(crate) const BEAT_DIV_SPACING: f32 = 1.0;
-pub(crate) const WAVE_BTN_W: f32 = 30.0;
 pub(crate) const DRIVER_PAD_H: f32 = 5.0;
 pub(crate) const BEAT_DIV_COUNT: usize = 11;
 pub(crate) const WAVEFORM_COUNT: usize = 5;
@@ -333,32 +332,35 @@ pub(crate) fn build_driver_config(
     let row2_y = row1_y + DRIVER_ROW_HEIGHT + 4.0;
     cx = x + DRIVER_PAD_H;
 
+    // Row 2: [.] [T] [Sin] [Tri] [Saw] [Sqr] [Rnd] [Rev]
+    // 8 buttons total, proportional width like beat divs
+    let row2_count = 2 + WAVEFORM_COUNT + 1; // dot, triplet, 5 waveforms, rev
+    let wave_btn_w = (avail_w - BEAT_DIV_SPACING * (row2_count as f32 - 1.0)) / row2_count as f32;
+
     let dot_btn_id = tree.add_button(
-        container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
+        container_id, cx, row2_y, wave_btn_w, DRIVER_ROW_HEIGHT,
         config_btn_style(is_dotted, btn_font_size), ".",
     ) as i32;
-    cx += WAVE_BTN_W + BEAT_DIV_SPACING;
+    cx += wave_btn_w + BEAT_DIV_SPACING;
 
     let triplet_btn_id = tree.add_button(
-        container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
+        container_id, cx, row2_y, wave_btn_w, DRIVER_ROW_HEIGHT,
         config_btn_style(is_triplet, btn_font_size), "T",
     ) as i32;
-    cx += WAVE_BTN_W + GAP;
+    cx += wave_btn_w + BEAT_DIV_SPACING;
 
     let mut wave_btn_ids = [-1i32; WAVEFORM_COUNT];
     for j in 0..WAVEFORM_COUNT {
         let active = j as i32 == active_wave;
         wave_btn_ids[j] = tree.add_button(
-            container_id, cx, row2_y, WAVE_BTN_W, DRIVER_ROW_HEIGHT,
+            container_id, cx, row2_y, wave_btn_w, DRIVER_ROW_HEIGHT,
             config_btn_style(active, btn_font_size), WAVEFORM_LABELS[j],
         ) as i32;
-        cx += WAVE_BTN_W + BEAT_DIV_SPACING;
+        cx += wave_btn_w + BEAT_DIV_SPACING;
     }
 
-    let reverse_w = 32.0;
-    let reverse_x = x + w - DRIVER_PAD_H - reverse_w;
     let reverse_btn_id = tree.add_button(
-        container_id, reverse_x, row2_y, reverse_w, DRIVER_ROW_HEIGHT,
+        container_id, cx, row2_y, wave_btn_w, DRIVER_ROW_HEIGHT,
         config_btn_style(is_reversed, btn_font_size), "Rev",
     ) as i32;
 
