@@ -99,6 +99,8 @@ pub struct UIRoot {
     /// Node ID for the video/timeline split handle (color feedback on hover/drag).
     /// From Unity PanelResizeHandle.cs — idle/hover/drag color states.
     split_handle_id: i32,
+    /// Node ID for the inspector resize handle (vertical bar at inspector right edge).
+    inspector_handle_id: i32,
 
     /// True when a DragBegin originated in the tracks area. While active,
     /// all Drag/DragEnd events are stashed for the InteractionOverlay
@@ -142,6 +144,7 @@ impl UIRoot {
             viewport_events: Vec::new(),
             last_right_click_pos: Vec2::new(0.0, 0.0),
             split_handle_id: -1,
+            inspector_handle_id: -1,
             overlay_drag_active: false,
         }
     }
@@ -195,6 +198,19 @@ impl UIRoot {
             let r = self.layout.split_handle();
             self.split_handle_id = self.tree.add_panel(
                 -1, r.x, r.y, r.width, r.height,
+                manifold_ui::node::UIStyle {
+                    bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
+                    ..manifold_ui::node::UIStyle::default()
+                },
+            ) as i32;
+        }
+
+        // Inspector resize handle — thin vertical bar at inspector right edge.
+        {
+            let edge_x = self.layout.content_left() - 2.0;
+            let insp = self.layout.inspector();
+            self.inspector_handle_id = self.tree.add_panel(
+                -1, edge_x, insp.y, 4.0, insp.height,
                 manifold_ui::node::UIStyle {
                     bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
                     ..manifold_ui::node::UIStyle::default()
@@ -896,6 +912,33 @@ impl UIRoot {
     pub fn set_split_handle_idle(&mut self) {
         if self.split_handle_id >= 0 {
             self.tree.set_style(self.split_handle_id as u32, manifold_ui::node::UIStyle {
+                bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
+                ..manifold_ui::node::UIStyle::default()
+            });
+        }
+    }
+
+    pub fn set_inspector_handle_hover(&mut self) {
+        if self.inspector_handle_id >= 0 {
+            self.tree.set_style(self.inspector_handle_id as u32, manifold_ui::node::UIStyle {
+                bg_color: manifold_ui::color::RESIZE_HANDLE_HOVER,
+                ..manifold_ui::node::UIStyle::default()
+            });
+        }
+    }
+
+    pub fn set_inspector_handle_drag(&mut self) {
+        if self.inspector_handle_id >= 0 {
+            self.tree.set_style(self.inspector_handle_id as u32, manifold_ui::node::UIStyle {
+                bg_color: manifold_ui::color::RESIZE_HANDLE_DRAG,
+                ..manifold_ui::node::UIStyle::default()
+            });
+        }
+    }
+
+    pub fn set_inspector_handle_idle(&mut self) {
+        if self.inspector_handle_id >= 0 {
+            self.tree.set_style(self.inspector_handle_id as u32, manifold_ui::node::UIStyle {
                 bg_color: manifold_ui::color::RESIZE_HANDLE_IDLE,
                 ..manifold_ui::node::UIStyle::default()
             });

@@ -434,8 +434,14 @@ impl Application {
         // Priority 2: Inspector resize edge hover
         if self.ui_root.inspector_resize_dragging || self.ui_root.is_near_inspector_edge(self.cursor_pos) {
             self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
+            if self.ui_root.inspector_resize_dragging {
+                self.ui_root.set_inspector_handle_drag();
+            } else {
+                self.ui_root.set_inspector_handle_hover();
+            }
             return;
         }
+        self.ui_root.set_inspector_handle_idle();
 
         // Priority 3: Video/timeline split handle hover
         // Use the same hit test as click detection (layout.split_handle rect).
@@ -1427,6 +1433,7 @@ impl ApplicationHandler for Application {
                                         self.ui_root.set_split_handle_drag();
                                     } else if self.ui_root.is_near_inspector_edge(self.cursor_pos) {
                                         self.ui_root.begin_inspector_resize(self.cursor_pos.x);
+                                        self.ui_root.set_inspector_handle_drag();
                                     } else {
                                         self.ui_root.pointer_event(
                                             self.cursor_pos,
