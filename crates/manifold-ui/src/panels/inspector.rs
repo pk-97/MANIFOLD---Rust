@@ -24,6 +24,7 @@ const SECTION_CARD_PAD: f32 = 6.0;
 const SECTION_CARD_BG: Color32 = Color32::new(22, 22, 23, 255);
 const SECTION_CARD_BORDER: Color32 = Color32::new(50, 50, 54, 255);
 const COLUMN_PAD: f32 = 4.0;
+const SECTION_INSET: f32 = 4.0; // horizontal padding inside section cards
 
 const SCROLLBAR_TRACK_COLOR: Color32 = color::SCROLLBAR_TRACK_C32;
 const SCROLLBAR_THUMB_COLOR: Color32 = color::SCROLLBAR_THUMB_C32;
@@ -299,11 +300,10 @@ impl InspectorCompositePanel {
             }
             h += SECTION_CARD_PAD + SECTION_GAP;
         }
-        if self.clip_visible {
-            h += SECTION_CARD_PAD + self.clip_chrome.compute_height();
-            if !self.clip_chrome.is_collapsed()
-                && let Some(ref gp) = self.gen_params {
-                    h += gp.compute_height() + SECTION_GAP;
+        if self.clip_visible && self.gen_params.is_some() {
+            h += SECTION_CARD_PAD;
+            if let Some(ref gp) = self.gen_params {
+                h += gp.compute_height() + SECTION_GAP;
             }
             h += SECTION_CARD_PAD + SECTION_GAP;
         }
@@ -766,9 +766,15 @@ impl InspectorCompositePanel {
                 }
             }
 
-            // Create ghost + indicator nodes
-            let panel_w = self.viewport_rect.width;
-            let ghost_w = (panel_w - 24.0).min(160.0);
+            // Create ghost + indicator nodes — scoped to the correct column
+            let (col_x, col_w) = if self.card_drag_tab == InspectorTab::Master {
+                let half = ((self.viewport_rect.width - COLUMN_PAD * 2.0 - 2.0) * 0.5).floor();
+                (self.viewport_rect.x + COLUMN_PAD, half)
+            } else {
+                let half = ((self.viewport_rect.width - COLUMN_PAD * 2.0 - 2.0) * 0.5).floor();
+                (self.column_split_x, half)
+            };
+            let ghost_w = (col_w - 24.0).min(160.0);
             self.card_drag_ghost_id = tree.add_label(
                 -1, 0.0, -100.0, ghost_w, DRAG_GHOST_H,
                 &self.card_drag_label,
@@ -782,8 +788,8 @@ impl InspectorCompositePanel {
                 },
             ) as i32;
             self.card_drag_indicator_id = tree.add_panel(
-                -1, self.viewport_rect.x + DRAG_INDICATOR_INSET, -100.0,
-                panel_w - DRAG_INDICATOR_INSET * 2.0, DRAG_INDICATOR_H,
+                -1, col_x + DRAG_INDICATOR_INSET, -100.0,
+                col_w - DRAG_INDICATOR_INSET * 2.0, DRAG_INDICATOR_H,
                 UIStyle {
                     bg_color: DRAG_INDICATOR_COLOR,
                     corner_radius: 1.0,
@@ -801,13 +807,19 @@ impl InspectorCompositePanel {
         if !self.card_drag_active { return; }
 
         let vp = self.viewport_rect;
-        let panel_w = vp.width;
-        let ghost_w = (panel_w - 24.0).min(160.0);
+        let (col_x, col_w) = if self.card_drag_tab == InspectorTab::Master {
+            let half = ((vp.width - COLUMN_PAD * 2.0 - 2.0) * 0.5).floor();
+            (vp.x + COLUMN_PAD, half)
+        } else {
+            let half = ((vp.width - COLUMN_PAD * 2.0 - 2.0) * 0.5).floor();
+            (self.column_split_x, half)
+        };
+        let ghost_w = (col_w - 24.0).min(160.0);
 
-        // Position ghost centered on cursor, clamped to viewport
+        // Position ghost centered on cursor, clamped to column
         let ghost_x = (pos.x - ghost_w * 0.5).clamp(
-            vp.x + DRAG_INDICATOR_INSET,
-            vp.x + panel_w - ghost_w - DRAG_INDICATOR_INSET,
+            col_x + DRAG_INDICATOR_INSET,
+            col_x + col_w - ghost_w - DRAG_INDICATOR_INSET,
         );
         let ghost_y = (pos.y - DRAG_GHOST_H * 0.5).clamp(vp.y, vp.y + vp.height - DRAG_GHOST_H);
 
@@ -846,9 +858,9 @@ impl InspectorCompositePanel {
         if self.card_drag_indicator_id >= 0 {
             tree.set_bounds(self.card_drag_indicator_id as u32,
                 Rect::new(
-                    vp.x + DRAG_INDICATOR_INSET,
+                    col_x + DRAG_INDICATOR_INSET,
                     indicator_y - DRAG_INDICATOR_H * 0.5,
-                    panel_w - DRAG_INDICATOR_INSET * 2.0,
+                    col_w - DRAG_INDICATOR_INSET * 2.0,
                     DRAG_INDICATOR_H,
                 ));
         }
@@ -1202,18 +1214,21 @@ impl Panel for InspectorCompositePanel {
                 );
                 cy += SECTION_CARD_PAD;
 
+                let inner_x = left_x + SECTION_INSET;
+                let inner_w = left_content_w - SECTION_INSET * 2.0;
+
                 let chrome_h = self.master_chrome.compute_height();
-                self.master_chrome.build(tree, Rect::new(left_x, cy, left_content_w, chrome_h));
+                self.master_chrome.build(tree, Rect::new(inner_x, cy, inner_w, chrome_h));
                 cy += chrome_h;
 
                 if !self.master_chrome.is_collapsed() {
                     for card in &mut self.master_effects {
                         let card_h = card.compute_height();
-                        card.build(tree, Rect::new(left_x, cy, left_content_w, card_h));
+                        card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
                         cy += card_h + SECTION_GAP;
                     }
                     self.add_master_effect_btn = tree.add_button(
-                        -1, left_x + 4.0, cy, left_content_w - 8.0, ADD_EFFECT_BTN_H,
+                        -1, inner_x, cy, inner_w, ADD_EFFECT_BTN_H,
                         UIStyle {
                             bg_color: ADD_EFFECT_BTN_BG,
                             hover_bg_color: ADD_EFFECT_BTN_HOVER,
@@ -1290,18 +1305,21 @@ impl Panel for InspectorCompositePanel {
                 );
                 cy += SECTION_CARD_PAD;
 
+                let inner_x = right_x + SECTION_INSET;
+                let inner_w = right_content_w - SECTION_INSET * 2.0;
+
                 let chrome_h = self.layer_chrome.compute_height();
-                self.layer_chrome.build(tree, Rect::new(right_x, cy, right_content_w, chrome_h));
+                self.layer_chrome.build(tree, Rect::new(inner_x, cy, inner_w, chrome_h));
                 cy += chrome_h;
 
                 if !self.layer_chrome.is_collapsed() {
                     for card in &mut self.layer_effects {
                         let card_h = card.compute_height();
-                        card.build(tree, Rect::new(right_x, cy, right_content_w, card_h));
+                        card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
                         cy += card_h + SECTION_GAP;
                     }
                     self.add_layer_effect_btn = tree.add_button(
-                        -1, right_x + 4.0, cy, right_content_w - 8.0, ADD_EFFECT_BTN_H,
+                        -1, inner_x, cy, inner_w, ADD_EFFECT_BTN_H,
                         UIStyle {
                             bg_color: ADD_EFFECT_BTN_BG,
                             hover_bg_color: ADD_EFFECT_BTN_HOVER,
@@ -1318,13 +1336,12 @@ impl Panel for InspectorCompositePanel {
                 cy += SECTION_CARD_PAD + SECTION_GAP;
             }
 
-            // Clip section
-            if self.clip_visible {
+            // Clip/Generator section — gen params only (clip chrome removed for generators)
+            if self.clip_visible && self.gen_params.is_some() {
                 let section_h = {
-                    let mut h = SECTION_CARD_PAD + self.clip_chrome.compute_height();
-                    if !self.clip_chrome.is_collapsed()
-                        && let Some(ref gp) = self.gen_params {
-                            h += gp.compute_height() + SECTION_GAP;
+                    let mut h = SECTION_CARD_PAD;
+                    if let Some(ref gp) = self.gen_params {
+                        h += gp.compute_height() + SECTION_GAP;
                     }
                     h + SECTION_CARD_PAD
                 };
@@ -1346,15 +1363,13 @@ impl Panel for InspectorCompositePanel {
                 );
                 cy += SECTION_CARD_PAD;
 
-                let chrome_h = self.clip_chrome.compute_height();
-                self.clip_chrome.build(tree, Rect::new(right_x, cy, right_content_w, chrome_h));
-                cy += chrome_h;
+                let clip_inner_x = right_x + SECTION_INSET;
+                let clip_inner_w = right_content_w - SECTION_INSET * 2.0;
 
-                if !self.clip_chrome.is_collapsed()
-                    && let Some(ref mut gp) = self.gen_params {
-                        let gp_h = gp.compute_height();
-                        gp.build(tree, Rect::new(right_x, cy, right_content_w, gp_h));
-                    }
+                if let Some(ref mut gp) = self.gen_params {
+                    let gp_h = gp.compute_height();
+                    gp.build(tree, Rect::new(clip_inner_x, cy, clip_inner_w, gp_h));
+                }
             }
         }
         let right_count = tree.count() - right_start;
