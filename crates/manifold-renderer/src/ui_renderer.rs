@@ -581,7 +581,7 @@ impl UIRenderer {
         buffer.set_text(
             &mut self.font_system,
             text,
-            &Attrs::new().family(Family::SansSerif).weight(weight),
+            &Attrs::new().family(Family::Name("Inter")).weight(weight),
             Shaping::Basic,
             None,
         );
@@ -707,7 +707,7 @@ impl UIRenderer {
                     buffer.set_text(
                         &mut self.font_system,
                         &cmd.text,
-                        &Attrs::new().family(Family::SansSerif).weight(weight),
+                        &Attrs::new().family(Family::Name("Inter")).weight(weight),
                         Shaping::Basic,
                         None,
                     );
