@@ -120,6 +120,18 @@ pub struct GpuComputePipeline {
     pub needs_sizes_buffer: bool,
 }
 
+impl Clone for GpuComputePipeline {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            slot_map: self.slot_map.clone(),
+            label: self.label.clone(),
+            workgroup_size: self.workgroup_size,
+            needs_sizes_buffer: self.needs_sizes_buffer,
+        }
+    }
+}
+
 unsafe impl Send for GpuComputePipeline {}
 unsafe impl Sync for GpuComputePipeline {}
 
@@ -129,6 +141,16 @@ pub struct GpuRenderPipeline {
     pub(crate) state: metal::RenderPipelineState,
     pub slot_map: SlotMap,
     pub label: String,
+}
+
+impl Clone for GpuRenderPipeline {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+            slot_map: self.slot_map.clone(),
+            label: self.label.clone(),
+        }
+    }
 }
 
 unsafe impl Send for GpuRenderPipeline {}

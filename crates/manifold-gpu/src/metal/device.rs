@@ -13,12 +13,20 @@ use super::shader_compiler::{compile_wgsl_to_msl, compile_wgsl_to_msl_render, fi
 /// Optionally holds a `GpuPipelineArchive` for caching compiled pipeline binaries
 /// to disk. When present, all `create_compute_pipeline` calls automatically use
 /// the archive — no caller changes needed.
+///
+/// Pipeline object cache: compiled pipelines are cached by shader hash so that
+/// duplicate `create_*_pipeline()` calls (e.g. generator pre-warm + first use)
+/// return a clone of the cached object — zero WGSL→MSL or Metal compilation.
 pub struct GpuDevice {
     device: metal::Device,
     queue: metal::CommandQueue,
     /// Binary archive for pipeline caching. Protected by Mutex for Sync.
     /// Only locked during pipeline creation (startup), never on the hot path.
     archive: std::sync::Mutex<Option<archive::GpuPipelineArchive>>,
+    /// In-memory pipeline cache keyed by shader hash.
+    /// Eliminates repeated WGSL→MSL→Metal compilation for the same shader.
+    compute_cache: std::sync::Mutex<std::collections::HashMap<u64, GpuComputePipeline>>,
+    render_cache: std::sync::Mutex<std::collections::HashMap<u64, GpuRenderPipeline>>,
 }
 
 // Safety: metal::Device and metal::CommandQueue are thread-safe (Metal guarantee).
@@ -40,6 +48,8 @@ impl GpuDevice {
             device,
             queue,
             archive: std::sync::Mutex::new(None),
+            compute_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+            render_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -167,6 +177,11 @@ impl GpuDevice {
         entry_point: &str,
         label: &str,
     ) -> GpuComputePipeline {
+        let hash = archive::pipeline_hash(wgsl_source, entry_point);
+        if let Some(cached) = self.compute_cache.lock().unwrap().get(&hash) {
+            return cached.clone();
+        }
+
         let (slot_map, msl_source, msl_entry_name, workgroup_size) =
             compile_wgsl_to_msl(wgsl_source, entry_point, label);
 
@@ -190,7 +205,6 @@ impl GpuDevice {
         // the archive on miss.
         let mut archive_guard = self.archive.lock().unwrap();
         let state = if let Some(ref mut arch) = *archive_guard {
-            let hash = archive::pipeline_hash(wgsl_source, entry_point);
             let desc = metal::ComputePipelineDescriptor::new();
             desc.set_compute_function(Some(&function));
             desc.set_label(label);
@@ -220,13 +234,15 @@ impl GpuDevice {
         drop(archive_guard);
 
         let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
-        GpuComputePipeline {
+        let pipeline = GpuComputePipeline {
             state,
             slot_map,
             label: label.to_string(),
             workgroup_size,
             needs_sizes_buffer,
-        }
+        };
+        self.compute_cache.lock().unwrap().insert(hash, pipeline.clone());
+        pipeline
     }
 
     /// Create a specialized compute pipeline by substituting constants in the WGSL
@@ -303,6 +319,11 @@ impl GpuDevice {
         blend: Option<GpuBlendState>,
         label: &str,
     ) -> GpuRenderPipeline {
+        let hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
+        if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
+            return cached.clone();
+        }
+
         // Compile vertex and fragment entry points to separate MSL strings.
         // SPIRV-Cross compiles one entry point at a time.
         let (slot_map, vs_msl, fs_msl) =
@@ -362,7 +383,6 @@ impl GpuDevice {
         // Use binary archive for render pipelines (same pattern as compute).
         let mut archive_guard = self.archive.lock().unwrap();
         let state = if let Some(ref mut arch) = *archive_guard {
-            let hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
             desc.set_binary_archives(&[arch.raw_archive()]);
 
             let state = self
@@ -388,11 +408,13 @@ impl GpuDevice {
         };
         drop(archive_guard);
 
-        GpuRenderPipeline {
+        let pipeline = GpuRenderPipeline {
             state,
             slot_map,
             label: label.to_string(),
-        }
+        };
+        self.render_cache.lock().unwrap().insert(hash, pipeline.clone());
+        pipeline
     }
 
     /// Create a new command encoder for one frame's GPU work.
