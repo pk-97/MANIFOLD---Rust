@@ -238,7 +238,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Window", 0.01, 1.0, 0.1, Some("F2"), "window"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
     ];
-    m.insert(GeneratorTypeId::TESSERACT, create_def("Tesseract", true, "generator/tesseract", params));
+    m.insert(GeneratorTypeId::TESSERACT, create_def("Tesseract", true, "tesseract", params));
 
     // ── Duocylinder ──
     let params = vec![
@@ -254,7 +254,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Window", 0.01, 1.0, 0.1, Some("F2"), "window"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
     ];
-    m.insert(GeneratorTypeId::DUOCYLINDER, create_def("Duocylinder", true, "generator/duocylinder", params));
+    m.insert(GeneratorTypeId::DUOCYLINDER, create_def("Duocylinder", true, "duocylinder", params));
 
     // ── Lissajous ──
     let params = vec![
@@ -270,7 +270,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Scale", 0.25, 3.0, 1.55, Some("F2"), "scale"),
         pd_toggle("Snap", 0.0, 1.0, 1.0, "snap"),
     ];
-    m.insert(GeneratorTypeId::LISSAJOUS, create_def("Lissajous", true, "generator/lissajous", params));
+    m.insert(GeneratorTypeId::LISSAJOUS, create_def("Lissajous", true, "lissajous", params));
 
     // ── WireframeZoo ──
     let params = vec![
@@ -283,7 +283,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("VSize", 0.1, 4.0, 1.0, Some("F1"), "vsize"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
     ];
-    m.insert(GeneratorTypeId::WIREFRAME_ZOO, create_def("Wireframe Zoo", true, "generator/wireframeZoo", params));
+    m.insert(GeneratorTypeId::WIREFRAME_ZOO, create_def("Wireframe Zoo", true, "wireframeZoo", params));
 
     // ── OscilloscopeXY ──
     let params = vec![
@@ -297,7 +297,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Scale", 0.25, 3.0, 1.75, Some("F2"), "scale"),
         pd_toggle("Snap", 0.0, 1.0, 1.0, "snap"),
     ];
-    m.insert(GeneratorTypeId::OSCILLOSCOPE_XY, create_def("Oscilloscope XY", true, "generator/oscilloscopeXY", params));
+    m.insert(GeneratorTypeId::OSCILLOSCOPE_XY, create_def("Oscilloscope XY", true, "oscilloscopeXY", params));
 
     // ── BasicShapesSnap ──
     let params = vec![
@@ -306,7 +306,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
         pd_whole_labels("Fill", 0.0, 2.0, 1.0, &["Solid", "Mixed", "Wireframe"], "fill"),
     ];
-    m.insert(GeneratorTypeId::BASIC_SHAPES_SNAP, create_def("Basic Shapes Snap", false, "generator/basicShapesSnap", params));
+    m.insert(GeneratorTypeId::BASIC_SHAPES_SNAP, create_def("Basic Shapes Snap", false, "basicShapesSnap", params));
 
     // ── ConcentricTunnel ──
     let params = vec![
@@ -317,7 +317,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd_toggle("Snap", 0.0, 1.0, 0.0, "snap"),
         pd_whole_labels("Snap Mode", 0.0, 2.0, 0.0, &["Shape", "Spawn", "Both"], "snapmode"),
     ];
-    m.insert(GeneratorTypeId::CONCENTRIC_TUNNEL, create_def("Concentric Tunnel", false, "generator/concentricTunnel", params));
+    m.insert(GeneratorTypeId::CONCENTRIC_TUNNEL, create_def("Concentric Tunnel", false, "concentricTunnel", params));
 
     // ── Plasma ──
     let params = vec![
@@ -328,7 +328,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
         pd_toggle("Snap", 0.0, 1.0, 1.0, "snap"),
     ];
-    m.insert(GeneratorTypeId::PLASMA, create_def("Plasma", false, "generator/plasma", params));
+    m.insert(GeneratorTypeId::PLASMA, create_def("Plasma", false, "plasma", params));
 
     // ── ParametricSurface ──
     let params = vec![
@@ -338,7 +338,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
         pd_toggle("Snap", 0.0, 1.0, 1.0, "snap"),
     ];
-    m.insert(GeneratorTypeId::PARAMETRIC_SURFACE, create_def("Parametric Surface", false, "generator/parametricSurface", params));
+    m.insert(GeneratorTypeId::PARAMETRIC_SURFACE, create_def("Parametric Surface", false, "parametricSurface", params));
 
     // ── FluidSimulation ──
     let params = vec![
@@ -363,7 +363,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Color Bright", 0.5, 5.0, 2.0, Some("F1"), "colorBright"),
         pd("Zone Force", 0.0, 0.02, 0.005, Some("F3"), "zoneForce"),
     ];
-    m.insert(GeneratorTypeId::FLUID_SIMULATION, create_def("Fluid Simulation", false, "generator/fluidSimulation", params));
+    m.insert(GeneratorTypeId::FLUID_SIMULATION, create_def("Fluid Simulation", false, "fluidSimulation", params));
 
     // ── Mycelium ──
     let params = vec![
@@ -380,7 +380,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Scale", 0.1, 2.0, 1.0, Some("F2"), "scale"),
         pd_whole("Seeds", 1.0, 5.0, 1.0, "seeds"),
     ];
-    m.insert(GeneratorTypeId::MYCELIUM, create_def("Mycelium", false, "generator/mycelium", params));
+    m.insert(GeneratorTypeId::MYCELIUM, create_def("Mycelium", false, "mycelium", params));
 
     // ── FluidSimulation3D ──
     let params = vec![
@@ -415,7 +415,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Rotate Z", -1.0, 1.0, 0.0, Some("F2"), "rotZ"),
         pd("Flatten", 0.0, 1.0, 0.0, Some("F2"), "flatten"),
     ];
-    m.insert(GeneratorTypeId::FLUID_SIMULATION_3D, create_def("Fluid Simulation 3D", false, "generator/fluidSimulation3D", params));
+    m.insert(GeneratorTypeId::FLUID_SIMULATION_3D, create_def("Fluid Simulation 3D", false, "fluidSimulation3D", params));
 
     // ── MRI Volume ──
     let params = vec![
@@ -428,7 +428,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Sharpen", 0.0, 3.0, 1.0, Some("F1"), "sharpen"),
         pd_whole_labels("Scan", 0.0, 2.0, 0.0, &["250μm 7T", "300μm HiRes", "Edlow 100μm"], "scan"),
     ];
-    m.insert(GeneratorTypeId::MRI_VOLUME, create_def("MRI Volume", false, "generator/mriVolume", params));
+    m.insert(GeneratorTypeId::MRI_VOLUME, create_def("MRI Volume", false, "mriVolume", params));
 
     m
 }
