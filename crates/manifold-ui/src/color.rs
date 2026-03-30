@@ -1,8 +1,10 @@
 use crate::node::Color32;
 
 // ── Contrast text color ────────────────────────────────────────────
-// Returns a readable text color for any background.
-// Dark charcoal on bright backgrounds, off-white on dark (Ableton-style).
+// Perceptual brightness using W3C luminance blended with max channel
+// to account for the Helmholtz-Kohlrausch effect: saturated colors
+// (red, purple, blue) appear brighter than their luminance suggests.
+// Threshold 0.45 matches Ableton's aggressive "black unless very dark" style.
 pub const TEXT_ON_DARK: Color32 = Color32::new(230, 230, 230, 255);
 pub const TEXT_ON_BRIGHT: Color32 = Color32::new(28, 28, 28, 255);
 
@@ -10,9 +12,10 @@ pub fn contrast_text_color(bg: Color32) -> Color32 {
     let r = bg.r as f32 / 255.0;
     let g = bg.g as f32 / 255.0;
     let b = bg.b as f32 / 255.0;
-    // W3C relative luminance
     let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    if luminance > 0.6 {
+    let max_channel = r.max(g).max(b);
+    let perceived = luminance * 0.6 + max_channel * 0.4;
+    if perceived > 0.45 {
         TEXT_ON_BRIGHT
     } else {
         TEXT_ON_DARK

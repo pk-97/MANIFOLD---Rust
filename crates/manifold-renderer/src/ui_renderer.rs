@@ -10,6 +10,14 @@ use manifold_ui::node::*;
 use manifold_ui::text::TextMeasure;
 use manifold_ui::tree::{TraversalEvent, UITree};
 
+fn font_weight_to_cosmic(fw: FontWeight) -> Weight {
+    match fw {
+        FontWeight::Regular => Weight::NORMAL,
+        FontWeight::Medium => Weight::MEDIUM,
+        FontWeight::Bold => Weight::BOLD,
+    }
+}
+
 /// Vertex for UI quad rendering.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -117,7 +125,7 @@ struct TextCommand {
     text: String,
     font_size: f32,
     color: [u8; 4],
-    bold: bool,
+    font_weight: FontWeight,
     /// Clip bounds for this text (None = full viewport).
     clip_bounds: Option<[f32; 4]>,
 }
@@ -162,11 +170,11 @@ pub struct UIRenderer {
     /// Matches Unity's approach: Font.GetCharacterInfo() serves cached glyph data
     /// from the font atlas; only new glyphs trigger rasterization. Here, we cache
     /// shaped TextBuffers so identical text across frames avoids re-shaping.
-    text_buffer_cache: ahash::AHashMap<(String, u16, bool), TextBuffer>,
+    text_buffer_cache: ahash::AHashMap<(String, u16, FontWeight), TextBuffer>,
     /// Frame generation counter for cache eviction.
     text_cache_generation: u64,
     /// Per-entry generation (tracks last-used frame for eviction).
-    text_cache_used: ahash::AHashMap<(String, u16, bool), u64>,
+    text_cache_used: ahash::AHashMap<(String, u16, FontWeight), u64>,
 
     // Draw queues
     rect_commands: Vec<RectCommand>,
@@ -281,11 +289,13 @@ impl UIRenderer {
         });
 
         // Load system fonts (needed for Unicode symbol fallback: ▶▼≡ etc),
-        // then load our bundled Inter Regular + Bold. Family::Name("Inter") with
-        // Weight::BOLD/NORMAL selects the correct weight from our bundled files.
+        // then load our bundled Inter Regular, Medium, and Bold.
+        // Family::Name("Inter") with Weight selects the correct weight.
         let mut font_system = FontSystem::new();
         let font_data = include_bytes!("../assets/fonts/Inter-Regular.ttf");
         font_system.db_mut().load_font_data(font_data.to_vec());
+        let medium_font_data = include_bytes!("../assets/fonts/Inter-Medium.ttf");
+        font_system.db_mut().load_font_data(medium_font_data.to_vec());
         let bold_font_data = include_bytes!("../assets/fonts/Inter-Bold.ttf");
         font_system.db_mut().load_font_data(bold_font_data.to_vec());
 
@@ -374,7 +384,7 @@ impl UIRenderer {
             text: text.to_string(),
             font_size,
             color,
-            bold: true, // default all direct text draws to bold
+            font_weight: FontWeight::Medium,
             clip_bounds: None,
         });
     }
@@ -526,8 +536,7 @@ impl UIRenderer {
             && !text.is_empty() {
                 // Cached measurement — only shapes on first encounter or content change.
                 // Matches Unity's Font.GetCharacterInfo() which returns cached glyph metrics.
-                let bold = matches!(style.font_weight, FontWeight::Bold);
-                let text_size = self.measure_text_cached(text, style.font_size, bold);
+                let text_size = self.measure_text_cached(text, style.font_size, style.font_weight);
                 let text_y = bounds.y + (bounds.height - text_size.y) * 0.5;
 
                 let text_x = match style.text_align {
@@ -549,7 +558,7 @@ impl UIRenderer {
                     text: text.clone(),
                     font_size: style.font_size as f32,
                     color: text_color,
-                    bold: matches!(style.font_weight, FontWeight::Bold),
+                    font_weight: style.font_weight,
                     clip_bounds,
                 });
             }
@@ -559,8 +568,8 @@ impl UIRenderer {
     /// Matches Unity's approach: Font.GetCharacterInfo() returns cached glyph metrics
     /// from the font atlas. Here, we cache shaped TextBuffers so the same text
     /// across frames is measured without re-shaping.
-    pub fn measure_text_cached(&mut self, text: &str, font_size: u16, bold: bool) -> Vec2 {
-        let key = (text.to_string(), font_size, bold);
+    pub fn measure_text_cached(&mut self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
+        let key = (text.to_string(), font_size, font_weight);
 
         // Mark as used this frame
         self.text_cache_used.insert(key.clone(), self.text_cache_generation);
@@ -580,7 +589,7 @@ impl UIRenderer {
         let metrics = Metrics::new(font_size as f32, font_size as f32 * 1.2);
         let mut buffer = TextBuffer::new(&mut self.font_system, metrics);
         buffer.set_size(&mut self.font_system, Some(10000.0), Some(font_size as f32 * 2.0));
-        let weight = if bold { Weight::BOLD } else { Weight::NORMAL };
+        let weight = font_weight_to_cosmic(font_weight);
         buffer.set_text(
             &mut self.font_system,
             text,
@@ -696,7 +705,7 @@ impl UIRenderer {
             self.text_buffers.clear();
 
             for cmd in &self.text_commands {
-                let key = (cmd.text.clone(), cmd.font_size as u16, cmd.bold);
+                let key = (cmd.text.clone(), cmd.font_size as u16, cmd.font_weight);
 
                 if let Some(buffer) = self.text_buffer_cache.get(&key) {
                     self.text_buffers.push(buffer.clone());
@@ -706,7 +715,7 @@ impl UIRenderer {
                         Metrics::new(cmd.font_size, cmd.font_size * 1.2),
                     );
                     buffer.set_size(&mut self.font_system, Some(width as f32), Some(height as f32));
-                    let weight = if cmd.bold { Weight::BOLD } else { Weight::NORMAL };
+                    let weight = font_weight_to_cosmic(cmd.font_weight);
                     buffer.set_text(
                         &mut self.font_system,
                         &cmd.text,
@@ -878,10 +887,10 @@ impl TextMeasure for UIRenderer {
         // Use an approximate measurement: Inter is ~0.5em per character on average.
         // This is good enough for layout; exact measurement happens in draw_node.
         let em = font_size as f32;
-        let avg_char_width = if matches!(font_weight, FontWeight::Bold) {
-            em * 0.56 // Bold glyphs are ~8% wider
-        } else {
-            em * 0.52
+        let avg_char_width = match font_weight {
+            FontWeight::Bold => em * 0.56,
+            FontWeight::Medium => em * 0.54,
+            FontWeight::Regular => em * 0.52,
         };
         let width = text.len() as f32 * avg_char_width;
         Vec2::new(width, em)

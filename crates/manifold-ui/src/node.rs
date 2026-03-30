@@ -184,10 +184,11 @@ pub enum TextAlign {
 }
 
 /// Font weight.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum FontWeight {
     Regular,
     #[default]
+    Medium,
     Bold,
 }
 

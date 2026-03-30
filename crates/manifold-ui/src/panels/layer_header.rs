@@ -813,7 +813,7 @@ impl LayerHeaderPanel {
                 bg_color: color::HANDLE_BG,
                 hover_bg_color: color::BUTTON_HIGHLIGHTED,
                 pressed_bg_color: color::BUTTON_PRESSED,
-                text_color: text_clr,
+                text_color: color::TEXT_ON_DARK,
                 font_size: HANDLE_FONT,
                 corner_radius: LH_BTN_RADIUS,
                 text_align: TextAlign::Center,
