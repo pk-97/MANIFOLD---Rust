@@ -18,10 +18,12 @@ use super::gen_param::{GenParamPanel, GenParamConfig};
 const SCROLLBAR_W: f32 = 4.0;
 const SCROLLBAR_MIN_THUMB_H: f32 = 16.0;
 const SCROLL_SPEED: f32 = 1.0;
-const SECTION_GAP: f32 = 2.0;
-const SECTION_CARD_RADIUS: f32 = 6.0;
-const SECTION_CARD_PAD: f32 = 4.0;
+const SECTION_GAP: f32 = 6.0;
+const SECTION_CARD_RADIUS: f32 = 4.0;
+const SECTION_CARD_PAD: f32 = 6.0;
 const SECTION_CARD_BG: Color32 = Color32::new(22, 22, 23, 255);
+const SECTION_CARD_BORDER: Color32 = Color32::new(50, 50, 54, 255);
+const COLUMN_PAD: f32 = 4.0;
 
 const SCROLLBAR_TRACK_COLOR: Color32 = color::SCROLLBAR_TRACK_C32;
 const SCROLLBAR_THUMB_COLOR: Color32 = color::SCROLLBAR_THUMB_C32;
@@ -1153,11 +1155,12 @@ impl Panel for InspectorCompositePanel {
 
         self.viewport_rect = rect;
         let col_gap = 2.0_f32;
-        let half_w = ((rect.width - col_gap) * 0.5).floor();
-        let left_x = rect.x;
-        let right_x = rect.x + half_w + col_gap;
+        let total_pad = COLUMN_PAD * 2.0 + col_gap; // left pad + right pad + gap
+        let half_w = ((rect.width - total_pad) * 0.5).floor();
+        let left_x = rect.x + COLUMN_PAD;
+        let right_x = left_x + half_w + col_gap;
         let left_content_w = half_w - SCROLLBAR_W;
-        let right_content_w = (rect.width - half_w - col_gap) - SCROLLBAR_W;
+        let right_content_w = half_w - SCROLLBAR_W;
         self.column_split_x = right_x;
 
         // Background panel
@@ -1179,13 +1182,21 @@ impl Panel for InspectorCompositePanel {
         {
             let mut cy = rect.y - self.master_scroll_offset;
             if self.master_visible {
-                // Section card background
+                // Section card: border + inner bg
                 let section_h = self.master_column_height();
                 tree.add_panel(
                     -1, left_x, cy, left_content_w, section_h,
                     UIStyle {
-                        bg_color: SECTION_CARD_BG,
+                        bg_color: SECTION_CARD_BORDER,
                         corner_radius: SECTION_CARD_RADIUS,
+                        ..UIStyle::default()
+                    },
+                );
+                tree.add_panel(
+                    -1, left_x + 1.0, cy + 1.0, left_content_w - 2.0, section_h - 2.0,
+                    UIStyle {
+                        bg_color: SECTION_CARD_BG,
+                        corner_radius: SECTION_CARD_RADIUS - 1.0,
                         ..UIStyle::default()
                     },
                 );
@@ -1237,7 +1248,7 @@ impl Panel for InspectorCompositePanel {
         ) as i32;
 
         // ── RIGHT COLUMN: Layer + Clip ──────────────────────────────
-        let right_clip_rect = Rect::new(right_x, rect.y, rect.width - half_w - col_gap, rect.height);
+        let right_clip_rect = Rect::new(right_x, rect.y, half_w, rect.height);
         let right_clip_id = tree.add_node(
             -1, right_clip_rect,
             crate::node::UINodeType::ClipRegion,
@@ -1264,8 +1275,16 @@ impl Panel for InspectorCompositePanel {
                 tree.add_panel(
                     -1, right_x, cy, right_content_w, section_h,
                     UIStyle {
-                        bg_color: SECTION_CARD_BG,
+                        bg_color: SECTION_CARD_BORDER,
                         corner_radius: SECTION_CARD_RADIUS,
+                        ..UIStyle::default()
+                    },
+                );
+                tree.add_panel(
+                    -1, right_x + 1.0, cy + 1.0, right_content_w - 2.0, section_h - 2.0,
+                    UIStyle {
+                        bg_color: SECTION_CARD_BG,
+                        corner_radius: SECTION_CARD_RADIUS - 1.0,
                         ..UIStyle::default()
                     },
                 );
@@ -1312,8 +1331,16 @@ impl Panel for InspectorCompositePanel {
                 tree.add_panel(
                     -1, right_x, cy, right_content_w, section_h,
                     UIStyle {
-                        bg_color: SECTION_CARD_BG,
+                        bg_color: SECTION_CARD_BORDER,
                         corner_radius: SECTION_CARD_RADIUS,
+                        ..UIStyle::default()
+                    },
+                );
+                tree.add_panel(
+                    -1, right_x + 1.0, cy + 1.0, right_content_w - 2.0, section_h - 2.0,
+                    UIStyle {
+                        bg_color: SECTION_CARD_BG,
+                        corner_radius: SECTION_CARD_RADIUS - 1.0,
                         ..UIStyle::default()
                     },
                 );
@@ -1334,7 +1361,7 @@ impl Panel for InspectorCompositePanel {
         tree.reparent_root_nodes(right_start, right_count, right_clip_id);
 
         // Right scrollbar
-        let right_sb_x = rect.x + rect.width - SCROLLBAR_W;
+        let right_sb_x = right_x + right_content_w;
         self.layer_scrollbar_track_id = tree.add_button(
             -1, right_sb_x, rect.y, SCROLLBAR_W, rect.height,
             UIStyle { bg_color: SCROLLBAR_TRACK_COLOR, ..UIStyle::default() }, "",

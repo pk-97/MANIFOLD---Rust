@@ -319,7 +319,7 @@ pub const TARGET_BAR_HOVER_C32: Color32 = Color32::new(211, 135, 40, 255);
 
 // ── Bitmap Effect Card ──────────────────────────────────────────────
 pub const EFFECT_CARD_INNER_BG_C32: Color32 = Color32::new(19, 19, 20, 255);
-pub const CARD_BORDER_C32: Color32 = Color32::new(46, 46, 49, 255);
+pub const CARD_BORDER_C32: Color32 = Color32::new(55, 55, 60, 255);
 pub const DRAG_HANDLE_BG_C32: Color32 = Color32::new(38, 38, 42, 255);
 pub const DRAG_HANDLE_HOVER_BG_C32: Color32 = Color32::new(52, 52, 56, 255);
 

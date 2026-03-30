@@ -12,8 +12,8 @@ use crate::tree::UITree;
 // ── Shared layout constants ─────────────────────────────────────
 
 pub(crate) const ROW_HEIGHT: f32 = 20.0;
-pub(crate) const ROW_SPACING: f32 = 2.0;
-pub(crate) const PADDING: f32 = 4.0;
+pub(crate) const ROW_SPACING: f32 = 4.0;
+pub(crate) const PADDING: f32 = 6.0;
 pub(crate) const GAP: f32 = 4.0;
 pub(crate) const FONT_SIZE: u16 = 10;
 

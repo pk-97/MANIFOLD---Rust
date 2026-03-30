@@ -20,7 +20,7 @@ const BADGE_RADIUS: f32 = 7.0;
 
 const BORDER_W: f32 = 1.0;
 const CORNER_RADIUS: f32 = 4.0;
-const CARD_BOTTOM_MARGIN: f32 = 4.0;
+const CARD_BOTTOM_MARGIN: f32 = 6.0;
 
 /// Font size for config buttons in effect card (effect uses 8, not FONT_SIZE=10).
 const CONFIG_BTN_FONT_SIZE: u16 = 8;
