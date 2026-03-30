@@ -132,7 +132,7 @@ fn tint_bg(base: Color32, tint: Color32, amount: f32) -> Color32 {
 
 fn bg_style(selected: bool, layer_color: Color32) -> UIStyle {
     let base = if selected { BG_SELECTED } else { BG_COLOR };
-    let amount = if selected { 0.35 } else { 0.20 };
+    let amount = if selected { 0.55 } else { 0.35 };
     let bg = tint_bg(base, layer_color, amount);
     let hover = lighten(bg, if selected { 10 } else { 12 });
     let pressed = darken(bg, 8);
