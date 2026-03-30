@@ -576,7 +576,7 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
                 use manifold_ui::panels::viewport::ViewportClip;
                 let clip_color = manifold_ui::node::Color32::from_f32(
                     layer.layer_color.r, layer.layer_color.g,
-                    layer.layer_color.b, 0.86,
+                    layer.layer_color.b, 1.0,
                 );
                 viewport_clips.push(ViewportClip {
                     clip_id: clip.id.clone(),
