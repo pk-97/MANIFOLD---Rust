@@ -38,11 +38,10 @@ fn make_region(project: &Project, start_beat: f32, end_beat: f32, start_layer: u
 }
 
 fn add_clip(project: &mut Project, layer: usize, start: f32, dur: f32) -> ClipId {
-    let layer_id = project.timeline.layers[layer].layer_id.clone();
     let clip = TimelineClip {
+        video_clip_id: "test_video".into(),
         start_beat: Beats::from_f32(start),
         duration_beats: Beats::from_f32(dur),
-        layer_id,
         ..Default::default()
     };
     let id = clip.id.clone();
@@ -209,13 +208,16 @@ fn paste_preserves_relative_offsets() {
     // Collect pasted clip beats
     let mut pasted: Vec<(f32, usize)> = result.pasted_clip_ids.iter()
         .map(|id| {
-            // Two-step to avoid borrow conflict (find_clip_by_id takes &mut self)
-            let (beat, lid) = {
-                let c = project.timeline.find_clip_by_id(id).unwrap();
-                (c.start_beat.as_f32(), c.layer_id.clone())
-            };
-            let li = project.timeline.layer_index_for_id(&lid).unwrap_or(0);
-            (beat, li)
+            let mut beat = 0.0f32;
+            let mut layer_idx = 0usize;
+            for (li, layer) in project.timeline.layers.iter().enumerate() {
+                if let Some(c) = layer.clips.iter().find(|c| &c.id == id) {
+                    beat = c.start_beat.as_f32();
+                    layer_idx = li;
+                    break;
+                }
+            }
+            (beat, layer_idx)
         })
         .collect();
     pasted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -442,9 +444,8 @@ fn move_clip_to_layer() {
     let mut service = EditingService::new();
     service.execute(cmd.unwrap(), &mut project);
 
-    let layer1_id = project.timeline.layers[1].layer_id.clone();
-    let clip = project.timeline.find_clip_by_id(&id1).unwrap();
-    assert_eq!(clip.layer_id, layer1_id);
+    // Verify the clip is now on layer 1
+    assert!(project.timeline.layers[1].clips.iter().any(|c| c.id == id1));
 }
 
 // ─── Selection region ───

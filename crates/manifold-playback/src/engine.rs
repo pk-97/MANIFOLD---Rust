@@ -1255,7 +1255,7 @@ impl PlaybackEngine {
     /// Returns 1.0 for generators or clips without recorded BPM.
     /// Port of C# PlaybackEngine.GetClipPlaybackRate (lines 1495-1505).
     pub fn get_clip_playback_rate(&mut self, clip: &TimelineClip) -> f32 {
-        if clip.is_generator() { return 1.0; }
+        if clip.video_clip_id.is_empty() { return 1.0; }
 
         let recorded_bpm = self.resolve_clip_recorded_bpm(clip);
         if recorded_bpm <= 0.0 { return 1.0; }
@@ -1756,7 +1756,7 @@ impl PlaybackEngine {
                 if any_solo && !layer.is_solo { continue; }
 
                 for clip in &layer.clips {
-                    if clip.is_generator() || clip.is_muted { continue; }
+                    if clip.video_clip_id.is_empty() || clip.is_muted { continue; }
                     if clip.video_clip_id.is_empty() { continue; }
 
                     let clip_start = TempoMapConverter::beat_to_seconds_immut(

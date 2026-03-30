@@ -77,7 +77,7 @@ impl StubRenderer {
 
 impl ClipRenderer for StubRenderer {
     fn can_handle(&self, clip: &TimelineClip) -> bool {
-        if self.is_generator { clip.is_generator() } else { !clip.is_generator() }
+        if self.is_generator { clip.video_clip_id.is_empty() } else { !clip.video_clip_id.is_empty() }
     }
 
     fn start_clip(&mut self, clip: &TimelineClip, _current_time: Seconds, _layers: &[Layer]) -> bool {

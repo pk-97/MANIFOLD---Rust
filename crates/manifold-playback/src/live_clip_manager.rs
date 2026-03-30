@@ -451,12 +451,8 @@ impl LiveClipManager {
         ));
 
         // Create phantom clip
-        let layer_id = project.timeline.layers.get(layer_index as usize)
-            .map(|l| l.layer_id.clone())
-            .unwrap_or_default();
         let mut clip = TimelineClip::new_video(
             video_clip_id,
-            layer_id,
             snap_beat,
             duration_beats,
             Seconds::from_f32(in_point),
@@ -508,7 +504,7 @@ impl LiveClipManager {
         &mut self,
         project: &mut Project,
         host: &dyn LiveClipHost,
-        generator_type: GeneratorTypeId,
+        _generator_type: GeneratorTypeId,
         layer_index: i32,
         duration_seconds: f32,
         beat_stamp: Option<f32>,
@@ -532,11 +528,8 @@ impl LiveClipManager {
             project.settings.time_signature_numerator,
         ));
 
-        let layer_id = project.timeline.layers.get(layer_index as usize)
-            .map(|l| l.layer_id.clone())
-            .unwrap_or_default();
         let mut clip = TimelineClip::new_generator(
-            generator_type, layer_id, snap_beat, duration_beats,
+            snap_beat, duration_beats,
         );
         clip.recorded_bpm = host.get_bpm_at_beat(snap_beat);
 

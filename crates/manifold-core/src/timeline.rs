@@ -237,9 +237,6 @@ impl Timeline {
         for (i, layer) in self.layers.iter_mut().enumerate() {
             layer.index = i as i32;
             self.layer_id_to_index.insert(layer.layer_id.clone(), i);
-            for clip in &mut layer.clips {
-                clip.layer_id = layer.layer_id.clone();
-            }
         }
         self.mark_clip_lookup_dirty();
     }

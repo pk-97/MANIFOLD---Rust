@@ -123,7 +123,7 @@ fn trigger_live_generator_clip() {
 
     assert!(clip.is_some());
     let clip = clip.unwrap();
-    assert!(clip.is_generator());
+    assert!(clip.video_clip_id.is_empty());
     assert!(mgr.is_live_slot_clip(&clip.id));
 }
 

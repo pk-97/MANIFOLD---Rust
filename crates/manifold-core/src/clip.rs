@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::id::{ClipId, LayerId};
-use crate::generator_type_id::GeneratorTypeId;
+use crate::id::ClipId;
 use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope};
 use crate::units::{Beats, Seconds};
 
@@ -11,9 +10,6 @@ pub struct TimelineClip {
     pub id: ClipId,
     #[serde(default)]
     pub video_clip_id: String,
-    /// Stable layer identity — survives reorder, add, remove, undo/redo.
-    #[serde(default)]
-    pub layer_id: LayerId,
 
     // ── Beat-primary timing (source of truth) ──
     #[serde(default)]
@@ -32,12 +28,14 @@ pub struct TimelineClip {
     pub is_locked: bool,
     #[serde(default)]
     pub is_muted: bool,
-    #[serde(default)]
-    pub invert_colors: bool,
 
-    // ── Generator type ──
-    #[serde(default)]
-    pub generator_type: GeneratorTypeId,
+    // ── Legacy fields (deserialized from old projects, never written back) ──
+    #[serde(default, skip_serializing)]
+    pub layer_id: crate::id::LayerId,
+    #[serde(default, skip_serializing)]
+    pub generator_type: crate::generator_type_id::GeneratorTypeId,
+    #[serde(default, skip_serializing)]
+    pub invert_colors: bool,
 
     // ── Transform ──
     #[serde(default)]
@@ -89,24 +87,16 @@ impl TimelineClip {
         self.start_beat + self.duration_beats
     }
 
-    pub fn is_generator(&self) -> bool {
-        self.generator_type != GeneratorTypeId::NONE
-    }
-
     pub fn is_active_at_beat(&self, beat: Beats) -> bool {
         beat >= self.start_beat && beat < self.end_beat()
     }
 
     pub fn overlaps_with(&self, other: &TimelineClip) -> bool {
-        if other.layer_id != self.layer_id {
-            return false;
-        }
         self.start_beat < other.end_beat() && self.end_beat() > other.start_beat
     }
 
     pub fn has_any_effect(&self) -> bool {
-        self.invert_colors
-            || self.translate_x != 0.0
+        self.translate_x != 0.0
             || self.translate_y != 0.0
             || self.scale != 1.0
             || self.rotation != 0.0
@@ -172,14 +162,12 @@ impl TimelineClip {
     /// Create a new video clip.
     pub fn new_video(
         video_clip_id: String,
-        layer_id: LayerId,
         start_beat: Beats,
         duration_beats: Beats,
         in_point: Seconds,
     ) -> Self {
         Self {
             video_clip_id,
-            layer_id,
             start_beat,
             duration_beats: duration_beats.max(Beats::ZERO),
             in_point: in_point.max(Seconds::ZERO),
@@ -189,14 +177,10 @@ impl TimelineClip {
 
     /// Create a new generator clip.
     pub fn new_generator(
-        gen_type: GeneratorTypeId,
-        layer_id: LayerId,
         start_beat: Beats,
         duration_beats: Beats,
     ) -> Self {
         Self {
-            generator_type: gen_type,
-            layer_id,
             start_beat,
             duration_beats: duration_beats.max(Beats::ZERO),
             ..Default::default()
@@ -221,7 +205,7 @@ impl Default for TimelineClip {
         Self {
             id: ClipId::new(crate::short_id()),
             video_clip_id: String::new(),
-            layer_id: LayerId::default(),
+            layer_id: crate::id::LayerId::default(),
             start_beat: Beats::ZERO,
             duration_beats: Beats::ONE,
             in_point: Seconds::ZERO,
@@ -229,7 +213,7 @@ impl Default for TimelineClip {
             is_locked: false,
             is_muted: false,
             invert_colors: false,
-            generator_type: GeneratorTypeId::NONE,
+            generator_type: crate::generator_type_id::GeneratorTypeId::NONE,
             translate_x: 0.0,
             translate_y: 0.0,
             scale: 1.0,
@@ -346,7 +330,7 @@ mod tests {
     #[test]
     fn test_new_video_clamps_duration() {
         let clip = TimelineClip::new_video(
-            "v1".into(), LayerId::default(),
+            "v1".into(),
             Beats(0.0), Beats(-3.0), Seconds(-1.0),
         );
         assert_eq!(clip.duration_beats, Beats(0.0));
@@ -356,7 +340,6 @@ mod tests {
     #[test]
     fn test_new_generator_clamps_duration() {
         let clip = TimelineClip::new_generator(
-            GeneratorTypeId::NONE, LayerId::default(),
             Beats(0.0), Beats(-2.0),
         );
         assert_eq!(clip.duration_beats, Beats(0.0));

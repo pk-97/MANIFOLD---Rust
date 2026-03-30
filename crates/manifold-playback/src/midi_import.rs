@@ -69,7 +69,7 @@ impl MidiImportService {
         let gen_type = project.timeline.layers[target_layer_index].generator_type();
         let source_clip_ids_empty = project.timeline.layers[target_layer_index].source_clip_ids.is_empty();
 
-        let (use_generator, resolved_gen_type) = if !is_generator && source_clip_ids_empty {
+        let (use_generator, _resolved_gen_type) = if !is_generator && source_clip_ids_empty {
             // Video layer with no source clips — fall back to BasicShapesSnap generator
             log::warn!(
                 "[MidiImportService] Target video layer has no source clips. \
@@ -95,8 +95,6 @@ impl MidiImportService {
         for note in &placements {
             let clip: TimelineClip = if use_generator {
                 TimelineClip::new_generator(
-                    resolved_gen_type.clone(),
-                    target_layer_lid.clone(),
                     Beats::from_f32(note.start_beat),
                     Beats::from_f32(note.duration_beats),
                 )
@@ -107,7 +105,6 @@ impl MidiImportService {
 
                 TimelineClip::new_video(
                     video_clip_id,
-                    target_layer_lid.clone(),
                     Beats::from_f32(note.start_beat),
                     Beats::from_f32(note.duration_beats),
                     Seconds::ZERO,

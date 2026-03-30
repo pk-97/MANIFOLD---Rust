@@ -106,11 +106,11 @@ fn clip_effects_undo_roundtrip() {
     let clip_id = project.timeline.layers[0].clips[0].id.clone();
 
     let old = ClipEffectsSnapshot {
-        invert_colors: false, is_looping: false, loop_duration_beats: Beats(0.0),
+        is_looping: false, loop_duration_beats: Beats(0.0),
         translate_x: 0.0, translate_y: 0.0, scale: 1.0, rotation: 0.0,
     };
     let new = ClipEffectsSnapshot {
-        invert_colors: true, is_looping: true, loop_duration_beats: Beats(2.0),
+        is_looping: true, loop_duration_beats: Beats(2.0),
         translate_x: 0.5, translate_y: -0.3, scale: 2.0, rotation: 45.0,
     };
 
@@ -118,13 +118,11 @@ fn clip_effects_undo_roundtrip() {
 
     cmd.execute(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!(clip.invert_colors);
     assert!(clip.is_looping);
     assert!((clip.scale - 2.0).abs() < 0.001);
 
     cmd.undo(&mut project);
     let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!(!clip.invert_colors);
     assert!(!clip.is_looping);
     assert!((clip.scale - 1.0).abs() < 0.001);
 }
@@ -936,15 +934,7 @@ fn project_load_verifies_caches() {
         assert_eq!(layer.index, i as i32, "layer.index must match position after reindex");
     }
 
-    // Verify clip layer_ids are synced
-    for layer in &project.timeline.layers {
-        for clip in &layer.clips {
-            assert_eq!(
-                clip.layer_id, layer.layer_id,
-                "clip.layer_id must match parent layer after reindex",
-            );
-        }
-    }
+    // clip.layer_id is now a legacy deserialization-only field — no longer synced
 }
 
 #[test]

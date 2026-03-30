@@ -357,7 +357,7 @@ impl VideoRenderer {
 
 impl ClipRenderer for VideoRenderer {
     fn can_handle(&self, clip: &TimelineClip) -> bool {
-        !clip.is_generator()
+        !clip.video_clip_id.is_empty()
     }
 
     fn start_clip(

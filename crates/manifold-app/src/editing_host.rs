@@ -267,7 +267,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 }
 
                 // Gen↔video type mismatch: block
-                let clip_is_gen = project.timeline.layers[src_layer].clips[clip_idx].is_generator();
+                let clip_is_gen = project.timeline.layers[src_layer].clips[clip_idx].video_clip_id.is_empty();
                 let target_is_gen = project.timeline.layers[target_layer].layer_type
                     == manifold_core::types::LayerType::Generator;
                 if clip_is_gen != target_is_gen {
@@ -275,14 +275,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 }
 
                 // Move clip between layers
-                let mut clip = project.timeline.layers[src_layer].clips.remove(clip_idx);
-                clip.layer_id = project.timeline.layers[target_layer].layer_id.clone();
-
-                // Gen→gen with different type: adopt target layer's generator type
-                if target_is_gen && clip.generator_type != *project.timeline.layers[target_layer].generator_type() {
-                    clip.generator_type = project.timeline.layers[target_layer].generator_type().clone();
-                }
-
+                let clip = project.timeline.layers[src_layer].clips.remove(clip_idx);
                 project.timeline.layers[target_layer].clips.push(clip);
                 project.timeline.mark_clip_lookup_dirty();
             }
@@ -371,9 +364,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             if let Some(project) = Some(&*self.project) {
                 // Linear scan — find_clip_by_id requires &mut for cache healing
                 let mut found: Option<(TimelineClip, usize)> = None;
-                for layer in &project.timeline.layers {
+                for (li, layer) in project.timeline.layers.iter().enumerate() {
                     if let Some(clip) = layer.clips.iter().find(|c| c.id == clip_id) {
-                        let li = project.timeline.layer_index_for_id(&clip.layer_id).unwrap_or(0);
                         found = Some((clip.clone(), li));
                         break;
                     }
@@ -547,7 +539,7 @@ impl TimelineEditingHost for AppEditingHost<'_> {
             Some(c) => c,
             None => return Beats::ZERO,
         };
-        if clip.is_generator() {
+        if clip.video_clip_id.is_empty() {
             return Beats::ZERO;
         }
 

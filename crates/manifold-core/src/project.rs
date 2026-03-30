@@ -93,7 +93,7 @@ impl Project {
         // Align all effect params to current definitions
         self.align_all_effect_params();
 
-        // Rebuild layer index cache + sync layer.index and clip.layer_id
+        // Rebuild layer index cache + sync layer.index
         self.timeline.reindex_layers();
     }
 
@@ -179,7 +179,7 @@ impl Project {
         // Validate timeline clip references
         for layer in &self.timeline.layers {
             for clip in &layer.clips {
-                if clip.is_generator() || clip.video_clip_id.is_empty() {
+                if layer.layer_type == crate::types::LayerType::Generator || clip.video_clip_id.is_empty() {
                     continue;
                 }
                 if !self.video_library.has_clip(&clip.video_clip_id) {
@@ -208,9 +208,10 @@ impl Project {
         // Stage 1: Remove timeline clips referencing missing library entries
         for layer in &mut self.timeline.layers {
             let before = layer.clips.len();
+            let is_gen_layer = layer.layer_type == crate::types::LayerType::Generator;
             layer.clips.retain(|clip| {
-                // Keep generators — they have no video reference
-                if clip.is_generator() { return true; }
+                // Keep generator layer clips — they have no video reference
+                if is_gen_layer { return true; }
                 if clip.video_clip_id.is_empty() { return true; }
                 valid_ids.contains(&clip.video_clip_id)
             });

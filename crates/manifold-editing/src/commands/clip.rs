@@ -2,8 +2,6 @@ use crate::command::Command;
 use manifold_core::{Beats, ClipId, LayerId, Seconds};
 use manifold_core::project::Project;
 use manifold_core::clip::TimelineClip;
-use manifold_core::types::LayerType;
-use manifold_core::GeneratorTypeId;
 
 /// Move a clip to a new beat position and/or layer.
 /// Matches Unity MoveClipCommand: cross-layer transfer removes from source and adds to target,
@@ -15,22 +13,11 @@ pub struct MoveClipCommand {
     new_start_beat: Beats,
     old_layer_id: LayerId,
     new_layer_id: LayerId,
-    /// Captured at construction time from the clip's current generator_type.
-    /// Port of C# MoveClipCommand line 32: captures in constructor.
-    old_generator_type: GeneratorTypeId,
 }
 
 impl MoveClipCommand {
-    /// Create a MoveClipCommand. `old_generator_type` captures the clip's generator type
-    /// at the time the command is created (matching Unity constructor behavior).
-    pub fn new_with_gen_type(clip_id: ClipId, old_start_beat: Beats, new_start_beat: Beats, old_layer_id: LayerId, new_layer_id: LayerId, old_generator_type: GeneratorTypeId) -> Self {
-        Self { clip_id, old_start_beat, new_start_beat, old_layer_id, new_layer_id, old_generator_type }
-    }
-
-    /// Convenience constructor that defaults generator type to None.
-    /// For callers that know the clip isn't a generator or will look it up themselves.
     pub fn new(clip_id: ClipId, old_start_beat: Beats, new_start_beat: Beats, old_layer_id: LayerId, new_layer_id: LayerId) -> Self {
-        Self { clip_id, old_start_beat, new_start_beat, old_layer_id, new_layer_id, old_generator_type: GeneratorTypeId::NONE }
+        Self { clip_id, old_start_beat, new_start_beat, old_layer_id, new_layer_id }
     }
 }
 
@@ -41,23 +28,12 @@ impl Command for MoveClipCommand {
             let dst = project.timeline.layer_index_for_id(&self.new_layer_id);
 
             // Remove clip from source layer.
-            let mut clip = if let Some(src_idx) = src
+            let clip = if let Some(src_idx) = src
                 && let Some(layer) = project.timeline.layers.get_mut(src_idx) {
                     layer.remove_clip(&self.clip_id)
                 } else {
                     None
                 };
-
-            if let Some(ref mut c) = clip {
-                c.layer_id = self.new_layer_id.clone();
-
-                // Generator-type adoption: when target is a generator layer, adopt its type.
-                if let Some(dst_idx) = dst
-                    && let Some(target) = project.timeline.layers.get(dst_idx)
-                    && target.layer_type == LayerType::Generator {
-                        c.generator_type = target.generator_type().clone();
-                    }
-            }
 
             // Add clip to target layer.
             if let Some(c) = clip
@@ -96,16 +72,12 @@ impl Command for MoveClipCommand {
             let dst = project.timeline.layer_index_for_id(&self.old_layer_id);
 
             // Remove clip from current (new) layer.
-            let mut clip = if let Some(src_idx) = src
+            let clip = if let Some(src_idx) = src
                 && let Some(layer) = project.timeline.layers.get_mut(src_idx) {
                     layer.remove_clip(&self.clip_id)
                 } else {
                     None
                 };
-
-            if let Some(ref mut c) = clip {
-                c.layer_id = self.old_layer_id.clone();
-            }
 
             // Add clip back to original layer.
             if let Some(c) = clip
@@ -117,7 +89,6 @@ impl Command for MoveClipCommand {
 
         // Restore generator type and start beat.
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
-            clip.generator_type = self.old_generator_type.clone();
             clip.start_beat = self.old_start_beat;
         }
 
@@ -160,8 +131,12 @@ impl Command for TrimClipCommand {
     fn execute(&mut self, project: &mut Project) {
         // Capture layer_id on first execute for mark_clips_unsorted.
         if self.layer_id.is_none() {
-            self.layer_id = project.timeline.find_clip_by_id(&self.clip_id)
-                .map(|c| c.layer_id.clone());
+            for layer in &project.timeline.layers {
+                if layer.clips.iter().any(|c| c.id == self.clip_id) {
+                    self.layer_id = Some(layer.layer_id.clone());
+                    break;
+                }
+            }
         }
 
         if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
@@ -341,7 +316,6 @@ impl Command for SlipClipCommand {
 /// Change clip visual effects (invert, loop, transform).
 #[derive(Debug, Clone)]
 pub struct ClipEffectsSnapshot {
-    pub invert_colors: bool,
     pub is_looping: bool,
     pub loop_duration_beats: Beats,
     pub translate_x: f32,
@@ -363,7 +337,6 @@ impl ClipEffectsCommand {
     }
 
     fn apply(clip: &mut TimelineClip, snap: &ClipEffectsSnapshot) {
-        clip.invert_colors = snap.invert_colors;
         clip.is_looping = snap.is_looping;
         clip.loop_duration_beats = snap.loop_duration_beats;
         clip.translate_x = snap.translate_x;

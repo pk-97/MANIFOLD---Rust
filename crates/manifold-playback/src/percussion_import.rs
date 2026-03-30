@@ -156,24 +156,7 @@ impl PercussionImportService {
                 .unwrap_or_default();
 
             let timeline_clip: TimelineClip = if placement.is_generator() {
-                // Use the layer's current generator type — respects user customisation
-                // (e.g. user swapped Flash→Voronoi on the Kick layer).
-                let effective_gen_type = {
-                    let target_layer = match project.timeline.layers.get(target_layer_index as usize) {
-                        Some(l) => l,
-                        None => continue,
-                    };
-                    let layer_gen = target_layer.generator_type();
-                    if *layer_gen != GeneratorTypeId::NONE {
-                        layer_gen.clone()
-                    } else {
-                        placement.generator_type.clone()
-                    }
-                };
-
                 TimelineClip::new_generator(
-                    effective_gen_type,
-                    target_layer_lid.clone(),
                     placement.start_beat,
                     placement.duration_beats,
                 )
@@ -188,7 +171,6 @@ impl PercussionImportService {
 
                 TimelineClip::new_video(
                     video_clip_id,
-                    target_layer_lid.clone(),
                     placement.start_beat,
                     placement.duration_beats,
                     Seconds(0.0),

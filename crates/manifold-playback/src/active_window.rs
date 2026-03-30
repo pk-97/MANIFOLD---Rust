@@ -137,14 +137,16 @@ impl ActiveTimelineClipWindow {
             self.indexed_layer_clip_counts.push(layer.clips.len());
         }
 
-        // Collect all clips from non-group layers
+        // Collect all clips from non-group layers, stamping layer_id for sort
         self.clips_by_start.clear();
         for layer in layers {
             if layer.is_group() {
                 continue;
             }
             for clip in &layer.clips {
-                self.clips_by_start.push(clip.clone());
+                let mut c = clip.clone();
+                c.layer_id = layer.layer_id.clone();
+                self.clips_by_start.push(c);
             }
         }
 
@@ -442,12 +444,9 @@ mod tests {
     fn make_project(layers: Vec<Layer>) -> Project {
         let mut project = Project::default();
         project.timeline.layers = layers;
-        // Sync layer indices and clip layer_id values
+        // Sync layer indices
         for (i, layer) in project.timeline.layers.iter_mut().enumerate() {
             layer.index = i as i32;
-            for clip in &mut layer.clips {
-                clip.layer_id = layer.layer_id.clone();
-            }
         }
         project
     }

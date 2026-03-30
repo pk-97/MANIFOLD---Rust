@@ -445,9 +445,9 @@ impl ContentPipeline {
                 None
             });
             if let Some(texture) = clip_texture {
-                let clip_li = project
-                    .and_then(|p| p.timeline.layer_index_for_id(&clip.layer_id))
-                    .unwrap_or(0);
+                let clip_li = layers.iter().position(|l| {
+                    l.clips.iter().any(|c| c.id == clip.id)
+                }).unwrap_or(0);
                 let layer = layers.get(clip_li);
                 clip_descs.push(CompositeClipDescriptor {
                     clip_id: &clip.id,

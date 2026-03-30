@@ -587,16 +587,18 @@ impl GeneratorRenderer {
 
 impl ClipRenderer for GeneratorRenderer {
     fn can_handle(&self, clip: &TimelineClip) -> bool {
-        clip.is_generator()
+        clip.video_clip_id.is_empty()
     }
 
     fn start_clip(&mut self, clip: &TimelineClip, _current_time: Seconds, layers: &[Layer]) -> bool {
-        let layer_id = clip.layer_id.clone();
-        let layer_index = layers
+        // Find the layer that contains this clip to get layer_id and generator_type
+        let (layer_id, gen_type, layer_index) = layers
             .iter()
-            .position(|l| l.layer_id == layer_id)
-            .map_or(0, |i| i as i32);
-        self.acquire_clip(&clip.id, clip.generator_type.clone(), layer_id, layer_index)
+            .enumerate()
+            .find(|(_, l)| l.clips.iter().any(|c| c.id == clip.id))
+            .map(|(i, l)| (l.layer_id.clone(), l.generator_type().clone(), i as i32))
+            .unwrap_or_default();
+        self.acquire_clip(&clip.id, gen_type, layer_id, layer_index)
     }
 
     fn stop_clip(&mut self, clip_id: &str) {

@@ -271,7 +271,6 @@ impl Application {
 
                 let clip = manifold_core::clip::TimelineClip::new_video(
                     video_clip_id,
-                    layer_id.clone(),
                     manifold_core::Beats::from_f32(beat),
                     manifold_core::Beats::from_f32(duration_beats),
                     manifold_core::Seconds::ZERO,

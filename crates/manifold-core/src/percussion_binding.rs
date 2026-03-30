@@ -60,14 +60,13 @@ impl ProjectPercussionBindingResolver {
         // 1) Prefer an existing clip already used on the target layer.
         if idx < layers.len() {
             let layer = &layers[idx];
-            for clip in &layer.clips {
-                if clip.is_generator() {
-                    continue;
-                }
-                if !clip.video_clip_id.is_empty()
-                    && project.video_library.has_clip(&clip.video_clip_id)
-                {
-                    return clip.video_clip_id.clone();
+            if layer.layer_type != crate::types::LayerType::Generator {
+                for clip in &layer.clips {
+                    if !clip.video_clip_id.is_empty()
+                        && project.video_library.has_clip(&clip.video_clip_id)
+                    {
+                        return clip.video_clip_id.clone();
+                    }
                 }
             }
 

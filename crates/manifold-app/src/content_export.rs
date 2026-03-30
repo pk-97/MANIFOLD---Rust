@@ -99,7 +99,7 @@ impl ContentThread {
         // backpressure needed, enabling faster-than-realtime export.
         // Matches Unity's IsGeneratorOnlyProject() → Time.captureFramerate path.
         let generator_only = project.timeline.layers.iter().all(|layer| {
-            layer.is_group() || layer.clips.iter().all(|c| c.is_generator())
+            layer.is_group() || layer.clips.iter().all(|c| c.video_clip_id.is_empty())
         });
         let mode_label = if generator_only { "offline" } else { "real-time" };
 

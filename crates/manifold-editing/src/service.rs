@@ -25,6 +25,7 @@ struct ClipboardEntry {
     source_clip: TimelineClip,
     beat_offset: Beats,
     layer_offset: i32,
+    is_generator: bool,
 }
 
 /// Result of a paste operation.
@@ -282,9 +283,10 @@ impl EditingService {
                 let region_end = region.end_beat;
 
                 // Find overlapping clips in region (matching Unity CopySelectedClips)
-                let overlapping: Vec<&TimelineClip> = project.timeline.layers.iter()
-                    .flat_map(|l| l.clips.iter())
-                    .filter(|c| {
+                let overlapping: Vec<(&TimelineClip, usize)> = project.timeline.layers.iter()
+                    .enumerate()
+                    .flat_map(|(li, l)| l.clips.iter().map(move |c| (c, li)))
+                    .filter(|(c, _)| {
                         c.start_beat < region_end
                             && c.end_beat() > region_start
                             && clip_ids.contains(&c.id)
@@ -299,14 +301,15 @@ impl EditingService {
                 let (min_layer, _) = region.layer_index_range(&project.timeline.layers)
                     .unwrap_or((0, 0));
 
-                for clip in overlapping {
+                for (clip, clip_layer_idx) in overlapping {
                     let trimmed = Self::trim_clip_to_region(clip, region, spb);
-                    let clip_layer_idx = project.timeline.layer_index_for_id(&trimmed.layer_id)
-                        .unwrap_or(0);
+                    let is_gen = project.timeline.layers.get(clip_layer_idx)
+                        .is_some_and(|l| l.layer_type == LayerType::Generator);
                     self.clipboard.push(ClipboardEntry {
                         beat_offset: trimmed.start_beat - origin_beat,
                         layer_offset: clip_layer_idx as i32 - min_layer as i32,
                         source_clip: trimmed,
+                        is_generator: is_gen,
                     });
                 }
                 return;
@@ -317,32 +320,33 @@ impl EditingService {
             return;
         }
 
-        let mut clips: Vec<TimelineClip> = Vec::new();
-        for layer in &project.timeline.layers {
+        let mut clips_with_layer: Vec<(TimelineClip, usize)> = Vec::new();
+        for (li, layer) in project.timeline.layers.iter().enumerate() {
             for clip in &layer.clips {
                 if clip_ids.contains(&clip.id) {
-                    clips.push(clip.clone());
+                    clips_with_layer.push((clip.clone(), li));
                 }
             }
         }
 
-        if clips.is_empty() {
+        if clips_with_layer.is_empty() {
             return;
         }
 
-        let min_beat = clips.iter().map(|c| c.start_beat).fold(Beats(f64::MAX), Beats::min);
-        let min_layer_idx = clips.iter()
-            .map(|c| project.timeline.layer_index_for_id(&c.layer_id).unwrap_or(0) as i32)
+        let min_beat = clips_with_layer.iter().map(|(c, _)| c.start_beat).fold(Beats(f64::MAX), Beats::min);
+        let min_layer_idx = clips_with_layer.iter()
+            .map(|(_, li)| *li as i32)
             .min()
             .unwrap_or(0);
 
-        for clip in clips {
-            let clip_layer_idx = project.timeline.layer_index_for_id(&clip.layer_id)
-                .unwrap_or(0) as i32;
+        for (clip, li) in clips_with_layer {
+            let is_gen = project.timeline.layers.get(li)
+                .is_some_and(|l| l.layer_type == LayerType::Generator);
             self.clipboard.push(ClipboardEntry {
                 beat_offset: clip.start_beat - min_beat,
-                layer_offset: clip_layer_idx - min_layer_idx,
+                layer_offset: li as i32 - min_layer_idx,
                 source_clip: clip,
+                is_generator: is_gen,
             });
         }
     }
@@ -373,7 +377,7 @@ impl EditingService {
                 None => { skipped += 1; continue; }
             };
 
-            let clip_is_gen = entry.source_clip.is_generator();
+            let clip_is_gen = entry.is_generator;
             let layer_is_gen = layer.layer_type == LayerType::Generator;
 
             // Gen<->video mismatch: skip
@@ -384,12 +388,6 @@ impl EditingService {
 
             let mut new_clip = entry.source_clip.clone_with_new_id();
             new_clip.start_beat = paste_beat;
-            new_clip.layer_id = layer.layer_id.clone();
-
-            // Gen->gen with different type: adopt target layer's generator type
-            if clip_is_gen && layer_is_gen && new_clip.generator_type != *layer.generator_type() {
-                new_clip.generator_type = layer.generator_type().clone();
-            }
 
             // Enforce non-overlap for the new clip
             let empty_ignore = HashSet::new();
@@ -443,11 +441,9 @@ impl EditingService {
                 let mut tail = clip.clone_with_new_id();
                 tail.start_beat = tail_start;
                 tail.duration_beats = tail_duration;
-                if !clip.is_generator() && clip.duration_beats > Beats::ZERO {
+                if !clip.video_clip_id.is_empty() && clip.duration_beats > Beats::ZERO {
                     tail.in_point = clip.in_point + Seconds(new_duration.0 * spb as f64);
                 }
-                tail.layer_id = layer.layer_id.clone();
-
                 return Some(Box::new(SplitClipCommand::new(
                     clip.id.clone(),
                     layer.layer_id.clone(),
@@ -532,8 +528,8 @@ impl EditingService {
         trimmed.start_beat = new_start;
         trimmed.duration_beats = new_duration;
 
-        // Adjust in_point for video clips (generators have no in_point)
-        if !clip.is_generator() {
+        // Adjust in_point for video clips
+        if !clip.video_clip_id.is_empty() {
             trimmed.in_point = clip.in_point + Seconds((new_start - clip.start_beat).0 * spb as f64);
         }
 
@@ -555,11 +551,9 @@ impl EditingService {
         let layer_id = layer.map(|l| l.layer_id.clone()).unwrap_or_default();
 
         let clip = if is_generator {
-            let gen_type = layer.map_or(manifold_core::GeneratorTypeId::NONE, |l| l.generator_type().clone());
-            TimelineClip::new_generator(gen_type, layer_id.clone(), beat, duration_beats)
+            TimelineClip::new_generator(beat, duration_beats)
         } else {
             TimelineClip {
-                layer_id: layer_id.clone(),
                 start_beat: beat,
                 duration_beats,
                 ..Default::default()
@@ -870,12 +864,12 @@ impl EditingService {
 
         for layer in &project.timeline.layers {
             if let Some(clip) = layer.find_clip(clip_id) {
-                if clip.layer_id == target_layer_id {
+                if layer.layer_id == target_layer_id {
                     return None;
                 }
 
                 // Gen/video type mismatch: block
-                let clip_is_gen = clip.is_generator();
+                let clip_is_gen = layer.layer_type == LayerType::Generator;
                 let target_is_gen = target_layer.layer_type == LayerType::Generator;
                 if clip_is_gen != target_is_gen {
                     return None;
@@ -885,7 +879,7 @@ impl EditingService {
                 return Some(Box::new(MoveClipCommand::new(
                     clip.id.clone(),
                     clip.start_beat, clip.start_beat,
-                    clip.layer_id.clone(), target_layer_id,
+                    layer.layer_id.clone(), target_layer_id,
                 )));
             }
         }
