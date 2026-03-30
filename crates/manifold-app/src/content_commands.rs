@@ -222,6 +222,7 @@ impl ContentThread {
                 if let Some(p) = self.engine.project() {
                     self.osc_param_router.rebuild(p, &mut self.osc_receiver);
                 }
+                self.osc_receiver.start_listening();
             }
             // ── Settings ───────────────────────────────────────────
             ContentCommand::SetBpm(bpm) => {
