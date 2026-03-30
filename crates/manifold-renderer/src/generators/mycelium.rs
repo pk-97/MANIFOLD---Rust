@@ -44,7 +44,7 @@ struct AgentUniforms {
     frame_count: u32,
     beat: f32,
     reactivity: f32,
-    _pad: f32,
+    dt: f32,
 }
 
 #[repr(C)]
@@ -348,7 +348,7 @@ impl Generator for MyceliumGenerator {
             frame_count: self.frame_count as u32,
             beat: ctx.beat as f32,
             reactivity,
-            _pad: 0.0,
+            dt: ctx.dt,
         };
         gpu.native_enc.dispatch_compute(
             &self.agent_update_pipeline,
@@ -409,10 +409,14 @@ impl Generator for MyceliumGenerator {
         );
 
         // Pass 3: Diffuse (3 blits) — trail_b -> trail_a -> trail_b -> trail_a
-        // Pass 0: B->A with decay + evaporation
+        // Pass 0: B->A with decay + evaporation (framerate-independent)
+        // pow(decay, dt*60) so per-second decay rate is constant across framerates
+        let dt_scale = ctx.dt * 60.0;
+        let effective_decay = decay.powf(dt_scale);
+        let effective_sub_decay = 0.003 * dt_scale;
         let diffuse0 = DiffuseUniforms {
-            decay,
-            sub_decay: 0.003,
+            decay: effective_decay,
+            sub_decay: effective_sub_decay,
             texel_x: 1.0 / tw as f32,
             texel_y: 1.0 / th as f32,
         };

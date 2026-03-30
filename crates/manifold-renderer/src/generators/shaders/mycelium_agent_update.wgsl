@@ -20,7 +20,7 @@ struct AgentUniforms {
     frame_count: u32,
     beat: f32,
     reactivity: f32,
-    _pad: f32,
+    dt: f32,
 };
 
 @group(0) @binding(0) var<storage, read_write> agents: array<PhysarumAgent>;
@@ -90,8 +90,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
 
-    // Move
-    let step = params.step_size * step_boost;
+    // Move (framerate-independent: dt * 60.0 normalizes to 60 FPS reference)
+    let dt_scale = params.dt * 60.0;
+    let step = params.step_size * step_boost * dt_scale;
     agent.pos += vec2<f32>(cos(agent.angle), sin(agent.angle)) * step;
     agent.pos = fract(agent.pos + vec2<f32>(1.0));
 

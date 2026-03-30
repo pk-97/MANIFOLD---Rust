@@ -130,6 +130,7 @@ impl Generator for LissajousGenerator {
                 window,
                 scale,
                 0.5, // dot_scale: Unity LissajousGenerator.GetDotScale() returns 0.5
+                ctx.dt,
             );
 
         self.line_pipeline.draw(

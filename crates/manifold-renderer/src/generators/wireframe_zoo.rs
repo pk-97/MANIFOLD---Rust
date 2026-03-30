@@ -222,6 +222,7 @@ impl Generator for WireframeZooGenerator {
                 0.0,
                 scale,
                 1.0, // dot_scale: default
+                ctx.dt,
             );
 
         self.line_pipeline.draw(

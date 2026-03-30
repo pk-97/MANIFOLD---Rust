@@ -207,6 +207,7 @@ impl LineGeneratorHelper {
         window: f32,
         scale: f32,
         dot_scale: f32,
+        dt: f32,
     ) -> (&[[f32; 2]], &[EdgeInstance], u32, f32, f32) {
         let vert_count = self.projected_x.len();
         let edge_count = self.edge_a.len();
@@ -242,7 +243,7 @@ impl LineGeneratorHelper {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
 
-            self.anim_progress += speed * (edge_count as f32 / 100.0);
+            self.anim_progress += speed * (edge_count as f32 / 100.0) * dt * 60.0;
             let total = edge_count as f32;
             if self.anim_progress >= total {
                 self.anim_progress -= total;

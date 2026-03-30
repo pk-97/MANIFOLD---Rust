@@ -156,7 +156,7 @@ struct Sim3DUniforms {
     wander: f32, respawn_rate: f32, dense_respawn: f32, flatten: f32,
     cam_fwd_x: f32, cam_fwd_y: f32, cam_fwd_z: f32,
     color_mode: u32, inject_index: i32, inject_force: f32, inject_phase: f32,
-    time2: f32, _pad0: f32, _pad1: f32, _pad2: f32,
+    time2: f32, dt: f32, _pad1: f32, _pad2: f32,
 }
 
 #[repr(C)]
@@ -628,7 +628,7 @@ impl Generator for FluidSimulation3DGenerator {
             cam_fwd_x: cam_fwd_sim[0], cam_fwd_y: cam_fwd_sim[1], cam_fwd_z: cam_fwd_sim[2],
             color_mode, inject_index: self.inject_zone_index,
             inject_force: inject_force_val, inject_phase, time2: ctx.time as f32,
-            _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
+            dt: ctx.dt, _pad1: 0.0, _pad2: 0.0,
         };
         gpu.native_enc.dispatch_compute(&self.simulate_pipeline, &[
             manifold_gpu::GpuBinding::Buffer { binding: 0, buffer: particle_buf, offset: 0 },

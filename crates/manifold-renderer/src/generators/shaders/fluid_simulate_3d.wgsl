@@ -35,7 +35,7 @@ struct SimUniforms {
     inject_force:  f32,
     inject_phase:  f32,
     time2:         f32,  // ctx.Time (_Time2)
-    _pad0:         f32,
+    dt:            f32,
     _pad1:         f32,
     _pad2:         f32,
 };
@@ -280,9 +280,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
 
-    // --- Integration: newPos = pos + force * _Speed  (NO dt multiplication) ---
+    // --- Integration: newPos = pos + force * _Speed * dt_scale (framerate-independent) ---
     // Unity line 214: float3 newPos = pos + force * _Speed;
-    var new_pos = pos + force * params.speed;
+    // dt * 60.0: normalize so existing speed values behave identically at 60 FPS
+    let dt_scale = params.dt * 60.0;
+    var new_pos = pos + force * params.speed * dt_scale;
 
     // --- Containment ---
     // Unity lines 217-243

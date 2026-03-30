@@ -121,6 +121,7 @@ impl Generator for DuocylinderGenerator {
                 window,
                 scale,
                 1.0, // dot_scale: default
+                ctx.dt,
             );
 
         self.line_pipeline.draw(

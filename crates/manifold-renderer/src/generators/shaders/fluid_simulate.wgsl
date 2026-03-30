@@ -29,7 +29,7 @@ struct SimUniforms {
     time_val: f32,
     // color index for injection (1-4 cycling)
     inject_color_index: u32,
-    _pad0: u32,
+    dt: f32,
     _pad1: u32,
     _pad2: u32,
 };
@@ -181,9 +181,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
 
-    // 6. Direct Euler integration + toroidal wrap
+    // 6. Direct Euler integration + toroidal wrap (framerate-independent)
     //    Unity: p.position.xy = frac(currentUV + force * _Speed + 1.0)
-    p.position = vec3<f32>(fract(current_uv + force * params.speed + 1.0), 0.0);
+    //    dt * 60.0: normalize so existing speed values behave identically at 60 FPS
+    let dt_scale = params.dt * 60.0;
+    p.position = vec3<f32>(fract(current_uv + force * params.speed * dt_scale + 1.0), 0.0);
 
     // 7. Injection disturbance (applied AFTER integration)
     //    Injection point is a random UV passed from host (was fixed 4-point array).

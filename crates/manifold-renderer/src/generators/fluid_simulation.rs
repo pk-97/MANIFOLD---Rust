@@ -139,7 +139,7 @@ struct SimUniforms {
     time_val: f32,
     // color index for injection (1-4 cycling)
     inject_color_index: u32,
-    _pad0: u32,
+    dt: f32,
     _pad1: u32,
     _pad2: u32,
 }
@@ -746,7 +746,7 @@ impl Generator for FluidSimulationGenerator {
             inject_phase,
             time_val: ctx.time as f32,
             inject_color_index: self.inject_color_counter + 1,
-            _pad0: 0, _pad1: 0, _pad2: 0,
+            dt: ctx.dt, _pad1: 0, _pad2: 0,
         };
         gpu.native_enc.dispatch_compute(
             &self.simulate_pipeline,
