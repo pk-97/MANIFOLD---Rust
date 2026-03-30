@@ -20,7 +20,7 @@ pub(crate) const FONT_SIZE: u16 = 10;
 pub(crate) const DE_BUTTON_SIZE: f32 = 20.0;
 pub(crate) const DE_BUTTON_GAP: f32 = 2.0;
 
-pub(crate) const DRIVER_CONFIG_HEIGHT: f32 = 52.0;
+pub(crate) const DRIVER_CONFIG_HEIGHT: f32 = 56.0;
 pub(crate) const DRIVER_ROW_HEIGHT: f32 = 22.0;
 #[allow(dead_code)]
 pub(crate) const BEAT_DIV_BTN_W: f32 = 27.0;
