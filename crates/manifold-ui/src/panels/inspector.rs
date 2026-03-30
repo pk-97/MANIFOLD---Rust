@@ -288,22 +288,20 @@ impl InspectorCompositePanel {
     }
 
     /// Content height for the layer column (right).
+    /// Order: layer chrome → gen params → layer effects → add effect button.
     fn layer_column_height(&self) -> f32 {
         let mut h = 0.0;
         if self.layer_visible {
             h += SECTION_CARD_PAD + self.layer_chrome.compute_height();
             if !self.layer_chrome.is_collapsed() {
+                // Gen params sit above layer effects
+                if let Some(ref gp) = self.gen_params {
+                    h += gp.compute_height() + SECTION_GAP;
+                }
                 for card in &self.layer_effects {
                     h += card.compute_height() + SECTION_GAP;
                 }
                 h += ADD_EFFECT_BTN_H + SECTION_GAP;
-            }
-            h += SECTION_CARD_PAD + SECTION_GAP;
-        }
-        if self.clip_visible && self.gen_params.is_some() {
-            h += SECTION_CARD_PAD;
-            if let Some(ref gp) = self.gen_params {
-                h += gp.compute_height() + SECTION_GAP;
             }
             h += SECTION_CARD_PAD + SECTION_GAP;
         }
@@ -1275,18 +1273,9 @@ impl Panel for InspectorCompositePanel {
         {
             let mut cy = rect.y - self.layer_scroll_offset;
 
-            // Layer section
+            // Layer section — includes gen params above layer effects
             if self.layer_visible {
-                let section_h = {
-                    let mut h = SECTION_CARD_PAD + self.layer_chrome.compute_height();
-                    if !self.layer_chrome.is_collapsed() {
-                        for card in &self.layer_effects {
-                            h += card.compute_height() + SECTION_GAP;
-                        }
-                        h += ADD_EFFECT_BTN_H + SECTION_GAP;
-                    }
-                    h + SECTION_CARD_PAD
-                };
+                let section_h = self.layer_column_height();
                 tree.add_panel(
                     -1, right_x, cy, right_content_w, section_h,
                     UIStyle {
@@ -1313,6 +1302,13 @@ impl Panel for InspectorCompositePanel {
                 cy += chrome_h;
 
                 if !self.layer_chrome.is_collapsed() {
+                    // Gen params above layer effects
+                    if let Some(ref mut gp) = self.gen_params {
+                        let gp_h = gp.compute_height();
+                        gp.build(tree, Rect::new(inner_x, cy, inner_w, gp_h));
+                        cy += gp_h + SECTION_GAP;
+                    }
+
                     for card in &mut self.layer_effects {
                         let card_h = card.compute_height();
                         card.build(tree, Rect::new(inner_x, cy, inner_w, card_h));
@@ -1331,44 +1327,6 @@ impl Panel for InspectorCompositePanel {
                         },
                         "+ Add Effect",
                     ) as i32;
-                    cy += ADD_EFFECT_BTN_H + SECTION_GAP;
-                }
-                cy += SECTION_CARD_PAD + SECTION_GAP;
-            }
-
-            // Clip/Generator section — gen params only (clip chrome removed for generators)
-            if self.clip_visible && self.gen_params.is_some() {
-                let section_h = {
-                    let mut h = SECTION_CARD_PAD;
-                    if let Some(ref gp) = self.gen_params {
-                        h += gp.compute_height() + SECTION_GAP;
-                    }
-                    h + SECTION_CARD_PAD
-                };
-                tree.add_panel(
-                    -1, right_x, cy, right_content_w, section_h,
-                    UIStyle {
-                        bg_color: SECTION_CARD_BORDER,
-                        corner_radius: SECTION_CARD_RADIUS,
-                        ..UIStyle::default()
-                    },
-                );
-                tree.add_panel(
-                    -1, right_x + 1.0, cy + 1.0, right_content_w - 2.0, section_h - 2.0,
-                    UIStyle {
-                        bg_color: SECTION_CARD_BG,
-                        corner_radius: SECTION_CARD_RADIUS - 1.0,
-                        ..UIStyle::default()
-                    },
-                );
-                cy += SECTION_CARD_PAD;
-
-                let clip_inner_x = right_x + SECTION_INSET;
-                let clip_inner_w = right_content_w - SECTION_INSET * 2.0;
-
-                if let Some(ref mut gp) = self.gen_params {
-                    let gp_h = gp.compute_height();
-                    gp.build(tree, Rect::new(clip_inner_x, cy, clip_inner_w, gp_h));
                 }
             }
         }
