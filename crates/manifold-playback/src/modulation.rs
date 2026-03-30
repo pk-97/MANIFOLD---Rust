@@ -38,15 +38,6 @@ pub fn reset_all_effectives(project: &mut Project) {
             }
         }
 
-        // Clip effect params: reset all
-        for clip in layer.clips.iter_mut() {
-            if clip.effects.is_empty() {
-                continue;
-            }
-            for fx in clip.effects.iter_mut() {
-                fx.reset_param_effectives();
-            }
-        }
     }
 
     // Master effect params: reset all
@@ -207,7 +198,7 @@ fn evaluate_effect_drivers(fx: &mut EffectInstance, current_beat: Beats) -> bool
 // Port of C# EnvelopeEvaluator.EvaluateAll()
 // =====================================================================
 
-/// Evaluate all clip and layer ADSR envelopes.
+/// Evaluate all layer ADSR envelopes.
 /// Returns true if any envelope was active (compositor should be marked dirty).
 pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> bool {
     let mut any_modulated = false;
@@ -229,83 +220,6 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                 active_elapsed = elapsed;
                 active_duration = clip.duration_beats.as_f32();
                 break; // Use first active clip
-            }
-        }
-
-        // Evaluate clip envelopes (each clip may have its own envelopes on its effects).
-        // Uses index-based iteration to avoid cloning the envelope list (Phase 9C fix).
-        for clip in layer.clips.iter_mut() {
-            if clip.is_muted || clip.effects.is_empty() {
-                continue;
-            }
-
-            let env_count = clip.envelopes.as_ref().map_or(0, |e| e.len());
-            if env_count == 0 {
-                continue;
-            }
-
-            let clip_elapsed = (current_beat - clip.start_beat).as_f32();
-            if clip_elapsed < 0.0 || clip_elapsed >= clip.duration_beats.as_f32() {
-                continue;
-            }
-
-            for ei in 0..env_count {
-                // Read envelope data by index (avoids borrow conflict with effects)
-                let (enabled, target_effect_type, param_index, attack, decay, sustain, release, target_norm) = {
-                    let env = &clip.envelopes.as_ref().unwrap()[ei];
-                    (env.enabled, env.target_effect_type.clone(), env.param_index, env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats, env.target_normalized)
-                };
-
-                if !enabled {
-                    continue;
-                }
-
-                let adsr_value = ParamEnvelope::calculate_adsr(
-                    Beats::from_f32(clip_elapsed),
-                    clip.duration_beats,
-                    attack,
-                    decay,
-                    sustain,
-                    release,
-                );
-
-                // Write back currentLevel for UI visualization (Phase 9B fix).
-                // Port of C# EnvelopeEvaluator line 96: env.currentLevel = adsrValue.
-                if let Some(envs) = &mut clip.envelopes
-                    && let Some(env) = envs.get_mut(ei) {
-                        env.current_level = adsr_value;
-                    }
-
-                // Find the target effect on this clip
-                let target_fx = clip.effects.iter_mut().find(|f| {
-                    f.effect_type() == &target_effect_type && f.enabled
-                });
-                let fx = match target_fx {
-                    Some(f) => f,
-                    None => continue,
-                };
-
-                let effect_def = match effect_definition_registry::try_get(fx.effect_type()) {
-                    Some(d) => d,
-                    None => continue,
-                };
-                let idx = param_index as usize;
-                if idx >= effect_def.param_defs.len() || idx >= fx.param_values.len() {
-                    continue;
-                }
-
-                let (min, max) = (effect_def.param_defs[idx].min, effect_def.param_defs[idx].max);
-
-                // Additive composition: push current toward target
-                let current_value = fx.param_values[idx];
-                let target_value = min + (max - min) * target_norm.clamp(0.0, 1.0);
-                let offset = (target_value - current_value) * adsr_value;
-                let final_value = (current_value + offset).clamp(min, max);
-
-                if (final_value - current_value).abs() > f32::EPSILON {
-                    fx.param_values[idx] = final_value;
-                    any_modulated = true;
-                }
             }
         }
 

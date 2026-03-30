@@ -461,11 +461,8 @@ impl ContentPipeline {
                     scale: clip.scale,
                     rotation: clip.rotation,
                     invert_colors: clip.invert_colors,
-                    effects: &clip.effects,
-                    effect_groups: clip
-                        .effect_groups
-                        .as_deref()
-                        .unwrap_or(&[]),
+                    effects: &[],
+                    effect_groups: &[],
                 });
             }
         }

@@ -504,18 +504,6 @@ impl ContentThread {
 
                 // Collect active effect info with named live params + group_id
                 let mut active_effects: Vec<manifold_profiler::ActiveEffectInfo> = Vec::new();
-                for clip in &tick_result.ready_clips {
-                    for fx in &clip.effects {
-                        if fx.enabled {
-                            active_effects.push(manifold_profiler::ActiveEffectInfo {
-                                effect_type: fx.effect_type().to_string(),
-                                scope: format!("clip:{}", clip.id),
-                                group_id: fx.group_id.as_ref().map(|g| g.to_string()),
-                                params: build_effect_params(fx),
-                            });
-                        }
-                    }
-                }
                 for layer in layers {
                     if let Some(layer_fxs) = layer.effects.as_deref() {
                         for fx in layer_fxs {

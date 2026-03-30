@@ -378,48 +378,40 @@ pub fn push_state(
         ui.master_effect_names = names;
     }
 
-    // Sync clip chrome from primary selected clip
+    // Sync clip chrome VALUES from primary selected clip.
+    // Mode (has_clip, is_video, is_gen, is_looping) is set in sync_inspector_data
+    // BEFORE build so the tree layout is correct. Here we only sync text/values
+    // into the already-built nodes.
     if let Some(clip_id) = &selection.primary_selected_clip_id {
-        {
-            // Linear search (no mut needed for read-only)
-            let clip = project.timeline.layers.iter()
-                .flat_map(|l| l.clips.iter())
-                .find(|c| c.id == *clip_id);
-            if let Some(clip) = clip {
-                let is_video = !clip.video_clip_id.is_empty();
-                let is_gen = clip.generator_type != GeneratorTypeId::NONE;
-                let chrome = ui.inspector.clip_chrome_mut();
-                let mode_changed = chrome.set_mode(true, is_video, is_gen, clip.is_looping);
-                if is_video {
-                    let name = clip.video_clip_id.clone();
-                    chrome.sync_name(tree, &name);
-                    chrome.sync_source_name(tree, &clip.video_clip_id);
-                    chrome.sync_slip(tree, clip.in_point);
-                    chrome.sync_loop_enabled(tree, clip.is_looping);
-                    chrome.sync_loop_duration(tree, clip.loop_duration_beats);
-                    if clip.recorded_bpm > 0.0 {
-                        chrome.sync_bpm(tree, &format!("{:.1}", clip.recorded_bpm));
-                    } else {
-                        chrome.sync_bpm(tree, "Auto");
-                    }
-                    // Slip range = source duration - clip duration in seconds
-                    let spb = 60.0 / Some(project).map_or(120.0, |p| p.settings.bpm.0);
-                    let clip_dur_s = Seconds::from_f32(clip.duration_beats.as_f32() * spb);
-                    chrome.set_slip_range(clip_dur_s.max(Seconds(1.0)));
-                    chrome.set_loop_range(clip.duration_beats.max(Beats(1.0)));
-                } else if is_gen {
-                    chrome.sync_name(tree, manifold_core::generator_type_registry::display_name(&clip.generator_type));
-                    chrome.sync_gen_type(tree, manifold_core::generator_type_registry::display_name(&clip.generator_type));
+        let clip = project.timeline.layers.iter()
+            .flat_map(|l| l.clips.iter())
+            .find(|c| c.id == *clip_id);
+        if let Some(clip) = clip {
+            let is_video = !clip.video_clip_id.is_empty();
+            let is_gen = clip.generator_type != GeneratorTypeId::NONE;
+            let chrome = ui.inspector.clip_chrome_mut();
+            if is_video {
+                let name = clip.video_clip_id.clone();
+                chrome.sync_name(tree, &name);
+                chrome.sync_source_name(tree, &clip.video_clip_id);
+                chrome.sync_slip(tree, clip.in_point);
+                chrome.sync_loop_enabled(tree, clip.is_looping);
+                chrome.sync_loop_duration(tree, clip.loop_duration_beats);
+                if clip.recorded_bpm > 0.0 {
+                    chrome.sync_bpm(tree, &format!("{:.1}", clip.recorded_bpm));
+                } else {
+                    chrome.sync_bpm(tree, "Auto");
                 }
-                if mode_changed {
-                    // Rebuild needed — mark as structural
-                }
+                // Slip range = source duration - clip duration in seconds
+                let spb = 60.0 / Some(project).map_or(120.0, |p| p.settings.bpm.0);
+                let clip_dur_s = Seconds::from_f32(clip.duration_beats.as_f32() * spb);
+                chrome.set_slip_range(clip_dur_s.max(Seconds(1.0)));
+                chrome.set_loop_range(clip.duration_beats.max(Beats(1.0)));
+            } else if is_gen {
+                chrome.sync_name(tree, manifold_core::generator_type_registry::display_name(&clip.generator_type));
+                chrome.sync_gen_type(tree, manifold_core::generator_type_registry::display_name(&clip.generator_type));
             }
         }
-    } else {
-        // No clip selected — hide clip chrome content
-        let chrome = ui.inspector.clip_chrome_mut();
-        chrome.set_mode(false, false, false, false);
     }
 
     // Sync effect card values (master, layer, clip)
@@ -445,22 +437,6 @@ pub fn push_state(
                         }
                     }
                 }
-
-        // Clip effects
-        if let Some(clip_id) = &selection.primary_selected_clip_id {
-            let clip = project.timeline.layers.iter()
-                .flat_map(|l| l.clips.iter())
-                .find(|c| c.id == *clip_id);
-            if let Some(clip) = clip {
-                for (i, effect) in clip.effects.iter().enumerate() {
-                    if let Some(card) = ui.inspector.clip_effect_mut(i) {
-                        card.sync_effect_name(tree, manifold_core::effect_type_registry::display_name(effect.effect_type()));
-                        card.sync_enabled(tree, effect.enabled);
-                        card.sync_values(tree, &effect.param_values);
-                    }
-                }
-            }
-        }
 
         // Generator params (stored on layer, not clip)
         if let Some(idx) = active_layer
@@ -710,20 +686,24 @@ pub fn sync_inspector_data(
         ui.inspector.configure_gen_params(None, None);
     }
 
-    // Clip effects → inspector
+    // Clip chrome → inspector (per-clip effects removed)
     if let Some(clip_id) = &selection.primary_selected_clip_id {
         let clip = project.timeline.layers.iter()
             .flat_map(|l| l.clips.iter())
             .find(|c| c.id == *clip_id);
         if let Some(clip) = clip {
-            let clip_envs = clip.envelopes.as_deref().unwrap_or(&[]);
-            let clip_configs = effects_to_configs(&clip.effects, clip_envs, OscScope::None);
-            ui.inspector.configure_clip_effects(&clip_configs);
+            // Sync clip chrome MODE before build so the tree layout is correct.
+            // Value sync (name, bpm, etc.) happens in push_state after build.
+            let is_video = !clip.video_clip_id.is_empty();
+            let is_gen = clip.generator_type != GeneratorTypeId::NONE;
+            ui.inspector.clip_chrome_mut().set_mode(
+                true, is_video, is_gen, clip.is_looping,
+            );
         } else {
-            ui.inspector.configure_clip_effects(&[]);
+            ui.inspector.clip_chrome_mut().set_mode(false, false, false, false);
         }
     } else {
-        ui.inspector.configure_clip_effects(&[]);
+        ui.inspector.clip_chrome_mut().set_mode(false, false, false, false);
     }
 }
 
@@ -734,7 +714,6 @@ pub fn sync_inspector_data(
 enum OscScope<'a> {
     Master,
     Layer(&'a str),
-    None,
 }
 
 /// Convert a slice of `EffectInstance` into `EffectCardConfig` for the UI.
@@ -748,7 +727,6 @@ fn effects_to_configs(effects: &[EffectInstance], envelopes: &[ParamEnvelope], o
             let osc_address = match osc_scope {
                 OscScope::Master => manifold_core::effect_definition_registry::get_osc_address(fx.effect_type(), pi),
                 OscScope::Layer(lid) => manifold_core::effect_definition_registry::get_osc_address_for_layer(fx.effect_type(), lid, pi),
-                OscScope::None => None,
             };
             EffectParamInfo {
                 name: pd.name.clone(),

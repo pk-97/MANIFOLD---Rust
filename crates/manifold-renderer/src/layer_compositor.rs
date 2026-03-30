@@ -545,42 +545,11 @@ impl LayerCompositor {
             let effect_chain = unsafe { &mut *effect_chains_ptr.add(ec_idx) };
 
             if group.len() == 1 && !has_layer_effects {
-                // Single clip with NO layer effects
+                // Single clip with NO layer effects — pass texture straight through
                 let clip = &group[0];
 
-                // Apply clip-level effects if present
-                let blend_input = if has_enabled_effects(clip.effects) {
-                    let ctx = EffectContext {
-                        time: frame.time,
-                        beat: frame.beat,
-                        dt: frame.dt,
-                        width,
-                        height,
-                        output_width: frame.output_width,
-                        output_height: frame.output_height,
-                        owner_key: clip_id_owner_key(clip.clip_id),
-                        is_clip_level: true,
-                        edge_stretch_width: 0.5625,
-                        frame_count: frame.frame_count as i64,
-                    };
-                    Self::apply_effects(
-                        effect_chain,
-                        &mut self.effect_registry,
-                        &self.wet_dry_lerp,
-                        gpu,
-                        clip.texture,
-                        clip.effects,
-                        clip.effect_groups,
-                        &ctx,
-                    )
-                } else {
-                    None
-                };
-
-                let effective_tex: *const GpuTexture =
-                    blend_input.unwrap_or(clip.texture);
                 self.layer_outputs_scratch.push(LayerOutput {
-                    texture: effective_tex,
+                    texture: clip.texture,
                     blend_mode: layer_blend,
                     opacity: layer_opacity * clip.opacity,
                     aspect,
@@ -604,35 +573,6 @@ impl LayerCompositor {
 
                 // Composite each clip into layer buffer with Normal blend
                 for clip in group {
-                    let blend_input = if has_enabled_effects(clip.effects) {
-                        let ctx = EffectContext {
-                            time: frame.time,
-                            beat: frame.beat,
-                            dt: frame.dt,
-                            width,
-                            height,
-                            output_width: frame.output_width,
-                            output_height: frame.output_height,
-                            owner_key: clip_id_owner_key(clip.clip_id),
-                            is_clip_level: true,
-                            edge_stretch_width: 0.5625,
-                            frame_count: frame.frame_count as i64,
-                        };
-                        Self::apply_effects(
-                            effect_chain,
-                            &mut self.effect_registry,
-                            &self.wet_dry_lerp,
-                            gpu,
-                            clip.texture,
-                            clip.effects,
-                            clip.effect_groups,
-                            &ctx,
-                        )
-                    } else {
-                        None
-                    };
-                    let effective_blend_tex = blend_input.unwrap_or(clip.texture);
-
                     let uniforms = BlendUniforms {
                         blend_mode: BlendMode::Normal as u32,
                         opacity: clip.opacity,
@@ -647,7 +587,7 @@ impl LayerCompositor {
                         gpu,
                         &mut self.uniform_arena,
                         layer_buf.source_texture(),
-                        effective_blend_tex,
+                        clip.texture,
                         layer_buf.target_texture(),
                         &uniforms,
                     );
@@ -895,39 +835,11 @@ impl LayerCompositor {
                 };
 
                 if group.len() == 1 && !has_layer_effects {
+                    // Single clip with NO layer effects — pass texture straight through
                     let clip = &group[0];
-                    let blend_input = if has_enabled_effects(clip.effects) {
-                        let ctx = EffectContext {
-                            time: frame.time,
-                            beat: frame.beat,
-                            dt: frame.dt,
-                            width,
-                            height,
-                            output_width: frame.output_width,
-                            output_height: frame.output_height,
-                            owner_key: clip_id_owner_key(clip.clip_id),
-                            is_clip_level: true,
-                            edge_stretch_width: 0.5625,
-                            frame_count: frame.frame_count as i64,
-                        };
-                        Self::apply_effects(
-                            effect_chain,
-                            &mut self.effect_registry,
-                            &self.wet_dry_lerp,
-                            &mut gpu,
-                            clip.texture,
-                            clip.effects,
-                            clip.effect_groups,
-                            &ctx,
-                        )
-                    } else {
-                        None
-                    };
 
-                    let effective_tex: *const GpuTexture =
-                        blend_input.unwrap_or(clip.texture);
                     self.layer_outputs_scratch.push(LayerOutput {
-                        texture: effective_tex,
+                        texture: clip.texture,
                         blend_mode: layer_blend,
                         opacity: layer_opacity * clip.opacity,
                         aspect,
@@ -948,39 +860,6 @@ impl LayerCompositor {
                     layer_buf.clear_source(&mut gpu, false);
 
                     for clip in group {
-                        let blend_input =
-                            if has_enabled_effects(clip.effects) {
-                                let ctx = EffectContext {
-                                    time: frame.time,
-                                    beat: frame.beat,
-                                    dt: frame.dt,
-                                    width,
-                                    height,
-                                    output_width: frame.output_width,
-                                    output_height: frame.output_height,
-                                    owner_key: clip_id_owner_key(
-                                        clip.clip_id,
-                                    ),
-                                    is_clip_level: true,
-                                    edge_stretch_width: 0.5625,
-                                    frame_count: frame.frame_count as i64,
-                                };
-                                Self::apply_effects(
-                                    effect_chain,
-                                    &mut self.effect_registry,
-                                    &self.wet_dry_lerp,
-                                    &mut gpu,
-                                    clip.texture,
-                                    clip.effects,
-                                    clip.effect_groups,
-                                    &ctx,
-                                )
-                            } else {
-                                None
-                            };
-                        let effective_blend_tex =
-                            blend_input.unwrap_or(clip.texture);
-
                         let uniforms = BlendUniforms {
                             blend_mode: BlendMode::Normal as u32,
                             opacity: clip.opacity,
@@ -999,7 +878,7 @@ impl LayerCompositor {
                             &mut gpu,
                             &mut self.uniform_arena,
                             layer_buf.source_texture(),
-                            effective_blend_tex,
+                            clip.texture,
                             layer_buf.target_texture(),
                             &uniforms,
                         );
