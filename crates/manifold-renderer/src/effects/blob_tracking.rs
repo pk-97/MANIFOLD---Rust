@@ -37,7 +37,7 @@ struct BlobResponse {
 // Unity hardcodes 320x180, but that squashes vertical projects into landscape.
 // Instead, preserve source aspect ratio with the same pixel budget (57,600 px).
 const READBACK_PIXEL_BUDGET: u32 = 320 * 180; // 57,600
-const MAX_BLOBS: usize = 16;
+const MAX_BLOBS: usize = 8;
 const READBACK_INTERVAL_FRAMES: i64 = 1;
 
 /// Compute readback dimensions that preserve source aspect ratio.
@@ -114,12 +114,12 @@ struct BlobUniforms {
     resolution: [f32; 2], // width, height
     texel_size: [f32; 2], // 1/width, 1/height
     // _BlobCenterSize[MAX_BLOBS] — each vec4 is [cx, cy, sw, sh]
-    blob_center_size: [[f32; 4]; 16],
+    blob_center_size: [[f32; 4]; MAX_BLOBS],
     // _BlobConnections[MAX_BLOBS] — each vec4 is [ax, ay, bx, by]
-    blob_connections: [[f32; 4]; 16],
+    blob_connections: [[f32; 4]; MAX_BLOBS],
 }
 
-const _: () = assert!(std::mem::size_of::<BlobUniforms>() == 544);
+const _: () = assert!(std::mem::size_of::<BlobUniforms>() == 288);
 
 // BlobTrackingFX.cs line 10 — BlobTrackingFX : IPostProcessEffect, IStatefulEffect
 pub struct BlobTrackingFX {
@@ -713,8 +713,8 @@ impl PostProcessEffect for BlobTrackingFX {
         state.blob_count = state.tracked_count as i32;
         Self::compute_connections(state, connect_dist);
 
-        let mut blob_center_size = [[0f32; 4]; 16];
-        let mut blob_connections_arr = [[0f32; 4]; 16];
+        let mut blob_center_size = [[0f32; 4]; MAX_BLOBS];
+        let mut blob_connections_arr = [[0f32; 4]; MAX_BLOBS];
         blob_center_size[..MAX_BLOBS].copy_from_slice(&state.blob_data_for_shader[..MAX_BLOBS]);
         blob_connections_arr[..MAX_BLOBS].copy_from_slice(&state.connection_lines[..MAX_BLOBS]);
 

@@ -2,7 +2,6 @@
 // Two entry points:
 //   cs_downsample — bilinear blit to smaller storage texture (replaces downsample render pass)
 //   cs_main       — overlay pass: reads source + font atlas, draws procedural SDF shapes
-// textureSample → textureSampleLevel, fragment output → textureStore.
 
 struct BlobUniforms {
     amount:           f32,
@@ -11,8 +10,8 @@ struct BlobUniforms {
     _pad0:            f32,
     resolution:       vec2<f32>,
     texel_size:       vec2<f32>,
-    blob_center_size: array<vec4<f32>, 16>,
-    blob_connections: array<vec4<f32>, 16>,
+    blob_center_size: array<vec4<f32>, 8>,
+    blob_connections: array<vec4<f32>, 8>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: BlobUniforms;
@@ -137,7 +136,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let draw_uv = vec2<f32>(uv.x, 1.0 - uv.y);
 
     // Scale drawing sizes relative to 1080p so overlays look the same at any resolution.
-    // At 1080p dpi_scale=1.0, at 4K dpi_scale=2.0 (lines are 2x more texels = same visual size).
     let dpi_scale = uniforms.resolution.y / 1080.0;
     let px_u = uniforms.texel_size.x * dpi_scale;
     let px_v = uniforms.texel_size.y * dpi_scale;
@@ -145,16 +143,29 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let thin_line   = 1.5 * px_u;
     let digit_size  = px_u * 2.0;
 
+    // Padding for per-blob AABB early-out. Covers all decorations:
+    // ticks (right 20*px_u), hex label (above 20*px_v), gauge (below 60*px_v).
+    let pad_x = px_u * 100.0;
+    let pad_y = px_v * 70.0;
+
     var overlay = 0.0;
     let overlay_color = vec3<f32>(0.85, 0.92, 1.0);
 
     // Draw blob overlays
-    for (var b = 0; b < 16; b++) {
+    for (var b = 0; b < 8; b++) {
         if b >= uniforms.blob_count { break; }
 
         let blob = uniforms.blob_center_size[b];
         let center    = blob.xy;
         let half_size = blob.zw * 0.5;
+
+        // AABB early-out: skip all drawing for this blob if pixel is far away.
+        // Covers brackets, labels, gauge, and ticks with generous padding.
+        let box_min = center - half_size - vec2<f32>(pad_x, pad_y);
+        let box_max = center + half_size + vec2<f32>(pad_x, pad_y);
+        if draw_uv.x < box_min.x || draw_uv.x > box_max.x || draw_uv.y < box_min.y || draw_uv.y > box_max.y {
+            continue;
+        }
 
         let bracket_len = min(half_size.x, half_size.y) * 0.4;
         overlay = max(overlay, corner_bracket(draw_uv, center + half_size * vec2<f32>(-1.0, -1.0), vec2<f32>(-1.0, -1.0), bracket_len, line_thick));
@@ -191,12 +202,21 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     }
 
     // Connection lines
-    for (var c = 0; c < 16; c++) {
+    for (var c = 0; c < 8; c++) {
         if c >= uniforms.connection_count { break; }
 
         let conn = uniforms.blob_connections[c];
         let conn_a = conn.xy;
         let conn_b = conn.zw;
+
+        // AABB early-out for connection line + midpoint label
+        let conn_pad = vec2<f32>(px_u * 30.0, px_v * 20.0);
+        let conn_min = min(conn_a, conn_b) - conn_pad;
+        let conn_max = max(conn_a, conn_b) + conn_pad;
+        if draw_uv.x < conn_min.x || draw_uv.x > conn_max.x || draw_uv.y < conn_min.y || draw_uv.y > conn_max.y {
+            continue;
+        }
+
         let len = length(conn_b - conn_a);
         if len > 0.001 {
             let pa = draw_uv - conn_a;
