@@ -1,20 +1,10 @@
-// FluidParticleDisplay — tone mapping of unified density+color texture.
-// Extended Reinhard tone mapping with 2 display modes:
-//   Mono:  lum = extended Reinhard; output = vec4(lum, lum, lum, lum)
-//   Color: density (.r) drives brightness; hue (.gba) provides color.
-//
-// WHITE_POINT = 3.0 (matches Unity #define WHITE_POINT 3.0)
-// UV scale: (uv - 0.5) / max(uv_scale, 0.001) + 0.5  (>1 zooms in, <1 zooms out)
+// FluidParticleDisplay — mono tone mapping via extended Reinhard (fragment shader variant).
 
 struct DisplayUniforms {
     intensity: f32,
     contrast: f32,
-    invert: f32,
     uv_scale: f32,
-    color_mode: f32,
-    color_bright: f32,
     _pad0: f32,
-    _pad1: f32,
 };
 
 @group(0) @binding(0) var<uniform> params: DisplayUniforms;
@@ -38,43 +28,12 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    // Scale UV around center: >1 zooms in, <1 zooms out (tiles)
-    // Unity: float2 uv = (i.uv - 0.5) / max(_UVScale, 0.001) + 0.5
     let uv = (in.uv - vec2<f32>(0.5)) / max(params.uv_scale, 0.001) + vec2<f32>(0.5);
 
-    // Unified texture: .r = density, .gba = pre-normalized hue
-    let tex = textureSample(t_density, s_density, uv);
-    let density = tex.r;
+    let density = textureSample(t_density, s_density, uv).r;
 
-    // Extended Reinhard tone curve: x*(1 + x/W^2) / (1 + x), W = 3.0
-    // Unity: float x = density * _Intensity * _Contrast; lum = x*(1+x/9) / (1+x)
     let x = density * params.intensity * params.contrast;
-    var lum = x * (1.0 + x / 9.0) / (1.0 + x);
+    let lum = x * (1.0 + x / 9.0) / (1.0 + x);
 
-    if params.color_mode > 0.5 {
-        // --- Color path ---
-        // Hue is pre-normalized in resolve: .gba = rgb/energy, (1,1,1) when no data
-        let hue = tex.gba;
-
-        // Blend between white and the hue based on Color Bright.
-        // 0 = fully white (mono), 1 = balanced, >1 = saturated color
-        // Unity: rgb = lerp(float3(1,1,1), hue, saturate(_ColorBright))
-        var rgb = mix(vec3<f32>(1.0), hue, clamp(params.color_bright, 0.0, 1.0));
-
-        // Apply brightness from scalar density (same curve as mono)
-        rgb *= lum;
-
-        if params.invert > 0.5 {
-            rgb = 1.0 - rgb;
-        }
-
-        return vec4<f32>(rgb, 1.0);
-    } else {
-        // --- Mono path ---
-        if params.invert > 0.5 {
-            lum = 1.0 - lum;
-        }
-
-        return vec4<f32>(lum, lum, lum, lum);
-    }
+    return vec4<f32>(lum, lum, lum, lum);
 }

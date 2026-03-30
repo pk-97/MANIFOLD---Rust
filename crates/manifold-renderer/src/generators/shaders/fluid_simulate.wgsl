@@ -17,21 +17,15 @@ struct SimUniforms {
     noise_amplitude: f32,
     density_noise_gain: f32,
     diffusion: f32,
-    refresh_rate: f32,
-    density_refresh_scale: f32,
-    color_mode: u32,
     frame_count: u32,
-    // injection point UV (random per trigger, from host)
     inject_point_x: f32,
     inject_point_y: f32,
     inject_force: f32,
     inject_phase: f32,
     time_val: f32,
-    // color index for injection (1-4 cycling)
-    inject_color_index: u32,
     dt: f32,
+    _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 };
 
 struct Particle {
@@ -51,7 +45,6 @@ struct Particle {
 
 const PI: f32 = 3.14159265;
 
-const INJECT_COLOR_RADIUS: f32 = 0.04;
 const INJECT_FORCE_RADIUS: f32 = 0.25;
 
 // ---- Hash functions (port of ParticleCommon.cginc) ----
@@ -78,7 +71,6 @@ fn hash_float2(seed: u32) -> vec2<f32> {
 
 // ---- SimplexNoise2D (mechanical port of ParticleCommon.cginc lines 72-120) ----
 // 8 evenly-spaced unit gradient directions (no trig)
-// Unity: static const float2 SIMPLEX_GRAD2[8]
 const SIMPLEX_GRAD2_X: array<f32, 8> = array<f32, 8>(
      1.0,  0.7071,  0.0, -0.7071,
     -1.0, -0.7071,  0.0,  0.7071
@@ -92,43 +84,31 @@ fn simplex_noise_2d(v: vec2<f32>) -> f32 {
     let F2: f32 = 0.36602540378; // (sqrt(3)-1)/2
     let G2: f32 = 0.21132486540; // (3-sqrt(3))/6
 
-    // Skew to simplex cell
     let s = (v.x + v.y) * F2;
     let i = floor(v + s);
     let t = (i.x + i.y) * G2;
     let x0 = v - (i - t);
 
-    // Which simplex triangle?
-    // Unity: float2 i1 = (x0.x > x0.y) ? float2(1.0, 0.0) : float2(0.0, 1.0);
     let i1 = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), x0.x > x0.y);
     let x1 = x0 - i1 + G2;
     let x2 = x0 - 1.0 + 2.0 * G2;
 
-    // Hash corners (offset by 10000 to avoid negative-to-uint issues)
-    // Unity: uint h0 = WangHash(uint(i.x + 10000.0) * 73856093u ^ uint(i.y + 10000.0) * 19349663u);
     let h0 = wang_hash(u32(i.x + 10000.0) * 73856093u ^ u32(i.y + 10000.0) * 19349663u);
     let h1 = wang_hash(u32(i.x + i1.x + 10000.0) * 73856093u ^ u32(i.y + i1.y + 10000.0) * 19349663u);
     let h2 = wang_hash(u32(i.x + 1.0 + 10000.0) * 73856093u ^ u32(i.y + 1.0 + 10000.0) * 19349663u);
 
-    // Gradient from hash table (8 directions, no trig)
-    // Unity: float2 g0 = SIMPLEX_GRAD2[h0 & 7u];
     let g0 = vec2<f32>(SIMPLEX_GRAD2_X[h0 & 7u], SIMPLEX_GRAD2_Y[h0 & 7u]);
     let g1 = vec2<f32>(SIMPLEX_GRAD2_X[h1 & 7u], SIMPLEX_GRAD2_Y[h1 & 7u]);
     let g2 = vec2<f32>(SIMPLEX_GRAD2_X[h2 & 7u], SIMPLEX_GRAD2_Y[h2 & 7u]);
 
-    // Radial falloff contributions
-    // Unity: float t0 = 0.5 - dot(x0, x0);
     let t0 = 0.5 - dot(x0, x0);
     let t1 = 0.5 - dot(x1, x1);
     let t2 = 0.5 - dot(x2, x2);
 
-    // Unity: float n0 = (t0 < 0.0) ? 0.0 : (t0*t0)*(t0*t0)*dot(g0, x0);
     let n0 = select(t0 * t0 * t0 * t0 * dot(g0, x0), 0.0, t0 < 0.0);
     let n1 = select(t1 * t1 * t1 * t1 * dot(g1, x1), 0.0, t1 < 0.0);
     let n2 = select(t2 * t2 * t2 * t2 * dot(g2, x2), 0.0, t2 < 0.0);
 
-    // Scale to [0, 1]
-    // Unity: return clamp((n0 + n1 + n2) * 35.0 + 0.5, 0.0, 1.0);
     return clamp((n0 + n1 + n2) * 35.0 + 0.5, 0.0, 1.0);
 }
 
@@ -141,19 +121,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var p = particles[id.x];
     let current_uv = p.position.xy;
 
-    // 1. Sample blurred vector field (linear filtering + repeat wrap)
-    // Unity: float2 force = _VectorField.SampleLevel(sampler_linear_repeat, currentUV, 0).rg;
+    // 1. Sample blurred vector field
     let field_force = textureSampleLevel(t_field, s_field, current_uv, 0.0).rg;
 
     // 2. Sample local density for adaptive noise scaling
-    // Unity: float localDensity = _DensityTex.SampleLevel(sampler_linear_repeat, currentUV, 0).r;
     let local_density = textureSampleLevel(t_density, s_density, current_uv, 0.0).r;
-    // Soft clamp: 0->0, 1->0.5, inf->1  (Unity: localDensity / (1.0 + localDensity))
     let capped_density = local_density / (1.0 + local_density);
     let adaptive_amp = params.noise_amplitude * (1.0 + capped_density * params.density_noise_gain);
 
     // 3. Simplex noise advection — prevents static clumping
-    //    Unity: noiseTime = _Time2 * 0.1, noiseUV = currentUV * 2.0
     let noise_time = params.time_val * 0.1;
     let noise_uv = current_uv * 2.0;
     let advection = vec2<f32>(
@@ -163,27 +139,12 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     var force = field_force + (advection - 0.5) * 2.0 * adaptive_amp;
 
     // 4. Per-particle diffusion — incoherent noise, density-weighted
-    //    Unity: diffSeed = i * 1664525u + _FrameCount * 747796405u
     let diff_seed = id.x * 1664525u + params.frame_count * 747796405u;
     let diff = (hash_float2(diff_seed) - 0.5) * params.diffusion * capped_density;
     force += diff;
 
-    // 5. Refresh: density-adaptive respawn
-    //    Unity: refreshSeed = i * 196613u + _FrameCount * 2891336453u
-    let refresh_seed = id.x * 196613u + params.frame_count * 2891336453u;
-    let adaptive_refresh = params.refresh_rate + capped_density * params.density_refresh_scale;
-    if hash_float(refresh_seed) < adaptive_refresh {
-        // Respawn at random UV (Unity: HashFloat2(refreshSeed + 7919u))
-        p.position = vec3<f32>(hash_float2(refresh_seed + 7919u), 0.0);
-        p.age = -1.0;
-        p.color = vec4<f32>(0.005, 0.005, 0.005, 1.0);
-        particles[id.x] = p;
-        return;
-    }
 
     // 6. Direct Euler integration + toroidal wrap (framerate-independent)
-    //    Unity: p.position.xy = frac(currentUV + force * _Speed + 1.0)
-    //    dt * 60.0: normalize so existing speed values behave identically at 60 FPS
     let dt_scale = params.dt * 60.0;
     p.position = vec3<f32>(fract(current_uv + force * params.speed * dt_scale + 1.0), 0.0);
 
@@ -224,15 +185,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let strength = params.inject_force * envelope * falloff;
             let push = perturbed_radial * strength + curl_force * strength * 0.5;
             p.position = vec3<f32>(fract(pos + push + 1.0), 0.0);
-        }
-
-        // Color injection: fixed-aperture, only while envelope > 0.3
-        if p.age < 0.0 && envelope > 0.3 {
-            let color_r = INJECT_COLOR_RADIUS;
-            let d = p.position.xy - inject_pt;
-            if dot(d, d) < color_r * color_r {
-                p.age = f32(params.inject_color_index);
-            }
         }
     }
 

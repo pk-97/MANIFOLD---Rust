@@ -11,31 +11,22 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use super::compute_common::Particle;
 
-// Parameter indices matching types.rs param_defs (20 params)
-// Unity: SLOPE=0, BLUR=1, ROTATION=2, NOISE=3, SPEED=4, CONTRAST=5,
-//        INVERT=6, SCALE=7, PARTICLES=8, SNAP=9, SNAP_MODE=10,
-//        SPLAT_SIZE=11, DENSITY_RES=12, DENSITY_NOISE=13, DIFFUSION=14,
-//        REFRESH=15, DENSITY_REFRESH=16, COLOR_MODE=17, COLOR_BRIGHT=18, INJECT_FORCE=19
+// Parameter indices (15 params).
+// Removed: Invert, Field Res, Wander, Respawn, Dense Respawn.
+// Anti-Clump now drives both density_noise_gain and diffusion.
 const SLOPE: usize = 0;
 const BLUR: usize = 1;
 const ROTATION: usize = 2;
 const NOISE: usize = 3;
 const SPEED: usize = 4;
 const CONTRAST: usize = 5;
-const INVERT: usize = 6;
-const SCALE: usize = 7;
-const PARTICLES: usize = 8;
-const SNAP: usize = 9;
-const SNAP_MODE: usize = 10;
-const SPLAT_SIZE: usize = 11;
-const DENSITY_RES: usize = 12;
-const DENSITY_NOISE: usize = 13;
-const DIFFUSION: usize = 14;
-const REFRESH: usize = 15;
-const DENSITY_REFRESH: usize = 16;
-const COLOR_MODE: usize = 17;
-const COLOR_BRIGHT: usize = 18;
-const INJECT_FORCE: usize = 19;
+const SCALE: usize = 6;
+const PARTICLES: usize = 7;
+const SNAP: usize = 8;
+const SNAP_MODE: usize = 9;
+const SPLAT_SIZE: usize = 10;
+const ANTI_CLUMP: usize = 11;
+const INJECT_FORCE: usize = 12;
 
 // Unity constants
 const MAX_PARTICLES: u32 = 8_000_000; // Unity: ParticleCount => 8000000
@@ -66,13 +57,7 @@ struct SplatUniforms {
     active_count: u32,
     width: u32,
     height: u32,
-    // pre-scaled energy: 0.005 * (splat_size/3) * (1_000_000/active_count) * 4096 + 0.5
     scaled_energy: u32,
-    // 0=mono, 1-5=color palette
-    color_mode: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
 }
 
 #[repr(C)]
@@ -82,14 +67,6 @@ struct ResolveUniforms {
     height: u32,
     _pad0: u32,
     _pad1: u32,
-    // Pad to 32 bytes: wgpu/naga derives min_binding_size from the maximum
-    // uniform at @group(0) @binding(2) across ALL entry points in the same
-    // shader module. SplatUniforms is 32 bytes at the same binding slot,
-    // so this struct must match.
-    _pad2: u32,
-    _pad3: u32,
-    _pad4: u32,
-    _pad5: u32,
 }
 
 #[repr(C)]
@@ -127,21 +104,15 @@ struct SimUniforms {
     noise_amplitude: f32,
     density_noise_gain: f32,
     diffusion: f32,
-    refresh_rate: f32,
-    density_refresh_scale: f32,
-    color_mode: u32,
     frame_count: u32,
-    // injection point UV (random per trigger)
     inject_point_x: f32,
     inject_point_y: f32,
     inject_force: f32,
     inject_phase: f32,
     time_val: f32,
-    // color index for injection (1-4 cycling)
-    inject_color_index: u32,
     dt: f32,
+    _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 #[repr(C)]
@@ -158,12 +129,8 @@ struct SeedUniforms {
 struct DisplayUniforms {
     intensity: f32,
     contrast: f32,
-    invert: f32,
     uv_scale: f32,
-    color_mode: f32,
-    color_bright: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 pub struct FluidSimulationGenerator {
@@ -174,10 +141,7 @@ pub struct FluidSimulationGenerator {
     seed_pipeline: manifold_gpu::GpuComputePipeline,
     blur_pipeline: manifold_gpu::GpuComputePipeline,
     gradient_pipeline: manifold_gpu::GpuComputePipeline,
-    /// Specialized display pipelines: mono (color_mode=0) vs color (color_mode=1).
-    /// Metal compiler eliminates the if/else branch in each variant.
-    display_pipeline_mono: manifold_gpu::GpuComputePipeline,
-    display_pipeline_color: manifold_gpu::GpuComputePipeline,
+    display_pipeline: manifold_gpu::GpuComputePipeline,
     sampler: manifold_gpu::GpuSampler,
 
     // GPU resources (lazy-init)
@@ -202,10 +166,8 @@ pub struct FluidSimulationGenerator {
     active_snap_mode: i32,
 
     // Injection state machine
-    last_color_mode: i32,
     inject_active: bool,
     inject_point: [f32; 2],
-    inject_color_counter: u32,
     inject_frames_remaining: i32,
 }
 
@@ -241,16 +203,10 @@ impl FluidSimulationGenerator {
             "cs_main",
             "FluidSim Gradient",
         );
-        let display_wgsl = include_str!("shaders/fluid_display_compute.wgsl");
-        let display_pipeline_mono = device.create_specialized_compute_pipeline(
-            display_wgsl, "cs_main",
-            &[("params.color_mode", "0.0")],
-            "FluidSim Display Mono",
-        );
-        let display_pipeline_color = device.create_specialized_compute_pipeline(
-            display_wgsl, "cs_main",
-            &[("params.color_mode", "1.0")],
-            "FluidSim Display Color",
+        let display_pipeline = device.create_compute_pipeline(
+            include_str!("shaders/fluid_display_compute.wgsl"),
+            "cs_main",
+            "FluidSim Display",
         );
 
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
@@ -267,8 +223,7 @@ impl FluidSimulationGenerator {
             seed_pipeline,
             blur_pipeline,
             gradient_pipeline,
-            display_pipeline_mono,
-            display_pipeline_color,
+            display_pipeline,
             sampler,
             particle_buffer: None,
             scatter_accum: None,
@@ -285,10 +240,8 @@ impl FluidSimulationGenerator {
             last_trigger_count: -1,
             snap_envelope: 0.0,
             active_snap_mode: 0,
-            last_color_mode: 0,
             inject_active: false,
             inject_point: [0.0; 2],
-            inject_color_counter: 0,
             inject_frames_remaining: 0,
         }
     }
@@ -326,8 +279,8 @@ impl FluidSimulationGenerator {
         self.scatter_width = sw;
         self.scatter_height = sh;
 
-        // Scatter accum: sw x sh x 4 channels x 4 bytes (RGBA, 4 atomic u32 per texel)
-        let accum_size = (sw as u64) * (sh as u64) * 4 * 4;
+        // Scatter accum: 1 atomic u32 per texel (mono density)
+        let accum_size = (sw as u64) * (sh as u64) * 4;
         let scatter_accum = device.create_buffer(
             accum_size,
             manifold_gpu::GpuBufferUsage::STORAGE,
@@ -344,7 +297,7 @@ impl FluidSimulationGenerator {
             label: "FluidSim Density",
         });
 
-        // Blur + vector field textures: half scatter resolution (PRE_SHRINK=2)
+        // Blur + vector field textures: half scatter resolution, capped at 480x270
         let bw = (sw / PRE_SHRINK).max(1);
         let bh = (sh / PRE_SHRINK).max(1);
         let blur_density_tex = device.create_texture(&manifold_gpu::GpuTextureDesc {
@@ -469,41 +422,33 @@ impl Generator for FluidSimulationGenerator {
         target: &manifold_gpu::GpuTexture,
         ctx: &GeneratorContext,
     ) -> f32 {
-        // Read all 20 params
         let slope = param(ctx, SLOPE, -0.01);
         let blur_radius_param = param(ctx, BLUR, 20.0);
         let rotation_deg = param(ctx, ROTATION, 85.0);
         let noise = param(ctx, NOISE, 0.001);
         let speed = param(ctx, SPEED, 1.0);
         let contrast = param(ctx, CONTRAST, 3.0);
-        let invert = param(ctx, INVERT, 0.0);
         let scale = param(ctx, SCALE, 1.0);
         let particles_param = param(ctx, PARTICLES, 2.0);
         let snap = param(ctx, SNAP, 0.0);
         let snap_mode = param(ctx, SNAP_MODE, 0.0);
         let splat_size = param(ctx, SPLAT_SIZE, 3.0);
-        let density_res = param(ctx, DENSITY_RES, 0.5).clamp(0.125, 1.0);
-        let density_noise = param(ctx, DENSITY_NOISE, 20.0);
-        let diffusion = param(ctx, DIFFUSION, 0.01);
-        let refresh = param(ctx, REFRESH, 0.001);
-        let density_refresh = param(ctx, DENSITY_REFRESH, 0.05);
-        let color_mode_f = param(ctx, COLOR_MODE, 0.0);
-        let color_bright = param(ctx, COLOR_BRIGHT, 2.0);
+        let anti_clump = param(ctx, ANTI_CLUMP, 20.0);
         let inject_force = param(ctx, INJECT_FORCE, 0.005);
 
-        let color_mode = color_mode_f.round() as i32;
+        // Anti-Clump drives both density_noise_gain and diffusion proportionally.
+        let density_noise = anti_clump;
+        let diffusion = (anti_clump / 60.0) * 0.05;
 
-        // Unity: activeCount is dispatch-only. Buffer is always MAX_PARTICLES.
         let active_count = ((particles_param * 1_000_000.0) as u32).clamp(100_000, MAX_PARTICLES);
         self.active_count = active_count;
 
-        // Unity: particles created once in Initialize(), never recreated for param changes.
         if !self.initialized {
             self.init_particles_gpu(gpu);
         }
 
-        // Unity: density_res change -> Resize() which only rebuilds scatter-resolution RTs.
-        self.ensure_scatter_resources(gpu.device, ctx.width, ctx.height, density_res);
+        // Scatter at full output resolution for crisp single-pixel particles.
+        self.ensure_scatter_resources(gpu.device, ctx.width, ctx.height, 1.0);
         let sw = self.scatter_width;
         let sh = self.scatter_height;
         let bw = (sw / PRE_SHRINK).max(1);
@@ -528,16 +473,13 @@ impl Generator for FluidSimulationGenerator {
                     let pattern = (trigger_count as u32) % PATTERN_COUNT;
                     self.dispatch_seed(gpu, pattern, trigger_count as u32);
                 } else if self.active_snap_mode == 4 {
-                    // Mode 4: inject at random point (only when color mode is active)
-                    if color_mode > 0 {
-                        self.inject_active = true;
-                        self.inject_point = random_inject_uv(
-                            trigger_count as u32,
-                            self.frame_count as u32,
-                        );
-                        self.inject_color_counter = (self.inject_color_counter + 1) % 4;
-                        self.inject_frames_remaining = INJECT_FRAMES_PER_ZONE;
-                    }
+                    // Mode 4: inject force at random point
+                    self.inject_active = true;
+                    self.inject_point = random_inject_uv(
+                        trigger_count as u32,
+                        self.frame_count as u32,
+                    );
+                    self.inject_frames_remaining = INJECT_FRAMES_PER_ZONE;
                 }
             }
         }
@@ -564,14 +506,6 @@ impl Generator for FluidSimulationGenerator {
                 _ => {}
             }
         }
-
-        // --- Color mode transition: reset injection state ---
-        if color_mode == 0 && self.last_color_mode > 0 {
-            self.inject_active = false;
-            self.inject_frames_remaining = 0;
-            self.inject_color_counter = 0;
-        }
-        self.last_color_mode = color_mode;
 
         // --- Advance injection state machine ---
         if self.inject_active {
@@ -611,8 +545,6 @@ impl Generator for FluidSimulationGenerator {
             width: sw,
             height: sh,
             scaled_energy,
-            color_mode: color_mode as u32,
-            _pad0: 0, _pad1: 0, _pad2: 0,
         };
         gpu.native_enc.dispatch_compute(
             &self.splat_pipeline,
@@ -635,7 +567,7 @@ impl Generator for FluidSimulationGenerator {
         // Resolve
         let resolve_uniforms = ResolveUniforms {
             width: sw, height: sh,
-            _pad0: 0, _pad1: 0, _pad2: 0, _pad3: 0, _pad4: 0, _pad5: 0,
+            _pad0: 0, _pad1: 0,
         };
         gpu.native_enc.dispatch_compute(
             &self.resolve_pipeline,
@@ -736,17 +668,14 @@ impl Generator for FluidSimulationGenerator {
             noise_amplitude,
             density_noise_gain: density_noise,
             diffusion,
-            refresh_rate: refresh,
-            density_refresh_scale: density_refresh,
-            color_mode: color_mode as u32,
             frame_count: self.frame_count as u32,
             inject_point_x: if self.inject_active { self.inject_point[0] } else { 0.0 },
             inject_point_y: if self.inject_active { self.inject_point[1] } else { 0.0 },
             inject_force: active_inject_force,
             inject_phase,
             time_val: ctx.time as f32,
-            inject_color_index: self.inject_color_counter + 1,
-            dt: ctx.dt, _pad1: 0, _pad2: 0,
+            dt: ctx.dt,
+            _pad0: 0, _pad1: 0,
         };
         gpu.native_enc.dispatch_compute(
             &self.simulate_pipeline,
@@ -784,20 +713,11 @@ impl Generator for FluidSimulationGenerator {
         let display_uniforms = DisplayUniforms {
             intensity,
             contrast,
-            invert,
             uv_scale: scale,
-            color_mode: color_mode as f32,
-            color_bright,
-            _pad0: 0.0, _pad1: 0.0,
-        };
-        // Select specialized display pipeline: mono (color_mode=0) vs color (color_mode>0)
-        let display_pipeline = if color_mode > 0 {
-            &self.display_pipeline_color
-        } else {
-            &self.display_pipeline_mono
+            _pad0: 0.0,
         };
         gpu.native_enc.dispatch_compute(
-            display_pipeline,
+            &self.display_pipeline,
             &[
                 manifold_gpu::GpuBinding::Bytes {
                     binding: 0,
