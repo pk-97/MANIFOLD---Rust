@@ -107,6 +107,13 @@ pub struct GpuSampler {
 unsafe impl Send for GpuSampler {}
 unsafe impl Sync for GpuSampler {}
 
+impl GpuSampler {
+    /// Raw Metal sampler state reference.
+    pub fn raw(&self) -> &metal::SamplerStateRef {
+        &self.raw
+    }
+}
+
 // ─── GpuComputePipeline ───────────────────────────────────────────────
 
 pub struct GpuComputePipeline {
@@ -141,6 +148,13 @@ pub struct GpuRenderPipeline {
     pub(crate) state: metal::RenderPipelineState,
     pub slot_map: SlotMap,
     pub label: String,
+}
+
+impl GpuRenderPipeline {
+    /// Raw Metal render pipeline state reference.
+    pub fn raw_state(&self) -> &metal::RenderPipelineStateRef {
+        &self.state
+    }
 }
 
 impl Clone for GpuRenderPipeline {

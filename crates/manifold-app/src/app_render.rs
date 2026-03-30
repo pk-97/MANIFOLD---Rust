@@ -934,36 +934,9 @@ impl Application {
                     video_rect.width * sf, video_rect.height * sf,
                     source_aspect,
                 );
-            } else if let Some(tonemap_blit) = self.output_blit_pipeline.as_ref() {
-                // Output windows: project resolution centered with letterbox/pillarbox.
-                // Per-window tonemap: ACES for SDR displays, passthrough for HDR.
-                let sdr_tonemap = self.output_edr_headroom <= 1.0;
-                // Clear to black first (bars around content when window != project aspect).
-                {
-                    let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Clear Output"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &surface_view,
-                            resolve_target: None,
-                            depth_slice: None,
-                            ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
-                }
-                tonemap_blit.blit_to_rect_fit(
-                    &gpu.device, &gpu.queue, &mut encoder,
-                    compositor_output, &surface_view,
-                    0.0, 0.0, surface_w as f32, surface_h as f32,
-                    source_aspect, sdr_tonemap,
-                );
             }
+            // Output window blitting is handled by the native Metal presenter
+            // thread — output windows have surface: None and are skipped above.
 
             // Draw UI overlay on workspace window using the UITree
             // Pass logical pixel dimensions — the tree is built in logical coords

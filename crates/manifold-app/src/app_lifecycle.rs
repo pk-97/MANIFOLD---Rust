@@ -10,7 +10,6 @@ use winit::event_loop::ActiveEventLoop;
 
 use manifold_editing::service::EditingService;
 use manifold_playback::audio_decoder::DecodedAudio;
-use manifold_renderer::surface::SurfaceWrapper;
 
 use crate::app::{Application, PendingAudioLoadResult};
 use manifold_core::Seconds;
@@ -530,10 +529,8 @@ impl Application {
         name: &str,
         display_index: Option<usize>,
     ) {
-        let gpu = match &self.gpu {
-            Some(g) => g,
-            None => return,
-        };
+        // Guard: don't open output window if GPU isn't initialized.
+        if self.gpu.is_none() { return; }
 
         // Resolve target monitor.
         // If display_index is given, use that. Otherwise pick first non-primary monitor.
@@ -615,46 +612,6 @@ impl Application {
 
         // Window is interactive — user can drag to any monitor and use native fullscreen.
 
-        let size = window.inner_size();
-        let scale = window.scale_factor();
-
-        // Create HDR surface (Rgba16Float) — wgpu auto-enables EDR on Metal.
-        // Linear HDR values pass through directly; macOS clips at display's physical max.
-        let surface = SurfaceWrapper::new_hdr(
-            &gpu.instance,
-            &gpu.adapter,
-            &gpu.device,
-            window.clone(),
-            size.width,
-            size.height,
-            scale,
-            wgpu::PresentMode::AutoNoVsync,
-        );
-
-        let surface_format = surface.format();
-
-        // Configure CAMetalLayer for EDR (colorspace + wantsExtendedDynamicRangeContent).
-        if surface_format == wgpu::TextureFormat::Rgba16Float {
-            crate::edr_surface::configure_edr(&surface.surface);
-        }
-
-        // Build or reuse the blit pipeline (reuse avoids MSL recompilation on
-        // open/close cycles with the same surface format, which is the common case).
-        if self.output_blit_pipeline.is_none()
-            || self.output_blit_format != Some(surface_format)
-        {
-            self.output_blit_pipeline = Some(
-                manifold_renderer::tonemap_blit::TonemapBlitPipeline::new(
-                    &gpu.device, surface_format,
-                ),
-            );
-            self.output_blit_format = Some(surface_format);
-            log::info!(
-                "[OutputWindow] Created blit pipeline for {:?}",
-                surface_format
-            );
-        }
-
         let id = window.id();
         let resolved_index = display_index.or({
             if monitors.len() > 1 { Some(1) } else { Some(0) }
@@ -669,37 +626,25 @@ impl Application {
             self.output_edr_headroom = h;
         }
 
-        // If the IOSurface bridge is available, hand the surface off to a
-        // dedicated presenter thread. This prevents get_current_texture()
-        // (Metal nextDrawable) from blocking the UI thread in fullscreen mode,
-        // where macOS vsync-locks the drawable pool to the display refresh rate.
-        #[cfg(target_os = "macos")]
-        let (window_surface, presenter) = if let Some(bridge) = self.shared_texture_bridge.clone()
-            && let Some(pipeline) = self.output_blit_pipeline.take()
-        {
-            let device = gpu.device.clone();
-            let queue = gpu.queue.clone();
-            let handle = crate::output_presenter::spawn(
-                device, queue, surface, pipeline, bridge, h,
-            );
-            // Pipeline is now owned by the presenter — clear format cache so
-            // a fresh pipeline is created next time the window opens.
-            self.output_blit_format = None;
-            (None, Some(handle))
-        } else {
-            // No bridge yet (no project loaded) — fall back to UI-thread blit.
-            (Some(surface), None)
-        };
+        let size = window.inner_size();
 
-        #[cfg(not(target_os = "macos"))]
-        let window_surface = Some(surface);
+        // Spawn the native Metal presenter thread. It creates its own GpuDevice
+        // (separate MTLCommandQueue), sets a CAMetalLayer on the NSView, and
+        // handles all rendering + presentation independently.
+        #[cfg(target_os = "macos")]
+        let presenter = if let Some(bridge) = self.shared_texture_bridge.clone() {
+            Some(crate::output_presenter::spawn(&window, bridge, h))
+        } else {
+            log::warn!("[OutputWindow] No IOSurface bridge — output will be black");
+            None
+        };
 
         #[cfg(target_os = "macos")]
         { self.output_presenter = presenter; }
 
         let state = WindowState {
             window,
-            surface: window_surface,
+            surface: None, // Surface is owned by the native Metal presenter.
             role: WindowRole::Output {
                 name: name.to_string(),
             },
@@ -710,16 +655,16 @@ impl Application {
 
         #[cfg(target_os = "macos")]
         let thread_label = if self.output_presenter.is_some() {
-            ", presenter-thread"
+            ", native-metal-presenter"
         } else {
-            ", ui-thread fallback"
+            ", no bridge"
         };
         #[cfg(not(target_os = "macos"))]
         let thread_label = "";
 
         log::info!(
-            "[OutputWindow] Opened '{}' on '{}' ({}x{}, {:?}, EDR={:.2}x → blit={}{})",
-            name, mon_name, size.width, size.height, surface_format, h,
+            "[OutputWindow] Opened '{}' on '{}' ({}x{}, Rgba16Float, EDR={:.2}x → blit={}{})",
+            name, mon_name, size.width, size.height, h,
             if h > 1.0 { "passthrough" } else { "ACES tonemap" },
             thread_label,
         );

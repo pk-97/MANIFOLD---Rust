@@ -202,10 +202,8 @@ pub struct Application {
     #[cfg(target_os = "macos")]
     pub(crate) last_output_front_index: usize,
     pub(crate) blit_pipeline: Option<BlitPipeline>,
-    /// Cached pipeline for the output blit — reused across open/close cycles
-    /// when the surface format stays the same.
-    pub(crate) output_blit_pipeline: Option<manifold_renderer::tonemap_blit::TonemapBlitPipeline>,
-    pub(crate) output_blit_format: Option<wgpu::TextureFormat>,
+    // (output_blit_pipeline and output_blit_format removed — native Metal
+    // presenter compiles its own pipeline via manifold-gpu)
     /// Dedicated presenter thread for the output window.
     /// Owns the output surface so `get_current_texture()` never blocks the UI thread.
     #[cfg(target_os = "macos")]
@@ -343,8 +341,6 @@ impl Application {
             #[cfg(target_os = "macos")]
             last_output_front_index: usize::MAX,
             blit_pipeline: None,
-            output_blit_pipeline: None,
-            output_blit_format: None,
             #[cfg(target_os = "macos")]
             output_presenter: None,
             ui_renderer: None,
@@ -2076,7 +2072,6 @@ impl Drop for Application {
         }
         self.layer_bitmap_gpu = None;
         self.ui_renderer = None;
-        self.output_blit_pipeline = None;
         self.blit_pipeline = None;
     }
 }
