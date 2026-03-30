@@ -1837,16 +1837,18 @@ mod tests {
     }
 
     #[test]
-    fn clip_color_states() {
-        // Clip color testing now uses bitmap_painter::get_clip_color
+    fn clip_color_uses_layer_color() {
         use crate::bitmap_painter;
+        use crate::node::Color32;
 
-        let normal = bitmap_painter::get_clip_color(false, false, false, false, false);
-        let selected = bitmap_painter::get_clip_color(true, false, false, false, false);
-        let hovered = bitmap_painter::get_clip_color(false, true, false, false, false);
+        let lc = Color32::new(180, 120, 60, 220);
+        let normal = bitmap_painter::get_clip_color(false, false, false, false, false, lc);
+        // Normal state = layer color at brightness 1.0
+        assert_eq!(normal.r, 180);
+        assert_eq!(normal.g, 120);
+        assert_eq!(normal.b, 60);
 
-        assert_eq!(normal, color::CLIP_NORMAL);
-        assert_eq!(selected, color::CLIP_SELECTED);
-        assert_eq!(hovered, color::CLIP_HOVER);
+        let locked = bitmap_painter::get_clip_color(false, false, false, true, false, lc);
+        assert_eq!(locked, color::CLIP_LOCKED);
     }
 }

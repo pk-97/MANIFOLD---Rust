@@ -323,6 +323,7 @@ impl LayerBitmapRenderer {
                 clip_muted,
                 is_locked,
                 is_generator,
+                clip.color,
             );
             let show_trim_hints = is_selected || is_hovered;
             bitmap_painter::draw_clip(
