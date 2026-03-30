@@ -693,10 +693,8 @@ impl Generator for FluidSimulation3DGenerator {
         self.disp_h = 0;
     }
 
-    /// Unity: InternalResolutionScale = 0.5.
-    /// Volumetric projection with soft particle output.
     fn internal_resolution_scale(&self) -> f32 {
-        0.5
+        1.0
     }
 
     fn reset_state(&mut self, _device: &manifold_gpu::GpuDevice) {

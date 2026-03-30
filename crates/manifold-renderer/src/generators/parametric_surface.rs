@@ -200,9 +200,7 @@ impl Generator for ParametricSurfaceGenerator {
         // Volume texture is fixed at 128^3; no resize needed
     }
 
-    /// Unity: InternalResolutionScale = 0.75.
-    /// Raymarched surfaces need slightly higher resolution than particle sims.
     fn internal_resolution_scale(&self) -> f32 {
-        0.75
+        1.0
     }
 }
