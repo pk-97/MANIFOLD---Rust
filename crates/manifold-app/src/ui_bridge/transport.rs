@@ -23,7 +23,7 @@ pub(super) fn dispatch_transport(
                 ContentCommand::send(content_tx, ContentCommand::Pause);
             } else {
                 if let Some(cursor_beat) = selection.insert_cursor_beat {
-                    ContentCommand::send(content_tx, ContentCommand::SeekToBeat(Beats::from_f32(cursor_beat)));
+                    ContentCommand::send(content_tx, ContentCommand::SeekToBeat(cursor_beat));
                 }
                 ContentCommand::send(content_tx, ContentCommand::Play);
             }
@@ -32,7 +32,7 @@ pub(super) fn dispatch_transport(
         PanelAction::Stop => {
             ContentCommand::send(content_tx, ContentCommand::Stop);
             if let Some(cursor_beat) = selection.insert_cursor_beat {
-                ContentCommand::send(content_tx, ContentCommand::SeekToBeat(Beats::from_f32(cursor_beat)));
+                ContentCommand::send(content_tx, ContentCommand::SeekToBeat(cursor_beat));
             }
             DispatchResult::handled()
         }
@@ -77,7 +77,7 @@ pub(super) fn dispatch_transport(
             // Legacy path — when no layer context available.
             // Uses set_insert_cursor_beat (non-clearing variant)
             // since we don't have a layer index here.
-            selection.set_insert_cursor_beat(*beat);
+            selection.set_insert_cursor_beat(manifold_core::Beats::from_f32(*beat));
             DispatchResult::structural()
         }
 

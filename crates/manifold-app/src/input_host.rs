@@ -541,8 +541,8 @@ impl TimelineInputHost for AppInputHost<'_> {
                     let (lo, hi) = region.layer_index_range(&project.timeline.layers)
                         .unwrap_or((0, 0));
                     self.selection.set_region(
-                        region.end_beat.as_f32(),
-                        (region.end_beat + duration).as_f32(),
+                        region.end_beat,
+                        region.end_beat + duration,
                         lo as i32,
                         hi as i32,
                         &project.timeline.layers,
@@ -918,7 +918,7 @@ impl TimelineInputHost for AppInputHost<'_> {
 
         // Step 4f: read cursor position from UIState (not viewport scroll)
         let current_beat = self.selection.insert_cursor_beat
-            .unwrap_or(self.content_state.current_beat.as_f32());
+            .unwrap_or(self.content_state.current_beat).as_f32();
         let active_idx = self.active_layer.as_ref()
             .and_then(|id| self.project.timeline.find_layer_index_by_id(id));
         let insert_cursor_idx = self.selection.insert_cursor_layer_id.as_ref()
@@ -934,7 +934,7 @@ impl TimelineInputHost for AppInputHost<'_> {
             cursor_nav::NavResult::SetCursor { beat, layer } => {
                 let lid = self.project.timeline.layers.get(layer)
                     .map(|l| l.layer_id.clone()).unwrap_or_default();
-                self.selection.set_insert_cursor(beat, lid);
+                self.selection.set_insert_cursor(manifold_core::Beats::from_f32(beat), lid);
                 *self.active_layer = self.project.timeline.layers
                     .get(layer)
                     .map(|l| l.layer_id.clone());
@@ -987,7 +987,7 @@ impl TimelineInputHost for AppInputHost<'_> {
     }
 
     fn insert_cursor_beat(&self) -> Option<f32> {
-        self.selection.insert_cursor_beat
+        self.selection.insert_cursor_beat.map(|b| b.as_f32())
     }
 
     fn insert_cursor_layer_index(&self) -> Option<usize> {

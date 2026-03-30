@@ -479,7 +479,7 @@ impl Application {
     fn navigate_cursor(&mut self, direction: manifold_ui::cursor_nav::Direction) {
         use manifold_ui::cursor_nav::{navigate_cursor, NavResult, NavLayerInfo, NavClipInfo};
 
-        let current_beat = self.selection.insert_cursor_beat.unwrap_or(self.content_state.current_beat.as_f32());
+        let current_beat = self.selection.insert_cursor_beat.unwrap_or(self.content_state.current_beat).as_f32();
         let active_idx = self.active_layer_id.as_ref()
             .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
         let insert_cursor_idx = self.selection.insert_cursor_layer_id.as_ref()
@@ -531,7 +531,7 @@ impl Application {
             NavResult::SetCursor { beat, layer } => {
                 let lid = self.local_project.timeline.layers.get(layer)
                     .map(|l| l.layer_id.clone()).unwrap_or_default();
-                self.selection.set_insert_cursor(beat, lid);
+                self.selection.set_insert_cursor(manifold_core::Beats::from_f32(beat), lid);
                 self.active_layer_id = self.local_project.timeline.layers
                     .get(layer).map(|l| l.layer_id.clone());
                 self.needs_rebuild = true;
@@ -1506,7 +1506,7 @@ impl ApplicationHandler for Application {
                     } else if tracks_rect.contains(pos) {
                         if self.modifiers.alt {
                             // Alt + scroll Y → zoom (step through zoom levels)
-                            let anchor_beat = self.ui_root.viewport.pixel_to_beat(pos.x);
+                            let anchor_beat = self.ui_root.viewport.pixel_to_beat(pos.x).as_f32();
                             let current_ppb = self.ui_root.viewport.pixels_per_beat();
                             let levels = &manifold_ui::color::ZOOM_LEVELS;
                             let current_idx = levels.iter()

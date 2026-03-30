@@ -31,7 +31,7 @@ use crate::ui_state::UIState;
 /// Shift+Click region selection with correct anchor precedence.
 /// Anchor priority: insert cursor > existing region > primary selected clip > fallback.
 fn select_region_to(
-    target_beat: f32,
+    target_beat: Beats,
     target_layer: usize,
     ui_state: &mut UIState,
     host: &dyn TimelineEditingHost,
@@ -40,13 +40,13 @@ fn select_region_to(
     if layer_count == 0 { return; }
 
     // Determine anchor — Unity priority: insert cursor > region > primary clip > fallback
-    let anchor: Option<(f32, usize)> = if ui_state.has_insert_cursor() {
+    let anchor: Option<(Beats, usize)> = if ui_state.has_insert_cursor() {
         // Resolve insert cursor layer_id back to an index for region computation
         let anchor_idx = ui_state.insert_cursor_layer_id.as_ref()
             .and_then(|id| (0..layer_count).find(|&i| host.layer_id_at_index(i).as_ref() == Some(id)))
             .unwrap_or(0);
         Some((
-            ui_state.insert_cursor_beat.unwrap_or(0.0),
+            ui_state.insert_cursor_beat.unwrap_or(Beats::ZERO),
             anchor_idx,
         ))
     } else if ui_state.has_region() {
@@ -54,7 +54,7 @@ fn select_region_to(
         let start_idx = r.layer_index_range(host.layers())
             .map(|(lo, _)| lo)
             .unwrap_or(0);
-        Some((r.start_beat.as_f32(), start_idx))
+        Some((r.start_beat, start_idx))
     } else if let Some(clip_id) = ui_state.primary_selected_clip_id.clone() {
         host.find_clip_by_id(&clip_id).map(|c| (c.start_beat, c.layer_index))
     } else {
@@ -95,7 +95,7 @@ pub enum DragMode {
 #[derive(Debug, Clone)]
 pub struct DragSnapshot {
     pub clip_id: ClipId,
-    pub start_beat: f32,
+    pub start_beat: Beats,
     pub layer_index: usize,
 }
 
@@ -112,12 +112,12 @@ pub struct InteractionOverlay {
     drag_start_layer_index: usize,
     drag_snapshots: Vec<DragSnapshot>,
     drag_snapshot_clip_ids: HashSet<ClipId>,
-    drag_selection_min_start_beat: f32,
+    drag_selection_min_start_beat: Beats,
     drag_selection_min_layer: usize,
     drag_selection_max_layer: usize,
     trim_clip_id: Option<ClipId>,
     drag_layer_blocked: bool,
-    region_drag_start_beat: f32,
+    region_drag_start_beat: Beats,
     region_drag_start_layer: usize,
 
     // Click suppression (Unity line 133: if currentDragMode != None return)
@@ -138,12 +138,12 @@ impl InteractionOverlay {
             drag_start_layer_index: 0,
             drag_snapshots: Vec::with_capacity(8),
             drag_snapshot_clip_ids: HashSet::with_capacity(8),
-            drag_selection_min_start_beat: 0.0,
+            drag_selection_min_start_beat: Beats::ZERO,
             drag_selection_min_layer: 0,
             drag_selection_max_layer: 0,
             trim_clip_id: None,
             drag_layer_blocked: false,
-            region_drag_start_beat: 0.0,
+            region_drag_start_beat: Beats::ZERO,
             region_drag_start_layer: 0,
             was_dragging: false,
             modifiers: Modifiers::NONE,
@@ -220,7 +220,7 @@ impl InteractionOverlay {
             // Unity: InputHandler.HandleEmptyAreaRightClick → ShowLayerContextMenu
             if is_right_button {
                 if let Some(layer) = layer_index {
-                    let beat = Beats::from_f32(viewport.pixel_to_beat(pos.x));
+                    let beat = viewport.pixel_to_beat(pos.x);
                     host.on_track_right_click(beat, layer, pos);
                 }
                 return;
@@ -229,8 +229,8 @@ impl InteractionOverlay {
             // Unity lines 152-162: double-click on empty area → create clip
             if click_count >= 2
                 && let Some(layer) = layer_index {
-                    let beat = viewport.floor_to_grid(Beats::from_f32(viewport.pixel_to_beat(pos.x)));
-                    if let Some(clip_id) = host.create_clip_at_position(beat, layer, Beats::from_f32(viewport.clip_creation_step())) {
+                    let beat = viewport.floor_to_grid(viewport.pixel_to_beat(pos.x));
+                    if let Some(clip_id) = host.create_clip_at_position(beat, layer, viewport.clip_creation_step()) {
                         let lid = host.layer_id_at_index(layer).unwrap_or_default();
                         ui_state.select_clip(clip_id.clone(), lid);
                         host.on_clip_selected(&clip_id);
@@ -241,7 +241,7 @@ impl InteractionOverlay {
             // Unity lines 165-188: single click on empty area
             if let Some(layer) = layer_index {
                 let beat = viewport.pixel_to_beat(pos.x);
-                let snapped = viewport.snap_to_grid(Beats::from_f32(beat)).as_f32();
+                let snapped = viewport.snap_to_grid(beat);
 
                 if shift {
                     // Unity line 180: Shift+Click → extend region
@@ -306,7 +306,7 @@ impl InteractionOverlay {
         viewport: &TimelineViewportPanel,
     ) {
         // Unity lines 222-223: track cursor position for paste target
-        ui_state.cursor_beat = viewport.pixel_to_beat(pos.x);
+        ui_state.cursor_beat = viewport.pixel_to_beat(pos.x).as_f32();
         ui_state.cursor_layer_id = viewport.layer_at_y(pos.y)
             .and_then(|idx| host.layer_id_at_index(idx));
 
@@ -498,12 +498,12 @@ impl InteractionOverlay {
 
             for snapshot in &self.drag_snapshots {
                 if let Some(clip) = host.find_clip_by_id(&snapshot.clip_id) {
-                    let start_changed = (clip.start_beat - snapshot.start_beat).abs() >= 0.0001;
+                    let start_changed = (clip.start_beat - snapshot.start_beat).abs() >= Beats(0.0001);
                     let layer_changed = clip.layer_index != snapshot.layer_index;
                     if start_changed || layer_changed {
                         host.record_move(
                             &snapshot.clip_id,
-                            Beats::from_f32(snapshot.start_beat), Beats::from_f32(clip.start_beat),
+                            snapshot.start_beat, clip.start_beat,
                             snapshot.layer_index, clip.layer_index,
                         );
                     }
@@ -522,9 +522,9 @@ impl InteractionOverlay {
                 && let Some(clip) = host.find_clip_by_id(trim_id) {
                     host.record_trim(
                         trim_id,
-                        Beats::from_f32(ui_state.trim_original_start_beat), Beats::from_f32(clip.start_beat),
-                        Beats::from_f32(ui_state.trim_original_duration_beats), Beats::from_f32(clip.duration_beats),
-                        Seconds::from_f32(ui_state.trim_original_in_point), Seconds::from_f32(clip.in_point),
+                        ui_state.trim_original_start_beat, clip.start_beat,
+                        ui_state.trim_original_duration_beats, clip.duration_beats,
+                        ui_state.trim_original_in_point, clip.in_point,
                     );
                 }
 
@@ -632,10 +632,10 @@ impl InteractionOverlay {
         // Unity lines 522-534: magnetic snap + beat delta
         let anchor_start_beat = mouse_beat - ui_state.drag_offset_beats;
         let snapped = viewport.magnetic_snap(
-            Beats::from_f32(anchor_start_beat),
+            anchor_start_beat,
             self.drag_start_layer_index,
             &self.drag_snapshot_clip_ids.iter().cloned().collect::<Vec<_>>(),
-        ).as_f32();
+        );
         let mut beat_delta = snapped - ui_state.drag_start_beat;
         // Clamp: don't let the leftmost clip go below beat 0
         beat_delta = beat_delta.max(-self.drag_selection_min_start_beat);
@@ -643,8 +643,8 @@ impl InteractionOverlay {
         // Apply beat delta to all clips (direct mutation during drag — committed in OnEndDrag)
         // Unity line 533: movingClip.StartBeat = Max(0, snapshot.StartBeat + beatDelta)
         for snapshot in &self.drag_snapshots {
-            let new_start = (snapshot.start_beat + beat_delta).max(0.0);
-            host.set_clip_start_beat(&snapshot.clip_id, Beats::from_f32(new_start));
+            let new_start = (snapshot.start_beat + beat_delta).max(Beats::ZERO);
+            host.set_clip_start_beat(&snapshot.clip_id, new_start);
         }
 
         host.invalidate_all_layer_bitmaps();
@@ -653,7 +653,7 @@ impl InteractionOverlay {
     /// Port of Unity InteractionOverlay.HandleTrimLeftDrag (lines 539-560).
     fn handle_trim_left_drag(
         &mut self,
-        mouse_beat: f32,
+        mouse_beat: Beats,
         host: &mut dyn TimelineEditingHost,
         ui_state: &UIState,
         viewport: &TimelineViewportPanel,
@@ -664,15 +664,15 @@ impl InteractionOverlay {
         };
 
         let original_end = ui_state.trim_original_start_beat + ui_state.trim_original_duration_beats;
-        let min_duration = 0.25; // 1/16 note minimum (Unity line 544)
+        let min_duration = Beats(0.25); // 1/16 note minimum (Unity line 544)
 
         // Get the clip's actual layer for snap context
         let clip_layer = host.find_clip_by_id(&trim_id).map_or(0, |c| c.layer_index);
         let snapped = viewport.magnetic_snap(
-            Beats::from_f32(mouse_beat),
+            mouse_beat,
             clip_layer,
             std::slice::from_ref(&trim_id),
-        ).as_f32();
+        );
 
         // Unity lines 548-551: video clips clamp to original start, generators extend freely
         let clip = host.find_clip_by_id(&trim_id);
@@ -686,17 +686,19 @@ impl InteractionOverlay {
 
         let beat_delta = new_start - ui_state.trim_original_start_beat;
         let new_duration = original_end - new_start;
-        let new_in_point = (ui_state.trim_original_in_point + beat_delta * host.get_seconds_per_beat()).max(0.0);
+        let new_in_point = (ui_state.trim_original_in_point
+            + Seconds(beat_delta.0 * host.get_seconds_per_beat() as f64))
+            .max(Seconds::ZERO);
 
         // Unity lines 554-557: direct mutation during drag
-        host.set_clip_trim(&trim_id, Beats::from_f32(new_start), Beats::from_f32(new_duration), Seconds::from_f32(new_in_point));
+        host.set_clip_trim(&trim_id, new_start, new_duration, new_in_point);
         host.invalidate_all_layer_bitmaps();
     }
 
     /// Port of Unity InteractionOverlay.HandleTrimRightDrag (lines 562-582).
     fn handle_trim_right_drag(
         &mut self,
-        mouse_beat: f32,
+        mouse_beat: Beats,
         host: &mut dyn TimelineEditingHost,
         _ui_state: &UIState,
         viewport: &TimelineViewportPanel,
@@ -706,16 +708,16 @@ impl InteractionOverlay {
             None => return,
         };
 
-        let min_duration = 0.25; // Unity line 566
+        let min_duration = Beats(0.25); // Unity line 566
 
         let clip = host.find_clip_by_id(&trim_id);
-        let start_beat = clip.as_ref().map_or(0.0, |c| c.start_beat);
+        let start_beat = clip.as_ref().map_or(Beats::ZERO, |c| c.start_beat);
 
         let snapped = viewport.magnetic_snap(
-            Beats::from_f32(mouse_beat),
+            mouse_beat,
             clip.as_ref().map_or(0, |c| c.layer_index),
             std::slice::from_ref(&trim_id),
-        ).as_f32();
+        );
 
         let new_end = snapped.max(start_beat + min_duration);
         let mut new_duration = new_end - start_beat;
@@ -723,15 +725,15 @@ impl InteractionOverlay {
         // Unity lines 573-578: clamp to video source length when not looping
         if let Some(ref c) = clip
             && !c.is_looping && !c.is_generator {
-                let max_dur = host.get_max_duration_beats(&trim_id).as_f32();
-                if max_dur > 0.0 {
+                let max_dur = host.get_max_duration_beats(&trim_id);
+                if max_dur > Beats::ZERO {
                     new_duration = new_duration.min(max_dur);
                 }
             }
 
         // Unity line 580: trimClip.DurationBeats = newDurationBeats
-        let in_point = clip.as_ref().map_or(0.0, |c| c.in_point);
-        host.set_clip_trim(&trim_id, Beats::from_f32(start_beat), Beats::from_f32(new_duration), Seconds::from_f32(in_point));
+        let in_point = clip.as_ref().map_or(Seconds::ZERO, |c| c.in_point);
+        host.set_clip_trim(&trim_id, start_beat, new_duration, in_point);
         host.invalidate_all_layer_bitmaps();
     }
 
@@ -744,7 +746,7 @@ impl InteractionOverlay {
         &mut self,
         clip_id: &str,
         layer_index: usize,
-        mouse_beat: f32,
+        mouse_beat: Beats,
         host: &mut dyn TimelineEditingHost,
         ui_state: &mut UIState,
         _viewport: &TimelineViewportPanel,
@@ -757,8 +759,8 @@ impl InteractionOverlay {
             if let Some(clip) = host.find_clip_by_id(clip_id) {
                 let layer_in_region = host.layer_id_at_index(clip.layer_index)
                     .is_some_and(|lid| region.contains_layer_id(&lid));
-                let hit_in_region = clip.end_beat > region.start_beat.as_f32()
-                    && clip.start_beat < region.end_beat.as_f32()
+                let hit_in_region = clip.end_beat > region.start_beat
+                    && clip.start_beat < region.end_beat
                     && layer_in_region;
 
                 if hit_in_region {
@@ -932,18 +934,18 @@ impl InteractionOverlay {
 
         if let Some(anchor_start) = anchor_start {
             let snapped = viewport.magnetic_snap(
-                Beats::from_f32(anchor_start),
+                anchor_start,
                 self.drag_start_layer_index,
                 &self.drag_snapshot_clip_ids.iter().cloned().collect::<Vec<_>>(),
-            ).as_f32();
+            );
             let snap_delta = snapped - anchor_start;
-            if snap_delta.abs() < 0.0001 {
+            if snap_delta.abs() < Beats(0.0001) {
                 return;
             }
             // Unity lines 764-768: apply snap delta to all clips
             for snapshot in &self.drag_snapshots {
                 if let Some(clip) = host.find_clip_by_id(&snapshot.clip_id) {
-                    host.set_clip_start_beat(&snapshot.clip_id, Beats::from_f32((clip.start_beat + snap_delta).max(0.0)));
+                    host.set_clip_start_beat(&snapshot.clip_id, (clip.start_beat + snap_delta).max(Beats::ZERO));
                 }
             }
             host.invalidate_all_layer_bitmaps();
@@ -988,8 +990,8 @@ impl InteractionOverlay {
         let max_layer = self.region_drag_start_layer.max(layer);
 
         // Unity lines 818-821: grid snap both edges
-        let snapped_min = viewport.snap_to_grid(Beats::from_f32(min_beat)).as_f32();
-        let snapped_max = viewport.snap_to_grid(Beats::from_f32(max_beat)).as_f32();
+        let snapped_min = viewport.snap_to_grid(min_beat);
+        let snapped_max = viewport.snap_to_grid(max_beat);
 
         // Unity line 835: update region live — bumps SelectionVersion
         ui_state.set_region(snapped_min, snapped_max, min_layer as i32, max_layer as i32, host.layers());
@@ -1011,8 +1013,8 @@ impl InteractionOverlay {
             return;
         }
 
-        let mut min_beat = f32::MAX;
-        let mut max_beat = f32::MIN;
+        let mut min_beat = Beats(f64::MAX);
+        let mut max_beat = Beats(-f64::MAX);
         let mut min_layer = usize::MAX;
         let mut max_layer = 0usize;
 
@@ -1040,7 +1042,7 @@ impl InteractionOverlay {
             return None;
         }
 
-        let beat = viewport.pixel_to_beat(pos.x);
+        let beat = viewport.pixel_to_beat(pos.x).as_f32();
         let y_in_tracks = pos.y - viewport.tracks_rect().y;
 
         ClipHitTester::hit_test(

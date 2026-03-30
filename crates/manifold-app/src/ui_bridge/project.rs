@@ -204,8 +204,8 @@ pub(super) fn dispatch_project(
         PanelAction::WaveformScrub(local_x, _local_y) => {
             // Events arrive in panel-local coords (offset by wf_rect.x in ui_root),
             // so use local_pixel_to_beat which doesn't subtract tracks_rect.x again.
-            let beat = ui.viewport.local_pixel_to_beat(*local_x).max(0.0);
-            ContentCommand::send(content_tx, ContentCommand::SeekToBeat(Beats::from_f32(beat)));
+            let beat = ui.viewport.local_pixel_to_beat(*local_x).max(Beats::ZERO);
+            ContentCommand::send(content_tx, ContentCommand::SeekToBeat(beat));
             DispatchResult::handled()
         }
         PanelAction::WaveformDragDelta(delta_beats) => {

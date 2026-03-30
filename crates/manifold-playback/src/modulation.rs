@@ -209,23 +209,23 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
         }
 
         // Find first active clip on this layer (for envelope timing)
-        let mut active_elapsed: f32 = -1.0;
-        let mut active_duration: f32 = 0.0;
+        let mut active_elapsed = Beats(-1.0); // sentinel: no active clip
+        let mut active_duration = Beats::ZERO;
         for clip in &layer.clips {
             if clip.is_muted {
                 continue;
             }
-            let elapsed = (current_beat - clip.start_beat).as_f32();
-            if elapsed >= 0.0 && elapsed < clip.duration_beats.as_f32() {
+            let elapsed = current_beat - clip.start_beat;
+            if elapsed >= Beats::ZERO && elapsed < clip.duration_beats {
                 active_elapsed = elapsed;
-                active_duration = clip.duration_beats.as_f32();
+                active_duration = clip.duration_beats;
                 break; // Use first active clip
             }
         }
 
         // Evaluate layer envelopes (use timing from first active clip).
         // Uses index-based iteration to avoid cloning (Phase 9C fix).
-        if active_elapsed >= 0.0 {
+        if active_elapsed >= Beats::ZERO {
             let layer_env_count = layer.envelopes.as_ref().map_or(0, |e| e.len());
             if layer_env_count == 0 {
                 continue;
@@ -246,8 +246,8 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
                 }
 
                 let adsr_value = ParamEnvelope::calculate_adsr(
-                    Beats::from_f32(active_elapsed),
-                    Beats::from_f32(active_duration),
+                    active_elapsed,
+                    active_duration,
                     attack,
                     decay,
                     sustain,
@@ -318,16 +318,16 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
 
         // Find first active clip on this layer for envelope timing
         // (must borrow clips immutably before taking mutable gen_params borrow)
-        let mut active_elapsed: f32 = -1.0;
-        let mut active_duration: f32 = 0.0;
+        let mut active_elapsed = Beats(-1.0); // sentinel: no active clip
+        let mut active_duration = Beats::ZERO;
         for clip in &layer.clips {
             if clip.is_muted {
                 continue;
             }
-            let elapsed = (current_beat - clip.start_beat).as_f32();
-            if elapsed >= 0.0 && elapsed < clip.duration_beats.as_f32() {
+            let elapsed = current_beat - clip.start_beat;
+            if elapsed >= Beats::ZERO && elapsed < clip.duration_beats {
                 active_elapsed = elapsed;
-                active_duration = clip.duration_beats.as_f32();
+                active_duration = clip.duration_beats;
                 break;
             }
         }
@@ -367,14 +367,14 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
 
             let (min, max) = (gen_defs[idx].min, gen_defs[idx].max);
 
-            if active_elapsed < 0.0 {
+            if active_elapsed < Beats::ZERO {
                 // No active clip — envelope at rest
                 continue;
             }
 
             let adsr_level = ParamEnvelope::calculate_adsr(
-                Beats::from_f32(active_elapsed),
-                Beats::from_f32(active_duration),
+                active_elapsed,
+                active_duration,
                 attack,
                 decay,
                 sustain,

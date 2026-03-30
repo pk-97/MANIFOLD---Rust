@@ -295,42 +295,42 @@ fn notify_clip_stopped_removes_only_clip_id() {
 fn quantize_snap_beat_from_tick() {
     // Beat quantize: 24 ticks/beat, snap tick 25 → 1 beat (rounds to 24)
     let beat = LiveClipManager::compute_snap_beat_from_tick(25, QuantizeMode::Beat, 4, false);
-    assert!((beat - 1.0).abs() < 0.001);
+    assert!((beat.0 - 1.0).abs() < 0.001);
 
     // Off: tick 25 → sixteenth compensation snaps to 24 → 1.0 beat
     let beat = LiveClipManager::compute_snap_beat_from_tick(25, QuantizeMode::Off, 4, false);
-    assert!((beat - 1.0).abs() < 0.001);
+    assert!((beat.0 - 1.0).abs() < 0.001);
 
     // Off: tick 22 (>1 away from nearest 16th=24) → no compensation → 22/24
     let beat = LiveClipManager::compute_snap_beat_from_tick(22, QuantizeMode::Off, 4, false);
-    assert!((beat - 22.0 / 24.0).abs() < 0.01);
+    assert!((beat.0 - 22.0 / 24.0).abs() < 0.01);
 
     // Bar quantize (4/4): snap tick 50 → round to 96 (4 beats)
     let beat = LiveClipManager::compute_snap_beat_from_tick(50, QuantizeMode::Bar, 4, true);
     // ceil: (50 + 96 - 1) / 96 * 96 = 96 → 4 beats
-    assert!((beat - 4.0).abs() < 0.001);
+    assert!((beat.0 - 4.0).abs() < 0.001);
 }
 
 #[test]
 fn quantize_duration_beats() {
     // 1 second at 120 BPM = 2 beats, with beat quantize → 2.0
     let dur = LiveClipManager::compute_duration_beats(1.0, 0.5, -1, QuantizeMode::Beat, 4);
-    assert!((dur - 2.0).abs() < 0.001);
+    assert!((dur.0 - 2.0).abs() < 0.001);
 
     // 0.6 seconds at 120 BPM = 1.2 beats, with beat quantize → rounds to 1.0
     let dur = LiveClipManager::compute_duration_beats(0.6, 0.5, -1, QuantizeMode::Beat, 4);
-    assert!((dur - 1.0).abs() < 0.001);
+    assert!((dur.0 - 1.0).abs() < 0.001);
 }
 
 #[test]
 fn held_beats_from_ticks_with_quantize() {
     // Start tick 0, end tick 48 = 2 beats, beat quantize → 2.0
     let held = LiveClipManager::compute_held_beats_from_ticks(0, 48, QuantizeMode::Beat, 4);
-    assert!((held - 2.0).abs() < 0.001);
+    assert!((held.0 - 2.0).abs() < 0.001);
 
     // Start 0, end 30 ≈ 1.25 beats, beat quantize → rounds to 1 beat
     let held = LiveClipManager::compute_held_beats_from_ticks(0, 30, QuantizeMode::Beat, 4);
-    assert!((held - 1.0).abs() < 0.001);
+    assert!((held.0 - 1.0).abs() < 0.001);
 }
 
 #[test]

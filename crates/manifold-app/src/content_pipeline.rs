@@ -460,13 +460,16 @@ impl ContentPipeline {
                     translate_y: clip.translate_y,
                     scale: clip.scale,
                     rotation: clip.rotation,
-                    invert_colors: clip.invert_colors,
                     effects: &[],
                     effect_groups: &[],
                 });
             }
         }
 
+
+        // Sort clips descending by layer_index: higher index = bottom of timeline = rendered first
+        // as base layer. This ordering is required by generate_layers' consecutive-run grouping.
+        clip_descs.sort_unstable_by(|a, b| b.layer_index.cmp(&a.layer_index));
 
         let layer_descs: Vec<CompositeLayerDescriptor> = layers
             .iter()

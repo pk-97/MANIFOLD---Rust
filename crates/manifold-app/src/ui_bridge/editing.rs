@@ -40,7 +40,7 @@ pub(super) fn dispatch_editing(
             if modifiers.shift {
                 // Shift+Click: extend region from anchor to clip end.
                 // From Unity InteractionOverlay.OnPointerClick (line 206-207).
-                super::select_region_to_with_project(clip_end_beat.as_f32(), layer_idx, selection, &*project);
+                super::select_region_to_with_project(clip_end_beat, layer_idx, selection, &*project);
             } else if modifiers.command || modifiers.ctrl {
                 // Cmd/Ctrl+Click: toggle clip in/out of selection, then update region bounds.
                 // From Unity InteractionOverlay.OnPointerClick (line 208-211).
@@ -63,13 +63,13 @@ pub(super) fn dispatch_editing(
                 // Shift+Click on empty area: extend region from anchor to beat/layer.
                 // From Unity InteractionOverlay.OnPointerClick (line 177-180).
                 let snapped = ui.viewport.snap_to_grid(Beats::from_f32(*beat));
-                super::select_region_to_with_project(snapped.as_f32(), *layer, selection, &*project);
+                super::select_region_to_with_project(snapped, *layer, selection, &*project);
             } else {
                 // Plain click: set insert cursor (clears everything, Ableton behavior).
                 // From Unity InteractionOverlay.OnPointerClick (line 183).
                 let lid = project.timeline.layers.get(*layer)
                     .map(|l| l.layer_id.clone()).unwrap_or_default();
-                selection.set_insert_cursor(*beat, lid);
+                selection.set_insert_cursor(Beats::from_f32(*beat), lid);
             }
             *active_layer = project.timeline.layers.get(*layer).map(|l| l.layer_id.clone());
             DispatchResult::structural()

@@ -1702,15 +1702,7 @@ impl PlaybackEngine {
             self.ready_clips_list.push(self.compositor_fallback_clips[i].clone());
         }
 
-        // Sort by layer index descending (back to front for compositing)
-        // Resolve layer_id → positional index via the project's cached map.
-        let id_to_idx = self.project.as_ref()
-            .map(|p| p.timeline.layer_id_index_map());
-        self.ready_clips_list.sort_unstable_by(|a, b| {
-            let ai = id_to_idx.and_then(|m| m.get(&a.layer_id).copied()).unwrap_or(0);
-            let bi = id_to_idx.and_then(|m| m.get(&b.layer_id).copied()).unwrap_or(0);
-            bi.cmp(&ai)
-        });
+        // Layer ordering is applied in content_pipeline.rs after layer_index is assigned.
 
         // Clear expired recently-started entries that passed the gate
         let last_rt = self.last_realtime_now;

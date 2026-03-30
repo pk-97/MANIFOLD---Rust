@@ -268,8 +268,8 @@ fn update_region_from_clip_selection(selection: &mut SelectionState, project: &P
         return;
     }
     {
-        let mut min_beat = f32::MAX;
-        let mut max_beat = f32::MIN;
+        let mut min_beat = manifold_core::Beats(f64::MAX);
+        let mut max_beat = manifold_core::Beats(-f64::MAX);
         let mut min_layer = i32::MAX;
         let mut max_layer = i32::MIN;
         let mut found = false;
@@ -278,8 +278,8 @@ fn update_region_from_clip_selection(selection: &mut SelectionState, project: &P
             let li = li as i32;
             for clip in &layer.clips {
                 if selection.selected_clip_ids.contains(&clip.id) {
-                    min_beat = min_beat.min(clip.start_beat.as_f32());
-                    max_beat = max_beat.max((clip.start_beat + clip.duration_beats).as_f32());
+                    min_beat = min_beat.min(clip.start_beat);
+                    max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
                     min_layer = min_layer.min(li);
                     max_layer = max_layer.max(li);
                     found = true;
@@ -299,8 +299,8 @@ pub fn update_region_from_clip_selection_inline(selection: &mut SelectionState, 
     if selection.selected_clip_ids.len() < 2 {
         return;
     }
-    let mut min_beat = f32::MAX;
-    let mut max_beat = f32::MIN;
+    let mut min_beat = manifold_core::Beats(f64::MAX);
+    let mut max_beat = manifold_core::Beats(-f64::MAX);
     let mut min_layer = i32::MAX;
     let mut max_layer = i32::MIN;
     let mut found = false;
@@ -309,8 +309,8 @@ pub fn update_region_from_clip_selection_inline(selection: &mut SelectionState, 
         let li = li as i32;
         for clip in &layer.clips {
             if selection.selected_clip_ids.contains(&clip.id) {
-                min_beat = min_beat.min(clip.start_beat.as_f32());
-                max_beat = max_beat.max((clip.start_beat + clip.duration_beats).as_f32());
+                min_beat = min_beat.min(clip.start_beat);
+                max_beat = max_beat.max(clip.start_beat + clip.duration_beats);
                 min_layer = min_layer.min(li);
                 max_layer = max_layer.max(li);
                 found = true;
@@ -325,7 +325,7 @@ pub fn update_region_from_clip_selection_inline(selection: &mut SelectionState, 
 
 /// Shift+Click region selection with correct anchor precedence.
 pub(crate) fn select_region_to_with_project(
-    target_beat: f32,
+    target_beat: manifold_core::Beats,
     target_layer: usize,
     selection: &mut SelectionState,
     project: &Project,
@@ -333,12 +333,12 @@ pub(crate) fn select_region_to_with_project(
     let layer_count = project.timeline.layers.len();
     if layer_count == 0 { return; }
 
-    let anchor: Option<(f32, usize)> = if selection.has_insert_cursor() {
+    let anchor: Option<(manifold_core::Beats, usize)> = if selection.has_insert_cursor() {
         let anchor_idx = selection.insert_cursor_layer_id.as_ref()
             .and_then(|id| project.timeline.find_layer_index_by_id(id))
             .unwrap_or(0);
         Some((
-            selection.insert_cursor_beat.unwrap_or(0.0),
+            selection.insert_cursor_beat.unwrap_or(manifold_core::Beats::ZERO),
             anchor_idx,
         ))
     } else if selection.has_region() {
@@ -346,12 +346,12 @@ pub(crate) fn select_region_to_with_project(
         let start_idx = r.layer_index_range(&project.timeline.layers)
             .map(|(lo, _)| lo)
             .unwrap_or(0);
-        Some((r.start_beat.as_f32(), start_idx))
+        Some((r.start_beat, start_idx))
     } else if let Some(ref clip_id) = selection.primary_selected_clip_id.clone() {
         project.timeline.layers.iter().enumerate()
             .find_map(|(li, l)| l.clips.iter()
                 .find(|c| c.id == *clip_id)
-                .map(|_c| (_c.start_beat.as_f32(), li)))
+                .map(|_c| (_c.start_beat, li)))
     } else {
         None
     };

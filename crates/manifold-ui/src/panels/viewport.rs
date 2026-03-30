@@ -592,14 +592,14 @@ impl TimelineViewportPanel {
     }
 
     /// Convert pixel X in the tracks area to beat position.
-    pub fn pixel_to_beat(&self, px: f32) -> f32 {
-        (px - self.tracks_rect.x) / self.mapper.pixels_per_beat() + self.scroll_x_beats.as_f32()
+    pub fn pixel_to_beat(&self, px: f32) -> Beats {
+        Beats(((px - self.tracks_rect.x) / self.mapper.pixels_per_beat()) as f64 + self.scroll_x_beats.0)
     }
 
     /// Convert panel-local pixel X (0 = left edge of tracks area) to beat position.
     /// Used by waveform/stem scrub where events are already offset to local coords.
-    pub fn local_pixel_to_beat(&self, local_px: f32) -> f32 {
-        local_px / self.mapper.pixels_per_beat() + self.scroll_x_beats.as_f32()
+    pub fn local_pixel_to_beat(&self, local_px: f32) -> Beats {
+        Beats((local_px / self.mapper.pixels_per_beat()) as f64 + self.scroll_x_beats.0)
     }
 
     /// Snap a beat to the grid for ruler scrubbing, unless free-scrub is active.
@@ -659,7 +659,7 @@ impl TimelineViewportPanel {
         }
 
         let layer_index = self.layer_at_y(pos.y)?;
-        let beat = self.pixel_to_beat(pos.x);
+        let beat = self.pixel_to_beat(pos.x).as_f32();
 
         // Reject clicks in vertical padding — only the padded clip rect is interactive.
         let track_y = self.track_y(layer_index);
@@ -836,7 +836,7 @@ impl TimelineViewportPanel {
     /// levels (16th → 8th → beat → bar) until the threshold is met.
     const MIN_CREATION_PX: f32 = 40.0;
 
-    pub fn clip_creation_step(&self) -> f32 {
+    pub fn clip_creation_step(&self) -> Beats {
         let ppb = self.mapper.pixels_per_beat();
         let candidates: [f32; 4] = [
             0.25,
@@ -847,11 +847,11 @@ impl TimelineViewportPanel {
         let grid = self.snap_grid_step();
         for &step in &candidates {
             if step >= grid && step * ppb >= Self::MIN_CREATION_PX {
-                return step;
+                return Beats(step as f64);
             }
         }
         // Fallback: bar is always the coarsest grid level
-        self.beats_per_bar as f32
+        Beats(self.beats_per_bar as f64)
     }
 
     // ── Grid subdivision ──────────────────────────────────────────
@@ -1024,7 +1024,7 @@ impl Panel for TimelineViewportPanel {
                     return vec![PanelAction::OverviewScrub(norm)];
                 }
                 if self.ruler_rect.contains(*pos) {
-                    let raw = Beats::from_f32(self.pixel_to_beat(pos.x));
+                    let raw = self.pixel_to_beat(pos.x);
                     let beat = self.scrub_snap_beat(raw, modifiers.alt);
                     return vec![PanelAction::Seek(beat.as_f32())];
                 }
@@ -1055,7 +1055,7 @@ impl Panel for TimelineViewportPanel {
                     // Latch Alt state at drag start — Unity checks per-frame but
                     // Drag events don't carry modifiers, so we capture once.
                     self.scrub_free = modifiers.alt;
-                    let raw = Beats::from_f32(self.pixel_to_beat(origin.x));
+                    let raw = self.pixel_to_beat(origin.x);
                     let beat = self.scrub_snap_beat(raw, self.scrub_free);
                     return vec![PanelAction::Seek(beat.as_f32())];
                 }
@@ -1067,7 +1067,7 @@ impl Panel for TimelineViewportPanel {
                 if self.drag_mode == ViewportDragMode::MarkerDrag
                     && let Some(marker_id) = &self.marker_drag_id
                 {
-                    let raw = Beats::from_f32(self.pixel_to_beat(pos.x));
+                    let raw = self.pixel_to_beat(pos.x);
                     let beat = self.scrub_snap_beat(raw, false).max(Beats::ZERO);
                     return vec![PanelAction::MarkerDragMoved(
                         marker_id.to_string(), beat.as_f32(),
@@ -1078,7 +1078,7 @@ impl Panel for TimelineViewportPanel {
                     return vec![PanelAction::OverviewScrub(norm)];
                 }
                 if self.drag_mode == ViewportDragMode::RulerScrub {
-                    let raw = Beats::from_f32(self.pixel_to_beat(pos.x));
+                    let raw = self.pixel_to_beat(pos.x);
                     let beat = self.scrub_snap_beat(raw, self.scrub_free);
                     return vec![PanelAction::Seek(beat.as_f32())];
                 }
@@ -1089,7 +1089,7 @@ impl Panel for TimelineViewportPanel {
             UIEvent::DragEnd { pos, .. } => {
                 if self.drag_mode == ViewportDragMode::MarkerDrag {
                     let result = if let Some(marker_id) = self.marker_drag_id.take() {
-                        let raw = Beats::from_f32(self.pixel_to_beat(pos.x));
+                        let raw = self.pixel_to_beat(pos.x);
                         let beat = self.scrub_snap_beat(raw, false).max(Beats::ZERO);
                         vec![PanelAction::MarkerDragEnded(marker_id.to_string(), beat.as_f32())]
                     } else {
@@ -1659,7 +1659,7 @@ mod tests {
         let beat = Beats::from_f32(4.0);
         let px = panel.beat_to_pixel(beat);
         let beat_back = panel.pixel_to_beat(px);
-        assert!((beat.as_f32() - beat_back).abs() < 0.001);
+        assert!((beat.as_f32() - beat_back.as_f32()).abs() < 0.001);
     }
 
     #[test]
@@ -1707,25 +1707,25 @@ mod tests {
 
         // ppb=200: sixteenth = 50px ≥ 40 → stays at 0.25
         panel.set_zoom(200.0);
-        assert_eq!(panel.clip_creation_step(), 0.25);
+        assert_eq!(panel.clip_creation_step(), Beats(0.25));
 
         // ppb=100: sixteenth = 25px < 40, eighth = 50px ≥ 40 → 0.5
         panel.set_zoom(100.0);
-        assert_eq!(panel.clip_creation_step(), 0.5);
+        assert_eq!(panel.clip_creation_step(), Beats(0.5));
 
         // ppb=20: sixteenth = 5px, eighth = 10px, beat = 20px < 40,
         //         bar = 80px ≥ 40 → 4.0
         panel.set_zoom(20.0);
-        assert_eq!(panel.clip_creation_step(), 4.0);
+        assert_eq!(panel.clip_creation_step(), Beats(4.0));
 
         // ppb=50: sixteenth = 12.5px < 40, eighth = 25px < 40,
         //         beat = 50px ≥ 40 → 1.0
         panel.set_zoom(50.0);
-        assert_eq!(panel.clip_creation_step(), 1.0);
+        assert_eq!(panel.clip_creation_step(), Beats(1.0));
 
         // Very zoomed out ppb=5: grid_step = bar (4.0), 4*5=20px < 40 → still bar (fallback)
         panel.set_zoom(5.0);
-        assert_eq!(panel.clip_creation_step(), 4.0);
+        assert_eq!(panel.clip_creation_step(), Beats(4.0));
     }
 
     #[test]

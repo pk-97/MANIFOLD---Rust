@@ -9,7 +9,7 @@ struct Uniforms {
     scale_val: f32,
     rotation: f32,
     aspect_ratio: f32,
-    invert_colors: f32,
+    _pad: f32, // keeps struct at 32 bytes — WGSL uniform structs must be multiples of 16 bytes
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -73,10 +73,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     switch u.blend_mode {
         case 0u: {
             let out_a = bl_a + ba * (1.0 - bl_a);
-            var out_rgb = f_val + b * (1.0 - bl_a);
-            if u.invert_colors > 0.5 {
-                out_rgb = max(vec3<f32>(1.0) - out_rgb, vec3<f32>(0.0));
-            }
+            let out_rgb = f_val + b * (1.0 - bl_a);
             var result = vec4<f32>(out_rgb, out_a);
             result = clamp(mix(base, result, u.opacity), vec4<f32>(-100.0), vec4<f32>(100.0));
             textureStore(t_output, vec2<i32>(id.xy), result);
@@ -129,10 +126,6 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var out_rgb = mix(b, blended, bl_a);
     let out_a = bl_a + ba * (1.0 - bl_a);
-
-    if u.invert_colors > 0.5 {
-        out_rgb = max(vec3<f32>(1.0) - out_rgb, vec3<f32>(0.0));
-    }
 
     let blended_result = vec4<f32>(out_rgb, out_a);
     var final_result = mix(base, blended_result, u.opacity);

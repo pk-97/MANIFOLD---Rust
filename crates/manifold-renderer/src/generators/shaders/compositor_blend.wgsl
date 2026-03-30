@@ -6,7 +6,7 @@ struct Uniforms {
     scale_val: f32,
     rotation: f32,
     aspect_ratio: f32,
-    invert_colors: f32,
+    _pad: f32, // keeps struct at 32 bytes — WGSL uniform structs must be multiples of 16 bytes
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -83,10 +83,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // 0: Normal — premultiplied alpha-over (Unity VideoCompositor.shader lines 218-221)
         case 0u: {
             let out_a = bl_a + ba * (1.0 - bl_a);
-            var out_rgb = f_val + b * (1.0 - bl_a);
-            if u.invert_colors > 0.5 {
-                out_rgb = max(vec3<f32>(1.0) - out_rgb, vec3<f32>(0.0));
-            }
+            let out_rgb = f_val + b * (1.0 - bl_a);
             var result = vec4<f32>(out_rgb, out_a);
             result = clamp(mix(base, result, u.opacity), vec4<f32>(-100.0), vec4<f32>(100.0));
             return result;
@@ -165,11 +162,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Alpha compositing: lerp base → blended by blend alpha
     var out_rgb = mix(b, blended, bl_a);
     let out_a = bl_a + ba * (1.0 - bl_a);
-
-    // Post-blend invert (matches Unity: applied to composited result)
-    if u.invert_colors > 0.5 {
-        out_rgb = max(vec3<f32>(1.0) - out_rgb, vec3<f32>(0.0));
-    }
 
     // Post-blend opacity lerp (matches Unity: lerp(base, result, opacity))
     let blended_result = vec4<f32>(out_rgb, out_a);

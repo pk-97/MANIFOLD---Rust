@@ -40,7 +40,7 @@ pub fn compute_left_trim(
     original_start: Beats,
     original_duration: Beats,
     original_in_point: Seconds,
-    spb: f32,
+    spb: f64,
     is_generator: bool,
     min_duration: Beats,
 ) -> TrimResult {
@@ -63,7 +63,7 @@ pub fn compute_left_trim(
     let beat_delta = new_start - original_start;
 
     // Adjust InPoint proportionally (seconds = beats * spb)
-    let new_in_point = Seconds::from_f32((original_in_point.as_f32() + beat_delta.as_f32() * spb).max(0.0));
+    let new_in_point = Seconds((original_in_point.0 + beat_delta.0 * spb).max(0.0));
 
     TrimResult {
         new_start_beat: new_start,
@@ -92,7 +92,7 @@ pub fn compute_right_trim(
     mouse_beat: Beats,
     clip_start: Beats,
     original_in_point: Seconds,
-    spb: f32,
+    spb: f64,
     is_generator: bool,
     is_looping: bool,
     video_length_seconds: Option<Seconds>,
@@ -105,7 +105,7 @@ pub fn compute_right_trim(
     if !is_generator && !is_looping
         && let Some(video_len) = video_length_seconds
             && spb > 0.0 {
-                let max_duration_beats = Beats::from_f32((video_len.as_f32() - original_in_point.as_f32()).max(0.0) / spb);
+                let max_duration_beats = Beats((video_len.0 - original_in_point.0).max(0.0) / spb);
                 new_end = new_end.min(clip_start + max_duration_beats);
                 // Re-enforce minimum after clamping
                 new_end = new_end.max(clip_start + min_duration);
@@ -124,7 +124,7 @@ pub fn compute_right_trim(
 mod tests {
     use super::*;
 
-    const SPB: f32 = 0.5; // 120 BPM
+    const SPB: f64 = 0.5; // 120 BPM
 
     fn b(v: f32) -> Beats { Beats::from_f32(v) }
     fn s(v: f32) -> Seconds { Seconds::from_f32(v) }

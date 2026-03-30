@@ -136,12 +136,12 @@ impl TimelineEditingHost for AppEditingHost<'_> {
                 if clip.id == clip_id {
                     return Some(ClipRef {
                         clip_id: clip.id.clone(),
-                        start_beat: clip.start_beat.as_f32(),
-                        duration_beats: clip.duration_beats.as_f32(),
-                        end_beat: (clip.start_beat + clip.duration_beats).as_f32(),
+                        start_beat: clip.start_beat,
+                        duration_beats: clip.duration_beats,
+                        end_beat: clip.start_beat + clip.duration_beats,
                         layer_index: li,
                         layer_id: layer.layer_id.clone(),
-                        in_point: clip.in_point.as_f32(),
+                        in_point: clip.in_point,
                         is_generator: layer.layer_type == manifold_core::types::LayerType::Generator,
                         is_locked: clip.is_locked,
                         is_looping: clip.is_looping,

@@ -5,9 +5,8 @@
 // Replaces the former app::SelectionState + app::ClipDragState.
 
 use std::collections::HashSet;
-use manifold_core::{ClipId, LayerId, MarkerId};
+use manifold_core::{Beats, ClipId, LayerId, MarkerId, Seconds};
 use manifold_core::selection::SelectionRegion;
-use manifold_core::units::Beats;
 
 pub struct UIState {
     // ── Clip Selection ──
@@ -37,7 +36,7 @@ pub struct UIState {
     pub cursor_layer_id: Option<LayerId>,
 
     // ── Insert Cursor (set on click, persists until next click or region drag) ──
-    pub insert_cursor_beat: Option<f32>,
+    pub insert_cursor_beat: Option<Beats>,
     pub insert_cursor_layer_id: Option<LayerId>,
 
     // ── Hover ──
@@ -46,17 +45,17 @@ pub struct UIState {
     // ── Drag state ──
     pub is_dragging: bool,
     pub drag_clip_id: Option<ClipId>,
-    pub drag_start_beat: f32,
+    pub drag_start_beat: Beats,
     pub drag_start_layer_id: Option<LayerId>,
-    pub drag_offset_beats: f32, // offset from clip StartBeat to mouse beat
+    pub drag_offset_beats: Beats, // offset from clip StartBeat to mouse beat
 
     // ── Trim state (originals preserved for undo) ──
     pub is_trimming: bool,
     pub trim_from_left: bool, // true = left edge, false = right edge
     pub trim_clip_id: Option<ClipId>,
-    pub trim_original_start_beat: f32,
-    pub trim_original_duration_beats: f32,
-    pub trim_original_in_point: f32, // seconds (video source offset)
+    pub trim_original_start_beat: Beats,
+    pub trim_original_duration_beats: Beats,
+    pub trim_original_in_point: Seconds, // video source offset
 
     // ── Scrubbing ──
     pub is_scrubbing: bool,
@@ -91,15 +90,15 @@ impl UIState {
             hovered_clip_id: None,
             is_dragging: false,
             drag_clip_id: None,
-            drag_start_beat: 0.0,
+            drag_start_beat: Beats::ZERO,
             drag_start_layer_id: None,
-            drag_offset_beats: 0.0,
+            drag_offset_beats: Beats::ZERO,
             is_trimming: false,
             trim_from_left: false,
             trim_clip_id: None,
-            trim_original_start_beat: 0.0,
-            trim_original_duration_beats: 0.0,
-            trim_original_in_point: 0.0,
+            trim_original_start_beat: Beats::ZERO,
+            trim_original_duration_beats: Beats::ZERO,
+            trim_original_in_point: Seconds::ZERO,
             is_scrubbing: false,
             current_zoom_index: crate::color::DEFAULT_ZOOM_INDEX,
             selected_marker_ids: HashSet::new(),
@@ -181,7 +180,7 @@ impl UIState {
     /// Set a region selection (clears individual clip and layer selection).
     /// Unity UIState.cs SetRegion (lines 50-68).
     pub fn set_region(
-        &mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32,
+        &mut self, start_beat: Beats, end_beat: Beats, start_layer: i32, end_layer: i32,
         layers: &[manifold_core::layer::Layer],
     ) {
         self.selected_clip_ids.clear();
@@ -194,8 +193,8 @@ impl UIState {
         // Populate LayerId-based fields from the layer array
         let min = start_layer.min(end_layer).max(0) as usize;
         let max = start_layer.max(end_layer).max(0) as usize;
-        self.selection_region.start_beat = Beats::from_f32(start_beat);
-        self.selection_region.end_beat = Beats::from_f32(end_beat);
+        self.selection_region.start_beat = start_beat;
+        self.selection_region.end_beat = end_beat;
         self.selection_region.is_active = true;
         self.selection_region.selected_layer_ids.clear();
         let upper = max.min(layers.len().saturating_sub(1));
@@ -211,7 +210,7 @@ impl UIState {
     /// individual clip IDs so per-clip highlight and inspector still work.
     /// Unity UIState.cs SetRegionFromClipBounds (lines 74-92).
     pub fn set_region_from_clip_bounds(
-        &mut self, start_beat: f32, end_beat: f32, start_layer: i32, end_layer: i32,
+        &mut self, start_beat: Beats, end_beat: Beats, start_layer: i32, end_layer: i32,
         layers: &[manifold_core::layer::Layer],
     ) {
         self.clear_layer_selection();
@@ -221,8 +220,8 @@ impl UIState {
         let e_layer = start_layer.max(end_layer).max(0) as usize;
         let s_beat = start_beat.min(end_beat);
         let e_beat = start_beat.max(end_beat);
-        self.selection_region.start_beat = Beats::from_f32(s_beat);
-        self.selection_region.end_beat = Beats::from_f32(e_beat);
+        self.selection_region.start_beat = s_beat;
+        self.selection_region.end_beat = e_beat;
         self.selection_region.is_active = true;
         self.selection_region.selected_layer_ids.clear();
         let upper = e_layer.min(layers.len().saturating_sub(1));
@@ -258,7 +257,7 @@ impl UIState {
 
     /// Set insert cursor. Clears EVERYTHING (clips, layers, region) per Ableton behavior.
     /// Unity UIState.cs SetInsertCursor (lines 111-122).
-    pub fn set_insert_cursor(&mut self, beat: f32, layer_id: LayerId) {
+    pub fn set_insert_cursor(&mut self, beat: Beats, layer_id: LayerId) {
         self.insert_cursor_beat = Some(beat);
         self.insert_cursor_layer_id = Some(layer_id);
         self.selection_region = SelectionRegion::default(); // cursor replaces region
@@ -272,7 +271,7 @@ impl UIState {
 
     /// Move the insert cursor beat without clearing selection (used during playhead scrub).
     /// Unity UIState.cs SetInsertCursorBeat (lines 125-130).
-    pub fn set_insert_cursor_beat(&mut self, beat: f32) {
+    pub fn set_insert_cursor_beat(&mut self, beat: Beats) {
         self.insert_cursor_beat = Some(beat);
     }
 
@@ -417,7 +416,7 @@ impl UIState {
     /// Begin a clip move drag.
     /// Unity UIState.cs BeginDrag (lines 374-381).
     pub fn begin_drag(
-        &mut self, clip_id: &ClipId, start_beat: f32, layer_id: LayerId, mouse_beat: f32,
+        &mut self, clip_id: &ClipId, start_beat: Beats, layer_id: LayerId, mouse_beat: Beats,
     ) {
         self.is_dragging = true;
         self.drag_clip_id = Some(clip_id.clone());
@@ -438,7 +437,7 @@ impl UIState {
     /// Begin a left-edge trim.
     /// Unity UIState.cs BeginTrimLeft (lines 389-397).
     pub fn begin_trim_left(
-        &mut self, clip_id: &ClipId, start_beat: f32, duration_beats: f32, in_point: f32,
+        &mut self, clip_id: &ClipId, start_beat: Beats, duration_beats: Beats, in_point: Seconds,
     ) {
         self.is_trimming = true;
         self.trim_from_left = true;
@@ -451,7 +450,7 @@ impl UIState {
     /// Begin a right-edge trim.
     /// Unity UIState.cs BeginTrimRight (lines 399-407).
     pub fn begin_trim_right(
-        &mut self, clip_id: &ClipId, start_beat: f32, duration_beats: f32, in_point: f32,
+        &mut self, clip_id: &ClipId, start_beat: Beats, duration_beats: Beats, in_point: Seconds,
     ) {
         self.is_trimming = true;
         self.trim_from_left = false;

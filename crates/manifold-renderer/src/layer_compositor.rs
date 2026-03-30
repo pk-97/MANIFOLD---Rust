@@ -25,7 +25,6 @@ pub struct CompositeClipDescriptor<'a> {
     pub translate_y: f32,
     pub scale: f32,
     pub rotation: f32,
-    pub invert_colors: bool,
     pub effects: &'a [EffectInstance],
     pub effect_groups: &'a [EffectGroup],
 }
@@ -40,7 +39,7 @@ struct BlendUniforms {
     scale_val: f32,
     rotation: f32,
     aspect_ratio: f32,
-    invert_colors: f32,
+    _pad: f32, // keeps struct at 32 bytes — WGSL uniform structs must be multiples of 16 bytes
 }
 
 const _: () = assert!(std::mem::size_of::<BlendUniforms>() == 32);
@@ -315,7 +314,6 @@ struct SingleClipTransform {
     translate_y: f32,
     scale: f32,
     rotation: f32,
-    invert_colors: bool,
 }
 
 /// Layer-aware compositor with per-layer ping-pong blending.
@@ -559,7 +557,6 @@ impl LayerCompositor {
                     translate_y: clip.translate_y,
                     scale: clip.scale,
                     rotation: clip.rotation,
-                    invert_colors: clip.invert_colors,
                 });
             } else {
                 // Multi-clip or layer-effects: composite into layer buffer
@@ -581,7 +578,7 @@ impl LayerCompositor {
                         scale_val: clip.scale,
                         rotation: clip.rotation,
                         aspect_ratio: aspect,
-                        invert_colors: if clip.invert_colors { 1.0 } else { 0.0 },
+                        _pad: 0.0,
                     };
                     self.blend.blend_pass(
                         gpu,
@@ -640,7 +637,6 @@ impl LayerCompositor {
                     translate_y: 0.0,
                     scale: 1.0,
                     rotation: 0.0,
-                    invert_colors: false,
                 });
             }
         }
@@ -672,7 +668,7 @@ impl LayerCompositor {
                 scale_val: transform.scale,
                 rotation: transform.rotation,
                 aspect_ratio: output.aspect,
-                invert_colors: if transform.invert_colors { 1.0 } else { 0.0 },
+                _pad: 0.0,
             };
             self.blend.blend_pass(
                 gpu,
@@ -849,7 +845,6 @@ impl LayerCompositor {
                         translate_y: clip.translate_y,
                         scale: clip.scale,
                         rotation: clip.rotation,
-                        invert_colors: clip.invert_colors,
                     });
                 } else {
                     let lb_idx = layer_buf_idx;
@@ -868,11 +863,7 @@ impl LayerCompositor {
                             scale_val: clip.scale,
                             rotation: clip.rotation,
                             aspect_ratio: aspect,
-                            invert_colors: if clip.invert_colors {
-                                1.0
-                            } else {
-                                0.0
-                            },
+                            _pad: 0.0,
                         };
                         self.blend.blend_pass(
                             &mut gpu,
@@ -933,7 +924,6 @@ impl LayerCompositor {
                             translate_y: 0.0,
                             scale: 1.0,
                             rotation: 0.0,
-                            invert_colors: false,
                         },
                     );
                 }

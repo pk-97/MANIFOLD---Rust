@@ -39,12 +39,12 @@ pub struct RegionSplitResult {
 /// Avoids passing mutable project references through the trait.
 pub struct ClipRef {
     pub clip_id: ClipId,
-    pub start_beat: f32,
-    pub duration_beats: f32,
-    pub end_beat: f32,
+    pub start_beat: Beats,
+    pub duration_beats: Beats,
+    pub end_beat: Beats,
     pub layer_index: usize,
     pub layer_id: LayerId,
-    pub in_point: f32,
+    pub in_point: Seconds,
     pub is_generator: bool,
     pub is_locked: bool,
     pub is_looping: bool,
