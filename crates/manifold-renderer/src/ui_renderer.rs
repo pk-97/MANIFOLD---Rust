@@ -281,7 +281,7 @@ impl UIRenderer {
         });
 
         // Load system fonts (needed for Unicode symbol fallback: ▶▼≡ etc),
-        // then load our bundled Inter Regular + Bold. Family::SansSerif with
+        // then load our bundled Inter Regular + Bold. Family::Name("Inter") with
         // Weight::BOLD/NORMAL selects the correct weight from our bundled files.
         let mut font_system = FontSystem::new();
         let font_data = include_bytes!("../assets/fonts/Inter-Regular.ttf");
@@ -584,7 +584,7 @@ impl UIRenderer {
         buffer.set_text(
             &mut self.font_system,
             text,
-            &Attrs::new().family(Family::SansSerif).weight(weight),
+            &Attrs::new().family(Family::Name("Inter")).weight(weight),
             Shaping::Basic,
             None,
         );
@@ -710,7 +710,7 @@ impl UIRenderer {
                     buffer.set_text(
                         &mut self.font_system,
                         &cmd.text,
-                        &Attrs::new().family(Family::SansSerif).weight(weight),
+                        &Attrs::new().family(Family::Name("Inter")).weight(weight),
                         Shaping::Basic,
                         None,
                     );
