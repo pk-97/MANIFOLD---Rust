@@ -243,9 +243,9 @@ pub struct Application {
     // Output window double-click fullscreen toggle.
     // Double-click fullscreen toggle for the output window.
     pub(crate) output_last_click: Option<std::time::Instant>,
-    /// True when the output window's NSView is in presentation fullscreen
-    /// (`enterFullScreenMode:`). Tracked manually — winit doesn't know about it.
-    pub(crate) output_presentation_fullscreen: bool,
+    /// Saved window frame before entering manual borderless fullscreen.
+    /// `Some(...)` = currently fullscreen. `None` = windowed.
+    pub(crate) output_saved_frame: Option<[f64; 4]>,
 
     // File I/O
     pub(crate) current_project_path: Option<std::path::PathBuf>,
@@ -368,7 +368,7 @@ impl Application {
             split_dragging: false,
             split_was_hovered: false,
             output_last_click: None,
-            output_presentation_fullscreen: false,
+            output_saved_frame: None,
             current_project_path: None,
             last_export_path: None,
             project_io: {
@@ -1303,7 +1303,7 @@ impl ApplicationHandler for Application {
                     #[cfg(target_os = "macos")]
                     {
                         self.output_presenter = None;
-                        self.output_presentation_fullscreen = false;
+                        self.output_saved_frame = None;
                     }
                     self.window_registry.remove(&window_id);
                     log::info!("Closed output window");
@@ -1540,7 +1540,7 @@ impl ApplicationHandler for Application {
                         if let Some(ws) = self.window_registry.get(&window_id) {
                             Self::toggle_presentation_fullscreen(
                                 &ws.window,
-                                &mut self.output_presentation_fullscreen,
+                                &mut self.output_saved_frame,
                             );
                         }
                     } else {
@@ -1829,7 +1829,7 @@ impl ApplicationHandler for Application {
                             #[cfg(target_os = "macos")]
                             {
                                 self.output_presenter = None;
-                                self.output_presentation_fullscreen = false;
+                                self.output_saved_frame = None;
                             }
                             self.window_registry.remove(&window_id);
                             log::info!("Closed output window");
@@ -1953,7 +1953,7 @@ impl ApplicationHandler for Application {
             #[cfg(target_os = "macos")]
             {
                 self.output_presenter = None;
-                self.output_presentation_fullscreen = false;
+                self.output_saved_frame = None;
             }
             let output_ids: Vec<_> = self.window_registry.iter()
                 .filter(|(_, ws)| matches!(ws.role, WindowRole::Output { .. }))
@@ -2042,14 +2042,16 @@ impl Application {
 // render_text_input_overlay() moved to app_render.rs
 
 impl Application {
-    /// Toggle macOS presentation fullscreen on the output window's NSView.
-    /// Uses `enterFullScreenMode:withOptions:` / `exitFullScreenModeWithOptions:`
-    /// which fills the screen instantly with no Spaces animation and no GPU
-    /// scheduler display-priority overhead.
+    /// Toggle manual borderless fullscreen on the output window.
+    ///
+    /// Saves the window frame, removes decorations, and resizes to fill the
+    /// screen. No Spaces animation, no GPU scheduler display-priority overhead,
+    /// and no view-stealing (unlike `enterFullScreenMode:` which conflicts with
+    /// winit's window delegate).
     #[cfg(target_os = "macos")]
     fn toggle_presentation_fullscreen(
         window: &winit::window::Window,
-        is_fullscreen: &mut bool,
+        saved_frame: &mut Option<[f64; 4]>,
     ) {
         use objc::{msg_send, sel, sel_impl};
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -2060,26 +2062,46 @@ impl Application {
         };
 
         unsafe {
-            if *is_fullscreen {
-                let _: () = msg_send![ns_view, exitFullScreenModeWithOptions: std::ptr::null::<objc::runtime::Object>()];
-                *is_fullscreen = false;
+            let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
+            if ns_window.is_null() { return; }
+
+            if let Some(frame) = saved_frame.take() {
+                // --- Exit fullscreen: restore decorations and saved frame ---
+                // NSWindowStyleMaskTitled | Closable | Miniaturizable | Resizable
+                let titled_mask: u64 = 1 | 2 | 4 | 8;
+                let _: () = msg_send![ns_window, setStyleMask: titled_mask];
+                let _: () = msg_send![ns_window, setLevel: 0i64]; // NSNormalWindowLevel
+
+                #[repr(C)]
+                #[derive(Copy, Clone)]
+                struct NSRect { x: f64, y: f64, w: f64, h: f64 }
+                let rect = NSRect { x: frame[0], y: frame[1], w: frame[2], h: frame[3] };
+                let _: () = msg_send![ns_window, setFrame: rect display: true];
+
                 log::info!("[OutputWindow] Exited presentation fullscreen");
             } else {
-                // Get the NSScreen the window is currently on.
-                let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
+                // --- Enter fullscreen: save frame, go borderless, fill screen ---
+
+                // Save current frame (origin + size) for restore.
+                #[repr(C)]
+                #[derive(Copy, Clone)]
+                struct NSRect { x: f64, y: f64, w: f64, h: f64 }
+                let current: NSRect = msg_send![ns_window, frame];
+                *saved_frame = Some([current.x, current.y, current.w, current.h]);
+
+                // Get the screen frame.
                 let screen: *mut objc::runtime::Object = msg_send![ns_window, screen];
                 if screen.is_null() { return; }
+                let screen_frame: NSRect = msg_send![screen, frame];
 
-                let ok: bool = msg_send![ns_view,
-                    enterFullScreenMode: screen
-                    withOptions: std::ptr::null::<objc::runtime::Object>()
-                ];
-                if ok {
-                    *is_fullscreen = true;
-                    log::info!("[OutputWindow] Entered presentation fullscreen");
-                } else {
-                    log::warn!("[OutputWindow] enterFullScreenMode failed");
-                }
+                // NSWindowStyleMaskBorderless = 0 (no title bar, no chrome).
+                let _: () = msg_send![ns_window, setStyleMask: 0u64];
+                let _: () = msg_send![ns_window, setFrame: screen_frame display: true];
+                // Keep above other windows so the output stays visible.
+                // NSStatusWindowLevel (25) — above normal, below screen-saver.
+                let _: () = msg_send![ns_window, setLevel: 25i64];
+
+                log::info!("[OutputWindow] Entered presentation fullscreen");
             }
         }
     }
