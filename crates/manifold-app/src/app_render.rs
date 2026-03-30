@@ -318,18 +318,10 @@ impl Application {
                     let tab = self.ui_root.inspector.last_effect_tab();
                     let target = match tab {
                         manifold_ui::InspectorTab::Master => manifold_editing::commands::effect_target::EffectTarget::Master,
-                        manifold_ui::InspectorTab::Layer => {
+                        manifold_ui::InspectorTab::Layer | manifold_ui::InspectorTab::Clip => {
                             let layer_id = self.active_layer_id.clone().unwrap_or_default();
                             manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id }
                         },
-                        manifold_ui::InspectorTab::Clip => {
-                            if let Some(cid) = self.selection.primary_selected_clip_id.clone() {
-                                manifold_editing::commands::effect_target::EffectTarget::Clip { clip_id: cid }
-                            } else {
-                                let layer_id = self.active_layer_id.clone().unwrap_or_default();
-                                manifold_editing::commands::effect_target::EffectTarget::Layer { layer_id }
-                            }
-                        }
                     };
                     let effects_len = match tab {
                         manifold_ui::InspectorTab::Master => self.local_project.settings.master_effects.len(),

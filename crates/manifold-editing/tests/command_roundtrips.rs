@@ -504,24 +504,6 @@ fn reorder_effect_undo_roundtrip() {
 }
 
 #[test]
-fn effect_on_clip_undo_roundtrip() {
-    let mut project = make_test_project();
-    let clip_id = project.timeline.layers[0].clips[0].id.clone();
-
-    let effect = EffectInstance::new(EffectTypeId::KALEIDOSCOPE);
-    let target = EffectTarget::Clip { clip_id: clip_id.clone() };
-    let mut cmd = AddEffectCommand::new(target, effect, 0);
-
-    cmd.execute(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert_eq!(clip.effects.len(), 1);
-
-    cmd.undo(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert_eq!(clip.effects.len(), 0);
-}
-
-#[test]
 fn effect_on_layer_undo_roundtrip() {
     let mut project = make_test_project();
 
@@ -746,65 +728,6 @@ fn change_trim_undo_roundtrip() {
 }
 
 // ─── Envelope Commands ───
-
-#[test]
-fn add_param_envelope_undo_roundtrip() {
-    let mut project = make_test_project();
-    let clip_id = project.timeline.layers[0].clips[0].id.clone();
-
-    let envelope = ParamEnvelope {
-        target_effect_type: EffectTypeId::BLOOM,
-        param_index: 0,
-        enabled: true,
-        attack_beats: 0.25,
-        decay_beats: 0.25,
-        sustain_level: 0.8,
-        release_beats: 0.5,
-        target_normalized: 1.0,
-        current_level: 0.0,
-    };
-
-    let mut cmd = AddParamEnvelopeCommand::new(clip_id.clone(), envelope);
-
-    cmd.execute(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!(clip.has_envelopes());
-
-    cmd.undo(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    assert!(!clip.has_envelopes());
-}
-
-#[test]
-fn change_envelope_adsr_undo_roundtrip() {
-    let mut project = make_test_project();
-    let clip_id = project.timeline.layers[0].clips[0].id.clone();
-
-    // Add an envelope first
-    let clip = project.timeline.find_clip_by_id_mut(&clip_id).unwrap();
-    clip.envelopes_mut().push(ParamEnvelope {
-        attack_beats: 0.25, decay_beats: 0.25, sustain_level: 1.0, release_beats: 0.25,
-        ..make_envelope()
-    });
-
-    let mut cmd = ChangeEnvelopeADSRCommand::new(
-        clip_id.clone(), 0,
-        0.25, 0.25, 1.0, 0.25,
-        0.5, 0.5, 0.7, 1.0,
-    );
-
-    cmd.execute(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    let env = &clip.envelopes.as_ref().unwrap()[0];
-    assert!((env.attack_beats - 0.5).abs() < 0.001);
-    assert!((env.sustain_level - 0.7).abs() < 0.001);
-
-    cmd.undo(&mut project);
-    let clip = project.timeline.find_clip_by_id(&clip_id).unwrap();
-    let env = &clip.envelopes.as_ref().unwrap()[0];
-    assert!((env.attack_beats - 0.25).abs() < 0.001);
-    assert!((env.sustain_level - 1.0).abs() < 0.001);
-}
 
 #[test]
 fn add_layer_envelope_undo_roundtrip() {

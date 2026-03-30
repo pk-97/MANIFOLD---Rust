@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use crate::id::{ClipId, LayerId};
 use crate::generator_type_id::GeneratorTypeId;
-use crate::effect_type_id::EffectTypeId;
 use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope};
 use crate::units::{Beats, Seconds};
 
@@ -62,12 +61,13 @@ pub struct TimelineClip {
     #[serde(default)]
     pub has_start_absolute_tick: bool,
 
-    // ── Effects & modulation ──
-    #[serde(default)]
+    // ── Legacy: per-clip effects removed (Ableton model: effects on layer/master only) ──
+    // Fields kept for deserialization of old projects, never written back.
+    #[serde(default, skip_serializing)]
     pub effects: Vec<EffectInstance>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub effect_groups: Option<Vec<EffectGroup>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing)]
     pub envelopes: Option<Vec<ParamEnvelope>>,
 
     // ── Legacy flat generator params (V1.0.0 clips) ──
@@ -110,15 +110,6 @@ impl TimelineClip {
             || self.translate_y != 0.0
             || self.scale != 1.0
             || self.rotation != 0.0
-            || !self.effects.is_empty()
-    }
-
-    pub fn has_modular_effects(&self) -> bool {
-        !self.effects.is_empty()
-    }
-
-    pub fn has_envelopes(&self) -> bool {
-        self.envelopes.as_ref().is_some_and(|e| !e.is_empty())
     }
 
     /// Deep clone with new ID.
@@ -212,21 +203,6 @@ impl TimelineClip {
         }
     }
 
-    /// Get the effect groups list, creating it if None.
-    pub fn effect_groups_mut(&mut self) -> &mut Vec<EffectGroup> {
-        if self.effect_groups.is_none() {
-            self.effect_groups = Some(Vec::new());
-        }
-        self.effect_groups.as_mut().unwrap()
-    }
-
-    /// Get the envelopes list, creating it if None.
-    pub fn envelopes_mut(&mut self) -> &mut Vec<ParamEnvelope> {
-        if self.envelopes.is_none() {
-            self.envelopes = Some(Vec::new());
-        }
-        self.envelopes.as_mut().unwrap()
-    }
 
     /// Set scale with clamp. Unity TimelineClip.cs line 179.
     pub fn set_scale(&mut self, v: f32) {
@@ -238,48 +214,6 @@ impl TimelineClip {
         self.loop_duration_beats = v.max(Beats::ZERO);
     }
 
-    /// Find effect by type. Unity TimelineClip.cs line 230.
-    pub fn find_effect(&self, effect_type: &EffectTypeId) -> Option<&EffectInstance> {
-        self.effects.iter().find(|e| e.effect_type() == effect_type)
-    }
-
-    /// Find effect group by ID. Unity TimelineClip.cs line 249.
-    pub fn find_effect_group(&self, group_id: &str) -> Option<&crate::effects::EffectGroup> {
-        self.effect_groups.as_ref()?.iter().find(|g| g.id == group_id)
-    }
-}
-
-impl crate::effects::EffectContainer for TimelineClip {
-    fn effects(&self) -> &[EffectInstance] {
-        &self.effects
-    }
-    fn effects_mut(&mut self) -> &mut Vec<EffectInstance> {
-        &mut self.effects
-    }
-    fn effect_groups(&self) -> &[EffectGroup] {
-        self.effect_groups.as_deref().unwrap_or(&[])
-    }
-    fn effect_groups_mut(&mut self) -> &mut Vec<EffectGroup> {
-        self.effect_groups_mut()
-    }
-    fn has_modular_effects(&self) -> bool {
-        !self.effects.is_empty()
-    }
-    fn find_effect(&self, effect_type: &EffectTypeId) -> Option<&EffectInstance> {
-        self.effects.iter().find(|e| e.effect_type() == effect_type)
-    }
-    fn find_effect_group(&self, group_id: &str) -> Option<&EffectGroup> {
-        self.effect_groups.as_ref()?.iter().find(|g| g.id == group_id)
-    }
-    fn envelopes(&self) -> &[ParamEnvelope] {
-        self.envelopes.as_deref().unwrap_or(&[])
-    }
-    fn envelopes_mut(&mut self) -> &mut Vec<ParamEnvelope> {
-        TimelineClip::envelopes_mut(self)
-    }
-    fn has_envelopes(&self) -> bool {
-        self.envelopes.as_ref().is_some_and(|e| !e.is_empty())
-    }
 }
 
 impl Default for TimelineClip {

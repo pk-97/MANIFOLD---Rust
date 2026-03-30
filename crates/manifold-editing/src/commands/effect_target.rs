@@ -1,12 +1,11 @@
-use manifold_core::{ClipId, LayerId};
+use manifold_core::LayerId;
 use manifold_core::effects::{EffectInstance, EffectGroup};
 use manifold_core::project::Project;
 
-/// Routes effect commands to clip/layer/master effect lists.
-/// Replaces C#'s `IList<EffectInstance>` parameter pattern.
+/// Routes effect commands to layer/master effect lists.
+/// Per-clip effects removed (Ableton model: effects on layer/master only).
 #[derive(Debug, Clone)]
 pub enum EffectTarget {
-    Clip { clip_id: ClipId },
     Layer { layer_id: LayerId },
     Master,
 }
@@ -22,16 +21,6 @@ where
     F: FnOnce(&mut Vec<EffectInstance>, &mut Vec<EffectGroup>) -> R,
 {
     match target {
-        EffectTarget::Clip { clip_id } => {
-            let clip = project.timeline.find_clip_by_id_mut(clip_id)?;
-            let groups = clip.effect_groups.get_or_insert_with(Vec::new);
-            // effects and groups are different fields of the same struct — no alias.
-            // We split the borrow manually.
-            let effects = &mut clip.effects as *mut Vec<EffectInstance>;
-            let groups = groups as *mut Vec<EffectGroup>;
-            // SAFETY: effects and groups are non-overlapping fields of TimelineClip.
-            Some(f(unsafe { &mut *effects }, unsafe { &mut *groups }))
-        }
         EffectTarget::Layer { layer_id } => {
             let (_, layer) = project.timeline.find_layer_by_id_mut(layer_id)?;
             let effects = layer.effects_mut() as *mut Vec<EffectInstance>;
@@ -57,16 +46,6 @@ where
     F: FnOnce(&[EffectInstance], &[EffectGroup]) -> R,
 {
     match target {
-        EffectTarget::Clip { clip_id } => {
-            // Linear search for immutable access (no self-healing cache)
-            for layer in &project.timeline.layers {
-                if let Some(clip) = layer.find_clip(clip_id) {
-                    let groups = clip.effect_groups.as_deref().unwrap_or(&[]);
-                    return Some(f(&clip.effects, groups));
-                }
-            }
-            None
-        }
         EffectTarget::Layer { layer_id } => {
             let (_, layer) = project.timeline.find_layer_by_id(layer_id)?;
             let effects = layer.effects.as_deref().unwrap_or(&[]);

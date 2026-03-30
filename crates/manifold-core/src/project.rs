@@ -62,13 +62,10 @@ impl Project {
         };
         // Master effects
         strip(&mut self.settings.master_effects);
-        // Layer + clip effects
+        // Layer effects
         for layer in &mut self.timeline.layers {
             if let Some(ref mut effects) = layer.effects {
                 strip(effects);
-            }
-            for clip in &mut layer.clips {
-                strip(&mut clip.effects);
             }
         }
     }
@@ -106,15 +103,10 @@ impl Project {
         for fx in &mut self.settings.master_effects {
             fx.align_to_definition();
         }
-        // Layer effects + clip effects
+        // Layer effects
         for layer in &mut self.timeline.layers {
             if let Some(ref mut effects) = layer.effects {
                 for fx in effects.iter_mut() {
-                    fx.align_to_definition();
-                }
-            }
-            for clip in &mut layer.clips {
-                for fx in &mut clip.effects {
                     fx.align_to_definition();
                 }
             }

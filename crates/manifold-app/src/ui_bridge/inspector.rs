@@ -14,8 +14,8 @@ use manifold_editing::commands::effects::{
     ReorderEffectGroupCommand,
 };
 use manifold_editing::commands::envelopes::{
-    ChangeEnvelopeADSRCommand, ChangeLayerEnvelopeADSRCommand,
-    ChangeLayerEnvelopeTargetCommand, ChangeEnvelopeTargetNormalizedCommand,
+    ChangeLayerEnvelopeADSRCommand,
+    ChangeLayerEnvelopeTargetCommand,
 };
 use manifold_editing::commands::effect_target::{EffectTarget, DriverTarget};
 use manifold_editing::commands::drivers::{
@@ -448,10 +448,6 @@ pub(super) fn dispatch_inspector(
                         p.timeline.find_layer_by_id_mut(layer_id)
                             .map(|(_, l)| l.effects_mut())
                     }
-                    EffectTarget::Clip { clip_id, .. } => {
-                        p.timeline.find_clip_by_id_mut(clip_id)
-                            .map(|c| &mut c.effects)
-                    }
                 };
                 if let Some(effects) = effects {
                     for &idx in &indices_owned {
@@ -605,15 +601,7 @@ pub(super) fn dispatch_inspector(
                                 .map(|l| l.envelopes_mut())
                         })
                     }
-                    InspectorTab::Clip => {
-                        selection.primary_selected_clip_id.as_ref().and_then(|clip_id| {
-                            project.timeline.layers.iter_mut()
-                                .flat_map(|l| l.clips.iter_mut())
-                                .find(|c| c.id == *clip_id)
-                                .map(|c| c.envelopes_mut())
-                        })
-                    }
-                    InspectorTab::Master => None,
+                    InspectorTab::Clip | InspectorTab::Master => None,
                 };
                 if let Some(envs) = envs {
                     let env_idx = envs.iter().position(|e|
@@ -706,13 +694,7 @@ pub(super) fn dispatch_inspector(
                     InspectorTab::Layer => layer_idx.and_then(|idx|
                         project.timeline.layers.get_mut(idx).map(|l| l.envelopes_mut())
                     ),
-                    InspectorTab::Clip => selection.primary_selected_clip_id.as_ref().and_then(|cid|
-                        project.timeline.layers.iter_mut()
-                            .flat_map(|l| l.clips.iter_mut())
-                            .find(|c| c.id == *cid)
-                            .map(|c| c.envelopes_mut())
-                    ),
-                    InspectorTab::Master => None,
+                    InspectorTab::Clip | InspectorTab::Master => None,
                 };
                 if let Some(envs) = envs
                     && let Some(env) = envs.iter_mut().find(|e|
@@ -732,18 +714,11 @@ pub(super) fn dispatch_inspector(
                 let p = *param;
                 let v = *val;
                 let layer_id = active_layer.clone().unwrap_or_default();
-                let clip_id = selection.primary_selected_clip_id.clone();
                 ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |proj| {
                     let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                         InspectorTab::Layer => proj.timeline.find_layer_by_id_mut(&layer_id)
                             .map(|(_, l)| l.envelopes_mut()),
-                        InspectorTab::Clip => clip_id.as_ref().and_then(|cid|
-                            proj.timeline.layers.iter_mut()
-                                .flat_map(|l| l.clips.iter_mut())
-                                .find(|c| c.id == *cid)
-                                .map(|c| c.envelopes_mut())
-                        ),
-                        InspectorTab::Master => None,
+                        InspectorTab::Clip | InspectorTab::Master => None,
                     };
                     if let Some(envs) = envs
                         && let Some(env) = envs.iter_mut().find(|e|
@@ -808,13 +783,7 @@ pub(super) fn dispatch_inspector(
                     InspectorTab::Layer => layer_idx.and_then(|idx|
                         project.timeline.layers.get_mut(idx).map(|l| l.envelopes_mut())
                     ),
-                    InspectorTab::Clip => selection.primary_selected_clip_id.as_ref().and_then(|cid|
-                        project.timeline.layers.iter_mut()
-                            .flat_map(|l| l.clips.iter_mut())
-                            .find(|c| c.id == *cid)
-                            .map(|c| c.envelopes_mut())
-                    ),
-                    InspectorTab::Master => None,
+                    InspectorTab::Clip | InspectorTab::Master => None,
                 };
                 if let Some(envs) = envs
                     && let Some(env) = envs.iter_mut().find(|e|
@@ -827,18 +796,11 @@ pub(super) fn dispatch_inspector(
                 let param_i = *pi as i32;
                 let n = *norm;
                 let layer_id = active_layer.clone().unwrap_or_default();
-                let clip_id = selection.primary_selected_clip_id.clone();
                 ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
                     let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                         InspectorTab::Layer => p.timeline.find_layer_by_id_mut(&layer_id)
                             .map(|(_, l)| l.envelopes_mut()),
-                        InspectorTab::Clip => clip_id.as_ref().and_then(|cid|
-                            p.timeline.layers.iter_mut()
-                                .flat_map(|l| l.clips.iter_mut())
-                                .find(|c| c.id == *cid)
-                                .map(|c| c.envelopes_mut())
-                        ),
-                        InspectorTab::Master => None,
+                        InspectorTab::Clip | InspectorTab::Master => None,
                     };
                     if let Some(envs) = envs
                         && let Some(env) = envs.iter_mut().find(|e|
@@ -938,23 +900,7 @@ pub(super) fn dispatch_inspector(
                                         }
                                 }
                         }
-                        InspectorTab::Clip => {
-                            if let Some(clip_id) = &selection.primary_selected_clip_id {
-                                let clip = project.timeline.layers.iter()
-                                    .flat_map(|l| l.clips.iter())
-                                    .find(|c| c.id == *clip_id);
-                                if let Some(clip) = clip {
-                                    let envs = clip.envelopes.as_deref().unwrap_or(&[]);
-                                    if let Some((env_idx, env)) = envs.iter().enumerate()
-                                        .find(|(_, e)| e.target_effect_type == et && e.param_index == *pi as i32)
-                                        && (old_target - env.target_normalized).abs() > f32::EPSILON {
-                                            let cmd = ChangeEnvelopeTargetNormalizedCommand::new(clip_id.clone(), env_idx, old_target, env.target_normalized);
-                                            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                                        }
-                                }
-                            }
-                        }
-                        InspectorTab::Master => {}
+                        InspectorTab::Clip | InspectorTab::Master => {}
                     }
                 }
             }
@@ -1024,28 +970,7 @@ pub(super) fn dispatch_inspector(
                                     }
                                 }
                         }
-                        InspectorTab::Clip => {
-                            if let Some(clip_id) = &selection.primary_selected_clip_id {
-                                let clip = project.timeline.layers.iter()
-                                    .flat_map(|l| l.clips.iter())
-                                    .find(|c| c.id == *clip_id);
-                                if let Some(clip) = clip {
-                                    let envs = clip.envelopes.as_deref().unwrap_or(&[]);
-                                    if let Some((env_idx, env)) = envs.iter().enumerate()
-                                        .find(|(_, e)| e.target_effect_type == et && e.param_index == *pi as i32)
-                                    {
-                                        let (na, nd, ns, nr) = (env.attack_beats, env.decay_beats, env.sustain_level, env.release_beats);
-                                        if (old_a - na).abs() > f32::EPSILON || (old_d - nd).abs() > f32::EPSILON
-                                            || (old_s - ns).abs() > f32::EPSILON || (old_r - nr).abs() > f32::EPSILON
-                                        {
-                                            let cmd = ChangeEnvelopeADSRCommand::new(clip_id.clone(), env_idx, old_a, old_d, old_s, old_r, na, nd, ns, nr);
-                                            ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        InspectorTab::Master => {}
+                        InspectorTab::Clip | InspectorTab::Master => {}
                     }
                 }
             }
@@ -1566,7 +1491,6 @@ pub(super) fn dispatch_inspector(
                         .map(|e| e.len())
                         .unwrap_or(0)
                 }
-                _ => 0,
             };
             let cmd = manifold_editing::commands::effects::AddEffectCommand::new(
                 target, effect, insert_idx,

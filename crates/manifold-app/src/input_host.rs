@@ -1183,7 +1183,7 @@ fn resolve_effects_ref<'a>(
 fn resolve_effect_target(
     tab: InspectorTab,
     active_layer: &Option<LayerId>,
-    selection: &UIState,
+    _selection: &UIState,
 ) -> EffectTarget {
     match tab {
         InspectorTab::Master => EffectTarget::Master,
@@ -1192,12 +1192,8 @@ fn resolve_effect_target(
             EffectTarget::Layer { layer_id }
         }
         InspectorTab::Clip => {
-            if let Some(clip_id) = selection.primary_selected_clip_id.as_ref() {
-                EffectTarget::Clip { clip_id: clip_id.clone() }
-            } else {
-                let layer_id = active_layer.clone().unwrap_or_default();
-                EffectTarget::Layer { layer_id }
-            }
+            let layer_id = active_layer.clone().unwrap_or_default();
+            EffectTarget::Layer { layer_id }
         }
     }
 }
