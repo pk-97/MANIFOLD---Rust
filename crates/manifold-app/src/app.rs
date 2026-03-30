@@ -242,6 +242,11 @@ pub struct Application {
     pub(crate) split_dragging: bool,
     pub(crate) split_was_hovered: bool,
 
+    // Output window double-click fullscreen toggle.
+    // Stores the Instant of the last left-button press on the output window so
+    // a second press within DOUBLE_CLICK_MS triggers Fullscreen::Borderless.
+    pub(crate) output_last_click: Option<std::time::Instant>,
+
     // File I/O
     pub(crate) current_project_path: Option<std::path::PathBuf>,
     /// Last export path — remembered across exports so the file dialog
@@ -364,6 +369,7 @@ impl Application {
             cursor_manager: CursorManager::new(),
             split_dragging: false,
             split_was_hovered: false,
+            output_last_click: None,
             current_project_path: None,
             last_export_path: None,
             project_io: {
@@ -1512,6 +1518,33 @@ impl ApplicationHandler for Application {
                             }
                         }
                         _ => {}
+                    }
+                } else if !is_primary
+                    && button == MouseButton::Left
+                    && state == ElementState::Pressed
+                {
+                    // Double-click on the output window toggles borderless fullscreen.
+                    // Borderless goes through the macOS compositor (unlike Spaces/green-button
+                    // fullscreen) so the GPU scheduler sees no display priority pressure.
+                    const DOUBLE_CLICK_MS: u128 = 300;
+                    let now = std::time::Instant::now();
+                    let is_double = self.output_last_click
+                        .map(|t| now.duration_since(t).as_millis() < DOUBLE_CLICK_MS)
+                        .unwrap_or(false);
+
+                    if is_double {
+                        self.output_last_click = None;
+                        if let Some(ws) = self.window_registry.get(&window_id) {
+                            if ws.window.fullscreen().is_some() {
+                                ws.window.set_fullscreen(None);
+                            } else {
+                                ws.window.set_fullscreen(Some(
+                                    winit::window::Fullscreen::Borderless(None),
+                                ));
+                            }
+                        }
+                    } else {
+                        self.output_last_click = Some(now);
                     }
                 }
             }
