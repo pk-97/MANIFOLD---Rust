@@ -748,10 +748,8 @@ impl Generator for FluidSimulationGenerator {
         self.scatter_height = 0;
     }
 
-    /// Unity: InternalResolutionScale = 0.5 (dynamic via DENSITY_RES param).
-    /// Organic particle simulation — visually indistinguishable at half res.
     fn internal_resolution_scale(&self) -> f32 {
-        0.5
+        1.0
     }
 
     fn reset_state(&mut self, _device: &manifold_gpu::GpuDevice) {
