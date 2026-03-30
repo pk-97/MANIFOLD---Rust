@@ -241,9 +241,11 @@ pub struct Application {
     pub(crate) split_was_hovered: bool,
 
     // Output window double-click fullscreen toggle.
-    // Stores the Instant of the last left-button press on the output window so
-    // a second press within DOUBLE_CLICK_MS triggers Fullscreen::Borderless.
+    // Double-click fullscreen toggle for the output window.
     pub(crate) output_last_click: Option<std::time::Instant>,
+    /// True when the output window's NSView is in presentation fullscreen
+    /// (`enterFullScreenMode:`). Tracked manually — winit doesn't know about it.
+    pub(crate) output_presentation_fullscreen: bool,
 
     // File I/O
     pub(crate) current_project_path: Option<std::path::PathBuf>,
@@ -366,6 +368,7 @@ impl Application {
             split_dragging: false,
             split_was_hovered: false,
             output_last_click: None,
+            output_presentation_fullscreen: false,
             current_project_path: None,
             last_export_path: None,
             project_io: {
@@ -1298,7 +1301,10 @@ impl ApplicationHandler for Application {
                     // Stop the presenter thread before removing the window so the
                     // surface is fully dropped before winit destroys the window.
                     #[cfg(target_os = "macos")]
-                    { self.output_presenter = None; }
+                    {
+                        self.output_presenter = None;
+                        self.output_presentation_fullscreen = false;
+                    }
                     self.window_registry.remove(&window_id);
                     log::info!("Closed output window");
                 }
@@ -1519,9 +1525,10 @@ impl ApplicationHandler for Application {
                     && button == MouseButton::Left
                     && state == ElementState::Pressed
                 {
-                    // Double-click on the output window toggles borderless fullscreen.
-                    // Borderless goes through the macOS compositor (unlike Spaces/green-button
-                    // fullscreen) so the GPU scheduler sees no display priority pressure.
+                    // Double-click on the output window toggles presentation fullscreen
+                    // via NSView.enterFullScreenMode / exitFullScreenMode. This is the
+                    // macOS API for presentation/kiosk displays — no Spaces animation,
+                    // no GPU scheduler display-priority overhead.
                     const DOUBLE_CLICK_MS: u128 = 300;
                     let now = std::time::Instant::now();
                     let is_double = self.output_last_click
@@ -1531,13 +1538,10 @@ impl ApplicationHandler for Application {
                     if is_double {
                         self.output_last_click = None;
                         if let Some(ws) = self.window_registry.get(&window_id) {
-                            if ws.window.fullscreen().is_some() {
-                                ws.window.set_fullscreen(None);
-                            } else {
-                                ws.window.set_fullscreen(Some(
-                                    winit::window::Fullscreen::Borderless(None),
-                                ));
-                            }
+                            Self::toggle_presentation_fullscreen(
+                                &ws.window,
+                                &mut self.output_presentation_fullscreen,
+                            );
                         }
                     } else {
                         self.output_last_click = Some(now);
@@ -1823,7 +1827,10 @@ impl ApplicationHandler for Application {
                     && let Key::Named(NamedKey::Escape) = &logical_key
                         && !is_primary {
                             #[cfg(target_os = "macos")]
-                            { self.output_presenter = None; }
+                            {
+                                self.output_presenter = None;
+                                self.output_presentation_fullscreen = false;
+                            }
                             self.window_registry.remove(&window_id);
                             log::info!("Closed output window");
                         }
@@ -1944,7 +1951,10 @@ impl ApplicationHandler for Application {
             // Stop the presenter thread first so the surface is dropped
             // before winit destroys the window.
             #[cfg(target_os = "macos")]
-            { self.output_presenter = None; }
+            {
+                self.output_presenter = None;
+                self.output_presentation_fullscreen = false;
+            }
             let output_ids: Vec<_> = self.window_registry.iter()
                 .filter(|(_, ws)| matches!(ws.role, WindowRole::Output { .. }))
                 .map(|(id, _)| *id)
@@ -2030,6 +2040,50 @@ impl Application {
 }
 
 // render_text_input_overlay() moved to app_render.rs
+
+impl Application {
+    /// Toggle macOS presentation fullscreen on the output window's NSView.
+    /// Uses `enterFullScreenMode:withOptions:` / `exitFullScreenModeWithOptions:`
+    /// which fills the screen instantly with no Spaces animation and no GPU
+    /// scheduler display-priority overhead.
+    #[cfg(target_os = "macos")]
+    fn toggle_presentation_fullscreen(
+        window: &winit::window::Window,
+        is_fullscreen: &mut bool,
+    ) {
+        use objc::{msg_send, sel, sel_impl};
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let ns_view = match window.window_handle().unwrap().as_raw() {
+            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut objc::runtime::Object,
+            _ => return,
+        };
+
+        unsafe {
+            if *is_fullscreen {
+                let _: () = msg_send![ns_view, exitFullScreenModeWithOptions: std::ptr::null::<objc::runtime::Object>()];
+                *is_fullscreen = false;
+                log::info!("[OutputWindow] Exited presentation fullscreen");
+            } else {
+                // Get the NSScreen the window is currently on.
+                let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
+                let screen: *mut objc::runtime::Object = msg_send![ns_window, screen];
+                if screen.is_null() { return; }
+
+                let ok: bool = msg_send![ns_view,
+                    enterFullScreenMode: screen
+                    withOptions: std::ptr::null::<objc::runtime::Object>()
+                ];
+                if ok {
+                    *is_fullscreen = true;
+                    log::info!("[OutputWindow] Entered presentation fullscreen");
+                } else {
+                    log::warn!("[OutputWindow] enterFullScreenMode failed");
+                }
+            }
+        }
+    }
+}
 
 impl Drop for Application {
     fn drop(&mut self) {
