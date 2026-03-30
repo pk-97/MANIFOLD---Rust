@@ -474,7 +474,7 @@ pub fn sync_project_data(ui: &mut UIRoot, project: &Project, active_layer: Optio
                 parent_layer_id: layer.parent_layer_id.as_ref().map(|id| id.to_string()),
                 blend_mode: format!("{:?}", layer.default_blend_mode),
                 generator_type: layer.gen_params()
-                    .map(|g| format!("{:?}", g.generator_type())),
+                    .map(|g| manifold_core::generator_type_registry::display_name(g.generator_type()).to_string()),
                 clip_count: layer.clips.len(),
                 video_folder_path: layer.video_folder_path.clone(),
                 source_clip_count: 0,
