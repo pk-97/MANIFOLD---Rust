@@ -1163,7 +1163,6 @@ impl TimelineViewportPanel {
 
         let layer_count = self.tracks.len();
         let row_h = overview_rect.height / layer_count as f32;
-        let palette = &color::LAYER_PALETTE;
 
         // Clip miniatures — cap to avoid thousands of nodes at low zoom.
         // At 1258 clips, uncapped overview creates 1258 panel nodes.
@@ -1178,9 +1177,8 @@ impl TimelineViewportPanel {
             // Layer 0 at bottom, layer N-1 at top (matching Unity line 230)
             let y = overview_rect.y + (layer_count.saturating_sub(1).saturating_sub(clip.layer_index)) as f32 * row_h;
 
-            let clip_color = palette[clip.layer_index % palette.len()];
             tree.add_panel(-1, x, y, w, row_h,
-                UIStyle { bg_color: clip_color, ..UIStyle::default() },
+                UIStyle { bg_color: clip.color, ..UIStyle::default() },
             );
         }
 
@@ -1263,13 +1261,10 @@ impl TimelineViewportPanel {
             if track.is_group && track.is_collapsed && !track.child_layer_indices.is_empty() {
                 let child_count = track.child_layer_indices.len();
                 let rows_per_child = 2.0_f32.min(clamped_h / child_count.max(1) as f32);
-                let palette = &color::LAYER_PALETTE;
                 let (min_beat, max_beat) = self.visible_beat_range();
-                let _ppb = self.mapper.pixels_per_beat();
 
                 for (ci, &child_idx) in track.child_layer_indices.iter().enumerate() {
                     let child_y = clamped_y + ci as f32 * rows_per_child;
-                    let child_color = palette[ci % palette.len()];
 
                     // Render clips of this child layer as tiny rects
                     for clip in &self.clips {
@@ -1283,7 +1278,7 @@ impl TimelineViewportPanel {
                         let cw = (cx2 - cx).max(1.0);
 
                         tree.add_panel(-1, cx, child_y, cw, rows_per_child,
-                            UIStyle { bg_color: child_color, ..UIStyle::default() },
+                            UIStyle { bg_color: clip.color, ..UIStyle::default() },
                         );
                     }
                 }

@@ -408,6 +408,12 @@ impl UIRoot {
                                     actions.push(action);
                                 }
                         }
+                        DropdownAction::ColorSelected(color_idx) => {
+                            if let Some(ctx) = self.dropdown_context.take()
+                                && let Some(action) = self.dropdown_color_to_action(ctx, color_idx) {
+                                    actions.push(action);
+                                }
+                        }
                         DropdownAction::Dismissed => {
                             // Only clear context if dropdown actually closed
                             // (disabled item clicks send Dismissed but keep dropdown open)
@@ -761,8 +767,18 @@ impl UIRoot {
                 if self.layer_headers.layer_count() > 1 {
                     items.push(DropdownItem::new("Delete Layer"));
                 }
+                // Last text item gets a separator before the color grid
+                if let Some(last) = items.last_mut() {
+                    last.separator_after = true;
+                }
                 self.dropdown_context = Some(DropdownContext::LayerContext(*layer_idx));
-                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                self.dropdown.open_context_with_colors(
+                    items,
+                    manifold_ui::color::COLOR_GRID.to_vec(),
+                    manifold_ui::color::COLOR_GRID_COLS,
+                    right_click_pos,
+                    &mut self.tree,
+                );
                 true
             }
             _ => false,
@@ -843,6 +859,17 @@ impl UIRoot {
                 };
                 Some(PanelAction::SetLedExitIndex(exit_index))
             }
+        }
+    }
+
+    /// Convert a color swatch selection into the appropriate PanelAction.
+    fn dropdown_color_to_action(&self, ctx: DropdownContext, color_idx: usize) -> Option<PanelAction> {
+        match ctx {
+            DropdownContext::LayerContext(layer_idx) => {
+                let color = manifold_ui::color::COLOR_GRID.get(color_idx)?;
+                Some(PanelAction::ContextSetLayerColor(layer_idx, *color))
+            }
+            _ => None,
         }
     }
 

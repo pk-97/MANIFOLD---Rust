@@ -176,7 +176,95 @@ pub const GRID_BEAT_LINE: Color32 = Color32::new(82, 82, 87, 77);
 pub const GRID_SUBDIVISION_LINE: Color32 = Color32::new(71, 71, 77, 38);
 pub const GRID_SIXTEENTH_LINE: Color32 = Color32::new(71, 71, 77, 20);
 
-// ── Layer palette ───────────────────────────────────────────────────
+// ── Layer color picker palette ──────────────────────────────────────
+// 7 columns × 10 rows = 70 high-contrast colors. Modeled after Ableton's
+// color grid: each column is a hue family, rows go from light → saturated → dark.
+pub const COLOR_GRID_COLS: usize = 7;
+pub const COLOR_GRID_ROWS: usize = 10;
+pub const COLOR_GRID: [Color32; 70] = [
+    // Row 0 — pastels (light, desaturated)
+    Color32::new(255, 148, 148, 255), // light red
+    Color32::new(255, 192, 120, 255), // light orange
+    Color32::new(255, 235, 120, 255), // light yellow
+    Color32::new(148, 235, 148, 255), // light green
+    Color32::new(130, 220, 235, 255), // light cyan
+    Color32::new(148, 168, 255, 255), // light blue
+    Color32::new(210, 148, 255, 255), // light purple
+    // Row 1 — warm vivids
+    Color32::new(255, 105, 105, 255), // coral red
+    Color32::new(255, 160, 70, 255),  // warm orange
+    Color32::new(255, 220, 50, 255),  // golden yellow
+    Color32::new(100, 220, 100, 255), // spring green
+    Color32::new(70, 200, 220, 255),  // turquoise
+    Color32::new(100, 140, 255, 255), // cornflower
+    Color32::new(185, 105, 255, 255), // lavender
+    // Row 2 — saturated brights
+    Color32::new(255, 50, 50, 255),   // bright red
+    Color32::new(255, 128, 0, 255),   // bright orange
+    Color32::new(255, 200, 0, 255),   // bright yellow
+    Color32::new(50, 200, 50, 255),   // bright green
+    Color32::new(0, 180, 210, 255),   // bright cyan
+    Color32::new(60, 110, 255, 255),  // bright blue
+    Color32::new(160, 60, 255, 255),  // bright purple
+    // Row 3 — pure saturated
+    Color32::new(230, 25, 25, 255),   // pure red
+    Color32::new(230, 105, 0, 255),   // pure orange
+    Color32::new(230, 180, 0, 255),   // amber
+    Color32::new(25, 180, 25, 255),   // pure green
+    Color32::new(0, 155, 190, 255),   // teal
+    Color32::new(35, 80, 230, 255),   // pure blue
+    Color32::new(135, 35, 230, 255),  // pure purple
+    // Row 4 — mid-depth
+    Color32::new(200, 20, 50, 255),   // crimson
+    Color32::new(200, 85, 0, 255),    // burnt orange
+    Color32::new(200, 160, 0, 255),   // gold
+    Color32::new(20, 155, 40, 255),   // forest green
+    Color32::new(0, 130, 165, 255),   // ocean
+    Color32::new(25, 60, 200, 255),   // royal blue
+    Color32::new(110, 25, 200, 255),  // violet
+    // Row 5 — deep saturated
+    Color32::new(170, 15, 45, 255),   // deep crimson
+    Color32::new(170, 70, 0, 255),    // rust
+    Color32::new(170, 140, 0, 255),   // dark gold
+    Color32::new(15, 130, 35, 255),   // deep green
+    Color32::new(0, 105, 140, 255),   // deep teal
+    Color32::new(20, 45, 170, 255),   // navy blue
+    Color32::new(90, 20, 170, 255),   // deep violet
+    // Row 6 — rich darks
+    Color32::new(140, 10, 40, 255),   // dark red
+    Color32::new(140, 55, 0, 255),    // dark orange
+    Color32::new(140, 115, 0, 255),   // dark amber
+    Color32::new(10, 105, 30, 255),   // dark green
+    Color32::new(0, 85, 115, 255),    // dark cyan
+    Color32::new(15, 35, 140, 255),   // dark blue
+    Color32::new(75, 15, 140, 255),   // dark purple
+    // Row 7 — warm earth tones
+    Color32::new(190, 100, 80, 255),  // terracotta
+    Color32::new(175, 130, 80, 255),  // tan
+    Color32::new(160, 160, 80, 255),  // olive
+    Color32::new(80, 140, 100, 255),  // sage
+    Color32::new(80, 130, 145, 255),  // dusty teal
+    Color32::new(100, 110, 160, 255), // slate blue
+    Color32::new(145, 100, 160, 255), // dusty purple
+    // Row 8 — cool grays with hue
+    Color32::new(160, 120, 120, 255), // warm gray
+    Color32::new(150, 135, 110, 255), // khaki
+    Color32::new(140, 140, 110, 255), // sage gray
+    Color32::new(110, 140, 120, 255), // green gray
+    Color32::new(110, 130, 140, 255), // blue gray
+    Color32::new(120, 120, 150, 255), // cool gray
+    Color32::new(140, 120, 150, 255), // purple gray
+    // Row 9 — near-neutrals
+    Color32::new(220, 220, 220, 255), // white
+    Color32::new(180, 180, 180, 255), // light gray
+    Color32::new(140, 140, 140, 255), // mid gray
+    Color32::new(100, 100, 100, 255), // dark gray
+    Color32::new(65, 65, 65, 255),    // charcoal
+    Color32::new(40, 40, 40, 255),    // near-black
+    Color32::new(255, 50, 180, 255),  // hot pink
+];
+
+// ── Legacy layer palette (overview strip fallback) ─────────────────
 pub const LAYER_PALETTE: [Color32; 8] = [
     Color32::new(100, 148, 210, 220), // Slate blue
     Color32::new(100, 180, 145, 220), // Sage green
@@ -187,6 +275,10 @@ pub const LAYER_PALETTE: [Color32; 8] = [
     Color32::new(100, 185, 182, 220), // Muted teal
     Color32::new(188, 182, 108, 220), // Olive gold
 ];
+
+// ── Color grid layout constants ────────────────────────────────────
+pub const COLOR_SWATCH_SIZE: f32 = 16.0;
+pub const COLOR_SWATCH_GAP: f32 = 3.0;
 
 // ── Tempo lane ──────────────────────────────────────────────────────
 pub const TEMPO_LINE: Color32 = Color32::new(64, 199, 199, 166);

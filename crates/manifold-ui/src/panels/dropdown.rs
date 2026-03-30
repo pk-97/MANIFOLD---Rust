@@ -70,6 +70,8 @@ impl DropdownItem {
 pub enum DropdownAction {
     /// User selected item at this index.
     Selected(usize),
+    /// User selected a color swatch at this index into the color grid.
+    ColorSelected(usize),
     /// User dismissed the dropdown (clicked outside or pressed Escape).
     Dismissed,
 }
@@ -97,6 +99,11 @@ pub struct DropdownPanel {
     /// First node index in the tree (for node range checks).
     first_node: usize,
     node_count: usize,
+    // ── Color grid (optional) ─────────────────────────────────
+    /// Colors to render as a swatch grid below the text items.
+    color_grid: Vec<Color32>,
+    color_grid_cols: usize,
+    color_swatch_ids: Vec<i32>,
 }
 
 impl DropdownPanel {
@@ -116,6 +123,9 @@ impl DropdownPanel {
             hovered_index: -1,
             first_node: 0,
             node_count: 0,
+            color_grid: Vec::new(),
+            color_grid_cols: 0,
+            color_swatch_ids: Vec::new(),
         }
     }
 
@@ -155,6 +165,8 @@ impl DropdownPanel {
         min_width: f32,
         tree: &mut UITree,
     ) {
+        self.color_grid.clear();
+        self.color_grid_cols = 0;
         let anchor = Vec2::new(trigger_rect.x, trigger_rect.y_max());
         self.open_at(items, anchor, min_width.max(trigger_rect.width), tree);
     }
@@ -166,6 +178,22 @@ impl DropdownPanel {
         pos: Vec2,
         tree: &mut UITree,
     ) {
+        self.color_grid.clear();
+        self.color_grid_cols = 0;
+        self.open_at(items, pos, MIN_WIDTH, tree);
+    }
+
+    /// Open as a context menu with a color swatch grid below the text items.
+    pub fn open_context_with_colors(
+        &mut self,
+        items: Vec<DropdownItem>,
+        colors: Vec<Color32>,
+        cols: usize,
+        pos: Vec2,
+        tree: &mut UITree,
+    ) {
+        self.color_grid = colors;
+        self.color_grid_cols = cols;
         self.open_at(items, pos, MIN_WIDTH, tree);
     }
 
@@ -184,7 +212,16 @@ impl DropdownPanel {
         // Compute content dimensions.
         let visible_count = self.items.len().min(MAX_VISIBLE_ITEMS);
         let content_width = self.compute_content_width();
-        let w = content_width.max(self.min_width);
+
+        // If we have a color grid, ensure the menu is wide enough for it.
+        let grid_width = if self.color_grid_cols > 0 {
+            let swatch = color::COLOR_SWATCH_SIZE;
+            let gap = color::COLOR_SWATCH_GAP;
+            PADDING_H * 2.0 + self.color_grid_cols as f32 * (swatch + gap) - gap
+        } else {
+            0.0
+        };
+        let w = content_width.max(self.min_width).max(grid_width);
 
         let mut h = PADDING_V * 2.0;
         for (i, item) in self.items.iter().enumerate() {
@@ -195,6 +232,15 @@ impl DropdownPanel {
             if item.separator_after {
                 h += SEPARATOR_HEIGHT;
             }
+        }
+
+        // Add color grid height.
+        if !self.color_grid.is_empty() && self.color_grid_cols > 0 {
+            let rows = self.color_grid.len().div_ceil(self.color_grid_cols);
+            let swatch = color::COLOR_SWATCH_SIZE;
+            let gap = color::COLOR_SWATCH_GAP;
+            // Separator + grid rows + padding.
+            h += SEPARATOR_HEIGHT + rows as f32 * (swatch + gap) - gap + PADDING_V;
         }
 
         // Edge clamping — clamp both position AND size to screen.
@@ -245,6 +291,7 @@ impl DropdownPanel {
         self.first_node = tree.count();
         self.item_ids.clear();
         self.separator_ids.clear();
+        self.color_swatch_ids.clear();
 
         let bounds = self.container_bounds;
 
@@ -345,6 +392,67 @@ impl DropdownPanel {
             }
         }
 
+        // ── Color grid (optional) ──────────────────────────────
+        if !self.color_grid.is_empty() && self.color_grid_cols > 0 {
+            // Separator line above grid.
+            let sep_y = cy + SEPARATOR_HEIGHT / 2.0 - 0.5;
+            let sep_style = UIStyle {
+                bg_color: color::DIVIDER_C32,
+                ..UIStyle::default()
+            };
+            let sep_id = tree.add_panel(
+                self.root_id,
+                bounds.x + PADDING_H,
+                bounds.y + sep_y,
+                item_w,
+                1.0,
+                sep_style,
+            );
+            self.separator_ids.push(sep_id as i32);
+            cy += SEPARATOR_HEIGHT;
+
+            let swatch = color::COLOR_SWATCH_SIZE;
+            let gap = color::COLOR_SWATCH_GAP;
+            let cols = self.color_grid_cols;
+
+            for (i, &swatch_color) in self.color_grid.iter().enumerate() {
+                let col = i % cols;
+                let row = i / cols;
+                let sx = bounds.x + PADDING_H + col as f32 * (swatch + gap);
+                let sy = bounds.y + cy + row as f32 * (swatch + gap);
+
+                let swatch_style = UIStyle {
+                    bg_color: swatch_color,
+                    hover_bg_color: Color32::new(
+                        swatch_color.r.saturating_add(40),
+                        swatch_color.g.saturating_add(40),
+                        swatch_color.b.saturating_add(40),
+                        255,
+                    ),
+                    pressed_bg_color: Color32::new(
+                        swatch_color.r.saturating_sub(20),
+                        swatch_color.g.saturating_sub(20),
+                        swatch_color.b.saturating_sub(20),
+                        255,
+                    ),
+                    corner_radius: 2.0,
+                    border_width: 1.0,
+                    border_color: Color32::new(0, 0, 0, 80),
+                    ..UIStyle::default()
+                };
+
+                let id = tree.add_node(
+                    self.root_id,
+                    Rect::new(sx, sy, swatch, swatch),
+                    UINodeType::Button,
+                    swatch_style,
+                    None,
+                    UIFlags::INTERACTIVE,
+                );
+                self.color_swatch_ids.push(id as i32);
+            }
+        }
+
         self.node_count = tree.count() - self.first_node;
     }
 
@@ -358,7 +466,7 @@ impl DropdownPanel {
 
         match event {
             UIEvent::Click { node_id, .. } => {
-                // Check if clicked on one of our items.
+                // Check if clicked on one of our text items.
                 if let Some(index) = self.item_index_for_node(*node_id) {
                     if self.items[index].enabled {
                         self.close(tree);
@@ -366,6 +474,11 @@ impl DropdownPanel {
                     }
                     // Clicked disabled item — consume but don't dismiss.
                     return Some(DropdownAction::Dismissed);
+                }
+                // Check if clicked on a color swatch.
+                if let Some(index) = self.color_index_for_node(*node_id) {
+                    self.close(tree);
+                    return Some(DropdownAction::ColorSelected(index));
                 }
                 // Click outside → dismiss.
                 self.close(tree);
@@ -426,6 +539,11 @@ impl DropdownPanel {
     fn item_index_for_node(&self, node_id: u32) -> Option<usize> {
         let nid = node_id as i32;
         self.item_ids.iter().position(|&id| id == nid)
+    }
+
+    fn color_index_for_node(&self, node_id: u32) -> Option<usize> {
+        let nid = node_id as i32;
+        self.color_swatch_ids.iter().position(|&id| id == nid)
     }
 
     fn move_hover(&mut self, direction: i32) {

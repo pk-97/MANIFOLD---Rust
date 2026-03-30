@@ -104,6 +104,7 @@ pub fn dispatch(
         | PanelAction::ContextImportMidi(_)
         | PanelAction::ContextGroupSelectedLayers
         | PanelAction::ContextUngroup(_)
+        | PanelAction::ContextSetLayerColor(..)
         | PanelAction::ClipRightClicked(_)
         | PanelAction::TrackRightClicked(..)
         | PanelAction::LayerHeaderRightClicked(_)

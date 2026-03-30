@@ -260,6 +260,7 @@ pub enum PanelAction {
     ContextImportMidi(usize),                        // layer_index
     ContextGroupSelectedLayers,
     ContextUngroup(usize),                           // layer_index
+    ContextSetLayerColor(usize, crate::node::Color32), // layer_index, color
 
     // Timeline Markers
     MarkerClicked(String, Modifiers),     // marker_id, modifiers (Shift for multi-select)

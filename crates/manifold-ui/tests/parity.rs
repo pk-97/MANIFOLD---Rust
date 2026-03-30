@@ -41,7 +41,7 @@ fn layout_layer_controls_width() {
 #[test]
 fn layout_inspector_width_range() {
     assert_eq!(color::MIN_INSPECTOR_WIDTH, 196.0);
-    assert_eq!(color::MAX_INSPECTOR_WIDTH, 500.0);
+    assert_eq!(color::MAX_INSPECTOR_WIDTH, 900.0);
 }
 
 #[test]

@@ -270,6 +270,26 @@ pub(super) fn dispatch_editing(
             DispatchResult::handled()
         }
 
+        PanelAction::ContextSetLayerColor(layer_idx, color) => {
+            use crate::content_command::ContentCommand;
+            let idx = *layer_idx;
+            let r = color.r as f32 / 255.0;
+            let g = color.g as f32 / 255.0;
+            let b = color.b as f32 / 255.0;
+            let a = color.a as f32 / 255.0;
+            // Local project mutation
+            if let Some(layer) = project.timeline.layers.get_mut(idx) {
+                layer.layer_color = manifold_core::color::Color { r, g, b, a };
+            }
+            // Mirror to content thread
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                if let Some(layer) = p.timeline.layers.get_mut(idx) {
+                    layer.layer_color = manifold_core::color::Color { r, g, b, a };
+                }
+            })));
+            DispatchResult::structural()
+        }
+
         // Right-click actions (intercepted by UIRoot for dropdown; should not reach dispatch)
         PanelAction::ClipRightClicked(_) | PanelAction::TrackRightClicked(_, _) => {
             DispatchResult::handled()

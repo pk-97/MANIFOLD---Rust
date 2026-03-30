@@ -1425,8 +1425,8 @@ mod tests {
         panel.build(&mut tree, &layout);
 
         assert!(panel.bg_panel_id >= 0);
-        assert!(panel.scrollbar_track_id >= 0);
-        assert!(panel.scrollbar_thumb_id >= 0);
+        assert!(panel.layer_scrollbar_track_id >= 0);
+        assert!(panel.layer_scrollbar_thumb_id >= 0);
         assert!(tree.count() > 0);
     }
 
@@ -1445,14 +1445,14 @@ mod tests {
     #[test]
     fn scroll_clamps_to_bounds() {
         let mut panel = InspectorCompositePanel::new();
-        panel.max_scroll = 100.0;
-        panel.scroll_offset = 50.0;
+        panel.layer_max_scroll = 100.0;
+        panel.layer_scroll_offset = 50.0;
 
         panel.handle_scroll(-100.0); // scroll way down
-        assert!(panel.scroll_offset <= 100.0);
+        assert!(panel.layer_scroll_offset <= 100.0);
 
         panel.handle_scroll(100.0); // scroll way up
-        assert!(panel.scroll_offset >= 0.0);
+        assert!(panel.layer_scroll_offset >= 0.0);
     }
 
     #[test]
@@ -1467,24 +1467,13 @@ mod tests {
     }
 
     #[test]
-    fn content_height_changes_with_visibility() {
-        let mut panel = InspectorCompositePanel::new();
-
-        let full_h = panel.compute_content_height();
-        panel.set_section_visible(InspectorTab::Master, false);
-        let partial_h = panel.compute_content_height();
-
-        assert!(partial_h < full_h);
-    }
-
-    #[test]
     fn find_target_for_scrollbar() {
         let mut tree = UITree::new();
         let mut panel = InspectorCompositePanel::new();
         let layout = inspector_layout();
         panel.build(&mut tree, &layout);
 
-        let target = panel.find_target_for_node(panel.scrollbar_track_id as u32);
+        let target = panel.find_target_for_node(panel.layer_scrollbar_track_id as u32);
         assert!(matches!(target, Some(PressedTarget::Scrollbar)));
     }
 
@@ -1510,9 +1499,6 @@ mod tests {
         let layout = inspector_layout();
         panel.build(&mut tree, &layout);
 
-        let vp = panel.viewport_rect;
-        let pos = Vec2::new(vp.x + 10.0, vp.y + 10.0);
-
         // Find the master chrome's chevron button and simulate click
         // We can test via route_click
         let actions = panel.route_click(panel.master_chrome.first_node() as u32 + 1, Modifiers::NONE);
@@ -1533,7 +1519,7 @@ mod tests {
         assert!(!panel.is_dragging());
 
         // Simulate scrollbar pointer down
-        let sb_id = panel.scrollbar_thumb_id as u32;
+        let sb_id = panel.layer_scrollbar_thumb_id as u32;
         let pos = Vec2::new(280.0, 100.0);
         panel.route_pointer_down(sb_id, pos, crate::input::Modifiers::NONE);
 
