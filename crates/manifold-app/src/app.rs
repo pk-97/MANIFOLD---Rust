@@ -197,16 +197,19 @@ pub struct Application {
     /// Last seen bridge generation — detects resize (not per-frame).
     #[cfg(target_os = "macos")]
     pub(crate) last_bridge_generation: u64,
-    /// Last IOSurface front_index rendered to output windows.
-    /// Used to skip output blits when no new content frame is available.
+    /// Last IOSurface front_index seen by the UI thread (workspace preview).
+    /// Not used for output window blitting — that is handled by OutputPresenter.
     #[cfg(target_os = "macos")]
     pub(crate) last_output_front_index: usize,
-    /// True when a new content frame is ready for the output window blit.
-    /// Set each tick: true when front_index changed (macOS), always true (non-macOS).
-    pub(crate) output_needs_blit: bool,
     pub(crate) blit_pipeline: Option<BlitPipeline>,
+    /// Cached pipeline for the output blit — reused across open/close cycles
+    /// when the surface format stays the same.
     pub(crate) output_blit_pipeline: Option<manifold_renderer::tonemap_blit::TonemapBlitPipeline>,
     pub(crate) output_blit_format: Option<wgpu::TextureFormat>,
+    /// Dedicated presenter thread for the output window.
+    /// Owns the output surface so `get_current_texture()` never blocks the UI thread.
+    #[cfg(target_os = "macos")]
+    pub(crate) output_presenter: Option<crate::output_presenter::OutputPresenterHandle>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
     pub(crate) surface_format: wgpu::TextureFormat,
@@ -334,10 +337,11 @@ impl Application {
             last_bridge_generation: 0,
             #[cfg(target_os = "macos")]
             last_output_front_index: usize::MAX,
-            output_needs_blit: true,
             blit_pipeline: None,
             output_blit_pipeline: None,
             output_blit_format: None,
+            #[cfg(target_os = "macos")]
+            output_presenter: None,
             ui_renderer: None,
             layer_bitmap_gpu: None,
             surface_format: wgpu::TextureFormat::Rgba16Float,
@@ -1040,7 +1044,7 @@ impl ApplicationHandler for Application {
                 wid,
                 WindowState {
                     window,
-                    surface: surface_wrapper,
+                    surface: Some(surface_wrapper),
                     role: WindowRole::Workspace,
                     display_index: None,
                 },
@@ -1289,6 +1293,10 @@ impl ApplicationHandler for Application {
                     }
                     event_loop.exit();
                 } else {
+                    // Stop the presenter thread before removing the window so the
+                    // surface is fully dropped before winit destroys the window.
+                    #[cfg(target_os = "macos")]
+                    { self.output_presenter = None; }
                     self.window_registry.remove(&window_id);
                     log::info!("Closed output window");
                 }
@@ -1298,7 +1306,21 @@ impl ApplicationHandler for Application {
                 if let Some(gpu) = &self.gpu
                     && let Some(ws) = self.window_registry.get_mut(&window_id) {
                         let scale = ws.window.scale_factor();
-                        ws.surface.resize(&gpu.device, size.width, size.height, scale);
+                        if let Some(surface) = &mut ws.surface {
+                            surface.resize(&gpu.device, size.width, size.height, scale);
+                        } else {
+                            // Surface is owned by the output presenter — forward resize.
+                            #[cfg(target_os = "macos")]
+                            if let Some(p) = &self.output_presenter {
+                                let _ = p.sender.send(
+                                    crate::output_presenter::OutputCommand::Resize {
+                                        width: size.width,
+                                        height: size.height,
+                                        scale,
+                                    },
+                                );
+                            }
+                        }
 
                         // Rebuild UI on primary window resize
                         if is_primary {
@@ -1313,8 +1335,20 @@ impl ApplicationHandler for Application {
                 if let Some(gpu) = &self.gpu
                     && let Some(ws) = self.window_registry.get_mut(&window_id) {
                         let size = ws.window.inner_size();
-                        ws.surface
-                            .resize(&gpu.device, size.width, size.height, scale_factor);
+                        if let Some(surface) = &mut ws.surface {
+                            surface.resize(&gpu.device, size.width, size.height, scale_factor);
+                        } else {
+                            #[cfg(target_os = "macos")]
+                            if let Some(p) = &self.output_presenter {
+                                let _ = p.sender.send(
+                                    crate::output_presenter::OutputCommand::Resize {
+                                        width: size.width,
+                                        height: size.height,
+                                        scale: scale_factor,
+                                    },
+                                );
+                            }
+                        }
 
                         if is_primary {
                             let logical_w = size.width as f32 / scale_factor as f32;
@@ -1759,6 +1793,8 @@ impl ApplicationHandler for Application {
                 if !consumed
                     && let Key::Named(NamedKey::Escape) = &logical_key
                         && !is_primary {
+                            #[cfg(target_os = "macos")]
+                            { self.output_presenter = None; }
                             self.window_registry.remove(&window_id);
                             log::info!("Closed output window");
                         }
@@ -1876,6 +1912,10 @@ impl ApplicationHandler for Application {
         // Close output window (Escape key or programmatic close)
         if self.pending_close_output {
             self.pending_close_output = false;
+            // Stop the presenter thread first so the surface is dropped
+            // before winit destroys the window.
+            #[cfg(target_os = "macos")]
+            { self.output_presenter = None; }
             let output_ids: Vec<_> = self.window_registry.iter()
                 .filter(|(_, ws)| matches!(ws.role, WindowRole::Output { .. }))
                 .map(|(id, _)| *id)
@@ -1938,6 +1978,7 @@ impl Application {
         }
 
         // Query headroom for output window → drives per-window tonemap blit.
+        // Also forward to the presenter thread so it uses the correct tonemap.
         for (_, ws) in self.window_registry.iter() {
             if matches!(ws.role, WindowRole::Output { .. }) {
                 let h = crate::edr_surface::query_window_headroom(&ws.window);
@@ -1948,6 +1989,11 @@ impl Application {
                         if h > 1.0 { "passthrough" } else { "ACES tonemap" },
                     );
                     self.output_edr_headroom = h;
+                    if let Some(p) = &self.output_presenter {
+                        let _ = p.sender.send(
+                            crate::output_presenter::OutputCommand::UpdateEdrHeadroom(h),
+                        );
+                    }
                 }
             }
         }
@@ -1968,6 +2014,12 @@ impl Drop for Application {
             let _ = handle.join();
             log::info!("[Application::Drop] content thread joined");
         }
+
+        // Stop the output presenter thread first — it owns the output surface
+        // and submits GPU work. It must be stopped before the device poll below,
+        // otherwise in-flight work from the presenter races against the poll.
+        #[cfg(target_os = "macos")]
+        { self.output_presenter = None; }
 
         // Wait for all in-flight GPU work to complete before dropping resources.
         // Without this, the last frame's command buffer may still be executing when

@@ -16,7 +16,10 @@ pub enum WindowRole {
 /// State for a single window.
 pub struct WindowState {
     pub window: Arc<winit::window::Window>,
-    pub surface: SurfaceWrapper,
+    /// `Some` for the workspace window and any output window without a dedicated
+    /// presenter thread. `None` for output windows whose surface is owned by
+    /// `OutputPresenterHandle` on a separate thread (macOS fullscreen path).
+    pub surface: Option<SurfaceWrapper>,
     pub role: WindowRole,
     pub display_index: Option<usize>,
 }

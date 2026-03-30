@@ -638,7 +638,8 @@ impl Application {
             crate::edr_surface::configure_edr(&surface.surface);
         }
 
-        // Create a blit pipeline matching the output surface format.
+        // Build or reuse the blit pipeline (reuse avoids MSL recompilation on
+        // open/close cycles with the same surface format, which is the common case).
         if self.output_blit_pipeline.is_none()
             || self.output_blit_format != Some(surface_format)
         {
@@ -668,9 +669,37 @@ impl Application {
             self.output_edr_headroom = h;
         }
 
+        // If the IOSurface bridge is available, hand the surface off to a
+        // dedicated presenter thread. This prevents get_current_texture()
+        // (Metal nextDrawable) from blocking the UI thread in fullscreen mode,
+        // where macOS vsync-locks the drawable pool to the display refresh rate.
+        #[cfg(target_os = "macos")]
+        let (window_surface, presenter) = if let Some(bridge) = self.shared_texture_bridge.clone()
+            && let Some(pipeline) = self.output_blit_pipeline.take()
+        {
+            let device = gpu.device.clone();
+            let queue = gpu.queue.clone();
+            let handle = crate::output_presenter::spawn(
+                device, queue, surface, pipeline, bridge, h,
+            );
+            // Pipeline is now owned by the presenter — clear format cache so
+            // a fresh pipeline is created next time the window opens.
+            self.output_blit_format = None;
+            (None, Some(handle))
+        } else {
+            // No bridge yet (no project loaded) — fall back to UI-thread blit.
+            (Some(surface), None)
+        };
+
+        #[cfg(not(target_os = "macos"))]
+        let window_surface = Some(surface);
+
+        #[cfg(target_os = "macos")]
+        { self.output_presenter = presenter; }
+
         let state = WindowState {
             window,
-            surface,
+            surface: window_surface,
             role: WindowRole::Output {
                 name: name.to_string(),
             },
@@ -678,10 +707,21 @@ impl Application {
         };
 
         self.window_registry.add(id, state);
+
+        #[cfg(target_os = "macos")]
+        let thread_label = if self.output_presenter.is_some() {
+            ", presenter-thread"
+        } else {
+            ", ui-thread fallback"
+        };
+        #[cfg(not(target_os = "macos"))]
+        let thread_label = "";
+
         log::info!(
-            "[OutputWindow] Opened '{}' on '{}' ({}x{}, {:?}, EDR={:.2}x → blit={})",
+            "[OutputWindow] Opened '{}' on '{}' ({}x{}, {:?}, EDR={:.2}x → blit={}{})",
             name, mon_name, size.width, size.height, surface_format, h,
             if h > 1.0 { "passthrough" } else { "ACES tonemap" },
+            thread_label,
         );
     }
 }

@@ -819,23 +819,17 @@ impl Application {
                 .map_or(0, |b| b.front_index()) as usize;
             let view = self.ui_shared_views[front].clone();
             if let Some(ref v) = view {
-                // Only blit the output window when the content thread published a new frame.
-                // At 96 UI FPS vs 60 content FPS, front_index changes ~60×/s. Skipping
-                // unchanged frames avoids get_current_texture() blocking on the output
-                // surface's drawable pool and eliminates redundant GPU blits.
-                let front_changed = front != self.last_output_front_index;
-                if front_changed {
+                // Track front_index changes so the workspace preview stays current.
+                // Output window blitting is handled by OutputPresenter on its own thread.
+                if front != self.last_output_front_index {
                     self.last_output_front_index = front;
                 }
-                self.output_needs_blit = front_changed;
                 self.present_all_windows(v);
             }
         }
         #[cfg(not(target_os = "macos"))]
         {
             // Fallback: single-device SharedOutputView (non-macOS).
-            // No IOSurface frame tracking — always blit.
-            self.output_needs_blit = true;
             let compositor_view = self.content_pipeline_output.as_ref()
                 .and_then(|shared| shared.get_view());
             if let Some(ref view) = compositor_view {
@@ -866,28 +860,27 @@ impl Application {
         for window_id in window_ids {
             let is_workspace = Some(window_id) == self.primary_window_id;
 
-            // Skip output windows when no new content frame is available.
-            // This avoids calling get_current_texture() (Metal nextDrawable) on the output
-            // surface drawable pool, which blocks when drawables are exhausted at high
-            // UI frame rates (e.g. 96 FPS UI vs 60 FPS content). The workspace always
-            // renders — it has live UI elements that update every frame regardless.
-            if !is_workspace && !self.output_needs_blit {
-                continue;
-            }
-
             let ws = match self.window_registry.get_mut(&window_id) {
                 Some(ws) => ws,
                 None => continue,
             };
 
-            let surface_texture = match ws.surface.get_current_texture() {
+            // Output windows whose surface is owned by OutputPresenter have no
+            // surface here — skip them entirely. The presenter thread handles
+            // get_current_texture() independently so the UI thread is never blocked.
+            let surface = match ws.surface.as_mut() {
+                Some(s) => s,
+                None => continue,
+            };
+
+            let surface_texture = match surface.get_current_texture() {
                 Ok(t) => t,
                 Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                    ws.surface.resize(
+                    surface.resize(
                         &gpu.device,
-                        ws.surface.width,
-                        ws.surface.height,
-                        ws.surface.scale_factor,
+                        surface.width,
+                        surface.height,
+                        surface.scale_factor,
                     );
                     continue;
                 }
@@ -901,9 +894,9 @@ impl Application {
                 .texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
 
-            let surface_w = ws.surface.width;
-            let surface_h = ws.surface.height;
-            let scale = ws.surface.scale_factor;
+            let surface_w = surface.width;
+            let surface_h = surface.height;
+            let scale = surface.scale_factor;
 
             let mut encoder =
                 gpu.device

@@ -17,6 +17,8 @@ mod frame_timer;
 mod input_handler;
 #[cfg(target_os = "macos")]
 mod shared_texture;
+#[cfg(target_os = "macos")]
+mod output_presenter;
 mod input_host;
 mod project_io;
 mod text_input;
