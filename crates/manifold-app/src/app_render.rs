@@ -8,6 +8,7 @@ use winit::window::WindowId;
 
 use manifold_renderer::ui_renderer::{TextMode, UIRenderer};
 
+use manifold_ui::node::FontWeight;
 use manifold_ui::panels::PanelAction;
 
 use crate::app::Application;
@@ -1191,7 +1192,7 @@ fn render_text_input_overlay(
 
     // Selection highlight (when select_all)
     if ti.select_all && !ti.text.is_empty() {
-        let text_w = ui.measure_text_cached(&ti.text, fs as u16, true).x;
+        let text_w = ui.measure_text_cached(&ti.text, fs as u16, FontWeight::Medium).x;
         ui.draw_rect(
             bg_x + pad_h, bg_y + pad_v,
             text_w.min(bg_w - pad_h * 2.0), bg_h - pad_v * 2.0,
@@ -1210,7 +1211,7 @@ fn render_text_input_overlay(
         let blink_on = ((elapsed / TEXT_INPUT_BLINK_PERIOD) as u64).is_multiple_of(2);
         if blink_on {
             let before = &ti.text[..ti.cursor];
-            let cursor_x = text_x + ui.measure_text_cached(before, fs as u16, true).x;
+            let cursor_x = text_x + ui.measure_text_cached(before, fs as u16, FontWeight::Medium).x;
             ui.draw_rect(
                 cursor_x, bg_y + pad_v,
                 TEXT_INPUT_CURSOR_W, bg_h - pad_v * 2.0,
