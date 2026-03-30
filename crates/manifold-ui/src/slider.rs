@@ -109,7 +109,7 @@ impl BitmapSlider {
                     UIStyle {
                         text_color: colors.text,
                         font_size,
-                        text_align: TextAlign::Left,
+                        text_align: TextAlign::Right,
                         ..UIStyle::default()
                     },
                 ) as i32;

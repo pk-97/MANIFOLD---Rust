@@ -618,7 +618,7 @@ impl EffectCardPanel {
                 tree.set_style(label_id, UIStyle {
                     text_color: color::ACCENT_BLUE_C32,
                     font_size: FONT_SIZE,
-                    text_align: TextAlign::Left,
+                    text_align: TextAlign::Right,
                     ..UIStyle::default()
                 });
                 self.copied_flash = Some((label_id, name, start));
@@ -628,7 +628,7 @@ impl EffectCardPanel {
                 tree.set_style(label_id, UIStyle {
                     text_color: color::SLIDER_TEXT_C32,
                     font_size: FONT_SIZE,
-                    text_align: TextAlign::Left,
+                    text_align: TextAlign::Right,
                     ..UIStyle::default()
                 });
                 self.copied_flash = None;

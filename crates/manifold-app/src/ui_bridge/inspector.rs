@@ -593,6 +593,8 @@ pub(super) fn dispatch_inspector(
                 effects.and_then(|e| e.get(*ei)).map(|fx| fx.effect_type().clone())
             };
             if let Some(et) = effect_type {
+                let et_content = et.clone(); // clone before local use for content thread sync
+                let pi2 = *pi as i32;
                 let layer_idx = super::resolve_active_layer_index(active_layer, project);
                 let envs: Option<&mut Vec<ParamEnvelope>> = match tab {
                     InspectorTab::Layer => {
@@ -605,24 +607,50 @@ pub(super) fn dispatch_inspector(
                 };
                 if let Some(envs) = envs {
                     let env_idx = envs.iter().position(|e|
-                        e.target_effect_type == et && e.param_index == *pi as i32
+                        e.target_effect_type == et && e.param_index == pi2
                     );
                     if let Some(idx) = env_idx {
                         envs[idx].enabled = !envs[idx].enabled;
                     } else {
                         envs.push(ParamEnvelope {
                             target_effect_type: et,
-                            param_index: *pi as i32,
+                            param_index: pi2,
                             enabled: true,
-                            attack_beats: 0.25,
-                            decay_beats: 0.25,
-                            sustain_level: 1.0,
-                            release_beats: 0.25,
+                            attack_beats: 0.0,
+                            decay_beats: 0.0,
+                            sustain_level: 0.0,
+                            release_beats: 0.0,
                             target_normalized: 1.0,
                             current_level: 0.0,
                         });
                     }
                 }
+                // Sync to content thread so the next snapshot doesn't overwrite
+                let et2 = et_content;
+                let layer_id = active_layer.clone().unwrap_or_default();
+                ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                    if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id) {
+                        let envs = layer.envelopes_mut();
+                        let env_idx = envs.iter().position(|e|
+                            e.target_effect_type == et2 && e.param_index == pi2
+                        );
+                        if let Some(idx) = env_idx {
+                            envs[idx].enabled = !envs[idx].enabled;
+                        } else {
+                            envs.push(ParamEnvelope {
+                                target_effect_type: et2,
+                                param_index: pi2,
+                                enabled: true,
+                                attack_beats: 0.0,
+                                decay_beats: 0.0,
+                                sustain_level: 0.0,
+                                release_beats: 0.0,
+                                target_normalized: 1.0,
+                                current_level: 0.0,
+                            });
+                        }
+                    }
+                })));
             }
             DispatchResult::structural()
         }
@@ -1205,15 +1233,40 @@ pub(super) fn dispatch_inspector(
                                 target_effect_type: Default::default(),
                                 param_index: *pi as i32,
                                 enabled: true,
-                                attack_beats: 0.25,
-                                decay_beats: 0.25,
-                                sustain_level: 1.0,
-                                release_beats: 0.25,
+                                attack_beats: 0.0,
+                                decay_beats: 0.0,
+                                sustain_level: 0.0,
+                                release_beats: 0.0,
                                 target_normalized: 1.0,
                                 current_level: 0.0,
                             });
                         }
                     }
+            // Sync to content thread so the next snapshot doesn't overwrite
+            let pi2 = *pi as i32;
+            let layer_id = active_layer.clone().unwrap_or_default();
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                if let Some((_, layer)) = p.timeline.find_layer_by_id_mut(&layer_id)
+                    && let Some(gp) = layer.gen_params_mut() {
+                        let envs = gp.envelopes.get_or_insert_with(Vec::new);
+                        let env_idx = envs.iter().position(|e| e.param_index == pi2);
+                        if let Some(idx) = env_idx {
+                            envs[idx].enabled = !envs[idx].enabled;
+                        } else {
+                            envs.push(ParamEnvelope {
+                                target_effect_type: Default::default(),
+                                param_index: pi2,
+                                enabled: true,
+                                attack_beats: 0.0,
+                                decay_beats: 0.0,
+                                sustain_level: 0.0,
+                                release_beats: 0.0,
+                                target_normalized: 1.0,
+                                current_level: 0.0,
+                            });
+                        }
+                }
+            })));
             DispatchResult::structural()
         }
         PanelAction::GenDriverConfig(pi, cfg) => {
