@@ -14,8 +14,9 @@ use ahash::AHashMap;
 use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use manifold_gpu::{
-    GpuBinding, GpuComputePipeline, GpuDevice, GpuFilterMode, GpuSampler, GpuSamplerDesc,
-    GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuComputePipeline,
+    GpuDevice, GpuFilterMode, GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture,
+    GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
 // Request/response types for the background blob detection worker.
@@ -121,10 +122,42 @@ struct BlobUniforms {
 
 const _: () = assert!(std::mem::size_of::<BlobUniforms>() == 288);
 
+// ---- Geometry-based overlay types ----
+
+const MAX_OVERLAY_QUADS: usize = 512;
+
+/// Per-instance data for overlay quad rendering. Matches WGSL QuadInstance.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct OverlayQuad {
+    rect: [f32; 4],       // clip-space (x0, y0, x1, y1)
+    atlas_rect: [f32; 4], // font atlas UVs (u0, v0, u1, v1); (0,0,0,0) for solid
+    alpha: f32,
+    _pad: [f32; 3],
+}
+
+const _: () = assert!(std::mem::size_of::<OverlayQuad>() == 48);
+
+/// Uniforms for the instanced overlay render shader.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct OverlayUniforms {
+    overlay_color: [f32; 3],
+    scanline_amount: f32,
+}
+
+/// Uniforms for the overlay composite compute shader.
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct CompositeUniforms {
+    amount: f32,
+    resolution_y: f32,
+    _pad0: f32,
+    _pad1: f32,
+}
+
 // BlobTrackingFX.cs line 10 — BlobTrackingFX : IPostProcessEffect, IStatefulEffect
 pub struct BlobTrackingFX {
-    // Compute pipeline for overlay pass (blob visualization).
-    compute_overlay: GpuComputePipeline,
     // Compute pipeline for downsample pass (bilinear blit to readback size).
     compute_downsample: GpuComputePipeline,
     // Bilinear sampler for source texture.
@@ -140,6 +173,13 @@ pub struct BlobTrackingFX {
     worker: Option<BackgroundWorker<BlobRequest, BlobResponse>>,
     // BlobTrackingFX.cs line 70 — ownerStates
     owner_states: AHashMap<i64, OwnerState>,
+
+    // ---- Geometry-based overlay rendering ----
+    overlay_pipeline: GpuRenderPipeline,
+    composite_pipeline: GpuComputePipeline,
+    overlay_buf: GpuBuffer,
+    overlay_rt: Option<RenderTarget>,
+    overlay_quads: Vec<OverlayQuad>,
 }
 
 unsafe impl Send for BlobTrackingFX {}
@@ -177,15 +217,36 @@ impl BlobTrackingFX {
         }
 
         // ---- Compute pipelines ----
-        let compute_overlay = device.create_compute_pipeline(
-            include_str!("shaders/fx_blob_tracking_compute.wgsl"),
-            "cs_main",
-            "BlobTracking Overlay",
-        );
         let compute_downsample = device.create_compute_pipeline(
             DOWNSAMPLE_COMPUTE_SHADER,
             "cs_downsample",
             "BlobTracking Downsample",
+        );
+
+        // ---- Geometry overlay pipelines ----
+        let blend = GpuBlendState {
+            src_factor: GpuBlendFactor::One,
+            dst_factor: GpuBlendFactor::One,
+            operation: GpuBlendOp::Max,
+            src_alpha_factor: GpuBlendFactor::One,
+            dst_alpha_factor: GpuBlendFactor::One,
+            alpha_operation: GpuBlendOp::Max,
+        };
+        let overlay_pipeline = device.create_render_pipeline(
+            include_str!("shaders/fx_blob_overlay_render.wgsl"),
+            "vs_main",
+            "fs_main",
+            GpuTextureFormat::Rgba16Float,
+            Some(blend),
+            "BlobTracking OverlayRender",
+        );
+        let composite_pipeline = device.create_compute_pipeline(
+            include_str!("shaders/fx_blob_overlay_composite.wgsl"),
+            "cs_main",
+            "BlobTracking Composite",
+        );
+        let overlay_buf = device.create_buffer_shared(
+            (MAX_OVERLAY_QUADS * std::mem::size_of::<OverlayQuad>()) as u64,
         );
 
         // ---- Samplers ----
@@ -202,13 +263,17 @@ impl BlobTrackingFX {
         let font_atlas = create_font_atlas(device);
 
         Self {
-            compute_overlay,
             compute_downsample,
             sampler,
             point_sampler,
             font_atlas,
             worker,
             owner_states: AHashMap::new(),
+            overlay_pipeline,
+            composite_pipeline,
+            overlay_buf,
+            overlay_rt: None,
+            overlay_quads: Vec::with_capacity(MAX_OVERLAY_QUADS),
         }
     }
 
@@ -467,6 +532,355 @@ impl BlobTrackingFX {
             state.connection_lines[i] = [0.0; 4];
         }
     }
+
+    // ---- Geometry overlay quad generation ----
+    // Translates each procedural drawing operation from the compute shader into
+    // CPU-side OverlayQuad instances. All coordinates start in "draw_uv" space
+    // [0,1] (Y-up, Unity convention), then convert to clip space for the vertex
+    // shader: clip = draw_uv * 2.0 - 1.0.
+
+    fn generate_overlay_quads(
+        quads: &mut Vec<OverlayQuad>,
+        state: &OwnerState,
+        width: u32,
+        height: u32,
+    ) {
+
+        let dpi_scale = height as f32 / 1080.0;
+        let px_u = (1.0 / width as f32) * dpi_scale;
+        let px_v = (1.0 / height as f32) * dpi_scale;
+        let line_thick = 2.0 * px_u;
+        let thin_line = 1.5 * px_u;
+        let digit_size = px_u * 2.0;
+
+        // Per-blob overlays
+        for b in 0..state.blob_count as usize {
+            if quads.len() >= MAX_OVERLAY_QUADS {
+                break;
+            }
+            let blob = state.blob_data_for_shader[b];
+            let center = [blob[0], blob[1]];
+            let half_size = [blob[2] * 0.5, blob[3] * 0.5];
+
+            let bracket_len = half_size[0].min(half_size[1]) * 0.4;
+
+            // (a) Corner brackets — 4 corners × 2 arms = 8 quads
+            for &dir in &[
+                [-1.0f32, -1.0f32],
+                [1.0, -1.0],
+                [-1.0, 1.0],
+                [1.0, 1.0],
+            ] {
+                let corner = [
+                    center[0] + half_size[0] * dir[0],
+                    center[1] + half_size[1] * dir[1],
+                ];
+                // Horizontal arm
+                let (hx0, hx1) = if dir[0] < 0.0 {
+                    (corner[0], corner[0] + bracket_len)
+                } else {
+                    (corner[0] - bracket_len, corner[0])
+                };
+                push_solid(
+                    quads, hx0, corner[1] - line_thick / 2.0,
+                    hx1, corner[1] + line_thick / 2.0, 1.0,
+                );
+                // Vertical arm
+                let (vy0, vy1) = if dir[1] < 0.0 {
+                    (corner[1], corner[1] + bracket_len)
+                } else {
+                    (corner[1] - bracket_len, corner[1])
+                };
+                push_solid(
+                    quads, corner[0] - line_thick / 2.0, vy0,
+                    corner[0] + line_thick / 2.0, vy1, 1.0,
+                );
+            }
+
+            // (b) Crosshair — 2 quads
+            let ch_size = half_size[0].min(half_size[1]) * 0.3;
+            push_solid(
+                quads,
+                center[0] - ch_size, center[1] - thin_line / 2.0,
+                center[0] + ch_size, center[1] + thin_line / 2.0,
+                1.0,
+            );
+            push_solid(
+                quads,
+                center[0] - thin_line / 2.0, center[1] - ch_size,
+                center[0] + thin_line / 2.0, center[1] + ch_size,
+                1.0,
+            );
+
+            // (c) Center dot — 1 quad
+            let dot_radius = px_u * 4.0;
+            push_solid(
+                quads,
+                center[0] - dot_radius, center[1] - dot_radius,
+                center[0] + dot_radius, center[1] + dot_radius,
+                1.0,
+            );
+
+            // (d) Hex label — 4 textured quads
+            let hex_pos = [
+                center[0] - half_size[0],
+                center[1] + half_size[1] + 8.0 * px_v,
+            ];
+            let hex_id = b as f32 * 17.0 + 48.0;
+            let n = hex_id.floor().clamp(0.0, 255.0);
+            let hi = (n / 16.0).floor();
+            let lo = n % 16.0;
+            // Chars: '0'(code 0), 'X'(code 16), hi digit, lo digit
+            // at pixel offsets 0, 6, 13, 19
+            let glyph_w = 5.0 * digit_size;
+            let glyph_h = 7.0 * digit_size;
+            for &(char_code, px_offset) in
+                &[(0.0f32, 0.0f32), (16.0, 6.0), (hi, 13.0), (lo, 19.0)]
+            {
+                let gx = hex_pos[0] + px_offset * digit_size;
+                let gy = hex_pos[1];
+                let atlas = glyph_atlas_rect(char_code);
+                push_textured(quads, gx, gy, gx + glyph_w, gy + glyph_h, atlas, 1.0);
+            }
+
+            // (e) Coord label — 7 textured quads
+            let coord_pos = [
+                center[0] - half_size[0],
+                center[1] - half_size[1] - 38.0 * px_v,
+            ];
+            let x_val = (center[0] * 999.0).floor().clamp(0.0, 999.0);
+            let y_val = (center[1] * 999.0).floor().clamp(0.0, 999.0);
+            let x_h = (x_val / 100.0).floor();
+            let x_t = ((x_val % 100.0) / 10.0).floor();
+            let x_o = x_val % 10.0;
+            let y_h = (y_val / 100.0).floor();
+            let y_t = ((y_val % 100.0) / 10.0).floor();
+            let y_o = y_val % 10.0;
+            // Pixel offsets: 0, 6, 12, 17(separator), 22, 28, 34
+            for &(char_code, px_offset) in &[
+                (x_h, 0.0f32),
+                (x_t, 6.0),
+                (x_o, 12.0),
+                (18.0, 17.0), // comma/separator char code 18
+                (y_h, 22.0),
+                (y_t, 28.0),
+                (y_o, 34.0),
+            ] {
+                let gx = coord_pos[0] + px_offset * digit_size;
+                let gy = coord_pos[1];
+                let atlas = glyph_atlas_rect(char_code);
+                push_textured(quads, gx, gy, gx + glyph_w, gy + glyph_h, atlas, 1.0);
+            }
+
+            // (f) Gauge bar — up to 5 quads (4 edges + 1 fill)
+            let gauge_pos = [
+                center[0] - half_size[0],
+                center[1] - half_size[1] - 50.0 * px_v,
+            ];
+            let gauge_w = (half_size[0] * 2.0).max(80.0 * px_u);
+            let gauge_h = 8.0 * px_v;
+            let gauge_fill = (blob[2] * blob[3] * 20.0).clamp(0.0, 1.0);
+
+            // Gauge edges: top, bottom, left, right
+            let gx0 = gauge_pos[0];
+            let gy0 = gauge_pos[1];
+            let gx1 = gauge_pos[0] + gauge_w;
+            let gy1 = gauge_pos[1] - gauge_h;
+            // Top edge
+            push_solid(
+                quads, gx0, gy0 - thin_line / 2.0,
+                gx1, gy0 + thin_line / 2.0, 1.0,
+            );
+            // Bottom edge
+            push_solid(
+                quads, gx0, gy1 - thin_line / 2.0,
+                gx1, gy1 + thin_line / 2.0, 1.0,
+            );
+            // Left edge
+            push_solid(
+                quads, gx0 - thin_line / 2.0, gy1,
+                gx0 + thin_line / 2.0, gy0, 1.0,
+            );
+            // Right edge
+            push_solid(
+                quads, gx1 - thin_line / 2.0, gy1,
+                gx1 + thin_line / 2.0, gy0, 1.0,
+            );
+            // Fill quad
+            if gauge_fill > 0.0 {
+                push_solid(
+                    quads, gx0, gy1,
+                    gx0 + gauge_w * gauge_fill, gy0, 0.4,
+                );
+            }
+
+            // (g) Tick marks — 4 quads
+            let tick_base = [
+                center[0] + half_size[0] + 8.0 * px_u,
+                center[1] + half_size[1],
+            ];
+            let tick_spacing = half_size[1] * 0.5;
+            for t in 0..4u32 {
+                let tick_y = tick_base[1] - tick_spacing * t as f32;
+                let tick_len = if t % 2 == 0 { 12.0 * px_u } else { 6.0 * px_u };
+                push_solid(
+                    quads,
+                    tick_base[0], tick_y - thin_line / 2.0,
+                    tick_base[0] + tick_len, tick_y + thin_line / 2.0,
+                    0.5,
+                );
+            }
+        }
+
+        // Per-connection overlays
+        for c in 0..state.connection_count as usize {
+            if quads.len() >= MAX_OVERLAY_QUADS {
+                break;
+            }
+            let conn = state.connection_lines[c];
+            let conn_a = [conn[0], conn[1]];
+            let conn_b = [conn[2], conn[3]];
+
+            let dx = conn_b[0] - conn_a[0];
+            let dy = conn_b[1] - conn_a[1];
+            let len = (dx * dx + dy * dy).sqrt();
+            if len < 0.001 {
+                continue;
+            }
+
+            // (h) Dashed connection line
+            let dir = [dx / len, dy / len];
+            let perp = [-dir[1], dir[0]];
+            let dash_total = px_u * 12.0;
+            let num_dashes = (len / dash_total).ceil() as u32;
+            let half_thick = thin_line / 2.0;
+
+            for d in 0..num_dashes {
+                if quads.len() >= MAX_OVERLAY_QUADS {
+                    break;
+                }
+                let t0 = d as f32 * dash_total / len;
+                if t0 > 1.0 {
+                    break;
+                }
+                let t1 = ((d as f32 * dash_total + dash_total * 0.6) / len).min(1.0);
+                // Dash "on" portion: from t0 to t1 along the line
+                // The compute shader uses step(0.4, dash_phase) which gives ~60% on
+                let p0 = [
+                    conn_a[0] + dir[0] * len * t0,
+                    conn_a[1] + dir[1] * len * t0,
+                ];
+                let p1 = [
+                    conn_a[0] + dir[0] * len * t1,
+                    conn_a[1] + dir[1] * len * t1,
+                ];
+                // Expand along perpendicular for thickness
+                let min_x = (p0[0] - perp[0] * half_thick)
+                    .min(p0[0] + perp[0] * half_thick)
+                    .min(p1[0] - perp[0] * half_thick)
+                    .min(p1[0] + perp[0] * half_thick);
+                let max_x = (p0[0] - perp[0] * half_thick)
+                    .max(p0[0] + perp[0] * half_thick)
+                    .max(p1[0] - perp[0] * half_thick)
+                    .max(p1[0] + perp[0] * half_thick);
+                let min_y = (p0[1] - perp[1] * half_thick)
+                    .min(p0[1] + perp[1] * half_thick)
+                    .min(p1[1] - perp[1] * half_thick)
+                    .min(p1[1] + perp[1] * half_thick);
+                let max_y = (p0[1] - perp[1] * half_thick)
+                    .max(p0[1] + perp[1] * half_thick)
+                    .max(p1[1] - perp[1] * half_thick)
+                    .max(p1[1] + perp[1] * half_thick);
+                push_solid(quads, min_x, min_y, max_x, max_y, 0.5);
+            }
+
+            // (i) Midpoint dot — 1 quad
+            let mid = [
+                (conn_a[0] + conn_b[0]) * 0.5,
+                (conn_a[1] + conn_b[1]) * 0.5,
+            ];
+            let dot_r = px_u * 5.0;
+            push_solid(
+                quads,
+                mid[0] - dot_r, mid[1] - dot_r,
+                mid[0] + dot_r, mid[1] + dot_r,
+                0.4,
+            );
+
+            // (j) Distance label — 3 textured quads
+            let dist_label_pos = [mid[0] + 8.0 * px_u, mid[1] + 4.0 * px_v];
+            let dist_val = (len * 1000.0).floor().clamp(0.0, 999.0);
+            let hundreds = (dist_val / 100.0).floor();
+            let tens = ((dist_val % 100.0) / 10.0).floor();
+            let ones = dist_val % 10.0;
+            let small_digit = digit_size * 0.7;
+            let small_gw = 5.0 * small_digit;
+            let small_gh = 7.0 * small_digit;
+            for &(char_code, px_offset) in
+                &[(hundreds, 0.0f32), (tens, 6.0), (ones, 12.0)]
+            {
+                let gx = dist_label_pos[0] + px_offset * small_digit;
+                let gy = dist_label_pos[1];
+                let atlas = glyph_atlas_rect(char_code);
+                push_textured(
+                    quads, gx, gy, gx + small_gw, gy + small_gh, atlas, 0.6,
+                );
+            }
+        }
+    }
+}
+
+// ---- Overlay quad helpers ----
+
+/// Convert a draw_uv rect [0,1] to clip-space rect [-1,1].
+fn uv_rect_to_clip(x0: f32, y0: f32, x1: f32, y1: f32) -> [f32; 4] {
+    [x0 * 2.0 - 1.0, y0 * 2.0 - 1.0, x1 * 2.0 - 1.0, y1 * 2.0 - 1.0]
+}
+
+/// Push a solid (untextured) quad in draw_uv space.
+fn push_solid(
+    quads: &mut Vec<OverlayQuad>,
+    x0: f32, y0: f32, x1: f32, y1: f32, alpha: f32,
+) {
+    if quads.len() >= MAX_OVERLAY_QUADS {
+        return;
+    }
+    quads.push(OverlayQuad {
+        rect: uv_rect_to_clip(x0, y0, x1, y1),
+        atlas_rect: [0.0; 4],
+        alpha,
+        _pad: [0.0; 3],
+    });
+}
+
+/// Push a textured (font glyph) quad in draw_uv space.
+fn push_textured(
+    quads: &mut Vec<OverlayQuad>,
+    x0: f32, y0: f32, x1: f32, y1: f32,
+    atlas_rect: [f32; 4], alpha: f32,
+) {
+    if quads.len() >= MAX_OVERLAY_QUADS {
+        return;
+    }
+    quads.push(OverlayQuad {
+        rect: uv_rect_to_clip(x0, y0, x1, y1),
+        atlas_rect,
+        alpha,
+        _pad: [0.0; 3],
+    });
+}
+
+/// Compute font atlas UV rect for a given character code.
+/// Atlas is 80×14 pixels, 5×7 glyphs, 16 columns × 2 rows.
+fn glyph_atlas_rect(char_code: f32) -> [f32; 4] {
+    let c = (char_code + 0.5).floor();
+    let atlas_col = (c % 16.0).floor();
+    let atlas_row = (c / 16.0).floor();
+    let u0 = (atlas_col * 5.0) / 80.0;
+    let v0 = (atlas_row * 7.0) / 14.0;
+    let u1 = (atlas_col * 5.0 + 5.0) / 80.0;
+    let v1 = (atlas_row * 7.0 + 7.0) / 14.0;
+    [u0, v0, u1, v1]
 }
 
 // BlobTrackingFX.cs lines 385-442 — CreateFontAtlas()
@@ -644,123 +1058,184 @@ impl PostProcessEffect for BlobTrackingFX {
         // ---- Phase 0: poll any pending readback from a previous frame ----
         self.poll_readback(ctx.owner_key);
 
-        let state = self.owner_states.get_mut(&ctx.owner_key).unwrap();
-        let rb_w = state.readback_w;
-        let rb_h = state.readback_h;
-
-        // ---- Phase 1: Blit to downsample RT and request readback (throttled) ----
-        let frame = ctx.frame_count;
-        // Guard: if frame_count jumped backwards (export restart, seek), reset
-        // so the throttle doesn't stall for hundreds of frames.
-        if frame < state.last_readback_frame {
-            state.last_readback_frame = frame - READBACK_INTERVAL_FRAMES;
-        }
-        if !state.readback.is_pending()
-            && frame - state.last_readback_frame >= READBACK_INTERVAL_FRAMES
+        // Phases 1-3 use mutable state borrow; scoped to release before Phase 4.
         {
-            // Compute downsample dispatch
-            gpu.native_enc.dispatch_compute(
-                &self.compute_downsample,
+            let state = self.owner_states.get_mut(&ctx.owner_key).unwrap();
+            let rb_w = state.readback_w;
+            let rb_h = state.readback_h;
+
+            // ---- Phase 1: Blit to downsample RT and request readback ----
+            let frame = ctx.frame_count;
+            // Guard: if frame_count jumped backwards (export restart, seek), reset
+            // so the throttle doesn't stall for hundreds of frames.
+            if frame < state.last_readback_frame {
+                state.last_readback_frame = frame - READBACK_INTERVAL_FRAMES;
+            }
+            if !state.readback.is_pending()
+                && frame - state.last_readback_frame >= READBACK_INTERVAL_FRAMES
+            {
+                // Compute downsample dispatch
+                gpu.native_enc.dispatch_compute(
+                    &self.compute_downsample,
+                    &[
+                        GpuBinding::Texture {
+                            binding: 0,
+                            texture: source,
+                        },
+                        GpuBinding::Sampler {
+                            binding: 1,
+                            sampler: &self.sampler,
+                        },
+                        GpuBinding::Texture {
+                            binding: 2,
+                            texture: &state.downsample_rt.texture,
+                        },
+                    ],
+                    [rb_w.div_ceil(16), rb_h.div_ceil(16), 1],
+                    "BlobTracking Downsample",
+                );
+
+                // Readback via native copy_texture_to_buffer
+                state.readback.submit(
+                    gpu,
+                    &state.downsample_rt.texture,
+                    rb_w,
+                    rb_h,
+                );
+                state.pending_threshold = threshold;
+                state.pending_sensitivity = sensitivity;
+                state.last_readback_frame = frame;
+            }
+
+            // ---- Phase 2: Per-frame temporal smoothing ----
+            if state.has_blob_data {
+                Self::update_smoothing(state, smoothing, ctx.dt);
+            }
+
+            // ---- Phase 3: Prepare smoothed blob data + connections ----
+            for i in 0..state.tracked_count {
+                let t = state.tracked[i];
+                state.blob_data_for_shader[i] = [
+                    t.smooth_pos[0],
+                    t.smooth_pos[1],
+                    t.smooth_size[0],
+                    t.smooth_size[1],
+                ];
+            }
+            for i in state.tracked_count..MAX_BLOBS {
+                state.blob_data_for_shader[i] = [0.0; 4];
+            }
+
+            state.blob_count = state.tracked_count as i32;
+            Self::compute_connections(state, connect_dist);
+        } // mutable borrow of owner_states released
+
+        // ---- Phase 4: Geometry overlay + composite ----
+        // Generate overlay quad instances from blob data (shared borrow).
+        self.overlay_quads.clear();
+        Self::generate_overlay_quads(
+            &mut self.overlay_quads,
+            self.owner_states.get(&ctx.owner_key).unwrap(),
+            ctx.width,
+            ctx.height,
+        );
+
+        // Ensure overlay RT matches source dimensions
+        match &mut self.overlay_rt {
+            Some(rt) => rt.resize(gpu.device, ctx.width, ctx.height),
+            None => {
+                self.overlay_rt = Some(RenderTarget::new(
+                    gpu.device,
+                    ctx.width,
+                    ctx.height,
+                    GpuTextureFormat::Rgba16Float,
+                    "BlobOverlay RT",
+                ));
+            }
+        }
+        let overlay_rt = self.overlay_rt.as_ref().unwrap();
+
+        let quad_count = self.overlay_quads.len().min(MAX_OVERLAY_QUADS);
+        if quad_count > 0 {
+            // Write instance data to shared buffer
+            let quad_bytes =
+                bytemuck::cast_slice(&self.overlay_quads[..quad_count]);
+            unsafe {
+                self.overlay_buf.write(0, quad_bytes);
+            }
+
+            // Draw overlay geometry to temp texture
+            let overlay_uniforms = OverlayUniforms {
+                overlay_color: [0.85, 0.92, 1.0],
+                scanline_amount: 0.0,
+            };
+            gpu.native_enc.draw_instanced(
+                &self.overlay_pipeline,
+                &overlay_rt.texture,
                 &[
-                    GpuBinding::Texture {
+                    GpuBinding::Bytes {
                         binding: 0,
-                        texture: source,
+                        data: bytemuck::bytes_of(&overlay_uniforms),
                     },
-                    GpuBinding::Sampler {
+                    GpuBinding::Buffer {
                         binding: 1,
-                        sampler: &self.sampler,
+                        buffer: &self.overlay_buf,
+                        offset: 0,
                     },
                     GpuBinding::Texture {
                         binding: 2,
-                        texture: &state.downsample_rt.texture,
+                        texture: &self.font_atlas,
+                    },
+                    GpuBinding::Sampler {
+                        binding: 3,
+                        sampler: &self.point_sampler,
                     },
                 ],
-                [rb_w.div_ceil(16), rb_h.div_ceil(16), 1],
-                "BlobTracking Downsample",
+                6,
+                quad_count as u32,
+                true, // clear to transparent
+                "BlobTracking Overlay",
             );
-
-            // Readback via native copy_texture_to_buffer
-            state.readback.submit(
-                gpu,
-                &state.downsample_rt.texture,
-                rb_w,
-                rb_h,
+        } else {
+            // No quads — clear the overlay RT to transparent
+            gpu.native_enc.clear_texture(
+                &overlay_rt.texture, 0.0, 0.0, 0.0, 0.0,
             );
-            state.pending_threshold = threshold;
-            state.pending_sensitivity = sensitivity;
-            state.last_readback_frame = frame;
         }
 
-        // ---- Phase 2: Per-frame temporal smoothing ----
-        if state.has_blob_data {
-            Self::update_smoothing(state, smoothing, ctx.dt);
-        }
-
-        // ---- Phase 3: Render overlay with smoothed blob data ----
-        for i in 0..state.tracked_count {
-            let t = state.tracked[i];
-            state.blob_data_for_shader[i] = [
-                t.smooth_pos[0],
-                t.smooth_pos[1],
-                t.smooth_size[0],
-                t.smooth_size[1],
-            ];
-        }
-        for i in state.tracked_count..MAX_BLOBS {
-            state.blob_data_for_shader[i] = [0.0; 4];
-        }
-
-        state.blob_count = state.tracked_count as i32;
-        Self::compute_connections(state, connect_dist);
-
-        let mut blob_center_size = [[0f32; 4]; MAX_BLOBS];
-        let mut blob_connections_arr = [[0f32; 4]; MAX_BLOBS];
-        blob_center_size[..MAX_BLOBS].copy_from_slice(&state.blob_data_for_shader[..MAX_BLOBS]);
-        blob_connections_arr[..MAX_BLOBS].copy_from_slice(&state.connection_lines[..MAX_BLOBS]);
-
-        let uniforms = BlobUniforms {
+        // Composite: source + overlay → target
+        let comp_uniforms = CompositeUniforms {
             amount,
-            blob_count: state.blob_count,
-            connection_count: state.connection_count,
+            resolution_y: ctx.height as f32,
             _pad0: 0.0,
-            resolution: [ctx.width as f32, ctx.height as f32],
-            texel_size: [1.0 / ctx.width as f32, 1.0 / ctx.height as f32],
-            blob_center_size,
-            blob_connections: blob_connections_arr,
+            _pad1: 0.0,
         };
-
-        // Overlay compute dispatch with inline uniform bytes
-        let uniform_bytes = bytemuck::bytes_of(&uniforms);
         gpu.native_enc.dispatch_compute(
-            &self.compute_overlay,
+            &self.composite_pipeline,
             &[
                 GpuBinding::Bytes {
                     binding: 0,
-                    data: uniform_bytes,
+                    data: bytemuck::bytes_of(&comp_uniforms),
                 },
                 GpuBinding::Texture {
                     binding: 1,
                     texture: source,
                 },
-                GpuBinding::Sampler {
+                GpuBinding::Texture {
                     binding: 2,
+                    texture: &overlay_rt.texture,
+                },
+                GpuBinding::Sampler {
+                    binding: 3,
                     sampler: &self.sampler,
                 },
                 GpuBinding::Texture {
-                    binding: 3,
-                    texture: &self.font_atlas,
-                },
-                GpuBinding::Sampler {
                     binding: 4,
-                    sampler: &self.point_sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 5,
                     texture: target,
                 },
             ],
             [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
-            "BlobTracking Overlay",
+            "BlobTracking Composite",
         );
     }
 
