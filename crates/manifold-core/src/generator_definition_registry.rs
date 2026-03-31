@@ -377,28 +377,21 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
 
     // ── FluidSimulation3D ──
     let params = vec![
-        // Shared with 2D FluidSimulation (indices 0-19)
+        // Shared with 2D FluidSimulation (indices 0-12)
         pd("Flow", -0.1, -0.001, -0.01, Some("F3"), "flow"),
         pd_whole("Feather", 4.0, 60.0, 20.0, "feather"),
         pd("Curl", 30.0, 90.0, 85.0, Some("F0"), "curl"),
         pd("Turbulence", 0.0, 0.01, 0.001, Some("F4"), "turbulence"),
         pd("Speed", 0.1, 3.0, 1.0, Some("F1"), "speed"),
         pd("Contrast", 1.0, 8.0, 3.5, Some("F1"), "contrast"),
-        pd_toggle("Invert", 0.0, 1.0, 0.0, "invert"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
         pd("Particles (M)", 0.1, 8.0, 2.0, Some("F1"), "particles"),
         pd_toggle("Snap", 0.0, 1.0, 0.0, "snap"),
         pd_whole_labels("Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),
         pd("Particle Size", 1.0, 8.0, 3.0, Some("F1"), "particleSize"),
-        pd("Field Res", 0.125, 1.0, 0.5, Some("F2"), "fieldRes"),
         pd("Anti-Clump", 0.0, 60.0, 20.0, Some("F0"), "antiClump"),
-        pd("Wander", 0.0, 0.05, 0.01, Some("F3"), "wander"),
-        pd("Respawn", 0.0, 0.01, 0.001, Some("F4"), "respawn"),
-        pd("Dense Respawn", 0.0, 0.2, 0.05, Some("F3"), "denseRespawn"),
-        pd_whole_labels("Color", 0.0, 5.0, 0.0, &["Mono", "Blush", "Sunset", "Ocean", "Vivid", "White"], "color"),
-        pd("Color Bright", 0.5, 5.0, 2.0, Some("F1"), "colorBright"),
-        pd("Zone Force", 0.0, 0.02, 0.005, Some("F3"), "zoneForce"),
-        // 3D-specific params (indices 20-27)
+        pd("Inject Force", 0.0, 0.02, 0.005, Some("F3"), "injectForce"),
+        // 3D-specific params (indices 13-20)
         pd_whole_labels("Container", 0.0, 3.0, 0.0, &["None", "Cube", "Sphere", "Torus"], "container"),
         pd("Ctr Scale", 0.2, 1.0, 0.8, Some("F2"), "containerScale"),
         pd_whole_labels("Vol Res", 0.0, 2.0, 0.0, &["64", "128", "256"], "volumeRes"),

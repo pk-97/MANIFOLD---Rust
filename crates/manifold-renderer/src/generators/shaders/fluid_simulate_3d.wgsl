@@ -21,23 +21,24 @@ struct SimUniforms {
     speed:         f32,
     turbulence:    f32,  // _NoiseAmplitude
     anti_clump:    f32,  // _AntiClump
-    wander:        f32,  // _Diffusion
+    diffusion:     f32,  // _Diffusion (derived from anti_clump)
     respawn_rate:  f32,  // _RefreshRate
     dense_respawn: f32,  // _DensityRefreshScale
     flatten:       f32,
-    // camera forward, precomputed C#-side from cam_orbit_angle and cam_tilt_rad
+    // camera forward, precomputed CPU-side from rot_x, rot_y
     cam_fwd_x: f32,
     cam_fwd_y: f32,
     cam_fwd_z: f32,
+    _pad0:     f32,
     // injection
-    color_mode:    u32,
-    inject_index:  i32,   // -1 = off
+    inject_index:  i32,  // -1 = off
     inject_force:  f32,
     inject_phase:  f32,
     time2:         f32,  // ctx.Time (_Time2)
     dt:            f32,
     _pad1:         f32,
     _pad2:         f32,
+    _pad3:         f32,
 };
 
 // Particle layout matches particle_common.wgsl (64 bytes with WGSL vec3 implicit padding):
@@ -175,8 +176,7 @@ const INJECT_POINTS_3D: array<vec3<f32>, 4> = array<vec3<f32>, 4>(
     vec3<f32>(0.356, 0.644, 0.356),
     vec3<f32>(0.356, 0.356, 0.644),
 );
-const INJECT_COLOR_RADIUS_3D: f32 = 0.05;
-const INJECT_FORCE_RADIUS_3D:  f32 = 0.25;
+const INJECT_FORCE_RADIUS_3D: f32 = 0.25;
 
 @compute @workgroup_size(256, 1, 1)
 fn main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -229,7 +229,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     //   diffSeed = i * 1664525u + _FrameCount * 747796405u
     //   force += (HashFloat3(diffSeed) - 0.5) * _Diffusion * cappedDensity
     let diff_seed = i * 1664525u + params.frame_count * 747796405u;
-    force += (hash_float3(diff_seed) - 0.5) * params.wander * capped_density;
+    force += (hash_float3(diff_seed) - 0.5) * params.diffusion * capped_density;
 
     // --- Refresh: density-adaptive respawn ---
     // Unity lines 165-196:
@@ -322,7 +322,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     p.position = new_pos;
 
     // --- Injection disturbance (3D) ---
-    // Unity lines 260-310
     if params.inject_index >= 0 {
         let ipos  = p.position;
         let idx_inject = u32(params.inject_index);
@@ -361,15 +360,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let strength = params.inject_force * envelope * falloff;
             let push = perturbed_radial * strength + curl_force_v * strength * 0.5;
             p.position = clamp(ipos + push, vec3<f32>(0.001), vec3<f32>(0.999));
-        }
-
-        // Color tagging: particles near injection point get zone index
-        if p.age < 0.0 && envelope > 0.3 {
-            let color_r = INJECT_COLOR_RADIUS_3D;
-            let d2 = p.position - INJECT_POINTS_3D[idx_inject];
-            if dot(d2, d2) < color_r * color_r {
-                p.age = f32(params.inject_index + 1);
-            }
         }
     }
 

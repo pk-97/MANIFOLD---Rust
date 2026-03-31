@@ -15,37 +15,30 @@ use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 use super::compute_common::Particle;
 
-// Parameter indices — must match types.rs param_defs (26 params)
+// Parameter indices — must match generator_definition_registry.rs (21 params)
 const FLOW:          usize = 0;
 const FEATHER:       usize = 1;
 const CURL:          usize = 2;
 const TURBULENCE:    usize = 3;
 const SPEED:         usize = 4;
 const CONTRAST:      usize = 5;
-const INVERT:        usize = 6;
 #[allow(dead_code)]
-const SCALE:         usize = 7;
-const PARTICLES:     usize = 8;
-const SNAP:          usize = 9;
-const SNAP_MODE:     usize = 10;
-const PARTICLE_SIZE: usize = 11;
-const FIELD_RES:     usize = 12;
-const ANTI_CLUMP:    usize = 13;
-const WANDER:        usize = 14;
-const RESPAWN:       usize = 15;
-const DENSE_RESPAWN: usize = 16;
-const COLOR:         usize = 17;
-const COLOR_BRIGHT:  usize = 18;
-const INJECT_FORCE:  usize = 19;
-const CONTAINER:     usize = 20;
-const CTR_SCALE:     usize = 21;
-const VOL_RES:       usize = 22;
-const CAM_DIST:      usize = 23;
+const SCALE:         usize = 6;
+const PARTICLES:     usize = 7;
+const SNAP:          usize = 8;
+const SNAP_MODE:     usize = 9;
+const PARTICLE_SIZE: usize = 10;
+const ANTI_CLUMP:    usize = 11;
+const INJECT_FORCE:  usize = 12;
+const CONTAINER:     usize = 13;
+const CTR_SCALE:     usize = 14;
+const VOL_RES:       usize = 15;
+const CAM_DIST:      usize = 16;
 const CAM_DIST_DEFAULT: f32 = 3.0;
-const ROT_X:         usize = 24;
-const ROT_Y:         usize = 25;
-const ROT_Z:         usize = 26;
-const FLATTEN:       usize = 27;
+const ROT_X:         usize = 17;
+const ROT_Y:         usize = 18;
+const ROT_Z:         usize = 19;
+const FLATTEN:       usize = 20;
 
 const MAX_PARTICLES: u32 = 8_000_000;
 const BAKE_GROUP_SIZE: u32 = 8;
@@ -153,10 +146,10 @@ struct GradientCurl3DUniforms {
 struct Sim3DUniforms {
     active_count: u32, frame_count: u32, use_vector_field: u32, container: u32,
     ctr_scale: f32, speed: f32, turbulence: f32, anti_clump: f32,
-    wander: f32, respawn_rate: f32, dense_respawn: f32, flatten: f32,
-    cam_fwd_x: f32, cam_fwd_y: f32, cam_fwd_z: f32,
-    color_mode: u32, inject_index: i32, inject_force: f32, inject_phase: f32,
-    time2: f32, dt: f32, _pad1: f32, _pad2: f32,
+    diffusion: f32, respawn_rate: f32, dense_respawn: f32, flatten: f32,
+    cam_fwd_x: f32, cam_fwd_y: f32, cam_fwd_z: f32, _pad0: f32,
+    inject_index: i32, inject_force: f32, inject_phase: f32, time2: f32,
+    dt: f32, _pad1: f32, _pad2: f32, _pad3: f32,
 }
 
 #[repr(C)]
@@ -182,8 +175,7 @@ struct SeedUniforms {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct DisplayUniforms {
-    intensity: f32, contrast: f32, invert: f32, uv_scale: f32,
-    color_mode: f32, color_bright: f32, _pad0: f32, _pad1: f32,
+    intensity: f32, contrast: f32, uv_scale: f32, _pad0: f32,
 }
 
 // Compile-time layout assertions
@@ -191,10 +183,10 @@ const _: () = assert!(std::mem::size_of::<Splat3DUniforms>() == 112);
 const _: () = assert!(std::mem::size_of::<Resolve3DUniforms>() == 112);
 const _: () = assert!(std::mem::size_of::<Blur3DUniforms>() == 16);
 const _: () = assert!(std::mem::size_of::<GradientCurl3DUniforms>() == 48);
-const _: () = assert!(std::mem::size_of::<Sim3DUniforms>() == 92);
+const _: () = assert!(std::mem::size_of::<Sim3DUniforms>() == 96);
 const _: () = assert!(std::mem::size_of::<ProjectedUniforms>() == 112);
 const _: () = assert!(std::mem::size_of::<SeedUniforms>() == 48);
-const _: () = assert!(std::mem::size_of::<DisplayUniforms>() == 32);
+const _: () = assert!(std::mem::size_of::<DisplayUniforms>() == 16);
 
 pub struct FluidSimulation3DGenerator {
     // Compute pipelines
@@ -231,7 +223,6 @@ pub struct FluidSimulation3DGenerator {
     last_trigger_count: u32,
     snap_envelope: f32,
     active_snap_mode: i32,
-    last_color_mode: i32,
     inject_zone_index: i32,
     inject_frames_remaining: i32,
     next_inject_zone: i32,
@@ -290,8 +281,7 @@ impl FluidSimulation3DGenerator {
             active_count: 0, vol_res: 0, disp_w: 0, disp_h: 0,
             frame_count: 0, initialized: false,
             last_trigger_count: u32::MAX, snap_envelope: 0.0, active_snap_mode: 0,
-            last_color_mode: 0, inject_zone_index: -1, inject_frames_remaining: 0,
-            next_inject_zone: 0,
+            inject_zone_index: -1, inject_frames_remaining: 0, next_inject_zone: 0,
         }
     }
 
@@ -397,18 +387,11 @@ impl Generator for FluidSimulation3DGenerator {
         let mut turbulence = param(ctx, TURBULENCE,    0.001);
         let speed          = param(ctx, SPEED,          1.0);
         let contrast       = param(ctx, CONTRAST,       3.5);
-        let invert         = param(ctx, INVERT,         0.0);
         let particles_param = param(ctx, PARTICLES,     2.0);
         let snap           = param(ctx, SNAP,           0.0);
         let snap_mode_f    = param(ctx, SNAP_MODE,      0.0);
         let particle_size  = param(ctx, PARTICLE_SIZE,  3.0);
-        let field_res      = param(ctx, FIELD_RES,      0.5);
         let anti_clump     = param(ctx, ANTI_CLUMP,    20.0);
-        let wander         = param(ctx, WANDER,        0.01);
-        let respawn        = param(ctx, RESPAWN,       0.001);
-        let dense_respawn  = param(ctx, DENSE_RESPAWN, 0.05);
-        let color_mode_f   = param(ctx, COLOR,          0.0);
-        let color_bright   = param(ctx, COLOR_BRIGHT,   2.0);
         let inject_force_p = param(ctx, INJECT_FORCE,  0.005);
         let container_f    = param(ctx, CONTAINER,      0.0);
         let ctr_scale      = param(ctx, CTR_SCALE,      0.8);
@@ -419,13 +402,16 @@ impl Generator for FluidSimulation3DGenerator {
         let rot_z          = param(ctx, ROT_Z,          0.0);
         let flatten        = param(ctx, FLATTEN,        0.0);
 
+        // Anti-clump drives diffusion kick (wander replacement)
+        let diffusion = (anti_clump / 60.0) * 0.05;
+
         let container_type = container_f.round() as u32;
-        let color_mode = color_mode_f.round() as u32;
         let snap_mode = snap_mode_f.round() as i32;
         let active_count = active_count_from_param(particles_param);
         let desired_vol_res = vol_res_from_param(vol_res_param);
-        let desired_dw = ((ctx.width as f32 * field_res).round() as u32).max(16);
-        let desired_dh = ((ctx.height as f32 * field_res).round() as u32).max(16);
+        // Lock display resolution at full size (density_res = 1.0)
+        let desired_dw = ctx.width;
+        let desired_dh = ctx.height;
 
         self.active_count = active_count;
 
@@ -450,7 +436,7 @@ impl Generator for FluidSimulation3DGenerator {
                         gpu, ctx.trigger_count % PATTERN_COUNT, ctx.trigger_count,
                         container_type, ctr_scale, flatten, cam_fwd_sim,
                     );
-                } else if self.active_snap_mode == 4 && color_mode > 0 {
+                } else if self.active_snap_mode == 4 {
                     self.inject_zone_index = self.next_inject_zone;
                     self.inject_frames_remaining = INJECT_FRAMES_PER_ZONE;
                     self.next_inject_zone = (self.next_inject_zone + 1) % 4;
@@ -467,14 +453,6 @@ impl Generator for FluidSimulation3DGenerator {
         if self.snap_envelope > 0.0 && self.active_snap_mode == 0 {
             turbulence *= 1.0 + 9.0 * self.snap_envelope;
         }
-
-        let color_mode_i = color_mode as i32;
-        if color_mode_i == 0 && self.last_color_mode > 0 {
-            self.inject_zone_index = -1;
-            self.inject_frames_remaining = 0;
-            self.next_inject_zone = 0;
-        }
-        self.last_color_mode = color_mode_i;
 
         if self.inject_zone_index >= 0 {
             self.inject_frames_remaining -= 1;
@@ -624,11 +602,10 @@ impl Generator for FluidSimulation3DGenerator {
         let sim_uni = Sim3DUniforms {
             active_count, frame_count: self.frame_count as u32, use_vector_field: 1,
             container: container_type, ctr_scale, speed, turbulence, anti_clump,
-            wander, respawn_rate: respawn, dense_respawn, flatten,
-            cam_fwd_x: cam_fwd_sim[0], cam_fwd_y: cam_fwd_sim[1], cam_fwd_z: cam_fwd_sim[2],
-            color_mode, inject_index: self.inject_zone_index,
-            inject_force: inject_force_val, inject_phase, time2: ctx.time as f32,
-            dt: ctx.dt, _pad1: 0.0, _pad2: 0.0,
+            diffusion, respawn_rate: 0.001, dense_respawn: 0.05, flatten,
+            cam_fwd_x: cam_fwd_sim[0], cam_fwd_y: cam_fwd_sim[1], cam_fwd_z: cam_fwd_sim[2], _pad0: 0.0,
+            inject_index: self.inject_zone_index, inject_force: inject_force_val,
+            inject_phase, time2: ctx.time as f32, dt: ctx.dt, _pad1: 0.0, _pad2: 0.0, _pad3: 0.0,
         };
         gpu.native_enc.dispatch_compute(&self.simulate_pipeline, &[
             manifold_gpu::GpuBinding::Buffer { binding: 0, buffer: particle_buf, offset: 0 },
@@ -671,9 +648,7 @@ impl Generator for FluidSimulation3DGenerator {
         let area_scale = (dw as f32 * dh as f32) / SCATTER_REFERENCE_AREA;
         let intensity = 3.0 * area_scale;
         let display_uni = DisplayUniforms {
-            intensity, contrast, invert, uv_scale: 1.0,
-            color_mode: color_mode as f32, color_bright,
-            _pad0: 0.0, _pad1: 0.0,
+            intensity, contrast, uv_scale: 1.0, _pad0: 0.0,
         };
         gpu.native_enc.dispatch_compute(&self.display_pipeline, &[
             manifold_gpu::GpuBinding::Bytes { binding: 0, data: bytemuck::bytes_of(&display_uni) },

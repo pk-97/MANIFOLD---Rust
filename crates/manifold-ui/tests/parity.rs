@@ -196,9 +196,9 @@ fn generator_param_count_parametric_surface() { assert_eq!(generator_definition_
 #[test]
 fn generator_param_count_mycelium() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::MYCELIUM).param_count, 12); }
 #[test]
-fn generator_param_count_fluid_sim() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION).param_count, 20); }
+fn generator_param_count_fluid_sim() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION).param_count, 13); }
 #[test]
-fn generator_param_count_fluid_sim_3d() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION_3D).param_count, 28); }
+fn generator_param_count_fluid_sim_3d() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::FLUID_SIMULATION_3D).param_count, 21); }
 
 #[test]
 fn generator_all_types_have_params() {
@@ -211,11 +211,11 @@ fn generator_all_types_have_params() {
 
 #[test]
 fn generator_max_param_count() {
-    // FluidSimulation3D has the most params (28)
+    // FluidSimulation3D has the most params (21)
     use manifold_core::generator_type_registry;
     let max = generator_type_registry::all().iter()
         .map(|reg| generator_definition_registry::get(&reg.id).param_count)
         .max()
         .unwrap_or(0);
-    assert_eq!(max, 28);
+    assert_eq!(max, 21);
 }
