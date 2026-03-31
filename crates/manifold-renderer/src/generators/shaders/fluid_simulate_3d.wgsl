@@ -231,41 +231,6 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let diff_seed = i * 1664525u + params.frame_count * 747796405u;
     force += (hash_float3(diff_seed) - 0.5) * params.diffusion * capped_density;
 
-    // --- Refresh: density-adaptive respawn ---
-    // Unity lines 165-196:
-    //   refreshSeed = i * 196613u + _FrameCount * 2891336453u
-    //   adaptiveRefresh = _RefreshRate + cappedDensity * _DensityRefreshScale
-    let refresh_seed = i * 196613u + params.frame_count * 2891336453u;
-    let adaptive_refresh = params.respawn_rate + capped_density * params.dense_respawn;
-    if hash_float(refresh_seed) < adaptive_refresh {
-        // Container-aware respawn: rejection sample until inside SDF
-        var respawn_pos = hash_float3(refresh_seed + 7919u);
-        if params.container > 0u {
-            // Up to 8 attempts to find a point inside the container
-            var attempt: i32 = 0;
-            loop {
-                if attempt >= 8 { break; }
-                if container_sdf(respawn_pos, params.container, params.ctr_scale) < 0.0 { break; }
-                let next_seed = wang_hash(refresh_seed + u32(attempt) * 31u);
-                respawn_pos = hash_float3(next_seed);
-                attempt += 1;
-            }
-        }
-        // Flatten: compress respawn position toward camera viewing plane
-        let cam_fwd = vec3<f32>(params.cam_fwd_x, params.cam_fwd_y, params.cam_fwd_z);
-        if params.flatten > 0.0 {
-            let d = dot(respawn_pos - 0.5, cam_fwd);
-            respawn_pos -= cam_fwd * d * params.flatten;
-        }
-        p.position = respawn_pos;
-        p.velocity = vec3<f32>(0.0);
-        p.life     = 1.0;
-        p.age      = -1.0;  // respawned particles start uncolored
-        p.color    = vec4<f32>(0.005, 0.005, 0.005, 1.0);
-        particles[i] = p;
-        return;
-    }
-
     // --- Soft container boundary repulsion ---
     // Unity lines 201-211:
     //   margin = 0.1

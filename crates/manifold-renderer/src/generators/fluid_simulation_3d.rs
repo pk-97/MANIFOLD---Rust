@@ -602,7 +602,7 @@ impl Generator for FluidSimulation3DGenerator {
         let sim_uni = Sim3DUniforms {
             active_count, frame_count: self.frame_count as u32, use_vector_field: 1,
             container: container_type, ctr_scale, speed, turbulence, anti_clump,
-            diffusion, respawn_rate: 0.001, dense_respawn: 0.05, flatten,
+            diffusion, respawn_rate: 0.0, dense_respawn: 0.0, flatten,
             cam_fwd_x: cam_fwd_sim[0], cam_fwd_y: cam_fwd_sim[1], cam_fwd_z: cam_fwd_sim[2], _pad0: 0.0,
             inject_index: self.inject_zone_index, inject_force: inject_force_val,
             inject_phase, time2: ctx.time as f32, dt: ctx.dt, _pad1: 0.0, _pad2: 0.0, _pad3: 0.0,
