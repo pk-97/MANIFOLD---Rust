@@ -91,7 +91,11 @@ impl PanelCompositor {
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
-                        blend: Some(wgpu::BlendState::REPLACE),
+                        // Cache textures have premultiplied alpha (UI shader
+                        // ALPHA_BLENDING onto transparent background). Use
+                        // premultiplied blend so transparent areas preserve
+                        // existing surface content.
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                     compilation_options: Default::default(),

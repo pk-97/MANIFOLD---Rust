@@ -117,8 +117,10 @@ impl UICacheManager {
             // Render panel nodes to commands
             ui_renderer.render_tree_range(tree, info.node_start, info.node_end);
 
-            let vp_w = (info.rect.width as f64 * self.scale_factor).ceil() as u32;
-            let vp_h = (info.rect.height as f64 * self.scale_factor).ceil() as u32;
+            // prepare_with_offset expects LOGICAL pixel dimensions —
+            // it derives physical from scale_factor internally.
+            let vp_w = info.rect.width.ceil() as u32;
+            let vp_h = info.rect.height.ceil() as u32;
 
             if !ui_renderer.prepare_with_offset(
                 device,
