@@ -267,8 +267,8 @@ impl FluidSimulationGenerator {
         density_res: f32,
     ) {
         let field_scale = density_res.clamp(0.125, 1.0);
-        let sw = ((output_width as f32 * field_scale) as u32).max(64);
-        let sh = ((output_height as f32 * field_scale) as u32).max(64);
+        let sw = ((output_width as f32 * field_scale) as u32).max(640);
+        let sh = ((output_height as f32 * field_scale) as u32).max(360);
 
         // Early out if dimensions haven't changed
         if self.scatter_accum.is_some() && self.scatter_width == sw && self.scatter_height == sh {
@@ -592,10 +592,13 @@ impl Generator for FluidSimulationGenerator {
         // ================================================================
 
         let base_blur_radius = blur_radius_param.round() as i32;
-        let res_scale = bw as f32 / 640.0;
-        let scaled_radius = (base_blur_radius as f32 * res_scale).round().max(1.0);
         let blur_texel_x = 1.0 / bw as f32;
         let blur_texel_y = 1.0 / bh as f32;
+
+        // Aspect-correct blur radii: scale relative to reference width (640),
+        // apply separately per axis so blur covers equal UV distance in both.
+        let radius_h = (base_blur_radius as f32 * bw as f32 / 640.0).round().max(1.0);
+        let radius_v = (base_blur_radius as f32 * bh as f32 / 640.0).round().max(1.0);
 
         // Downsample: density -> blur_density (radius=0)
         self.dispatch_blur(
@@ -606,13 +609,13 @@ impl Generator for FluidSimulationGenerator {
         // H blur: blur_density -> blur_temp
         self.dispatch_blur(
             gpu, blur_density_tex, blur_temp_tex,
-            [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur H",
+            [1.0, 0.0], radius_h, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur H",
         );
 
         // V blur: blur_temp -> blur_density
         self.dispatch_blur(
             gpu, blur_temp_tex, blur_density_tex,
-            [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur V",
+            [0.0, 1.0], radius_v, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur V",
         );
 
         // Gradient + Rotate
@@ -647,13 +650,13 @@ impl Generator for FluidSimulationGenerator {
         // Blur vector field H: vector -> blur_temp
         self.dispatch_blur(
             gpu, vector_field_tex, blur_temp_tex,
-            [1.0, 0.0], scaled_radius, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur Vector H",
+            [1.0, 0.0], radius_h, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur Vector H",
         );
 
         // Blur vector field V: blur_temp -> vector
         self.dispatch_blur(
             gpu, blur_temp_tex, vector_field_tex,
-            [0.0, 1.0], scaled_radius, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur Vector V",
+            [0.0, 1.0], radius_v, blur_texel_x, blur_texel_y, bw, bh, "FluidSim Blur Vector V",
         );
 
         // ================================================================
