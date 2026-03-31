@@ -76,10 +76,6 @@ pub struct ContentPipeline {
     /// and MetalFX is supported (macOS 13+, Apple Silicon). Preferred over FSR.
     #[cfg(target_os = "macos")]
     metalfx: Option<manifold_renderer::metalfx_upscaler::MetalFxFullFrameUpscaler>,
-    /// Temporal AA pass. Active when render_scale == 1.0 (native resolution).
-    /// Blends compositor output with history for free edge anti-aliasing.
-    #[cfg(target_os = "macos")]
-    taa: Option<manifold_renderer::temporal_aa::TemporalAAPass>,
     /// FSR 1.0 spatial upscaler. Present only when render_scale < 1.0
     /// AND MetalFX is not available. Fallback for older hardware.
     #[cfg(target_os = "macos")]
@@ -150,8 +146,6 @@ impl ContentPipeline {
             shared_output: shared,
             #[cfg(target_os = "macos")]
             metalfx: None,
-            #[cfg(target_os = "macos")]
-            taa: None,
             #[cfg(target_os = "macos")]
             fsr1: None,
             output_w: 1920,
@@ -587,29 +581,14 @@ impl ContentPipeline {
                     );
                 }
             } else {
-                // No upscaling (native resolution).
-                // Apply temporal AA if active, then blit to IOSurface.
-                let final_tex = if let Some(ref mut taa) = self.taa {
-                    let mut gpu_taa = if let Some(pool) = texture_pool {
-                        GpuEncoder::with_pool(&mut native_enc, native_device, pool)
-                    } else {
-                        GpuEncoder::new(&mut native_enc, native_device)
-                    };
-                    let taa_out = taa.apply(
-                        &mut gpu_taa, self.compositor.output_texture(),
-                    ) as *const manifold_gpu::GpuTexture;
-                    // Safety: taa_out points into self.taa which outlives this scope.
-                    unsafe { &*taa_out }
-                } else {
-                    self.compositor.output_texture()
-                };
+                // No upscaling: blit compositor output directly to IOSurface.
                 if let Some(ref shared_tex) =
                     self.shared_textures[self.write_surface_index]
                     && shared_tex.width == comp_w
                     && shared_tex.height == comp_h
                 {
                     native_enc.copy_texture_to_texture(
-                        final_tex, shared_tex, comp_w, comp_h, 1,
+                        self.compositor.output_texture(), shared_tex, comp_w, comp_h, 1,
                     );
                 }
             }
@@ -752,21 +731,6 @@ impl ContentPipeline {
             }
             self.metalfx = None;
             self.fsr1 = None;
-        }
-
-        // Temporal AA: active at native resolution (scale == 1.0).
-        // Blends compositor output with history for free edge anti-aliasing.
-        #[cfg(target_os = "macos")]
-        if scale >= 1.0 {
-            if let Some(ref mut taa) = self.taa {
-                taa.resize(native_device, width, height);
-            } else {
-                self.taa = Some(manifold_renderer::temporal_aa::TemporalAAPass::new(
-                    native_device, width, height,
-                ));
-            }
-        } else {
-            self.taa = None;
         }
 
         // IOSurface bridge always at output resolution.
