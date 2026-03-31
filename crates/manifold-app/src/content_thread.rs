@@ -427,23 +427,10 @@ impl ContentThread {
                 let active_layers = self.engine.project()
                     .map_or(0, |p| p.timeline.layers.len());
 
-                // Collect GPU pass timing results with resolution + absolute timestamps
-                let gpu_pass_results = self.content_pipeline.last_gpu_pass_results();
-                let gpu_pass_count = gpu_pass_results.len() as u32;
-                let gpu_total_ms: f64 = gpu_pass_results.iter()
-                    .map(|p| p.duration_ms).sum();
-                let gpu_passes: Vec<manifold_profiler::GpuPassRecord> =
-                    gpu_pass_results.iter()
-                        .map(|p| manifold_profiler::GpuPassRecord {
-                            name: p.label.clone(),
-                            ms: p.duration_ms,
-                            begin_ns: p.begin_ns,
-                            end_ns: p.end_ns,
-                            width: p.width,
-                            height: p.height,
-                            is_compute: p.is_compute,
-                        })
-                        .collect();
+                // GPU pass-level profiling not yet available on native Metal.
+                let gpu_pass_count = 0u32;
+                let gpu_total_ms = 0.0f64;
+                let gpu_passes = Vec::new();
 
                 // Helper: build named params from values + registry
                 fn build_effect_params(fx: &manifold_core::effects::EffectInstance) -> Vec<manifold_profiler::NamedParam> {
@@ -570,7 +557,7 @@ impl ContentThread {
                     gpu_total_ms,
                     layer_states,
                     missed_frames: self.timer.missed_ticks(),
-                    profiler_overhead_ms: self.content_pipeline.profiler_overhead_ms(),
+                    profiler_overhead_ms: 0.0,
                     memory: manifold_profiler::MemorySnapshot {
                         estimated_texture_bytes: estimated_tex_bytes,
                         render_target_count: rt_count,

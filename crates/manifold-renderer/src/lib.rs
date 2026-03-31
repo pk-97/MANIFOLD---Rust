@@ -1,8 +1,6 @@
 pub mod gpu;
 pub mod gpu_types;
 pub mod gpu_encoder;
-#[cfg(feature = "profiling")]
-pub mod gpu_profiler;
 pub mod render_target;
 pub mod render_target_pool;
 pub mod uniform_arena;

@@ -123,12 +123,6 @@ pub struct ContentPipeline {
     /// Captured inside render_content(), read by the profiler.
     #[cfg(feature = "profiling")]
     gpu_poll_ms: f64,
-    /// GPU pass-level profiler (timestamp queries). Created on first use.
-    #[cfg(feature = "profiling")]
-    gpu_profiler: Option<manifold_renderer::gpu_profiler::GpuProfiler>,
-    /// GPU pass timing results from the last frame.
-    #[cfg(feature = "profiling")]
-    last_gpu_pass_results: Vec<manifold_renderer::gpu_profiler::GpuPassTiming>,
     /// Native Metal GPU device from manifold-gpu (macOS only).
     /// Owns metal::Device + metal::CommandQueue for zero-wgpu encoding.
     #[cfg(target_os = "macos")]
@@ -187,10 +181,6 @@ impl ContentPipeline {
             last_fence_wait_ms: 0.0,
             #[cfg(feature = "profiling")]
             gpu_poll_ms: 0.0,
-            #[cfg(feature = "profiling")]
-            gpu_profiler: None,
-            #[cfg(feature = "profiling")]
-            last_gpu_pass_results: Vec::new(),
             #[cfg(target_os = "macos")]
             native_device: None,
             #[cfg(target_os = "macos")]
@@ -1009,28 +999,4 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         self.gpu_poll_ms
     }
 
-    /// Per-pass GPU timing results from the last frame.
-    /// Only available with the `profiling` feature.
-    #[cfg(feature = "profiling")]
-    pub fn last_gpu_pass_results(
-        &self,
-    ) -> &[manifold_renderer::gpu_profiler::GpuPassTiming] {
-        &self.last_gpu_pass_results
-    }
-
-    /// GPU adapter name from the profiler. Returns "Unknown" if profiler not available.
-    #[cfg(feature = "profiling")]
-    pub fn gpu_adapter_name(&self) -> &str {
-        self.gpu_profiler
-            .as_ref()
-            .map_or("Unknown", |p| p.adapter_name())
-    }
-
-    /// Profiler buffer readback overhead in ms.
-    #[cfg(feature = "profiling")]
-    pub fn profiler_overhead_ms(&self) -> f64 {
-        self.gpu_profiler
-            .as_ref()
-            .map_or(0.0, |p| p.last_readback_overhead_ms())
-    }
 }

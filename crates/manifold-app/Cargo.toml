@@ -41,7 +41,7 @@ raw-window-handle = "0.6"
 core-graphics-types = "0.2"
 
 [features]
-profiling = ["dep:manifold-profiler", "manifold-renderer/profiling"]
+profiling = ["dep:manifold-profiler"]
 
 [lints]
 workspace = true
