@@ -1833,10 +1833,8 @@ version = "0.1.0"
 dependencies = [
  "arboard",
  "core-foundation 0.10.1",
- "core-graphics-types 0.2.0",
  "crossbeam-channel",
  "env_logger",
- "foreign-types",
  "io-surface",
  "libc",
  "log",
@@ -1850,7 +1848,6 @@ dependencies = [
  "manifold-profiler",
  "manifold-renderer",
  "manifold-ui",
- "metal",
  "mimalloc",
  "objc",
  "parking_lot",

@@ -105,7 +105,7 @@ pub struct ContentPipeline {
     #[cfg(feature = "profiling")]
     gpu_poll_ms: f64,
     /// Native Metal GPU device from manifold-gpu (macOS only).
-    /// Owns metal::Device + metal::CommandQueue for native Metal encoding.
+    /// Owns GpuDevice (Metal device + command queue) for native encoding.
     #[cfg(target_os = "macos")]
     native_device: Option<manifold_gpu::GpuDevice>,
     /// Native Metal shared event for frame completion (macOS only).

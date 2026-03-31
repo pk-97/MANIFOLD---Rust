@@ -665,4 +665,46 @@ impl GpuDevice {
     pub fn create_texture_pool(&self, frames_in_flight: u64) -> TexturePool {
         TexturePool::new(self, frames_in_flight)
     }
+
+    /// Create a GPU texture backed by an IOSurface.
+    /// Used for zero-copy cross-thread texture sharing on macOS.
+    ///
+    /// # Safety
+    /// The IOSurface must remain valid for the lifetime of the returned texture.
+    pub unsafe fn create_texture_from_io_surface(
+        &self,
+        io_surface: *const std::ffi::c_void,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+    ) -> GpuTexture { unsafe {
+        let descriptor = metal::TextureDescriptor::new();
+        descriptor.set_pixel_format(to_mtl_pixel_format(format));
+        descriptor.set_width(width as u64);
+        descriptor.set_height(height as u64);
+        descriptor.set_depth(1);
+        descriptor.set_mipmap_level_count(1);
+        descriptor.set_sample_count(1);
+        descriptor.set_texture_type(metal::MTLTextureType::D2);
+        descriptor.set_usage(
+            metal::MTLTextureUsage::ShaderRead
+                | metal::MTLTextureUsage::ShaderWrite
+                | metal::MTLTextureUsage::RenderTarget,
+        );
+        descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
+
+        let raw_mtl_texture: *mut objc::runtime::Object = msg_send![
+            self.raw_device(),
+            newTextureWithDescriptor:descriptor.as_ref()
+            iosurface:io_surface
+            plane:0usize
+        ];
+        assert!(
+            !raw_mtl_texture.is_null(),
+            "newTextureWithDescriptor:iosurface:plane: failed"
+        );
+        use metal::foreign_types::ForeignType;
+        let mtl_texture = metal::Texture::from_ptr(raw_mtl_texture as *mut _);
+        GpuTexture::from_raw(mtl_texture, width, height, 1, format)
+    }}
 }

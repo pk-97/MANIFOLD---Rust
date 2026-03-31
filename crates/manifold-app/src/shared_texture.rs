@@ -20,9 +20,6 @@ use core_foundation::base::TCFType;
 use core_foundation::dictionary::CFMutableDictionary;
 use core_foundation::number::CFNumber;
 use core_foundation::string::CFString;
-use foreign_types::ForeignType;
-#[allow(unused_imports)]
-use objc::{msg_send, sel, sel_impl};
 
 /// Number of IOSurface buffers (triple-buffered).
 /// 3 surfaces allow 2 content frames in flight while the UI reads a third.
@@ -118,8 +115,7 @@ impl SharedTextureBridge {
         }
     }
 
-    /// Create a native `manifold_gpu::GpuTexture` backed by one of the IOSurfaces.
-    /// Used by the content thread which uses `manifold_gpu::GpuDevice` directly.
+    /// Create a `GpuTexture` backed by one of the IOSurfaces.
     ///
     /// `surface_index` selects which of the triple-buffered surfaces (0, 1, or 2).
     ///
@@ -128,57 +124,24 @@ impl SharedTextureBridge {
     /// the bridge outlives the texture.
     pub unsafe fn import_texture_native(
         &self,
-        native_device: &manifold_gpu::GpuDevice,
+        device: &manifold_gpu::GpuDevice,
         surface_index: usize,
     ) -> manifold_gpu::GpuTexture { unsafe {
         assert!(surface_index < SURFACE_COUNT, "surface_index must be 0..{SURFACE_COUNT}");
         let width = self.width.load(Ordering::Acquire);
         let height = self.height.load(Ordering::Acquire);
 
-        let raw_device: &metal::DeviceRef = native_device.raw_device();
-
-        // Create an MTLTextureDescriptor
-        let descriptor = metal::TextureDescriptor::new();
-        descriptor.set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
-        descriptor.set_width(width as u64);
-        descriptor.set_height(height as u64);
-        descriptor.set_depth(1);
-        descriptor.set_mipmap_level_count(1);
-        descriptor.set_sample_count(1);
-        descriptor.set_texture_type(metal::MTLTextureType::D2);
-        descriptor.set_usage(
-            metal::MTLTextureUsage::ShaderRead
-                | metal::MTLTextureUsage::ShaderWrite
-                | metal::MTLTextureUsage::RenderTarget,
-        );
-        descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
-
-        // Call [MTLDevice newTextureWithDescriptor:iosurface:plane:]
         let io_surfaces_guard = self.io_surfaces.read();
-        let io_surface_ref = io_surfaces_guard[surface_index].as_concrete_TypeRef();
-        let raw_mtl_texture: *mut objc::runtime::Object = objc::msg_send![
-            raw_device,
-            newTextureWithDescriptor:descriptor.as_ref()
-            iosurface:io_surface_ref
-            plane:0usize
-        ];
-        drop(io_surfaces_guard);
-        assert!(
-            !raw_mtl_texture.is_null(),
-            "newTextureWithDescriptor:iosurface:plane: failed"
-        );
-
-        // Wrap as metal::Texture (takes ownership of the +1 retain from newTexture)
-        let mtl_texture = metal::Texture::from_ptr(raw_mtl_texture as *mut _);
-
-        // Wrap as GpuTexture
-        manifold_gpu::GpuTexture::from_raw(
-            mtl_texture,
+        let io_surface_ref = io_surfaces_guard[surface_index].as_concrete_TypeRef()
+            as *const std::ffi::c_void;
+        let texture = device.create_texture_from_io_surface(
+            io_surface_ref,
             width,
             height,
-            1,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
-        )
+        );
+        drop(io_surfaces_guard);
+        texture
     }}
 
     /// Resize the bridge. Creates three new IOSurfaces at the new dimensions.

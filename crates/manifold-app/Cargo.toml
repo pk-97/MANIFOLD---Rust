@@ -30,15 +30,12 @@ parking_lot = { workspace = true }
 arboard = "3"
 manifold-profiler = { path = "../manifold-profiler", optional = true }
 
-# IOSurface bridge for cross-device GPU texture sharing (macOS)
+# macOS platform dependencies
 [target.'cfg(target_os = "macos")'.dependencies]
 io-surface = "0.16"
-metal = "0.33"
 objc = "0.2"
-foreign-types = "0.5"
 core-foundation = "0.10"
 raw-window-handle = "0.6"
-core-graphics-types = "0.2"
 
 [features]
 profiling = ["dep:manifold-profiler"]

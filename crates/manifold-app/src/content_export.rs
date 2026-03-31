@@ -335,10 +335,10 @@ impl ContentThread {
             let texture = self.content_pipeline.pq_encode_for_export(
                 paper_white, max_nits,
             );
-            unsafe { Self::get_metal_texture_ptr(texture) }
+            Self::get_metal_texture_ptr(texture)
         } else {
             let texture = self.content_pipeline.export_output_texture();
-            unsafe { Self::get_metal_texture_ptr(texture) }
+            Self::get_metal_texture_ptr(texture)
         };
 
         self.content_pipeline.wait_for_render_complete();
@@ -371,13 +371,8 @@ impl ContentThread {
     /// Extract the raw Metal texture pointer from a native GpuTexture.
     /// Returns `id<MTLTexture>` as `*mut c_void` for the native encoder.
     #[cfg(target_os = "macos")]
-    unsafe fn get_metal_texture_ptr(texture: &manifold_gpu::GpuTexture) -> Option<*mut std::ffi::c_void> {
-        use objc::runtime::Object;
-        use std::ffi::c_void;
-        // metal::TextureRef is an objc object — cast to raw pointer.
-        let raw_ref: &metal::TextureRef = texture.raw();
-        let ptr = raw_ref as *const metal::TextureRef as *const Object as *mut c_void;
-        Some(ptr)
+    fn get_metal_texture_ptr(texture: &manifold_gpu::GpuTexture) -> Option<*mut std::ffi::c_void> {
+        Some(texture.raw_ptr())
     }
 
     /// Send export progress to the UI thread.

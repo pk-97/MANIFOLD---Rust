@@ -1,43 +1,42 @@
-//! Output presenter — dedicated thread with native Metal blit pipeline.
+//! Output presenter — dedicated thread with manifold-gpu blit pipeline.
 //!
-//! `NativeOutputPresenter` spawns a dedicated thread that owns a `CAMetalLayer`
-//! at project resolution and a native Metal fullscreen-triangle pipeline.
+//! `NativeOutputPresenter` spawns a dedicated thread that owns a `GpuSurface`
+//! (CAMetalLayer) at project resolution and a WGSL fullscreen-triangle pipeline.
 //! The thread polls the IOSurface bridge for new frames and blits them to the
-//! output window's drawable, display-synchronized via `CAMetalLayer`.
+//! output window's drawable, display-synchronized via the surface.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use metal::foreign_types::ForeignType;
-#[allow(unused_imports)]
-use objc::{msg_send, sel, sel_impl};
+use manifold_gpu::{
+    GpuBinding, GpuDevice, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler,
+    GpuSamplerDesc, GpuSurface, GpuTexture, GpuTextureFormat,
+};
 
 use crate::shared_texture::{SharedTextureBridge, SURFACE_COUNT};
 
-const PRESENTER_MSL: &str = r#"
-#include <metal_stdlib>
-using namespace metal;
+const PRESENTER_WGSL: &str = r#"
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
 
-struct VertexOut {
-    float4 position [[position]];
-    float2 uv;
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
 };
 
-vertex VertexOut vs_presenter(uint vid [[vertex_id]]) {
-    VertexOut out;
-    float x = float(int(vid) / 2) * 4.0 - 1.0;
-    float y = float(int(vid) % 2) * 4.0 - 1.0;
-    out.position = float4(x, y, 0.0, 1.0);
-    out.uv = float2((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
+    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
     return out;
 }
 
-fragment half4 fs_presenter(
-    VertexOut in [[stage_in]],
-    texture2d<half> tex [[texture(0)]],
-    sampler smp [[sampler(0)]]
-) {
-    return tex.sample(smp, in.uv);
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(t_source, s_source, in.uv);
 }
 "#;
 
@@ -50,119 +49,61 @@ pub struct NativeOutputPresenter {
 
 impl NativeOutputPresenter {
     pub fn new(
-        gpu_device: &manifold_gpu::GpuDevice,
+        _gpu_device: &GpuDevice,
         window: &winit::window::Window,
         bridge: Arc<SharedTextureBridge>,
         edr_headroom: f64,
     ) -> Self {
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-        let ns_view = match window.window_handle().unwrap().as_raw() {
-            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut objc::runtime::Object,
-            _ => panic!("Expected AppKit window handle"),
-        };
-
-        let device_ref = gpu_device.raw_device();
-        let command_queue = gpu_device.clone_queue();
-
-        let compile_opts = metal::CompileOptions::new();
-        compile_opts.set_fast_math_enabled(true);
-        let library = device_ref
-            .new_library_with_source(PRESENTER_MSL, &compile_opts)
-            .expect("Failed to compile presenter MSL");
-
-        let vs = library.get_function("vs_presenter", None)
-            .expect("vs_presenter not found");
-        let fs = library.get_function("fs_presenter", None)
-            .expect("fs_presenter not found");
-
-        let pipe_desc = metal::RenderPipelineDescriptor::new();
-        pipe_desc.set_vertex_function(Some(&vs));
-        pipe_desc.set_fragment_function(Some(&fs));
-        pipe_desc.color_attachments().object_at(0).unwrap()
-            .set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
-
-        let pipeline = device_ref
-            .new_render_pipeline_state(&pipe_desc)
-            .expect("Failed to create presenter render pipeline");
-
-        let sampler_desc = metal::SamplerDescriptor::new();
-        sampler_desc.set_min_filter(metal::MTLSamplerMinMagFilter::Nearest);
-        sampler_desc.set_mag_filter(metal::MTLSamplerMinMagFilter::Nearest);
-        sampler_desc.set_address_mode_s(metal::MTLSamplerAddressMode::ClampToEdge);
-        sampler_desc.set_address_mode_t(metal::MTLSamplerAddressMode::ClampToEdge);
-        let sampler = device_ref.new_sampler(&sampler_desc);
+        // Create a dedicated GpuDevice for the presenter thread.
+        // Same physical Metal device, separate command queue — prevents
+        // GPU scheduler contention with the content thread.
+        let presenter_device = GpuDevice::new();
 
         let proj_w = bridge.width();
         let proj_h = bridge.height();
 
-        let layer = metal::MetalLayer::new();
-        layer.set_device(device_ref);
-        layer.set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
-        layer.set_framebuffer_only(true);
-        // Audience display path: let CAMetalLayer pace drawable acquisition to
-        // the actual display refresh instead of free-running in software.
-        layer.set_display_sync_enabled(true);
-        layer.set_maximum_drawable_count(3);
-        layer.set_drawable_size(core_graphics_types::geometry::CGSize {
-            width: proj_w as f64,
-            height: proj_h as f64,
+        // Create the surface (CAMetalLayer) on the calling thread where the
+        // window handle is valid, then move it to the presenter thread.
+        let surface = presenter_device.create_surface(
+            window,
+            proj_w,
+            proj_h,
+            GpuTextureFormat::Rgba16Float,
+            true, // display-sync: pace to output monitor refresh
+        );
+        surface.configure_edr();
+        surface.set_contents_gravity_resize_aspect();
+        surface.set_background_color(0.0, 0.0, 0.0, 1.0);
+
+        let pipeline = presenter_device.create_render_pipeline(
+            PRESENTER_WGSL,
+            "vs_main",
+            "fs_main",
+            GpuTextureFormat::Rgba16Float,
+            None,
+            "Presenter Blit",
+        );
+
+        let sampler = presenter_device.create_sampler(&GpuSamplerDesc {
+            min_filter: GpuFilterMode::Nearest,
+            mag_filter: GpuFilterMode::Nearest,
+            ..Default::default()
         });
-        layer.set_contents_scale(1.0);
-
-        let layer_ptr = layer.as_ptr() as *mut std::ffi::c_void;
-        unsafe {
-            let _: () = msg_send![layer_ptr as *mut objc::runtime::Object,
-                setAllowsNextDrawableTimeout: true];
-            let _: () = msg_send![ns_view, setLayer: layer_ptr];
-            let _: () = msg_send![ns_view, setWantsLayer: true];
-        }
-
-        unsafe {
-            let gravity: *const objc::runtime::Object =
-                msg_send![objc::class!(NSString),
-                    stringWithUTF8String: c"resizeAspect".as_ptr()];
-            let _: () = msg_send![layer_ptr as *mut objc::runtime::Object,
-                                   setContentsGravity: gravity];
-        }
-
-        unsafe {
-            let cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
-            if !cs.is_null() {
-                let _: () = msg_send![layer_ptr as *mut objc::runtime::Object,
-                                       setColorspace: cs];
-                CGColorSpaceRelease(cs);
-            }
-            let _: () = msg_send![layer_ptr as *mut objc::runtime::Object,
-                                   setWantsExtendedDynamicRangeContent: true];
-        }
-
-        unsafe {
-            let black = CGColorCreateGenericRGB(0.0, 0.0, 0.0, 1.0);
-            let _: () = msg_send![layer_ptr as *mut objc::runtime::Object,
-                                   setBackgroundColor: black];
-        }
-
-        unsafe {
-            objc::runtime::objc_retain(layer_ptr as *mut objc::runtime::Object);
-        }
 
         let bridge_gen = bridge.generation();
-        let native_textures = import_textures(device_ref, &bridge);
+        let native_textures = import_textures(&presenter_device, &bridge);
 
         let stop = Arc::new(AtomicBool::new(false));
         let edr = Arc::new(AtomicU64::new(edr_headroom.to_bits()));
 
         let thread_state = PresenterThread {
-            command_queue,
+            device: presenter_device,
             pipeline,
             sampler,
+            surface,
             bridge,
-            layer_ptr,
             native_textures,
             last_bridge_gen: bridge_gen,
-            drawable_width: proj_w,
-            drawable_height: proj_h,
             last_front: usize::MAX,
             stop: Arc::clone(&stop),
             edr_headroom: Arc::clone(&edr),
@@ -195,15 +136,13 @@ impl Drop for NativeOutputPresenter {
 }
 
 struct PresenterThread {
-    command_queue: metal::CommandQueue,
-    pipeline: metal::RenderPipelineState,
-    sampler: metal::SamplerState,
+    device: GpuDevice,
+    pipeline: GpuRenderPipeline,
+    sampler: GpuSampler,
+    surface: GpuSurface,
     bridge: Arc<SharedTextureBridge>,
-    layer_ptr: *mut std::ffi::c_void,
-    native_textures: [Option<metal::Texture>; SURFACE_COUNT],
+    native_textures: [Option<GpuTexture>; SURFACE_COUNT],
     last_bridge_gen: u64,
-    drawable_width: u32,
-    drawable_height: u32,
     last_front: usize,
     stop: Arc<AtomicBool>,
     #[allow(dead_code)]
@@ -214,8 +153,6 @@ unsafe impl Send for PresenterThread {}
 
 impl PresenterThread {
     fn run(mut self) {
-        self.sync_drawable_to_bridge();
-
         loop {
             if self.stop.load(Ordering::Acquire) {
                 break;
@@ -225,7 +162,7 @@ impl PresenterThread {
             if bridge_gen != self.last_bridge_gen {
                 self.last_bridge_gen = bridge_gen;
                 self.reimport_textures();
-                self.sync_drawable_to_bridge();
+                self.sync_surface_to_bridge();
             }
 
             // Use the latest available frame every presenter tick. Drawable
@@ -238,108 +175,62 @@ impl PresenterThread {
                 continue;
             };
 
-            let layer = self.layer();
-            let Some(drawable) = layer.next_drawable() else {
+            let Some(drawable) = self.surface.next_drawable() else {
                 std::thread::sleep(std::time::Duration::from_millis(1));
                 continue;
             };
 
-            let pass_desc = metal::RenderPassDescriptor::new();
-            let color = pass_desc.color_attachments().object_at(0).unwrap();
-            color.set_texture(Some(drawable.texture()));
-            color.set_load_action(metal::MTLLoadAction::DontCare);
-            color.set_store_action(metal::MTLStoreAction::Store);
+            let target = drawable.gpu_texture(GpuTextureFormat::Rgba16Float);
 
-            let cmd_buf = self.command_queue.new_command_buffer();
-            let enc = cmd_buf.new_render_command_encoder(pass_desc);
+            let w = self.surface.width as f32;
+            let h = self.surface.height as f32;
 
-            enc.set_render_pipeline_state(&self.pipeline);
-            enc.set_viewport(metal::MTLViewport {
-                originX: 0.0,
-                originY: 0.0,
-                width: self.drawable_width as f64,
-                height: self.drawable_height as f64,
-                znear: 0.0,
-                zfar: 1.0,
-            });
-            enc.set_fragment_texture(0, Some(source));
-            enc.set_fragment_sampler_state(0, Some(&self.sampler));
-            enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
-            enc.end_encoding();
-
-            cmd_buf.present_drawable(drawable);
-            cmd_buf.commit();
+            let mut encoder = self.device.create_encoder("Output Present");
+            encoder.draw_fullscreen_viewport(
+                &self.pipeline,
+                &target,
+                &[
+                    GpuBinding::Texture { binding: 0, texture: source },
+                    GpuBinding::Sampler { binding: 1, sampler: &self.sampler },
+                ],
+                (0.0, 0.0, w, h),
+                GpuLoadAction::DontCare,
+                "Presenter Blit",
+            );
+            encoder.present_drawable(&drawable);
+            encoder.commit();
         }
-
-        unsafe {
-            objc::runtime::objc_release(self.layer_ptr as *mut objc::runtime::Object);
-        }
-    }
-
-    fn layer(&self) -> &metal::MetalLayerRef {
-        unsafe { &*(self.layer_ptr as *const metal::MetalLayerRef) }
     }
 
     fn reimport_textures(&mut self) {
-        let device = self.command_queue.device();
-        self.native_textures = import_textures(device, &self.bridge);
+        self.native_textures = import_textures(&self.device, &self.bridge);
     }
 
-    fn sync_drawable_to_bridge(&mut self) {
+    fn sync_surface_to_bridge(&mut self) {
         let w = self.bridge.width();
         let h = self.bridge.height();
-        if w != self.drawable_width || h != self.drawable_height {
-            self.drawable_width = w;
-            self.drawable_height = h;
-            self.layer().set_drawable_size(core_graphics_types::geometry::CGSize {
-                width: w as f64,
-                height: h as f64,
-            });
+        if w != self.surface.width || h != self.surface.height {
+            self.surface.resize(w, h);
         }
     }
 }
 
-unsafe extern "C" {
-    fn CGColorSpaceCreateWithName(name: *const std::ffi::c_void) -> *mut std::ffi::c_void;
-    fn CGColorSpaceRelease(space: *mut std::ffi::c_void);
-    fn CGColorCreateGenericRGB(r: f64, g: f64, b: f64, a: f64) -> *mut std::ffi::c_void;
-    static kCGColorSpaceExtendedLinearSRGB: *const std::ffi::c_void;
-}
-
 fn import_textures(
-    device: &metal::DeviceRef,
+    device: &GpuDevice,
     bridge: &SharedTextureBridge,
-) -> [Option<metal::Texture>; SURFACE_COUNT] {
+) -> [Option<GpuTexture>; SURFACE_COUNT] {
     let width = bridge.width();
     let height = bridge.height();
 
     std::array::from_fn(|i| {
-        let descriptor = metal::TextureDescriptor::new();
-        descriptor.set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
-        descriptor.set_width(width as u64);
-        descriptor.set_height(height as u64);
-        descriptor.set_depth(1);
-        descriptor.set_mipmap_level_count(1);
-        descriptor.set_sample_count(1);
-        descriptor.set_texture_type(metal::MTLTextureType::D2);
-        descriptor.set_usage(
-            metal::MTLTextureUsage::ShaderRead | metal::MTLTextureUsage::ShaderWrite,
-        );
-        descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
-
         let io_surface_ref = bridge.raw_io_surface(i);
-        let raw_mtl_texture: *mut objc::runtime::Object = unsafe {
-            msg_send![
-                device,
-                newTextureWithDescriptor:descriptor.as_ref()
-                iosurface:io_surface_ref
-                plane:0usize
-            ]
-        };
-        assert!(
-            !raw_mtl_texture.is_null(),
-            "newTextureWithDescriptor:iosurface:plane: failed for surface {i}",
-        );
-        Some(unsafe { metal::Texture::from_ptr(raw_mtl_texture as *mut _) })
+        Some(unsafe {
+            device.create_texture_from_io_surface(
+                io_surface_ref,
+                width,
+                height,
+                GpuTextureFormat::Rgba16Float,
+            )
+        })
     })
 }
