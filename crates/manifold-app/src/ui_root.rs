@@ -994,7 +994,6 @@ impl UIRoot {
             .clamp(Self::INSPECTOR_MIN_W, Self::INSPECTOR_MAX_W);
         if (new_width - self.layout.inspector_width).abs() > 1.0 {
             self.layout.inspector_width = new_width;
-            self.build();
             true
         } else {
             false
