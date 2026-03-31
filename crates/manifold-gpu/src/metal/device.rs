@@ -70,6 +70,13 @@ impl GpuDevice {
         &self.queue
     }
 
+    /// Clone the owned Metal command queue handle.
+    /// Multiple threads can submit command buffers to the same queue; Metal
+    /// serializes them in submission order on that queue.
+    pub fn clone_queue(&self) -> metal::CommandQueue {
+        self.queue.clone()
+    }
+
     /// Create a GPU texture via device allocation (kernel call per texture).
     /// Prefer `TexturePool::acquire()` for transient textures.
     pub fn create_texture(&self, desc: &GpuTextureDesc) -> GpuTexture {

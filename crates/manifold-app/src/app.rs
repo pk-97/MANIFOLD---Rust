@@ -205,6 +205,9 @@ pub struct Application {
     /// No separate thread or command queue. Pixel-perfect 1:1, EDR-capable.
     #[cfg(target_os = "macos")]
     pub(crate) output_blitter: Option<crate::output_presenter::OutputBlitter>,
+    /// Dedicated presenter thread for presentation-mode output windows.
+    #[cfg(target_os = "macos")]
+    pub(crate) output_presenter: Option<crate::output_presenter::NativeOutputPresenter>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
@@ -344,6 +347,8 @@ impl Application {
             atlas_sampler: None,
             #[cfg(target_os = "macos")]
             output_blitter: None,
+            #[cfg(target_os = "macos")]
+            output_presenter: None,
             ui_renderer: None,
             ui_cache_manager: None,
             layer_bitmap_gpu: None,
@@ -1299,6 +1304,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     #[cfg(target_os = "macos")]
                     {
                         self.output_blitter = None;
+                        self.output_presenter = None;
                         self.output_saved_frame = None;
                     }
                     self.window_registry.remove(&window_id);
@@ -1504,10 +1510,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     && button == MouseButton::Left
                     && state == ElementState::Pressed
                 {
-                    // Double-click on the output window toggles presentation fullscreen
-                    // via NSView.enterFullScreenMode / exitFullScreenMode. This is the
-                    // macOS API for presentation/kiosk displays — no Spaces animation,
-                    // no GPU scheduler display-priority overhead.
+                    // Double-click on the output window toggles a dedicated
+                    // borderless presentation window instead of mutating the
+                    // existing titled window in place.
                     const DOUBLE_CLICK_MS: u128 = 300;
                     let now = std::time::Instant::now();
                     let is_double = self.output_last_click
@@ -1516,10 +1521,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                     if is_double {
                         self.output_last_click = None;
-                        if let Some(ws) = self.window_registry.get(&window_id) {
-                            Self::toggle_presentation_fullscreen(
-                                &ws.window,
-                                &mut self.output_saved_frame,
+                        if let Some((name, display_index, presentation)) = self.window_registry
+                            .get(&window_id)
+                            .and_then(|ws| match &ws.role {
+                                WindowRole::Output { name, presentation } => Some((
+                                    name.clone(),
+                                    ws.display_index,
+                                    *presentation,
+                                )),
+                                _ => None,
+                            })
+                        {
+                            #[cfg(target_os = "macos")]
+                            {
+                                self.output_blitter = None;
+                                self.output_presenter = None;
+                                self.output_saved_frame = None;
+                            }
+                            self.window_registry.remove(&window_id);
+                            self.open_output_window(
+                                event_loop,
+                                &name,
+                                display_index,
+                                !presentation,
                             );
                         }
                     } else {
@@ -1931,6 +1955,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             #[cfg(target_os = "macos")]
             {
                 self.output_blitter = None;
+                self.output_presenter = None;
                 self.output_saved_frame = None;
             }
             let output_ids: Vec<_> = self.window_registry.iter()
@@ -1952,7 +1977,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             if self.window_registry.has_output_window() {
                 self.pending_close_output = true; // will close next iteration
             } else {
-                self.open_output_window(event_loop, "Output", None);
+                self.open_output_window(event_loop, "Output", None, false);
             }
         }
 
@@ -2005,6 +2030,10 @@ impl Application {
                         if h > 1.0 { "passthrough" } else { "ACES tonemap" },
                     );
                     self.output_edr_headroom = h;
+                    #[cfg(target_os = "macos")]
+                    if let Some(p) = &mut self.output_presenter {
+                        p.update_edr_headroom(h);
+                    }
                 }
             }
         }
@@ -2012,72 +2041,6 @@ impl Application {
 }
 
 // render_text_input_overlay() moved to app_render.rs
-
-impl Application {
-    /// Toggle manual borderless fullscreen on the output window.
-    ///
-    /// Saves the window frame, removes decorations, and resizes to fill the
-    /// screen. No Spaces animation, no GPU scheduler display-priority overhead,
-    /// and no view-stealing (unlike `enterFullScreenMode:` which conflicts with
-    /// winit's window delegate).
-    #[cfg(target_os = "macos")]
-    fn toggle_presentation_fullscreen(
-        window: &winit::window::Window,
-        saved_frame: &mut Option<[f64; 4]>,
-    ) {
-        use objc::{msg_send, sel, sel_impl};
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-
-        let ns_view = match window.window_handle().unwrap().as_raw() {
-            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut objc::runtime::Object,
-            _ => return,
-        };
-
-        unsafe {
-            let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
-            if ns_window.is_null() { return; }
-
-            if let Some(frame) = saved_frame.take() {
-                // --- Exit fullscreen: restore decorations and saved frame ---
-                // NSWindowStyleMaskTitled | Closable | Miniaturizable | Resizable
-                let titled_mask: u64 = 1 | 2 | 4 | 8;
-                let _: () = msg_send![ns_window, setStyleMask: titled_mask];
-                let _: () = msg_send![ns_window, setLevel: 0i64]; // NSNormalWindowLevel
-
-                #[repr(C)]
-                #[derive(Copy, Clone)]
-                struct NSRect { x: f64, y: f64, w: f64, h: f64 }
-                let rect = NSRect { x: frame[0], y: frame[1], w: frame[2], h: frame[3] };
-                let _: () = msg_send![ns_window, setFrame: rect display: true];
-
-                log::info!("[OutputWindow] Exited presentation fullscreen");
-            } else {
-                // --- Enter fullscreen: save frame, go borderless, fill screen ---
-
-                // Save current frame (origin + size) for restore.
-                #[repr(C)]
-                #[derive(Copy, Clone)]
-                struct NSRect { x: f64, y: f64, w: f64, h: f64 }
-                let current: NSRect = msg_send![ns_window, frame];
-                *saved_frame = Some([current.x, current.y, current.w, current.h]);
-
-                // Get the screen frame.
-                let screen: *mut objc::runtime::Object = msg_send![ns_window, screen];
-                if screen.is_null() { return; }
-                let screen_frame: NSRect = msg_send![screen, frame];
-
-                // NSWindowStyleMaskBorderless = 0 (no title bar, no chrome).
-                let _: () = msg_send![ns_window, setStyleMask: 0u64];
-                let _: () = msg_send![ns_window, setFrame: screen_frame display: true];
-                // Keep above other windows so the output stays visible.
-                // NSStatusWindowLevel (25) — above normal, below screen-saver.
-                let _: () = msg_send![ns_window, setLevel: 25i64];
-
-                log::info!("[OutputWindow] Entered presentation fullscreen");
-            }
-        }
-    }
-}
 
 impl Drop for Application {
     fn drop(&mut self) {
@@ -2094,7 +2057,10 @@ impl Drop for Application {
 
         // Drop the output blitter — releases its CAMetalLayer before cleanup.
         #[cfg(target_os = "macos")]
-        { self.output_blitter = None; }
+        {
+            self.output_blitter = None;
+            self.output_presenter = None;
+        }
 
         // Drop GPU resources before the device and surfaces.
         // Field drop order is declaration order — gpu (device) drops before

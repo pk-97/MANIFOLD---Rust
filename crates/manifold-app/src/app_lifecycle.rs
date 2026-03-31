@@ -528,6 +528,7 @@ impl Application {
         event_loop: &ActiveEventLoop,
         name: &str,
         display_index: Option<usize>,
+        presentation: bool,
     ) {
         // Guard: don't open output window if GPU isn't initialized.
         if self.gpu.is_none() { return; }
@@ -586,8 +587,6 @@ impl Application {
             mon_phys_size.width, mon_phys_size.height, scale_factor
         );
 
-        // Default size = project resolution. Resizable + native fullscreen supported.
-        // Content always renders at project resolution with letterbox/pillarbox to fit.
         let (proj_w, proj_h) = (
             self.local_project.settings.output_width.max(1) as f64,
             self.local_project.settings.output_height.max(1) as f64,
@@ -595,12 +594,23 @@ impl Application {
         let center_x = logical_x + (logical_w - proj_w) * 0.5;
         let center_y = logical_y + (logical_h - proj_h) * 0.5;
 
-        let attrs = winit::window::Window::default_attributes()
-            .with_title(format!("MANIFOLD - {}", name))
-            .with_position(winit::dpi::Position::Logical(
-                winit::dpi::LogicalPosition::new(center_x, center_y),
-            ))
-            .with_inner_size(winit::dpi::LogicalSize::new(proj_w, proj_h));
+        let attrs = if presentation {
+            winit::window::Window::default_attributes()
+                .with_title(format!("MANIFOLD - {}", name))
+                .with_decorations(false)
+                .with_resizable(false)
+                .with_position(winit::dpi::Position::Logical(
+                    winit::dpi::LogicalPosition::new(logical_x, logical_y),
+                ))
+                .with_inner_size(winit::dpi::LogicalSize::new(logical_w, logical_h))
+        } else {
+            winit::window::Window::default_attributes()
+                .with_title(format!("MANIFOLD - {}", name))
+                .with_position(winit::dpi::Position::Logical(
+                    winit::dpi::LogicalPosition::new(center_x, center_y),
+                ))
+                .with_inner_size(winit::dpi::LogicalSize::new(proj_w, proj_h))
+        };
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
@@ -610,7 +620,10 @@ impl Application {
             }
         };
 
-        // Window is interactive — user can drag to any monitor and use native fullscreen.
+        if presentation {
+            #[cfg(target_os = "macos")]
+            Self::configure_presentation_window(&window);
+        }
 
         let id = window.id();
         let resolved_index = display_index.or({
@@ -626,17 +639,18 @@ impl Application {
             self.output_edr_headroom = h;
         }
 
-        // Inline output blitter: attaches a CAMetalLayer at project resolution.
-        // Blitting runs from the main frame encoder — no dedicated thread/queue.
         #[cfg(target_os = "macos")]
-        if let Some(gpu) = &self.gpu {
-            let blitter = crate::output_presenter::OutputBlitter::new(
+        if let Some(gpu) = &self.gpu
+            && let Some(bridge) = &self.shared_texture_bridge
+        {
+            let presenter = crate::output_presenter::NativeOutputPresenter::new(
                 &gpu.device,
                 &window,
-                proj_w as u32,
-                proj_h as u32,
+                Arc::clone(bridge),
+                h,
             );
-            self.output_blitter = Some(blitter);
+            self.output_presenter = Some(presenter);
+            self.output_blitter = None;
         }
 
         let state = WindowState {
@@ -644,6 +658,7 @@ impl Application {
             surface: None, // No wgpu surface — OutputBlitter owns the CAMetalLayer.
             role: WindowRole::Output {
                 name: name.to_string(),
+                presentation,
             },
             display_index: resolved_index,
         };
@@ -652,8 +667,30 @@ impl Application {
 
         let (proj_w_u32, proj_h_u32) = (proj_w as u32, proj_h as u32);
         log::info!(
-            "[OutputWindow] Opened '{}' on '{}' (drawable={}x{}, Rgba16Float, EDR={:.2}x, pixel-perfect)",
-            name, mon_name, proj_w_u32, proj_h_u32, h,
+            "[OutputWindow] Opened '{}' on '{}' (drawable={}x{}, Rgba16Float, EDR={:.2}x, pixel-perfect, presentation={})",
+            name, mon_name, proj_w_u32, proj_h_u32, h, presentation,
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    fn configure_presentation_window(window: &winit::window::Window) {
+        use objc::{msg_send, sel, sel_impl};
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+        let ns_view = match window.window_handle().unwrap().as_raw() {
+            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut objc::runtime::Object,
+            _ => return,
+        };
+
+        unsafe {
+            let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
+            if ns_window.is_null() {
+                return;
+            }
+            let _: () = msg_send![ns_window, setStyleMask: 0u64];
+            let _: () = msg_send![ns_window, setLevel: 25i64];
+            let _: () = msg_send![ns_window, setMovable: false];
+            let _: () = msg_send![ns_window, setMovableByWindowBackground: false];
+        }
     }
 }

@@ -80,6 +80,11 @@ impl GpuDevice {
         // Attach CAMetalLayer to the NSView.
         let layer_ptr = layer.as_ptr() as *mut std::ffi::c_void;
         unsafe {
+            // Prevent CAMetalLayer::nextDrawable from blocking the caller when
+            // all drawables are in flight. The output presenter now runs inline
+            // on the main frame encoder, so blocking here would stall the app.
+            let _: () = msg_send![layer_ptr as *mut objc::runtime::Object,
+                setAllowsNextDrawableTimeout: true];
             let _: () = msg_send![ns_view, setLayer: layer_ptr];
             let _: () = msg_send![ns_view, setWantsLayer: true];
             // Retain the layer — the local MetalLayer will drop its reference.

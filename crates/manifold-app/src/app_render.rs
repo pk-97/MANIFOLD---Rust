@@ -1057,26 +1057,10 @@ impl Application {
             }
         }
 
-        // Pass 6: Output blit (IOSurface → output drawable, same encoder)
-        // Both drawables are presented from one commit() — single command queue,
-        // zero GPU scheduler contention between workspace and output windows.
-        #[cfg(target_os = "macos")]
-        let output_drawable = if let (Some(output), Some(compositor_tex)) = (
-            &mut self.output_blitter,
-            self.ui_shared_textures[front_index].as_ref(),
-        ) {
-            output.blit_if_new(front_index, compositor_tex, &mut encoder)
-        } else {
-            None
-        };
-
         // ── Present + commit ──
         encoder.present_drawable(&drawable);
-        #[cfg(target_os = "macos")]
-        if let Some(ref out_drawable) = output_drawable {
-            encoder.present_drawable(out_drawable);
-        }
         encoder.commit();
+
     }
 }
 

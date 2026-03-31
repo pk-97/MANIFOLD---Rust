@@ -8,7 +8,7 @@ pub enum WindowRole {
     /// Main workspace window (UI, timeline, etc.)
     Workspace,
     /// External output window (projector, LED wall, secondary monitor)
-    Output { name: String },
+    Output { name: String, presentation: bool },
 }
 
 #[allow(dead_code)]
