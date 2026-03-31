@@ -198,6 +198,41 @@ pub struct GpuBlendState {
     pub alpha_operation: GpuBlendOp,
 }
 
+// ─── Vertex Layout ───────────────────────────────────────────────────
+
+/// Vertex attribute format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuVertexFormat {
+    Float32,
+    Float32x2,
+    Float32x3,
+    Float32x4,
+    Uint32,
+    Uint8x4,
+}
+
+/// A single vertex attribute in a vertex buffer layout.
+#[derive(Clone, Copy, Debug)]
+pub struct GpuVertexAttribute {
+    /// Vertex format (e.g. Float32x2 for position).
+    pub format: GpuVertexFormat,
+    /// Byte offset within the vertex struct.
+    pub offset: u32,
+    /// Shader location (matches WGSL @location(N)).
+    pub shader_location: u32,
+}
+
+/// Vertex buffer layout — describes the memory layout of vertices.
+#[derive(Clone, Debug)]
+pub struct GpuVertexLayout {
+    /// Stride in bytes between consecutive vertices.
+    pub stride: u32,
+    /// Vertex attributes in this buffer.
+    pub attributes: Vec<GpuVertexAttribute>,
+}
+
+// ─── Resource Bindings ───────────────────────────────────────────────
+
 /// Resource binding for dispatch/draw calls.
 pub enum GpuBinding<'a> {
     /// Buffer at WGSL @binding(N). Backend maps to Metal buffer index.

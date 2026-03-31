@@ -32,6 +32,7 @@ mod texture_pool;
 mod encoder;
 mod shader_compiler;
 mod format;
+pub mod surface;
 
 // Re-export all public types so external code paths remain identical.
 pub use device::GpuDevice;
@@ -40,6 +41,7 @@ pub use types::{
 };
 pub use texture_pool::TexturePool;
 pub use encoder::GpuEncoder;
+pub use surface::{GpuSurface, GpuDrawable};
 
 // Raw ObjC retain/release — avoids dependency on objc::msg_send! macro.
 // Used by both device (command buffer retain) and encoder (encoder retain/release).

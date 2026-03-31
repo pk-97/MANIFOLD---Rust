@@ -76,6 +76,17 @@ pub(crate) fn to_mtl_address(mode: GpuAddressMode) -> metal::MTLSamplerAddressMo
     }
 }
 
+pub(crate) fn to_mtl_vertex_format(fmt: GpuVertexFormat) -> metal::MTLVertexFormat {
+    match fmt {
+        GpuVertexFormat::Float32 => metal::MTLVertexFormat::Float,
+        GpuVertexFormat::Float32x2 => metal::MTLVertexFormat::Float2,
+        GpuVertexFormat::Float32x3 => metal::MTLVertexFormat::Float3,
+        GpuVertexFormat::Float32x4 => metal::MTLVertexFormat::Float4,
+        GpuVertexFormat::Uint32 => metal::MTLVertexFormat::UInt,
+        GpuVertexFormat::Uint8x4 => metal::MTLVertexFormat::UChar4,
+    }
+}
+
 pub(crate) fn to_mtl_blend_factor(factor: GpuBlendFactor) -> metal::MTLBlendFactor {
     match factor {
         GpuBlendFactor::Zero => metal::MTLBlendFactor::Zero,

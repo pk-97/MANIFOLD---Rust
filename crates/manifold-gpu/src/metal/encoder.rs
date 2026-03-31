@@ -305,6 +305,112 @@ impl GpuEncoder {
         enc.end_encoding();
     }
 
+    /// Draw indexed geometry with a render pipeline and vertex/index buffers.
+    ///
+    /// Sets bindings on BOTH vertex and fragment stages (same as `draw_instanced`).
+    /// Vertex buffer bound at index 30 (matching the vertex descriptor buffer index).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_indexed(
+        &mut self,
+        pipeline: &GpuRenderPipeline,
+        target: &GpuTexture,
+        bindings: &[GpuBinding],
+        vertex_buffer: &GpuBuffer,
+        index_buffer: &GpuBuffer,
+        index_count: u32,
+        viewport: Option<(f32, f32, f32, f32)>,
+        load_action: crate::GpuLoadAction,
+        label: &str,
+    ) {
+        self.end_current();
+
+        let desc = metal::RenderPassDescriptor::new();
+        let color = desc.color_attachments().object_at(0).unwrap();
+        color.set_texture(Some(&target.raw));
+        color.set_load_action(match load_action {
+            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
+            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
+            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
+        });
+        color.set_store_action(metal::MTLStoreAction::Store);
+        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
+
+        let enc = self.cmd_buf().new_render_command_encoder(desc);
+        enc.push_debug_group(label);
+        enc.set_render_pipeline_state(&pipeline.state);
+
+        // Set viewport if provided, otherwise full texture dimensions.
+        if let Some((x, y, w, h)) = viewport {
+            enc.set_viewport(metal::MTLViewport {
+                originX: x as f64,
+                originY: y as f64,
+                width: w as f64,
+                height: h as f64,
+                znear: 0.0,
+                zfar: 1.0,
+            });
+        } else {
+            enc.set_viewport(metal::MTLViewport {
+                originX: 0.0,
+                originY: 0.0,
+                width: target.width as f64,
+                height: target.height as f64,
+                znear: 0.0,
+                zfar: 1.0,
+            });
+        }
+
+        // Bind vertex buffer at index 30 (same as vertex descriptor buffer index).
+        const VERTEX_BUFFER_INDEX: u64 = 30;
+        enc.set_vertex_buffer(VERTEX_BUFFER_INDEX, Some(&vertex_buffer.raw), 0);
+
+        // Set all bindings on both vertex and fragment stages.
+        for binding in bindings {
+            match binding {
+                GpuBinding::Buffer { binding: b, buffer, offset } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    enc.set_vertex_buffer(
+                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
+                    );
+                    enc.set_fragment_buffer(
+                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
+                    );
+                }
+                GpuBinding::Texture { binding: b, texture } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
+                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
+                }
+                GpuBinding::Sampler { binding: b, sampler } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                }
+                GpuBinding::Bytes { binding: b, data } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    enc.set_vertex_bytes(
+                        slot.metal_index as _, data.len() as _,
+                        data.as_ptr() as *const _,
+                    );
+                    enc.set_fragment_bytes(
+                        slot.metal_index as _, data.len() as _,
+                        data.as_ptr() as *const _,
+                    );
+                }
+            }
+        }
+
+        enc.draw_indexed_primitives(
+            metal::MTLPrimitiveType::Triangle,
+            index_count as u64,
+            metal::MTLIndexType::UInt32,
+            &index_buffer.raw,
+            0,
+        );
+        enc.pop_debug_group();
+        enc.end_encoding();
+    }
+
     /// Clear a texture to a solid color via a render pass with MTLLoadAction::Clear.
     /// No draw call — just load-clear + store.
     pub fn clear_texture(&mut self, texture: &GpuTexture, r: f64, g: f64, b: f64, a: f64) {

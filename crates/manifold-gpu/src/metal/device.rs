@@ -417,6 +417,146 @@ impl GpuDevice {
         pipeline
     }
 
+    /// Create a render pipeline from WGSL source with a vertex buffer layout.
+    ///
+    /// Same as `create_render_pipeline()` but additionally configures an
+    /// `MTLVertexDescriptor` from a `GpuVertexLayout`. Used for UI-thread
+    /// rendering with actual vertex buffers (not fullscreen triangles).
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_render_pipeline_with_vertex_layout(
+        &self,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        color_format: GpuTextureFormat,
+        blend: Option<GpuBlendState>,
+        vertex_layout: &GpuVertexLayout,
+        label: &str,
+    ) -> GpuRenderPipeline {
+        // Incorporate vertex layout stride into the hash to differentiate from
+        // vertex-less pipelines with the same shader.
+        let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
+        let hash = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            base_hash.hash(&mut hasher);
+            vertex_layout.stride.hash(&mut hasher);
+            hasher.finish()
+        };
+        if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
+            return cached.clone();
+        }
+
+        let (slot_map, vs_msl, fs_msl) =
+            compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+
+        let compile_opts = metal::CompileOptions::new();
+        compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
+        compile_opts.set_fast_math_enabled(true);
+
+        let vs_library = self
+            .device
+            .new_library_with_source(&vs_msl, &compile_opts)
+            .unwrap_or_else(|e| {
+                panic!("{label}: MTL vertex library compile error: {e}\nMSL:\n{vs_msl}")
+            });
+        let fs_library = self
+            .device
+            .new_library_with_source(&fs_msl, &compile_opts)
+            .unwrap_or_else(|e| {
+                panic!("{label}: MTL fragment library compile error: {e}\nMSL:\n{fs_msl}")
+            });
+
+        let vs_available = vs_library.function_names();
+        let fs_available = fs_library.function_names();
+        let vs_func = find_entry_function(
+            &vs_library, vs_entry, &vs_available, label, "vertex",
+        );
+        let fs_func = find_entry_function(
+            &fs_library, fs_entry, &fs_available, label, "fragment",
+        );
+
+        let desc = metal::RenderPipelineDescriptor::new();
+        desc.set_vertex_function(Some(&vs_func));
+        desc.set_fragment_function(Some(&fs_func));
+
+        // Build MTLVertexDescriptor from GpuVertexLayout.
+        // Vertex buffer bound at index 30 to avoid collision with SPIRV-Cross bindings.
+        const VERTEX_BUFFER_INDEX: u64 = 30;
+        let vtx_desc = metal::VertexDescriptor::new();
+        for attr in &vertex_layout.attributes {
+            let a = vtx_desc
+                .attributes()
+                .object_at(attr.shader_location as u64)
+                .expect("vertex attribute");
+            a.set_format(format::to_mtl_vertex_format(attr.format));
+            a.set_offset(attr.offset as u64);
+            a.set_buffer_index(VERTEX_BUFFER_INDEX);
+        }
+        let layout = vtx_desc
+            .layouts()
+            .object_at(VERTEX_BUFFER_INDEX)
+            .expect("vertex buffer layout");
+        layout.set_stride(vertex_layout.stride as u64);
+        layout.set_step_function(metal::MTLVertexStepFunction::PerVertex);
+        layout.set_step_rate(1);
+        desc.set_vertex_descriptor(Some(vtx_desc));
+
+        let color_attach = desc
+            .color_attachments()
+            .object_at(0)
+            .expect("color attachment 0");
+        color_attach.set_pixel_format(to_mtl_pixel_format(color_format));
+
+        if let Some(blend) = blend {
+            color_attach.set_blending_enabled(true);
+            color_attach.set_rgb_blend_operation(to_mtl_blend_op(blend.operation));
+            color_attach.set_alpha_blend_operation(to_mtl_blend_op(blend.alpha_operation));
+            color_attach.set_source_rgb_blend_factor(to_mtl_blend_factor(blend.src_factor));
+            color_attach
+                .set_destination_rgb_blend_factor(to_mtl_blend_factor(blend.dst_factor));
+            color_attach
+                .set_source_alpha_blend_factor(to_mtl_blend_factor(blend.src_alpha_factor));
+            color_attach
+                .set_destination_alpha_blend_factor(to_mtl_blend_factor(blend.dst_alpha_factor));
+        }
+
+        let mut archive_guard = self.archive.lock().unwrap();
+        let state = if let Some(ref mut arch) = *archive_guard {
+            desc.set_binary_archives(&[arch.raw_archive()]);
+
+            let state = self
+                .device
+                .new_render_pipeline_state(&desc)
+                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"));
+
+            if !arch.was_added(hash) {
+                if let Err(e) = arch
+                    .raw_archive()
+                    .add_render_pipeline_functions_with_descriptor(&desc)
+                {
+                    log::warn!("{label}: failed to add render PSO to binary archive: {e}");
+                } else {
+                    arch.mark_added(hash);
+                }
+            }
+            state
+        } else {
+            self.device
+                .new_render_pipeline_state(&desc)
+                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"))
+        };
+        drop(archive_guard);
+
+        let pipeline = GpuRenderPipeline {
+            state,
+            slot_map,
+            label: label.to_string(),
+        };
+        self.render_cache.lock().unwrap().insert(hash, pipeline.clone());
+        pipeline
+    }
+
     /// Create a new command encoder for one frame's GPU work.
     pub fn create_encoder(&self, label: &str) -> GpuEncoder {
         // Use retained references — Metal retains all resources set on encoders.

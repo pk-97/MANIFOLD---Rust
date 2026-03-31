@@ -2124,10 +2124,12 @@ name = "manifold-gpu"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "core-graphics-types 0.2.0",
  "log",
  "metal",
  "naga",
  "objc",
+ "raw-window-handle",
  "spirv-cross2",
  "spirv-tools",
 ]

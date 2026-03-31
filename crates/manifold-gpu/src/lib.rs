@@ -1,10 +1,10 @@
-//! manifold-gpu — purpose-built GPU abstraction for MANIFOLD's content thread.
+//! manifold-gpu — purpose-built GPU abstraction for MANIFOLD.
 //!
 //! Native Metal on macOS. Zero wgpu, zero vtable overhead.
-//! All content-thread GPU resources are native Metal types.
+//! All GPU resources are native Metal types.
 //!
-//! The UI thread stays on wgpu directly — this crate is only for the
-//! content thread.
+//! Used by both the content thread (rendering, effects, generators) and
+//! the UI thread (native Metal UI rendering via GpuSurface).
 
 // objc macros (msg_send!, sel!, class!) must be imported at crate root.
 // objc 0.2's sel_impl macro uses `cfg(feature = "cargo-clippy")` which
