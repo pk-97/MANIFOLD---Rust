@@ -626,31 +626,25 @@ impl Application {
             self.output_edr_headroom = h;
         }
 
-        let size = window.inner_size();
-
-        // Direct IOSurface display: set the IOSurface as the view's layer contents.
-        // Zero GPU work — Core Animation displays the IOSurface pixel-perfect at
-        // project resolution, handles vsync and display scaling automatically.
-        // No wgpu surface, no blit, no separate thread.
-        // wgpu HDR surface — same rendering path as workspace preview.
-        // Handles vsync alignment (Mailbox), HDR/EDR, and color management.
-        // Pixel-perfect 1:1 at project res requires a custom CAMetalLayer (follow-up).
-        let output_surface = if let Some(ref gpu) = self.gpu {
-            let sw = manifold_renderer::surface::SurfaceWrapper::new_hdr(
-                &gpu.instance, &gpu.adapter, &gpu.device,
-                window.clone(),
-                size.width, size.height, window.scale_factor(),
-                wgpu::PresentMode::Mailbox,
+        // Native Metal presenter: custom CAMetalLayer at project resolution.
+        // Pixel-perfect 1:1 blit from IOSurface, vsync-locked, EDR-capable.
+        // No wgpu surface — the presenter owns the layer directly.
+        #[cfg(target_os = "macos")]
+        if let (Some(gpu), Some(bridge)) =
+            (&self.gpu, &self.shared_texture_bridge)
+        {
+            let presenter = crate::output_presenter::NativeOutputPresenter::new(
+                &gpu.device,
+                &window,
+                Arc::clone(bridge),
+                h,
             );
-            crate::edr_surface::configure_edr(&sw.surface);
-            Some(sw)
-        } else {
-            None
-        };
+            self.output_presenter = Some(presenter);
+        }
 
         let state = WindowState {
             window,
-            surface: output_surface,
+            surface: None, // No wgpu surface — presenter owns the CAMetalLayer.
             role: WindowRole::Output {
                 name: name.to_string(),
             },
@@ -659,20 +653,10 @@ impl Application {
 
         self.window_registry.add(id, state);
 
-        #[cfg(target_os = "macos")]
-        let thread_label = if self.output_presenter.is_some() {
-            ", native-metal-presenter"
-        } else {
-            ", no bridge"
-        };
-        #[cfg(not(target_os = "macos"))]
-        let thread_label = "";
-
+        let (proj_w_u32, proj_h_u32) = (proj_w as u32, proj_h as u32);
         log::info!(
-            "[OutputWindow] Opened '{}' on '{}' ({}x{}, Rgba16Float, EDR={:.2}x → blit={}{})",
-            name, mon_name, size.width, size.height, h,
-            if h > 1.0 { "passthrough" } else { "ACES tonemap" },
-            thread_label,
+            "[OutputWindow] Opened '{}' on '{}' (drawable={}x{}, Rgba16Float, EDR={:.2}x, pixel-perfect)",
+            name, mon_name, proj_w_u32, proj_h_u32, h,
         );
     }
 }

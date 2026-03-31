@@ -204,10 +204,10 @@ pub struct Application {
     pub(crate) blit_pipeline: Option<BlitPipeline>,
     // (output_blit_pipeline and output_blit_format removed — native Metal
     // presenter compiles its own pipeline via manifold-gpu)
-    /// Dedicated presenter thread for the output window.
-    /// Owns the output surface so `get_current_texture()` never blocks the UI thread.
+    /// Native Metal output presenter — custom CAMetalLayer at project resolution.
+    /// Pixel-perfect 1:1 blit from IOSurface, vsync-locked, EDR-capable.
     #[cfg(target_os = "macos")]
-    pub(crate) output_presenter: Option<crate::output_presenter::OutputPresenterHandle>,
+    pub(crate) output_presenter: Option<crate::output_presenter::NativeOutputPresenter>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) panel_compositor: Option<manifold_renderer::panel_compositor::PanelCompositor>,
@@ -1310,8 +1310,8 @@ impl ApplicationHandler for Application {
                     }
                     event_loop.exit();
                 } else {
-                    // Stop the presenter thread before removing the window so the
-                    // surface is fully dropped before winit destroys the window.
+                    // Drop the presenter before removing the window so the
+                    // CAMetalLayer is released before winit destroys the window.
                     #[cfg(target_os = "macos")]
                     {
                         self.output_presenter = None;
@@ -1348,18 +1348,9 @@ impl ApplicationHandler for Application {
                         let size = ws.window.inner_size();
                         if let Some(surface) = &mut ws.surface {
                             surface.resize(&gpu.device, size.width, size.height, scale_factor);
-                        } else {
-                            #[cfg(target_os = "macos")]
-                            if let Some(p) = &self.output_presenter {
-                                let _ = p.sender.send(
-                                    crate::output_presenter::OutputCommand::Resize {
-                                        width: size.width,
-                                        height: size.height,
-                                        scale: scale_factor,
-                                    },
-                                );
-                            }
                         }
+                        // Output windows: drawable stays at project resolution.
+                        // NativeOutputPresenter detects changes via bridge generation.
 
                         if is_primary {
                             let logical_w = size.width as f32 / scale_factor as f32;
@@ -1953,8 +1944,7 @@ impl ApplicationHandler for Application {
         // Close output window (Escape key or programmatic close)
         if self.pending_close_output {
             self.pending_close_output = false;
-            // Stop the presenter thread first so the surface is dropped
-            // before winit destroys the window.
+            // Drop the presenter before removing windows.
             #[cfg(target_os = "macos")]
             {
                 self.output_presenter = None;
@@ -2021,8 +2011,7 @@ impl Application {
             }
         }
 
-        // Query headroom for output window → drives per-window tonemap blit.
-        // Also forward to the presenter thread so it uses the correct tonemap.
+        // Query headroom for output window → update presenter directly.
         for (_, ws) in self.window_registry.iter() {
             if matches!(ws.role, WindowRole::Output { .. }) {
                 let h = crate::edr_surface::query_window_headroom(&ws.window);
@@ -2033,13 +2022,12 @@ impl Application {
                         if h > 1.0 { "passthrough" } else { "ACES tonemap" },
                     );
                     self.output_edr_headroom = h;
-                    if let Some(p) = &self.output_presenter {
-                        let _ = p.sender.send(
-                            crate::output_presenter::OutputCommand::UpdateEdrHeadroom(h),
-                        );
-                    }
                 }
             }
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(p) = &mut self.output_presenter {
+            p.update_edr_headroom(self.output_edr_headroom);
         }
     }
 }
@@ -2125,9 +2113,8 @@ impl Drop for Application {
             log::info!("[Application::Drop] content thread joined");
         }
 
-        // Stop the output presenter thread first — it owns the output surface
-        // and submits GPU work. It must be stopped before the device poll below,
-        // otherwise in-flight work from the presenter races against the poll.
+        // Drop the output presenter first — it owns a CAMetalLayer and
+        // MTLCommandQueue. Must be dropped before the device poll below.
         #[cfg(target_os = "macos")]
         { self.output_presenter = None; }
 

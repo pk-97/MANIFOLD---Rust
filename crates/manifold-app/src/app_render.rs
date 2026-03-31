@@ -4,8 +4,6 @@
 //! overlay rendering helper. All methods are `impl Application` blocks that
 //! operate on the struct defined in app.rs.
 
-use winit::window::WindowId;
-
 use manifold_renderer::ui_renderer::{TextMode, UIRenderer};
 
 use manifold_ui::node::FontWeight;
@@ -863,24 +861,27 @@ impl Application {
             .unwrap_or((1920, 1080));
         let source_aspect = comp_w as f32 / comp_h as f32;
 
-        // Process output windows first (single draw call) so they aren't
-        // delayed by the heavier workspace render. Stable ordering: outputs
-        // first, then workspace.
-        let mut window_ids: Vec<WindowId> = self.window_registry.iter().map(|(id, _)| *id).collect();
-        let primary = self.primary_window_id;
-        window_ids.sort_by_key(|id| if Some(*id) == primary { 1u8 } else { 0 });
+        // Present output window via native Metal presenter (pixel-perfect 1:1).
+        // Done before the workspace render so output isn't delayed by heavy UI work.
+        #[cfg(target_os = "macos")]
+        if let Some(presenter) = &mut self.output_presenter {
+            presenter.present();
+        }
 
-        for window_id in window_ids {
-            let is_workspace = Some(window_id) == self.primary_window_id;
+        // Workspace window rendering.
+        let Some(window_id) = self.primary_window_id else {
+            return;
+        };
 
+        {
             let ws = match self.window_registry.get_mut(&window_id) {
                 Some(ws) => ws,
-                None => continue,
+                None => return,
             };
 
             let surface = match ws.surface.as_mut() {
                 Some(s) => s,
-                None => continue,
+                None => return,
             };
 
             let surface_texture = match surface.get_current_texture() {
@@ -892,11 +893,11 @@ impl Application {
                         surface.height,
                         surface.scale_factor,
                     );
-                    continue;
+                    return;
                 }
                 Err(e) => {
                     log::error!("Surface error: {e}");
-                    continue;
+                    return;
                 }
             };
 
@@ -913,24 +914,6 @@ impl Application {
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some("Blit Encoder"),
                     });
-
-            // Output window blitting is handled by the native Metal presenter
-            // thread — output windows have surface: None and are skipped above.
-
-            if !is_workspace {
-                // Output window: fullscreen blit of compositor output.
-                if let Some(blit) = &self.blit_pipeline {
-                    blit.blit_to_rect_fit(
-                        &gpu.device, &mut encoder,
-                        compositor_output, &surface_view,
-                        0.0, 0.0, surface_w as f32, surface_h as f32,
-                        source_aspect,
-                    );
-                }
-                gpu.queue.submit(std::iter::once(encoder.finish()));
-                surface_texture.present();
-                continue;
-            }
 
             {
                 let video_rect = self.ui_root.layout.video_area();
