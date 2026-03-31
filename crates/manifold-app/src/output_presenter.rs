@@ -1,4 +1,4 @@
-//! Pixel-perfect 1:1 output presenter — custom CAMetalLayer, native Metal blit.
+//! Pixel-perfect 1:1 output presenter — custom CAMetalLayer, tile-friendly render pass.
 //!
 //! The output monitor is the primary audience-facing display in a live
 //! performance. It uses a custom CAMetalLayer (not wgpu-managed) so the
@@ -7,29 +7,23 @@
 //! the layer contents to the window via `contentsGravity = resizeAspect`.
 //!
 //! Architecture:
-//!   Content Thread ──render──▶ IOSurface ◀──blit── Presenter Thread
-//!                              (bridge)            (custom CAMetalLayer + MTLBlit)
+//!   Content Thread ──render──▶ IOSurface ◀──sample── Presenter Thread
+//!                              (bridge)              (fullscreen triangle → drawable)
 //!
-//! Key design — "always present latest" (Mailbox-style):
-//!   The presenter thread loops on `nextDrawable()` with displaySyncEnabled=true.
-//!   Each drawable acquisition blocks until the display's next vsync — this IS
-//!   the frame pacer. At each vsync, the thread blits whatever the content
-//!   thread's latest IOSurface frame is. No poll loop, no variable detection
-//!   timing, no frame hold time variation.
-//!
-//!   The old presenter (which flickered) polled for NEW content at 200μs intervals
-//!   and only presented when content changed. This created ±200μs jitter in when
-//!   presents landed relative to vsync, causing some frames to be held for 1
-//!   refresh interval and others for 2 — visible as brightness flicker on noisy
-//!   content. The new approach eliminates this entirely: every present is exactly
-//!   on a vsync boundary, showing the latest available frame.
+//! GPU strategy — render pass, not blit:
+//!   On Apple Silicon TBDR, MTLBlitCommandEncoder does a large linear memory
+//!   transaction (62MB read + 62MB write at 3456×2234 Rgba16Float) that bypasses
+//!   tile memory and saturates the memory fabric. A fullscreen triangle render
+//!   pass samples the IOSurface texture through the texture sampling hardware
+//!   and writes directly to tile memory, with dramatically lower external memory
+//!   bandwidth. This eliminates GPU contention with the UI thread.
 //!
 //! Properties:
 //! - **drawableSize = project resolution** (always, regardless of window size)
-//! - **MTLBlitCommandEncoder** for zero-shader texture copy (IOSurface → drawable)
-//! - **displaySyncEnabled = true** — nextDrawable blocks at vsync (dedicated thread)
+//! - **Fullscreen triangle render pass** (TBDR tile-friendly, not linear blit)
 //! - **EDR** — Rgba16Float + extendedLinearSRGB + wantsExtendedDynamicRangeContent
 //! - **Dedicated thread** — never blocks the UI thread
+//! - **Only presents on new content** — no redundant GPU work
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -52,15 +46,52 @@ unsafe extern "C" {
 }
 
 // ---------------------------------------------------------------------------
+// MSL shader — fullscreen triangle + texture sample (passthrough)
+// ---------------------------------------------------------------------------
+
+/// Metal Shading Language source for the output presenter.
+/// Fullscreen triangle generated from vertex_id (no vertex buffer).
+/// Fragment shader samples the IOSurface texture — pure passthrough.
+/// The compositor already handles tonemapping; no additional processing needed.
+const PRESENTER_MSL: &str = r#"
+#include <metal_stdlib>
+using namespace metal;
+
+struct VertexOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex VertexOut vs_presenter(uint vid [[vertex_id]]) {
+    VertexOut out;
+    // Fullscreen triangle: 3 vertices cover the entire screen.
+    // Vertex 0: (-1, -1), Vertex 1: (3, -1), Vertex 2: (-1, 3)
+    float x = float(int(vid) / 2) * 4.0 - 1.0;
+    float y = float(int(vid) % 2) * 4.0 - 1.0;
+    out.position = float4(x, y, 0.0, 1.0);
+    out.uv = float2((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+
+fragment half4 fs_presenter(
+    VertexOut in [[stage_in]],
+    texture2d<half> tex [[texture(0)]],
+    sampler smp [[sampler(0)]]
+) {
+    return tex.sample(smp, in.uv);
+}
+"#;
+
+// ---------------------------------------------------------------------------
 // NativeOutputPresenter — handle held by Application on the UI thread
 // ---------------------------------------------------------------------------
 
 /// Pixel-perfect output presenter backed by a dedicated thread.
 ///
 /// The UI thread creates this handle, which spawns a presenter thread.
-/// The thread owns a CAMetalLayer at project resolution and blits the
-/// latest IOSurface content at each vsync. Dropping the handle stops
-/// the thread and releases the layer.
+/// The thread owns a CAMetalLayer at project resolution and renders the
+/// latest IOSurface content via a fullscreen triangle render pass.
+/// Dropping the handle stops the thread and releases the layer.
 pub struct NativeOutputPresenter {
     /// Atomic stop flag — set by Drop, checked by the presenter thread.
     stop: Arc<AtomicBool>,
@@ -74,8 +105,9 @@ impl NativeOutputPresenter {
     /// Create a new presenter with a custom CAMetalLayer on the output window.
     ///
     /// Extracts the raw MTLDevice from the wgpu device (same underlying GPU),
-    /// creates a dedicated MTLCommandQueue, configures the CAMetalLayer for
-    /// pixel-perfect EDR output at project resolution, and spawns the thread.
+    /// creates a dedicated MTLCommandQueue, compiles the MSL render pipeline,
+    /// configures the CAMetalLayer for pixel-perfect EDR output at project
+    /// resolution, and spawns the presenter thread.
     pub fn new(
         wgpu_device: &wgpu::Device,
         window: &winit::window::Window,
@@ -101,6 +133,39 @@ impl NativeOutputPresenter {
         let device_ref = unsafe { metal::DeviceRef::from_ptr(raw_device) };
         let command_queue = device_ref.new_command_queue();
 
+        // --- Compile MSL render pipeline ---
+        let compile_opts = metal::CompileOptions::new();
+        compile_opts.set_fast_math_enabled(true);
+        let library = device_ref
+            .new_library_with_source(PRESENTER_MSL, &compile_opts)
+            .expect("Failed to compile presenter MSL");
+
+        let vs = library.get_function("vs_presenter", None)
+            .expect("vs_presenter not found");
+        let fs = library.get_function("fs_presenter", None)
+            .expect("fs_presenter not found");
+
+        let pipe_desc = metal::RenderPipelineDescriptor::new();
+        pipe_desc.set_vertex_function(Some(&vs));
+        pipe_desc.set_fragment_function(Some(&fs));
+        pipe_desc
+            .color_attachments()
+            .object_at(0)
+            .unwrap()
+            .set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
+
+        let pipeline = device_ref
+            .new_render_pipeline_state(&pipe_desc)
+            .expect("Failed to create presenter render pipeline");
+
+        // --- Create sampler (nearest — 1:1 pixel-perfect, no interpolation) ---
+        let sampler_desc = metal::SamplerDescriptor::new();
+        sampler_desc.set_min_filter(metal::MTLSamplerMinMagFilter::Nearest);
+        sampler_desc.set_mag_filter(metal::MTLSamplerMinMagFilter::Nearest);
+        sampler_desc.set_address_mode_s(metal::MTLSamplerAddressMode::ClampToEdge);
+        sampler_desc.set_address_mode_t(metal::MTLSamplerAddressMode::ClampToEdge);
+        let sampler = device_ref.new_sampler(&sampler_desc);
+
         // --- Create CAMetalLayer ---
         let proj_w = bridge.width();
         let proj_h = bridge.height();
@@ -111,9 +176,7 @@ impl NativeOutputPresenter {
         layer.set_framebuffer_only(true);
         // displaySyncEnabled = false: nextDrawable returns immediately.
         // We only call it when content has changed (60/sec), so no tearing.
-        // Core Animation still presents at vsync — this just avoids blocking
-        // the thread, which would interfere with ProMotion display scheduling
-        // and cause UI frame drops.
+        // Core Animation still presents at vsync.
         layer.set_display_sync_enabled(false);
         layer.set_maximum_drawable_count(3);
         layer.set_drawable_size(core_graphics_types::geometry::CGSize {
@@ -157,10 +220,9 @@ impl NativeOutputPresenter {
             let black = CGColorCreateGenericRGB(0.0, 0.0, 0.0, 1.0);
             let _: () = msg_send![layer_ptr as *mut objc::runtime::Object,
                                    setBackgroundColor: black];
-            // CGColor is retained by the layer — no need to release.
         }
 
-        // Retain the layer — released in PresenterThread Drop (via stop + join).
+        // Retain the layer — released in PresenterThread when it exits.
         unsafe {
             objc::runtime::objc_retain(layer_ptr as *mut objc::runtime::Object);
         }
@@ -170,7 +232,7 @@ impl NativeOutputPresenter {
         let native_textures = import_textures(device_ref, &bridge);
 
         log::info!(
-            "[NativeOutputPresenter] Created: {}x{} Rgba16Float, EDR={:.2}x, vsync=true",
+            "[NativeOutputPresenter] Created: {}x{} Rgba16Float, EDR={:.2}x, render-pass",
             proj_w, proj_h, edr_headroom,
         );
 
@@ -180,6 +242,8 @@ impl NativeOutputPresenter {
 
         let thread_state = PresenterThread {
             command_queue,
+            pipeline,
+            sampler,
             bridge,
             layer_ptr,
             native_textures,
@@ -220,12 +284,13 @@ impl Drop for NativeOutputPresenter {
 }
 
 // ---------------------------------------------------------------------------
-// Presenter thread — runs the vsync-locked blit loop
+// Presenter thread — runs the render-pass presentation loop
 // ---------------------------------------------------------------------------
 
-/// Internal state that lives on the presenter thread.
 struct PresenterThread {
     command_queue: metal::CommandQueue,
+    pipeline: metal::RenderPipelineState,
+    sampler: metal::SamplerState,
     bridge: Arc<SharedTextureBridge>,
     layer_ptr: *mut std::ffi::c_void,
     native_textures: [Option<metal::Texture>; SURFACE_COUNT],
@@ -239,12 +304,11 @@ struct PresenterThread {
 }
 
 // SAFETY: CAMetalLayer is documented thread-safe for nextDrawable and property access.
-// Metal command queue and textures are Send+Sync. The layer pointer is stable (retained).
+// Metal command queue, pipeline state, sampler, and textures are Send+Sync.
 unsafe impl Send for PresenterThread {}
 
 impl PresenterThread {
     fn run(mut self) {
-        // Initial sync: match drawable to project resolution.
         self.sync_drawable_to_bridge();
 
         loop {
@@ -252,7 +316,7 @@ impl PresenterThread {
                 break;
             }
 
-            // Check for bridge resize — reimport textures + update drawable size.
+            // Check for bridge resize — reimport textures + update drawable.
             let bridge_gen = self.bridge.generation();
             if bridge_gen != self.last_bridge_gen {
                 self.last_bridge_gen = bridge_gen;
@@ -260,16 +324,9 @@ impl PresenterThread {
                 self.sync_drawable_to_bridge();
             }
 
-            // Only blit when the content thread has published a new frame.
-            // On a 120Hz display with 60fps content, this halves GPU work
-            // (60 blits/sec instead of 120) — eliminates GPU contention that
-            // caused UI frame drops.
+            // Only present when content thread publishes a new frame.
             let front = self.bridge.front_index() as usize;
             if front == self.last_front {
-                // No new content — brief sleep and check again.
-                // 500μs ensures we detect new content well within one vsync
-                // interval (8.33ms at 120Hz), so the present always lands on
-                // the first available vsync after content publication.
                 std::thread::sleep(std::time::Duration::from_micros(500));
                 continue;
             }
@@ -280,7 +337,6 @@ impl PresenterThread {
             };
 
             // Acquire drawable — returns immediately (displaySyncEnabled=false).
-            // Core Animation handles vsync scheduling on present.
             let layer = self.layer();
             let Some(drawable) = layer.next_drawable() else {
                 std::thread::sleep(std::time::Duration::from_millis(1));
@@ -288,28 +344,33 @@ impl PresenterThread {
             };
 
             let drawable_tex = drawable.texture();
-            let w = self.drawable_width;
-            let h = self.drawable_height;
 
-            // GPU blit: IOSurface → drawable (same dimensions, same format).
+            // Render pass: sample IOSurface → write to drawable via tile memory.
+            // On Apple Silicon TBDR this is dramatically cheaper than a linear blit
+            // because it stays in tile memory instead of doing 62MB read + 62MB write
+            // through the memory fabric.
+            let pass_desc = metal::RenderPassDescriptor::new();
+            let color = pass_desc.color_attachments().object_at(0).unwrap();
+            color.set_texture(Some(drawable_tex));
+            color.set_load_action(metal::MTLLoadAction::DontCare);
+            color.set_store_action(metal::MTLStoreAction::Store);
+
             let cmd_buf = self.command_queue.new_command_buffer();
-            let blit_enc = cmd_buf.new_blit_command_encoder();
-            blit_enc.copy_from_texture(
-                source,
-                0,
-                0,
-                metal::MTLOrigin { x: 0, y: 0, z: 0 },
-                metal::MTLSize {
-                    width: w as u64,
-                    height: h as u64,
-                    depth: 1,
-                },
-                drawable_tex,
-                0,
-                0,
-                metal::MTLOrigin { x: 0, y: 0, z: 0 },
-            );
-            blit_enc.end_encoding();
+            let enc = cmd_buf.new_render_command_encoder(pass_desc);
+
+            enc.set_render_pipeline_state(&self.pipeline);
+            enc.set_viewport(metal::MTLViewport {
+                originX: 0.0,
+                originY: 0.0,
+                width: self.drawable_width as f64,
+                height: self.drawable_height as f64,
+                znear: 0.0,
+                zfar: 1.0,
+            });
+            enc.set_fragment_texture(0, Some(source));
+            enc.set_fragment_sampler_state(0, Some(&self.sampler));
+            enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+            enc.end_encoding();
 
             cmd_buf.present_drawable(drawable);
             cmd_buf.commit();
