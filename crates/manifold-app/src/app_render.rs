@@ -937,7 +937,7 @@ impl Application {
                     &mut self.ui_renderer,
                 ) {
                     cm.set_scale_factor(scale);
-                    cm.update_sizes(&gpu.device, pc, &panel_infos);
+                    cm.ensure_atlas(&gpu.device, pc, logical_w, logical_h);
                     cm.render_dirty_panels(
                         &gpu.device,
                         &gpu.queue,
@@ -960,17 +960,16 @@ impl Application {
                     );
                 }
 
-                // Collect compositing data from cache manager (Rect + BindGroup pairs).
-                let compositing_panels: Vec<_> = self.ui_cache_manager.as_ref()
-                    .map(|cm| cm.compositing_data(&panel_infos))
-                    .unwrap_or_default();
+                // Get atlas bind group for single-blit compositing.
+                let atlas_bg = self.ui_cache_manager.as_ref()
+                    .and_then(|cm| cm.atlas_bind_group());
 
                 // Single render pass: clear to black, blit compositor output,
-                // then composite cached panel textures.
+                // then blit the full-screen UI atlas (one draw instead of 7).
                 {
                     let mut pass =
                         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Clear + Blit + Cached Panels"),
+                            label: Some("Clear + Blit + UI Atlas"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                                 view: &surface_view,
                                 resolve_target: None,
@@ -995,9 +994,9 @@ impl Application {
                         surface_w as f32, surface_h as f32,
                         0.0, 1.0,
                     );
-                    // Composite cached panel textures
-                    if let Some(pc) = &self.panel_compositor {
-                        pc.draw_panels(&mut pass, &compositing_panels, sf);
+                    // Blit UI atlas (single draw — premultiplied alpha preserves video)
+                    if let (Some(pc), Some(bg)) = (&self.panel_compositor, atlas_bg) {
+                        pc.draw_atlas(&mut pass, bg);
                     }
                 }
 

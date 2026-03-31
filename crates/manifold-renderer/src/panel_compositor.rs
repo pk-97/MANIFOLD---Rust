@@ -1,6 +1,4 @@
-use manifold_ui::node::Rect;
-
-/// Composites cached panel textures onto the surface.
+/// Composites the UI atlas onto the surface.
 ///
 /// Each panel is drawn as a viewport-restricted fullscreen triangle blit,
 /// reusing the same shader pattern as BlitPipeline. ~7 draw calls per frame.
@@ -134,27 +132,16 @@ impl PanelCompositor {
         &self.sampler
     }
 
-    /// Composite cached panel textures into an existing render pass.
-    /// Each panel is drawn by setting the viewport to its screen rect
-    /// and drawing a fullscreen triangle.
-    pub fn draw_panels<'a>(
+    /// Blit the full-screen UI atlas onto the surface in one draw call.
+    /// Uses premultiplied alpha blending so transparent atlas areas
+    /// preserve the video content underneath.
+    pub fn draw_atlas<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
-        panels: &[(Rect, &'a wgpu::BindGroup)],
-        scale_factor: f32,
+        atlas_bind_group: &'a wgpu::BindGroup,
     ) {
         pass.set_pipeline(&self.pipeline);
-        for (rect, bind_group) in panels {
-            let px = rect.x * scale_factor;
-            let py = rect.y * scale_factor;
-            let pw = rect.width * scale_factor;
-            let ph = rect.height * scale_factor;
-            if pw <= 0.0 || ph <= 0.0 {
-                continue;
-            }
-            pass.set_viewport(px, py, pw, ph, 0.0, 1.0);
-            pass.set_bind_group(0, *bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
+        pass.set_bind_group(0, atlas_bind_group, &[]);
+        pass.draw(0..3, 0..1);
     }
 }
