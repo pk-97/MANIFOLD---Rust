@@ -474,12 +474,8 @@ impl Generator for FluidSimulation3DGenerator {
         }
 
         let angle_rad = curl_angle.to_radians();
-        // Normalize gradient force to be invariant to volume resolution.
-        // Gradient is in voxel-space, so magnitude scales with density-per-voxel.
-        // Compensate by (ref/actual)^2 so behavior matches at all vol_res values.
-        let vol_scale = (128.0 / desired_vol_res as f32).powi(2);
-        let curl_strength = cur_flow * FORCE_SCALE * angle_rad.sin() * vol_scale;
-        let slope_strength = cur_flow * FORCE_SCALE * angle_rad.cos() * vol_scale;
+        let curl_strength = cur_flow * FORCE_SCALE * angle_rad.sin();
+        let slope_strength = cur_flow * FORCE_SCALE * angle_rad.cos();
         let t_ref = ctx.time as f32 * 0.3;
         let ref_axis = normalize3([(t_ref * 1.0).sin(), (t_ref * 0.7).cos(), (t_ref * 0.5).sin()]);
 
