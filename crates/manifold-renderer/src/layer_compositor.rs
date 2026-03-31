@@ -223,12 +223,6 @@ impl PingPong {
         self.pong.resize(device, width, height);
     }
 
-    /// Release both textures back to the pool. Consumes self.
-    fn release_to_pool(self, pool: &manifold_gpu::TexturePool) {
-        self.ping.release_to_pool(pool);
-        self.pong.release_to_pool(pool);
-    }
-
     fn width(&self) -> u32 {
         self.ping.width
     }
@@ -442,30 +436,21 @@ impl LayerCompositor {
     }
 
     /// Trim oversized layer_bufs and effect_chains down to actual usage + headroom.
-    /// Excess textures are released back to the pool for recycling.
+    /// Excess textures are dropped immediately (freed by Metal) rather than released
+    /// to the TexturePool — compositor scratch buffers are large and rarely re-needed,
+    /// so pooling them just delays the memory savings.
     /// Headroom of 2 prevents oscillation if usage fluctuates frame-to-frame.
-    fn trim_excess_buffers(&mut self, pool: Option<&manifold_gpu::TexturePool>) {
+    fn trim_excess_buffers(&mut self) {
         const HEADROOM: usize = 2;
 
         let target_layer_bufs = self.last_layer_buf_used.saturating_add(HEADROOM);
         if self.layer_bufs.len() > target_layer_bufs {
-            let excess: Vec<PingPong> = self.layer_bufs.drain(target_layer_bufs..).collect();
-            if let Some(p) = pool {
-                for pp in excess {
-                    pp.release_to_pool(p);
-                }
-            }
-            // If no pool, excess PingPongs are simply dropped (Metal frees them).
+            self.layer_bufs.truncate(target_layer_bufs);
         }
 
         let target_effect_chains = self.last_effect_chain_used.saturating_add(HEADROOM);
         if self.effect_chains.len() > target_effect_chains {
-            let excess: Vec<EffectChain> = self.effect_chains.drain(target_effect_chains..).collect();
-            if let Some(p) = pool {
-                for mut ec in excess {
-                    ec.release_to_pool(p);
-                }
-            }
+            self.effect_chains.truncate(target_effect_chains);
         }
     }
 
@@ -1058,7 +1043,7 @@ impl Compositor for LayerCompositor {
             // No layers active — trim excess buffers from previous frames.
             self.last_layer_buf_used = 0;
             self.last_effect_chain_used = 0;
-            self.trim_excess_buffers(gpu.pool);
+            self.trim_excess_buffers();
             return &self.tonemap.output.texture;
         }
 
@@ -1176,7 +1161,7 @@ impl Compositor for LayerCompositor {
         // Trim oversized buffer pools. Excess textures released to TexturePool
         // for recycling (or dropped if no pool). Headroom of +2 prevents
         // oscillation when layer count fluctuates frame-to-frame.
-        self.trim_excess_buffers(gpu.pool);
+        self.trim_excess_buffers();
 
         &self.tonemap.output.texture
     }

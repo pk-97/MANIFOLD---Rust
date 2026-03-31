@@ -29,9 +29,6 @@ use crate::decode_scheduler::{
 use crate::decoder::DecoderPool;
 use crate::decoder_ffi;
 
-/// Initial render target pool size.
-const INITIAL_RT_POOL_SIZE: usize = 8;
-
 /// A native Metal texture for video output.
 struct VideoRenderTarget {
     texture: GpuTexture,
@@ -107,20 +104,16 @@ impl VideoRenderer {
         width: u32,
         height: u32,
         format: GpuTextureFormat,
-        pool_size: usize,
+        _pool_size: usize,
     ) -> Self {
         let decoder_pool = Arc::new(
             DecoderPool::new().expect("Failed to create video decoder pool"),
         );
         let scheduler = DecodeScheduler::new(decoder_pool);
 
-        let pool_size = pool_size.max(INITIAL_RT_POOL_SIZE);
-        let mut available_rts = Vec::with_capacity(pool_size);
-        for i in 0..pool_size {
-            available_rts.push(VideoRenderTarget::new(
-                device, width, height, format, i,
-            ));
-        }
+        // Lazy allocation: start empty, grow on demand as clips start.
+        // Avoids pre-allocating large textures that may never be used.
+        let available_rts = Vec::with_capacity(8);
 
         Self {
             device_ptr: device as *const GpuDevice,
@@ -131,7 +124,7 @@ impl VideoRenderer {
             scheduler,
             available_rts,
             video_library: None,
-            rt_counter: pool_size,
+            rt_counter: 0,
             pending_scratch: Vec::new(),
             clip_ids_scratch: Vec::new(),
         }
@@ -611,11 +604,10 @@ impl ClipRenderer for VideoRenderer {
         let device = unsafe { &*self.device_ptr };
         let fmt = self.format;
 
+        // Drop old pool RTs (wrong size), start fresh. New RTs will be
+        // allocated on demand as clips start.
         self.available_rts.clear();
-        for i in 0..INITIAL_RT_POOL_SIZE {
-            self.available_rts.push(VideoRenderTarget::new(device, w, h, fmt, i));
-        }
-        self.rt_counter = INITIAL_RT_POOL_SIZE;
+        self.rt_counter = 0;
 
         for clip in self.active_clips.values_mut() {
             clip.render_target =

@@ -97,18 +97,11 @@ impl GeneratorRenderer {
         width: u32,
         height: u32,
         format: GpuTextureFormat,
-        pool_size: usize,
+        _pool_size: usize,
     ) -> Self {
-        let mut available_rts = Vec::with_capacity(pool_size);
-        for i in 0..pool_size {
-            available_rts.push(RenderTarget::new(
-                device,
-                width,
-                height,
-                format,
-                &format!("Generator RT {i}"),
-            ));
-        }
+        // Lazy allocation: start empty, grow on demand as clips start.
+        // Avoids pre-allocating large textures that may never be used.
+        let available_rts = Vec::with_capacity(8);
 
         let uniform_arena = UniformArena::new(device);
         let upscaler = manifold_gpu::metalfx::TextureUpscaler::new(device, format);
