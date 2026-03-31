@@ -183,6 +183,7 @@ impl NativeOutputPresenter {
             last_bridge_gen: bridge_gen,
             drawable_width: proj_w,
             drawable_height: proj_h,
+            last_front: usize::MAX,
             stop: Arc::clone(&stop),
             edr_headroom: Arc::clone(&edr),
         };
@@ -228,6 +229,7 @@ struct PresenterThread {
     last_bridge_gen: u64,
     drawable_width: u32,
     drawable_height: u32,
+    last_front: usize,
     stop: Arc<AtomicBool>,
     #[allow(dead_code)]
     edr_headroom: Arc<AtomicU64>,
@@ -255,21 +257,31 @@ impl PresenterThread {
                 self.sync_drawable_to_bridge();
             }
 
-            // Acquire drawable — blocks until vsync (displaySyncEnabled=true).
-            // This IS the frame pacer. Every iteration = one vsync interval.
-            let layer = self.layer();
-            let Some(drawable) = layer.next_drawable() else {
-                // Drawable pool exhausted (shouldn't happen with pool of 3).
-                // Brief sleep to avoid spinning.
-                std::thread::sleep(std::time::Duration::from_millis(1));
+            // Only blit when the content thread has published a new frame.
+            // On a 120Hz display with 60fps content, this halves GPU work
+            // (60 blits/sec instead of 120) — eliminates GPU contention that
+            // caused UI frame drops.
+            let front = self.bridge.front_index() as usize;
+            if front == self.last_front {
+                // No new content — brief sleep and check again.
+                // 500μs ensures we detect new content well within one vsync
+                // interval (8.33ms at 120Hz), so the present always lands on
+                // the first available vsync after content publication.
+                std::thread::sleep(std::time::Duration::from_micros(500));
+                continue;
+            }
+            self.last_front = front;
+
+            let Some(source) = self.native_textures[front].as_ref() else {
                 continue;
             };
 
-            // Always blit the LATEST content, even if it hasn't changed.
-            // This gives consistent frame hold times — every vsync shows a frame,
-            // no variable brightness from skipped presents.
-            let front = self.bridge.front_index() as usize;
-            let Some(source) = self.native_textures[front].as_ref() else {
+            // Acquire drawable — with displaySyncEnabled=true, this blocks
+            // until the next vsync. Since we only reach here when there's new
+            // content, the present lands on the first vsync after publication.
+            let layer = self.layer();
+            let Some(drawable) = layer.next_drawable() else {
+                std::thread::sleep(std::time::Duration::from_millis(1));
                 continue;
             };
 
