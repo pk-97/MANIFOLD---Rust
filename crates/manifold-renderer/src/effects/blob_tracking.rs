@@ -39,7 +39,15 @@ struct BlobResponse {
 // Instead, preserve source aspect ratio with the same pixel budget (57,600 px).
 const READBACK_PIXEL_BUDGET: u32 = 320 * 180; // 57,600
 const MAX_BLOBS: usize = 8;
-const READBACK_INTERVAL_FRAMES: i64 = 1;
+const READBACK_INTERVAL_FRAMES: i64 = 3;
+
+/// One-Euro filter smoothing factor from cutoff frequency (Hz) and timestep.
+/// α = 1 / (1 + τ/dt), where τ = 1/(2π·fc).
+#[inline]
+fn one_euro_alpha(dt: f32, cutoff: f32) -> f32 {
+    let tau = 1.0 / (2.0 * std::f32::consts::PI * cutoff);
+    1.0 / (1.0 + tau / dt)
+}
 
 /// Compute readback dimensions that preserve source aspect ratio.
 /// Keeps total pixel count ≈ READBACK_PIXEL_BUDGET, rounds to multiples of 16
@@ -56,7 +64,16 @@ fn readback_dims(source_w: u32, source_h: u32) -> (u32, u32) {
 
 // BlobTrackingFX.cs line 35
 const MATCH_RADIUS_SQ: f32 = 0.08;
-const SIZE_SMOOTH_FACTOR: f32 = 0.85;
+// Grace period: unmatched blobs survive this many detection cycles before removal.
+const UNMATCHED_GRACE_FRAMES: u32 = 3;
+
+// One-Euro filter parameters.
+// min_cutoff: minimum cutoff frequency (Hz). Lower = more smoothing when still.
+//   Controlled by the "Smooth" param: smooth=0 → 4.0 Hz (responsive), smooth=1 → 0.3 Hz (stable).
+// beta: speed coefficient. Higher = more responsiveness during fast motion.
+const ONE_EURO_BETA: f32 = 0.5;
+// Cutoff frequency for the derivative low-pass filter (Hz). Fixed.
+const ONE_EURO_D_CUTOFF: f32 = 1.0;
 
 // Connection distance threshold is now param 4 ("Connect", 0.0–1.0, default 0.35).
 // Squared before use in compute_connections().
@@ -69,6 +86,11 @@ struct TrackedBlob {
     raw_pos: [f32; 2],
     raw_size: [f32; 2],
     matched: bool,
+    /// How many consecutive detection cycles this blob went unmatched.
+    missed_count: u32,
+    // One-Euro filter state: filtered derivative for position and size (per axis).
+    dx_pos: [f32; 2],
+    dx_size: [f32; 2],
 }
 
 // BlobTrackingFX.cs line 48-68 — OwnerState
@@ -381,7 +403,7 @@ impl BlobTrackingFX {
         let copy_len = response.blob_data.len().min(state.native_blob_output.len());
         state.native_blob_output[..copy_len].copy_from_slice(&response.blob_data[..copy_len]);
 
-        // Mark all existing tracked blobs as unmatched
+        // Mark all existing tracked blobs as unmatched for this cycle
         for i in 0..state.tracked_count {
             state.tracked[i].matched = false;
         }
@@ -418,6 +440,7 @@ impl BlobTrackingFX {
                 state.tracked[idx].raw_pos = [dx, dy];
                 state.tracked[idx].raw_size = [dw, dh];
                 state.tracked[idx].matched = true;
+                state.tracked[idx].missed_count = 0;
             } else if state.tracked_count < MAX_BLOBS {
                 // New blob — initialize at detection position
                 let idx = state.tracked_count;
@@ -428,7 +451,17 @@ impl BlobTrackingFX {
                     raw_pos: [dx, dy],
                     raw_size: [dw, dh],
                     matched: true,
+                    missed_count: 0,
+                    dx_pos: [0.0; 2],
+                    dx_size: [0.0; 2],
                 };
+            }
+        }
+
+        // Increment missed_count for blobs that weren't matched this cycle
+        for i in 0..state.tracked_count {
+            if !state.tracked[i].matched {
+                state.tracked[i].missed_count += 1;
             }
         }
 
@@ -436,19 +469,17 @@ impl BlobTrackingFX {
         state.has_blob_data = true;
     }
 
-    // BlobTrackingFX.cs lines 258-291 — UpdateSmoothing (static method)
+    // One-Euro filter smoothing — replaces the original single-pole exponential.
+    // Adapts cutoff frequency based on speed: stable when slow, responsive when fast.
+    // Reference: Casiez et al., "1€ Filter", CHI 2012.
     fn update_smoothing(state: &mut OwnerState, smoothing: f32, dt: f32) {
-        // BlobTrackingFX.cs line 263: Mathf.Lerp(60f, 2f, smoothing)
-        // Mathf.Lerp clamps t to [0,1]
-        let lerp_speed = 60.0 + (2.0 - 60.0) * smoothing.clamp(0.0, 1.0);
-        let pos_alpha = 1.0 - (-lerp_speed * dt).exp();
-        let size_alpha = 1.0 - (-lerp_speed * SIZE_SMOOTH_FACTOR * dt).exp();
-
-        // BlobTrackingFX.cs lines 268-281 — remove unmatched blobs on new detection
+        // Remove blobs that have exceeded the grace period (missed too many
+        // consecutive detection cycles). Blobs within the grace window are kept
+        // and continue smoothing toward their last known position.
         if state.has_new_detection {
             let mut write = 0usize;
             for read in 0..state.tracked_count {
-                if state.tracked[read].matched {
+                if state.tracked[read].missed_count <= UNMATCHED_GRACE_FRAMES {
                     if write != read {
                         state.tracked[write] = state.tracked[read];
                     }
@@ -459,18 +490,43 @@ impl BlobTrackingFX {
             state.has_new_detection = false;
         }
 
-        // BlobTrackingFX.cs lines 283-290 — lerp positions and sizes
+        if dt <= 0.0 {
+            return;
+        }
+
+        // Map "Smooth" param (0–1) to min_cutoff:
+        //   smooth=0 → 4.0 Hz (very responsive, minimal filtering)
+        //   smooth=1 → 0.3 Hz (heavy filtering when still)
+        let s = smoothing.clamp(0.0, 1.0);
+        let min_cutoff = 4.0 + (0.3 - 4.0) * s;
+
+        // Derivative filter alpha (fixed cutoff)
+        let d_alpha = one_euro_alpha(dt, ONE_EURO_D_CUTOFF);
+
         for i in 0..state.tracked_count {
-            let t = state.tracked[i];
-            // Vector2.Lerp(a, b, t) = a + (b-a)*clamp(t,0,1) — but alpha is already [0,1]
-            state.tracked[i].smooth_pos = [
-                t.smooth_pos[0] + (t.raw_pos[0] - t.smooth_pos[0]) * pos_alpha,
-                t.smooth_pos[1] + (t.raw_pos[1] - t.smooth_pos[1]) * pos_alpha,
-            ];
-            state.tracked[i].smooth_size = [
-                t.smooth_size[0] + (t.raw_size[0] - t.smooth_size[0]) * size_alpha,
-                t.smooth_size[1] + (t.raw_size[1] - t.smooth_size[1]) * size_alpha,
-            ];
+            let b = &mut state.tracked[i];
+
+            // --- Position (2 axes) ---
+            for ax in 0..2 {
+                let raw_dx = (b.raw_pos[ax] - b.smooth_pos[ax]) / dt;
+                // Low-pass the derivative
+                b.dx_pos[ax] = b.dx_pos[ax] + d_alpha * (raw_dx - b.dx_pos[ax]);
+                // Adaptive cutoff: faster motion → higher cutoff → less smoothing
+                let cutoff = min_cutoff + ONE_EURO_BETA * b.dx_pos[ax].abs();
+                let alpha = one_euro_alpha(dt, cutoff);
+                b.smooth_pos[ax] =
+                    b.smooth_pos[ax] + alpha * (b.raw_pos[ax] - b.smooth_pos[ax]);
+            }
+
+            // --- Size (2 axes) ---
+            for ax in 0..2 {
+                let raw_dx = (b.raw_size[ax] - b.smooth_size[ax]) / dt;
+                b.dx_size[ax] = b.dx_size[ax] + d_alpha * (raw_dx - b.dx_size[ax]);
+                let cutoff = min_cutoff + ONE_EURO_BETA * b.dx_size[ax].abs();
+                let alpha = one_euro_alpha(dt, cutoff);
+                b.smooth_size[ax] =
+                    b.smooth_size[ax] + alpha * (b.raw_size[ax] - b.smooth_size[ax]);
+            }
         }
     }
 
