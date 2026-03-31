@@ -19,7 +19,7 @@ use core_graphics::{
     context::CGContext,
     data_provider::CGDataProvider,
     font::CGFont,
-    geometry::{CGAffineTransform, CGPoint, CGSize},
+    geometry::{CGPoint, CGSize},
 };
 use core_text::{
     font::CTFont,
@@ -279,7 +279,7 @@ impl GlyphAtlas {
             glyph_id,
             bitmap_w,
             bitmap_h,
-            ascent,
+            descent,
         ) {
             for row in 0..bitmap_h {
                 let src_start = (row * bitmap_w) as usize;
@@ -334,31 +334,27 @@ impl GlyphAtlas {
     }
 }
 
-/// Rasterize a single glyph into a caller-owned grayscale buffer (R8, y-down).
+/// Rasterize a single glyph into a caller-owned grayscale buffer (R8).
 ///
-/// Uses a pre-allocated Vec as the CGBitmapContext backing store. After
-/// `draw_glyphs` consumes and releases the context, the pixel data
-/// remains in the returned Vec because CGBitmapContext does not free
-/// caller-provided memory.
+/// Uses CG's native y-up coordinate system (NO Y-flip). The bitmap memory
+/// is laid out top-row-first, and CG y=0 is at the bottom. So ascenders
+/// (high CG y) end up in the top rows of memory — right-side-up glyphs.
+///
+/// `descent` is the font's descent (positive value, distance below baseline).
 fn rasterize_glyph_bitmap(
     ct_font: &CTFont,
     glyph_id: u16,
     bitmap_w: u32,
     bitmap_h: u32,
-    ascent: f32,
+    descent: f32,
 ) -> Option<Vec<u8>> {
     let w = bitmap_w as usize;
     let h = bitmap_h as usize;
 
-    // Pre-allocate the pixel buffer. CGBitmapContext will write into this.
     let mut pixels = vec![0u8; w * h];
 
-    // Grayscale bitmap context backed by our pixel buffer.
-    // kCGImageAlphaNone = 0: single-channel grayscale, no alpha.
     let color_space = CGColorSpace::create_device_gray();
     let ctx = CGContext::create_bitmap_context(
-        // Safety: pixels lives until the end of this function; the context
-        // is consumed by draw_glyphs before this function returns.
         Some(pixels.as_mut_ptr() as *mut std::ffi::c_void),
         w,
         h,
@@ -368,34 +364,20 @@ fn rasterize_glyph_bitmap(
         0u32, // kCGImageAlphaNone
     );
 
-    // Y-flip transform: makes y=0 correspond to the TOP of the bitmap.
-    // Default CGContext has y-up (origin at bottom-left), but CGBitmapContextGetData
-    // stores rows top-first. With this flip, drawing at y=baseline_from_top
-    // directly maps to the correct data row.
-    let flip = CGAffineTransform {
-        a: 1.0,
-        b: 0.0,
-        c: 0.0,
-        d: -1.0,
-        tx: 0.0,
-        ty: h as f64,
-    };
-    ctx.concat_ctm(flip);
+    // NO Y-flip. CG native y-up: y=0 at bottom, y=h at top.
+    // Bitmap memory: row 0 = top of image = CG y=h.
+    //
+    // Place baseline at y = descent + GLYPH_PADDING (from bottom).
+    // Ascent extends upward, descent extends downward — both fit in the bitmap.
 
-    // White glyph on black background — R channel becomes the coverage alpha.
     ctx.set_rgb_fill_color(1.0, 1.0, 1.0, 1.0);
     ctx.set_allows_font_smoothing(false);
     ctx.set_should_smooth_fonts(false);
 
-    // In the flipped (y-down) coordinate system:
-    // - Top of bitmap = y=0, bottom = y=h
-    // - Baseline is at y = ascent + GLYPH_PADDING (rows below the top padding)
-    let baseline_y = (ascent + GLYPH_PADDING as f32) as f64;
+    let baseline_y = (descent + GLYPH_PADDING as f32) as f64;
     let origin_x = GLYPH_PADDING as f64;
     let position = CGPoint::new(origin_x, baseline_y);
 
-    // draw_glyphs consumes the context by value. After this call, ctx is
-    // released, but `pixels` retains the bitmap data.
     ct_font.draw_glyphs(&[glyph_id], &[position], ctx);
 
     Some(pixels)
@@ -616,7 +598,7 @@ impl NativeTextRenderer {
 
         let commands: Vec<TextCommand> = std::mem::take(&mut self.commands);
 
-        for (cmd_idx, cmd) in commands.iter().enumerate() {
+        for cmd in &commands {
             let physical_size = cmd.font_size * scale;
             let size_x10 = (physical_size * 10.0).round() as u16;
 
@@ -626,11 +608,14 @@ impl NativeTextRenderer {
                 continue;
             };
 
-            // ct_font.ascent() returns inflated hhea table metrics (includes line gap).
-            // For baseline positioning, use a ratio of the em size that matches
-            // the actual glyph ascent. Inter's cap height is ~72% of em, with
-            // ascenders at ~82%. This matches glyphon's effective baseline.
-            let ascent = physical_size * 0.82;
+            // cmd.y is the top of the text bounding box (vertically centered by
+            // UIRenderer). The measurement height = font_size (logical px).
+            // Place baseline so the glyph content is centered within that box:
+            //   baseline = cmd.y + font_size * BASELINE_FRACTION
+            // where BASELINE_FRACTION positions the baseline within the em square.
+            // For Inter, ~0.76 places ascenders near the top and descenders near
+            // the bottom of the font_size box.
+            let baseline_y = cmd.y + cmd.font_size * 0.76;
 
             let color = [
                 cmd.color[0] as f32 / 255.0,
