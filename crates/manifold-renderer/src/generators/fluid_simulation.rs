@@ -267,8 +267,9 @@ impl FluidSimulationGenerator {
         density_res: f32,
     ) {
         let field_scale = density_res.clamp(0.125, 1.0);
-        let sw = ((output_width as f32 * field_scale) as u32).max(640);
-        let sh = ((output_height as f32 * field_scale) as u32).max(360);
+        // Round to even for clean PRE_SHRINK division and texel alignment.
+        let sw = (((output_width as f32 * field_scale) as u32).max(640) + 1) & !1;
+        let sh = (((output_height as f32 * field_scale) as u32).max(360) + 1) & !1;
 
         // Early out if dimensions haven't changed
         if self.scatter_accum.is_some() && self.scatter_width == sw && self.scatter_height == sh {
