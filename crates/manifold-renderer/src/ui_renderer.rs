@@ -1,22 +1,15 @@
-use wgpu::util::DeviceExt;
-
-use glyphon::{
-    Attrs, Buffer as TextBuffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics,
-    Resolution, Shaping, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
-    Weight,
+use manifold_gpu::{
+    GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice, GpuEncoder,
+    GpuLoadAction, GpuRenderPipeline, GpuTexture, GpuTextureFormat, GpuVertexAttribute,
+    GpuVertexFormat, GpuVertexLayout,
 };
+
+#[cfg(target_os = "macos")]
+use crate::native_text::NativeTextRenderer;
 
 use manifold_ui::node::*;
 use manifold_ui::text::TextMeasure;
 use manifold_ui::tree::{TraversalEvent, UITree};
-
-fn font_weight_to_cosmic(fw: FontWeight) -> Weight {
-    match fw {
-        FontWeight::Regular => Weight::NORMAL,
-        FontWeight::Medium => Weight::MEDIUM,
-        FontWeight::Bold => Weight::BOLD,
-    }
-}
 
 /// Vertex for UI quad rendering.
 #[repr(C)]
@@ -119,231 +112,86 @@ struct RectCommand {
     border_color: [f32; 4],
 }
 
-/// Queued text command.
-struct TextCommand {
-    x: f32,
-    y: f32,
-    text: String,
-    font_size: f32,
-    color: [u8; 4],
-    font_weight: FontWeight,
-    /// Clip bounds for this text (None = full viewport).
-    clip_bounds: Option<[f32; 4]>,
-}
+/// Initial vertex/index buffer capacities (vertices / indices).
+const INITIAL_VERTEX_CAPACITY: usize = 1024;
+const INITIAL_INDEX_CAPACITY: usize = 1536;
 
-/// Controls which TextRenderer is used (or skipped) during `render()`.
-///
-/// Each mode corresponds to an independent glyphon TextRenderer with its own
-/// vertex buffer, preventing cross-pass corruption when multiple render() calls
-/// are recorded into the same CommandEncoder before submission.
-pub enum TextMode {
-    /// Use the main TextRenderer (base UI text).
-    Main,
-    /// Use the overlay TextRenderer (dropdown/popup text).
-    Overlay,
-    /// Skip text entirely — render only rects (e.g. playhead line).
-    Skip,
-}
-
-/// Simple batched 2D UI renderer for wgpu.
+/// Simple batched 2D UI renderer using native Metal via manifold-gpu.
 pub struct UIRenderer {
-    pipeline: wgpu::RenderPipeline,
-    globals_buffer: wgpu::Buffer,
-    globals_bind_group_layout: wgpu::BindGroupLayout,
+    pipeline: GpuRenderPipeline,
 
-    // Text rendering — one TextRenderer for Main, a pool for Overlay passes.
-    // Each TextRenderer owns its own GPU vertex buffer; they share the glyph atlas.
-    // Multiple overlay render() calls per encoder each need a distinct TextRenderer
-    // because prepare() replaces the internal vertex buffer, destroying the one
-    // referenced by the previous (not yet submitted) render pass.
-    font_system: FontSystem,
-    swash_cache: SwashCache,
-    #[allow(dead_code)]
-    text_cache: Cache,
-    text_atlas: TextAtlas,
-    text_renderer: TextRenderer,
-    overlay_text_renderers: Vec<TextRenderer>,
-    overlay_pass_index: usize,
-    viewport: Viewport,
-    text_buffers: Vec<TextBuffer>,
+    // Text rendering — Phase 4 CoreText renderer.
+    #[cfg(target_os = "macos")]
+    text_renderer: NativeTextRenderer,
 
-    /// Cached TextBuffers keyed by (text_content, font_size).
-    /// Matches Unity's approach: Font.GetCharacterInfo() serves cached glyph data
-    /// from the font atlas; only new glyphs trigger rasterization. Here, we cache
-    /// shaped TextBuffers so identical text across frames avoids re-shaping.
-    text_buffer_cache: ahash::AHashMap<(String, u16, FontWeight), TextBuffer>,
-    /// Frame generation counter for cache eviction.
-    text_cache_generation: u64,
-    /// Per-entry generation (tracks last-used frame for eviction).
-    text_cache_used: ahash::AHashMap<(String, u16, FontWeight), u64>,
-
-    // Draw queues
+    // Rect draw queue.
     rect_commands: Vec<RectCommand>,
-    text_commands: Vec<TextCommand>,
 
-    // Per-frame vertex buffer
+    // Per-frame vertex/index scratch (CPU side).
     vertices: Vec<UIVertex>,
     indices: Vec<u32>,
 
-    // Clip stack for render_tree (mathematical clipping)
-    clip_stack: Vec<Rect>,
-
-    // Prepared state for split prepare/draw — survives between prepare() and draw()
-    prepared_vertex_buffer: Option<wgpu::Buffer>,
-    prepared_index_buffer: Option<wgpu::Buffer>,
+    // Pre-allocated shared GpuBuffers (written each prepare, consumed before next overwrite).
+    vertex_buf: GpuBuffer,
+    index_buf: GpuBuffer,
+    vertex_capacity: usize,
+    index_capacity: usize,
     prepared_index_count: u32,
-    prepared_globals_bg: Option<wgpu::BindGroup>,
-    prepared_has_text: bool,
-    prepared_text_mode: Option<TextMode>,
-    prepared_overlay_idx: Option<usize>,
+    /// [viewport_w, viewport_h, offset_x, offset_y] — passed as inline uniform.
+    prepared_globals: [f32; 4],
+
+    // Clip stack for render_tree (mathematical clipping).
+    clip_stack: Vec<Rect>,
 }
 
 impl UIRenderer {
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        target_format: wgpu::TextureFormat,
-    ) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("UI Shader"),
-            source: wgpu::ShaderSource::Wgsl(UI_SHADER.into()),
-        });
-
-        let globals_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("UI Globals BGL"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("UI Pipeline Layout"),
-            bind_group_layouts: &[&globals_bind_group_layout],
-            immediate_size: 0,
-        });
-
-        let vertex_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<UIVertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 0,
-                    shader_location: 0,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 8,
-                    shader_location: 1,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 16,
-                    shader_location: 2,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 32,
-                    shader_location: 3,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 48,
-                    shader_location: 4,
-                },
+    pub fn new(device: &GpuDevice, format: GpuTextureFormat) -> Self {
+        let blend = GpuBlendState {
+            src_factor: GpuBlendFactor::SrcAlpha,
+            dst_factor: GpuBlendFactor::OneMinusSrcAlpha,
+            operation: GpuBlendOp::Add,
+            src_alpha_factor: GpuBlendFactor::One,
+            dst_alpha_factor: GpuBlendFactor::OneMinusSrcAlpha,
+            alpha_operation: GpuBlendOp::Add,
+        };
+        let layout = GpuVertexLayout {
+            stride: std::mem::size_of::<UIVertex>() as u32, // 64 bytes
+            attributes: vec![
+                GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                GpuVertexAttribute { format: GpuVertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 16, shader_location: 2 },
+                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 32, shader_location: 3 },
+                GpuVertexAttribute { format: GpuVertexFormat::Float32x4, offset: 48, shader_location: 4 },
             ],
         };
+        let pipeline = device.create_render_pipeline_with_vertex_layout(
+            UI_SHADER, "vs_main", "fs_main", format, Some(blend), &layout, "UI Pipeline",
+        );
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("UI Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[vertex_layout],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        #[cfg(target_os = "macos")]
+        let text_renderer = NativeTextRenderer::new(device, format);
 
-        let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("UI Globals"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // Load system fonts (needed for Unicode symbol fallback: ▶▼≡ etc),
-        // then load our bundled Inter Regular, Medium, and Bold.
-        // Family::Name("Inter") with Weight selects the correct weight.
-        let mut font_system = FontSystem::new();
-        let font_data = include_bytes!("../assets/fonts/Inter-Regular.ttf");
-        font_system.db_mut().load_font_data(font_data.to_vec());
-        let medium_font_data = include_bytes!("../assets/fonts/Inter-Medium.ttf");
-        font_system.db_mut().load_font_data(medium_font_data.to_vec());
-        let bold_font_data = include_bytes!("../assets/fonts/Inter-Bold.ttf");
-        font_system.db_mut().load_font_data(bold_font_data.to_vec());
-
-        let swash_cache = SwashCache::new();
-        let cache = Cache::new(device);
-        let mut text_atlas = TextAtlas::new(device, queue, &cache, target_format);
-        let text_renderer =
-            TextRenderer::new(&mut text_atlas, device, wgpu::MultisampleState::default(), None);
-        let viewport = Viewport::new(device, &cache);
+        let vertex_buf = device.create_buffer_shared(
+            (INITIAL_VERTEX_CAPACITY * std::mem::size_of::<UIVertex>()) as u64,
+        );
+        let index_buf = device.create_buffer_shared(
+            (INITIAL_INDEX_CAPACITY * std::mem::size_of::<u32>()) as u64,
+        );
 
         Self {
             pipeline,
-            globals_buffer,
-            globals_bind_group_layout,
-            font_system,
-            swash_cache,
-            text_cache: cache,
-            text_atlas,
+            #[cfg(target_os = "macos")]
             text_renderer,
-            overlay_text_renderers: Vec::new(),
-            overlay_pass_index: 0,
-            viewport,
-            text_buffers: Vec::new(),
-            text_buffer_cache: ahash::AHashMap::with_capacity(256),
-            text_cache_generation: 0,
-            text_cache_used: ahash::AHashMap::with_capacity(256),
             rect_commands: Vec::with_capacity(256),
-            text_commands: Vec::with_capacity(128),
-            vertices: Vec::with_capacity(1024),
-            indices: Vec::with_capacity(1536),
-            clip_stack: Vec::with_capacity(8),
-            prepared_vertex_buffer: None,
-            prepared_index_buffer: None,
+            vertices: Vec::with_capacity(INITIAL_VERTEX_CAPACITY),
+            indices: Vec::with_capacity(INITIAL_INDEX_CAPACITY),
+            vertex_buf,
+            index_buf,
+            vertex_capacity: INITIAL_VERTEX_CAPACITY,
+            index_capacity: INITIAL_INDEX_CAPACITY,
             prepared_index_count: 0,
-            prepared_globals_bg: None,
-            prepared_has_text: false,
-            prepared_text_mode: None,
-            prepared_overlay_idx: None,
+            prepared_globals: [0.0; 4],
+            clip_stack: Vec::with_capacity(8),
         }
     }
 
@@ -396,14 +244,8 @@ impl UIRenderer {
         font_size: f32,
         color: [u8; 4],
     ) {
-        self.text_commands.push(TextCommand {
-            x, y,
-            text: text.to_string(),
-            font_size,
-            color,
-            font_weight: FontWeight::Medium,
-            clip_bounds: None,
-        });
+        #[cfg(target_os = "macos")]
+        self.text_renderer.draw_text(x, y, text, font_size, color, FontWeight::Medium, None);
     }
 
     // ── UITree rendering ────────────────────────────────────────────
@@ -549,11 +391,12 @@ impl UIRenderer {
         }
 
         // Text
+        #[cfg(target_os = "macos")]
         if let Some(text) = &node.text
             && !text.is_empty() {
-                // Cached measurement — only shapes on first encounter or content change.
-                // Matches Unity's Font.GetCharacterInfo() which returns cached glyph metrics.
-                let text_size = self.measure_text_cached(text, style.font_size, style.font_weight);
+                let text_size = self.text_renderer.measure_text_cached(
+                    text, style.font_size, style.font_weight,
+                );
                 let text_y = bounds.y + (bounds.height - text_size.y) * 0.5;
 
                 let text_x = match style.text_align {
@@ -569,96 +412,48 @@ impl UIRenderer {
                 } else {
                     [style.text_color.r, style.text_color.g, style.text_color.b, style.text_color.a]
                 };
-                self.text_commands.push(TextCommand {
-                    x: text_x,
-                    y: text_y,
-                    text: text.clone(),
-                    font_size: style.font_size as f32,
-                    color: text_color,
-                    font_weight: style.font_weight,
-                    clip_bounds,
-                });
+                self.text_renderer.draw_text(
+                    text_x, text_y, text, style.font_size as f32,
+                    text_color, style.font_weight, clip_bounds,
+                );
             }
     }
 
-    /// Text measurement using cached TextBuffer.
-    /// Matches Unity's approach: Font.GetCharacterInfo() returns cached glyph metrics
-    /// from the font atlas. Here, we cache shaped TextBuffers so the same text
-    /// across frames is measured without re-shaping.
+    /// Text measurement using NativeTextRenderer's cached measurement.
     pub fn measure_text_cached(&mut self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
-        let key = (text.to_string(), font_size, font_weight);
-
-        // Mark as used this frame
-        self.text_cache_used.insert(key.clone(), self.text_cache_generation);
-
-        // Check cache
-        if let Some(buffer) = self.text_buffer_cache.get(&key) {
-            let mut width = 0.0f32;
-            let mut height = 0.0f32;
-            for run in buffer.layout_runs() {
-                width = width.max(run.line_w);
-                height = height.max(run.line_y + font_size as f32 * 0.2);
-            }
-            return Vec2::new(width, height.max(font_size as f32));
+        #[cfg(target_os = "macos")]
+        return self.text_renderer.measure_text_cached(text, font_size, font_weight);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let em = font_size as f32;
+            Vec2::new(text.len() as f32 * em * 0.54, em)
         }
-
-        // Cache miss — create and shape new TextBuffer
-        let metrics = Metrics::new(font_size as f32, font_size as f32 * 1.2);
-        let mut buffer = TextBuffer::new(&mut self.font_system, metrics);
-        buffer.set_size(&mut self.font_system, Some(10000.0), Some(font_size as f32 * 2.0));
-        let weight = font_weight_to_cosmic(font_weight);
-        buffer.set_text(
-            &mut self.font_system,
-            text,
-            &Attrs::new().family(Family::Name("Inter")).weight(weight),
-            Shaping::Advanced,
-            None,
-        );
-        buffer.shape_until_scroll(&mut self.font_system, false);
-
-        let mut width = 0.0f32;
-        let mut height = 0.0f32;
-        for run in buffer.layout_runs() {
-            width = width.max(run.line_w);
-            height = height.max(run.line_y + font_size as f32 * 0.2);
-        }
-
-        let result = Vec2::new(width, height.max(font_size as f32));
-        self.text_buffer_cache.insert(key, buffer);
-        result
     }
 
     // ── Render pass ─────────────────────────────────────────────────
 
-    /// Reset the overlay pass counter. Call once per frame before any
-    /// `render(..., TextMode::Overlay)` calls so each overlay pass gets
-    /// its own TextRenderer (preventing vertex buffer destruction).
+    /// Advance text renderer frame counter (call once per frame).
     pub fn begin_frame(&mut self) {
-        self.overlay_pass_index = 0;
+        #[cfg(target_os = "macos")]
+        self.text_renderer.begin_frame();
     }
 
-    /// Render a range of tree nodes to vertex/text commands.
+    /// Render a range of tree nodes to draw commands.
     /// Equivalent to `render_overlay_range` but named for panel cache usage.
     pub fn render_tree_range(&mut self, tree: &UITree, start: usize, end: usize) {
         self.render_overlay_range(tree, start, end);
     }
 
-    /// Prepare vertex/index buffers and text for drawing. Call before creating
-    /// the render pass. Returns `true` if there is content to draw.
-    ///
-    /// `width`/`height`: logical pixel dimensions (matches UITree coordinates).
-    /// `scale_factor`: HiDPI scale (e.g. 2.0 on Retina). Used for crisp text.
-    /// `text_mode`: which TextRenderer to use, or `Skip` for rects only.
+    /// Prepare vertex/index buffers and text for drawing. Call before `render()`.
+    /// Returns `true` if there is content to draw.
     pub fn prepare(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &GpuDevice,
         width: u32,
         height: u32,
         scale_factor: f64,
-        text_mode: TextMode,
     ) -> bool {
-        self.prepare_with_offset(device, queue, width, height, 0.0, 0.0, scale_factor, text_mode)
+        self.prepare_with_offset(device, width, height, 0.0, 0.0, scale_factor)
     }
 
     /// Prepare with viewport offset for panel-local rendering.
@@ -668,34 +463,16 @@ impl UIRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_with_offset(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &GpuDevice,
         viewport_w: u32,
         viewport_h: u32,
         offset_x: f32,
         offset_y: f32,
         scale_factor: f64,
-        text_mode: TextMode,
     ) -> bool {
-        let width = viewport_w;
-        let height = viewport_h;
-        let physical_w = (width as f64 * scale_factor) as u32;
-        let physical_h = (height as f64 * scale_factor) as u32;
+        self.prepared_globals = [viewport_w as f32, viewport_h as f32, offset_x, offset_y];
 
-        // Update globals — viewport size + offset for NDC mapping
-        let globals_data: [f32; 4] = [width as f32, height as f32, offset_x, offset_y];
-        queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals_data));
-
-        self.prepared_globals_bg = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("UI Globals BG"),
-            layout: &self.globals_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.globals_buffer.as_entire_binding(),
-            }],
-        }));
-
-        // Build vertex/index buffers from rect commands
+        // Build vertex/index data from rect commands.
         self.vertices.clear();
         self.indices.clear();
 
@@ -736,254 +513,99 @@ impl UIRenderer {
             ]);
         }
 
-        // Store vertex/index buffers as fields so they outlive the render pass
+        // Write vertices to shared GpuBuffer (grow if needed).
         if !self.vertices.is_empty() {
-            self.prepared_vertex_buffer =
-                Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("UI Vertices"),
-                    contents: bytemuck::cast_slice(&self.vertices),
-                    usage: wgpu::BufferUsages::VERTEX,
-                }));
-            self.prepared_index_buffer =
-                Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("UI Indices"),
-                    contents: bytemuck::cast_slice(&self.indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                }));
+            let needed = self.vertices.len();
+            if needed > self.vertex_capacity {
+                let new_cap = needed.next_power_of_two();
+                self.vertex_buf = device.create_buffer_shared(
+                    (new_cap * std::mem::size_of::<UIVertex>()) as u64,
+                );
+                self.vertex_capacity = new_cap;
+            }
+            let vdata = bytemuck::cast_slice::<UIVertex, u8>(&self.vertices);
+            // Safety: shared buffer is not GPU-accessed before commit() on the encoder we will create next.
+            unsafe { self.vertex_buf.write(0, vdata); }
+
+            let needed_idx = self.indices.len();
+            if needed_idx > self.index_capacity {
+                let new_cap = needed_idx.next_power_of_two();
+                self.index_buf = device.create_buffer_shared(
+                    (new_cap * std::mem::size_of::<u32>()) as u64,
+                );
+                self.index_capacity = new_cap;
+            }
+            let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
+            unsafe { self.index_buf.write(0, idata); }
+
             self.prepared_index_count = self.indices.len() as u32;
         } else {
-            self.prepared_vertex_buffer = None;
-            self.prepared_index_buffer = None;
             self.prepared_index_count = 0;
         }
 
-        // ── Text preparation (skipped for TextMode::Skip) ──────────
-        let has_text = !matches!(text_mode, TextMode::Skip) && !self.text_commands.is_empty();
-        self.prepared_has_text = has_text;
-        self.prepared_overlay_idx = None;
-
-        if has_text {
-            // Prepare text buffers for glyphon — reuse cached buffers where possible.
-            self.text_buffers.clear();
-
-            for cmd in &self.text_commands {
-                let key = (cmd.text.clone(), cmd.font_size as u16, cmd.font_weight);
-
-                if let Some(buffer) = self.text_buffer_cache.get(&key) {
-                    self.text_buffers.push(buffer.clone());
-                } else {
-                    let mut buffer = TextBuffer::new(
-                        &mut self.font_system,
-                        Metrics::new(cmd.font_size, cmd.font_size * 1.2),
-                    );
-                    buffer.set_size(
-                        &mut self.font_system,
-                        Some(width as f32),
-                        Some(height as f32),
-                    );
-                    let weight = font_weight_to_cosmic(cmd.font_weight);
-                    buffer.set_text(
-                        &mut self.font_system,
-                        &cmd.text,
-                        &Attrs::new().family(Family::Name("Inter")).weight(weight),
-                        Shaping::Advanced,
-                        None,
-                    );
-                    buffer.shape_until_scroll(&mut self.font_system, false);
-                    self.text_buffer_cache.insert(key, buffer.clone());
-                    self.text_buffers.push(buffer);
-                }
-            }
-
-            // Evict stale cache entries every 60 frames (only in Main mode
-            // so the generation counter increments once per frame, not per pass).
-            if matches!(text_mode, TextMode::Main) {
-                self.text_cache_generation += 1;
-                if self.text_cache_generation.is_multiple_of(60) {
-                    let current_gen = self.text_cache_generation;
-                    let stale: Vec<_> = self
-                        .text_cache_used
-                        .iter()
-                        .filter(|(_, last_used)| current_gen - **last_used > 120)
-                        .map(|(k, _)| k.clone())
-                        .collect();
-                    for key in stale {
-                        self.text_buffer_cache.remove(&key);
-                        self.text_cache_used.remove(&key);
-                    }
-                }
-            }
-
-            let sf = scale_factor as f32;
-            let mut text_areas = Vec::with_capacity(self.text_commands.len());
-            for (i, cmd) in self.text_commands.iter().enumerate() {
-                let bounds = if let Some(clip) = cmd.clip_bounds {
-                    TextBounds {
-                        left: ((clip[0] - offset_x) * sf) as i32,
-                        top: ((clip[1] - offset_y) * sf) as i32,
-                        right: ((clip[2] - offset_x) * sf) as i32,
-                        bottom: ((clip[3] - offset_y) * sf) as i32,
-                    }
-                } else {
-                    TextBounds {
-                        left: 0,
-                        top: 0,
-                        right: physical_w as i32,
-                        bottom: physical_h as i32,
-                    }
-                };
-
-                text_areas.push(TextArea {
-                    buffer: &self.text_buffers[i],
-                    left: (cmd.x - offset_x) * sf,
-                    top: (cmd.y - offset_y) * sf,
-                    scale: sf,
-                    bounds,
-                    default_color: GlyphonColor::rgba(
-                        cmd.color[0],
-                        cmd.color[1],
-                        cmd.color[2],
-                        cmd.color[3],
-                    ),
-                    custom_glyphs: &[],
-                });
-            }
-
-            self.viewport
-                .update(queue, Resolution { width: physical_w, height: physical_h });
-
-            // Prepare the appropriate TextRenderer — each has its own vertex buffer.
-            // Overlay passes use a pool: each call within one encoder gets a fresh
-            // TextRenderer so prepare() doesn't destroy the previous pass's buffer.
-            if matches!(text_mode, TextMode::Overlay) {
-                let idx = self.overlay_pass_index;
-                self.overlay_pass_index += 1;
-                while self.overlay_text_renderers.len() <= idx {
-                    self.overlay_text_renderers.push(TextRenderer::new(
-                        &mut self.text_atlas,
-                        device,
-                        wgpu::MultisampleState::default(),
-                        None,
-                    ));
-                }
-                self.prepared_overlay_idx = Some(idx);
-            }
-            let renderer = match text_mode {
-                TextMode::Main => &mut self.text_renderer,
-                TextMode::Overlay => {
-                    &mut self.overlay_text_renderers[self.prepared_overlay_idx.unwrap()]
-                }
-                TextMode::Skip => unreachable!(),
-            };
-            renderer
-                .prepare(
-                    device,
-                    queue,
-                    &mut self.font_system,
-                    &mut self.text_atlas,
-                    &self.viewport,
-                    text_areas,
-                    &mut self.swash_cache,
-                )
-                .expect("Failed to prepare text renderer");
-        }
-
-        self.prepared_text_mode = Some(text_mode);
-
-        let has_content = self.prepared_vertex_buffer.is_some() || has_text;
+        // Prepare text.
+        #[cfg(target_os = "macos")]
+        let has_text = self.text_renderer.prepare(
+            device, viewport_w, viewport_h, offset_x, offset_y, scale_factor,
+        );
+        #[cfg(not(target_os = "macos"))]
+        let has_text = false;
 
         self.rect_commands.clear();
-        if !matches!(self.prepared_text_mode.as_ref().unwrap(), TextMode::Skip) {
-            self.text_commands.clear();
-        }
 
-        has_content
+        self.prepared_index_count > 0 || has_text
     }
 
-    /// Issue draw commands into an existing render pass. Must call `prepare()`
-    /// first. The render pass borrows prepared buffers stored on `self`.
-    pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {
-        if let (Some(vb), Some(ib)) =
-            (&self.prepared_vertex_buffer, &self.prepared_index_buffer)
-        {
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, self.prepared_globals_bg.as_ref().unwrap(), &[]);
-            pass.set_vertex_buffer(0, vb.slice(..));
-            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..self.prepared_index_count, 0, 0..1);
-        }
-
-        if self.prepared_has_text {
-            let text_mode = self.prepared_text_mode.as_ref().unwrap();
-            let renderer = match text_mode {
-                TextMode::Main => &self.text_renderer,
-                TextMode::Overlay => {
-                    &self.overlay_text_renderers[self.prepared_overlay_idx.unwrap()]
-                }
-                TextMode::Skip => return,
-            };
-            renderer
-                .render(&self.text_atlas, &self.viewport, pass)
-                .expect("Failed to render text");
-        }
-    }
-
-    /// Convenience: prepare + create render pass + draw. Used for standalone
-    /// overlay passes that don't need to share a pass with other pipelines.
+    /// Render prepared rect and text geometry into `target`.
+    /// Must call `prepare()` or `prepare_with_offset()` first.
     pub fn render(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
-        width: u32,
-        height: u32,
-        scale_factor: f64,
-        text_mode: TextMode,
+        &self,
+        encoder: &mut GpuEncoder,
+        target: &GpuTexture,
+        load_action: GpuLoadAction,
     ) {
-        if !self.prepare(device, queue, width, height, scale_factor, text_mode) {
-            return;
+        if self.prepared_index_count > 0 {
+            encoder.draw_indexed(
+                &self.pipeline,
+                target,
+                &[GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::bytes_of(&self.prepared_globals),
+                }],
+                &self.vertex_buf,
+                &self.index_buf,
+                self.prepared_index_count,
+                None,
+                load_action,
+                "UI Rects",
+            );
         }
 
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("UI Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-
-        self.draw(&mut pass);
+        // Text always uses Load to preserve rects drawn above.
+        #[cfg(target_os = "macos")]
+        self.text_renderer.render(encoder, target, GpuLoadAction::Load);
     }
 }
 
 /// Implement TextMeasure for UIRenderer so panels can compute layout.
 impl TextMeasure for UIRenderer {
     fn measure_text(&self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2 {
-        // TextMeasure requires &self, but glyphon needs &mut FontSystem.
-        // Use an approximate measurement: Inter is ~0.5em per character on average.
-        // This is good enough for layout; exact measurement happens in draw_node.
-        let em = font_size as f32;
-        let avg_char_width = match font_weight {
-            FontWeight::Bold => em * 0.56,
-            FontWeight::Medium => em * 0.54,
-            FontWeight::Regular => em * 0.52,
-        };
-        let width = text.len() as f32 * avg_char_width;
-        Vec2::new(width, em)
+        #[cfg(target_os = "macos")]
+        return self.text_renderer.measure_text(text, font_size, font_weight);
+        #[cfg(not(target_os = "macos"))]
+        {
+            let em = font_size as f32;
+            let avg_char_width = match font_weight {
+                FontWeight::Bold => em * 0.56,
+                FontWeight::Medium => em * 0.54,
+                FontWeight::Regular => em * 0.52,
+            };
+            Vec2::new(text.len() as f32 * avg_char_width, em)
+        }
     }
 }
 
-// ── Geometry helpers ────────────────────────────────────────────────
+// ── Geometry helpers ────────────────────────────────────────────────────────
 
 /// Intersect two rects (for nested clipping).
 fn intersect_rects(a: Rect, b: Rect) -> Rect {
@@ -997,7 +619,10 @@ fn intersect_rects(a: Rect, b: Rect) -> Rect {
 /// Clamp a rect to a clip region (mathematical clipping).
 /// Fixes the Unity "ClipsChildren broken" bug by clamping geometry instead
 /// of relying on a flat-loop push/pop.
-fn clamp_rect_to_clip(rect: Rect, clip: Rect) -> Rect {
-    intersect_rects(rect, clip)
+fn clamp_rect_to_clip(r: Rect, clip: Rect) -> Rect {
+    let x0 = r.x.max(clip.x);
+    let y0 = r.y.max(clip.y);
+    let x1 = r.x_max().min(clip.x_max());
+    let y1 = r.y_max().min(clip.y_max());
+    Rect::new(x0, y0, (x1 - x0).max(0.0), (y1 - y0).max(0.0))
 }
-

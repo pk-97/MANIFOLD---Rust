@@ -150,19 +150,28 @@ CoreText (CPU)     →  Glyph Atlas (GPU)     →  Metal Render Pass
 - Main + Overlay render modes (separate TextRenderer instances)
 - Advanced shaping (handled by CoreText)
 
-### Phase 5: UIRenderer + UICacheManager [NOT STARTED]
+### Phase 5: UIRenderer + UICacheManager [DONE]
 
 Prompt: `docs/PHASE5_AGENT_PROMPT.md`
 
 Convert UIRenderer's SDF/rect rendering and glyphon text to manifold-gpu, then convert UICacheManager which depends on UIRenderer. These two must be converted together.
 
-- [ ] Replace UIRenderer wgpu RenderPipeline/Buffer with `create_render_pipeline_with_vertex_layout()` + GpuBuffer
-- [ ] Replace UIRenderer text rendering (glyphon) with CoreText renderer from Phase 4
-- [ ] Replace UICacheManager wgpu Texture/CommandEncoder with GpuTexture/GpuEncoder
-- [ ] Atlas becomes GpuTexture — delete PanelCompositor (breaking until Phase 6)
-- [ ] Remove glyphon dependency from Cargo.toml
+- [x] Replace UIRenderer wgpu RenderPipeline/Buffer with `create_render_pipeline_with_vertex_layout()` + GpuBuffer
+- [x] Replace UIRenderer text rendering (glyphon) with CoreText renderer from Phase 4 (NativeTextRenderer)
+- [x] Replace UICacheManager wgpu Texture/CommandEncoder with GpuTexture/GpuEncoder
+- [x] Atlas becomes GpuTexture — PanelCompositor deleted (breaking until Phase 6)
+- [x] Remove glyphon dependency from Cargo.toml
 
-**Breaking**: UI panels and overlay text stop rendering until Phase 6 wires the GpuTextures into the single-encoder render loop.
+**Notes:**
+- UIRenderer converted to `GpuRenderPipeline` + pre-allocated shared `GpuBuffer`s. Globals passed as `GpuBinding::Bytes` (no buffer/bind group needed).
+- glyphon replaced with `NativeTextRenderer` (CoreText). Text is queued directly in NativeTextRenderer via `draw_text()`, prepared and rendered via `prepare()/render()`.
+- UICacheManager atlas is now a `GpuTexture` (RENDER_TARGET | SHADER_READ). `atlas_bind_group()` replaced by `atlas_texture()`.
+- `PanelCompositor` deleted — atlas not blitted to surface until Phase 6.
+- `overlay_native_target: Option<GpuTexture>` added to Application for the overlay render target.
+- UIRenderer construction moved to use `gpu.native_device` instead of wgpu device.
+- `native_device` creation moved earlier in `init_gpu_context()` so UIRenderer can use it.
+
+**Breaking**: UI panels (atlas) and overlay text are disconnected from surface — Phase 6 wires GpuTextures into the single-encoder render loop.
 
 ### Phase 6: Full render loop conversion [NOT STARTED]
 

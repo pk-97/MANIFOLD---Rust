@@ -12,7 +12,6 @@ manifold-ui = { path = "../manifold-ui" }
 wgpu = { workspace = true }
 log = { workspace = true }
 bytemuck = { version = "1", features = ["derive"] }
-glyphon = "0.10"
 half = "2"
 serde_json = "1"
 ahash = { workspace = true }

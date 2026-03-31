@@ -4,7 +4,7 @@
 //! overlay rendering helper. All methods are `impl Application` blocks that
 //! operate on the struct defined in app.rs.
 
-use manifold_renderer::ui_renderer::{TextMode, UIRenderer};
+use manifold_renderer::ui_renderer::UIRenderer;
 
 use manifold_ui::node::FontWeight;
 use manifold_ui::panels::PanelAction;
@@ -925,18 +925,16 @@ impl Application {
                 }
 
                 // ── Phase 0: Panel cache update ──
-                // Render dirty panels to their offscreen cache textures.
+                // Render dirty panels to the native Metal atlas texture.
                 let panel_infos = self.ui_root.panel_cache_info();
-                if let (Some(cm), Some(pc), Some(ui)) = (
+                if let (Some(cm), Some(ui)) = (
                     &mut self.ui_cache_manager,
-                    &self.panel_compositor,
                     &mut self.ui_renderer,
                 ) {
                     cm.set_scale_factor(scale);
-                    cm.ensure_atlas(&gpu.device, pc, logical_w, logical_h);
+                    cm.ensure_atlas(&gpu.native_device, logical_w, logical_h);
                     cm.render_dirty_panels(
-                        &gpu.device,
-                        &gpu.queue,
+                        &gpu.native_device,
                         ui,
                         &self.ui_root.tree,
                         &panel_infos,
@@ -956,16 +954,12 @@ impl Application {
                     );
                 }
 
-                // Get atlas bind group for single-blit compositing.
-                let atlas_bg = self.ui_cache_manager.as_ref()
-                    .and_then(|cm| cm.atlas_bind_group());
-
-                // Single render pass: clear to black, blit compositor output,
-                // then blit the full-screen UI atlas (one draw instead of 7).
+                // Single render pass: clear to black, blit compositor output.
+                // UI atlas blit removed here (atlas is GpuTexture until Phase 6 wires it).
                 {
                     let mut pass =
                         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Clear + Blit + UI Atlas"),
+                            label: Some("Clear + Blit"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                                 view: &surface_view,
                                 resolve_target: None,
@@ -983,16 +977,6 @@ impl Application {
 
                     if let Some(blit) = &self.blit_pipeline {
                         blit.draw_in_pass(&mut pass);
-                    }
-                    // Reset viewport from blit subrect back to full surface
-                    pass.set_viewport(
-                        0.0, 0.0,
-                        surface_w as f32, surface_h as f32,
-                        0.0, 1.0,
-                    );
-                    // Blit UI atlas (single draw — premultiplied alpha preserves video)
-                    if let (Some(pc), Some(bg)) = (&self.panel_compositor, atlas_bg) {
-                        pc.draw_atlas(&mut pass, bg);
                     }
                 }
 
@@ -1120,31 +1104,34 @@ impl Application {
                         );
                     }
 
-                    // Flush all overlay commands in one render pass
-                    if ui.prepare(
-                        &gpu.device, &gpu.queue,
-                        logical_w, logical_h, scale, TextMode::Overlay,
-                    ) {
-                        let mut pass =
-                            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                label: Some("Overlay UI"),
-                                color_attachments: &[Some(
-                                    wgpu::RenderPassColorAttachment {
-                                        view: &surface_view,
-                                        resolve_target: None,
-                                        depth_slice: None,
-                                        ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Load,
-                                            store: wgpu::StoreOp::Store,
-                                        },
+                    // Flush all overlay commands via native Metal.
+                    // Phase 5 transition: render to intermediate GpuTexture.
+                    // Disconnected from surface until Phase 6.
+                    if ui.prepare(&gpu.native_device, logical_w, logical_h, scale) {
+                        #[cfg(target_os = "macos")]
+                        {
+                            let needs_create = self.overlay_native_target
+                                .as_ref()
+                                .is_none_or(|t| t.width != surface_w || t.height != surface_h);
+                            if needs_create {
+                                self.overlay_native_target = Some(gpu.native_device.create_texture(
+                                    &manifold_gpu::GpuTextureDesc {
+                                        width: surface_w,
+                                        height: surface_h,
+                                        depth: 1,
+                                        format: manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+                                        dimension: manifold_gpu::GpuTextureDimension::D2,
+                                        usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+                                        label: "Overlay Native Target",
                                     },
-                                )],
-                                depth_stencil_attachment: None,
-                                timestamp_writes: None,
-                                occlusion_query_set: None,
-                                multiview_mask: None,
-                            });
-                        ui.draw(&mut pass);
+                                ));
+                            }
+                            if let Some(target) = &self.overlay_native_target {
+                                let mut native_enc = gpu.native_device.create_encoder("Overlay UI");
+                                ui.render(&mut native_enc, target, manifold_gpu::GpuLoadAction::Load);
+                                native_enc.commit();
+                            }
+                        }
                     }
                 }
             }

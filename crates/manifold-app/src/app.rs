@@ -211,12 +211,15 @@ pub struct Application {
     pub(crate) output_presenter: Option<crate::output_presenter::NativeOutputPresenter>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
-    pub(crate) panel_compositor: Option<manifold_renderer::panel_compositor::PanelCompositor>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
     /// Phase 3-6 transition: intermediate GpuTexture for layer bitmap rendering.
     /// Disconnected from the surface until Phase 6 wires it to the GpuDrawable.
     #[cfg(target_os = "macos")]
     pub(crate) layer_bitmap_native_target: Option<manifold_gpu::GpuTexture>,
+    /// Phase 5-6 transition: intermediate GpuTexture for overlay UI rendering.
+    /// Disconnected from the surface until Phase 6 wires it to the GpuDrawable.
+    #[cfg(target_os = "macos")]
+    pub(crate) overlay_native_target: Option<manifold_gpu::GpuTexture>,
     pub(crate) surface_format: wgpu::TextureFormat,
     /// macOS EDR headroom for the primary window (1.0 = SDR, >1.0 = HDR capable).
     /// Drives compositor tonemap (passthrough if > 1.0, ACES if ≤ 1.0).
@@ -354,10 +357,11 @@ impl Application {
             output_presenter: None,
             ui_renderer: None,
             ui_cache_manager: None,
-            panel_compositor: None,
             layer_bitmap_gpu: None,
             #[cfg(target_os = "macos")]
             layer_bitmap_native_target: None,
+            #[cfg(target_os = "macos")]
+            overlay_native_target: None,
             surface_format: wgpu::TextureFormat::Rgba16Float,
             edr_headroom: 1.0,
             output_edr_headroom: 1.0,
@@ -1072,18 +1076,21 @@ impl ApplicationHandler for Application {
             // Create blit pipeline
             self.blit_pipeline = Some(BlitPipeline::new(&device, format));
 
-            // Create UI renderer (renders directly to surface in surface format)
-            self.ui_renderer = Some(UIRenderer::new(&device, &queue, format));
-
-            // Create panel cache system (offscreen textures + compositor for cached panels)
-            self.panel_compositor = Some(
-                manifold_renderer::panel_compositor::PanelCompositor::new(&device, format),
-            );
-            self.ui_cache_manager = Some(
-                manifold_renderer::ui_cache_manager::UICacheManager::new(format, scale),
-            );
-
             let native_device = manifold_gpu::GpuDevice::new();
+
+            // Create UI renderer using native Metal (Bgra8Unorm matches surface format)
+            self.ui_renderer = Some(UIRenderer::new(
+                &native_device,
+                manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+            ));
+
+            // Create panel cache system (atlas now a GpuTexture — no PanelCompositor needed)
+            self.ui_cache_manager = Some(
+                manifold_renderer::ui_cache_manager::UICacheManager::new(
+                    manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+                    scale,
+                ),
+            );
 
             // Create layer bitmap GPU (textured quad pipeline for per-layer bitmaps)
             self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(

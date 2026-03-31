@@ -27,6 +27,5 @@ pub mod wet_dry_lerp;
 pub mod ui_renderer;
 #[cfg(target_os = "macos")]
 pub mod native_text;
-pub mod panel_compositor;
 pub mod ui_cache_manager;
 pub mod layer_bitmap_gpu;
