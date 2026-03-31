@@ -69,7 +69,7 @@ Both happen inside one `begin_render_pass()` / `end_render_pass()`. BlitPipeline
 
 ## Phases
 
-### Phase 1: Extend manifold-gpu [IN PROGRESS]
+### Phase 1: Extend manifold-gpu [DONE]
 
 Prompt: `docs/PHASE1_AGENT_PROMPT.md`
 
@@ -79,36 +79,39 @@ Add the missing API surface so the UI thread can use manifold-gpu:
 - `GpuSurface` / `GpuDrawable` — CAMetalLayer wrapper
 - Smoke test
 
-### Phase 2: Bridge + dead code cleanup [NOT STARTED]
+### Phase 2: Bridge + dead code cleanup [DONE]
 
 Prompt: `docs/PHASE2_AGENT_PROMPT.md`
 
 Small setup step — originally planned to convert simple blit modules, but analysis revealed BlitPipeline and PanelCompositor share a wgpu render pass and can't be converted independently. Revised scope:
 
-- [ ] Add `native_device: GpuDevice` field to `GpuContext` (bridge for transition period)
-- [ ] Delete `tonemap_blit.rs` (dead code — unused since output presenter rewrite)
-- [ ] Update this migration doc
+- [x] Add `native_device: GpuDevice` field to `GpuContext` (bridge for transition period)
+- [x] Delete `tonemap_blit.rs` (dead code — unused since output presenter rewrite)
+- [x] Update this migration doc
 
-### Phase 3: Convert texture management [NOT STARTED]
+### Phase 3: Convert LayerBitmapGpu [DONE]
 
-Modules that manage their own textures and render passes (don't participate in the shared workspace render pass):
+Prompt: `docs/PHASE3_AGENT_PROMPT.md`
 
-- [ ] `UICacheManager` — atlas texture + incremental render. Replace wgpu Texture/CommandEncoder with GpuTexture/GpuEncoder. Load/DontCare/Clear actions map directly.
-- [ ] `LayerBitmapGpu` — per-layer textures, indexed quad rendering. Uses `draw_indexed()` from Phase 1. Pixel upload via `GpuDevice::upload_texture()`.
-- [ ] `SharedTextureBridge` — strip wgpu-hal wrapper. Already native Metal internally — just remove the wgpu import layer and return `GpuTexture` directly.
+`LayerBitmapGpu` is the only Phase 3 module with a clean enough boundary to convert independently. Analysis revealed:
+- `UICacheManager` calls `UIRenderer.draw()` with a wgpu RenderPass — can't convert until UIRenderer is native (Phase 5).
+- `SharedTextureBridge` already has `import_texture_native()` — the wgpu `import_texture()` stays until Phase 6 removes wgpu from the UI thread.
+- `LayerBitmapGpu` has its own independent render pass and owns its textures — clean conversion target.
 
-### Phase 4: UIRenderer — rects [NOT STARTED]
+**"Breaking is fine"** — layer bitmap visuals (waveform lane, stem lanes) will stop appearing on screen until Phase 6 wires the output to the surface drawable.
 
-Convert the UIRenderer's rectangle/SDF rendering to manifold-gpu:
+Key technical notes:
+- BITMAP_SHADER updated to `@group(0)` throughout — manifold-gpu slot_map keys on binding number only, multi-group shaders cause collisions.
+- `LayerBitmapGpu` renders to `layer_bitmap_native_target` (intermediate GpuTexture). Layer bitmap visuals disconnected from surface until Phase 6.
+- `GpuBuffer::mapped_ptr` is a method (not a field) — call with `()`.
 
-- [ ] Replace wgpu RenderPipeline with `create_render_pipeline_with_vertex_layout()`
-- [ ] Replace wgpu Buffer (vertex/index/uniform) with GpuBuffer
-- [ ] Replace render pass recording with `draw_indexed()`
-- [ ] Keep same WGSL shader (SDF rounded rects + borders)
+- [x] Convert `LayerBitmapGpu` — textures, pipeline, upload, draw_indexed
+- [x] Update callers in app_render.rs — pass `&gpu.native_device`, intermediate GpuTexture target
+- [x] Fix BITMAP_SHADER binding groups
 
-Text rendering stays on glyphon temporarily during this phase.
+### Phase 4: CoreText text renderer [NOT STARTED]
 
-### Phase 5: CoreText text renderer [NOT STARTED]
+New independent module — zero wgpu, pure manifold-gpu. Unblocks Phase 5 (UIRenderer conversion).
 
 Replace glyphon with native macOS text rendering:
 
@@ -142,6 +145,17 @@ CoreText (CPU)     →  Glyph Atlas (GPU)     →  Metal Render Pass
 - Clip bounds per text command
 - Main + Overlay render modes (separate TextRenderer instances)
 - Advanced shaping (handled by CoreText)
+
+### Phase 5: UIRenderer + UICacheManager [NOT STARTED]
+
+Convert UIRenderer's SDF/rect rendering and glyphon text to manifold-gpu, then convert UICacheManager which depends on UIRenderer. These two must be converted together.
+
+- [ ] Replace UIRenderer wgpu RenderPipeline/Buffer with `create_render_pipeline_with_vertex_layout()` + GpuBuffer
+- [ ] Replace UIRenderer text rendering (glyphon) with CoreText renderer from Phase 4
+- [ ] Replace UICacheManager wgpu Texture/CommandEncoder with GpuTexture/GpuEncoder
+- [ ] Atlas becomes GpuTexture — remove PanelCompositor bind group (breaking until Phase 6)
+
+**Breaking**: UI panels stop rendering until Phase 6 wires the atlas GpuTexture into the new render loop.
 
 ### Phase 6: Full render loop conversion [NOT STARTED]
 
@@ -186,13 +200,16 @@ CoreText (CPU)     →  Glyph Atlas (GPU)     →  Metal Render Pass
 Phase 1 (manifold-gpu extensions)
     |
     v
-Phase 2 (bridge + cleanup) ←── small, fast
+Phase 2 (bridge + cleanup) ←── DONE
     |
-    +-- Phase 3 (texture management) ←── parallel
+    v
+Phase 3 (LayerBitmapGpu) ←── independent, breaking ok
     |
-    +-- Phase 4 (UIRenderer rects) ←── parallel
+    v
+Phase 4 (CoreText renderer) ←── independent, new code
     |
-    +-- Phase 5 (CoreText) ←── parallel, independent
+    v
+Phase 5 (UIRenderer + UICacheManager) ←── needs CoreText from Phase 4
     |
     v
 Phase 6 (full render loop) ←── needs ALL of 3, 4, 5 complete
@@ -201,9 +218,11 @@ Phase 6 (full render loop) ←── needs ALL of 3, 4, 5 complete
 Phase 7 (cleanup)
 ```
 
-Phases 3, 4, 5 can be developed in parallel after Phase 2.
+Phases 3 and 4 can be developed in parallel (both independent).
 
-Phase 6 is the integration point — all modules must be ready before the render loop can be rewritten.
+Phase 5 depends on Phase 4 (CoreText). Phase 6 is the integration point.
+
+**Sequencing rationale:** Phases 3, 4, 5 are no longer parallel — analysis revealed UICacheManager can't convert without UIRenderer (wgpu RenderPass coupling), and UIRenderer can't convert without CoreText (text backend). The serial chain 4→5 is necessary. Phase 3 (LayerBitmapGpu) is independent and can run in parallel with 4.
 
 ## Decision Log
 
@@ -216,3 +235,7 @@ Phase 6 is the integration point — all modules must be ready before the render
 | 2026-03-31 | Defer BlitPipeline/PanelCompositor to Phase 6 | They share a wgpu render pass — can't convert independently |
 | 2026-03-31 | Phase 2 revised to bridge + cleanup only | Original scope (convert blit modules) impossible due to shared render pass coupling |
 | 2026-03-31 | Phase 1 with Opus, subsequent phases with Sonnet | Foundation must be correct; mechanical follow-through is well-prompted |
+| 2026-03-31 | "Breaking is fine" policy adopted | Simplifies phases — no compatibility shims, wgpu removed cleanly, visual regressions accepted until Phase 6 integrates |
+| 2026-03-31 | Phase 3 narrowed to LayerBitmapGpu only | UICacheManager blocked by UIRenderer (wgpu RenderPass), SharedTextureBridge already has native path |
+| 2026-03-31 | Phase 4 = CoreText (was Phase 5), Phase 5 = UIRenderer+UICacheManager | CoreText must exist before UIRenderer can drop glyphon; UIRenderer and UICacheManager must convert together |
+| 2026-03-31 | BITMAP_SHADER must use @group(0) only | manifold-gpu slot_map keys on binding number alone — multi-group shaders cause collisions |

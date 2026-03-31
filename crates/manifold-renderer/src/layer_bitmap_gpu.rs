@@ -1,11 +1,16 @@
 //! GPU texture management and rendering for per-layer bitmap textures.
 //!
-//! Each layer gets a wgpu texture uploaded from CPU pixel buffers produced by
+//! Each layer gets a native Metal texture uploaded from CPU pixel buffers produced by
 //! `manifold_ui::bitmap_renderer::LayerBitmapRenderer`. Textures are rendered
-//! as positioned quads in the viewport area.
+//! as positioned quads in the viewport area via `draw_indexed`.
 
+use manifold_gpu::{
+    GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuDevice, GpuEncoder,
+    GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture,
+    GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage, GpuVertexAttribute,
+    GpuVertexFormat, GpuVertexLayout,
+};
 use manifold_ui::node::{Color32, Rect};
-use wgpu::util::DeviceExt;
 
 /// Vertex for textured quad rendering.
 #[repr(C)]
@@ -21,8 +26,8 @@ struct Globals {
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
-@group(1) @binding(0) var t_layer: texture_2d<f32>;
-@group(1) @binding(1) var s_layer: sampler;
+@group(0) @binding(1) var t_layer: texture_2d<f32>;
+@group(0) @binding(2) var s_layer: sampler;
 
 struct VertexInput {
     @location(0) position: vec2<f32>,
@@ -58,152 +63,86 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 /// Per-layer GPU texture.
 struct LayerTexture {
-    texture: wgpu::Texture,
-    _view: wgpu::TextureView,
-    bind_group: wgpu::BindGroup,
+    texture: GpuTexture,
     width: u32,
     height: u32,
+    // No view or bind_group — manifold-gpu uses slot-based bindings
 }
 
 /// Manages GPU textures for all layer bitmaps and renders them as positioned quads.
 pub struct LayerBitmapGpu {
     textures: Vec<Option<LayerTexture>>,
-    pipeline: wgpu::RenderPipeline,
-    sampler: wgpu::Sampler,
-    texture_bind_group_layout: wgpu::BindGroupLayout,
-    globals_buffer: wgpu::Buffer,
-    globals_bind_group_layout: wgpu::BindGroupLayout,
-    // Reusable vertex/index buffers
-    vertices: Vec<BitmapVertex>,
-    indices: Vec<u32>,
+    /// Per-layer shared GpuBuffer for 4 vertices (16 bytes each).
+    /// Grown when a new layer index is encountered — no per-frame allocation after warmup.
+    vertex_bufs: Vec<Option<GpuBuffer>>,
+    pipeline: GpuRenderPipeline,
+    sampler: GpuSampler,
+    /// Pre-allocated shared index buffer: [0u32, 1, 2, 0, 2, 3] — one quad.
+    index_buf: GpuBuffer,
 }
 
 impl LayerBitmapGpu {
-    pub fn new(device: &wgpu::Device, target_format: wgpu::TextureFormat) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Bitmap Layer Shader"),
-            source: wgpu::ShaderSource::Wgsl(BITMAP_SHADER.into()),
-        });
-
-        // Globals bind group layout (group 0)
-        let globals_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Bitmap Globals BGL"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
-        // Texture bind group layout (group 1)
-        let texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Bitmap Texture BGL"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-            });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Bitmap Pipeline Layout"),
-            bind_group_layouts: &[&globals_bind_group_layout, &texture_bind_group_layout],
-            immediate_size: 0,
-        });
-
-        let vertex_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<BitmapVertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
+    pub fn new(device: &GpuDevice, format: GpuTextureFormat) -> Self {
+        let vertex_layout = GpuVertexLayout {
+            stride: std::mem::size_of::<BitmapVertex>() as u32,
+            attributes: vec![
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x2,
                     offset: 0,
                     shader_location: 0,
                 },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
+                GpuVertexAttribute {
+                    format: GpuVertexFormat::Float32x2,
                     offset: 8,
                     shader_location: 1,
                 },
             ],
         };
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Bitmap Pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[vertex_layout],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let blend = GpuBlendState {
+            src_factor: GpuBlendFactor::SrcAlpha,
+            dst_factor: GpuBlendFactor::OneMinusSrcAlpha,
+            operation: GpuBlendOp::Add,
+            src_alpha_factor: GpuBlendFactor::One,
+            dst_alpha_factor: GpuBlendFactor::OneMinusSrcAlpha,
+            alpha_operation: GpuBlendOp::Add,
+        };
+
+        let pipeline = device.create_render_pipeline_with_vertex_layout(
+            BITMAP_SHADER,
+            "vs_main",
+            "fs_main",
+            format,
+            Some(blend),
+            &vertex_layout,
+            "Bitmap Pipeline",
+        );
 
         // Nearest-neighbor sampler (matches Unity FilterMode.Point)
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("Bitmap Sampler"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
+        let sampler = device.create_sampler(&GpuSamplerDesc {
+            min_filter: GpuFilterMode::Nearest,
+            mag_filter: GpuFilterMode::Nearest,
+            mip_filter: GpuFilterMode::Nearest,
             ..Default::default()
         });
 
-        let globals_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Bitmap Globals"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        // Pre-allocated index buffer for one quad
+        let index_data: [u32; 6] = [0, 1, 2, 0, 2, 3];
+        let index_buf = device.create_buffer_shared(24); // 6 × 4 bytes
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                index_data.as_ptr(),
+                index_buf.mapped_ptr().unwrap() as *mut u32,
+                6,
+            );
+        }
 
         Self {
             textures: Vec::new(),
+            vertex_bufs: Vec::new(),
             pipeline,
             sampler,
-            texture_bind_group_layout,
-            globals_buffer,
-            globals_bind_group_layout,
-            vertices: Vec::with_capacity(64),
-            indices: Vec::with_capacity(96),
+            index_buf,
         }
     }
 
@@ -211,8 +150,7 @@ impl LayerBitmapGpu {
     /// Creates or resizes texture as needed.
     pub fn upload_layer(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &GpuDevice,
         layer_index: usize,
         pixels: &[Color32],
         tex_w: u32,
@@ -222,95 +160,49 @@ impl LayerBitmapGpu {
             return;
         }
 
-        // Ensure vec is large enough
         if layer_index >= self.textures.len() {
             self.textures.resize_with(layer_index + 1, || None);
         }
+        if layer_index >= self.vertex_bufs.len() {
+            self.vertex_bufs.resize_with(layer_index + 1, || None);
+        }
 
-        // Check if we need to recreate the texture (size changed)
         let needs_create = match &self.textures[layer_index] {
             Some(lt) => lt.width != tex_w || lt.height != tex_h,
             None => true,
         };
 
         if needs_create {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(&format!("Layer Bitmap {}", layer_index)),
-                size: wgpu::Extent3d {
-                    width: tex_w,
-                    height: tex_h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("Layer Bitmap BG {}", layer_index)),
-                layout: &self.texture_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-            });
-            self.textures[layer_index] = Some(LayerTexture {
-                texture,
-                _view: view,
-                bind_group,
+            let texture = device.create_texture(&GpuTextureDesc {
                 width: tex_w,
                 height: tex_h,
+                depth: 1,
+                format: GpuTextureFormat::Rgba8UnormSrgb,
+                dimension: GpuTextureDimension::D2,
+                usage: GpuTextureUsage::SHADER_READ | GpuTextureUsage::CPU_UPLOAD,
+                label: &format!("Layer Bitmap {layer_index}"),
             });
+            self.textures[layer_index] = Some(LayerTexture { texture, width: tex_w, height: tex_h });
+            self.vertex_bufs[layer_index] =
+                Some(device.create_buffer_shared(std::mem::size_of::<BitmapVertex>() as u64 * 4));
         }
 
-        // Upload pixel data via queue.write_texture()
+        // Upload pixel data via replace_region (CPU_UPLOAD texture)
         // Color32 is #[repr(C)] with 4 u8 fields — safe to reinterpret as &[u8]
         if let Some(lt) = &self.textures[layer_index] {
             let bytes: &[u8] = unsafe {
-                std::slice::from_raw_parts(
-                    pixels.as_ptr() as *const u8,
-                    pixels.len() * 4,
-                )
+                std::slice::from_raw_parts(pixels.as_ptr() as *const u8, pixels.len() * 4)
             };
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &lt.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                bytes,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(tex_w * 4),
-                    rows_per_image: None,
-                },
-                wgpu::Extent3d {
-                    width: tex_w,
-                    height: tex_h,
-                    depth_or_array_layers: 1,
-                },
-            );
+            device.upload_texture(&lt.texture, bytes);
         }
     }
 
     /// Render all active layer bitmap textures as positioned quads.
-    /// `layer_rects`: vec of `(layer_index, rect)` in logical pixels.
+    /// `layer_rects`: slice of `(layer_index, rect)` in logical pixels.
     pub fn render_layers(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &wgpu::TextureView,
+        encoder: &mut GpuEncoder,
+        target: &GpuTexture,
         screen_w: u32,
         screen_h: u32,
         layer_rects: &[(usize, Rect)],
@@ -319,99 +211,53 @@ impl LayerBitmapGpu {
             return;
         }
 
-        // Update globals
-        let globals_data: [f32; 4] = [screen_w as f32, screen_h as f32, 0.0, 0.0];
-        queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals_data));
-
-        let globals_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Bitmap Globals BG"),
-            layout: &self.globals_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: self.globals_buffer.as_entire_binding(),
-            }],
-        });
-
-        // Build vertex/index data for all layer quads
-        self.vertices.clear();
-        self.indices.clear();
-
-        // Collect which layers have textures
-        let mut draw_list: Vec<(usize, u32, u32)> = Vec::new(); // (layer_idx, vert_start, index_count)
+        let globals: [f32; 2] = [screen_w as f32, screen_h as f32];
+        let globals_bytes: &[u8] = bytemuck::bytes_of(&globals);
 
         for &(layer_idx, rect) in layer_rects {
-            if layer_idx >= self.textures.len() {
-                continue;
-            }
-            if self.textures[layer_idx].is_none() {
+            if layer_idx >= self.textures.len() || self.textures[layer_idx].is_none() {
                 continue;
             }
             if rect.width <= 0.0 || rect.height <= 0.0 {
                 continue;
             }
+            if layer_idx >= self.vertex_bufs.len() || self.vertex_bufs[layer_idx].is_none() {
+                continue;
+            }
 
-            let base = self.vertices.len() as u32;
             let (x0, y0) = (rect.x, rect.y);
             let (x1, y1) = (rect.x + rect.width, rect.y + rect.height);
-
-            self.vertices.push(BitmapVertex { position: [x0, y0], uv: [0.0, 0.0] });
-            self.vertices.push(BitmapVertex { position: [x1, y0], uv: [1.0, 0.0] });
-            self.vertices.push(BitmapVertex { position: [x1, y1], uv: [1.0, 1.0] });
-            self.vertices.push(BitmapVertex { position: [x0, y1], uv: [0.0, 1.0] });
-
-            self.indices.extend_from_slice(&[
-                base, base + 1, base + 2,
-                base, base + 2, base + 3,
-            ]);
-
-            draw_list.push((layer_idx, base, 6));
-        }
-
-        if self.vertices.is_empty() {
-            return;
-        }
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Bitmap Vertices"),
-            contents: bytemuck::cast_slice(&self.vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Bitmap Indices"),
-            contents: bytemuck::cast_slice(&self.indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
-
-        // Render pass — one pass, switch texture bind group per layer
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Bitmap Layer Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load, // Preserve existing content
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &globals_bind_group, &[]);
-        pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-        pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-
-        for (layer_idx, vert_start, index_count) in &draw_list {
-            if let Some(lt) = &self.textures[*layer_idx] {
-                pass.set_bind_group(1, &lt.bind_group, &[]);
-                // Each layer's 6 indices start at (vert_start / 4) * 6
-                let index_offset = (vert_start / 4) * 6;
-                pass.draw_indexed(index_offset..index_offset + index_count, 0, 0..1);
+            let verts = [
+                BitmapVertex { position: [x0, y0], uv: [0.0, 0.0] },
+                BitmapVertex { position: [x1, y0], uv: [1.0, 0.0] },
+                BitmapVertex { position: [x1, y1], uv: [1.0, 1.0] },
+                BitmapVertex { position: [x0, y1], uv: [0.0, 1.0] },
+            ];
+            let vbuf = self.vertex_bufs[layer_idx].as_ref().unwrap();
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    verts.as_ptr(),
+                    vbuf.mapped_ptr().unwrap() as *mut BitmapVertex,
+                    4,
+                );
             }
+
+            let lt = self.textures[layer_idx].as_ref().unwrap();
+            encoder.draw_indexed(
+                &self.pipeline,
+                target,
+                &[
+                    GpuBinding::Bytes { binding: 0, data: globals_bytes },
+                    GpuBinding::Texture { binding: 1, texture: &lt.texture },
+                    GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
+                ],
+                vbuf,
+                &self.index_buf,
+                6,
+                None,
+                GpuLoadAction::Load,
+                &format!("Bitmap Layer {layer_idx}"),
+            );
         }
     }
 
@@ -420,6 +266,8 @@ impl LayerBitmapGpu {
         if self.textures.len() > count {
             self.textures.truncate(count);
         }
+        if self.vertex_bufs.len() > count {
+            self.vertex_bufs.truncate(count);
+        }
     }
 }
-

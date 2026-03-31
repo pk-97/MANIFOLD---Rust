@@ -213,6 +213,10 @@ pub struct Application {
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) panel_compositor: Option<manifold_renderer::panel_compositor::PanelCompositor>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
+    /// Phase 3-6 transition: intermediate GpuTexture for layer bitmap rendering.
+    /// Disconnected from the surface until Phase 6 wires it to the GpuDrawable.
+    #[cfg(target_os = "macos")]
+    pub(crate) layer_bitmap_native_target: Option<manifold_gpu::GpuTexture>,
     pub(crate) surface_format: wgpu::TextureFormat,
     /// macOS EDR headroom for the primary window (1.0 = SDR, >1.0 = HDR capable).
     /// Drives compositor tonemap (passthrough if > 1.0, ACES if ≤ 1.0).
@@ -352,6 +356,8 @@ impl Application {
             ui_cache_manager: None,
             panel_compositor: None,
             layer_bitmap_gpu: None,
+            #[cfg(target_os = "macos")]
+            layer_bitmap_native_target: None,
             surface_format: wgpu::TextureFormat::Rgba16Float,
             edr_headroom: 1.0,
             output_edr_headroom: 1.0,
@@ -1077,15 +1083,20 @@ impl ApplicationHandler for Application {
                 manifold_renderer::ui_cache_manager::UICacheManager::new(format, scale),
             );
 
+            let native_device = manifold_gpu::GpuDevice::new();
+
             // Create layer bitmap GPU (textured quad pipeline for per-layer bitmaps)
-            self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(&device, format));
+            self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(
+                &native_device,
+                manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+            ));
 
             GpuContext {
                 instance,
                 adapter,
                 device,
                 queue,
-                native_device: manifold_gpu::GpuDevice::new(),
+                native_device,
             }
         };
 

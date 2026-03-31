@@ -746,7 +746,7 @@ impl Application {
         if let (Some(gpu), Some(bitmap_gpu)) = (&self.gpu, &mut self.layer_bitmap_gpu) {
             for (layer_idx, pixels, tw, th) in self.ui_root.viewport.dirty_layer_iter() {
                 bitmap_gpu.upload_layer(
-                    &gpu.device, &gpu.queue,
+                    &gpu.native_device,
                     layer_idx, pixels, tw as u32, th as u32,
                 );
             }
@@ -764,7 +764,7 @@ impl Application {
                     // Upload after repaint
                     if wf.buffer_width > 0 && wf.buffer_height > 0 && !wf.pixel_buffer.is_empty() {
                         bitmap_gpu.upload_layer(
-                            &gpu.device, &gpu.queue,
+                            &gpu.native_device,
                             1000, &wf.pixel_buffer,
                             wf.buffer_width as u32, wf.buffer_height as u32,
                         );
@@ -785,7 +785,7 @@ impl Application {
                         sl.repaint(sl_rect.width as usize, mapper);
                         if sl.buffer_width > 0 && sl.buffer_height > 0 && !sl.pixel_buffer.is_empty() {
                             bitmap_gpu.upload_layer(
-                                &gpu.device, &gpu.queue,
+                                &gpu.native_device,
                                 1001, &sl.pixel_buffer,
                                 sl.buffer_width as u32, sl.buffer_height as u32,
                             );
@@ -996,7 +996,7 @@ impl Application {
                     }
                 }
 
-                // ── Phase 2: Bitmap layers (unchanged — different pipeline) ──
+                // ── Phase 2: Bitmap layers (native Metal — intermediate target) ──
                 if let Some(bitmap_gpu) = &mut self.layer_bitmap_gpu {
                     let mut rects = self.ui_root.viewport.layer_bitmap_rects();
 
@@ -1013,10 +1013,41 @@ impl Application {
                     }
 
                     if !rects.is_empty() {
-                        bitmap_gpu.render_layers(
-                            &gpu.device, &gpu.queue, &mut encoder, &surface_view,
-                            logical_w, logical_h, &rects,
-                        );
+                        // Phase 3 transition: render into intermediate GpuTexture.
+                        // Visual output disconnected from surface until Phase 6.
+                        #[cfg(target_os = "macos")]
+                        {
+                            let needs_create = self
+                                .layer_bitmap_native_target
+                                .as_ref()
+                                .is_none_or(|t| t.width != surface_w || t.height != surface_h);
+                            if needs_create {
+                                self.layer_bitmap_native_target =
+                                    Some(gpu.native_device.create_texture(
+                                        &manifold_gpu::GpuTextureDesc {
+                                            width: surface_w,
+                                            height: surface_h,
+                                            depth: 1,
+                                            format: manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+                                            dimension: manifold_gpu::GpuTextureDimension::D2,
+                                            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+                                            label: "Layer Bitmap Native Target",
+                                        },
+                                    ));
+                            }
+                            if let Some(target) = &self.layer_bitmap_native_target {
+                                let mut native_enc =
+                                    gpu.native_device.create_encoder("Layer Bitmaps");
+                                bitmap_gpu.render_layers(
+                                    &mut native_enc,
+                                    target,
+                                    logical_w,
+                                    logical_h,
+                                    &rects,
+                                );
+                                native_enc.commit();
+                            }
+                        }
                     }
                 }
 
