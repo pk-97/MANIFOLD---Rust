@@ -1326,20 +1326,11 @@ impl ApplicationHandler for Application {
                 if let Some(gpu) = &self.gpu
                     && let Some(ws) = self.window_registry.get_mut(&window_id) {
                         let scale = ws.window.scale_factor();
-                        if let Some(surface) = &mut ws.surface {
+                        // Output windows: surface stays at project resolution
+                        // (pixel-perfect 1:1). Core Animation handles display scaling.
+                        // Only resize workspace windows.
+                        if is_primary && let Some(surface) = &mut ws.surface {
                             surface.resize(&gpu.device, size.width, size.height, scale);
-                        } else {
-                            // Surface is owned by the output presenter — forward resize.
-                            #[cfg(target_os = "macos")]
-                            if let Some(p) = &self.output_presenter {
-                                let _ = p.sender.send(
-                                    crate::output_presenter::OutputCommand::Resize {
-                                        width: size.width,
-                                        height: size.height,
-                                        scale,
-                                    },
-                                );
-                            }
                         }
 
                         // Rebuild UI on primary window resize
@@ -1399,7 +1390,9 @@ impl ApplicationHandler for Application {
                     }
                     // Inspector resize drag takes next priority
                     else if self.ui_root.inspector_resize_dragging {
-                        self.ui_root.update_inspector_resize(self.cursor_pos.x);
+                        if self.ui_root.update_inspector_resize(self.cursor_pos.x) {
+                            self.needs_rebuild = true;
+                        }
                         self.cursor_manager.set(TimelineCursor::ResizeHorizontal);
                     } else {
                         self.ui_root.pointer_event(

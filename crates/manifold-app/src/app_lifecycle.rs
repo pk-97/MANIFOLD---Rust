@@ -628,23 +628,29 @@ impl Application {
 
         let size = window.inner_size();
 
-        // Spawn the native Metal presenter thread. It creates its own GpuDevice
-        // (separate MTLCommandQueue), sets a CAMetalLayer on the NSView, and
-        // handles all rendering + presentation independently.
-        #[cfg(target_os = "macos")]
-        let presenter = if let Some(bridge) = self.shared_texture_bridge.clone() {
-            Some(crate::output_presenter::spawn(&window, bridge, h))
+        // Direct IOSurface display: set the IOSurface as the view's layer contents.
+        // Zero GPU work — Core Animation displays the IOSurface pixel-perfect at
+        // project resolution, handles vsync and display scaling automatically.
+        // No wgpu surface, no blit, no separate thread.
+        // wgpu HDR surface — same rendering path as workspace preview.
+        // Handles vsync alignment (Mailbox), HDR/EDR, and color management.
+        // Pixel-perfect 1:1 at project res requires a custom CAMetalLayer (follow-up).
+        let output_surface = if let Some(ref gpu) = self.gpu {
+            let sw = manifold_renderer::surface::SurfaceWrapper::new_hdr(
+                &gpu.instance, &gpu.adapter, &gpu.device,
+                window.clone(),
+                size.width, size.height, window.scale_factor(),
+                wgpu::PresentMode::Mailbox,
+            );
+            crate::edr_surface::configure_edr(&sw.surface);
+            Some(sw)
         } else {
-            log::warn!("[OutputWindow] No IOSurface bridge — output will be black");
             None
         };
 
-        #[cfg(target_os = "macos")]
-        { self.output_presenter = presenter; }
-
         let state = WindowState {
             window,
-            surface: None, // Surface is owned by the native Metal presenter.
+            surface: output_surface,
             role: WindowRole::Output {
                 name: name.to_string(),
             },

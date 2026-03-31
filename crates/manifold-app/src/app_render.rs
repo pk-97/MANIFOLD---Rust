@@ -863,7 +863,12 @@ impl Application {
             .unwrap_or((1920, 1080));
         let source_aspect = comp_w as f32 / comp_h as f32;
 
-        let window_ids: Vec<WindowId> = self.window_registry.iter().map(|(id, _)| *id).collect();
+        // Process output windows first (single draw call) so they aren't
+        // delayed by the heavier workspace render. Stable ordering: outputs
+        // first, then workspace.
+        let mut window_ids: Vec<WindowId> = self.window_registry.iter().map(|(id, _)| *id).collect();
+        let primary = self.primary_window_id;
+        window_ids.sort_by_key(|id| if Some(*id) == primary { 1u8 } else { 0 });
 
         for window_id in window_ids {
             let is_workspace = Some(window_id) == self.primary_window_id;
@@ -873,9 +878,6 @@ impl Application {
                 None => continue,
             };
 
-            // Output windows whose surface is owned by OutputPresenter have no
-            // surface here — skip them entirely. The presenter thread handles
-            // get_current_texture() independently so the UI thread is never blocked.
             let surface = match ws.surface.as_mut() {
                 Some(s) => s,
                 None => continue,
@@ -915,7 +917,22 @@ impl Application {
             // Output window blitting is handled by the native Metal presenter
             // thread — output windows have surface: None and are skipped above.
 
-            if is_workspace {
+            if !is_workspace {
+                // Output window: fullscreen blit of compositor output.
+                if let Some(blit) = &self.blit_pipeline {
+                    blit.blit_to_rect_fit(
+                        &gpu.device, &mut encoder,
+                        compositor_output, &surface_view,
+                        0.0, 0.0, surface_w as f32, surface_h as f32,
+                        source_aspect,
+                    );
+                }
+                gpu.queue.submit(std::iter::once(encoder.finish()));
+                surface_texture.present();
+                continue;
+            }
+
+            {
                 let video_rect = self.ui_root.layout.video_area();
                 let sf = scale as f32;
                 let logical_w = (surface_w as f64 / scale) as u32;

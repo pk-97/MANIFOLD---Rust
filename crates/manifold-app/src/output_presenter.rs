@@ -1,4 +1,6 @@
+#![allow(dead_code)]
 //! Dedicated output-window presenter thread — native Metal, zero wgpu.
+//! DEPRECATED: Output window now uses wgpu surface (same path as workspace preview).
 //!
 //! The output monitor is the primary audience-facing display in a live
 //! performance. It runs on its own `GpuDevice` (separate Metal command queue
@@ -101,6 +103,8 @@ struct Uniforms {
 
 pub enum OutputCommand {
     /// Output window was resized (e.g. entering/leaving fullscreen).
+    /// Drawable stays at project resolution — this is kept for future use.
+    #[expect(dead_code)]
     Resize { width: u32, height: u32, scale: f64 },
     /// EDR headroom changed (window moved to a different display).
     UpdateEdrHeadroom(f64),
@@ -168,21 +172,40 @@ impl OutputPresenter {
         unsafe { &*(self.layer_ptr as *const metal::MetalLayerRef) }
     }
 
+    /// Sync the CAMetalLayer drawableSize to the IOSurface (project) dimensions.
+    /// Called when the bridge resizes (project resolution change).
+    /// The drawable matches project pixels 1:1 — Core Animation handles
+    /// display scaling via contentsGravity = kCAGravityResizeAspect.
+    fn sync_drawable_to_bridge(&mut self) {
+        let w = self.bridge.width();
+        let h = self.bridge.height();
+        if w != self.drawable_width || h != self.drawable_height {
+            self.drawable_width = w;
+            self.drawable_height = h;
+            let layer = self.layer();
+            layer.set_drawable_size(core_graphics_types::geometry::CGSize {
+                width: w as f64,
+                height: h as f64,
+            });
+            eprintln!(
+                "[Presenter] drawable synced to project: {}×{}",
+                w, h,
+            );
+        }
+    }
+
     fn run(mut self, rx: Receiver<OutputCommand>) {
+        // Initial sync: match drawable to project resolution.
+        self.sync_drawable_to_bridge();
+
         loop {
             // --- Drain all pending commands (non-blocking) ---
             loop {
                 match rx.try_recv() {
                     Ok(OutputCommand::Stop) => return,
-                    Ok(OutputCommand::Resize { width, height, scale }) => {
-                        self.drawable_width = width;
-                        self.drawable_height = height;
-                        let layer = self.layer();
-                        layer.set_drawable_size(core_graphics_types::geometry::CGSize {
-                            width: width as f64,
-                            height: height as f64,
-                        });
-                        layer.set_contents_scale(scale);
+                    Ok(OutputCommand::Resize { .. }) => {
+                        // Window resize — drawable stays at project resolution.
+                        // Core Animation handles display scaling.
                     }
                     Ok(OutputCommand::UpdateEdrHeadroom(h)) => {
                         self.edr_headroom = h;
@@ -197,12 +220,14 @@ impl OutputPresenter {
             if bridge_gen != self.last_bridge_gen {
                 self.last_bridge_gen = bridge_gen;
                 self.reimport_textures();
+                // Project resolution changed — sync drawable.
+                self.sync_drawable_to_bridge();
             }
 
-            // --- Wait for a new content frame ---
+            // --- Wait for new content frame (tight poll, no drawable consumption) ---
             let front = self.bridge.front_index() as usize;
             if front == self.last_front {
-                std::thread::sleep(std::time::Duration::from_millis(1));
+                std::thread::sleep(std::time::Duration::from_micros(200));
                 continue;
             }
             self.last_front = front;
@@ -211,10 +236,12 @@ impl OutputPresenter {
                 continue;
             };
 
-            // --- Acquire drawable from CAMetalLayer ---
-            // In fullscreen this may block at the TV's vsync.
-            // Only this thread is blocked — never the UI thread.
-            let Some(drawable) = self.layer().next_drawable() else {
+            // --- Acquire drawable at next vsync ---
+            // With displaySyncEnabled=true, this blocks until the display is
+            // ready. Only called when we have content — no drawable waste.
+            // Guarantees every present lands exactly on a vsync boundary.
+            let layer_ref = unsafe { &*(self.layer_ptr as *const metal::MetalLayerRef) };
+            let Some(drawable) = layer_ref.next_drawable() else {
                 continue;
             };
             let drawable_tex = drawable.texture();
@@ -222,37 +249,25 @@ impl OutputPresenter {
             let surface_w = self.drawable_width;
             let surface_h = self.drawable_height;
 
-            // --- Calculate FitInParent viewport (letterbox/pillarbox) ---
-            let src_w = self.bridge.width();
-            let src_h = self.bridge.height();
-            let source_aspect = src_w as f32 / src_h.max(1) as f32;
-            let rect_aspect = surface_w as f32 / surface_h.max(1) as f32;
-            let (fit_w, fit_h) = if source_aspect > rect_aspect {
-                (surface_w as f32, surface_w as f32 / source_aspect)
-            } else {
-                (surface_h as f32 * source_aspect, surface_h as f32)
-            };
-            let fit_x = (surface_w as f32 - fit_w) * 0.5;
-            let fit_y = (surface_h as f32 - fit_h) * 0.5;
-
             // --- Create command buffer + render pass ---
+            // 1:1 blit: drawable matches project resolution exactly.
+            // No upscale, no viewport fit — fullscreen triangle covers all pixels.
             let mut enc = self.device.create_encoder("Output Blit");
             let cmd_buf = enc.raw_cmd_buf();
 
             let pass_desc = metal::RenderPassDescriptor::new();
             let color = pass_desc.color_attachments().object_at(0).unwrap();
             color.set_texture(Some(drawable_tex));
-            color.set_load_action(metal::MTLLoadAction::Clear);
+            color.set_load_action(metal::MTLLoadAction::DontCare);
             color.set_store_action(metal::MTLStoreAction::Store);
-            color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
 
             let render_enc = cmd_buf.new_render_command_encoder(pass_desc);
             render_enc.set_render_pipeline_state(self.pipeline.raw_state());
             render_enc.set_viewport(metal::MTLViewport {
-                originX: fit_x as f64,
-                originY: fit_y as f64,
-                width: fit_w as f64,
-                height: fit_h as f64,
+                originX: 0.0,
+                originY: 0.0,
+                width: surface_w as f64,
+                height: surface_h as f64,
                 znear: 0.0,
                 zfar: 1.0,
             });
@@ -330,21 +345,36 @@ pub fn spawn(
     layer.set_device(device.raw_device());
     layer.set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
     layer.set_framebuffer_only(true);
-    layer.set_display_sync_enabled(false);
+    layer.set_display_sync_enabled(true);
 
-    let size = window.inner_size();
-    let scale = window.scale_factor();
+    // Drawable size is set by the presenter thread to match project resolution
+    // (1:1 pixel-perfect). Initial size uses bridge dimensions; presenter syncs
+    // on first frame and on bridge resize. Core Animation handles display scaling.
+    let proj_w = bridge.width();
+    let proj_h = bridge.height();
     layer.set_drawable_size(core_graphics_types::geometry::CGSize {
-        width: size.width as f64,
-        height: size.height as f64,
+        width: proj_w as f64,
+        height: proj_h as f64,
     });
-    layer.set_contents_scale(scale);
+    // contentsScale = 1.0: drawable pixels ARE the content pixels.
+    // Core Animation scales the layer to fit the view via contentsGravity.
+    layer.set_contents_scale(1.0);
 
     // Set CAMetalLayer on the NSView.
     let layer_ptr = layer.as_ptr() as *mut std::ffi::c_void;
     unsafe {
         let _: () = objc::msg_send![ns_view, setLayer: layer_ptr];
         let _: () = objc::msg_send![ns_view, setWantsLayer: true];
+    }
+
+    // Configure aspect-correct display scaling.
+    // kCAGravityResizeAspect preserves aspect ratio (letterbox/pillarbox).
+    unsafe {
+        let gravity: *const objc::runtime::Object =
+            objc::msg_send![objc::class!(NSString),
+                stringWithUTF8String: c"resizeAspect".as_ptr()];
+        let _: () = objc::msg_send![layer_ptr as *mut objc::runtime::Object,
+                                     setContentsGravity: gravity];
     }
 
     // Configure EDR: colorspace + wantsExtendedDynamicRangeContent.
@@ -376,10 +406,10 @@ pub fn spawn(
         "Output Tonemap Blit",
     );
 
-    // --- Create sampler (linear filtering, clamp to edge) ---
+    // --- Create sampler (nearest — 1:1 pixel-perfect, no interpolation) ---
     let sampler = device.create_sampler(&GpuSamplerDesc {
-        min_filter: GpuFilterMode::Linear,
-        mag_filter: GpuFilterMode::Linear,
+        min_filter: GpuFilterMode::Nearest,
+        mag_filter: GpuFilterMode::Nearest,
         address_mode_u: GpuAddressMode::ClampToEdge,
         address_mode_v: GpuAddressMode::ClampToEdge,
         ..GpuSamplerDesc::default()
@@ -403,8 +433,8 @@ pub fn spawn(
         last_front: usize::MAX,
         last_bridge_gen: bridge_gen,
         edr_headroom,
-        drawable_width: size.width,
-        drawable_height: size.height,
+        drawable_width: proj_w,
+        drawable_height: proj_h,
     };
 
     let thread = std::thread::Builder::new()

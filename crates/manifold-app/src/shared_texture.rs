@@ -331,4 +331,12 @@ impl SharedTextureBridge {
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
     }
+
+    /// Get the raw IOSurfaceRef pointer for a surface index.
+    /// Used for direct CALayer display (zero-copy, pixel-perfect).
+    /// The returned pointer is valid as long as no resize occurs.
+    pub fn raw_io_surface(&self, index: usize) -> *const std::ffi::c_void {
+        let guard = self.io_surfaces.read();
+        guard[index].as_concrete_TypeRef() as *const std::ffi::c_void
+    }
 }
