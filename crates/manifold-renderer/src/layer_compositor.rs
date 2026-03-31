@@ -9,7 +9,6 @@ use crate::effect_chain::EffectChain;
 use crate::effect_registry::EffectRegistry;
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
-use crate::luminance_smoother::LuminanceSmoother;
 use crate::tonemap::TonemapPipeline;
 use crate::uniform_arena::UniformArena;
 use crate::wet_dry_lerp::WetDryLerpPipeline;
@@ -386,8 +385,6 @@ pub struct LayerCompositor {
     last_layer_buf_used: usize,
     /// How many effect_chains were actually used last frame.
     last_effect_chain_used: usize,
-    /// Pre-tonemap luminance smoother — stabilizes brightness on noisy scenes.
-    luminance_smoother: LuminanceSmoother,
 }
 
 impl LayerCompositor {
@@ -410,7 +407,6 @@ impl LayerCompositor {
             async_signal_base: 0,
             last_layer_buf_used: 0,
             last_effect_chain_used: 0,
-            luminance_smoother: LuminanceSmoother::new(device),
         }
     }
 
@@ -1101,19 +1097,9 @@ impl Compositor for LayerCompositor {
             self.led_tap = None;
         }
 
-        // Luminance stabilization: read previous frame's compensation, then
-        // dispatch measurement for the next frame. The 1-frame delay is
-        // imperceptible — the EMA smooths over ~5 frames anyway.
-        let lum_comp = self.luminance_smoother.compensation();
-        self.luminance_smoother.measure(gpu, self.main.source_texture());
-
         // Tonemap the composited scene (before master glow effects).
-        // Exposure is modulated by the luminance compensation to cancel
-        // noise-induced brightness jitter (Jensen's inequality through ACES).
-        let mut tonemap = frame.tonemap;
-        tonemap.exposure *= lum_comp;
         self.tonemap
-            .apply(gpu, self.main.source_texture(), &tonemap);
+            .apply(gpu, self.main.source_texture(), &frame.tonemap);
 
         // Apply master effects (bloom, halation, CRT) AFTER tonemapping.
         // Glow contribution pushes values > 1.0 for HDR/EDR displays.
