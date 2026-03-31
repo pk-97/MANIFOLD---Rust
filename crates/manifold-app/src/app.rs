@@ -204,8 +204,9 @@ pub struct Application {
     pub(crate) blit_pipeline: Option<BlitPipeline>,
     // (output_blit_pipeline and output_blit_format removed — native Metal
     // presenter compiles its own pipeline via manifold-gpu)
-    /// Native Metal output presenter — custom CAMetalLayer at project resolution.
-    /// Pixel-perfect 1:1 blit from IOSurface, vsync-locked, EDR-capable.
+    /// Native Metal output presenter — dedicated thread with custom CAMetalLayer
+    /// at project resolution. Vsync-locked, pixel-perfect 1:1, EDR-capable.
+    /// Dropping the handle stops the thread and releases the layer.
     #[cfg(target_os = "macos")]
     pub(crate) output_presenter: Option<crate::output_presenter::NativeOutputPresenter>,
     pub(crate) ui_renderer: Option<UIRenderer>,
@@ -2113,8 +2114,8 @@ impl Drop for Application {
             log::info!("[Application::Drop] content thread joined");
         }
 
-        // Drop the output presenter first — it owns a CAMetalLayer and
-        // MTLCommandQueue. Must be dropped before the device poll below.
+        // Stop the output presenter thread — it owns a CAMetalLayer and
+        // MTLCommandQueue. Must be stopped before the device poll below.
         #[cfg(target_os = "macos")]
         { self.output_presenter = None; }
 

@@ -861,12 +861,8 @@ impl Application {
             .unwrap_or((1920, 1080));
         let source_aspect = comp_w as f32 / comp_h as f32;
 
-        // Present output window via native Metal presenter (pixel-perfect 1:1).
-        // Done before the workspace render so output isn't delayed by heavy UI work.
-        #[cfg(target_os = "macos")]
-        if let Some(presenter) = &mut self.output_presenter {
-            presenter.present();
-        }
+        // Output window: presented by dedicated thread (NativeOutputPresenter).
+        // No present() call needed here — the thread loops on nextDrawable at vsync.
 
         // Workspace window rendering.
         let Some(window_id) = self.primary_window_id else {
