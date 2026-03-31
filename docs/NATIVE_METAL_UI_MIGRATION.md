@@ -109,9 +109,13 @@ Key technical notes:
 - [x] Update callers in app_render.rs — pass `&gpu.native_device`, intermediate GpuTexture target
 - [x] Fix BITMAP_SHADER binding groups
 
-### Phase 4: CoreText text renderer [NOT STARTED]
+### Phase 4: CoreText text renderer [DONE]
 
 New independent module — zero wgpu, pure manifold-gpu. Unblocks Phase 5 (UIRenderer conversion).
+
+CoreText renderer built in `crates/manifold-renderer/src/native_text.rs`. Font loading (Inter Regular/Medium/Bold via CGFont), text shaping (CTLine/CTRun), glyph rasterization (CGBitmapContext grayscale, shelf-packed R8Unorm atlas), accurate measurement (CTLine typographic bounds), and textured-quad rendering (draw_indexed with TextVertex layout). Not yet wired into UIRenderer — that is Phase 5.
+
+Dependencies added to manifold-renderer: `core-text = "20"`, `core-graphics = "0.23"`, `core-foundation = "0.9"` (matched to core-text's transitive dep versions to avoid duplicate crate conflicts).
 
 Replace glyphon with native macOS text rendering:
 
@@ -148,32 +152,37 @@ CoreText (CPU)     →  Glyph Atlas (GPU)     →  Metal Render Pass
 
 ### Phase 5: UIRenderer + UICacheManager [NOT STARTED]
 
+Prompt: `docs/PHASE5_AGENT_PROMPT.md`
+
 Convert UIRenderer's SDF/rect rendering and glyphon text to manifold-gpu, then convert UICacheManager which depends on UIRenderer. These two must be converted together.
 
 - [ ] Replace UIRenderer wgpu RenderPipeline/Buffer with `create_render_pipeline_with_vertex_layout()` + GpuBuffer
 - [ ] Replace UIRenderer text rendering (glyphon) with CoreText renderer from Phase 4
 - [ ] Replace UICacheManager wgpu Texture/CommandEncoder with GpuTexture/GpuEncoder
-- [ ] Atlas becomes GpuTexture — remove PanelCompositor bind group (breaking until Phase 6)
+- [ ] Atlas becomes GpuTexture — delete PanelCompositor (breaking until Phase 6)
+- [ ] Remove glyphon dependency from Cargo.toml
 
-**Breaking**: UI panels stop rendering until Phase 6 wires the atlas GpuTexture into the new render loop.
+**Breaking**: UI panels and overlay text stop rendering until Phase 6 wires the GpuTextures into the single-encoder render loop.
 
 ### Phase 6: Full render loop conversion [NOT STARTED]
 
-**The big one.** Convert the entire workspace render loop from wgpu to a single GpuEncoder. This is where BlitPipeline, PanelCompositor, and SurfaceWrapper are replaced — they can't be converted earlier because they participate in shared wgpu render passes.
+Prompt: `docs/PHASE6_AGENT_PROMPT.md`
 
-- [ ] Replace `GpuContext` wgpu fields with `GpuDevice` only (remove wgpu Instance/Adapter/Device/Queue)
-- [ ] Replace `SurfaceWrapper` with `GpuSurface` for the workspace window
-- [ ] Rewrite `present_all_windows()` around a single `GpuEncoder`:
-  - One encoder per frame
-  - Panel cache render passes (dirty panels → atlas)
-  - Clear + blit compositor + UI atlas (replaces BlitPipeline + PanelCompositor)
-  - Layer bitmap render passes
-  - Overlay render passes (text, playhead, popups)
-  - Output presenter render pass (sample IOSurface → output drawable)
-  - `commit()` — single GPU submission
-- [ ] Output presenter becomes a render pass in the main encoder (not a separate thread)
-- [ ] Remove wgpu from manifold-app Cargo.toml
-- [ ] Remove wgpu from manifold-renderer Cargo.toml
+**The big one.** Wire everything together into a single GpuEncoder per frame. Replace BlitPipeline, SurfaceWrapper, GpuContext wgpu fields. Remove wgpu entirely.
+
+- [ ] Add `GpuDrawable::gpu_texture()` helper to manifold-gpu (only manifold-gpu change)
+- [ ] Replace `GpuContext` — remove wgpu, keep `GpuDevice` only
+- [ ] Replace `SurfaceWrapper` with `GpuSurface` for workspace window
+- [ ] Replace `SharedTextureBridge.import_texture()` wgpu version with `import_texture_native()` on UI thread
+- [ ] Create native blit pipeline (draw_indexed with viewport) — replaces BlitPipeline
+- [ ] Create native atlas blit (draw_fullscreen with premultiplied blend) — replaces PanelCompositor
+- [ ] Rewrite `present_all_windows()`: single GpuEncoder, clear → blit → atlas → layers → overlays → present → commit
+- [ ] Remove intermediate GpuTexture targets (layer_bitmap_native_target, overlay_native_target)
+- [ ] Delete `blit.rs`, `surface.rs`, dead wgpu code
+- [ ] Remove wgpu from manifold-renderer and manifold-app Cargo.toml
+- [ ] Remove wgpu, wgpu-hal, wgpu-types from workspace deps
+
+Note: output presenter stays on its own thread with its own Metal queue — unchanged.
 
 ### Phase 7: Cleanup [NOT STARTED]
 

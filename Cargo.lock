@@ -805,6 +805,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-text"
+version = "20.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9d2790b5c08465d49f8dc05c8bcae9fea467855947db39b0f8145c091aaced5"
+dependencies = [
+ "core-foundation 0.9.4",
+ "core-graphics",
+ "foreign-types",
+ "libc",
+]
+
+[[package]]
 name = "core_maths"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2213,6 +2225,9 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "bytemuck",
+ "core-foundation 0.9.4",
+ "core-graphics",
+ "core-text",
  "glyphon",
  "half",
  "log",
@@ -2223,6 +2238,7 @@ dependencies = [
  "manifold-ui",
  "metal",
  "naga",
+ "objc",
  "serde_json",
  "tiff 0.9.1",
  "wgpu",
