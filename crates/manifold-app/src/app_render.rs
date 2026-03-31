@@ -900,6 +900,17 @@ impl Application {
 
         // Pass 2: Blit compositor output to video area (aspect-fit)
         #[cfg(target_os = "macos")]
+        {
+            let has_tex = self.ui_shared_textures[front_index].is_some();
+            let has_pipe = self.blit_pipeline.is_some();
+            let has_vbuf = self.blit_vbuf.is_some();
+            let has_ibuf = self.blit_ibuf.is_some();
+            let has_samp = self.blit_sampler.is_some();
+            eprintln!(
+                "[Blit] tex={has_tex} pipe={has_pipe} vbuf={has_vbuf} ibuf={has_ibuf} samp={has_samp} front={front_index}"
+            );
+        }
+        #[cfg(target_os = "macos")]
         if let (
             Some(compositor_tex),
             Some(blit_pipeline),
@@ -987,7 +998,7 @@ impl Application {
             }
 
             if !rects.is_empty() {
-                bitmap_gpu.render_layers(&mut encoder, &drawable_tex, logical_w, logical_h, &rects);
+                bitmap_gpu.render_layers(&gpu.device, &mut encoder, &drawable_tex, logical_w, logical_h, &rects);
             }
         }
 

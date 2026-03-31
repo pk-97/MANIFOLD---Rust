@@ -72,9 +72,6 @@ struct LayerTexture {
 /// Manages GPU textures for all layer bitmaps and renders them as positioned quads.
 pub struct LayerBitmapGpu {
     textures: Vec<Option<LayerTexture>>,
-    /// Per-layer shared GpuBuffer for 4 vertices (16 bytes each).
-    /// Grown when a new layer index is encountered — no per-frame allocation after warmup.
-    vertex_bufs: Vec<Option<GpuBuffer>>,
     pipeline: GpuRenderPipeline,
     sampler: GpuSampler,
     /// Pre-allocated shared index buffer: [0u32, 1, 2, 0, 2, 3] — one quad.
@@ -139,7 +136,6 @@ impl LayerBitmapGpu {
 
         Self {
             textures: Vec::new(),
-            vertex_bufs: Vec::new(),
             pipeline,
             sampler,
             index_buf,
@@ -163,9 +159,6 @@ impl LayerBitmapGpu {
         if layer_index >= self.textures.len() {
             self.textures.resize_with(layer_index + 1, || None);
         }
-        if layer_index >= self.vertex_bufs.len() {
-            self.vertex_bufs.resize_with(layer_index + 1, || None);
-        }
 
         let needs_create = match &self.textures[layer_index] {
             Some(lt) => lt.width != tex_w || lt.height != tex_h,
@@ -183,8 +176,6 @@ impl LayerBitmapGpu {
                 label: &format!("Layer Bitmap {layer_index}"),
             });
             self.textures[layer_index] = Some(LayerTexture { texture, width: tex_w, height: tex_h });
-            self.vertex_bufs[layer_index] =
-                Some(device.create_buffer_shared(std::mem::size_of::<BitmapVertex>() as u64 * 4));
         }
 
         // Upload pixel data via replace_region (CPU_UPLOAD texture)
@@ -201,6 +192,7 @@ impl LayerBitmapGpu {
     /// `layer_rects`: slice of `(layer_index, rect)` in logical pixels.
     pub fn render_layers(
         &mut self,
+        device: &GpuDevice,
         encoder: &mut GpuEncoder,
         target: &GpuTexture,
         screen_w: u32,
@@ -221,9 +213,6 @@ impl LayerBitmapGpu {
             if rect.width <= 0.0 || rect.height <= 0.0 {
                 continue;
             }
-            if layer_idx >= self.vertex_bufs.len() || self.vertex_bufs[layer_idx].is_none() {
-                continue;
-            }
 
             let (x0, y0) = (rect.x, rect.y);
             let (x1, y1) = (rect.x + rect.width, rect.y + rect.height);
@@ -233,7 +222,8 @@ impl LayerBitmapGpu {
                 BitmapVertex { position: [x1, y1], uv: [1.0, 1.0] },
                 BitmapVertex { position: [x0, y1], uv: [0.0, 1.0] },
             ];
-            let vbuf = self.vertex_bufs[layer_idx].as_ref().unwrap();
+            // Fresh buffer each frame — avoids aliasing with in-flight GPU work.
+            let vbuf = device.create_buffer_shared(std::mem::size_of::<BitmapVertex>() as u64 * 4);
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     verts.as_ptr(),
@@ -251,7 +241,7 @@ impl LayerBitmapGpu {
                     GpuBinding::Texture { binding: 1, texture: &lt.texture },
                     GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
                 ],
-                vbuf,
+                &vbuf,
                 &self.index_buf,
                 6,
                 None,
@@ -265,9 +255,6 @@ impl LayerBitmapGpu {
     pub fn trim_to_layer_count(&mut self, count: usize) {
         if self.textures.len() > count {
             self.textures.truncate(count);
-        }
-        if self.vertex_bufs.len() > count {
-            self.vertex_bufs.truncate(count);
         }
     }
 }

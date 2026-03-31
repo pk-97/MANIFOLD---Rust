@@ -131,11 +131,9 @@ pub struct UIRenderer {
     vertices: Vec<UIVertex>,
     indices: Vec<u32>,
 
-    // Pre-allocated shared GpuBuffers (written each prepare, consumed before next overwrite).
-    vertex_buf: GpuBuffer,
-    index_buf: GpuBuffer,
-    vertex_capacity: usize,
-    index_capacity: usize,
+    // Fresh GpuBuffers created each prepare() call — avoids aliasing with in-flight GPU work.
+    prepared_vertex_buf: Option<GpuBuffer>,
+    prepared_index_buf: Option<GpuBuffer>,
     prepared_index_count: u32,
     /// [viewport_w, viewport_h, offset_x, offset_y] — passed as inline uniform.
     prepared_globals: [f32; 4],
@@ -171,13 +169,6 @@ impl UIRenderer {
         #[cfg(target_os = "macos")]
         let text_renderer = NativeTextRenderer::new(device, format);
 
-        let vertex_buf = device.create_buffer_shared(
-            (INITIAL_VERTEX_CAPACITY * std::mem::size_of::<UIVertex>()) as u64,
-        );
-        let index_buf = device.create_buffer_shared(
-            (INITIAL_INDEX_CAPACITY * std::mem::size_of::<u32>()) as u64,
-        );
-
         Self {
             pipeline,
             #[cfg(target_os = "macos")]
@@ -185,10 +176,8 @@ impl UIRenderer {
             rect_commands: Vec::with_capacity(256),
             vertices: Vec::with_capacity(INITIAL_VERTEX_CAPACITY),
             indices: Vec::with_capacity(INITIAL_INDEX_CAPACITY),
-            vertex_buf,
-            index_buf,
-            vertex_capacity: INITIAL_VERTEX_CAPACITY,
-            index_capacity: INITIAL_INDEX_CAPACITY,
+            prepared_vertex_buf: None,
+            prepared_index_buf: None,
             prepared_index_count: 0,
             prepared_globals: [0.0; 4],
             clip_stack: Vec::with_capacity(8),
@@ -513,33 +502,22 @@ impl UIRenderer {
             ]);
         }
 
-        // Write vertices to shared GpuBuffer (grow if needed).
+        // Create fresh GpuBuffers each prepare() — avoids aliasing with in-flight GPU work.
         if !self.vertices.is_empty() {
-            let needed = self.vertices.len();
-            if needed > self.vertex_capacity {
-                let new_cap = needed.next_power_of_two();
-                self.vertex_buf = device.create_buffer_shared(
-                    (new_cap * std::mem::size_of::<UIVertex>()) as u64,
-                );
-                self.vertex_capacity = new_cap;
-            }
             let vdata = bytemuck::cast_slice::<UIVertex, u8>(&self.vertices);
-            // Safety: shared buffer is not GPU-accessed before commit() on the encoder we will create next.
-            unsafe { self.vertex_buf.write(0, vdata); }
+            let vbuf = device.create_buffer_shared(vdata.len() as u64);
+            unsafe { vbuf.write(0, vdata); }
 
-            let needed_idx = self.indices.len();
-            if needed_idx > self.index_capacity {
-                let new_cap = needed_idx.next_power_of_two();
-                self.index_buf = device.create_buffer_shared(
-                    (new_cap * std::mem::size_of::<u32>()) as u64,
-                );
-                self.index_capacity = new_cap;
-            }
             let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
-            unsafe { self.index_buf.write(0, idata); }
+            let ibuf = device.create_buffer_shared(idata.len() as u64);
+            unsafe { ibuf.write(0, idata); }
 
+            self.prepared_vertex_buf = Some(vbuf);
+            self.prepared_index_buf = Some(ibuf);
             self.prepared_index_count = self.indices.len() as u32;
         } else {
+            self.prepared_vertex_buf = None;
+            self.prepared_index_buf = None;
             self.prepared_index_count = 0;
         }
 
@@ -572,8 +550,8 @@ impl UIRenderer {
                     binding: 0,
                     data: bytemuck::bytes_of(&self.prepared_globals),
                 }],
-                &self.vertex_buf,
-                &self.index_buf,
+                self.prepared_vertex_buf.as_ref().unwrap(),
+                self.prepared_index_buf.as_ref().unwrap(),
                 self.prepared_index_count,
                 None,
                 load_action,

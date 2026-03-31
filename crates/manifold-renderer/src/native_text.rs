@@ -49,10 +49,6 @@ const GLYPH_PADDING: u32 = 1;
 const MAX_MEASURE_CACHE: usize = 512;
 /// Frames before an unused measurement entry is evicted.
 const MEASURE_EVICT_FRAMES: u64 = 120;
-/// Initial vertex buffer capacity (vertices × 32 bytes).
-const INITIAL_VERTEX_CAPACITY: usize = 4096;
-/// Initial index buffer capacity (indices × 4 bytes).
-const INITIAL_INDEX_CAPACITY: usize = 6144;
 
 // ─── WGSL Shader ─────────────────────────────────────────────────────────────
 
@@ -465,12 +461,10 @@ pub struct NativeTextRenderer {
     // Draw queue.
     commands: Vec<TextCommand>,
 
-    // Prepared state (persists between prepare() and render()).
-    vertex_buf: GpuBuffer,
-    index_buf: GpuBuffer,
+    // Fresh GpuBuffers created each prepare() call — avoids aliasing with in-flight GPU work.
+    prepared_vertex_buf: Option<GpuBuffer>,
+    prepared_index_buf: Option<GpuBuffer>,
     prepared_index_count: u32,
-    vertex_capacity: usize,
-    index_capacity: usize,
     prepared_globals: [f32; 4], // [viewport_w, viewport_h, offset_x, offset_y]
 
     // CPU scratch (reused each frame).
@@ -514,24 +508,15 @@ impl NativeTextRenderer {
             ..Default::default()
         });
 
-        let vertex_buf = device.create_buffer_shared(
-            (INITIAL_VERTEX_CAPACITY * std::mem::size_of::<TextVertex>()) as u64,
-        );
-        let index_buf = device.create_buffer_shared(
-            (INITIAL_INDEX_CAPACITY * std::mem::size_of::<u32>()) as u64,
-        );
-
         Self {
             font_manager,
             atlas,
             pipeline,
             sampler,
             commands: Vec::new(),
-            vertex_buf,
-            index_buf,
+            prepared_vertex_buf: None,
+            prepared_index_buf: None,
             prepared_index_count: 0,
-            vertex_capacity: INITIAL_VERTEX_CAPACITY,
-            index_capacity: INITIAL_INDEX_CAPACITY,
             prepared_globals: [0.0; 4],
             vertices: Vec::new(),
             indices: Vec::new(),
@@ -718,32 +703,17 @@ impl NativeTextRenderer {
 
         self.atlas.upload_if_dirty(device);
 
-        // Grow GPU buffers if needed.
-        let needed_verts = self.vertices.len();
-        let needed_idxs = self.indices.len();
-        if needed_verts > self.vertex_capacity {
-            let new_cap = needed_verts.next_power_of_two();
-            self.vertex_buf = device.create_buffer_shared(
-                (new_cap * std::mem::size_of::<TextVertex>()) as u64,
-            );
-            self.vertex_capacity = new_cap;
-        }
-        if needed_idxs > self.index_capacity {
-            let new_cap = needed_idxs.next_power_of_two();
-            self.index_buf = device.create_buffer_shared(
-                (new_cap * std::mem::size_of::<u32>()) as u64,
-            );
-            self.index_capacity = new_cap;
-        }
-
+        // Create fresh GpuBuffers each prepare() — avoids aliasing with in-flight GPU work.
         let vdata = bytemuck::cast_slice::<TextVertex, u8>(&self.vertices);
-        let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
-        // Safety: shared buffers are not accessed by the GPU at this point (before commit).
-        unsafe {
-            self.vertex_buf.write(0, vdata);
-            self.index_buf.write(0, idata);
-        }
+        let vbuf = device.create_buffer_shared(vdata.len() as u64);
+        unsafe { vbuf.write(0, vdata); }
 
+        let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
+        let ibuf = device.create_buffer_shared(idata.len() as u64);
+        unsafe { ibuf.write(0, idata); }
+
+        self.prepared_vertex_buf = Some(vbuf);
+        self.prepared_index_buf = Some(ibuf);
         self.prepared_index_count = self.indices.len() as u32;
         true
     }
@@ -779,8 +749,8 @@ impl NativeTextRenderer {
                     sampler: &self.sampler,
                 },
             ],
-            &self.vertex_buf,
-            &self.index_buf,
+            self.prepared_vertex_buf.as_ref().unwrap(),
+            self.prepared_index_buf.as_ref().unwrap(),
             self.prepared_index_count,
             None,
             load_action,
