@@ -285,26 +285,16 @@ impl FluidSimulation3DGenerator {
         }
     }
 
-    fn init_particles(&mut self, device: &manifold_gpu::GpuDevice) {
+    fn init_particles_gpu(&mut self, gpu: &mut GpuEncoder) {
         let particle_buf_size = MAX_PARTICLES as u64 * PARTICLE_SIZE_BYTES;
-        let particle_buffer = device.create_buffer_shared(particle_buf_size);
-
-        let mut rng_state: u64 = 42;
-        let particle_data: Vec<Particle> = (0..MAX_PARTICLES as usize).map(|_| {
-            let px = lcg_next_f32(&mut rng_state);
-            let py = lcg_next_f32(&mut rng_state);
-            let pz = lcg_next_f32(&mut rng_state);
-            Particle {
-                position: [px, py, pz], _pad0: 0.0,
-                velocity: [0.0, 0.0, 0.0], life: 1.0,
-                age: -1.0, _pad1: [0.0, 0.0, 0.0],
-                color: [0.005, 0.005, 0.005, 1.0],
-            }
-        }).collect();
-        unsafe { particle_buffer.write(0, bytemuck::cast_slice(&particle_data)); }
-
+        let particle_buffer = gpu.device.create_buffer(
+            particle_buf_size,
+            manifold_gpu::GpuBufferUsage::STORAGE,
+        );
         self.particle_buffer = Some(particle_buffer);
         self.initialized = true;
+        // pattern 255 = random fill, same as 2D
+        self.dispatch_seed_pattern(gpu, 255, 42, 0, 0.8, 0.0, [0.0, 0.0, 1.0]);
     }
 
     fn ensure_volume_resources(&mut self, device: &manifold_gpu::GpuDevice, vol_res: u32) {
@@ -415,7 +405,7 @@ impl Generator for FluidSimulation3DGenerator {
 
         self.active_count = active_count;
 
-        if !self.initialized { self.init_particles(gpu.device); }
+        if !self.initialized { self.init_particles_gpu(gpu); }
         self.ensure_volume_resources(gpu.device, desired_vol_res);
         self.ensure_display_resources(gpu.device, desired_dw, desired_dh);
         let vol_res = self.vol_res;
@@ -690,8 +680,3 @@ impl Generator for FluidSimulation3DGenerator {
     }
 }
 
-fn lcg_next_f32(state: &mut u64) -> f32 {
-    *state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-    let hi = (*state >> 33) as u32;
-    hi as f32 / 4294967296.0
-}
