@@ -30,14 +30,22 @@ commit() — one GPU submission, zero scheduler contention
 |--------|------|----------------|----------|
 | GpuContext | `manifold-renderer/src/gpu.rs` | Instance, Adapter, Device, Queue | Clean |
 | SurfaceWrapper | `manifold-renderer/src/surface.rs` | Surface, SurfaceTexture, SurfaceConfig | Clean |
-| BlitPipeline | `manifold-renderer/src/blit.rs` | RenderPipeline, BindGroup, Sampler | Clean |
-| PanelCompositor | `manifold-renderer/src/panel_compositor.rs` | RenderPipeline, BindGroup, Sampler | Clean |
-| TonemapBlitPipeline | `manifold-renderer/src/tonemap_blit.rs` | RenderPipeline, Buffer, BindGroup | Clean |
+| BlitPipeline | `manifold-renderer/src/blit.rs` | RenderPipeline, BindGroup, Sampler | **Shared render pass** |
+| PanelCompositor | `manifold-renderer/src/panel_compositor.rs` | RenderPipeline, BindGroup, Sampler | **Shared render pass** |
+| TonemapBlitPipeline | `manifold-renderer/src/tonemap_blit.rs` | RenderPipeline, Buffer, BindGroup | Dead code (unused) |
 | UICacheManager | `manifold-renderer/src/ui_cache_manager.rs` | Texture, CommandEncoder, RenderPass | Clean |
 | LayerBitmapGpu | `manifold-renderer/src/layer_bitmap_gpu.rs` | RenderPipeline, Buffer, Texture, BindGroup | Clean |
 | UIRenderer | `manifold-renderer/src/ui_renderer.rs` | RenderPipeline, Buffer, BindGroup + **glyphon** | **Glyphon blocker** |
 | SharedTextureBridge | `manifold-app/src/shared_texture.rs` | wgpu-hal Metal backend | Clean (already native) |
 | app_render | `manifold-app/src/app_render.rs` | CommandEncoder, RenderPass, Surface | Clean |
+
+## Key Constraint: Shared Render Passes
+
+`app_render.rs` creates a **single wgpu render pass** that draws:
+1. Clear to black + BlitPipeline (compositor output to video area)
+2. PanelCompositor (UI atlas overlay)
+
+Both happen inside one `begin_render_pass()` / `end_render_pass()`. BlitPipeline and PanelCompositor **cannot be converted independently** — they must be converted together with the render loop in Phase 6. This is why the original Phase 2 plan was revised.
 
 ## manifold-gpu API Coverage
 
@@ -52,105 +60,38 @@ commit() — one GPU submission, zero scheduler contention
 - `GpuBlendState` — configurable blend modes
 - `GpuBinding` — Buffer/Texture/Sampler/Bytes bindings via slot map
 
-**Needs to be added (Phase 1):**
-- Vertex layout support for render pipelines (`GpuVertexLayout`)
-- `draw_indexed()` on GpuEncoder (vertex + index buffer draw)
-- `GpuSurface` — CAMetalLayer lifecycle, drawable acquisition, present
-- `create_render_pipeline_with_vertex_layout()` on GpuDevice
+**Added in Phase 1:**
+- `GpuVertexFormat`, `GpuVertexAttribute`, `GpuVertexLayout` — vertex layout types
+- `GpuDevice::create_render_pipeline_with_vertex_layout()` — render pipeline with vertex descriptor
+- `GpuEncoder::draw_indexed()` — indexed draw with vertex + index buffers
+- `GpuSurface` / `GpuDrawable` — CAMetalLayer wrapper for window presentation
+- `GpuEncoder::present_drawable()` — schedule drawable present with command buffer
 
 ## Phases
 
-### Phase 1: Extend manifold-gpu [NOT STARTED]
+### Phase 1: Extend manifold-gpu [IN PROGRESS]
 
-Add the missing API surface so the UI thread can use manifold-gpu.
+Prompt: `docs/PHASE1_AGENT_PROMPT.md`
 
-**1a. Vertex layout support**
+Add the missing API surface so the UI thread can use manifold-gpu:
+- Vertex layout types + `create_render_pipeline_with_vertex_layout()`
+- `draw_indexed()` on GpuEncoder
+- `GpuSurface` / `GpuDrawable` — CAMetalLayer wrapper
+- Smoke test
 
-New types in `types.rs`:
-- `GpuVertexFormat` — Float32x2, Float32x4, Uint32, etc.
-- `GpuVertexAttribute` — format, offset, shader_location
-- `GpuVertexLayout` — stride, step_mode, attributes
+### Phase 2: Bridge + dead code cleanup [NOT STARTED]
 
-New method on `GpuDevice`:
-- `create_render_pipeline_with_vertex_layout(wgsl, vs, fs, format, blend, layout, label)` — builds MTLVertexDescriptor from GpuVertexLayout
+Prompt: `docs/PHASE2_AGENT_PROMPT.md`
 
-Vertex layouts needed by UI:
-- UIRenderer: stride 48 — pos(Float32x2) + uv(Float32x2) + color(Float32x4) + params(Float32x4)
-- LayerBitmapGpu: stride 32 — pos(Float32x2) + uv(Float32x2) + color(Float32x2) + params(Float32x2)
+Small setup step — originally planned to convert simple blit modules, but analysis revealed BlitPipeline and PanelCompositor share a wgpu render pass and can't be converted independently. Revised scope:
 
-**1b. draw_indexed() on GpuEncoder**
-
-New method:
-```rust
-fn draw_indexed(
-    &mut self,
-    pipeline: &GpuRenderPipeline,
-    target: &GpuTexture,
-    bindings: &[GpuBinding],
-    vertex_buffer: &GpuBuffer,
-    index_buffer: &GpuBuffer,
-    index_count: u32,
-    viewport: Option<(f32, f32, f32, f32)>,  // x, y, w, h
-    load_action: GpuLoadAction,
-    label: &str,
-)
-```
-
-Sets bindings on both vertex and fragment stages (like draw_instanced). Supports optional viewport override for sub-region rendering.
-
-**1c. GpuSurface — CAMetalLayer wrapper**
-
-New type:
-```rust
-pub struct GpuSurface {
-    layer_ptr: *mut c_void,  // retained CAMetalLayer
-    drawable_width: u32,
-    drawable_height: u32,
-}
-```
-
-Methods:
-- `GpuDevice::create_surface(window, width, height, format, vsync) -> GpuSurface`
-- `surface.resize(width, height)`
-- `surface.next_drawable() -> Option<GpuDrawable>`
-- `surface.configure_edr()` — set colorspace + wantsExtendedDynamicRangeContent
-- `surface.set_contents_gravity_resize_aspect()` — letterbox
-- `surface.set_background_color(r, g, b, a)`
-
-New type:
-```rust
-pub struct GpuDrawable {
-    // wraps CAMetalDrawable
-}
-```
-
-Methods:
-- `drawable.texture() -> &metal::TextureRef` — for use as render target
-- `GpuEncoder::present_drawable(drawable)` — schedule present
-- Or: `drawable.present()` after encoder commit
-
-**1d. Smoke test**
-
-Minimal test in manifold-gpu that:
-- Creates a GpuDevice
-- Creates a GpuSurface (headless or with a test window)
-- Creates a render pipeline with vertex layout
-- Draws an indexed quad to a texture
-- Verifies pixel output
-
-### Phase 2: Convert simple blit modules [NOT STARTED]
-
-Replace wgpu with manifold-gpu in the straightforward modules:
-
-- [ ] `BlitPipeline` → use `draw_fullscreen()` (already exists)
-- [ ] `PanelCompositor` → use `draw_fullscreen()` with premultiplied alpha blend
-- [ ] `TonemapBlitPipeline` → use `draw_fullscreen()` with uniform for tonemap mode
-- [ ] `GpuContext` → replaced by `GpuDevice` (already exists)
-- [ ] `SurfaceWrapper` → replaced by `GpuSurface` (Phase 1)
-
-Each module is independently testable. Existing WGSL shaders work unchanged — manifold-gpu compiles WGSL→MSL automatically.
+- [ ] Add `native_device: GpuDevice` field to `GpuContext` (bridge for transition period)
+- [ ] Delete `tonemap_blit.rs` (dead code — unused since output presenter rewrite)
+- [ ] Update this migration doc
 
 ### Phase 3: Convert texture management [NOT STARTED]
+
+Modules that manage their own textures and render passes (don't participate in the shared workspace render pass):
 
 - [ ] `UICacheManager` — atlas texture + incremental render. Replace wgpu Texture/CommandEncoder with GpuTexture/GpuEncoder. Load/DontCare/Clear actions map directly.
 - [ ] `LayerBitmapGpu` — per-layer textures, indexed quad rendering. Uses `draw_indexed()` from Phase 1. Pixel upload via `GpuDevice::upload_texture()`.
@@ -202,15 +143,21 @@ CoreText (CPU)     →  Glyph Atlas (GPU)     →  Metal Render Pass
 - Main + Overlay render modes (separate TextRenderer instances)
 - Advanced shaping (handled by CoreText)
 
-### Phase 6: app_render.rs integration [NOT STARTED]
+### Phase 6: Full render loop conversion [NOT STARTED]
 
-Wire everything together:
+**The big one.** Convert the entire workspace render loop from wgpu to a single GpuEncoder. This is where BlitPipeline, PanelCompositor, and SurfaceWrapper are replaced — they can't be converted earlier because they participate in shared wgpu render passes.
 
-- [ ] Single `GpuDevice` shared across UI + content (via Arc, or content creates its own)
-- [ ] Single `GpuEncoder` per frame in `present_all_windows()`
-- [ ] All render passes encoded sequentially into one command buffer
-- [ ] Output presenter becomes a render pass (not a separate thread)
-- [ ] One `commit()` at the end of the frame
+- [ ] Replace `GpuContext` wgpu fields with `GpuDevice` only (remove wgpu Instance/Adapter/Device/Queue)
+- [ ] Replace `SurfaceWrapper` with `GpuSurface` for the workspace window
+- [ ] Rewrite `present_all_windows()` around a single `GpuEncoder`:
+  - One encoder per frame
+  - Panel cache render passes (dirty panels → atlas)
+  - Clear + blit compositor + UI atlas (replaces BlitPipeline + PanelCompositor)
+  - Layer bitmap render passes
+  - Overlay render passes (text, playhead, popups)
+  - Output presenter render pass (sample IOSurface → output drawable)
+  - `commit()` — single GPU submission
+- [ ] Output presenter becomes a render pass in the main encoder (not a separate thread)
 - [ ] Remove wgpu from manifold-app Cargo.toml
 - [ ] Remove wgpu from manifold-renderer Cargo.toml
 
@@ -231,28 +178,32 @@ Wire everything together:
 | WGSL shader incompatibility | Build failure | manifold-gpu already compiles WGSL for content thread — proven path |
 | Text measurement differences | Layout shifts | Side-by-side comparison tool, test with all font sizes |
 | Missing manifold-gpu feature | Blocked | Each phase identifies needed API surface upfront |
+| Shared render pass coupling | Can't convert modules piecemeal | Identified — BlitPipeline/PanelCompositor deferred to Phase 6 |
 
 ## Dependencies
 
 ```
 Phase 1 (manifold-gpu extensions)
     |
-    +-- Phase 2 (simple blits) ←── can start immediately after Phase 1
+    v
+Phase 2 (bridge + cleanup) ←── small, fast
     |
-    +-- Phase 3 (texture management) ←── can start in parallel with Phase 2
+    +-- Phase 3 (texture management) ←── parallel
     |
-    +-- Phase 4 (UIRenderer rects) ←── needs Phase 1 (draw_indexed)
+    +-- Phase 4 (UIRenderer rects) ←── parallel
     |
-    +-- Phase 5 (CoreText) ←── independent, can start in parallel with Phase 2-4
+    +-- Phase 5 (CoreText) ←── parallel, independent
     |
     v
-Phase 6 (integration) ←── needs ALL of Phases 2-5 complete
+Phase 6 (full render loop) ←── needs ALL of 3, 4, 5 complete
     |
     v
 Phase 7 (cleanup)
 ```
 
-Phases 2, 3, 4, 5 can be developed in parallel after Phase 1 completes.
+Phases 3, 4, 5 can be developed in parallel after Phase 2.
+
+Phase 6 is the integration point — all modules must be ready before the render loop can be rewritten.
 
 ## Decision Log
 
@@ -262,3 +213,6 @@ Phases 2, 3, 4, 5 can be developed in parallel after Phase 1 completes.
 | 2026-03-31 | Replace glyphon with CoreText | If going native, go all the way. Native macOS text quality. |
 | 2026-03-31 | Surface management in manifold-gpu (not manifold-app) | Clean boundary, cross-platform extensibility |
 | 2026-03-31 | New methods only in manifold-gpu (no existing API changes) | Content thread is untouched, zero regression risk |
+| 2026-03-31 | Defer BlitPipeline/PanelCompositor to Phase 6 | They share a wgpu render pass — can't convert independently |
+| 2026-03-31 | Phase 2 revised to bridge + cleanup only | Original scope (convert blit modules) impossible due to shared render pass coupling |
+| 2026-03-31 | Phase 1 with Opus, subsequent phases with Sonnet | Foundation must be correct; mechanical follow-through is well-prompted |
