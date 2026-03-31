@@ -8,6 +8,10 @@ pub struct GpuContext {
     pub adapter: wgpu::Adapter,
     pub device: Arc<wgpu::Device>,
     pub queue: Arc<wgpu::Queue>,
+    /// Native Metal device for modules migrated to manifold-gpu during the wgpu→Metal transition.
+    /// Shares the same physical MTLDevice as wgpu (single GPU on Apple Silicon).
+    /// Unused until Phase 3+ of the Native Metal UI Migration.
+    pub native_device: manifold_gpu::GpuDevice,
 }
 
 impl GpuContext {
@@ -46,6 +50,7 @@ impl GpuContext {
             adapter,
             device: Arc::new(device),
             queue: Arc::new(queue),
+            native_device: manifold_gpu::GpuDevice::new(),
         }
     }
 

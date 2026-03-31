@@ -20,7 +20,6 @@ pub mod effect_registry;
 pub mod effect_chain;
 pub mod effects;
 pub mod tonemap;
-pub mod tonemap_blit;
 pub mod pq_encoder;
 pub mod fsr1;
 pub mod metalfx_upscaler;

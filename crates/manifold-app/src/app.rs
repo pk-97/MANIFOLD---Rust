@@ -1085,6 +1085,7 @@ impl ApplicationHandler for Application {
                 adapter,
                 device,
                 queue,
+                native_device: manifold_gpu::GpuDevice::new(),
             }
         };
 
@@ -1220,6 +1221,7 @@ impl ApplicationHandler for Application {
                     adapter: gpu.adapter.clone(),
                     device: Arc::clone(&gpu.device),
                     queue: Arc::clone(&gpu.queue),
+                    native_device: manifold_gpu::GpuDevice::new(),
                 },
                 frame_count: 0,
                 time_since_start: manifold_core::Seconds::ZERO,
