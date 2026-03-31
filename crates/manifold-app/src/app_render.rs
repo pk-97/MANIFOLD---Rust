@@ -746,7 +746,7 @@ impl Application {
         if let (Some(gpu), Some(bitmap_gpu)) = (&self.gpu, &mut self.layer_bitmap_gpu) {
             for (layer_idx, pixels, tw, th) in self.ui_root.viewport.dirty_layer_iter() {
                 bitmap_gpu.upload_layer(
-                    &gpu.native_device,
+                    &gpu.device,
                     layer_idx, pixels, tw as u32, th as u32,
                 );
             }
@@ -764,7 +764,7 @@ impl Application {
                     // Upload after repaint
                     if wf.buffer_width > 0 && wf.buffer_height > 0 && !wf.pixel_buffer.is_empty() {
                         bitmap_gpu.upload_layer(
-                            &gpu.native_device,
+                            &gpu.device,
                             1000, &wf.pixel_buffer,
                             wf.buffer_width as u32, wf.buffer_height as u32,
                         );
@@ -785,7 +785,7 @@ impl Application {
                         sl.repaint(sl_rect.width as usize, mapper);
                         if sl.buffer_width > 0 && sl.buffer_height > 0 && !sl.pixel_buffer.is_empty() {
                             bitmap_gpu.upload_layer(
-                                &gpu.native_device,
+                                &gpu.device,
                                 1001, &sl.pixel_buffer,
                                 sl.buffer_width as u32, sl.buffer_height as u32,
                             );
@@ -805,340 +805,263 @@ impl Application {
         // front_index tells us which surface has the latest completed frame.
         #[cfg(target_os = "macos")]
         {
-            // Detect bridge resize (generation changed) and re-import both UI textures.
+            // Detect bridge resize (generation changed) and re-import all UI textures.
             if let Some(ref bridge) = self.shared_texture_bridge {
                 let bridge_gen = bridge.generation();
                 if bridge_gen != self.last_bridge_generation {
                     self.last_bridge_generation = bridge_gen;
-                    let ui_textures: [wgpu::Texture; crate::shared_texture::SURFACE_COUNT] =
-                        std::array::from_fn(|i| unsafe { bridge.import_texture(&gpu.device, i) });
-                    let ui_views: [wgpu::TextureView; crate::shared_texture::SURFACE_COUNT] =
-                        std::array::from_fn(|i| {
-                            ui_textures[i].create_view(&wgpu::TextureViewDescriptor::default())
-                        });
+                    let ui_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
+                        std::array::from_fn(|i| unsafe { bridge.import_texture_native(&gpu.device, i) });
                     self.ui_shared_textures = ui_textures.map(Some);
-                    self.ui_shared_views = ui_views.map(Some);
-                    log::info!("[UI] re-imported {} IOSurface textures after resize (gen={})", crate::shared_texture::SURFACE_COUNT, bridge_gen);
+                    log::info!("[UI] re-imported {} IOSurface textures after resize (gen={})",
+                        crate::shared_texture::SURFACE_COUNT, bridge_gen);
                 }
             }
             // Read the front surface published by the content thread.
             let front = self.shared_texture_bridge.as_ref()
                 .map_or(0, |b| b.front_index()) as usize;
-            let view = self.ui_shared_views[front].clone();
-            if let Some(ref v) = view {
-                // Track front_index changes so the workspace preview stays current.
-                // Output window blitting is handled by OutputPresenter on its own thread.
-                if front != self.last_output_front_index {
-                    self.last_output_front_index = front;
-                }
-                self.present_all_windows(v);
+            if front != self.last_output_front_index {
+                self.last_output_front_index = front;
             }
+            self.present_all_windows(front);
         }
         #[cfg(not(target_os = "macos"))]
         {
-            // Fallback: single-device SharedOutputView (non-macOS).
-            let compositor_view = self.content_pipeline_output.as_ref()
-                .and_then(|shared| shared.get_view());
-            if let Some(ref view) = compositor_view {
-                self.present_all_windows(view);
-            }
+            // Non-macOS: just call present with index 0 (stub path)
+            self.present_all_windows(0);
         }
 
         self.frame_count += 1;
     }
 
-    fn present_all_windows(&mut self, compositor_output: &wgpu::TextureView) {
-        let gpu = match &self.gpu {
-            Some(g) => g,
-            None => return,
-        };
-        if self.blit_pipeline.is_none() {
-            return;
+    fn present_all_windows(&mut self, front_index: usize) {
+        let Some(gpu) = &self.gpu else { return };
+
+        // ── Panel cache update ──
+        let scale = self.scale_factor;
+        let panel_infos = self.ui_root.panel_cache_info();
+        if let (Some(cm), Some(ui)) = (&mut self.ui_cache_manager, &mut self.ui_renderer) {
+            // Compute logical surface dimensions
+            let (surface_w, surface_h) = self.primary_window_id
+                .and_then(|id| self.window_registry.get(&id))
+                .and_then(|ws| ws.surface.as_ref())
+                .map(|s| (s.width, s.height))
+                .unwrap_or((1, 1));
+            let logical_w = (surface_w as f64 / scale) as u32;
+            let logical_h = (surface_h as f64 / scale) as u32;
+            cm.set_scale_factor(scale);
+            cm.ensure_atlas(&gpu.device, logical_w, logical_h);
+            cm.render_dirty_panels(&gpu.device, ui, &self.ui_root.tree, &panel_infos);
+            self.ui_root.tree.clear_dirty();
         }
-        // Compositor aspect ratio for aspect-correct blitting (FitInParent)
-        let (comp_w, comp_h) = self.content_pipeline_output.as_ref()
-            .map(|p| p.get_dimensions())
-            .unwrap_or((1920, 1080));
-        let source_aspect = comp_w as f32 / comp_h as f32;
 
-        // Output window: presented by dedicated thread (NativeOutputPresenter).
-        // No present() call needed here — the thread loops on nextDrawable at vsync.
+        // ── Acquire drawable ──
+        let Some(window_id) = self.primary_window_id else { return };
+        let surface_dims = self.window_registry.get(&window_id)
+            .and_then(|ws| ws.surface.as_ref())
+            .map(|s| (s.width, s.height))
+            .unwrap_or((1, 1));
+        let (surface_w, surface_h) = surface_dims;
 
-        // Workspace window rendering.
-        let Some(window_id) = self.primary_window_id else {
-            return;
-        };
-
-        {
+        let drawable = {
             let ws = match self.window_registry.get_mut(&window_id) {
                 Some(ws) => ws,
                 None => return,
             };
-
-            let surface = match ws.surface.as_mut() {
+            let surface = match ws.surface.as_ref() {
                 Some(s) => s,
                 None => return,
             };
-
-            let surface_texture = match surface.get_current_texture() {
-                Ok(t) => t,
-                Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                    surface.resize(
-                        &gpu.device,
-                        surface.width,
-                        surface.height,
-                        surface.scale_factor,
-                    );
+            match surface.next_drawable() {
+                Some(d) => d,
+                None => {
+                    log::warn!("No drawable available — skipping frame");
                     return;
                 }
-                Err(e) => {
-                    log::error!("Surface error: {e}");
-                    return;
-                }
-            };
+            }
+        };
 
-            let surface_view = surface_texture
-                .texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
+        let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
 
-            let surface_w = surface.width;
-            let surface_h = surface.height;
-            let scale = surface.scale_factor;
+        let logical_w = (surface_w as f64 / scale) as u32;
+        let logical_h = (surface_h as f64 / scale) as u32;
+        let sf = scale as f32;
 
-            let mut encoder =
-                gpu.device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Blit Encoder"),
-                    });
+        // Reset overlay TextRenderer pool index
+        if let Some(ui) = &mut self.ui_renderer {
+            ui.begin_frame();
+        }
 
-            {
-                let video_rect = self.ui_root.layout.video_area();
-                let sf = scale as f32;
-                let logical_w = (surface_w as f64 / scale) as u32;
-                let logical_h = (surface_h as f64 / scale) as u32;
+        // ── Build the frame ──
+        let mut encoder = gpu.device.create_encoder("Frame");
 
-                // Reset overlay TextRenderer pool index so each overlay pass
-                // this frame gets its own TextRenderer (prevents vertex buffer
-                // destruction before encoder submission).
-                if let Some(ui) = &mut self.ui_renderer {
-                    ui.begin_frame();
-                }
+        // Pass 1: Clear to black
+        encoder.clear_texture(&drawable_tex, 0.0, 0.0, 0.0, 1.0);
 
-                // ── Phase 0: Panel cache update ──
-                // Render dirty panels to the native Metal atlas texture.
-                let panel_infos = self.ui_root.panel_cache_info();
-                if let (Some(cm), Some(ui)) = (
-                    &mut self.ui_cache_manager,
-                    &mut self.ui_renderer,
-                ) {
-                    cm.set_scale_factor(scale);
-                    cm.ensure_atlas(&gpu.native_device, logical_w, logical_h);
-                    cm.render_dirty_panels(
-                        &gpu.native_device,
-                        ui,
-                        &self.ui_root.tree,
-                        &panel_infos,
-                    );
-                    // Clear dirty flags for cached nodes so next frame starts fresh
-                    self.ui_root.tree.clear_dirty();
-                }
+        // Pass 2: Blit compositor output to video area (aspect-fit)
+        #[cfg(target_os = "macos")]
+        if let (
+            Some(compositor_tex),
+            Some(blit_pipeline),
+            Some(blit_vbuf),
+            Some(blit_ibuf),
+            Some(blit_sampler),
+        ) = (
+            self.ui_shared_textures[front_index].as_ref(),
+            &self.blit_pipeline,
+            &self.blit_vbuf,
+            &self.blit_ibuf,
+            &self.blit_sampler,
+        ) {
+            let (comp_w, comp_h) = self.content_pipeline_output.as_ref()
+                .map(|p| p.get_dimensions())
+                .unwrap_or((1920, 1080));
+            let source_aspect = comp_w as f32 / comp_h as f32;
+            let video_rect = self.ui_root.layout.video_area();
+            let rect_x = video_rect.x * sf;
+            let rect_y = video_rect.y * sf;
+            let rect_w = video_rect.width * sf;
+            let rect_h = video_rect.height * sf;
 
-                // ── Phase 1: Clear + Blit + Cached Panels (single render pass) ──
-                // Prepare blit bind group + viewport before creating the pass.
-                if let Some(blit) = &mut self.blit_pipeline {
-                    blit.prepare_rect_fit(
-                        &gpu.device, compositor_output,
-                        video_rect.x * sf, video_rect.y * sf,
-                        video_rect.width * sf, video_rect.height * sf,
-                        source_aspect,
-                    );
-                }
+            if rect_w > 0.0 && rect_h > 0.0 && source_aspect > 0.0 {
+                let rect_aspect = rect_w / rect_h;
+                let (fit_w, fit_h) = if source_aspect > rect_aspect {
+                    (rect_w, rect_w / source_aspect)
+                } else {
+                    (rect_h * source_aspect, rect_h)
+                };
+                let fit_x = rect_x + (rect_w - fit_w) * 0.5;
+                let fit_y = rect_y + (rect_h - fit_h) * 0.5;
 
-                // Single render pass: clear to black, blit compositor output.
-                // UI atlas blit removed here (atlas is GpuTexture until Phase 6 wires it).
-                {
-                    let mut pass =
-                        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Clear + Blit"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &surface_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                            multiview_mask: None,
-                        });
+                encoder.draw_indexed(
+                    blit_pipeline,
+                    &drawable_tex,
+                    &[
+                        manifold_gpu::GpuBinding::Texture { binding: 0, texture: compositor_tex },
+                        manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: blit_sampler },
+                    ],
+                    blit_vbuf,
+                    blit_ibuf,
+                    6,
+                    Some((fit_x, fit_y, fit_w, fit_h)),
+                    manifold_gpu::GpuLoadAction::Load,
+                    "Blit Compositor",
+                );
+            }
+        }
 
-                    if let Some(blit) = &self.blit_pipeline {
-                        blit.draw_in_pass(&mut pass);
-                    }
-                }
+        // Pass 3: Atlas blit fullscreen (premultiplied alpha over video)
+        let atlas_opt = self.ui_cache_manager.as_ref().and_then(|cm| cm.atlas_texture());
+        if let (Some(atlas_pipeline), Some(atlas_sampler), Some(atlas)) = (
+            &self.atlas_pipeline,
+            &self.atlas_sampler,
+            atlas_opt.as_ref(),
+        ) {
+            encoder.draw_fullscreen(
+                atlas_pipeline,
+                &drawable_tex,
+                &[
+                    manifold_gpu::GpuBinding::Texture { binding: 0, texture: atlas },
+                    manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: atlas_sampler },
+                ],
+                false,
+                true,
+                "Atlas Blit",
+            );
+        }
 
-                // ── Phase 2: Bitmap layers (native Metal — intermediate target) ──
-                if let Some(bitmap_gpu) = &mut self.layer_bitmap_gpu {
-                    let mut rects = self.ui_root.viewport.layer_bitmap_rects();
+        // Pass 4: Layer bitmaps directly to drawable
+        if let Some(bitmap_gpu) = &mut self.layer_bitmap_gpu {
+            let mut rects = self.ui_root.viewport.layer_bitmap_rects();
 
-                    let wf_rect = self.ui_root.viewport.waveform_lane_rect();
-                    if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
-                        rects.push((1000, wf_rect));
-                    }
+            let wf_rect = self.ui_root.viewport.waveform_lane_rect();
+            if wf_rect.width > 0.0 && wf_rect.height > 0.0 {
+                rects.push((1000, wf_rect));
+            }
 
-                    if self.ui_root.stem_lanes.is_expanded() {
-                        let sl_rect = self.ui_root.viewport.stem_lanes_rect();
-                        if sl_rect.width > 0.0 && sl_rect.height > 0.0 {
-                            rects.push((1001, sl_rect));
-                        }
-                    }
-
-                    if !rects.is_empty() {
-                        // Phase 3 transition: render into intermediate GpuTexture.
-                        // Visual output disconnected from surface until Phase 6.
-                        #[cfg(target_os = "macos")]
-                        {
-                            let needs_create = self
-                                .layer_bitmap_native_target
-                                .as_ref()
-                                .is_none_or(|t| t.width != surface_w || t.height != surface_h);
-                            if needs_create {
-                                self.layer_bitmap_native_target =
-                                    Some(gpu.native_device.create_texture(
-                                        &manifold_gpu::GpuTextureDesc {
-                                            width: surface_w,
-                                            height: surface_h,
-                                            depth: 1,
-                                            format: manifold_gpu::GpuTextureFormat::Bgra8Unorm,
-                                            dimension: manifold_gpu::GpuTextureDimension::D2,
-                                            usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-                                            label: "Layer Bitmap Native Target",
-                                        },
-                                    ));
-                            }
-                            if let Some(target) = &self.layer_bitmap_native_target {
-                                let mut native_enc =
-                                    gpu.native_device.create_encoder("Layer Bitmaps");
-                                bitmap_gpu.render_layers(
-                                    &mut native_enc,
-                                    target,
-                                    logical_w,
-                                    logical_h,
-                                    &rects,
-                                );
-                                native_enc.commit();
-                            }
-                        }
-                    }
-                }
-
-                // ── Phase 3: All post-bitmap overlays (single render pass) ──
-                // Accumulate all overlay commands, then one prepare + draw.
-                if let Some(ui) = &mut self.ui_renderer {
-                    // Waveform/stem lane buttons (over bitmap textures)
-                    let wf_first = self.ui_root.waveform_lane.first_node();
-                    let sl_first = self.ui_root.stem_lanes.first_node();
-                    let overlay_end = self.ui_root.perf_hud.first_node();
-                    let overlay_start = if wf_first != usize::MAX {
-                        Some(wf_first)
-                    } else if sl_first != usize::MAX {
-                        Some(sl_first)
-                    } else {
-                        None
-                    };
-                    if let Some(start) = overlay_start {
-                        ui.render_overlay_range(
-                            &self.ui_root.tree, start, overlay_end,
-                        );
-                    }
-
-                    // Playhead line
-                    if let Some(px) = self.ui_root.viewport.playhead_pixel() {
-                        let ruler = self.ui_root.viewport.ruler_rect();
-                        let tr = self.ui_root.viewport.get_tracks_rect();
-                        let top = ruler.y;
-                        let height = (tr.y + tr.height) - top;
-                        ui.draw_rect(
-                            px - 1.0, top,
-                            manifold_ui::color::PLAYHEAD_WIDTH, height,
-                            manifold_ui::color::PLAYHEAD_RED.to_f32(),
-                        );
-                    }
-
-                    // Perf HUD
-                    if self.ui_root.perf_hud.is_visible() {
-                        let hud_start = self.ui_root.perf_hud.first_node();
-                        let hud_end = if self.ui_root.dropdown.is_open() {
-                            self.ui_root.dropdown.first_node()
-                        } else if self.ui_root.browser_popup.is_open() {
-                            self.ui_root.browser_popup.first_node()
-                        } else {
-                            usize::MAX
-                        };
-                        ui.render_overlay_range(
-                            &self.ui_root.tree, hud_start, hud_end,
-                        );
-                    }
-
-                    // Popups (dropdown or browser)
-                    if self.ui_root.dropdown.is_open() {
-                        let start = self.ui_root.dropdown.first_node();
-                        ui.render_overlay(&self.ui_root.tree, start);
-                    } else if self.ui_root.browser_popup.is_open() {
-                        let start = self.ui_root.browser_popup.first_node();
-                        ui.render_overlay(&self.ui_root.tree, start);
-                    }
-
-                    // Effect card drag ghost
-                    if let Some(start) = self.ui_root.inspector.card_drag_first_node() {
-                        ui.render_overlay(&self.ui_root.tree, start);
-                    }
-
-                    // Text input overlay
-                    if self.text_input.active {
-                        render_text_input_overlay(
-                            &self.text_input, &self.frame_timer, ui,
-                        );
-                    }
-
-                    // Flush all overlay commands via native Metal.
-                    // Phase 5 transition: render to intermediate GpuTexture.
-                    // Disconnected from surface until Phase 6.
-                    if ui.prepare(&gpu.native_device, logical_w, logical_h, scale) {
-                        #[cfg(target_os = "macos")]
-                        {
-                            let needs_create = self.overlay_native_target
-                                .as_ref()
-                                .is_none_or(|t| t.width != surface_w || t.height != surface_h);
-                            if needs_create {
-                                self.overlay_native_target = Some(gpu.native_device.create_texture(
-                                    &manifold_gpu::GpuTextureDesc {
-                                        width: surface_w,
-                                        height: surface_h,
-                                        depth: 1,
-                                        format: manifold_gpu::GpuTextureFormat::Bgra8Unorm,
-                                        dimension: manifold_gpu::GpuTextureDimension::D2,
-                                        usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
-                                        label: "Overlay Native Target",
-                                    },
-                                ));
-                            }
-                            if let Some(target) = &self.overlay_native_target {
-                                let mut native_enc = gpu.native_device.create_encoder("Overlay UI");
-                                ui.render(&mut native_enc, target, manifold_gpu::GpuLoadAction::Load);
-                                native_enc.commit();
-                            }
-                        }
-                    }
+            if self.ui_root.stem_lanes.is_expanded() {
+                let sl_rect = self.ui_root.viewport.stem_lanes_rect();
+                if sl_rect.width > 0.0 && sl_rect.height > 0.0 {
+                    rects.push((1001, sl_rect));
                 }
             }
 
-            gpu.queue.submit(std::iter::once(encoder.finish()));
-            surface_texture.present();
+            if !rects.is_empty() {
+                bitmap_gpu.render_layers(&mut encoder, &drawable_tex, logical_w, logical_h, &rects);
+            }
         }
+
+        // Pass 5: Overlay UI (playhead, HUD, dropdowns, text)
+        if let Some(ui) = &mut self.ui_renderer {
+            // Waveform/stem lane buttons
+            let wf_first = self.ui_root.waveform_lane.first_node();
+            let sl_first = self.ui_root.stem_lanes.first_node();
+            let overlay_end = self.ui_root.perf_hud.first_node();
+            let overlay_start = if wf_first != usize::MAX {
+                Some(wf_first)
+            } else if sl_first != usize::MAX {
+                Some(sl_first)
+            } else {
+                None
+            };
+            if let Some(start) = overlay_start {
+                ui.render_overlay_range(&self.ui_root.tree, start, overlay_end);
+            }
+
+            // Playhead line
+            if let Some(px) = self.ui_root.viewport.playhead_pixel() {
+                let ruler = self.ui_root.viewport.ruler_rect();
+                let tr = self.ui_root.viewport.get_tracks_rect();
+                let top = ruler.y;
+                let height = (tr.y + tr.height) - top;
+                ui.draw_rect(
+                    px - 1.0, top,
+                    manifold_ui::color::PLAYHEAD_WIDTH, height,
+                    manifold_ui::color::PLAYHEAD_RED.to_f32(),
+                );
+            }
+
+            // Perf HUD
+            if self.ui_root.perf_hud.is_visible() {
+                let hud_start = self.ui_root.perf_hud.first_node();
+                let hud_end = if self.ui_root.dropdown.is_open() {
+                    self.ui_root.dropdown.first_node()
+                } else if self.ui_root.browser_popup.is_open() {
+                    self.ui_root.browser_popup.first_node()
+                } else {
+                    usize::MAX
+                };
+                ui.render_overlay_range(&self.ui_root.tree, hud_start, hud_end);
+            }
+
+            // Popups
+            if self.ui_root.dropdown.is_open() {
+                let start = self.ui_root.dropdown.first_node();
+                ui.render_overlay(&self.ui_root.tree, start);
+            } else if self.ui_root.browser_popup.is_open() {
+                let start = self.ui_root.browser_popup.first_node();
+                ui.render_overlay(&self.ui_root.tree, start);
+            }
+
+            // Effect card drag ghost
+            if let Some(start) = self.ui_root.inspector.card_drag_first_node() {
+                ui.render_overlay(&self.ui_root.tree, start);
+            }
+
+            // Text input overlay
+            if self.text_input.active {
+                render_text_input_overlay(&self.text_input, &self.frame_timer, ui);
+            }
+
+            // Flush all overlay commands
+            if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
+                ui.render(&mut encoder, &drawable_tex, manifold_gpu::GpuLoadAction::Load);
+            }
+        }
+
+        // ── Present + commit ──
+        encoder.present_drawable(&drawable);
+        encoder.commit();
     }
 }
 

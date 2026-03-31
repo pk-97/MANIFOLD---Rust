@@ -1,14 +1,13 @@
 pub mod gpu;
 pub mod gpu_types;
 pub mod gpu_encoder;
+#[cfg(feature = "profiling")]
 pub mod gpu_profiler;
 pub mod render_target;
 pub mod render_target_pool;
 pub mod uniform_arena;
 pub mod gpu_readback;
 pub mod background_worker;
-pub mod surface;
-pub mod blit;
 pub mod compositor;
 pub mod generator;
 pub mod generator_context;

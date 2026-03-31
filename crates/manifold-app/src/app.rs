@@ -17,11 +17,9 @@ use manifold_playback::percussion_orchestrator::PercussionImportOrchestrator;
 use manifold_playback::engine::PlaybackEngine;
 #[cfg(not(target_os = "macos"))]
 use manifold_playback::renderer::StubRenderer;
-use manifold_renderer::blit::BlitPipeline;
 use manifold_renderer::generator_renderer::GeneratorRenderer;
 use manifold_renderer::gpu::GpuContext;
 use manifold_renderer::layer_compositor::LayerCompositor;
-use manifold_renderer::surface::SurfaceWrapper;
 use manifold_renderer::ui_renderer::UIRenderer;
 
 use manifold_ui::cursors::{CursorManager, TimelineCursor};
@@ -187,13 +185,11 @@ pub struct Application {
     /// Content device writes compositor output to the IOSurface; UI device reads it.
     #[cfg(target_os = "macos")]
     pub(crate) shared_texture_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
-    /// UI-side wgpu::Textures imported from the triple-buffered IOSurfaces.
+    /// UI-side GpuTextures imported from the triple-buffered IOSurfaces.
     /// The UI reads from whichever surface the content thread has published
     /// via `bridge.front_index()`.
     #[cfg(target_os = "macos")]
-    pub(crate) ui_shared_textures: [Option<wgpu::Texture>; crate::shared_texture::SURFACE_COUNT],
-    #[cfg(target_os = "macos")]
-    pub(crate) ui_shared_views: [Option<wgpu::TextureView>; crate::shared_texture::SURFACE_COUNT],
+    pub(crate) ui_shared_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     /// Last seen bridge generation — detects resize (not per-frame).
     #[cfg(target_os = "macos")]
     pub(crate) last_bridge_generation: u64,
@@ -201,7 +197,12 @@ pub struct Application {
     /// Not used for output window blitting — that is handled by OutputPresenter.
     #[cfg(target_os = "macos")]
     pub(crate) last_output_front_index: usize,
-    pub(crate) blit_pipeline: Option<BlitPipeline>,
+    pub(crate) blit_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    pub(crate) blit_vbuf: Option<manifold_gpu::GpuBuffer>,
+    pub(crate) blit_ibuf: Option<manifold_gpu::GpuBuffer>,
+    pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
+    pub(crate) atlas_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    pub(crate) atlas_sampler: Option<manifold_gpu::GpuSampler>,
     // (output_blit_pipeline and output_blit_format removed — native Metal
     // presenter compiles its own pipeline via manifold-gpu)
     /// Native Metal output presenter — dedicated thread with custom CAMetalLayer
@@ -212,15 +213,7 @@ pub struct Application {
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
-    /// Phase 3-6 transition: intermediate GpuTexture for layer bitmap rendering.
-    /// Disconnected from the surface until Phase 6 wires it to the GpuDrawable.
-    #[cfg(target_os = "macos")]
-    pub(crate) layer_bitmap_native_target: Option<manifold_gpu::GpuTexture>,
-    /// Phase 5-6 transition: intermediate GpuTexture for overlay UI rendering.
-    /// Disconnected from the surface until Phase 6 wires it to the GpuDrawable.
-    #[cfg(target_os = "macos")]
-    pub(crate) overlay_native_target: Option<manifold_gpu::GpuTexture>,
-    pub(crate) surface_format: wgpu::TextureFormat,
+    pub(crate) scale_factor: f64,
     /// macOS EDR headroom for the primary window (1.0 = SDR, >1.0 = HDR capable).
     /// Drives compositor tonemap (passthrough if > 1.0, ACES if ≤ 1.0).
     pub(crate) edr_headroom: f64,
@@ -347,22 +340,21 @@ impl Application {
             #[cfg(target_os = "macos")]
             ui_shared_textures: [None, None, None],
             #[cfg(target_os = "macos")]
-            ui_shared_views: [None, None, None],
-            #[cfg(target_os = "macos")]
             last_bridge_generation: 0,
             #[cfg(target_os = "macos")]
             last_output_front_index: usize::MAX,
             blit_pipeline: None,
+            blit_vbuf: None,
+            blit_ibuf: None,
+            blit_sampler: None,
+            atlas_pipeline: None,
+            atlas_sampler: None,
             #[cfg(target_os = "macos")]
             output_presenter: None,
             ui_renderer: None,
             ui_cache_manager: None,
             layer_bitmap_gpu: None,
-            #[cfg(target_os = "macos")]
-            layer_bitmap_native_target: None,
-            #[cfg(target_os = "macos")]
-            overlay_native_target: None,
-            surface_format: wgpu::TextureFormat::Rgba16Float,
+            scale_factor: 1.0,
             edr_headroom: 1.0,
             output_edr_headroom: 1.0,
             ui_root: UIRoot::new(),
@@ -962,100 +954,22 @@ impl ApplicationHandler for Application {
             entry.2 = format!("Display {}", i + 1);
         }
 
-        // Create GPU context with primary window's surface for adapter compatibility
+        // Create native Metal GPU context
         let gpu = {
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                backends: wgpu::Backends::all(),
-                ..Default::default()
-            });
+            let native_device = manifold_gpu::GpuDevice::new();
 
-            let surface = instance
-                .create_surface(window.clone())
-                .expect("Failed to create surface");
-
-            let gpu = pollster::block_on(async {
-                let adapter = instance
-                    .request_adapter(&wgpu::RequestAdapterOptions {
-                        power_preference: wgpu::PowerPreference::HighPerformance,
-                        compatible_surface: Some(&surface),
-                        force_fallback_adapter: false,
-                    })
-                    .await
-                    .expect("No suitable GPU adapter");
-
-                log::info!("GPU: {}", adapter.get_info().name);
-
-                let (device, queue) = adapter
-                    .request_device(
-                        &wgpu::DeviceDescriptor {
-                            label: Some("MANIFOLD Device"),
-                            required_features: wgpu::Features::empty(),
-                            required_limits: adapter.limits(),
-                            memory_hints: wgpu::MemoryHints::Performance,
-                            trace: wgpu::Trace::Off,
-                            ..Default::default()
-                        },
-                    )
-                    .await
-                    .expect("Failed to create device");
-
-                (instance, adapter, device, queue, surface)
-            });
-
-            let (instance, adapter, device, queue, surface) = gpu;
-            let device = Arc::new(device);
-            let queue = Arc::new(queue);
-
-            // Configure surface
-            let caps = surface.get_capabilities(&adapter);
-            // Prefer Rgba16Float for macOS EDR (extended dynamic range).
-            // edr_surface::configure_edr() sets the CAMetalLayer colorspace to
-            // extendedLinearSRGB after surface creation — required for correct display.
-            // Fallback to sRGB if Rgba16Float isn't available.
-            let format = if caps.formats.contains(&wgpu::TextureFormat::Rgba16Float) {
-                wgpu::TextureFormat::Rgba16Float
-            } else {
-                caps.formats
-                    .iter()
-                    .find(|f| f.is_srgb())
-                    .copied()
-                    .unwrap_or(caps.formats[0])
-            };
-
-            let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
-                wgpu::PresentMode::Mailbox
-            } else {
-                caps.present_modes[0]
-            };
-
-            let config = wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format,
-                width: size.width.max(1),
-                height: size.height.max(1),
-                present_mode,
-                alpha_mode: caps.alpha_modes[0],
-                view_formats: vec![],
-                desired_maximum_frame_latency: 2,
-            };
-            surface.configure(&device, &config);
-
-            // Configure CAMetalLayer for EDR (colorspace + wantsExtendedDynamicRangeContent).
-            // Must happen after surface.configure() which creates the CAMetalLayer.
-            if format == wgpu::TextureFormat::Rgba16Float {
-                self.edr_headroom = crate::edr_surface::configure_edr(&surface);
-                // Register NSNotification observers for dynamic headroom updates
-                // when windows move between displays or display params change.
-                crate::edr_surface::register_screen_change_observer();
-            }
-
-            let surface_wrapper = SurfaceWrapper {
-                surface,
-                config,
-                width: size.width,
-                height: size.height,
-                scale_factor: scale,
-            };
+            // Create native Metal surface for the workspace window
+            let surface = native_device.create_surface(
+                &*window,
+                size.width.max(1),
+                size.height.max(1),
+                manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+                true, // vsync
+            );
+            // EDR: configure colorspace + query headroom
+            surface.configure_edr();
+            self.edr_headroom = crate::edr_surface::query_window_headroom(&window);
+            crate::edr_surface::register_screen_change_observer();
 
             // Register primary window
             let wid = window.id();
@@ -1064,27 +978,138 @@ impl ApplicationHandler for Application {
                 wid,
                 WindowState {
                     window,
-                    surface: Some(surface_wrapper),
+                    surface: Some(surface),
                     role: WindowRole::Workspace,
                     display_index: None,
                 },
             );
 
-            // Store surface format for UI renderer
-            self.surface_format = format;
+            // Blit pipeline (composite output → drawable with aspect-fit viewport)
+            let blit_shader = r#"
+struct VertexInput {
+    @location(0) position: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+};
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+@vertex
+fn vs_main(in: VertexInput) -> VertexOutput {
+    var out: VertexOutput;
+    out.position = vec4<f32>(in.position, 0.0, 1.0);
+    out.uv = in.uv;
+    return out;
+}
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(t_source, s_source, in.uv);
+}
+"#;
+            let blit_vertex_layout = manifold_gpu::GpuVertexLayout {
+                stride: 16,
+                attributes: vec![
+                    manifold_gpu::GpuVertexAttribute {
+                        format: manifold_gpu::GpuVertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    manifold_gpu::GpuVertexAttribute {
+                        format: manifold_gpu::GpuVertexFormat::Float32x2,
+                        offset: 8,
+                        shader_location: 1,
+                    },
+                ],
+            };
+            self.blit_pipeline = Some(native_device.create_render_pipeline_with_vertex_layout(
+                blit_shader, "vs_main", "fs_main",
+                manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+                None,
+                &blit_vertex_layout,
+                "Blit Pipeline",
+            ));
+            // Fullscreen quad: 4 vertices, NDC positions + UVs
+            // [-1,-1,0,1], [1,-1,1,1], [1,1,1,0], [-1,1,0,0]
+            let quad_vertices: [[f32; 4]; 4] = [
+                [-1.0, -1.0, 0.0, 1.0],
+                [ 1.0, -1.0, 1.0, 1.0],
+                [ 1.0,  1.0, 1.0, 0.0],
+                [-1.0,  1.0, 0.0, 0.0],
+            ];
+            let vbuf = native_device.create_buffer_shared(64);
+            unsafe {
+                let data = std::slice::from_raw_parts(
+                    quad_vertices.as_ptr() as *const u8, 64,
+                );
+                vbuf.write(0, data);
+            }
+            self.blit_vbuf = Some(vbuf);
+            let quad_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
+            let ibuf = native_device.create_buffer_shared(24);
+            unsafe {
+                let data = std::slice::from_raw_parts(
+                    quad_indices.as_ptr() as *const u8, 24,
+                );
+                ibuf.write(0, data);
+            }
+            self.blit_ibuf = Some(ibuf);
+            self.blit_sampler = Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                min_filter: manifold_gpu::GpuFilterMode::Linear,
+                mag_filter: manifold_gpu::GpuFilterMode::Linear,
+                ..Default::default()
+            }));
 
-            // Create blit pipeline
-            self.blit_pipeline = Some(BlitPipeline::new(&device, format));
+            // Atlas blit pipeline (premultiplied alpha — One/OneMinusSrcAlpha)
+            let atlas_shader = r#"
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
+    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(t_source, s_source, in.uv);
+}
+"#;
+            let premultiplied_blend = manifold_gpu::GpuBlendState {
+                src_factor: manifold_gpu::GpuBlendFactor::One,
+                dst_factor: manifold_gpu::GpuBlendFactor::OneMinusSrcAlpha,
+                operation: manifold_gpu::GpuBlendOp::Add,
+                src_alpha_factor: manifold_gpu::GpuBlendFactor::One,
+                dst_alpha_factor: manifold_gpu::GpuBlendFactor::OneMinusSrcAlpha,
+                alpha_operation: manifold_gpu::GpuBlendOp::Add,
+            };
+            self.atlas_pipeline = Some(native_device.create_render_pipeline(
+                atlas_shader, "vs_main", "fs_main",
+                manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+                Some(premultiplied_blend),
+                "Atlas Blit Pipeline",
+            ));
+            self.atlas_sampler = Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+                min_filter: manifold_gpu::GpuFilterMode::Nearest,
+                mag_filter: manifold_gpu::GpuFilterMode::Nearest,
+                ..Default::default()
+            }));
 
-            let native_device = manifold_gpu::GpuDevice::new();
-
-            // Create UI renderer using native Metal (Bgra8Unorm matches surface format)
+            // Create UI renderer using native Metal
             self.ui_renderer = Some(UIRenderer::new(
                 &native_device,
                 manifold_gpu::GpuTextureFormat::Bgra8Unorm,
             ));
 
-            // Create panel cache system (atlas now a GpuTexture — no PanelCompositor needed)
+            // Create panel cache system
             self.ui_cache_manager = Some(
                 manifold_renderer::ui_cache_manager::UICacheManager::new(
                     manifold_gpu::GpuTextureFormat::Bgra8Unorm,
@@ -1092,19 +1117,15 @@ impl ApplicationHandler for Application {
                 ),
             );
 
-            // Create layer bitmap GPU (textured quad pipeline for per-layer bitmaps)
+            // Create layer bitmap GPU
             self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(
                 &native_device,
                 manifold_gpu::GpuTextureFormat::Bgra8Unorm,
             ));
 
-            GpuContext {
-                instance,
-                adapter,
-                device,
-                queue,
-                native_device,
-            }
+            self.scale_factor = scale;
+
+            GpuContext { device: native_device }
         };
 
         // Spawn content thread with its OWN GPU device (separate queue for isolation).
@@ -1129,14 +1150,9 @@ impl ApplicationHandler for Application {
                 );
                 let bridge = Arc::new(bridge);
                 // Import all IOSurface textures on the UI device (triple-buffered).
-                let ui_textures: [wgpu::Texture; crate::shared_texture::SURFACE_COUNT] =
-                    std::array::from_fn(|i| unsafe { bridge.import_texture(&gpu.device, i) });
-                let ui_views: [wgpu::TextureView; crate::shared_texture::SURFACE_COUNT] =
-                    std::array::from_fn(|i| {
-                        ui_textures[i].create_view(&wgpu::TextureViewDescriptor::default())
-                    });
+                let ui_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
+                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(&gpu.device, i) });
                 self.ui_shared_textures = ui_textures.map(Some);
-                self.ui_shared_views = ui_views.map(Some);
                 self.shared_texture_bridge = Some(Arc::clone(&bridge));
             }
 
@@ -1155,7 +1171,7 @@ impl ApplicationHandler for Application {
                     .load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
             }
             log::info!(
-                "[GPU] Dual command queue: content=native MTLCommandQueue, UI=wgpu MTLCommandQueue"
+                "[GPU] Content thread: native MTLCommandQueue (manifold-gpu)"
             );
 
             let gen_format = manifold_gpu::GpuTextureFormat::Rgba16Float;
@@ -1234,13 +1250,7 @@ impl ApplicationHandler for Application {
                         .unwrap_or_default(),
                 ),
                 transport_controller: manifold_playback::transport_controller::TransportController::new(),
-                gpu: GpuContext {
-                    instance: gpu.instance.clone(),
-                    adapter: gpu.adapter.clone(),
-                    device: Arc::clone(&gpu.device),
-                    queue: Arc::clone(&gpu.queue),
-                    native_device: manifold_gpu::GpuDevice::new(),
-                },
+                gpu: GpuContext::new(),
                 frame_count: 0,
                 time_since_start: manifold_core::Seconds::ZERO,
                 last_data_version: 0,
@@ -1344,41 +1354,40 @@ impl ApplicationHandler for Application {
             }
 
             WindowEvent::Resized(size) => {
-                if let Some(gpu) = &self.gpu
-                    && let Some(ws) = self.window_registry.get_mut(&window_id) {
-                        let scale = ws.window.scale_factor();
-                        // Output windows: surface stays at project resolution
-                        // (pixel-perfect 1:1). Core Animation handles display scaling.
-                        // Only resize workspace windows.
-                        if is_primary && let Some(surface) = &mut ws.surface {
-                            surface.resize(&gpu.device, size.width, size.height, scale);
-                        }
-
-                        // Rebuild UI on primary window resize
-                        if is_primary {
-                            let logical_w = size.width as f32 / scale as f32;
-                            let logical_h = size.height as f32 / scale as f32;
-                            self.ui_root.resize(logical_w, logical_h);
-                        }
+                if let Some(ws) = self.window_registry.get_mut(&window_id) {
+                    let scale = ws.window.scale_factor();
+                    // Output windows: surface stays at project resolution
+                    // (pixel-perfect 1:1). Core Animation handles display scaling.
+                    // Only resize workspace windows.
+                    if is_primary && let Some(surface) = &mut ws.surface {
+                        surface.resize(size.width, size.height);
                     }
+
+                    // Rebuild UI on primary window resize
+                    if is_primary {
+                        let logical_w = size.width as f32 / scale as f32;
+                        let logical_h = size.height as f32 / scale as f32;
+                        self.ui_root.resize(logical_w, logical_h);
+                    }
+                }
             }
 
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                if let Some(gpu) = &self.gpu
-                    && let Some(ws) = self.window_registry.get_mut(&window_id) {
-                        let size = ws.window.inner_size();
-                        if let Some(surface) = &mut ws.surface {
-                            surface.resize(&gpu.device, size.width, size.height, scale_factor);
-                        }
-                        // Output windows: drawable stays at project resolution.
-                        // NativeOutputPresenter detects changes via bridge generation.
-
-                        if is_primary {
-                            let logical_w = size.width as f32 / scale_factor as f32;
-                            let logical_h = size.height as f32 / scale_factor as f32;
-                            self.ui_root.resize(logical_w, logical_h);
-                        }
+                if let Some(ws) = self.window_registry.get_mut(&window_id) {
+                    let size = ws.window.inner_size();
+                    if let Some(surface) = &mut ws.surface {
+                        surface.resize(size.width, size.height);
                     }
+                    // Output windows: drawable stays at project resolution.
+                    // NativeOutputPresenter detects changes via bridge generation.
+
+                    if is_primary {
+                        let logical_w = size.width as f32 / scale_factor as f32;
+                        let logical_h = size.height as f32 / scale_factor as f32;
+                        self.ui_root.resize(logical_w, logical_h);
+                        self.scale_factor = scale_factor;
+                    }
+                }
             }
 
             // ── Pointer input → UIInputSystem ──────────────────────
@@ -2139,28 +2148,21 @@ impl Drop for Application {
         #[cfg(target_os = "macos")]
         { self.output_presenter = None; }
 
-        // Wait for all in-flight GPU work to complete before dropping resources.
-        // Without this, the last frame's command buffer may still be executing when
-        // wgpu surfaces/textures/pipelines are destroyed, causing a segfault in the
-        // Metal runtime.
-        if let Some(ref gpu) = self.gpu {
-            let _ = gpu.device.poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: None,
-            });
-        }
-
         // Drop GPU resources before the device and surfaces.
         // Field drop order is declaration order — gpu (device) drops before
         // window_registry (surfaces) and IOSurface textures, which can crash.
         // Explicitly clear them here so they're gone before implicit field drops.
         #[cfg(target_os = "macos")]
         {
-            self.ui_shared_views = [None, None, None];
             self.ui_shared_textures = [None, None, None];
         }
         self.layer_bitmap_gpu = None;
         self.ui_renderer = None;
         self.blit_pipeline = None;
+        self.blit_vbuf = None;
+        self.blit_ibuf = None;
+        self.blit_sampler = None;
+        self.atlas_pipeline = None;
+        self.atlas_sampler = None;
     }
 }

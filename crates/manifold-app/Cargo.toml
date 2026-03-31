@@ -18,10 +18,8 @@ manifold-media = { path = "../manifold-media" }
 manifold-gpu = { path = "../manifold-gpu" }
 manifold-led = { path = "../manifold-led" }
 winit = { workspace = true }
-wgpu = { workspace = true }
 log = { workspace = true }
 env_logger = { workspace = true }
-pollster = { workspace = true }
 rfd = "0.15"
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -39,13 +37,11 @@ metal = "0.33"
 objc = "0.2"
 foreign-types = "0.5"
 core-foundation = "0.10"
-wgpu-hal = "28"
-wgpu-types = "28"
 raw-window-handle = "0.6"
 core-graphics-types = "0.2"
 
 [features]
-profiling = ["dep:manifold-profiler"]
+profiling = ["dep:manifold-profiler", "manifold-renderer/profiling"]
 
 [lints]
 workspace = true

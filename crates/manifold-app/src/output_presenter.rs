@@ -28,7 +28,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use metal::foreign_types::{ForeignType, ForeignTypeRef};
+use metal::foreign_types::ForeignType;
 #[allow(unused_imports)]
 use objc::{msg_send, sel, sel_impl};
 
@@ -104,12 +104,12 @@ pub struct NativeOutputPresenter {
 impl NativeOutputPresenter {
     /// Create a new presenter with a custom CAMetalLayer on the output window.
     ///
-    /// Extracts the raw MTLDevice from the wgpu device (same underlying GPU),
-    /// creates a dedicated MTLCommandQueue, compiles the MSL render pipeline,
+    /// Takes the native Metal GPU device, creates a dedicated MTLCommandQueue,
+    /// compiles the MSL render pipeline,
     /// configures the CAMetalLayer for pixel-perfect EDR output at project
     /// resolution, and spawns the presenter thread.
     pub fn new(
-        wgpu_device: &wgpu::Device,
+        gpu_device: &manifold_gpu::GpuDevice,
         window: &winit::window::Window,
         bridge: Arc<SharedTextureBridge>,
         edr_headroom: f64,
@@ -122,15 +122,7 @@ impl NativeOutputPresenter {
             _ => panic!("Expected AppKit window handle"),
         };
 
-        // --- Extract raw MTLDevice from wgpu ---
-        let raw_device: *mut metal::MTLDevice = unsafe {
-            let hal_guard = wgpu_device
-                .as_hal::<wgpu_hal::api::Metal>()
-                .expect("Not a Metal backend");
-            let dev_ref: &metal::DeviceRef = hal_guard.raw_device();
-            dev_ref.as_ptr()
-        };
-        let device_ref = unsafe { metal::DeviceRef::from_ptr(raw_device) };
+        let device_ref = gpu_device.raw_device();
         let command_queue = device_ref.new_command_queue();
 
         // --- Compile MSL render pipeline ---

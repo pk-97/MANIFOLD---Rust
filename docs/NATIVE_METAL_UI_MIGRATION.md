@@ -173,23 +173,23 @@ Convert UIRenderer's SDF/rect rendering and glyphon text to manifold-gpu, then c
 
 **Breaking**: UI panels (atlas) and overlay text are disconnected from surface — Phase 6 wires GpuTextures into the single-encoder render loop.
 
-### Phase 6: Full render loop conversion [NOT STARTED]
+### Phase 6: Full render loop conversion [DONE]
 
 Prompt: `docs/PHASE6_AGENT_PROMPT.md`
 
 **The big one.** Wire everything together into a single GpuEncoder per frame. Replace BlitPipeline, SurfaceWrapper, GpuContext wgpu fields. Remove wgpu entirely.
 
-- [ ] Add `GpuDrawable::gpu_texture()` helper to manifold-gpu (only manifold-gpu change)
-- [ ] Replace `GpuContext` — remove wgpu, keep `GpuDevice` only
-- [ ] Replace `SurfaceWrapper` with `GpuSurface` for workspace window
-- [ ] Replace `SharedTextureBridge.import_texture()` wgpu version with `import_texture_native()` on UI thread
-- [ ] Create native blit pipeline (draw_indexed with viewport) — replaces BlitPipeline
-- [ ] Create native atlas blit (draw_fullscreen with premultiplied blend) — replaces PanelCompositor
-- [ ] Rewrite `present_all_windows()`: single GpuEncoder, clear → blit → atlas → layers → overlays → present → commit
-- [ ] Remove intermediate GpuTexture targets (layer_bitmap_native_target, overlay_native_target)
-- [ ] Delete `blit.rs`, `surface.rs`, dead wgpu code
-- [ ] Remove wgpu from manifold-renderer and manifold-app Cargo.toml
-- [ ] Remove wgpu, wgpu-hal, wgpu-types from workspace deps
+- [x] Add `GpuDrawable::gpu_texture()` helper to manifold-gpu (only manifold-gpu change)
+- [x] Replace `GpuContext` — remove wgpu, keep `GpuDevice` only
+- [x] Replace `SurfaceWrapper` with `GpuSurface` for workspace window
+- [x] Replace `SharedTextureBridge.import_texture()` wgpu version with `import_texture_native()` on UI thread
+- [x] Create native blit pipeline (draw_indexed with viewport) — replaces BlitPipeline
+- [x] Create native atlas blit (draw_fullscreen with premultiplied blend) — replaces PanelCompositor
+- [x] Rewrite `present_all_windows()`: single GpuEncoder, clear → blit → atlas → layers → overlays → present → commit
+- [x] Remove intermediate GpuTexture targets (layer_bitmap_native_target, overlay_native_target)
+- [x] Delete `blit.rs`, `surface.rs`, dead wgpu code
+- [x] Remove wgpu from manifold-renderer and manifold-app Cargo.toml
+- [x] `SharedOutputView` wgpu::TextureView field gated under `#[cfg(not(target_os = "macos"))]` (non-macOS fallback preserved)
 
 Note: output presenter stays on its own thread with its own Metal queue — unchanged.
 

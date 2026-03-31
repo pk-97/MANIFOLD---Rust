@@ -4,6 +4,7 @@
 //! Used by the UI thread for native Metal rendering directly to windows.
 
 use crate::types::GpuTextureFormat;
+use crate::metal::types::GpuTexture;
 use super::format::to_mtl_pixel_format;
 use super::{objc_retain, objc_release};
 use super::device::GpuDevice;
@@ -180,6 +181,21 @@ impl GpuDrawable {
     /// Get the raw drawable pointer for command buffer present integration.
     pub(crate) fn raw_drawable_ref(&self) -> &metal::MetalDrawableRef {
         unsafe { &*(self.drawable_ptr as *const metal::MetalDrawableRef) }
+    }
+
+    /// Create a GpuTexture referencing this drawable's backing texture.
+    /// The drawable must outlive the returned GpuTexture.
+    /// Retains the Metal texture — safe to use alongside the drawable.
+    pub fn gpu_texture(&self, format: GpuTextureFormat) -> GpuTexture {
+        use metal::foreign_types::{ForeignType, ForeignTypeRef};
+        let tex_ref = self.texture();
+        let w = tex_ref.width() as u32;
+        let h = tex_ref.height() as u32;
+        // Retain: GpuTexture::drop will release, so we need our own +1
+        let ptr = tex_ref.as_ptr() as *mut std::ffi::c_void;
+        unsafe { super::objc_retain(ptr); }
+        let mtl_texture = unsafe { metal::Texture::from_ptr(ptr as *mut _) };
+        GpuTexture::from_raw(mtl_texture, w, h, 1, format)
     }
 
     /// Present the drawable immediately.

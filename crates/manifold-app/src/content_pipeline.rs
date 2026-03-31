@@ -15,10 +15,10 @@ use manifold_playback::engine::{PlaybackEngine, TickResult};
 /// Thread-safe shared output view. The content thread writes a new view
 /// after each swap; the UI thread reads it for blitting to screen.
 ///
-/// Both threads share a single wgpu Device, so TextureViews created by
-/// the content thread are directly usable by the UI thread — zero copy.
+/// On macOS the IOSurface path is used exclusively — the wgpu view fields
+/// are compiled out. On other platforms the wgpu fallback path is active.
 pub struct SharedOutputView {
-    #[allow(dead_code)] // Used on non-macOS (fallback rendering path)
+    #[cfg(not(target_os = "macos"))]
     view: RwLock<Option<wgpu::TextureView>>,
     dimensions: RwLock<(u32, u32)>,
 }
@@ -26,19 +26,20 @@ pub struct SharedOutputView {
 impl SharedOutputView {
     pub fn new() -> Self {
         Self {
+            #[cfg(not(target_os = "macos"))]
             view: RwLock::new(None),
             dimensions: RwLock::new((1920, 1080)),
         }
     }
 
     /// Read the current front buffer view (called by UI thread).
-    #[allow(dead_code)] // Used on non-macOS (fallback rendering path)
+    #[cfg(not(target_os = "macos"))]
     pub fn get_view(&self) -> Option<wgpu::TextureView> {
         self.view.read().clone()
     }
 
     /// Update the front buffer view (called by content thread after swap).
-    #[allow(dead_code)] // Used on non-macOS (fallback rendering path)
+    #[cfg(not(target_os = "macos"))]
     pub fn set_view(&self, view: wgpu::TextureView) {
         *self.view.write() = Some(view);
     }

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::collections::HashMap;
-use manifold_renderer::surface::SurfaceWrapper;
 
 #[allow(dead_code)]
 /// Role of a window in the application.
@@ -19,7 +18,7 @@ pub struct WindowState {
     /// `Some` for the workspace window and any output window without a dedicated
     /// presenter thread. `None` for output windows whose surface is owned by
     /// `OutputPresenterHandle` on a separate thread (macOS fullscreen path).
-    pub surface: Option<SurfaceWrapper>,
+    pub surface: Option<manifold_gpu::GpuSurface>,
     pub role: WindowRole,
     pub display_index: Option<usize>,
 }

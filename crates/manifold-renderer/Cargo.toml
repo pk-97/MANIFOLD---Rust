@@ -9,7 +9,7 @@ manifold-gpu = { path = "../manifold-gpu" }
 manifold-native = { path = "../manifold-native" }
 manifold-playback = { path = "../manifold-playback" }
 manifold-ui = { path = "../manifold-ui" }
-wgpu = { workspace = true }
+wgpu = { workspace = true, optional = true }
 log = { workspace = true }
 bytemuck = { version = "1", features = ["derive"] }
 half = "2"
@@ -26,6 +26,9 @@ core-foundation = "0.9"
 objc = "0.2"
 
 [dev-dependencies]
+
+[features]
+profiling = ["dep:wgpu"]
 
 [lints]
 workspace = true

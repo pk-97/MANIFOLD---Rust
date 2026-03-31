@@ -1,88 +1,17 @@
-use std::sync::Arc;
-
-/// Central GPU resource holder for the UI thread. Created once, shared across
-/// all windows and render targets. The content thread uses `manifold_gpu::GpuDevice`
-/// directly — it does not go through this struct.
+/// Central GPU resource holder for the UI thread and content thread.
+/// Thin wrapper around GpuDevice. The wgpu GPU context has been removed.
 pub struct GpuContext {
-    pub instance: wgpu::Instance,
-    pub adapter: wgpu::Adapter,
-    pub device: Arc<wgpu::Device>,
-    pub queue: Arc<wgpu::Queue>,
-    /// Native Metal device for modules migrated to manifold-gpu during the wgpu→Metal transition.
-    /// Shares the same physical MTLDevice as wgpu (single GPU on Apple Silicon).
-    /// Unused until Phase 3+ of the Native Metal UI Migration.
-    pub native_device: manifold_gpu::GpuDevice,
+    pub device: manifold_gpu::GpuDevice,
 }
 
 impl GpuContext {
-    /// Create a new GPU context. Async — use pollster::block_on at the call site.
-    /// Pass a compatible surface to ensure the adapter can present to it.
-    pub async fn new(compatible_surface: Option<&wgpu::Surface<'_>>) -> Self {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::METAL,
-            ..Default::default()
-        });
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface,
-                force_fallback_adapter: false,
-            })
-            .await
-            .expect("Failed to find a suitable GPU adapter");
-
-        let info = adapter.get_info();
-        log::info!(
-            "[GPU] adapter={:?} backend={:?} driver={:?}",
-            info.name, info.backend, info.driver
-        );
-
-        let (device, queue) =
-            Self::create_device_from_adapter(&adapter, "MANIFOLD Device").await;
-
-        device.on_uncaptured_error(Arc::new(|error| {
-            log::error!("[wgpu] Uncaptured device error: {error}");
-        }));
-
-        Self {
-            instance,
-            adapter,
-            device: Arc::new(device),
-            queue: Arc::new(queue),
-            native_device: manifold_gpu::GpuDevice::new(),
-        }
+    pub fn new() -> Self {
+        Self { device: manifold_gpu::GpuDevice::new() }
     }
+}
 
-    async fn create_device_from_adapter(
-        adapter: &wgpu::Adapter,
-        label: &str,
-    ) -> (wgpu::Device, wgpu::Queue) {
-        // Request timestamp query features if the adapter supports them (for GPU profiling).
-        let mut features = wgpu::Features::empty();
-        if adapter
-            .features()
-            .contains(wgpu::Features::TIMESTAMP_QUERY)
-        {
-            features |= wgpu::Features::TIMESTAMP_QUERY;
-        }
-        if adapter
-            .features()
-            .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
-        {
-            features |= wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
-        }
-
-        adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some(label),
-                required_features: features,
-                required_limits: adapter.limits(),
-                memory_hints: wgpu::MemoryHints::Performance,
-                trace: wgpu::Trace::Off,
-                ..Default::default()
-            })
-            .await
-            .expect("Failed to create GPU device")
+impl Default for GpuContext {
+    fn default() -> Self {
+        Self::new()
     }
 }

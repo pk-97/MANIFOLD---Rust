@@ -1980,14 +1980,10 @@ dependencies = [
  "mimalloc",
  "objc",
  "parking_lot",
- "pollster",
  "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",
- "wgpu",
- "wgpu-hal",
- "wgpu-types",
  "winit",
 ]
 

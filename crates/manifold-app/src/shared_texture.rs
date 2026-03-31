@@ -1,9 +1,8 @@
 //! Cross-device GPU texture sharing via IOSurface (macOS).
 //!
-//! The content thread renders on its own wgpu Device. The UI thread renders on
-//! a separate Device. Textures can't cross wgpu Devices, but both Devices share
-//! the same underlying MTLDevice. IOSurface provides kernel-managed GPU memory
-//! that multiple MTLTextures (from any Device) can bind to — zero copy.
+//! Both threads share the same underlying MTLDevice via manifold-gpu GpuDevice.
+//! IOSurface provides kernel-managed GPU memory that multiple MTLTextures
+//! (from any Device) can bind to — zero copy.
 //!
 //! Architecture:
 //!   Content Device ──render──▶ IOSurface-backed texture ◀──read── UI Device
@@ -118,106 +117,6 @@ impl SharedTextureBridge {
             TCFType::wrap_under_create_rule(surface_ref)
         }
     }
-
-    /// Create an MTLTexture backed by one of the IOSurfaces, then import it
-    /// into the given wgpu Device as a wgpu::Texture.
-    ///
-    /// `surface_index` selects which of the triple-buffered surfaces (0, 1, or 2).
-    /// Both the content and UI devices call this — each gets their own
-    /// MTLTexture handle backed by the same IOSurface memory.
-    ///
-    /// # Safety
-    /// `wgpu_device` must be from the same adapter (same underlying MTLDevice).
-    pub unsafe fn import_texture(
-        &self,
-        wgpu_device: &wgpu::Device,
-        surface_index: usize,
-    ) -> wgpu::Texture { unsafe {
-        assert!(surface_index < SURFACE_COUNT, "surface_index must be 0..{SURFACE_COUNT}");
-        let width = self.width.load(Ordering::Acquire);
-        let height = self.height.load(Ordering::Acquire);
-
-        // 1. Get the raw MTLDevice from wgpu
-        let hal_device_guard = wgpu_device
-            .as_hal::<wgpu_hal::api::Metal>()
-            .expect("Not a Metal backend");
-        let raw_device: &metal::DeviceRef = hal_device_guard.raw_device();
-
-        // 2. Create an MTLTextureDescriptor
-        let descriptor = metal::TextureDescriptor::new();
-        descriptor.set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
-        descriptor.set_width(width as u64);
-        descriptor.set_height(height as u64);
-        descriptor.set_depth(1);
-        descriptor.set_mipmap_level_count(1);
-        descriptor.set_sample_count(1);
-        descriptor.set_texture_type(metal::MTLTextureType::D2);
-        descriptor.set_usage(
-            metal::MTLTextureUsage::ShaderRead
-                | metal::MTLTextureUsage::ShaderWrite
-                | metal::MTLTextureUsage::RenderTarget,
-        );
-        descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
-
-        // 3. Call [MTLDevice newTextureWithDescriptor:iosurface:plane:]
-        let io_surfaces_guard = self.io_surfaces.read();
-        let io_surface_ref = io_surfaces_guard[surface_index].as_concrete_TypeRef();
-        let raw_mtl_texture: *mut objc::runtime::Object = objc::msg_send![
-            raw_device,
-            newTextureWithDescriptor:descriptor.as_ref()
-            iosurface:io_surface_ref
-            plane:0usize
-        ];
-        drop(io_surfaces_guard); // Release read lock before wgpu calls
-        assert!(
-            !raw_mtl_texture.is_null(),
-            "newTextureWithDescriptor:iosurface:plane: failed"
-        );
-
-        // 4. Wrap as metal::Texture (takes ownership of the +1 retain from newTexture)
-        let mtl_texture = metal::Texture::from_ptr(raw_mtl_texture as *mut _);
-
-        // 5. Create wgpu-hal texture from the raw Metal texture
-        let hal_texture = wgpu_hal::metal::Device::texture_from_raw(
-            mtl_texture,
-            wgpu_types::TextureFormat::Rgba16Float,
-            metal::MTLTextureType::D2,
-            1, // array_layers
-            1, // mip_levels
-            wgpu_hal::CopyExtent {
-                width,
-                height,
-                depth: 1,
-            },
-        );
-
-        // 6. Import into wgpu
-        let labels = [
-            "IOSurface Shared Texture A",
-            "IOSurface Shared Texture B",
-            "IOSurface Shared Texture C",
-        ];
-        let label = labels[surface_index];
-        wgpu_device.create_texture_from_hal::<wgpu_hal::api::Metal>(
-            hal_texture,
-            &wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba16Float,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            },
-        )
-    }}
 
     /// Create a native `manifold_gpu::GpuTexture` backed by one of the IOSurfaces.
     /// Used by the content thread which uses `manifold_gpu::GpuDevice` directly
