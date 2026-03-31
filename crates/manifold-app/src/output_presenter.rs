@@ -121,7 +121,13 @@ impl NativeOutputPresenter {
         layer.set_device(device_ref);
         layer.set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
         layer.set_framebuffer_only(true);
-        layer.set_display_sync_enabled(true);
+        // displaySyncEnabled = false: nextDrawable returns immediately instead
+        // of blocking until vsync. Since we're on the UI thread, blocking would
+        // stall the workspace render. Frame pacing comes from winit's event loop
+        // and Core Animation's present-at-vsync behavior.
+        layer.set_display_sync_enabled(false);
+        // Maximize drawable count to reduce nextDrawable blocking.
+        layer.set_maximum_drawable_count(3);
         layer.set_drawable_size(core_graphics_types::geometry::CGSize {
             width: proj_w as f64,
             height: proj_h as f64,
@@ -170,7 +176,7 @@ impl NativeOutputPresenter {
         let native_textures = Self::import_textures(device_ref, &bridge);
 
         log::info!(
-            "[NativeOutputPresenter] Created: {}x{} Rgba16Float, EDR={:.2}x, vsync=true",
+            "[NativeOutputPresenter] Created: {}x{} Rgba16Float, EDR={:.2}x, non-blocking",
             proj_w, proj_h, edr_headroom,
         );
 
