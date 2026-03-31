@@ -194,22 +194,17 @@ pub struct Application {
     #[cfg(target_os = "macos")]
     pub(crate) last_bridge_generation: u64,
     /// Last IOSurface front_index seen by the UI thread (workspace preview).
-    /// Not used for output window blitting — that is handled by OutputPresenter.
+    /// Passed to `present_all_windows()` and tracked by `OutputBlitter`.
     #[cfg(target_os = "macos")]
     pub(crate) last_output_front_index: usize,
     pub(crate) blit_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
-    pub(crate) blit_vbuf: Option<manifold_gpu::GpuBuffer>,
-    pub(crate) blit_ibuf: Option<manifold_gpu::GpuBuffer>,
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) atlas_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) atlas_sampler: Option<manifold_gpu::GpuSampler>,
-    // (output_blit_pipeline and output_blit_format removed — native Metal
-    // presenter compiles its own pipeline via manifold-gpu)
-    /// Native Metal output presenter — dedicated thread with custom CAMetalLayer
-    /// at project resolution. Vsync-locked, pixel-perfect 1:1, EDR-capable.
-    /// Dropping the handle stops the thread and releases the layer.
+    /// Inline output blitter — renders output window from the main frame encoder.
+    /// No separate thread or command queue. Pixel-perfect 1:1, EDR-capable.
     #[cfg(target_os = "macos")]
-    pub(crate) output_presenter: Option<crate::output_presenter::NativeOutputPresenter>,
+    pub(crate) output_blitter: Option<crate::output_presenter::OutputBlitter>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
@@ -344,13 +339,11 @@ impl Application {
             #[cfg(target_os = "macos")]
             last_output_front_index: usize::MAX,
             blit_pipeline: None,
-            blit_vbuf: None,
-            blit_ibuf: None,
             blit_sampler: None,
             atlas_pipeline: None,
             atlas_sampler: None,
             #[cfg(target_os = "macos")]
-            output_presenter: None,
+            output_blitter: None,
             ui_renderer: None,
             ui_cache_manager: None,
             layer_bitmap_gpu: None,
@@ -985,22 +978,23 @@ impl ApplicationHandler for Application {
             );
 
             // Blit pipeline (composite output → drawable with aspect-fit viewport)
+            // Fullscreen triangle from vertex_index — same approach as OutputBlitter
+            // and atlas blit. Avoids vertex buffer / vertex descriptor path which
+            // produces no visible output through the WGSL→MSL compilation pipeline.
             let blit_shader = r#"
-struct VertexInput {
-    @location(0) position: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-};
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
 };
-@group(0) @binding(0) var t_source: texture_2d<f32>;
-@group(0) @binding(1) var s_source: sampler;
 @vertex
-fn vs_main(in: VertexInput) -> VertexOutput {
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
     var out: VertexOutput;
-    out.position = vec4<f32>(in.position, 0.0, 1.0);
-    out.uv = in.uv;
+    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
+    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
     return out;
 }
 @fragment
@@ -1008,53 +1002,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     return textureSample(t_source, s_source, in.uv);
 }
 "#;
-            let blit_vertex_layout = manifold_gpu::GpuVertexLayout {
-                stride: 16,
-                attributes: vec![
-                    manifold_gpu::GpuVertexAttribute {
-                        format: manifold_gpu::GpuVertexFormat::Float32x2,
-                        offset: 0,
-                        shader_location: 0,
-                    },
-                    manifold_gpu::GpuVertexAttribute {
-                        format: manifold_gpu::GpuVertexFormat::Float32x2,
-                        offset: 8,
-                        shader_location: 1,
-                    },
-                ],
-            };
-            self.blit_pipeline = Some(native_device.create_render_pipeline_with_vertex_layout(
+            self.blit_pipeline = Some(native_device.create_render_pipeline(
                 blit_shader, "vs_main", "fs_main",
                 manifold_gpu::GpuTextureFormat::Bgra8Unorm,
                 None,
-                &blit_vertex_layout,
                 "Blit Pipeline",
             ));
-            // Fullscreen quad: 4 vertices, NDC positions + UVs
-            // [-1,-1,0,1], [1,-1,1,1], [1,1,1,0], [-1,1,0,0]
-            let quad_vertices: [[f32; 4]; 4] = [
-                [-1.0, -1.0, 0.0, 1.0],
-                [ 1.0, -1.0, 1.0, 1.0],
-                [ 1.0,  1.0, 1.0, 0.0],
-                [-1.0,  1.0, 0.0, 0.0],
-            ];
-            let vbuf = native_device.create_buffer_shared(64);
-            unsafe {
-                let data = std::slice::from_raw_parts(
-                    quad_vertices.as_ptr() as *const u8, 64,
-                );
-                vbuf.write(0, data);
-            }
-            self.blit_vbuf = Some(vbuf);
-            let quad_indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
-            let ibuf = native_device.create_buffer_shared(24);
-            unsafe {
-                let data = std::slice::from_raw_parts(
-                    quad_indices.as_ptr() as *const u8, 24,
-                );
-                ibuf.write(0, data);
-            }
-            self.blit_ibuf = Some(ibuf);
             self.blit_sampler = Some(native_device.create_sampler(&manifold_gpu::GpuSamplerDesc {
                 min_filter: manifold_gpu::GpuFilterMode::Linear,
                 mag_filter: manifold_gpu::GpuFilterMode::Linear,
@@ -1341,11 +1294,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                     event_loop.exit();
                 } else {
-                    // Drop the presenter before removing the window so the
+                    // Drop the blitter before removing the window so the
                     // CAMetalLayer is released before winit destroys the window.
                     #[cfg(target_os = "macos")]
                     {
-                        self.output_presenter = None;
+                        self.output_blitter = None;
                         self.output_saved_frame = None;
                     }
                     self.window_registry.remove(&window_id);
@@ -1854,7 +1807,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         && !is_primary {
                             #[cfg(target_os = "macos")]
                             {
-                                self.output_presenter = None;
+                                self.output_blitter = None;
                                 self.output_saved_frame = None;
                             }
                             self.window_registry.remove(&window_id);
@@ -1974,10 +1927,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Close output window (Escape key or programmatic close)
         if self.pending_close_output {
             self.pending_close_output = false;
-            // Drop the presenter before removing windows.
+            // Drop the blitter before removing windows.
             #[cfg(target_os = "macos")]
             {
-                self.output_presenter = None;
+                self.output_blitter = None;
                 self.output_saved_frame = None;
             }
             let output_ids: Vec<_> = self.window_registry.iter()
@@ -2054,10 +2007,6 @@ impl Application {
                     self.output_edr_headroom = h;
                 }
             }
-        }
-        #[cfg(target_os = "macos")]
-        if let Some(p) = &mut self.output_presenter {
-            p.update_edr_headroom(self.output_edr_headroom);
         }
     }
 }
@@ -2143,10 +2092,9 @@ impl Drop for Application {
             log::info!("[Application::Drop] content thread joined");
         }
 
-        // Stop the output presenter thread — it owns a CAMetalLayer and
-        // MTLCommandQueue. Must be stopped before the device poll below.
+        // Drop the output blitter — releases its CAMetalLayer before cleanup.
         #[cfg(target_os = "macos")]
-        { self.output_presenter = None; }
+        { self.output_blitter = None; }
 
         // Drop GPU resources before the device and surfaces.
         // Field drop order is declaration order — gpu (device) drops before
@@ -2159,8 +2107,6 @@ impl Drop for Application {
         self.layer_bitmap_gpu = None;
         self.ui_renderer = None;
         self.blit_pipeline = None;
-        self.blit_vbuf = None;
-        self.blit_ibuf = None;
         self.blit_sampler = None;
         self.atlas_pipeline = None;
         self.atlas_sampler = None;

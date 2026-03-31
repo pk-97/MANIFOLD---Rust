@@ -898,30 +898,36 @@ impl Application {
         // Pass 1: Clear to black
         encoder.clear_texture(&drawable_tex, 0.0, 0.0, 0.0, 1.0);
 
-        // Pass 2: Blit compositor output to video area (aspect-fit)
-        #[cfg(target_os = "macos")]
-        {
-            let has_tex = self.ui_shared_textures[front_index].is_some();
-            let has_pipe = self.blit_pipeline.is_some();
-            let has_vbuf = self.blit_vbuf.is_some();
-            let has_ibuf = self.blit_ibuf.is_some();
-            let has_samp = self.blit_sampler.is_some();
-            eprintln!(
-                "[Blit] tex={has_tex} pipe={has_pipe} vbuf={has_vbuf} ibuf={has_ibuf} samp={has_samp} front={front_index}"
+        // Pass 2: Atlas blit fullscreen (UI panels onto black)
+        let atlas_opt = self.ui_cache_manager.as_ref().and_then(|cm| cm.atlas_texture());
+        if let (Some(atlas_pipeline), Some(atlas_sampler), Some(atlas)) = (
+            &self.atlas_pipeline,
+            &self.atlas_sampler,
+            atlas_opt.as_ref(),
+        ) {
+            encoder.draw_fullscreen(
+                atlas_pipeline,
+                &drawable_tex,
+                &[
+                    manifold_gpu::GpuBinding::Texture { binding: 0, texture: atlas },
+                    manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: atlas_sampler },
+                ],
+                false,
+                true,
+                "Atlas Blit",
             );
         }
+
+        // Pass 3: Blit compositor output ON TOP of atlas in video area (aspect-fit)
+        // Compositor replaces whatever is in the video rect (opaque, no blend).
         #[cfg(target_os = "macos")]
         if let (
             Some(compositor_tex),
             Some(blit_pipeline),
-            Some(blit_vbuf),
-            Some(blit_ibuf),
             Some(blit_sampler),
         ) = (
             self.ui_shared_textures[front_index].as_ref(),
             &self.blit_pipeline,
-            &self.blit_vbuf,
-            &self.blit_ibuf,
             &self.blit_sampler,
         ) {
             let (comp_w, comp_h) = self.content_pipeline_output.as_ref()
@@ -944,41 +950,22 @@ impl Application {
                 let fit_x = rect_x + (rect_w - fit_w) * 0.5;
                 let fit_y = rect_y + (rect_h - fit_h) * 0.5;
 
-                encoder.draw_indexed(
+                encoder.draw_fullscreen_viewport(
                     blit_pipeline,
                     &drawable_tex,
                     &[
-                        manifold_gpu::GpuBinding::Texture { binding: 0, texture: compositor_tex },
-                        manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: blit_sampler },
+                        manifold_gpu::GpuBinding::Texture {
+                            binding: 0, texture: compositor_tex,
+                        },
+                        manifold_gpu::GpuBinding::Sampler {
+                            binding: 1, sampler: blit_sampler,
+                        },
                     ],
-                    blit_vbuf,
-                    blit_ibuf,
-                    6,
-                    Some((fit_x, fit_y, fit_w, fit_h)),
+                    (fit_x, fit_y, fit_w, fit_h),
                     manifold_gpu::GpuLoadAction::Load,
                     "Blit Compositor",
                 );
             }
-        }
-
-        // Pass 3: Atlas blit fullscreen (premultiplied alpha over video)
-        let atlas_opt = self.ui_cache_manager.as_ref().and_then(|cm| cm.atlas_texture());
-        if let (Some(atlas_pipeline), Some(atlas_sampler), Some(atlas)) = (
-            &self.atlas_pipeline,
-            &self.atlas_sampler,
-            atlas_opt.as_ref(),
-        ) {
-            encoder.draw_fullscreen(
-                atlas_pipeline,
-                &drawable_tex,
-                &[
-                    manifold_gpu::GpuBinding::Texture { binding: 0, texture: atlas },
-                    manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: atlas_sampler },
-                ],
-                false,
-                true,
-                "Atlas Blit",
-            );
         }
 
         // Pass 4: Layer bitmaps directly to drawable
@@ -1070,8 +1057,25 @@ impl Application {
             }
         }
 
+        // Pass 6: Output blit (IOSurface → output drawable, same encoder)
+        // Both drawables are presented from one commit() — single command queue,
+        // zero GPU scheduler contention between workspace and output windows.
+        #[cfg(target_os = "macos")]
+        let output_drawable = if let (Some(output), Some(compositor_tex)) = (
+            &mut self.output_blitter,
+            self.ui_shared_textures[front_index].as_ref(),
+        ) {
+            output.blit_if_new(front_index, compositor_tex, &mut encoder)
+        } else {
+            None
+        };
+
         // ── Present + commit ──
         encoder.present_drawable(&drawable);
+        #[cfg(target_os = "macos")]
+        if let Some(ref out_drawable) = output_drawable {
+            encoder.present_drawable(out_drawable);
+        }
         encoder.commit();
     }
 }

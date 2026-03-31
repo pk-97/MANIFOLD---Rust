@@ -626,25 +626,22 @@ impl Application {
             self.output_edr_headroom = h;
         }
 
-        // Native Metal presenter: custom CAMetalLayer at project resolution.
-        // Pixel-perfect 1:1 blit from IOSurface, vsync-locked, EDR-capable.
-        // No wgpu surface — the presenter owns the layer directly.
+        // Inline output blitter: attaches a CAMetalLayer at project resolution.
+        // Blitting runs from the main frame encoder — no dedicated thread/queue.
         #[cfg(target_os = "macos")]
-        if let (Some(gpu), Some(bridge)) =
-            (&self.gpu, &self.shared_texture_bridge)
-        {
-            let presenter = crate::output_presenter::NativeOutputPresenter::new(
+        if let Some(gpu) = &self.gpu {
+            let blitter = crate::output_presenter::OutputBlitter::new(
                 &gpu.device,
                 &window,
-                Arc::clone(bridge),
-                h,
+                proj_w as u32,
+                proj_h as u32,
             );
-            self.output_presenter = Some(presenter);
+            self.output_blitter = Some(blitter);
         }
 
         let state = WindowState {
             window,
-            surface: None, // No wgpu surface — presenter owns the CAMetalLayer.
+            surface: None, // No wgpu surface — OutputBlitter owns the CAMetalLayer.
             role: WindowRole::Output {
                 name: name.to_string(),
             },

@@ -180,7 +180,7 @@ impl GpuEncoder {
         color.set_load_action(if clear {
             metal::MTLLoadAction::Clear
         } else {
-            metal::MTLLoadAction::DontCare
+            metal::MTLLoadAction::Load
         });
         color.set_store_action(if store {
             metal::MTLStoreAction::Store
@@ -224,6 +224,79 @@ impl GpuEncoder {
         enc.pop_debug_group();
         enc.end_encoding();
         // State goes back to None (render encoder consumed).
+    }
+
+    /// Draw a fullscreen triangle with viewport positioning.
+    ///
+    /// Like `draw_fullscreen()` but sets a viewport for sub-region rendering
+    /// (e.g. aspect-fit blit into a panel). Load action preserves existing content.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_fullscreen_viewport(
+        &mut self,
+        pipeline: &GpuRenderPipeline,
+        target: &GpuTexture,
+        bindings: &[GpuBinding],
+        viewport: (f32, f32, f32, f32),
+        load_action: crate::GpuLoadAction,
+        label: &str,
+    ) {
+        self.end_current();
+
+        let desc = metal::RenderPassDescriptor::new();
+        let color = desc.color_attachments().object_at(0).unwrap();
+        color.set_texture(Some(&target.raw));
+        color.set_load_action(match load_action {
+            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
+            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
+            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
+        });
+        color.set_store_action(metal::MTLStoreAction::Store);
+        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
+
+        let enc = self.cmd_buf().new_render_command_encoder(desc);
+        enc.push_debug_group(label);
+        enc.set_render_pipeline_state(&pipeline.state);
+
+        let (x, y, w, h) = viewport;
+        enc.set_viewport(metal::MTLViewport {
+            originX: x as f64,
+            originY: y as f64,
+            width: w as f64,
+            height: h as f64,
+            znear: 0.0,
+            zfar: 1.0,
+        });
+
+        for binding in bindings {
+            match binding {
+                GpuBinding::Buffer { binding: b, buffer, offset } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    enc.set_fragment_buffer(
+                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
+                    );
+                }
+                GpuBinding::Texture { binding: b, texture } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
+                }
+                GpuBinding::Sampler { binding: b, sampler } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                }
+                GpuBinding::Bytes { binding: b, data } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    enc.set_fragment_bytes(
+                        slot.metal_index as _,
+                        data.len() as _,
+                        data.as_ptr() as *const _,
+                    );
+                }
+            }
+        }
+
+        enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+        enc.pop_debug_group();
+        enc.end_encoding();
     }
 
     /// Draw instanced geometry with a render pipeline.

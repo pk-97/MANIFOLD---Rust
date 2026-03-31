@@ -616,7 +616,7 @@ impl NativeTextRenderer {
 
         let commands: Vec<TextCommand> = std::mem::take(&mut self.commands);
 
-        for cmd in &commands {
+        for (cmd_idx, cmd) in commands.iter().enumerate() {
             let physical_size = cmd.font_size * scale;
             let size_x10 = (physical_size * 10.0).round() as u16;
 
@@ -626,10 +626,11 @@ impl NativeTextRenderer {
                 continue;
             };
 
-            let ascent = ct_font.ascent() as f32;
-
-            // Baseline in y-down screen space. cmd.y is the top of the line box.
-            let baseline_y = cmd.y + ascent / scale;
+            // ct_font.ascent() returns inflated hhea table metrics (includes line gap).
+            // For baseline positioning, use a ratio of the em size that matches
+            // the actual glyph ascent. Inter's cap height is ~72% of em, with
+            // ascenders at ~82%. This matches glyphon's effective baseline.
+            let ascent = physical_size * 0.82;
 
             let color = [
                 cmd.color[0] as f32 / 255.0,
@@ -804,8 +805,9 @@ fn measure_text_ct(
     let line = make_ct_line(ct_font, text);
     let bounds = line.get_typographic_bounds();
     let w = bounds.width as f32;
-    let h = ((bounds.ascent + bounds.descent) as f32).max(font_size);
-    Vec2::new(w, h)
+    // Use font_size as height (matches glyphon behavior). CTLine's ascent+descent
+    // includes inflated hhea line metrics which are too tall for UI centering.
+    Vec2::new(w, font_size)
 }
 
 /// Create a CTLine from a text string and a CTFont.
