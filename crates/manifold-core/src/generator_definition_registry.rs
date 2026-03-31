@@ -354,7 +354,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd_whole_labels("Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),
         pd("Particle Size", 1.0, 8.0, 3.0, Some("F1"), "particleSize"),
         pd("Anti-Clump", 0.0, 60.0, 20.0, Some("F0"), "antiClump"),
-        pd("Inject Force", 0.0, 0.02, 0.005, Some("F3"), "injectForce"),
+        pd("Inject Force", 0.0, 0.1, 0.005, Some("F3"), "injectForce"),
     ];
     m.insert(GeneratorTypeId::FLUID_SIMULATION, create_def("Fluid Simulation", false, "fluidSimulation", params));
 
@@ -390,7 +390,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd_whole_labels("Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),
         pd("Particle Size", 1.0, 8.0, 3.0, Some("F1"), "particleSize"),
         pd("Anti-Clump", 0.0, 60.0, 20.0, Some("F0"), "antiClump"),
-        pd("Inject Force", 0.0, 0.02, 0.005, Some("F3"), "injectForce"),
+        pd("Inject Force", 0.0, 0.1, 0.005, Some("F3"), "injectForce"),
         // 3D-specific params (indices 13-20)
         pd_whole_labels("Container", 0.0, 3.0, 0.0, &["None", "Cube", "Sphere", "Torus"], "container"),
         pd("Ctr Scale", 0.2, 1.0, 0.8, Some("F2"), "containerScale"),

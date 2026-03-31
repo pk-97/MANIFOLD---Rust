@@ -44,7 +44,7 @@ const MAX_PARTICLES: u32 = 8_000_000;
 const BAKE_GROUP_SIZE: u32 = 8;
 const PATTERN_COUNT: u32 = 7;
 const SNAP_DECAY_RATE: f32 = 12.0;
-const INJECT_FRAMES_PER_ZONE: i32 = 120;
+const INJECT_DURATION_SECS: f32 = 0.5;
 const SCATTER_REFERENCE_AREA: f32 = 1920.0 * 1080.0;
 const THREAD_GROUP_SIZE: u32 = 256;
 const FORCE_SCALE: f32 = 500.0;
@@ -224,7 +224,7 @@ pub struct FluidSimulation3DGenerator {
     snap_envelope: f32,
     active_snap_mode: i32,
     inject_zone_index: i32,
-    inject_frames_remaining: i32,
+    inject_elapsed: f32,
     next_inject_zone: i32,
 }
 
@@ -281,7 +281,7 @@ impl FluidSimulation3DGenerator {
             active_count: 0, vol_res: 0, disp_w: 0, disp_h: 0,
             frame_count: 0, initialized: false,
             last_trigger_count: u32::MAX, snap_envelope: 0.0, active_snap_mode: 0,
-            inject_zone_index: -1, inject_frames_remaining: 0, next_inject_zone: 0,
+            inject_zone_index: -1, inject_elapsed: 0.0, next_inject_zone: 0,
         }
     }
 
@@ -438,7 +438,7 @@ impl Generator for FluidSimulation3DGenerator {
                     );
                 } else if self.active_snap_mode == 4 {
                     self.inject_zone_index = self.next_inject_zone;
-                    self.inject_frames_remaining = INJECT_FRAMES_PER_ZONE;
+                    self.inject_elapsed = 0.0;
                     self.next_inject_zone = (self.next_inject_zone + 1) % 4;
                 }
             }
@@ -455,11 +455,11 @@ impl Generator for FluidSimulation3DGenerator {
         }
 
         if self.inject_zone_index >= 0 {
-            self.inject_frames_remaining -= 1;
-            if self.inject_frames_remaining <= 0 { self.inject_zone_index = -1; }
+            self.inject_elapsed += ctx.dt;
+            if self.inject_elapsed >= INJECT_DURATION_SECS { self.inject_zone_index = -1; }
         }
         let inject_phase = if self.inject_zone_index >= 0 {
-            1.0 - self.inject_frames_remaining as f32 / INJECT_FRAMES_PER_ZONE as f32
+            self.inject_elapsed / INJECT_DURATION_SECS
         } else { 0.0 };
         let inject_force_val = if self.inject_zone_index >= 0 { inject_force_p } else { 0.0 };
 
@@ -686,7 +686,7 @@ impl Generator for FluidSimulation3DGenerator {
         self.disp_w = 0;
         self.disp_h = 0;
         self.snap_envelope = 0.0;
-        self.inject_frames_remaining = 0;
+        self.inject_elapsed = 0.0;
     }
 }
 

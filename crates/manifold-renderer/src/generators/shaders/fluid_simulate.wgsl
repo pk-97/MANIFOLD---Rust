@@ -182,7 +182,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let curl_profile = t * (1.0 - t) * 4.0;
             let curl_force = tangent * curl_profile;
 
-            let strength = params.inject_force * envelope * falloff;
+            let dt_scale = params.dt * 60.0;
+            let strength = params.inject_force * envelope * falloff * dt_scale;
             let push = perturbed_radial * strength + curl_force * strength * 0.5;
             p.position = vec3<f32>(fract(pos + push + 1.0), 0.0);
         }

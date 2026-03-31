@@ -34,7 +34,7 @@ const PATTERN_COUNT: u32 = 7;
 const SNAP_DECAY_RATE: f32 = 12.0; // ~200ms to near-zero
 /// Blur/vector field resolution divider. 2 = half scatter res (matches Unity).
 const PRE_SHRINK: u32 = 2;
-const INJECT_FRAMES_PER_ZONE: i32 = 120; // ~2 sec at 60fps
+const INJECT_DURATION_SECS: f32 = 0.5;
 const SCATTER_REFERENCE_AREA: f32 = 1920.0 * 1080.0; // reference for intensity normalization
 
 // Texture formats: Rgba16Float for both density and vector field.
@@ -168,7 +168,7 @@ pub struct FluidSimulationGenerator {
     // Injection state machine
     inject_active: bool,
     inject_point: [f32; 2],
-    inject_frames_remaining: i32,
+    inject_elapsed: f32,
 }
 
 impl FluidSimulationGenerator {
@@ -242,7 +242,7 @@ impl FluidSimulationGenerator {
             active_snap_mode: 0,
             inject_active: false,
             inject_point: [0.0; 2],
-            inject_frames_remaining: 0,
+            inject_elapsed: 0.0,
         }
     }
 
@@ -479,7 +479,7 @@ impl Generator for FluidSimulationGenerator {
                         trigger_count as u32,
                         self.frame_count as u32,
                     );
-                    self.inject_frames_remaining = INJECT_FRAMES_PER_ZONE;
+                    self.inject_elapsed = 0.0;
                 }
             }
         }
@@ -509,14 +509,14 @@ impl Generator for FluidSimulationGenerator {
 
         // --- Advance injection state machine ---
         if self.inject_active {
-            self.inject_frames_remaining -= 1;
-            if self.inject_frames_remaining <= 0 {
+            self.inject_elapsed += ctx.dt;
+            if self.inject_elapsed >= INJECT_DURATION_SECS {
                 self.inject_active = false;
             }
         }
 
         let inject_phase = if self.inject_active {
-            1.0 - (self.inject_frames_remaining as f32 / INJECT_FRAMES_PER_ZONE as f32)
+            self.inject_elapsed / INJECT_DURATION_SECS
         } else {
             0.0
         };
@@ -766,7 +766,7 @@ impl Generator for FluidSimulationGenerator {
         self.scatter_height = 0;
         self.snap_envelope = 0.0;
         self.inject_active = false;
-        self.inject_frames_remaining = 0;
+        self.inject_elapsed = 0.0;
     }
 }
 
