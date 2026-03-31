@@ -26,7 +26,15 @@ pub struct PanelCacheInfo {
     pub node_start: usize,
     pub node_end: usize,
     pub rect: Rect,
+    /// Optional sub-regions for incremental re-rendering (e.g. effect cards
+    /// within the inspector). When present and only a few are dirty, the
+    /// panel cache is partially updated via LoadOp::Load instead of full
+    /// re-render.
+    pub sub_regions: Option<Vec<(usize, usize)>>,
 }
+
+/// Max dirty sub-regions before falling back to full panel re-render.
+const INCREMENTAL_THRESHOLD: usize = 4;
 
 /// Manages per-panel GPU texture caches and orchestrates dirty re-rendering.
 pub struct UICacheManager {
@@ -94,6 +102,11 @@ impl UICacheManager {
     /// the same buffer within one submission alias — only the last write
     /// is visible to all render passes. Separate submissions ensure each
     /// panel's buffer state is correct.
+    ///
+    /// For panels with sub-regions (e.g. inspector effect cards), when the
+    /// cache is valid and only a few sub-regions are dirty, an incremental
+    /// re-render is done with LoadOp::Load (preserving clean areas) instead
+    /// of a full re-render.
     pub fn render_dirty_panels(
         &mut self,
         device: &wgpu::Device,
@@ -118,78 +131,125 @@ impl UICacheManager {
                 None => continue,
             };
 
-            // Render panel nodes to commands
-            ui_renderer.render_tree_range(tree, info.node_start, info.node_end);
+            // ── Sub-region incremental path ──
+            // If the cache is valid and the panel has sub-regions, check if
+            // only a few sub-regions are dirty. If so, render just those
+            // into the existing cache texture (LoadOp::Load preserves the rest).
+            if cache.is_valid()
+                && let Some(ref subs) = info.sub_regions
+            {
+                    let dirty: Vec<&(usize, usize)> = subs
+                        .iter()
+                        .filter(|(s, e)| tree.has_dirty_in_range(*s, *e))
+                        .collect();
 
-            // prepare_with_offset expects LOGICAL pixel dimensions —
-            // it derives physical from scale_factor internally.
+                    if !dirty.is_empty() && dirty.len() <= INCREMENTAL_THRESHOLD {
+                        // Accumulate all dirty sub-region nodes into one draw
+                        for &(s, e) in &dirty {
+                            ui_renderer.render_tree_range(tree, *s, *e);
+                        }
+                        let vp_w = info.rect.width.ceil() as u32;
+                        let vp_h = info.rect.height.ceil() as u32;
+                        if ui_renderer.prepare_with_offset(
+                            device, queue,
+                            vp_w.max(1), vp_h.max(1),
+                            info.rect.x, info.rect.y,
+                            self.scale_factor, TextMode::Overlay,
+                        ) {
+                            let mut enc = device.create_command_encoder(
+                                &wgpu::CommandEncoderDescriptor {
+                                    label: Some("Panel Incremental"),
+                                },
+                            );
+                            {
+                                let mut pass = enc.begin_render_pass(
+                                    &wgpu::RenderPassDescriptor {
+                                        label: Some("Panel Cache Incremental"),
+                                        color_attachments: &[Some(
+                                            wgpu::RenderPassColorAttachment {
+                                                view,
+                                                resolve_target: None,
+                                                depth_slice: None,
+                                                ops: wgpu::Operations {
+                                                    load: wgpu::LoadOp::Load,
+                                                    store: wgpu::StoreOp::Store,
+                                                },
+                                            },
+                                        )],
+                                        depth_stencil_attachment: None,
+                                        timestamp_writes: None,
+                                        occlusion_query_set: None,
+                                        multiview_mask: None,
+                                    },
+                                );
+                                ui_renderer.draw(&mut pass);
+                            }
+                            queue.submit(std::iter::once(enc.finish()));
+                        }
+                        // Cache stays valid (we only updated dirty sub-regions)
+                        rendered += 1;
+                        continue;
+                    }
+            }
+
+            // ── Full render path ──
+            ui_renderer.render_tree_range(tree, info.node_start, info.node_end);
             let vp_w = info.rect.width.ceil() as u32;
             let vp_h = info.rect.height.ceil() as u32;
 
             if !ui_renderer.prepare_with_offset(
-                device,
-                queue,
-                vp_w.max(1),
-                vp_h.max(1),
-                info.rect.x,
-                info.rect.y,
-                self.scale_factor,
-                TextMode::Overlay,
+                device, queue,
+                vp_w.max(1), vp_h.max(1),
+                info.rect.x, info.rect.y,
+                self.scale_factor, TextMode::Overlay,
             ) {
-                // No content — clear the cache texture
                 let mut enc = device.create_command_encoder(
                     &wgpu::CommandEncoderDescriptor { label: Some("Panel Clear") },
                 );
-                let _pass =
-                    enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                {
+                    let _pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Panel Cache Clear"),
-                        color_attachments: &[Some(
-                            wgpu::RenderPassColorAttachment {
-                                view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                    store: wgpu::StoreOp::Store,
-                                },
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
                             },
-                        )],
+                        })],
                         depth_stencil_attachment: None,
                         timestamp_writes: None,
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                drop(_pass);
+                }
                 queue.submit(std::iter::once(enc.finish()));
                 self.caches[idx].mark_valid();
                 rendered += 1;
                 continue;
             }
 
-            // Draw into panel cache texture (own encoder to isolate write_buffer)
             let mut enc = device.create_command_encoder(
                 &wgpu::CommandEncoderDescriptor { label: Some("Panel Cache") },
             );
             {
-                let mut pass =
-                    enc.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Panel Cache Render"),
-                        color_attachments: &[Some(
-                            wgpu::RenderPassColorAttachment {
-                                view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            },
-                        )],
-                        depth_stencil_attachment: None,
-                        timestamp_writes: None,
-                        occlusion_query_set: None,
-                        multiview_mask: None,
-                    });
+                let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("Panel Cache Render"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
                 ui_renderer.draw(&mut pass);
             }
             queue.submit(std::iter::once(enc.finish()));

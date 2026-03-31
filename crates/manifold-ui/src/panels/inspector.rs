@@ -199,6 +199,34 @@ impl InspectorCompositePanel {
         }
     }
 
+    /// Sub-region node ranges for incremental cache re-rendering.
+    /// Returns (node_start, node_end) for each sub-panel: chrome panels,
+    /// effect cards, gen params. Used by the cache manager to detect which
+    /// parts of the inspector changed and only re-render those.
+    pub fn sub_region_ranges(&self) -> Vec<(usize, usize)> {
+        let mut ranges = Vec::with_capacity(
+            3 + self.master_effects.len() + self.layer_effects.len() + 1,
+        );
+        let push = |ranges: &mut Vec<(usize, usize)>, first: usize, count: usize| {
+            if first != usize::MAX && count > 0 {
+                ranges.push((first, first + count));
+            }
+        };
+        push(&mut ranges, self.master_chrome.first_node(), self.master_chrome.node_count());
+        for card in &self.master_effects {
+            push(&mut ranges, card.first_node(), card.node_count());
+        }
+        push(&mut ranges, self.layer_chrome.first_node(), self.layer_chrome.node_count());
+        push(&mut ranges, self.clip_chrome.first_node(), self.clip_chrome.node_count());
+        if let Some(ref gp) = self.gen_params {
+            push(&mut ranges, gp.first_node(), gp.node_count());
+        }
+        for card in &self.layer_effects {
+            push(&mut ranges, card.first_node(), card.node_count());
+        }
+        ranges
+    }
+
     pub fn configure_master_effects(&mut self, configs: &[EffectCardConfig]) {
         self.master_effects.clear();
         for cfg in configs {

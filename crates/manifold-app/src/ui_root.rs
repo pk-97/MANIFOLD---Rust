@@ -166,9 +166,9 @@ impl UIRoot {
         if start < end {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::Transport,
-                node_start: start,
-                node_end: end,
+                node_start: start, node_end: end,
                 rect: self.layout.transport_bar(),
+                sub_regions: None,
             });
         }
 
@@ -177,9 +177,9 @@ impl UIRoot {
         if start < end {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::Header,
-                node_start: start,
-                node_end: end,
+                node_start: start, node_end: end,
                 rect: self.layout.header(),
+                sub_regions: None,
             });
         }
 
@@ -188,36 +188,35 @@ impl UIRoot {
         if start < end {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::Footer,
-                node_start: start,
-                node_end: end,
+                node_start: start, node_end: end,
                 rect: self.layout.footer(),
+                sub_regions: None,
             });
         }
 
-        // Inspector
+        // Inspector (with per-card sub-regions for incremental re-rendering)
         let (start, end) = self.inspector.node_range();
         if start < end {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::Inspector,
-                node_start: start,
-                node_end: end,
+                node_start: start, node_end: end,
                 rect: self.layout.inspector(),
+                sub_regions: Some(self.inspector.sub_region_ranges()),
             });
         }
 
         // SplitHandles — nodes between inspector end and scroll_panels_start
-        let inspector_end = self.inspector.first_node().saturating_add(self.inspector.node_count());
-        if inspector_end < self.scroll_panels_start && self.inspector.first_node() != usize::MAX {
+        let inspector_end = self.inspector.first_node()
+            .saturating_add(self.inspector.node_count());
+        if inspector_end < self.scroll_panels_start
+            && self.inspector.first_node() != usize::MAX
+        {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::SplitHandles,
                 node_start: inspector_end,
                 node_end: self.scroll_panels_start,
-                rect: Rect::new(
-                    0.0,
-                    0.0,
-                    self.layout.screen_width,
-                    self.layout.screen_height,
-                ),
+                rect: Rect::new(0.0, 0.0, self.layout.screen_width, self.layout.screen_height),
+                sub_regions: None,
             });
         }
 
@@ -226,9 +225,9 @@ impl UIRoot {
         if start < end {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::LayerHeaders,
-                node_start: start,
-                node_end: end,
+                node_start: start, node_end: end,
                 rect: self.layout.layer_controls(),
+                sub_regions: None,
             });
         }
 
@@ -237,9 +236,9 @@ impl UIRoot {
         if start < end {
             info.push(PanelCacheInfo {
                 slot: PanelSlot::Viewport,
-                node_start: start,
-                node_end: end,
+                node_start: start, node_end: end,
                 rect: self.layout.timeline_body(),
+                sub_regions: None,
             });
         }
 
