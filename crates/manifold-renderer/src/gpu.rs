@@ -1,5 +1,5 @@
 /// Central GPU resource holder for the UI thread and content thread.
-/// Thin wrapper around GpuDevice. The wgpu GPU context has been removed.
+/// Thin wrapper around GpuDevice.
 pub struct GpuContext {
     pub device: manifold_gpu::GpuDevice,
 }

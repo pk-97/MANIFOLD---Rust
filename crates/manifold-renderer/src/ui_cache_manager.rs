@@ -121,7 +121,7 @@ impl UICacheManager {
         self.invalidate_all();
     }
 
-    /// Atlas texture for Phase 6 to blit to the surface.
+    /// Atlas texture to blit to the surface.
     pub fn atlas_texture(&self) -> Option<&GpuTexture> {
         self.atlas_texture.as_ref()
     }

@@ -1,13 +1,9 @@
-//! Pixel-perfect output presenter — inline blit from the main frame encoder.
+//! Output presenter — dedicated thread with native Metal blit pipeline.
 //!
-//! `OutputBlitter` holds a `GpuSurface` (CAMetalLayer) at project resolution
-//! and a native Metal fullscreen-triangle pipeline. Each frame,
-//! `present_all_windows()` checks whether the content thread has published a
-//! new IOSurface index and, if so, encodes the output blit into the SAME
-//! command buffer used for the workspace window.
-//!
-//! This preserves the old presenter's exact shader + layer behavior while
-//! eliminating the second command queue that caused GPU scheduler contention.
+//! `NativeOutputPresenter` spawns a dedicated thread that owns a `CAMetalLayer`
+//! at project resolution and a native Metal fullscreen-triangle pipeline.
+//! The thread polls the IOSurface bridge for new frames and blits them to the
+//! output window's drawable, display-synchronized via `CAMetalLayer`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -45,180 +41,11 @@ fragment half4 fs_presenter(
 }
 "#;
 
-#[allow(dead_code)]
-/// Inline output window presenter. No dedicated thread, no separate queue.
-pub struct OutputBlitter {
-    /// CAMetalLayer on the output window (project resolution, EDR).
-    pub(crate) surface: manifold_gpu::GpuSurface,
-    /// Native Metal fullscreen blit pipeline. This matches the pre-inline
-    /// presenter path exactly instead of relying on WGSL -> MSL translation.
-    pipeline: metal::RenderPipelineState,
-    sampler: metal::SamplerState,
-    /// Last front_index blitted — skip if unchanged (no new content).
-    pub(crate) last_front_index: usize,
-    /// Throttled diagnostic for output drawable starvation.
-    last_no_drawable_log: Option<std::time::Instant>,
-    /// Throttled diagnostic for slow output blits.
-    last_slow_log: Option<std::time::Instant>,
-}
-
 /// Pixel-perfect output presenter backed by a dedicated thread.
 pub struct NativeOutputPresenter {
     stop: Arc<AtomicBool>,
     edr_headroom: Arc<AtomicU64>,
     thread: Option<std::thread::JoinHandle<()>>,
-}
-
-#[allow(dead_code)]
-impl OutputBlitter {
-    /// Create an `OutputBlitter` for the given window.
-    pub fn new(
-        gpu_device: &manifold_gpu::GpuDevice,
-        window: &winit::window::Window,
-        proj_w: u32,
-        proj_h: u32,
-    ) -> Self {
-        let surface = gpu_device.create_surface(
-            window,
-            proj_w,
-            proj_h,
-            manifold_gpu::GpuTextureFormat::Rgba16Float,
-            false,
-        );
-        surface.configure_edr();
-        surface.set_contents_gravity_resize_aspect();
-        surface.set_background_color(0.0, 0.0, 0.0, 1.0);
-
-        let device_ref = gpu_device.raw_device();
-        let compile_opts = metal::CompileOptions::new();
-        compile_opts.set_fast_math_enabled(true);
-        let library = device_ref
-            .new_library_with_source(PRESENTER_MSL, &compile_opts)
-            .expect("Failed to compile presenter MSL");
-
-        let vs = library
-            .get_function("vs_presenter", None)
-            .expect("vs_presenter not found");
-        let fs = library
-            .get_function("fs_presenter", None)
-            .expect("fs_presenter not found");
-
-        let pipe_desc = metal::RenderPipelineDescriptor::new();
-        pipe_desc.set_vertex_function(Some(&vs));
-        pipe_desc.set_fragment_function(Some(&fs));
-        pipe_desc
-            .color_attachments()
-            .object_at(0)
-            .unwrap()
-            .set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
-
-        let pipeline = device_ref
-            .new_render_pipeline_state(&pipe_desc)
-            .expect("Failed to create presenter render pipeline");
-
-        let sampler_desc = metal::SamplerDescriptor::new();
-        sampler_desc.set_min_filter(metal::MTLSamplerMinMagFilter::Nearest);
-        sampler_desc.set_mag_filter(metal::MTLSamplerMinMagFilter::Nearest);
-        sampler_desc.set_address_mode_s(metal::MTLSamplerAddressMode::ClampToEdge);
-        sampler_desc.set_address_mode_t(metal::MTLSamplerAddressMode::ClampToEdge);
-        let sampler = device_ref.new_sampler(&sampler_desc);
-
-        log::info!(
-            "[OutputBlitter] Created: {}x{} Rgba16Float, native MSL inline path",
-            proj_w, proj_h,
-        );
-
-        Self {
-            surface,
-            pipeline,
-            sampler,
-            last_front_index: usize::MAX,
-            last_no_drawable_log: None,
-            last_slow_log: None,
-        }
-    }
-
-    /// Blit `front_index` IOSurface to the output drawable if it has changed.
-    pub(crate) fn blit_if_new(
-        &mut self,
-        front_index: usize,
-        compositor_tex: &manifold_gpu::GpuTexture,
-        gpu_device: &manifold_gpu::GpuDevice,
-    ) {
-        if front_index == self.last_front_index {
-            return;
-        }
-        self.last_front_index = front_index;
-
-        let t0 = std::time::Instant::now();
-        let drawable = match self.surface.next_drawable() {
-            Some(drawable) => {
-                self.last_no_drawable_log = None;
-                drawable
-            }
-            None => {
-                let now = std::time::Instant::now();
-                let should_log = self.last_no_drawable_log
-                    .is_none_or(|t| now.duration_since(t).as_millis() >= 500);
-                if should_log {
-                    eprintln!(
-                        "[OutputBlitter] next_drawable returned None \
-                         (front_index={}, surface={}x{}, format={:?})",
-                        front_index,
-                        self.surface.width,
-                        self.surface.height,
-                        self.surface.format,
-                    );
-                    self.last_no_drawable_log = Some(now);
-                }
-                return;
-            }
-        };
-        let drawable_ms = t0.elapsed().as_secs_f64() * 1000.0;
-
-        let t1 = std::time::Instant::now();
-        let mut encoder = gpu_device.create_encoder("Output Frame");
-        let cmd_buf = encoder.raw_cmd_buf();
-        {
-            let pass_desc = metal::RenderPassDescriptor::new();
-            let color = pass_desc.color_attachments().object_at(0).unwrap();
-            color.set_texture(Some(drawable.texture()));
-            color.set_load_action(metal::MTLLoadAction::DontCare);
-            color.set_store_action(metal::MTLStoreAction::Store);
-
-            let enc = cmd_buf.new_render_command_encoder(pass_desc);
-            enc.push_debug_group("Output Blit");
-            enc.set_render_pipeline_state(&self.pipeline);
-            enc.set_fragment_texture(0, Some(compositor_tex.raw()));
-            enc.set_fragment_sampler_state(0, Some(&self.sampler));
-            enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
-            enc.pop_debug_group();
-            enc.end_encoding();
-        }
-        let encode_ms = t1.elapsed().as_secs_f64() * 1000.0;
-
-        let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
-        if total_ms >= 16.0 {
-            let now = std::time::Instant::now();
-            let should_log = self.last_slow_log
-                .is_none_or(|t| now.duration_since(t).as_millis() >= 500);
-            if should_log {
-                eprintln!(
-                    "[OutputBlitter] slow blit total={:.2}ms drawable={:.2}ms encode={:.2}ms \
-                     front_index={} surface={}x{}",
-                    total_ms,
-                    drawable_ms,
-                    encode_ms,
-                    front_index,
-                    self.surface.width,
-                    self.surface.height,
-                );
-                self.last_slow_log = Some(now);
-            }
-        }
-        encoder.present_drawable(&drawable);
-        encoder.commit();
-    }
 }
 
 impl NativeOutputPresenter {

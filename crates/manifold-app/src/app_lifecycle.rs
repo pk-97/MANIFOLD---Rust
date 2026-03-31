@@ -650,12 +650,11 @@ impl Application {
                 h,
             );
             self.output_presenter = Some(presenter);
-            self.output_blitter = None;
         }
 
         let state = WindowState {
             window,
-            surface: None, // No wgpu surface — OutputBlitter owns the CAMetalLayer.
+            surface: None, // NativeOutputPresenter owns the CAMetalLayer.
             role: WindowRole::Output {
                 name: name.to_string(),
                 presentation,

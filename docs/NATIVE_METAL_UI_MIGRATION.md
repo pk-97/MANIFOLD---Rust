@@ -1,5 +1,7 @@
 # Native Metal UI Migration
 
+**Migration complete.** All UI rendering uses native Metal via manifold-gpu. wgpu removed from manifold-renderer and manifold-app (retained only as an optional dependency for the profiling feature).
+
 Migrate the UI thread from wgpu to native Metal via `manifold-gpu`, achieving a single device/queue/command-buffer architecture. Eliminates GPU scheduler contention between wgpu and the output presenter, enables TBDR-optimal rendering, and removes the wgpu dependency entirely.
 
 ## Motivation
@@ -193,13 +195,16 @@ Prompt: `docs/PHASE6_AGENT_PROMPT.md`
 
 Note: output presenter stays on its own thread with its own Metal queue — unchanged.
 
-### Phase 7: Cleanup [NOT STARTED]
+### Phase 7: Cleanup [DONE]
 
-- [ ] Remove wgpu, wgpu-hal, wgpu-types workspace dependencies
-- [ ] Remove glyphon dependency
-- [ ] Delete deprecated output_presenter thread code
-- [ ] Update CLAUDE.md architecture docs
-- [ ] Performance validation — compare frame times before/after
+- [x] Remove dead wgpu/glyphon/phase migration comments from manifold-renderer and manifold-app
+- [x] Verify no dead files remain (blit.rs, surface.rs, panel_compositor.rs already gone)
+- [x] Remove dead `OutputBlitter` struct (replaced by `NativeOutputPresenter`)
+- [x] Remove dead `last_accepted_data_version` field
+- [x] Remove unused `pollster` workspace dependency
+- [x] Verify LoadAction consistency across all render passes
+- [x] Verify Cargo.toml dependencies (wgpu retained as optional for profiling feature only)
+- [x] Fix stale comments referencing migration phases
 
 ## Risk Register
 

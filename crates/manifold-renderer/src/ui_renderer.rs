@@ -120,7 +120,7 @@ const INITIAL_INDEX_CAPACITY: usize = 1536;
 pub struct UIRenderer {
     pipeline: GpuRenderPipeline,
 
-    // Text rendering — Phase 4 CoreText renderer.
+    // Text rendering — CoreText renderer.
     #[cfg(target_os = "macos")]
     text_renderer: NativeTextRenderer,
 

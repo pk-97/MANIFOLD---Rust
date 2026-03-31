@@ -212,10 +212,6 @@ pub struct Application {
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) atlas_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) atlas_sampler: Option<manifold_gpu::GpuSampler>,
-    /// Inline output blitter — renders output window from the main frame encoder.
-    /// No separate thread or command queue. Pixel-perfect 1:1, EDR-capable.
-    #[cfg(target_os = "macos")]
-    pub(crate) output_blitter: Option<crate::output_presenter::OutputBlitter>,
     /// Dedicated presenter thread for presentation-mode output windows.
     #[cfg(target_os = "macos")]
     pub(crate) output_presenter: Option<crate::output_presenter::NativeOutputPresenter>,
@@ -313,10 +309,6 @@ pub struct Application {
     /// Set by keyboard shortcuts that mutate project data (undo, delete, etc.).
     /// Consumed by tick_and_render to trigger sync_project_data + rebuild.
     pub(crate) needs_structural_sync: bool,
-    /// Last data_version seen from content thread. When content_state.data_version
-    /// is newer, accept the project snapshot (unless drag is in progress).
-    #[allow(dead_code)]
-    pub(crate) last_accepted_data_version: u64,
 }
 
 impl Application {
@@ -368,8 +360,6 @@ impl Application {
             atlas_pipeline: None,
             atlas_sampler: None,
             #[cfg(target_os = "macos")]
-            output_blitter: None,
-            #[cfg(target_os = "macos")]
             output_presenter: None,
             ui_renderer: None,
             ui_cache_manager: None,
@@ -420,7 +410,6 @@ impl Application {
             needs_rebuild: false,
             needs_scroll_rebuild: false,
             needs_structural_sync: false,
-            last_accepted_data_version: 0,
         }
     }
 
@@ -1053,7 +1042,7 @@ impl ApplicationHandler for Application {
             );
 
             // Blit pipeline (composite output → drawable with aspect-fit viewport)
-            // Fullscreen triangle from vertex_index — same approach as OutputBlitter
+            // Fullscreen triangle from vertex_index
             // and atlas blit. Avoids vertex buffer / vertex descriptor path which
             // produces no visible output through the WGSL→MSL compilation pipeline.
             let blit_shader = r#"
@@ -1401,11 +1390,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     }
                     event_loop.exit();
                 } else {
-                    // Drop the blitter before removing the window so the
-                    // CAMetalLayer is released before winit destroys the window.
                     #[cfg(target_os = "macos")]
                     {
-                        self.output_blitter = None;
                         self.output_presenter = None;
                         self.output_saved_frame = None;
                     }
@@ -1636,7 +1622,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         {
                             #[cfg(target_os = "macos")]
                             {
-                                self.output_blitter = None;
                                 self.output_presenter = None;
                                 self.output_saved_frame = None;
                             }
@@ -1933,7 +1918,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         && !is_primary {
                             #[cfg(target_os = "macos")]
                             {
-                                self.output_blitter = None;
                                 self.output_saved_frame = None;
                             }
                             self.window_registry.remove(&window_id);
@@ -2053,10 +2037,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Close output window (Escape key or programmatic close)
         if self.pending_close_output {
             self.pending_close_output = false;
-            // Drop the blitter before removing windows.
             #[cfg(target_os = "macos")]
             {
-                self.output_blitter = None;
                 self.output_presenter = None;
                 self.output_saved_frame = None;
             }
@@ -2157,10 +2139,8 @@ impl Drop for Application {
             log::info!("[Application::Drop] content thread joined");
         }
 
-        // Drop the output blitter — releases its CAMetalLayer before cleanup.
         #[cfg(target_os = "macos")]
         {
-            self.output_blitter = None;
             self.output_presenter = None;
         }
 

@@ -1,11 +1,8 @@
 //! Native macOS CoreText/CoreGraphics text renderer.
 //!
-//! Phase 4 of the Native Metal UI Migration: an independent text renderer
-//! with no glyphon/wgpu dependencies. Uses CoreText for text shaping and
-//! measurement, CoreGraphics for glyph rasterization into a shelf-packed
-//! atlas texture, and manifold-gpu for the GPU atlas upload and draw_indexed.
-//!
-//! Not yet wired into UIRenderer — that is Phase 5.
+//! Uses CoreText for text shaping and measurement, CoreGraphics for glyph
+//! rasterization into a shelf-packed atlas texture, and manifold-gpu for
+//! the GPU atlas upload and draw_indexed.
 
 use ahash::AHashMap;
 use bytemuck::{Pod, Zeroable};
@@ -433,7 +430,7 @@ fn text_vertex_layout() -> GpuVertexLayout {
 
 /// Standalone CoreText-based text renderer.
 ///
-/// API mirrors UIRenderer's text methods. Will be wired in during Phase 5.
+/// API mirrors UIRenderer's text methods.
 pub struct NativeTextRenderer {
     font_manager: FontManager,
     atlas: GlyphAtlas,
