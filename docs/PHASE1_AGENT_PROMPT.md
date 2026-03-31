@@ -1,11 +1,5 @@
 # Phase 1 — manifold-gpu Extensions
 
-Copy everything below the line into a new Claude Code chat to execute Phase 1.
-
-See `NATIVE_METAL_UI_MIGRATION.md` for full migration context.
-
----
-
 Read `CLAUDE.md` and `docs/NATIVE_METAL_UI_MIGRATION.md` before starting.
 
 You are extending the `manifold-gpu` crate to support UI-thread rendering. This is Phase 1 of a larger migration from wgpu to native Metal. The crate currently serves the content thread only. You are adding NEW methods and types — do NOT modify any existing methods or types. The content thread must continue working identically.
