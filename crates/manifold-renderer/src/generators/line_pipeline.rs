@@ -141,7 +141,7 @@ impl LinePipeline {
             ],
             6,
             instance_count,
-            true,
+            manifold_gpu::GpuLoadAction::Clear,
             label,
         );
     }

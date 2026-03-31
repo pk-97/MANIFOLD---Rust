@@ -239,7 +239,7 @@ impl GpuEncoder {
         bindings: &[GpuBinding],
         vertex_count: u32,
         instance_count: u32,
-        clear: bool,
+        load_action: crate::GpuLoadAction,
         label: &str,
     ) {
         self.end_current();
@@ -247,10 +247,10 @@ impl GpuEncoder {
         let desc = metal::RenderPassDescriptor::new();
         let color = desc.color_attachments().object_at(0).unwrap();
         color.set_texture(Some(&target.raw));
-        color.set_load_action(if clear {
-            metal::MTLLoadAction::Clear
-        } else {
-            metal::MTLLoadAction::DontCare
+        color.set_load_action(match load_action {
+            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
+            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
+            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
         });
         color.set_store_action(metal::MTLStoreAction::Store);
         color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));

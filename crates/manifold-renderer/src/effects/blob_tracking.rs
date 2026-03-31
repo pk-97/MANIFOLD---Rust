@@ -15,8 +15,8 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use manifold_gpu::{
     GpuBinding, GpuBlendFactor, GpuBlendOp, GpuBlendState, GpuBuffer, GpuComputePipeline,
-    GpuDevice, GpuFilterMode, GpuRenderPipeline, GpuSampler, GpuSamplerDesc, GpuTexture,
-    GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
+    GpuDevice, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler, GpuSamplerDesc,
+    GpuTexture, GpuTextureDesc, GpuTextureDimension, GpuTextureFormat, GpuTextureUsage,
 };
 
 // Request/response types for the background blob detection worker.
@@ -143,17 +143,7 @@ const _: () = assert!(std::mem::size_of::<OverlayQuad>() == 48);
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct OverlayUniforms {
     overlay_color: [f32; 3],
-    scanline_amount: f32,
-}
-
-/// Uniforms for the overlay composite compute shader.
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct CompositeUniforms {
     amount: f32,
-    resolution_y: f32,
-    _pad0: f32,
-    _pad1: f32,
 }
 
 // BlobTrackingFX.cs line 10 — BlobTrackingFX : IPostProcessEffect, IStatefulEffect
@@ -176,9 +166,7 @@ pub struct BlobTrackingFX {
 
     // ---- Geometry-based overlay rendering ----
     overlay_pipeline: GpuRenderPipeline,
-    composite_pipeline: GpuComputePipeline,
     overlay_buf: GpuBuffer,
-    overlay_rt: Option<RenderTarget>,
     overlay_quads: Vec<OverlayQuad>,
 }
 
@@ -223,14 +211,17 @@ impl BlobTrackingFX {
             "BlobTracking Downsample",
         );
 
-        // ---- Geometry overlay pipelines ----
+        // ---- Geometry overlay pipeline ----
+        // Additive blend: overlay color is added to the existing target contents.
+        // Fragment outputs premultiplied RGB (color * alpha * amount), alpha = 0
+        // so destination alpha is preserved.
         let blend = GpuBlendState {
             src_factor: GpuBlendFactor::One,
             dst_factor: GpuBlendFactor::One,
-            operation: GpuBlendOp::Max,
-            src_alpha_factor: GpuBlendFactor::One,
+            operation: GpuBlendOp::Add,
+            src_alpha_factor: GpuBlendFactor::Zero,
             dst_alpha_factor: GpuBlendFactor::One,
-            alpha_operation: GpuBlendOp::Max,
+            alpha_operation: GpuBlendOp::Add,
         };
         let overlay_pipeline = device.create_render_pipeline(
             include_str!("shaders/fx_blob_overlay_render.wgsl"),
@@ -239,11 +230,6 @@ impl BlobTrackingFX {
             GpuTextureFormat::Rgba16Float,
             Some(blend),
             "BlobTracking OverlayRender",
-        );
-        let composite_pipeline = device.create_compute_pipeline(
-            include_str!("shaders/fx_blob_overlay_composite.wgsl"),
-            "cs_main",
-            "BlobTracking Composite",
         );
         let overlay_buf = device.create_buffer_shared(
             (MAX_OVERLAY_QUADS * std::mem::size_of::<OverlayQuad>()) as u64,
@@ -270,9 +256,7 @@ impl BlobTrackingFX {
             worker,
             owner_states: AHashMap::new(),
             overlay_pipeline,
-            composite_pipeline,
             overlay_buf,
-            overlay_rt: None,
             overlay_quads: Vec::with_capacity(MAX_OVERLAY_QUADS),
         }
     }
@@ -1140,38 +1124,25 @@ impl PostProcessEffect for BlobTrackingFX {
             ctx.height,
         );
 
-        // Ensure overlay RT matches source dimensions
-        match &mut self.overlay_rt {
-            Some(rt) => rt.resize(gpu.device, ctx.width, ctx.height),
-            None => {
-                self.overlay_rt = Some(RenderTarget::new(
-                    gpu.device,
-                    ctx.width,
-                    ctx.height,
-                    GpuTextureFormat::Rgba16Float,
-                    "BlobOverlay RT",
-                ));
-            }
-        }
-        let overlay_rt = self.overlay_rt.as_ref().unwrap();
+        // Copy source → target, then draw overlay directly on top with additive blend.
+        // Eliminates the temp overlay texture and full-screen composite pass (~7% savings).
+        gpu.native_enc.copy_texture_to_texture(source, target, ctx.width, ctx.height, 1);
 
         let quad_count = self.overlay_quads.len().min(MAX_OVERLAY_QUADS);
         if quad_count > 0 {
-            // Write instance data to shared buffer
             let quad_bytes =
                 bytemuck::cast_slice(&self.overlay_quads[..quad_count]);
             unsafe {
                 self.overlay_buf.write(0, quad_bytes);
             }
 
-            // Draw overlay geometry to temp texture
             let overlay_uniforms = OverlayUniforms {
                 overlay_color: [0.85, 0.92, 1.0],
-                scanline_amount: 0.0,
+                amount,
             };
             gpu.native_enc.draw_instanced(
                 &self.overlay_pipeline,
-                &overlay_rt.texture,
+                target,
                 &[
                     GpuBinding::Bytes {
                         binding: 0,
@@ -1193,50 +1164,10 @@ impl PostProcessEffect for BlobTrackingFX {
                 ],
                 6,
                 quad_count as u32,
-                true, // clear to transparent
+                GpuLoadAction::Load,
                 "BlobTracking Overlay",
             );
-        } else {
-            // No quads — clear the overlay RT to transparent
-            gpu.native_enc.clear_texture(
-                &overlay_rt.texture, 0.0, 0.0, 0.0, 0.0,
-            );
         }
-
-        // Composite: source + overlay → target
-        let comp_uniforms = CompositeUniforms {
-            amount,
-            resolution_y: ctx.height as f32,
-            _pad0: 0.0,
-            _pad1: 0.0,
-        };
-        gpu.native_enc.dispatch_compute(
-            &self.composite_pipeline,
-            &[
-                GpuBinding::Bytes {
-                    binding: 0,
-                    data: bytemuck::bytes_of(&comp_uniforms),
-                },
-                GpuBinding::Texture {
-                    binding: 1,
-                    texture: source,
-                },
-                GpuBinding::Texture {
-                    binding: 2,
-                    texture: &overlay_rt.texture,
-                },
-                GpuBinding::Sampler {
-                    binding: 3,
-                    sampler: &self.sampler,
-                },
-                GpuBinding::Texture {
-                    binding: 4,
-                    texture: target,
-                },
-            ],
-            [ctx.width.div_ceil(16), ctx.height.div_ceil(16), 1],
-            "BlobTracking Composite",
-        );
     }
 
     // BlobTrackingFX.cs lines 329-333 — ClearState() (all owners)

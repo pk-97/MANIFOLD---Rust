@@ -151,6 +151,17 @@ impl Default for GpuSamplerDesc {
     }
 }
 
+/// Load action for a render pass color attachment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuLoadAction {
+    /// Clear to transparent black (0,0,0,0).
+    Clear,
+    /// Preserve existing contents (MTLLoadAction::Load).
+    Load,
+    /// Contents undefined — use when you'll write every pixel.
+    DontCare,
+}
+
 /// Blend factor for render pipelines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GpuBlendFactor {

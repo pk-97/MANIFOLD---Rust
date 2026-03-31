@@ -10,7 +10,7 @@
 
 struct Uniforms {
     overlay_color: vec3<f32>,
-    scanline_amount: f32,
+    amount: f32,
 };
 
 struct QuadInstance {
@@ -62,12 +62,12 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    var a = in.alpha;
+    var a = in.alpha * u.amount;
     if in.is_textured > 0.5 {
         a *= textureSampleLevel(font_tex, point_sampler, in.atlas_uv, 0.0).r;
     }
     if a < 0.004 {
         discard;
     }
-    return vec4<f32>(u.overlay_color * a, a);
+    return vec4<f32>(u.overlay_color * a, 0.0);
 }
