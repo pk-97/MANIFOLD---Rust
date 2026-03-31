@@ -109,9 +109,12 @@ impl NativeOutputPresenter {
         layer.set_device(device_ref);
         layer.set_pixel_format(metal::MTLPixelFormat::RGBA16Float);
         layer.set_framebuffer_only(true);
-        // displaySyncEnabled = true: nextDrawable blocks until vsync.
-        // This is the frame pacer — safe because we're on a dedicated thread.
-        layer.set_display_sync_enabled(true);
+        // displaySyncEnabled = false: nextDrawable returns immediately.
+        // We only call it when content has changed (60/sec), so no tearing.
+        // Core Animation still presents at vsync — this just avoids blocking
+        // the thread, which would interfere with ProMotion display scheduling
+        // and cause UI frame drops.
+        layer.set_display_sync_enabled(false);
         layer.set_maximum_drawable_count(3);
         layer.set_drawable_size(core_graphics_types::geometry::CGSize {
             width: proj_w as f64,
@@ -276,9 +279,8 @@ impl PresenterThread {
                 continue;
             };
 
-            // Acquire drawable — with displaySyncEnabled=true, this blocks
-            // until the next vsync. Since we only reach here when there's new
-            // content, the present lands on the first vsync after publication.
+            // Acquire drawable — returns immediately (displaySyncEnabled=false).
+            // Core Animation handles vsync scheduling on present.
             let layer = self.layer();
             let Some(drawable) = layer.next_drawable() else {
                 std::thread::sleep(std::time::Duration::from_millis(1));
