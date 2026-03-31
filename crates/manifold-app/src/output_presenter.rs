@@ -47,6 +47,7 @@ use crate::shared_texture::{SharedTextureBridge, SURFACE_COUNT};
 unsafe extern "C" {
     fn CGColorSpaceCreateWithName(name: *const std::ffi::c_void) -> *mut std::ffi::c_void;
     fn CGColorSpaceRelease(space: *mut std::ffi::c_void);
+    fn CGColorCreateGenericRGB(r: f64, g: f64, b: f64, a: f64) -> *mut std::ffi::c_void;
     static kCGColorSpaceExtendedLinearSRGB: *const std::ffi::c_void;
 }
 
@@ -146,6 +147,14 @@ impl NativeOutputPresenter {
             }
             let _: () = msg_send![layer_ptr as *mut objc::runtime::Object,
                                    setWantsExtendedDynamicRangeContent: true];
+        }
+
+        // Black background for letterbox/pillarbox bars.
+        unsafe {
+            let black = CGColorCreateGenericRGB(0.0, 0.0, 0.0, 1.0);
+            let _: () = msg_send![layer_ptr as *mut objc::runtime::Object,
+                                   setBackgroundColor: black];
+            // CGColor is retained by the layer — no need to release.
         }
 
         // Retain the layer — released in PresenterThread Drop (via stop + join).
