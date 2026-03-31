@@ -223,6 +223,12 @@ impl PingPong {
         self.pong.resize(device, width, height);
     }
 
+    /// Release both textures back to the pool. Consumes self.
+    fn release_to_pool(self, pool: &manifold_gpu::TexturePool) {
+        self.ping.release_to_pool(pool);
+        self.pong.release_to_pool(pool);
+    }
+
     fn width(&self) -> u32 {
         self.ping.width
     }
@@ -381,6 +387,10 @@ pub struct LayerCompositor {
     /// Each layer signals base + layer_index; compositor waits for base + layer_count.
     #[cfg(target_os = "macos")]
     async_signal_base: u64,
+    /// How many layer_bufs were actually used last frame.
+    last_layer_buf_used: usize,
+    /// How many effect_chains were actually used last frame.
+    last_effect_chain_used: usize,
 }
 
 impl LayerCompositor {
@@ -401,17 +411,24 @@ impl LayerCompositor {
             async_event: None,
             #[cfg(target_os = "macos")]
             async_signal_base: 0,
+            last_layer_buf_used: 0,
+            last_effect_chain_used: 0,
         }
     }
 
     /// Ensure we have at least `count` layer scratch buffers available.
-    fn ensure_layer_bufs(&mut self, count: usize, device: &GpuDevice) {
+    fn ensure_layer_bufs(
+        &mut self,
+        count: usize,
+        device: &GpuDevice,
+        pool: Option<&manifold_gpu::TexturePool>,
+    ) {
         let w = self.main.width();
         let h = self.main.height();
         while self.layer_bufs.len() < count {
             let idx = self.layer_bufs.len();
             self.layer_bufs.push(PingPong::new(
-                device, None, w, h,
+                device, pool, w, h,
                 &format!("Layer Scratch {idx}"),
             ));
         }
@@ -421,6 +438,34 @@ impl LayerCompositor {
     fn ensure_effect_chains(&mut self, count: usize) {
         while self.effect_chains.len() < count {
             self.effect_chains.push(EffectChain::new());
+        }
+    }
+
+    /// Trim oversized layer_bufs and effect_chains down to actual usage + headroom.
+    /// Excess textures are released back to the pool for recycling.
+    /// Headroom of 2 prevents oscillation if usage fluctuates frame-to-frame.
+    fn trim_excess_buffers(&mut self, pool: Option<&manifold_gpu::TexturePool>) {
+        const HEADROOM: usize = 2;
+
+        let target_layer_bufs = self.last_layer_buf_used.saturating_add(HEADROOM);
+        if self.layer_bufs.len() > target_layer_bufs {
+            let excess: Vec<PingPong> = self.layer_bufs.drain(target_layer_bufs..).collect();
+            if let Some(p) = pool {
+                for pp in excess {
+                    pp.release_to_pool(p);
+                }
+            }
+            // If no pool, excess PingPongs are simply dropped (Metal frees them).
+        }
+
+        let target_effect_chains = self.last_effect_chain_used.saturating_add(HEADROOM);
+        if self.effect_chains.len() > target_effect_chains {
+            let excess: Vec<EffectChain> = self.effect_chains.drain(target_effect_chains..).collect();
+            if let Some(p) = pool {
+                for mut ec in excess {
+                    ec.release_to_pool(p);
+                }
+            }
         }
     }
 
@@ -505,7 +550,7 @@ impl LayerCompositor {
         // Ensure enough effect chains and scratch buffers
         self.ensure_effect_chains(active_layer_count);
         if multi_clip_layer_count > 0 {
-            self.ensure_layer_bufs(multi_clip_layer_count, gpu.device);
+            self.ensure_layer_bufs(multi_clip_layer_count, gpu.device, gpu.pool);
         }
 
         self.layer_outputs_scratch.clear();
@@ -661,6 +706,10 @@ impl LayerCompositor {
                 });
             }
         }
+
+        // Record actual usage for trim_excess_buffers.
+        self.last_layer_buf_used = layer_buf_idx;
+        self.last_effect_chain_used = effect_chain_idx;
     }
 
     /// Phase B: Blend all layer outputs into main in order.
@@ -800,7 +849,7 @@ impl LayerCompositor {
 
         self.ensure_effect_chains(active_layer_count);
         if multi_clip_layer_count > 0 {
-            self.ensure_layer_bufs(multi_clip_layer_count, device);
+            self.ensure_layer_bufs(multi_clip_layer_count, device, pool);
         }
 
         let effect_chains_ptr = self.effect_chains.as_mut_ptr();
@@ -970,6 +1019,10 @@ impl LayerCompositor {
             layer_enc.commit();
         }
 
+        // Record actual usage for trim_excess_buffers.
+        self.last_layer_buf_used = layer_buf_idx;
+        self.last_effect_chain_used = effect_chain_idx;
+
         // Update base for next frame
         self.async_signal_base = base_signal + layer_signal_idx;
 
@@ -1002,6 +1055,10 @@ impl Compositor for LayerCompositor {
             // Skips ALL master effects, tonemap, and LED tap — zero GPU draw calls.
             gpu.clear_texture(self.main.source_texture(), 0.0, 0.0, 0.0, 1.0);
             self.tonemap.clear(gpu);
+            // No layers active — trim excess buffers from previous frames.
+            self.last_layer_buf_used = 0;
+            self.last_effect_chain_used = 0;
+            self.trim_excess_buffers(gpu.pool);
             return &self.tonemap.output.texture;
         }
 
@@ -1115,6 +1172,11 @@ impl Compositor for LayerCompositor {
         // On native path, arena buffer is not read by GPU dispatches (uses inline
         // set_bytes), but we still flush to handle capacity growth.
         self.uniform_arena.flush(gpu.device);
+
+        // Trim oversized buffer pools. Excess textures released to TexturePool
+        // for recycling (or dropped if no pool). Headroom of +2 prevents
+        // oscillation when layer count fluctuates frame-to-frame.
+        self.trim_excess_buffers(gpu.pool);
 
         &self.tonemap.output.texture
     }

@@ -281,6 +281,20 @@ impl EffectChain {
         self.swap();
     }
 
+    /// Release all owned textures back to the pool. Resets to empty state
+    /// (textures will be lazily recreated on next apply_chain).
+    pub fn release_to_pool(&mut self, pool: &manifold_gpu::TexturePool) {
+        if let Some(ping) = self.ping.take() {
+            ping.release_to_pool(pool);
+        }
+        if let Some(pong) = self.pong.take() {
+            pong.release_to_pool(pool);
+        }
+        if let Some(snap) = self.dry_snapshot.take() {
+            snap.release_to_pool(pool);
+        }
+    }
+
     pub fn resize(&mut self, device: &GpuDevice, width: u32, height: u32) {
         if let Some(ping) = &mut self.ping {
             ping.resize(device, width, height);
