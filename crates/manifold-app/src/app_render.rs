@@ -941,7 +941,6 @@ impl Application {
                     cm.render_dirty_panels(
                         &gpu.device,
                         &gpu.queue,
-                        &mut encoder,
                         ui,
                         &self.ui_root.tree,
                         &panel_infos,

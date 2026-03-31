@@ -87,13 +87,17 @@ impl UICacheManager {
     }
 
     /// Re-render dirty panels to their cache textures.
-    /// Returns the number of panels that were re-rendered.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// Each panel gets its own command encoder + submit. This is necessary
+    /// because `prepare_with_offset` writes per-panel viewport/offset data
+    /// to shared GPU buffers via `queue.write_buffer`. Multiple writes to
+    /// the same buffer within one submission alias — only the last write
+    /// is visible to all render passes. Separate submissions ensure each
+    /// panel's buffer state is correct.
     pub fn render_dirty_panels(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
         ui_renderer: &mut UIRenderer,
         tree: &UITree,
         panels: &[PanelCacheInfo],
@@ -133,8 +137,11 @@ impl UICacheManager {
                 TextMode::Overlay,
             ) {
                 // No content — clear the cache texture
+                let mut enc = device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("Panel Clear") },
+                );
                 let _pass =
-                    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Panel Cache Clear"),
                         color_attachments: &[Some(
                             wgpu::RenderPassColorAttachment {
@@ -152,16 +159,20 @@ impl UICacheManager {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                // Pass drops here — clear is enough
+                drop(_pass);
+                queue.submit(std::iter::once(enc.finish()));
                 self.caches[idx].mark_valid();
                 rendered += 1;
                 continue;
             }
 
-            // Draw into panel cache texture
+            // Draw into panel cache texture (own encoder to isolate write_buffer)
+            let mut enc = device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("Panel Cache") },
+            );
             {
                 let mut pass =
-                    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Panel Cache Render"),
                         color_attachments: &[Some(
                             wgpu::RenderPassColorAttachment {
@@ -181,6 +192,7 @@ impl UICacheManager {
                     });
                 ui_renderer.draw(&mut pass);
             }
+            queue.submit(std::iter::once(enc.finish()));
 
             self.caches[idx].mark_valid();
             rendered += 1;
