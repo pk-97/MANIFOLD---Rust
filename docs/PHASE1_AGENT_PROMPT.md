@@ -1,14 +1,18 @@
-# Phase 1 Agent Prompt — manifold-gpu Extensions
+# Phase 1 — manifold-gpu Extensions
 
-This document contains the complete prompt for the agent executing Phase 1 of the Native Metal UI Migration. See `NATIVE_METAL_UI_MIGRATION.md` for full context.
+Copy everything below the line into a new Claude Code chat to execute Phase 1.
+
+See `NATIVE_METAL_UI_MIGRATION.md` for full migration context.
 
 ---
 
-## Prompt
+Read `CLAUDE.md` and `docs/NATIVE_METAL_UI_MIGRATION.md` before starting.
 
 You are extending the `manifold-gpu` crate to support UI-thread rendering. This is Phase 1 of a larger migration from wgpu to native Metal. The crate currently serves the content thread only. You are adding NEW methods and types — do NOT modify any existing methods or types. The content thread must continue working identically.
 
-Work without breaks. Complete all tasks. Build with `cargo clippy --workspace -- -D warnings` and `cargo test --workspace` after all changes. Commit and push when done.
+Read every file you need to modify BEFORE making changes. Read the metal crate source at `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/metal-0.33.0/src/` to verify Metal API names before using them.
+
+Work without breaks. Complete all 8 tasks below. Build with `cargo clippy --workspace -- -D warnings` and `cargo test --workspace` after all changes. Fix any issues. Commit and push when done.
 
 ### Context
 
