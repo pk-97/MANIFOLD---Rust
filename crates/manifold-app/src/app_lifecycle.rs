@@ -521,7 +521,7 @@ impl Application {
     /// Open a decorated HDR output window (default size = project resolution).
     /// Resizable — content always renders at project resolution with letterbox/pillarbox.
     /// Native title bar allows drag-to-monitor and macOS fullscreen (green button).
-    /// Surface is Rgba16Float — wgpu v28 Metal backend auto-enables EDR.
+    /// Surface is Rgba16Float with EDR enabled via GpuSurface.
     /// Unity: NativeMonitorWindowController.cs + MonitorWindowPlugin.mm.
     pub(crate) fn open_output_window(
         &mut self,

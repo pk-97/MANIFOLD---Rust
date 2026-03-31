@@ -1,11 +1,11 @@
 // MetalVideoDecoderPlugin.m — Native Metal GPU video decoder for MANIFOLD playback.
 // Decodes video via AVAssetReader + VideoToolbox hardware decode to CVPixelBuffer (NV12),
-// then converts NV12 → Rgba16Float via Metal compute shader and writes to a wgpu-owned
+// then converts NV12 → Rgba16Float via Metal compute shader and writes to the
 // destination texture. Zero CPU readback — entire decode→convert pipeline is GPU-resident.
 //
 // Architecture mirrors MetalEncoderPlugin.m (encode direction reversed):
-//   Encoder: wgpu texture → compute copy → CVPixelBuffer → AVAssetWriter
-//   Decoder: AVAssetReader → CVPixelBuffer → compute convert → wgpu texture
+//   Encoder: Metal texture → compute copy → CVPixelBuffer → AVAssetWriter
+//   Decoder: AVAssetReader → CVPixelBuffer → compute convert → Metal texture
 //
 // Exported C functions (FFI from Rust):
 //   VideoDecoder_CreatePool()           -> shared pool (MTLDevice, compute pipeline, texture cache)
@@ -517,7 +517,7 @@ int VideoDecoder_DecodeNextFrame(void* handle)
 
 // -- CopyFrameToTexture -------------------------------------------------------
 // Run the NV12→Rgba16Float compute shader, writing the decoded frame into
-// the destination Metal texture (which is owned by wgpu's RenderTarget).
+// the destination Metal texture.
 
 int VideoDecoder_CopyFrameToTexture(void* poolPtr, void* handle, void* destMetalTexturePtr)
 {

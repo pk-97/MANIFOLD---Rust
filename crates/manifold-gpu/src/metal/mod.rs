@@ -1,8 +1,7 @@
 //! Native Metal backend for macOS content thread.
 //!
 //! Owns metal::Device, metal::CommandQueue, metal::CommandBuffer directly.
-//! Zero wgpu types, zero wgpu submission tracking, zero "(wgpu internal) Signal"
-//! overhead.
+//! Zero abstraction overhead — direct Metal API calls.
 //!
 //! Shader compilation pipeline: WGSL → naga → SPIR-V → spirv-opt → SPIRV-Cross → MSL.
 //! naga parses WGSL and provides binding introspection for the SlotMap.

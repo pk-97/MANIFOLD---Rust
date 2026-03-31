@@ -170,7 +170,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let src = textureSample(main_tex, main_sampler, in.uv);
     let original = src.rgb;
 
-    // Unity UV has v=0 at bottom (Y-up); wgpu UV has uv.y=0 at top (Y-down).
+    // Unity UV has v=0 at bottom (Y-up); Metal/WGSL UV has uv.y=0 at top (Y-down).
     // Flip Y for overlay drawing so all label offsets, text rendering, and bracket
     // directions match Unity's shader exactly. Source texture sampling uses in.uv.
     let draw_uv = vec2<f32>(in.uv.x, 1.0 - in.uv.y);

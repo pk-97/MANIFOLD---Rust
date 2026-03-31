@@ -2,7 +2,7 @@ use crate::node::{FontWeight, Vec2};
 
 /// Abstract text measurement — implemented by the renderer.
 /// Lives in manifold-ui (engine-agnostic) so panels can compute layout
-/// without depending on wgpu/glyphon.
+/// without depending on the GPU backend.
 pub trait TextMeasure {
     /// Measure the pixel dimensions of a text string at the given font size and weight.
     fn measure_text(&self, text: &str, font_size: u16, font_weight: FontWeight) -> Vec2;

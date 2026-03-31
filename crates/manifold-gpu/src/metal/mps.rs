@@ -2,7 +2,7 @@
 //!
 //! MPS kernels are Apple's hand-tuned GPU image processing primitives.
 //! They encode directly into MTLCommandBuffer and operate on MTLTexture —
-//! no wgpu involvement, no intermediate copies.
+//! no intermediate copies.
 //!
 //! MPS kernels are created once per device (or per parameter set) and cached.
 //! They are NOT per-dispatch objects — reuse them across frames.

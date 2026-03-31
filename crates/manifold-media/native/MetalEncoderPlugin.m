@@ -1,5 +1,5 @@
 // MetalEncoderPlugin.m — Native Metal GPU encoder for MANIFOLD export pipeline.
-// Encodes wgpu Metal texture frames to MP4 via AVAssetWriter + VideoToolbox,
+// Encodes Metal texture frames to MP4 via AVAssetWriter + VideoToolbox,
 // with zero GPU->CPU readback. Uses a compute shader to copy textures entirely on the GPU.
 //
 // Two encoding modes:

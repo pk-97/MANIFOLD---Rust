@@ -35,7 +35,7 @@ pub const SURFACE_COUNT: usize = 3;
 /// Triple-buffered: three IOSurfaces allow the content thread to have 2 frames
 /// in flight while the UI thread reads a completed frame. An atomic front_index
 /// tracks which surface is safe to read. Combined with separate Metal command
-/// queues (content=native, UI=wgpu), this eliminates GPU starvation and
+/// queues (content + UI), this eliminates GPU starvation and
 /// synchronous poll stalls.
 pub struct SharedTextureBridge {
     /// Three IOSurface kernel objects — triple-buffered for async pipeline.
@@ -119,8 +119,7 @@ impl SharedTextureBridge {
     }
 
     /// Create a native `manifold_gpu::GpuTexture` backed by one of the IOSurfaces.
-    /// Used by the content thread which uses `manifold_gpu::GpuDevice` directly
-    /// (no wgpu on the content hot path).
+    /// Used by the content thread which uses `manifold_gpu::GpuDevice` directly.
     ///
     /// `surface_index` selects which of the triple-buffered surfaces (0, 1, or 2).
     ///

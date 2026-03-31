@@ -1152,7 +1152,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             let (state_tx, state_rx) = crossbeam_channel::bounded::<ContentState>(4);
 
             // Content thread uses its own native Metal device from manifold-gpu.
-            // No wgpu device needed for content — all encoding goes through native Metal.
 
             let output_w = self.local_project.settings.output_width.max(1) as u32;
             let output_h = self.local_project.settings.output_height.max(1) as u32;
@@ -1198,7 +1197,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             // Create native Metal device BEFORE renderers so they can build native pipelines.
             // This gives the content thread its OWN MTLCommandQueue, completely separate
-            // from the UI thread's wgpu queue. Metal interleaves GPU work from both queues,
+            // from the UI thread's queue. Metal interleaves GPU work from both queues,
             // preventing the content thread from starving UI submissions.
             let native_device = manifold_gpu::GpuDevice::new();
             // Load pipeline binary archive — subsequent pipeline creation calls

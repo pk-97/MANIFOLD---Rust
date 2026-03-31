@@ -3,9 +3,9 @@
 //! When using Rgba16Float surfaces for HDR output, three properties must be
 //! set on the CAMetalLayer for macOS to correctly interpret linear HDR values:
 //!
-//! 1. `pixelFormat = .rgba16Float` — wgpu handles this
-//! 2. `wantsExtendedDynamicRangeContent = YES` — wgpu v28 may handle this
-//! 3. `colorspace = kCGColorSpaceExtendedLinearSRGB` — wgpu does NOT set this
+//! 1. `pixelFormat = .rgba16Float` — set via GpuSurface
+//! 2. `wantsExtendedDynamicRangeContent = YES` — set via `configure_edr()`
+//! 3. `colorspace = kCGColorSpaceExtendedLinearSRGB` — set via `configure_edr()`
 //!
 //! Without the correct colorspace, macOS doesn't know the values are linear
 //! and won't apply the sRGB display transfer function. Subtle bloom gradients

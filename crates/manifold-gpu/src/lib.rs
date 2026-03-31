@@ -1,6 +1,6 @@
 //! manifold-gpu — purpose-built GPU abstraction for MANIFOLD.
 //!
-//! Native Metal on macOS. Zero wgpu, zero vtable overhead.
+//! Native Metal on macOS. Zero vtable overhead.
 //! All GPU resources are native Metal types.
 //!
 //! Used by both the content thread (rendering, effects, generators) and

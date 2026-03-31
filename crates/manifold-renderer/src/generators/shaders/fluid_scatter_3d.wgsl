@@ -21,7 +21,7 @@ struct Particle {
 // FluidDensityScatter3D.compute SplatKernel3D
 // Unity energy: (R/128)^2 * 0.005 * (1e6 / activeCount), scaled by 4096, precomputed on CPU.
 
-// Padded to 112 bytes: wgpu/naga requires all @binding(2) uniforms in the same
+// Padded to 112 bytes: naga requires all @binding(2) uniforms in the same
 // shader module to match the maximum size (ProjectedUniforms = 112 bytes).
 struct Splat3DUniforms {
     active_count:   u32,

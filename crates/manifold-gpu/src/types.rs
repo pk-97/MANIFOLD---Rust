@@ -1,7 +1,7 @@
 //! Shared types for manifold-gpu — identical on all backends.
 
 /// Texture formats used by MANIFOLD content thread.
-/// Subset of Metal/wgpu formats that we actually need.
+/// Subset of Metal texture formats that we actually need.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GpuTextureFormat {
     Rgba16Float,

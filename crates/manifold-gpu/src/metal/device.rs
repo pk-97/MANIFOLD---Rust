@@ -8,7 +8,7 @@ use super::shader_compiler::{compile_wgsl_to_msl, compile_wgsl_to_msl_render, fi
 
 /// Native Metal device + command queue for the content thread.
 /// Created once at startup. Owns the Metal device and a dedicated command queue
-/// for content-thread GPU work (separate from the UI thread's wgpu queue).
+/// for content-thread GPU work (separate from the UI thread's queue).
 ///
 /// Optionally holds a `GpuPipelineArchive` for caching compiled pipeline binaries
 /// to disk. When present, all `create_compute_pipeline` calls automatically use

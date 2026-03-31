@@ -69,7 +69,7 @@ pub struct FrameRecord {
 
 fn is_zero_u64(v: &u64) -> bool { *v == 0 }
 
-/// GPU pass timing from wgpu timestamp queries.
+/// GPU pass timing from timestamp queries.
 #[derive(Debug, Clone, Serialize)]
 pub struct GpuPassRecord {
     pub name: String,

@@ -12,36 +12,17 @@ use manifold_media::video_renderer::VideoRenderer;
 use manifold_renderer::tonemap::TonemapSettings;
 use manifold_playback::engine::{PlaybackEngine, TickResult};
 
-/// Thread-safe shared output view. The content thread writes a new view
-/// after each swap; the UI thread reads it for blitting to screen.
-///
-/// On macOS the IOSurface path is used exclusively — the wgpu view fields
-/// are compiled out. On other platforms the wgpu fallback path is active.
+/// Thread-safe shared output dimensions. The content thread writes new
+/// dimensions after resize; the UI thread reads them for aspect ratio.
 pub struct SharedOutputView {
-    #[cfg(not(target_os = "macos"))]
-    view: RwLock<Option<wgpu::TextureView>>,
     dimensions: RwLock<(u32, u32)>,
 }
 
 impl SharedOutputView {
     pub fn new() -> Self {
         Self {
-            #[cfg(not(target_os = "macos"))]
-            view: RwLock::new(None),
             dimensions: RwLock::new((1920, 1080)),
         }
-    }
-
-    /// Read the current front buffer view (called by UI thread).
-    #[cfg(not(target_os = "macos"))]
-    pub fn get_view(&self) -> Option<wgpu::TextureView> {
-        self.view.read().clone()
-    }
-
-    /// Update the front buffer view (called by content thread after swap).
-    #[cfg(not(target_os = "macos"))]
-    pub fn set_view(&self, view: wgpu::TextureView) {
-        *self.view.write() = Some(view);
     }
 
     /// Update dimensions (called by content thread on resize).
@@ -62,7 +43,7 @@ impl SharedOutputView {
 ///
 /// On macOS, uses native Metal encoding via manifold-gpu.
 /// IOSurface triple-buffering for zero-copy cross-device sharing with the UI thread.
-/// Combined with separate Metal command queues (content=native, UI=wgpu),
+/// Combined with separate Metal command queues (content + UI),
 /// this allows 2 content frames in flight without starving the UI thread.
 pub struct ContentPipeline {
     compositor: Box<dyn Compositor>,
@@ -124,7 +105,7 @@ pub struct ContentPipeline {
     #[cfg(feature = "profiling")]
     gpu_poll_ms: f64,
     /// Native Metal GPU device from manifold-gpu (macOS only).
-    /// Owns metal::Device + metal::CommandQueue for zero-wgpu encoding.
+    /// Owns metal::Device + metal::CommandQueue for native Metal encoding.
     #[cfg(target_os = "macos")]
     native_device: Option<manifold_gpu::GpuDevice>,
     /// Native Metal shared event for frame completion (macOS only).
@@ -370,7 +351,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
         // === NATIVE METAL PATH ===
         // When manifold-gpu is initialized, use raw Metal encoding.
-        // Zero wgpu on the content hot path — no "(wgpu internal) Signal".
+        // Native Metal encoding path.
         #[cfg(target_os = "macos")]
         if self.native_device.is_some() {
             self.render_content_native(
@@ -388,10 +369,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    /// Native Metal render path — zero wgpu on the content hot path.
+    /// Native Metal render path.
     ///
     /// Uses manifold_gpu::GpuDevice + GpuEncoder for ALL encoding.
-    /// No wgpu::Queue::submit(), no wgpu::CommandEncoder, no "(wgpu internal) Signal".
     /// Generators/effects dispatch through the native encoder via GpuEncoder wrapper.
     #[cfg(target_os = "macos")]
     #[allow(clippy::too_many_arguments)]

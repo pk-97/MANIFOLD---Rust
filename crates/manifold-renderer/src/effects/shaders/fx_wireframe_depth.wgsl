@@ -153,7 +153,7 @@ fn fs_wire_mask(in: VertexOutput) -> @location(0) vec4<f32> {
     let center_bias = 1.0 - smoothstep(0.28, 1.08, length(center_delta));
     let sem_foreground = clamp(max(body_mask * (0.28 + center_bias * 0.95) + boundary_mask * 0.24, face_mask * 1.28), 0.0, 1.0);
 
-    // Unity UV has v=0 at bottom; wgpu has uv.y=0 at top.
+    // Unity UV has v=0 at bottom; Metal/WGSL has uv.y=0 at top.
     // Flip Y of these hardcoded positions so they sample the same screen regions
     // (slightly above center, face/body area) as the Unity shader.
     let d_c0 = textureSample(depth_tex, samp, vec2<f32>(0.50, 0.48)).r;
@@ -233,7 +233,7 @@ fn fs_wire_mask(in: VertexOutput) -> @location(0) vec4<f32> {
     let persp = 1.0 / (1.0 + z * 1.6);
     var warped = p * persp;
     // Unity: float2(z*0.12, -z*0.08) — shifts right and down in Y-up UV.
-    // wgpu Y-down: positive Y is down, so negate the Y offset.
+    // Metal/WGSL Y-down: positive Y is down, so negate the Y offset.
     warped = warped + vec2<f32>(z * 0.12, z * 0.08);
 
     // Derive AA from unsnapped coordinates.
