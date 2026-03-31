@@ -185,18 +185,29 @@ pub struct Application {
     /// Content device writes compositor output to the IOSurface; UI device reads it.
     #[cfg(target_os = "macos")]
     pub(crate) shared_texture_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    /// IOSurface bridge for the workspace preview texture.
+    #[cfg(target_os = "macos")]
+    pub(crate) preview_texture_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// UI-side GpuTextures imported from the triple-buffered IOSurfaces.
     /// The UI reads from whichever surface the content thread has published
     /// via `bridge.front_index()`.
     #[cfg(target_os = "macos")]
     pub(crate) ui_shared_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    /// UI-side textures imported from the workspace preview IOSurfaces.
+    #[cfg(target_os = "macos")]
+    pub(crate) ui_preview_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     /// Last seen bridge generation — detects resize (not per-frame).
     #[cfg(target_os = "macos")]
     pub(crate) last_bridge_generation: u64,
-    /// Last IOSurface front_index seen by the UI thread (workspace preview).
-    /// Passed to `present_all_windows()` and tracked by `OutputBlitter`.
+    /// Last seen preview bridge generation.
+    #[cfg(target_os = "macos")]
+    pub(crate) last_preview_bridge_generation: u64,
+    /// Last workspace preview IOSurface front_index seen by the UI thread.
     #[cfg(target_os = "macos")]
     pub(crate) last_output_front_index: usize,
+    /// Last requested workspace preview surface size.
+    #[cfg(target_os = "macos")]
+    pub(crate) workspace_preview_size: (u32, u32),
     pub(crate) blit_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) atlas_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
@@ -309,6 +320,9 @@ pub struct Application {
 }
 
 impl Application {
+    #[cfg(target_os = "macos")]
+    const WORKSPACE_PREVIEW_QUANTUM: u32 = 64;
+
     pub fn new() -> Self {
         let default_project = Self::create_default_project();
 
@@ -336,11 +350,19 @@ impl Application {
             #[cfg(target_os = "macos")]
             shared_texture_bridge: None,
             #[cfg(target_os = "macos")]
+            preview_texture_bridge: None,
+            #[cfg(target_os = "macos")]
             ui_shared_textures: [None, None, None],
+            #[cfg(target_os = "macos")]
+            ui_preview_textures: [None, None, None],
             #[cfg(target_os = "macos")]
             last_bridge_generation: 0,
             #[cfg(target_os = "macos")]
+            last_preview_bridge_generation: 0,
+            #[cfg(target_os = "macos")]
             last_output_front_index: usize::MAX,
+            #[cfg(target_os = "macos")]
+            workspace_preview_size: (1920, 1080),
             blit_pipeline: None,
             blit_sampler: None,
             atlas_pipeline: None,
@@ -400,6 +422,54 @@ impl Application {
             needs_structural_sync: false,
             last_accepted_data_version: 0,
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn compute_workspace_preview_size(
+        output_w: u32,
+        output_h: u32,
+        video_w_logical: f32,
+        video_h_logical: f32,
+        scale_factor: f64,
+    ) -> (u32, u32) {
+        let physical_w = (video_w_logical * scale_factor as f32).floor().max(1.0) as u32;
+        let physical_h = (video_h_logical * scale_factor as f32).floor().max(1.0) as u32;
+        let output_aspect = output_w.max(1) as f32 / output_h.max(1) as f32;
+        let rect_aspect = physical_w as f32 / physical_h as f32;
+        let quantum = Self::WORKSPACE_PREVIEW_QUANTUM;
+        let align_dim = |value: u32| value.max(2) & !1;
+
+        if output_aspect >= rect_aspect {
+            let width = ((physical_w / quantum).max(1)) * quantum;
+            let height = ((width as f32) / output_aspect).round().max(1.0) as u32;
+            (align_dim(width), align_dim(height))
+        } else {
+            let height = ((physical_h / quantum).max(1)) * quantum;
+            let width = ((height as f32) * output_aspect).round().max(1.0) as u32;
+            (align_dim(width), align_dim(height))
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn current_workspace_preview_size(&self) -> (u32, u32) {
+        let video_rect = self.ui_root.layout.video_area();
+        Self::compute_workspace_preview_size(
+            self.local_project.settings.output_width.max(1) as u32,
+            self.local_project.settings.output_height.max(1) as u32,
+            video_rect.width.max(1.0),
+            video_rect.height.max(1.0),
+            self.scale_factor,
+        )
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn sync_workspace_preview_size(&mut self) {
+        let size = self.current_workspace_preview_size();
+        if size == self.workspace_preview_size {
+            return;
+        }
+        self.workspace_preview_size = size;
+        self.send_content_cmd(ContentCommand::ResizeWorkspacePreview(size.0, size.1));
     }
 
     /// Send a command to the content thread (no-op if not yet spawned).
@@ -1097,6 +1167,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
             let output_w = self.local_project.settings.output_width.max(1) as u32;
             let output_h = self.local_project.settings.output_height.max(1) as u32;
+            let initial_layout = manifold_ui::layout::ScreenLayout::new(
+                size.width as f32 / scale as f32,
+                size.height as f32 / scale as f32,
+            );
+            let initial_video_area = initial_layout.video_area();
+            let initial_preview_size = Self::compute_workspace_preview_size(
+                output_w,
+                output_h,
+                initial_video_area.width,
+                initial_video_area.height,
+                scale,
+            );
+            self.workspace_preview_size = initial_preview_size;
 
             // Create IOSurface bridge for cross-device texture sharing.
             // Both devices get their own MTLTexture backed by the same IOSurface memory.
@@ -1112,6 +1195,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     std::array::from_fn(|i| unsafe { bridge.import_texture_native(&gpu.device, i) });
                 self.ui_shared_textures = ui_textures.map(Some);
                 self.shared_texture_bridge = Some(Arc::clone(&bridge));
+
+                let preview_bridge = crate::shared_texture::SharedTextureBridge::new(
+                    initial_preview_size.0,
+                    initial_preview_size.1,
+                );
+                let preview_bridge = Arc::new(preview_bridge);
+                let preview_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
+                    std::array::from_fn(|i| unsafe { preview_bridge.import_texture_native(&gpu.device, i) });
+                self.ui_preview_textures = preview_textures.map(Some);
+                self.preview_texture_bridge = Some(Arc::clone(&preview_bridge));
             }
 
             // Create native Metal device BEFORE renderers so they can build native pipelines.
@@ -1172,6 +1265,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 let content_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
                     std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
                 content_pipeline.set_shared_textures(content_textures, Arc::clone(bridge));
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(ref bridge) = self.preview_texture_bridge {
+                let native_dev = content_pipeline.native_device().unwrap();
+                let preview_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
+                    std::array::from_fn(|i| unsafe { bridge.import_texture_native(native_dev, i) });
+                content_pipeline.set_preview_textures(preview_textures, Arc::clone(bridge));
             }
             self.content_pipeline_output = Some(content_pipeline.shared_output());
 
@@ -1260,6 +1360,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let logical_w = size.width as f32 / scale as f32;
         let logical_h = size.height as f32 / scale as f32;
         self.ui_root.resize(logical_w, logical_h);
+        #[cfg(target_os = "macos")]
+        self.sync_workspace_preview_size();
 
         // Push initial project data (layers, tracks) and rebuild
         let active_idx = self.active_layer_id.as_ref()
@@ -2069,6 +2171,7 @@ impl Drop for Application {
         #[cfg(target_os = "macos")]
         {
             self.ui_shared_textures = [None, None, None];
+            self.ui_preview_textures = [None, None, None];
         }
         self.layer_bitmap_gpu = None;
         self.ui_renderer = None;

@@ -43,6 +43,9 @@ pub enum ContentCommand {
     /// Resize the content pipeline to `(width, height)` output resolution
     /// at the given `render_scale` (1.0 = native, 0.5 = FSR performance).
     ResizeContent(u32, u32, f32),
+    /// Resize the workspace preview surface. This does not affect the
+    /// audience output resolution.
+    ResizeWorkspacePreview(u32, u32),
 
     // ── Transport/sync ─────────────────────────────────────────────
     CycleClockAuthority,

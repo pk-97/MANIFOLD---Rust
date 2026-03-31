@@ -622,6 +622,9 @@ impl Application {
             }
         }
 
+        #[cfg(target_os = "macos")]
+        self.sync_workspace_preview_size();
+
         // 4. Push engine state to UI panels (AFTER build so new nodes get state)
         let active_idx = self.active_layer_id.as_ref().and_then(|id| self.local_project.timeline.find_layer_index_by_id(id));
         crate::ui_bridge::push_state(
@@ -805,7 +808,7 @@ impl Application {
         // front_index tells us which surface has the latest completed frame.
         #[cfg(target_os = "macos")]
         {
-            // Detect bridge resize (generation changed) and re-import all UI textures.
+            // Detect output bridge resize (generation changed) and re-import all UI textures.
             if let Some(ref bridge) = self.shared_texture_bridge {
                 let bridge_gen = bridge.generation();
                 if bridge_gen != self.last_bridge_generation {
@@ -817,8 +820,20 @@ impl Application {
                         crate::shared_texture::SURFACE_COUNT, bridge_gen);
                 }
             }
-            // Read the front surface published by the content thread.
-            let front = self.shared_texture_bridge.as_ref()
+            // Detect preview bridge resize (generation changed) and re-import workspace textures.
+            if let Some(ref bridge) = self.preview_texture_bridge {
+                let bridge_gen = bridge.generation();
+                if bridge_gen != self.last_preview_bridge_generation {
+                    self.last_preview_bridge_generation = bridge_gen;
+                    let ui_textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT] =
+                        std::array::from_fn(|i| unsafe { bridge.import_texture_native(&gpu.device, i) });
+                    self.ui_preview_textures = ui_textures.map(Some);
+                    log::info!("[UI] re-imported {} workspace preview IOSurface textures after resize (gen={})",
+                        crate::shared_texture::SURFACE_COUNT, bridge_gen);
+                }
+            }
+            // Read the workspace preview front surface published by the content thread.
+            let front = self.preview_texture_bridge.as_ref()
                 .map_or(0, |b| b.front_index()) as usize;
             if front != self.last_output_front_index {
                 self.last_output_front_index = front;
@@ -926,7 +941,7 @@ impl Application {
             Some(blit_pipeline),
             Some(blit_sampler),
         ) = (
-            self.ui_shared_textures[front_index].as_ref(),
+            self.ui_preview_textures[front_index].as_ref(),
             &self.blit_pipeline,
             &self.blit_sampler,
         ) {

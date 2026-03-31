@@ -241,6 +241,9 @@ impl ContentThread {
             ContentCommand::ResizeContent(w, h, render_scale) => {
                 self.content_pipeline.resize(&mut self.engine, w, h, render_scale);
             }
+            ContentCommand::ResizeWorkspacePreview(w, h) => {
+                self.content_pipeline.resize_workspace_preview(w, h);
+            }
 
             // ── Transport/sync ─────────────────────────────────────
             ContentCommand::CycleClockAuthority => {

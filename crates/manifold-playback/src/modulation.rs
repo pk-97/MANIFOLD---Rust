@@ -63,12 +63,11 @@ pub fn evaluate_all_drivers(project: &mut Project, current_beat: Beats) -> bool 
         }
     }
 
-    // Layer effect drivers + generator param drivers
+    // Layer effect drivers + generator param drivers.
+    // Modulation runs even on muted layers — mute only suppresses compositor
+    // output, not the modulation pipeline. This keeps the inspector showing
+    // live driver/envelope values regardless of mute state.
     for layer in project.timeline.layers.iter_mut() {
-        if layer.is_muted {
-            continue;
-        }
-
         // Layer effect drivers
         if let Some(effects) = &mut layer.effects {
             for fx in effects.iter_mut() {
@@ -204,10 +203,7 @@ pub fn evaluate_all_envelopes(project: &mut Project, current_beat: Beats) -> boo
     let mut any_modulated = false;
 
     for layer in project.timeline.layers.iter_mut() {
-        if layer.is_muted {
-            continue;
-        }
-
+        // Envelopes run even on muted layers (mute = compositor only).
         // Find first active clip on this layer (for envelope timing)
         let mut active_elapsed = Beats(-1.0); // sentinel: no active clip
         let mut active_duration = Beats::ZERO;
@@ -312,7 +308,7 @@ pub fn evaluate_gen_param_envelopes(project: &mut Project, current_beat: Beats) 
     let mut any_modulated = false;
 
     for layer in project.timeline.layers.iter_mut() {
-        if layer.layer_type != LayerType::Generator || layer.is_muted {
+        if layer.layer_type != LayerType::Generator {
             continue;
         }
 

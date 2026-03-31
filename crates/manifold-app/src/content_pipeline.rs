@@ -89,15 +89,24 @@ pub struct ContentPipeline {
     /// Content writes to shared_textures[write_surface_index]; UI reads the front surface.
     #[cfg(target_os = "macos")]
     shared_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
+    /// Triple-buffered IOSurface textures for the workspace preview.
+    #[cfg(target_os = "macos")]
+    preview_textures: [Option<manifold_gpu::GpuTexture>; crate::shared_texture::SURFACE_COUNT],
     /// Which surface we're writing to THIS frame (0, 1, or 2).
     #[cfg(target_os = "macos")]
     write_surface_index: usize,
     /// IOSurface bridge for cross-device sharing.
     #[cfg(target_os = "macos")]
     shared_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
+    /// IOSurface bridge for the workspace preview path.
+    #[cfg(target_os = "macos")]
+    preview_bridge: Option<Arc<crate::shared_texture::SharedTextureBridge>>,
     /// Last seen bridge generation — used to detect resize and re-import.
     #[cfg(target_os = "macos")]
     shared_generation: u64,
+    /// Last seen preview bridge generation.
+    #[cfg(target_os = "macos")]
+    preview_generation: u64,
     /// Per-surface signal values — tracks the GpuEvent signal value from the last
     /// frame that wrote to each surface. Before writing to surface S, we wait for
     /// surface_signal_values[S] to complete (the frame that last used it).
@@ -133,6 +142,12 @@ pub struct ContentPipeline {
     /// Texture pool backed by MTLHeap for zero-kernel-call allocation.
     #[cfg(target_os = "macos")]
     texture_pool: Option<manifold_gpu::TexturePool>,
+    /// Downscale blit used for the workspace preview texture.
+    #[cfg(target_os = "macos")]
+    preview_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
+    /// Linear sampler for preview downscaling.
+    #[cfg(target_os = "macos")]
+    preview_sampler: Option<manifold_gpu::GpuSampler>,
 }
 
 impl ContentPipeline {
@@ -154,11 +169,17 @@ impl ContentPipeline {
             #[cfg(target_os = "macos")]
             shared_textures: [None, None, None],
             #[cfg(target_os = "macos")]
+            preview_textures: [None, None, None],
+            #[cfg(target_os = "macos")]
             write_surface_index: 0,
             #[cfg(target_os = "macos")]
             shared_bridge: None,
             #[cfg(target_os = "macos")]
+            preview_bridge: None,
+            #[cfg(target_os = "macos")]
             shared_generation: 0,
+            #[cfg(target_os = "macos")]
+            preview_generation: 0,
             #[cfg(target_os = "macos")]
             surface_signal_values: [0; crate::shared_texture::SURFACE_COUNT],
             #[cfg(target_os = "macos")]
@@ -178,6 +199,10 @@ impl ContentPipeline {
             native_signal_value: 0,
             #[cfg(target_os = "macos")]
             texture_pool: None,
+            #[cfg(target_os = "macos")]
+            preview_pipeline: None,
+            #[cfg(target_os = "macos")]
+            preview_sampler: None,
         }
     }
 
@@ -192,6 +217,40 @@ impl ContentPipeline {
         let event = device.create_event();
         // 3 frames in flight (triple buffering).
         let pool = device.create_texture_pool(3);
+        let preview_shader = r#"
+@group(0) @binding(0) var t_source: texture_2d<f32>;
+@group(0) @binding(1) var s_source: sampler;
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+@vertex
+fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
+    var out: VertexOutput;
+    let x = f32(i32(idx) / 2) * 4.0 - 1.0;
+    let y = f32(i32(idx) % 2) * 4.0 - 1.0;
+    out.position = vec4<f32>(x, y, 0.0, 1.0);
+    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
+    return out;
+}
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(t_source, s_source, in.uv);
+}
+"#;
+        self.preview_pipeline = Some(device.create_render_pipeline(
+            preview_shader,
+            "vs_main",
+            "fs_main",
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            None,
+            "Workspace Preview Blit",
+        ));
+        self.preview_sampler = Some(device.create_sampler(&manifold_gpu::GpuSamplerDesc {
+            min_filter: manifold_gpu::GpuFilterMode::Linear,
+            mag_filter: manifold_gpu::GpuFilterMode::Linear,
+            ..Default::default()
+        }));
         self.native_device = Some(device);
         self.native_event = Some(event);
         self.texture_pool = Some(pool);
@@ -221,6 +280,16 @@ impl ContentPipeline {
         self.shared_bridge = Some(bridge);
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn set_preview_textures(
+        &mut self,
+        textures: [manifold_gpu::GpuTexture; crate::shared_texture::SURFACE_COUNT],
+        bridge: Arc<crate::shared_texture::SharedTextureBridge>,
+    ) {
+        self.preview_textures = textures.map(Some);
+        self.preview_bridge = Some(bridge);
+    }
+
     /// Get a clone of the shared output handle. The UI thread holds this
     /// to read the front buffer view and dimensions.
     pub fn shared_output(&self) -> Arc<SharedOutputView> {
@@ -248,6 +317,9 @@ impl ContentPipeline {
                 return;
             }
             if let Some(ref bridge) = self.shared_bridge {
+                bridge.publish_front(self.last_write_surface as u32);
+            }
+            if let Some(ref bridge) = self.preview_bridge {
                 bridge.publish_front(self.last_write_surface as u32);
             }
         }
@@ -559,6 +631,13 @@ impl ContentPipeline {
                         self.output_w, self.output_h, 1,
                     );
                 }
+                Self::update_workspace_preview(
+                    &mut native_enc,
+                    &mfx.output.texture,
+                    self.preview_textures[self.write_surface_index].as_ref(),
+                    self.preview_pipeline.as_ref(),
+                    self.preview_sampler.as_ref(),
+                );
             } else if let Some(ref fsr) = self.fsr1 {
                 // FSR 1.0 fallback: EASU + RCAS compute dispatches.
                 {
@@ -581,6 +660,13 @@ impl ContentPipeline {
                         self.output_w, self.output_h, 1,
                     );
                 }
+                Self::update_workspace_preview(
+                    &mut native_enc,
+                    &fsr.output.texture,
+                    self.preview_textures[self.write_surface_index].as_ref(),
+                    self.preview_pipeline.as_ref(),
+                    self.preview_sampler.as_ref(),
+                );
             } else {
                 // No upscaling: blit compositor output directly to IOSurface.
                 if let Some(ref shared_tex) =
@@ -592,6 +678,13 @@ impl ContentPipeline {
                         self.compositor.output_texture(), shared_tex, comp_w, comp_h, 1,
                     );
                 }
+                Self::update_workspace_preview(
+                    &mut native_enc,
+                    self.compositor.output_texture(),
+                    self.preview_textures[self.write_surface_index].as_ref(),
+                    self.preview_pipeline.as_ref(),
+                    self.preview_sampler.as_ref(),
+                );
             }
         }
 
@@ -750,10 +843,69 @@ impl ContentPipeline {
         self.shared_output.set_dimensions(width, height);
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn resize_workspace_preview(&mut self, width: u32, height: u32) {
+        let width = width.max(1);
+        let height = height.max(1);
+
+        let Some(ref bridge) = self.preview_bridge else { return };
+        if bridge.width() == width && bridge.height() == height {
+            return;
+        }
+
+        let native_device = self.native_device.as_ref()
+            .expect("native device required for workspace preview resize");
+        bridge.resize(width, height);
+        self.preview_textures = std::array::from_fn(|i| {
+            Some(unsafe { bridge.import_texture_native(native_device, i) })
+        });
+        self.preview_generation = bridge.generation();
+    }
+
     /// Get current output dimensions (= IOSurface / UI dimensions).
     /// When FSR is active these differ from `self.compositor.dimensions()`.
     pub fn dimensions(&self) -> (u32, u32) {
         (self.output_w, self.output_h)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn update_workspace_preview(
+        native_enc: &mut manifold_gpu::GpuEncoder,
+        source: &manifold_gpu::GpuTexture,
+        target: Option<&manifold_gpu::GpuTexture>,
+        pipeline: Option<&manifold_gpu::GpuRenderPipeline>,
+        sampler: Option<&manifold_gpu::GpuSampler>,
+    ) {
+        let Some(target) = target else {
+            return;
+        };
+
+        if target.width == source.width && target.height == source.height {
+            native_enc.copy_texture_to_texture(source, target, target.width, target.height, 1);
+            return;
+        }
+
+        let (Some(pipeline), Some(sampler)) = (pipeline, sampler) else {
+            return;
+        };
+
+        native_enc.draw_fullscreen(
+            pipeline,
+            target,
+            &[
+                manifold_gpu::GpuBinding::Texture {
+                    binding: 0,
+                    texture: source,
+                },
+                manifold_gpu::GpuBinding::Sampler {
+                    binding: 1,
+                    sampler,
+                },
+            ],
+            true,
+            true,
+            "Workspace Preview Blit",
+        );
     }
 
     /// Clean up per-owner effect state for stopped clips.
