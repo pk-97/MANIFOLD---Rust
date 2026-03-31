@@ -1125,6 +1125,9 @@ impl Panel for TimelineViewportPanel {
             _ => Vec::new()
         }
     }
+
+    fn first_node(&self) -> usize { self.first_node }
+    fn node_count(&self) -> usize { self.node_count }
 }
 
 // ── Build helpers (private) ──────────────────────────────────────
