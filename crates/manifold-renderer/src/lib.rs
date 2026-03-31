@@ -26,4 +26,7 @@ pub mod fsr1;
 pub mod metalfx_upscaler;
 pub mod wet_dry_lerp;
 pub mod ui_renderer;
+pub mod panel_cache;
+pub mod panel_compositor;
+pub mod ui_cache_manager;
 pub mod layer_bitmap_gpu;

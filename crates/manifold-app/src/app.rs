@@ -209,6 +209,8 @@ pub struct Application {
     #[cfg(target_os = "macos")]
     pub(crate) output_presenter: Option<crate::output_presenter::OutputPresenterHandle>,
     pub(crate) ui_renderer: Option<UIRenderer>,
+    pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
+    pub(crate) panel_compositor: Option<manifold_renderer::panel_compositor::PanelCompositor>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
     pub(crate) surface_format: wgpu::TextureFormat,
     /// macOS EDR headroom for the primary window (1.0 = SDR, >1.0 = HDR capable).
@@ -346,6 +348,8 @@ impl Application {
             #[cfg(target_os = "macos")]
             output_presenter: None,
             ui_renderer: None,
+            ui_cache_manager: None,
+            panel_compositor: None,
             layer_bitmap_gpu: None,
             surface_format: wgpu::TextureFormat::Rgba16Float,
             edr_headroom: 1.0,
@@ -1063,6 +1067,14 @@ impl ApplicationHandler for Application {
 
             // Create UI renderer (renders directly to surface in surface format)
             self.ui_renderer = Some(UIRenderer::new(&device, &queue, format));
+
+            // Create panel cache system (offscreen textures + compositor for cached panels)
+            self.panel_compositor = Some(
+                manifold_renderer::panel_compositor::PanelCompositor::new(&device, format),
+            );
+            self.ui_cache_manager = Some(
+                manifold_renderer::ui_cache_manager::UICacheManager::new(format, scale),
+            );
 
             // Create layer bitmap GPU (textured quad pipeline for per-layer bitmaps)
             self.layer_bitmap_gpu = Some(manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu::new(&device, format));

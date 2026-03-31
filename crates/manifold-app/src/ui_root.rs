@@ -154,6 +154,98 @@ impl UIRoot {
         self.display_resolutions = resolutions;
     }
 
+    /// Build panel cache info for UICacheManager.
+    /// Returns one entry per cacheable panel with its node range and screen rect.
+    pub fn panel_cache_info(&self) -> Vec<manifold_renderer::ui_cache_manager::PanelCacheInfo> {
+        use manifold_renderer::ui_cache_manager::{PanelCacheInfo, PanelSlot};
+
+        let mut info = Vec::with_capacity(7);
+
+        // Transport
+        let (start, end) = self.transport.node_range();
+        if start < end {
+            info.push(PanelCacheInfo {
+                slot: PanelSlot::Transport,
+                node_start: start,
+                node_end: end,
+                rect: self.layout.transport_bar(),
+            });
+        }
+
+        // Header
+        let (start, end) = self.header.node_range();
+        if start < end {
+            info.push(PanelCacheInfo {
+                slot: PanelSlot::Header,
+                node_start: start,
+                node_end: end,
+                rect: self.layout.header(),
+            });
+        }
+
+        // Footer
+        let (start, end) = self.footer.node_range();
+        if start < end {
+            info.push(PanelCacheInfo {
+                slot: PanelSlot::Footer,
+                node_start: start,
+                node_end: end,
+                rect: self.layout.footer(),
+            });
+        }
+
+        // Inspector
+        let (start, end) = self.inspector.node_range();
+        if start < end {
+            info.push(PanelCacheInfo {
+                slot: PanelSlot::Inspector,
+                node_start: start,
+                node_end: end,
+                rect: self.layout.inspector(),
+            });
+        }
+
+        // SplitHandles — nodes between inspector end and scroll_panels_start
+        let inspector_end = self.inspector.first_node().saturating_add(self.inspector.node_count());
+        if inspector_end < self.scroll_panels_start && self.inspector.first_node() != usize::MAX {
+            info.push(PanelCacheInfo {
+                slot: PanelSlot::SplitHandles,
+                node_start: inspector_end,
+                node_end: self.scroll_panels_start,
+                rect: Rect::new(
+                    0.0,
+                    0.0,
+                    self.layout.screen_width,
+                    self.layout.screen_height,
+                ),
+            });
+        }
+
+        // LayerHeaders
+        let (start, end) = self.layer_headers.node_range();
+        if start < end {
+            info.push(PanelCacheInfo {
+                slot: PanelSlot::LayerHeaders,
+                node_start: start,
+                node_end: end,
+                rect: self.layout.layer_controls(),
+            });
+        }
+
+        // Viewport (timeline body)
+        let (start, end) = self.viewport.node_range();
+        if start < end {
+            info.push(PanelCacheInfo {
+                slot: PanelSlot::Viewport,
+                node_start: start,
+                node_end: end,
+                rect: self.layout.timeline_body(),
+            });
+        }
+
+        info
+    }
+
     /// Apply saved layout from project settings. Called after project load.
     /// Equivalent to Unity's WorkspaceController.ApplySavedLayout().
     pub fn apply_project_layout(&mut self, settings: &manifold_core::settings::ProjectSettings) {

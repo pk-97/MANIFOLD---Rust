@@ -48,7 +48,8 @@ struct VertexOutput {
 };
 
 struct Globals {
-    screen_size: vec2<f32>,
+    viewport_size: vec2<f32>,
+    offset: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -56,9 +57,9 @@ struct Globals {
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
-    // Convert pixel coordinates to NDC: (0,0) top-left, (w,h) bottom-right
-    let ndc_x = (in.position.x / globals.screen_size.x) * 2.0 - 1.0;
-    let ndc_y = 1.0 - (in.position.y / globals.screen_size.y) * 2.0;
+    // Convert pixel coordinates to NDC with optional offset for panel-local rendering
+    let ndc_x = ((in.position.x - globals.offset.x) / globals.viewport_size.x) * 2.0 - 1.0;
+    let ndc_y = 1.0 - ((in.position.y - globals.offset.y) / globals.viewport_size.y) * 2.0;
     out.position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
     out.uv = in.uv;
     out.color = in.color;
@@ -636,13 +637,18 @@ impl UIRenderer {
         self.overlay_pass_index = 0;
     }
 
-    /// Render all queued commands to the target view.
+    /// Render a range of tree nodes to vertex/text commands.
+    /// Equivalent to `render_overlay_range` but named for panel cache usage.
+    pub fn render_tree_range(&mut self, tree: &UITree, start: usize, end: usize) {
+        self.render_overlay_range(tree, start, end);
+    }
+
+    /// Prepare vertex/index buffers and text for drawing. Call before creating
+    /// the render pass. Returns `true` if there is content to draw.
     ///
     /// `width`/`height`: logical pixel dimensions (matches UITree coordinates).
     /// `scale_factor`: HiDPI scale (e.g. 2.0 on Retina). Used for crisp text.
     /// `text_mode`: which TextRenderer to use, or `Skip` for rects only.
-    /// Prepare vertex/index buffers and text for drawing. Call before creating
-    /// the render pass. Returns `true` if there is content to draw.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -652,11 +658,32 @@ impl UIRenderer {
         scale_factor: f64,
         text_mode: TextMode,
     ) -> bool {
+        self.prepare_with_offset(device, queue, width, height, 0.0, 0.0, scale_factor, text_mode)
+    }
+
+    /// Prepare with viewport offset for panel-local rendering.
+    ///
+    /// `viewport_w`/`viewport_h`: panel texture size in logical pixels.
+    /// `offset_x`/`offset_y`: panel's screen-space origin (subtracted in shader).
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_with_offset(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        viewport_w: u32,
+        viewport_h: u32,
+        offset_x: f32,
+        offset_y: f32,
+        scale_factor: f64,
+        text_mode: TextMode,
+    ) -> bool {
+        let width = viewport_w;
+        let height = viewport_h;
         let physical_w = (width as f64 * scale_factor) as u32;
         let physical_h = (height as f64 * scale_factor) as u32;
 
-        // Update globals — logical pixel dimensions for NDC mapping
-        let globals_data: [f32; 4] = [width as f32, height as f32, 0.0, 0.0];
+        // Update globals — viewport size + offset for NDC mapping
+        let globals_data: [f32; 4] = [width as f32, height as f32, offset_x, offset_y];
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::bytes_of(&globals_data));
 
         self.prepared_globals_bg = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -792,10 +819,10 @@ impl UIRenderer {
             for (i, cmd) in self.text_commands.iter().enumerate() {
                 let bounds = if let Some(clip) = cmd.clip_bounds {
                     TextBounds {
-                        left: (clip[0] * sf) as i32,
-                        top: (clip[1] * sf) as i32,
-                        right: (clip[2] * sf) as i32,
-                        bottom: (clip[3] * sf) as i32,
+                        left: ((clip[0] - offset_x) * sf) as i32,
+                        top: ((clip[1] - offset_y) * sf) as i32,
+                        right: ((clip[2] - offset_x) * sf) as i32,
+                        bottom: ((clip[3] - offset_y) * sf) as i32,
                     }
                 } else {
                     TextBounds {
@@ -808,8 +835,8 @@ impl UIRenderer {
 
                 text_areas.push(TextArea {
                     buffer: &self.text_buffers[i],
-                    left: cmd.x * sf,
-                    top: cmd.y * sf,
+                    left: (cmd.x - offset_x) * sf,
+                    top: (cmd.y - offset_y) * sf,
                     scale: sf,
                     bounds,
                     default_color: GlyphonColor::rgba(

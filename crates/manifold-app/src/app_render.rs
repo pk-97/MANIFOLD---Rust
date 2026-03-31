@@ -600,6 +600,9 @@ impl Application {
                 // But still rebuild scroll panels if needed (they're separate from inspector)
                 if scroll_changed {
                     self.ui_root.rebuild_scroll_panels();
+                    if let Some(cm) = &mut self.ui_cache_manager {
+                        cm.invalidate_scroll_panels();
+                    }
                 }
             } else if layer_dragging {
                 // Defer — rebuilding scroll panels while a layer drag is active would
@@ -610,9 +613,15 @@ impl Application {
                 // Re-apply effect card selection visuals after rebuild —
                 // structural changes recreate cards with is_selected=false.
                 self.ui_root.inspector.apply_selection_visuals(&mut self.ui_root.tree);
+                if let Some(cm) = &mut self.ui_cache_manager {
+                    cm.invalidate_all();
+                }
             }
         } else if scroll_changed && !layer_dragging {
             self.ui_root.rebuild_scroll_panels();
+            if let Some(cm) = &mut self.ui_cache_manager {
+                cm.invalidate_scroll_panels();
+            }
         }
 
         // 4. Push engine state to UI panels (AFTER build so new nodes get state)
@@ -919,7 +928,29 @@ impl Application {
                     ui.begin_frame();
                 }
 
-                // ── Phase 1: Clear + Blit + Main UI (single render pass) ──
+                // ── Phase 0: Panel cache update ──
+                // Render dirty panels to their offscreen cache textures.
+                let panel_infos = self.ui_root.panel_cache_info();
+                if let (Some(cm), Some(pc), Some(ui)) = (
+                    &mut self.ui_cache_manager,
+                    &self.panel_compositor,
+                    &mut self.ui_renderer,
+                ) {
+                    cm.set_scale_factor(scale);
+                    cm.update_sizes(&gpu.device, pc, &panel_infos);
+                    cm.render_dirty_panels(
+                        &gpu.device,
+                        &gpu.queue,
+                        &mut encoder,
+                        ui,
+                        &self.ui_root.tree,
+                        &panel_infos,
+                    );
+                    // Clear dirty flags for cached nodes so next frame starts fresh
+                    self.ui_root.tree.clear_dirty();
+                }
+
+                // ── Phase 1: Clear + Blit + Cached Panels (single render pass) ──
                 // Prepare blit bind group + viewport before creating the pass.
                 if let Some(blit) = &mut self.blit_pipeline {
                     blit.prepare_rect_fit(
@@ -930,39 +961,17 @@ impl Application {
                     );
                 }
 
-                // Prepare main UI (vertex/index buffers + text).
-                if let Some(ui) = &mut self.ui_renderer {
-                    let wf_first = self.ui_root.waveform_lane.first_node();
-                    let sl_first = self.ui_root.stem_lanes.first_node();
-                    let mut skip_from: Option<usize> = None;
-                    if wf_first != usize::MAX {
-                        skip_from = Some(wf_first);
-                    } else if sl_first != usize::MAX {
-                        skip_from = Some(sl_first);
-                    }
-                    if skip_from.is_none() {
-                        if self.ui_root.perf_hud.is_visible() {
-                            skip_from = Some(self.ui_root.perf_hud.first_node());
-                        } else if self.ui_root.dropdown.is_open() {
-                            skip_from = Some(self.ui_root.dropdown.first_node());
-                        } else if self.ui_root.browser_popup.is_open() {
-                            skip_from = Some(self.ui_root.browser_popup.first_node());
-                        }
-                    }
-                    ui.render_tree(&self.ui_root.tree, skip_from);
-                    ui.prepare(
-                        &gpu.device, &gpu.queue,
-                        logical_w, logical_h, scale, TextMode::Main,
-                    );
-                }
+                // Collect compositing data from cache manager (Rect + BindGroup pairs).
+                let compositing_panels: Vec<_> = self.ui_cache_manager.as_ref()
+                    .map(|cm| cm.compositing_data(&panel_infos))
+                    .unwrap_or_default();
 
                 // Single render pass: clear to black, blit compositor output,
-                // then draw main UI — eliminates 2 LoadOp::Load round-trips
-                // (~140 MiB bandwidth saved per frame).
+                // then composite cached panel textures.
                 {
                     let mut pass =
                         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("Clear + Blit + Main UI"),
+                            label: Some("Clear + Blit + Cached Panels"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                                 view: &surface_view,
                                 resolve_target: None,
@@ -987,8 +996,9 @@ impl Application {
                         surface_w as f32, surface_h as f32,
                         0.0, 1.0,
                     );
-                    if let Some(ui) = &self.ui_renderer {
-                        ui.draw(&mut pass);
+                    // Composite cached panel textures
+                    if let Some(pc) = &self.panel_compositor {
+                        pc.draw_panels(&mut pass, &compositing_panels, sf);
                     }
                 }
 

@@ -441,6 +441,10 @@ pub struct LayerHeaderPanel {
 
     // Scroll container for clipping layer rows to the visible area
     scroll_clip_id: i32,
+
+    // Cache tracking
+    cache_first_node: usize,
+    cache_node_count: usize,
 }
 
 impl LayerHeaderPanel {
@@ -464,6 +468,8 @@ impl LayerHeaderPanel {
             panel_width: 0.0,
             scroll_y_px: 0.0,
             scroll_clip_id: -1,
+            cache_first_node: usize::MAX,
+            cache_node_count: 0,
         }
     }
 
@@ -1031,6 +1037,8 @@ impl Default for LayerHeaderPanel {
 
 impl Panel for LayerHeaderPanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
+        self.cache_first_node = tree.count();
+
         let lc = layout.layer_controls();
         // Offset layer rows down by the header stack (overview strip + ruler + waveform lanes)
         // so they align vertically with the track content area.
@@ -1122,6 +1130,8 @@ impl Panel for LayerHeaderPanel {
 
         // No "+ Add Layer" button — layers are added via right-click context menu
         self.add_layer_btn = -1;
+
+        self.cache_node_count = tree.count() - self.cache_first_node;
     }
 
     fn update(&mut self, tree: &mut UITree) {
@@ -1182,6 +1192,9 @@ impl Panel for LayerHeaderPanel {
             _ => Vec::new(),
         }
     }
+
+    fn first_node(&self) -> usize { self.cache_first_node }
+    fn node_count(&self) -> usize { self.cache_node_count }
 }
 
 #[cfg(test)]

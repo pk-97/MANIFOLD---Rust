@@ -124,6 +124,10 @@ pub struct HeaderPanel {
     time_display: String,
     zoom_label: String,
     monitor_active: bool,
+
+    // Cache tracking
+    cache_first_node: usize,
+    cache_node_count: usize,
 }
 
 impl HeaderPanel {
@@ -146,6 +150,8 @@ impl HeaderPanel {
             time_display: "00:00.00 / 00:00.00  |  1.1.1".into(),
             zoom_label: "120 px/beat".into(),
             monitor_active: false,
+            cache_first_node: usize::MAX,
+            cache_node_count: 0,
         }
     }
 
@@ -231,6 +237,8 @@ impl Default for HeaderPanel {
 
 impl Panel for HeaderPanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
+        self.cache_first_node = tree.count();
+
         let header = layout.header();
         self.layout.compute(header, self.import_progress);
 
@@ -358,6 +366,8 @@ impl Panel for HeaderPanel {
             self.monitor_style(),
             "Monitor",
         ) as i32;
+
+        self.cache_node_count = tree.count() - self.cache_first_node;
     }
 
     fn update(&mut self, _tree: &mut UITree) {}
@@ -368,6 +378,9 @@ impl Panel for HeaderPanel {
             _ => Vec::new(),
         }
     }
+
+    fn first_node(&self) -> usize { self.cache_first_node }
+    fn node_count(&self) -> usize { self.cache_node_count }
 }
 
 #[cfg(test)]

@@ -273,6 +273,10 @@ pub struct TransportPanel {
     export_active: bool,
     hdr_active: bool,
     perc_active: bool,
+
+    // Cache tracking
+    cache_first_node: usize,
+    cache_node_count: usize,
 }
 
 impl TransportPanel {
@@ -314,6 +318,8 @@ impl TransportPanel {
             export_active: false,
             hdr_active: false,
             perc_active: false,
+            cache_first_node: usize::MAX,
+            cache_node_count: 0,
         }
     }
 
@@ -737,6 +743,8 @@ impl Default for TransportPanel {
 
 impl Panel for TransportPanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
+        self.cache_first_node = tree.count();
+
         let bar = layout.transport_bar();
         self.layout.compute(bar);
 
@@ -748,6 +756,8 @@ impl Panel for TransportPanel {
         self.build_left(tree, bg);
         self.build_center(tree, bg);
         self.build_right(tree, bg);
+
+        self.cache_node_count = tree.count() - self.cache_first_node;
     }
 
     fn update(&mut self, _tree: &mut UITree) {}
@@ -758,6 +768,9 @@ impl Panel for TransportPanel {
             _ => Vec::new(),
         }
     }
+
+    fn first_node(&self) -> usize { self.cache_first_node }
+    fn node_count(&self) -> usize { self.cache_node_count }
 }
 
 #[cfg(test)]

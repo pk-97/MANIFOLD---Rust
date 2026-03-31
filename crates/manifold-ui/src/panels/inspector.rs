@@ -135,6 +135,10 @@ pub struct InspectorCompositePanel {
     card_drag_ghost_id: i32,
     card_drag_indicator_id: i32,
     card_drag_label: String,
+
+    // Cache tracking
+    cache_first_node: usize,
+    cache_node_count: usize,
 }
 
 impl InspectorCompositePanel {
@@ -180,6 +184,8 @@ impl InspectorCompositePanel {
             card_drag_ghost_id: -1,
             card_drag_indicator_id: -1,
             card_drag_label: String::new(),
+            cache_first_node: usize::MAX,
+            cache_node_count: 0,
         }
     }
 
@@ -1158,6 +1164,8 @@ impl InspectorCompositePanel {
 
 impl Panel for InspectorCompositePanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
+        self.cache_first_node = tree.count();
+
         let rect = layout.inspector();
         if rect.width <= 0.0 {
             return;
@@ -1351,6 +1359,8 @@ impl Panel for InspectorCompositePanel {
 
         self.update_scroll_bounds();
         self.update_scrollbar(tree);
+
+        self.cache_node_count = tree.count() - self.cache_first_node;
     }
 
     fn update(&mut self, _tree: &mut UITree) {
@@ -1392,6 +1402,9 @@ impl Panel for InspectorCompositePanel {
             _ => Vec::new(),
         }
     }
+
+    fn first_node(&self) -> usize { self.cache_first_node }
+    fn node_count(&self) -> usize { self.cache_node_count }
 }
 
 impl Default for InspectorCompositePanel {

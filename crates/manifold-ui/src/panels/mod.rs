@@ -324,4 +324,19 @@ pub trait Panel {
 
     /// Handle a UI event. Returns actions for the app layer to process.
     fn handle_event(&mut self, event: &UIEvent, tree: &UITree) -> Vec<PanelAction>;
+
+    /// First node index in the tree. Returns usize::MAX if not built.
+    fn first_node(&self) -> usize { usize::MAX }
+
+    /// Number of nodes this panel owns.
+    fn node_count(&self) -> usize { 0 }
+
+    /// Node range as (start, end). Convenience wrapper.
+    fn node_range(&self) -> (usize, usize) {
+        let first = self.first_node();
+        if first == usize::MAX {
+            return (0, 0);
+        }
+        (first, first + self.node_count())
+    }
 }

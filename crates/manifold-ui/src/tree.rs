@@ -231,6 +231,9 @@ impl UITree {
         if idx >= self.count {
             return;
         }
+        if self.nodes[idx].bounds == bounds {
+            return;
+        }
         self.nodes[idx].bounds = bounds;
         self.nodes[idx].flags |= UIFlags::DIRTY;
         self.has_dirty = true;
@@ -239,6 +242,9 @@ impl UITree {
     pub fn set_style(&mut self, id: u32, style: UIStyle) {
         let idx = id as usize;
         if idx >= self.count {
+            return;
+        }
+        if self.nodes[idx].style == style {
             return;
         }
         self.nodes[idx].style = style;
@@ -355,6 +361,27 @@ impl UITree {
             self.nodes[i].flags.remove(UIFlags::DIRTY);
         }
         self.has_dirty = false;
+    }
+
+    /// Check if any node in [start, end) has the DIRTY flag.
+    pub fn has_dirty_in_range(&self, start: usize, end: usize) -> bool {
+        let end = end.min(self.count);
+        for i in start..end {
+            if self.nodes[i].flags.contains(UIFlags::DIRTY) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Clear DIRTY flag on nodes in [start, end) and recompute global has_dirty.
+    pub fn clear_dirty_range(&mut self, start: usize, end: usize) {
+        let end = end.min(self.count);
+        for i in start..end {
+            self.nodes[i].flags.remove(UIFlags::DIRTY);
+        }
+        self.has_dirty = (0..self.count)
+            .any(|i| self.nodes[i].flags.contains(UIFlags::DIRTY));
     }
 
     // ── Rendering traversal (recursive DFS) ─────────────────────────

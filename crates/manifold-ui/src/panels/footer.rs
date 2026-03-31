@@ -114,6 +114,10 @@ pub struct FooterPanel {
     resolution_text: String,
     fps_text: String,
     current_render_scale: f32,
+
+    // Cache tracking
+    cache_first_node: usize,
+    cache_node_count: usize,
 }
 
 impl FooterPanel {
@@ -135,6 +139,8 @@ impl FooterPanel {
             resolution_text: "1080p".into(),
             fps_text: "60".into(),
             current_render_scale: 1.0,
+            cache_first_node: usize::MAX,
+            cache_node_count: 0,
         }
     }
 
@@ -227,6 +233,8 @@ impl Default for FooterPanel {
 
 impl Panel for FooterPanel {
     fn build(&mut self, tree: &mut UITree, layout: &ScreenLayout) {
+        self.cache_first_node = tree.count();
+
         let footer = layout.footer();
         self.layout.compute(footer);
 
@@ -330,6 +338,8 @@ impl Panel for FooterPanel {
             self.layout.fps_field.width, self.layout.fps_field.height,
             Self::footer_button_style(), &fps_text,
         ) as i32;
+
+        self.cache_node_count = tree.count() - self.cache_first_node;
     }
 
     fn update(&mut self, _tree: &mut UITree) {}
@@ -340,6 +350,9 @@ impl Panel for FooterPanel {
             _ => Vec::new(),
         }
     }
+
+    fn first_node(&self) -> usize { self.cache_first_node }
+    fn node_count(&self) -> usize { self.cache_node_count }
 }
 
 #[cfg(test)]
