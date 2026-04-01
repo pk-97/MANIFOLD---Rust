@@ -808,7 +808,7 @@ impl UIRoot {
                 // Add display resolutions below presets (Unity: Footer.CollectDisplayResolutions)
                 if has_displays {
                     // Separator label (disabled, non-selectable) — matches Unity format
-                    items.push(DropdownItem::disabled("\u{2500}\u{2500}  Displays  \u{2500}\u{2500}"));
+                    items.push(DropdownItem::disabled("---  Displays  ---"));
                     for (w, h, label) in &self.display_resolutions {
                         items.push(DropdownItem::new(&format!("{}  ({}x{})", label, w, h)));
                     }

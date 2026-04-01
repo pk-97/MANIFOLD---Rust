@@ -11,6 +11,8 @@ use super::param_slider_shared::*;
 
 const TOGGLE_BTN_W: f32 = 40.0;
 const TOGGLE_BTN_H: f32 = 16.0;
+const CHANGE_BTN_W: f32 = 60.0;
+const CHANGE_BTN_H: f32 = 16.0;
 
 // ── Card layout constants ────────────────────────────────────────
 const HEADER_HEIGHT: f32 = 27.5;
@@ -91,14 +93,16 @@ pub struct GenParamPanel {
     /// The layer this panel is displaying gen params for.
     layer_id: Option<LayerId>,
 
-    // Collapse state
+    // Card state
     is_collapsed: bool,
+    is_selected: bool,
 
     // Node IDs — card shell
     border_id: i32,
     inner_bg_id: i32,
     header_bg_id: i32,
     name_label_id: i32,
+    change_btn_id: i32,
     chevron_id: i32,
 
     // Node IDs — per-param (sliders or toggles)
@@ -137,10 +141,12 @@ impl GenParamPanel {
             state: GenParamState::new(0),
             layer_id: None,
             is_collapsed: false,
+            is_selected: false,
             border_id: -1,
             inner_bg_id: -1,
             header_bg_id: -1,
             name_label_id: -1,
+            change_btn_id: -1,
             chevron_id: -1,
             slider_ids: Vec::new(),
             toggle_ids: Vec::new(),
@@ -234,6 +240,21 @@ impl GenParamPanel {
 
     pub fn is_collapsed(&self) -> bool { self.is_collapsed }
     pub fn set_collapsed(&mut self, v: bool) { self.is_collapsed = v; }
+    pub fn is_selected(&self) -> bool { self.is_selected }
+
+    /// Update selection visual (border color) without a full rebuild.
+    pub fn update_selection_visual(&mut self, tree: &mut UITree, selected: bool) {
+        if selected == self.is_selected { return; }
+        self.is_selected = selected;
+        if self.border_id >= 0 {
+            let border_color = if selected { color::SELECTED_BORDER } else { color::GEN_CARD_BORDER_C32 };
+            tree.set_style(self.border_id as u32, UIStyle {
+                bg_color: border_color,
+                corner_radius: CORNER_RADIUS,
+                ..UIStyle::default()
+            });
+        }
+    }
 
     // ── Build ────────────────────────────────────────────────────
 
@@ -245,14 +266,16 @@ impl GenParamPanel {
         let total_h = self.compute_height() - CARD_BOTTOM_MARGIN;
 
         // ── Card shell ──
+        let border_color = if self.is_selected { color::SELECTED_BORDER } else { color::GEN_CARD_BORDER_C32 };
         self.border_id = tree.add_panel(
             -1, rect.x, rect.y, rect.width, total_h,
             UIStyle {
-                bg_color: color::GEN_CARD_BORDER_C32,
+                bg_color: border_color,
                 corner_radius: CORNER_RADIUS,
                 ..UIStyle::default()
             },
         ) as i32;
+        tree.set_flag(self.border_id as u32, UIFlags::INTERACTIVE);
 
         let inner_x = rect.x + BORDER_W;
         let inner_y = rect.y + BORDER_W;
@@ -279,8 +302,13 @@ impl GenParamPanel {
         tree.set_flag(self.header_bg_id as u32, UIFlags::INTERACTIVE);
 
         let gen_name = self.gen_type_name.clone();
+
+        // Header layout (right-to-left): [Name] ... [Change] [Chevron]
+        let chevron_x = inner_x + inner_w - CHEVRON_W;
+        let change_x = chevron_x - CHANGE_BTN_W - GAP;
         let name_x = inner_x + PADDING;
-        let name_w = inner_w - PADDING * 2.0 - CHEVRON_W;
+        let name_w = change_x - name_x - GAP;
+
         self.name_label_id = tree.add_label(
             -1, name_x, inner_y, name_w, HEADER_HEIGHT,
             &gen_name,
@@ -291,11 +319,26 @@ impl GenParamPanel {
                 ..UIStyle::default()
             },
         ) as i32;
-        tree.set_flag(self.name_label_id as u32, UIFlags::INTERACTIVE);
+
+        self.change_btn_id = tree.add_button(
+            -1, change_x, inner_y + (HEADER_HEIGHT - CHANGE_BTN_H) * 0.5,
+            CHANGE_BTN_W, CHANGE_BTN_H,
+            UIStyle {
+                bg_color: color::CONFIG_BG_C32,
+                hover_bg_color: color::GEN_CARD_HEADER_HOVER_C32,
+                pressed_bg_color: color::SLIDER_TRACK_PRESSED_C32,
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: FONT_SIZE,
+                corner_radius: 2.0,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            },
+            "Change",
+        ) as i32;
 
         let chevron_text = if self.is_collapsed { "\u{25B6}" } else { "\u{25BC}" };
         self.chevron_id = tree.add_button(
-            -1, inner_x + inner_w - CHEVRON_W, inner_y,
+            -1, chevron_x, inner_y,
             CHEVRON_W, HEADER_HEIGHT,
             UIStyle {
                 text_color: color::TEXT_DIMMED_C32,
@@ -438,7 +481,7 @@ impl GenParamPanel {
                 tree.set_style(label_id, UIStyle {
                     text_color: color::ACCENT_BLUE_C32,
                     font_size: FONT_SIZE,
-                    text_align: TextAlign::Left,
+                    text_align: TextAlign::Right,
                     ..UIStyle::default()
                 });
                 self.copied_flash = Some((label_id, name, start));
@@ -447,7 +490,7 @@ impl GenParamPanel {
                 tree.set_style(label_id, UIStyle {
                     text_color: color::SLIDER_TEXT_C32,
                     font_size: FONT_SIZE,
-                    text_align: TextAlign::Left,
+                    text_align: TextAlign::Right,
                     ..UIStyle::default()
                 });
                 self.copied_flash = None;
@@ -516,9 +559,14 @@ impl GenParamPanel {
             return vec![PanelAction::GenCollapseToggle];
         }
 
-        // Header name or bg → open type picker
-        if id == self.name_label_id || id == self.header_bg_id {
+        // Change button → open type picker
+        if id == self.change_btn_id {
             return vec![PanelAction::GenTypeClicked(self.layer_id.clone())];
+        }
+
+        // Card click (header bg, name, border) → select the card
+        if id == self.header_bg_id || id == self.name_label_id || id == self.border_id {
+            return vec![PanelAction::GenCardClicked];
         }
 
         // Toggle buttons
@@ -849,9 +897,15 @@ mod tests {
         panel.configure(&test_config());
         panel.build(&mut tree, Rect::new(0.0, 0.0, 280.0, 300.0));
 
-        let actions = panel.handle_click(panel.name_label_id as u32);
+        // Clicking the Change button opens the type picker
+        let actions = panel.handle_click(panel.change_btn_id as u32);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], PanelAction::GenTypeClicked(_)));
+
+        // Clicking the name label selects the card
+        let actions = panel.handle_click(panel.name_label_id as u32);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], PanelAction::GenCardClicked));
     }
 
     #[test]

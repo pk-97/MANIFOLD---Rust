@@ -437,12 +437,12 @@ pub const CARD_BORDER_C32: Color32 = Color32::new(55, 55, 60, 255);
 pub const DRAG_HANDLE_BG_C32: Color32 = Color32::new(38, 38, 42, 255);
 pub const DRAG_HANDLE_HOVER_BG_C32: Color32 = Color32::new(52, 52, 56, 255);
 
-// ── Bitmap Generator Card (green-tinted to distinguish from effect cards) ───
-pub const GEN_CARD_BORDER_C32: Color32 = Color32::new(45, 65, 52, 255);
-pub const GEN_CARD_INNER_BG_C32: Color32 = Color32::new(18, 22, 19, 255);
-pub const GEN_CARD_HEADER_BG_C32: Color32 = Color32::new(32, 42, 36, 255);
-pub const GEN_CARD_HEADER_HOVER_C32: Color32 = Color32::new(42, 55, 46, 255);
-pub const GEN_CARD_HEADER_NAME_C32: Color32 = Color32::new(140, 210, 165, 255);
+// ── Bitmap Generator Card (purple-tinted to distinguish from effect cards) ───
+pub const GEN_CARD_BORDER_C32: Color32 = Color32::new(58, 45, 70, 255);
+pub const GEN_CARD_INNER_BG_C32: Color32 = Color32::new(20, 18, 24, 255);
+pub const GEN_CARD_HEADER_BG_C32: Color32 = Color32::new(38, 32, 48, 255);
+pub const GEN_CARD_HEADER_HOVER_C32: Color32 = Color32::new(50, 42, 62, 255);
+pub const GEN_CARD_HEADER_NAME_C32: Color32 = Color32::new(185, 160, 220, 255);
 
 // ── Panel-specific colors ────────────────────────────────────────────
 

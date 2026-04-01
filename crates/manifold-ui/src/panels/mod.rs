@@ -204,6 +204,7 @@ pub enum PanelAction {
 
     // Generator card actions
     GenCollapseToggle,
+    GenCardClicked,
     GenCardRightClicked,
     CopyGenerator,
     PasteGenerator,

@@ -184,6 +184,7 @@ pub fn dispatch(
         | PanelAction::GenEnvParamSnapshot(_)
         | PanelAction::GenEnvParamCommit(_)
         | PanelAction::GenCollapseToggle
+        | PanelAction::GenCardClicked
         | PanelAction::GenCardRightClicked
         | PanelAction::CopyGenerator
         | PanelAction::PasteGenerator

@@ -461,6 +461,10 @@ pub(super) fn dispatch_inspector(
             DispatchResult::structural()
         }
         PanelAction::EffectCardClicked(_) => {
+            // Deselect generator card when an effect card is clicked
+            if let Some(gp) = ui.inspector.gen_params_mut() {
+                gp.update_selection_visual(&mut ui.tree, false);
+            }
             let tree = &mut ui.tree;
             let inspector = &mut ui.inspector;
             inspector.apply_selection_visuals(tree);
@@ -1080,6 +1084,15 @@ pub(super) fn dispatch_inspector(
                 gp.set_collapsed(new_val);
             }
             DispatchResult::structural()
+        }
+        PanelAction::GenCardClicked => {
+            // Select the generator card (blue highlight border), deselect effect cards
+            if let Some(gp) = ui.inspector.gen_params_mut() {
+                gp.update_selection_visual(&mut ui.tree, true);
+            }
+            // Deselect all effect cards
+            ui.inspector.clear_effect_selection();
+            DispatchResult::handled()
         }
         PanelAction::GenCardRightClicked => {
             // Handled by UIRoot::try_open_dropdown — should not reach dispatch
