@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use manifold_gpu::{
     GpuBinding, GpuDevice, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler,
-    GpuSamplerDesc, GpuSurface, GpuTexture, GpuTextureFormat,
+    GpuSamplerDesc, GpuSurface, GpuTexture, GpuTextureFormat, GpuTextureUsage,
 };
 
 use crate::shared_texture::{SharedTextureBridge, SURFACE_COUNT};
@@ -230,6 +230,7 @@ fn import_textures(
                 width,
                 height,
                 GpuTextureFormat::Rgba16Float,
+                GpuTextureUsage::SHADER_READ,
             )
         })
     })

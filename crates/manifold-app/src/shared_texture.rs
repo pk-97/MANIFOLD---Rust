@@ -139,6 +139,7 @@ impl SharedTextureBridge {
             width,
             height,
             manifold_gpu::GpuTextureFormat::Rgba16Float,
+            manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
         );
         drop(io_surfaces_guard);
         texture

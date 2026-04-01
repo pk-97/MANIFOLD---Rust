@@ -746,6 +746,10 @@ impl GpuDevice {
     /// Create a GPU texture backed by an IOSurface.
     /// Used for zero-copy cross-thread texture sharing on macOS.
     ///
+    /// `usage` controls the Metal texture usage flags. The content thread
+    /// (which renders into the surface) needs full usage; the presenter
+    /// thread (which only samples) needs only `SHADER_READ`.
+    ///
     /// # Safety
     /// The IOSurface must remain valid for the lifetime of the returned texture.
     pub unsafe fn create_texture_from_io_surface(
@@ -754,6 +758,7 @@ impl GpuDevice {
         width: u32,
         height: u32,
         format: GpuTextureFormat,
+        usage: GpuTextureUsage,
     ) -> GpuTexture { unsafe {
         let descriptor = metal::TextureDescriptor::new();
         descriptor.set_pixel_format(to_mtl_pixel_format(format));
@@ -763,11 +768,7 @@ impl GpuDevice {
         descriptor.set_mipmap_level_count(1);
         descriptor.set_sample_count(1);
         descriptor.set_texture_type(metal::MTLTextureType::D2);
-        descriptor.set_usage(
-            metal::MTLTextureUsage::ShaderRead
-                | metal::MTLTextureUsage::ShaderWrite
-                | metal::MTLTextureUsage::RenderTarget,
-        );
+        descriptor.set_usage(to_mtl_texture_usage(usage));
         descriptor.set_storage_mode(metal::MTLStorageMode::Shared);
 
         let raw_mtl_texture: *mut objc::runtime::Object = msg_send![
