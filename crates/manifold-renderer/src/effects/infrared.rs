@@ -220,6 +220,8 @@ fn palette_toxic(t: f32) -> [f32; 3] {
 }
 
 /// Evaluate a piecewise-linear gradient at position t.
+/// For t > last stop, extrapolates the last segment's gradient direction —
+/// this produces the HDR blowout colors (e.g., arctic's golden highlights).
 fn gradient(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
     if t <= stops[0].0 { return stops[0].1; }
     for i in 1..stops.len() {
@@ -234,5 +236,15 @@ fn gradient(stops: &[(f32, [f32; 3])], t: f32) -> [f32; 3] {
             ];
         }
     }
-    stops[stops.len() - 1].1
+    // Extrapolate beyond the last stop using the last segment's direction.
+    // Matches the original WGSL mix() behavior where s > 1.0 overshoots.
+    let n = stops.len();
+    let s = (t - stops[n - 2].0) / (stops[n - 1].0 - stops[n - 2].0);
+    let a = stops[n - 2].1;
+    let b = stops[n - 1].1;
+    [
+        a[0] + (b[0] - a[0]) * s,
+        a[1] + (b[1] - a[1]) * s,
+        a[2] + (b[2] - a[2]) * s,
+    ]
 }
