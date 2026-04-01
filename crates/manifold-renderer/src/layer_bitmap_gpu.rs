@@ -85,6 +85,8 @@ pub struct LayerBitmapGpu {
     /// Each buffer holds MAX_LAYER_QUADS * 4 vertices.
     vbuf_ring: [GpuBuffer; VBUF_RING_SIZE],
     vbuf_ring_idx: usize,
+    /// Pre-allocated scratch for draw list (reused each frame).
+    draw_list: Vec<(usize, usize)>,
 }
 
 impl LayerBitmapGpu {
@@ -154,6 +156,7 @@ impl LayerBitmapGpu {
             index_buf,
             vbuf_ring,
             vbuf_ring_idx: 0,
+            draw_list: Vec::with_capacity(MAX_LAYER_QUADS),
         }
     }
 
@@ -230,7 +233,7 @@ impl LayerBitmapGpu {
         let mut quad_count = 0usize;
 
         // Collect which layers are valid and write their vertices.
-        let mut draw_list: Vec<(usize, usize)> = Vec::new(); // (layer_idx, quad_offset)
+        self.draw_list.clear();
         for &(layer_idx, rect) in layer_rects {
             if layer_idx >= self.textures.len() || self.textures[layer_idx].is_none() {
                 continue;
@@ -257,7 +260,7 @@ impl LayerBitmapGpu {
                     4,
                 );
             }
-            draw_list.push((layer_idx, quad_count));
+            self.draw_list.push((layer_idx, quad_count));
             quad_count += 1;
         }
 
@@ -269,7 +272,7 @@ impl LayerBitmapGpu {
         // render encoder creation (each costs a TBDR tile load/store cycle).
         encoder.begin_render_pass(target, GpuLoadAction::Load, "Layer Bitmaps");
 
-        for &(layer_idx, quad_offset) in &draw_list {
+        for &(layer_idx, quad_offset) in &self.draw_list {
             let lt = self.textures[layer_idx].as_ref().unwrap();
             let vertex_offset = (quad_offset * 4 * std::mem::size_of::<BitmapVertex>()) as u64;
             encoder.draw_in_render_pass(

@@ -254,6 +254,8 @@ pub struct DisplayLinkPresenter {
     context: *mut PresenterContext,
     stop: Arc<AtomicBool>,
     edr_headroom: Arc<AtomicU64>,
+    /// Current display ID — compared on screen change to detect retargeting.
+    current_display_id: u32,
 }
 
 // SAFETY: CVDisplayLinkRef is a CoreFoundation object safe to stop/release
@@ -381,11 +383,38 @@ impl DisplayLinkPresenter {
             context,
             stop,
             edr_headroom: edr,
+            current_display_id: display_id,
         }
     }
 
     pub fn update_edr_headroom(&mut self, headroom: f64) {
         self.edr_headroom.store(headroom.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Retarget the display link if the window moved to a different display.
+    /// Safe to call from the main thread while the link is running.
+    pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
+        let new_id = display_id_for_window(window);
+        if new_id == 0 || new_id == self.current_display_id {
+            return;
+        }
+        let old_refresh = unsafe {
+            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
+        };
+        unsafe {
+            CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
+        }
+        let new_refresh = unsafe {
+            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
+        };
+        log::info!(
+            "[DisplayLink] Retargeted: display {} → {}, \
+             refresh {:.1}Hz → {:.1}Hz",
+            self.current_display_id, new_id,
+            if old_refresh > 0.0 { 1.0 / old_refresh } else { 0.0 },
+            if new_refresh > 0.0 { 1.0 / new_refresh } else { 0.0 },
+        );
+        self.current_display_id = new_id;
     }
 }
 
@@ -473,6 +502,8 @@ pub struct UiDisplayLink {
     display_link: CVDisplayLinkRef,
     context: *mut UiDisplayLinkContext,
     vsync_ready: Arc<AtomicBool>,
+    /// Current display ID — compared on screen change to detect retargeting.
+    current_display_id: u32,
 }
 
 unsafe impl Send for UiDisplayLink {}
@@ -534,12 +565,38 @@ impl UiDisplayLink {
             if refresh > 0.0 { 1.0 / refresh } else { 0.0 },
         );
 
-        Self { display_link, context, vsync_ready }
+        Self { display_link, context, vsync_ready, current_display_id: display_id }
     }
 
     /// Check and consume the vsync signal. Returns true once per display vsync.
     pub fn vsync_ready(&self) -> bool {
         self.vsync_ready.swap(false, Ordering::AcqRel)
+    }
+
+    /// Retarget the display link if the window moved to a different display.
+    /// Safe to call from the main thread while the link is running.
+    pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
+        let new_id = display_id_for_window(window);
+        if new_id == 0 || new_id == self.current_display_id {
+            return;
+        }
+        let old_refresh = unsafe {
+            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
+        };
+        unsafe {
+            CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
+        }
+        let new_refresh = unsafe {
+            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
+        };
+        log::info!(
+            "[UiDisplayLink] Retargeted: display {} → {}, \
+             refresh {:.1}Hz → {:.1}Hz",
+            self.current_display_id, new_id,
+            if old_refresh > 0.0 { 1.0 / old_refresh } else { 0.0 },
+            if new_refresh > 0.0 { 1.0 / new_refresh } else { 0.0 },
+        );
+        self.current_display_id = new_id;
     }
 }
 

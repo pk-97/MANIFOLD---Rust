@@ -34,6 +34,9 @@ pub struct TransportDisplayCache {
     // BPM display: "120.0"
     prev_bpm_tenths: i32, // bpm * 10, rounded
     cached_bpm: String,
+    // Link peers display: "1 peer" / "N peers"
+    prev_link_peers: i32,
+    cached_link_peers: String,
 }
 
 impl TransportDisplayCache {
@@ -48,6 +51,8 @@ impl TransportDisplayCache {
             cached_display: String::new(),
             prev_bpm_tenths: -1,
             cached_bpm: String::new(),
+            prev_link_peers: -1,
+            cached_link_peers: String::new(),
         }
     }
 
@@ -82,6 +87,19 @@ impl TransportDisplayCache {
             self.cached_bpm = format!("{:.1}", bpm);
         }
         &self.cached_bpm
+    }
+
+    /// Returns the formatted Link peers string, only reformatting when count changes.
+    pub fn link_peers_display(&mut self, peers: u32) -> &str {
+        if peers as i32 != self.prev_link_peers {
+            self.prev_link_peers = peers as i32;
+            self.cached_link_peers = match peers {
+                0 => String::new(),
+                1 => "1 peer".to_string(),
+                n => format!("{n} peers"),
+            };
+        }
+        &self.cached_link_peers
     }
 }
 
@@ -211,12 +229,8 @@ pub fn push_state(
         if !content_state.link_enabled {
             ui.transport.set_link_state(tree, false, color::STATUS_DOT_INACTIVE, "Off", color::TEXT_DIMMED_C32);
         } else if content_state.link_peers > 0 {
-            let status = if content_state.link_peers == 1 {
-                "1 peer".to_string()
-            } else {
-                format!("{} peers", content_state.link_peers)
-            };
-            ui.transport.set_link_state(tree, true, color::STATUS_DOT_GREEN, &status, color::TEXT_WHITE_C32);
+            let status = transport_cache.link_peers_display(content_state.link_peers as u32);
+            ui.transport.set_link_state(tree, true, color::STATUS_DOT_GREEN, status, color::TEXT_WHITE_C32);
         } else {
             ui.transport.set_link_state(tree, true, color::STATUS_DOT_YELLOW, "Listening", color::TEXT_DIMMED_C32);
         }

@@ -35,7 +35,9 @@ pub struct PanelCacheInfo {
 }
 
 /// Max dirty sub-regions before falling back to full panel re-render.
-const INCREMENTAL_THRESHOLD: usize = 4;
+/// With dirty-only rendering, per-sub-region cost is ~3 node draws (not ~40),
+/// so handling many sub-regions incrementally is cheap.
+const INCREMENTAL_THRESHOLD: usize = 16;
 
 /// Manages a single full-screen UI atlas texture. Dirty panels render
 /// directly into the atlas at their screen position. The surface composite
@@ -132,15 +134,26 @@ impl UICacheManager {
     /// across panels with different viewport/offset). Panels render with
     /// LoadOp::Load to preserve other panels' content. On invalidate_all, the
     /// atlas is cleared first.
+    /// Max full panel renders per frame. Sub-region incremental renders
+    /// (dirty-only, ~3 nodes) don't count against this budget.
+    const MAX_FULL_PANELS_PER_FRAME: usize = 3;
+
+    /// Render dirty panels into the atlas. Returns `(panels_rendered, rendered_ranges)`.
+    /// The caller must clear dirty flags for the returned ranges.
+    /// Incremental sub-region renders don't count against the per-frame budget.
+    /// Full panel renders are capped at MAX_FULL_PANELS_PER_FRAME — remaining
+    /// panels stay dirty for the next frame (atlas shows stale but valid content).
     pub fn render_dirty_panels(
         &mut self,
         device: &GpuDevice,
         ui_renderer: &mut UIRenderer,
         tree: &UITree,
         panels: &[PanelCacheInfo],
-    ) -> usize {
+    ) -> (usize, Vec<(usize, usize)>) {
+        let mut rendered_ranges: Vec<(usize, usize)> = Vec::new();
+
         if self.atlas_texture.is_none() {
-            return 0;
+            return (0, rendered_ranges);
         }
 
         // Clear atlas if needed (resize, full rebuild).
@@ -152,6 +165,7 @@ impl UICacheManager {
         }
 
         let mut rendered = 0;
+        let mut full_renders = 0;
 
         for info in panels {
             let idx = info.slot as usize;
@@ -163,7 +177,7 @@ impl UICacheManager {
                 continue;
             }
 
-            // ── Sub-region incremental path ──
+            // ── Sub-region incremental path (doesn't count against budget) ──
             if self.panel_valid[idx]
                 && let Some(ref subs) = info.sub_regions
             {
@@ -174,27 +188,38 @@ impl UICacheManager {
 
                 if !dirty.is_empty() && dirty.len() <= INCREMENTAL_THRESHOLD {
                     for &(s, e) in &dirty {
-                        ui_renderer.render_tree_range(tree, *s, *e);
+                        ui_renderer.render_sub_region(tree, *s, *e, true);
                     }
                     if self.prepare_and_draw(device, ui_renderer) {
                         rendered += 1;
+                    }
+                    // Mark only the dirty sub-regions for clearing.
+                    for &(s, e) in &dirty {
+                        rendered_ranges.push((*s, *e));
                     }
                     continue;
                 }
             }
 
-            // ── Full panel render ──
+            // ── Full panel render (counts against budget) ──
+            if full_renders >= Self::MAX_FULL_PANELS_PER_FRAME {
+                // Budget exhausted — leave this panel dirty for next frame.
+                // Atlas retains stale but valid content from previous render.
+                continue;
+            }
+
             ui_renderer.render_tree_range(tree, info.node_start, info.node_end);
             if self.prepare_and_draw(device, ui_renderer) {
                 self.panel_valid[idx] = true;
                 rendered += 1;
             } else {
-                // No content from this panel — mark valid anyway.
                 self.panel_valid[idx] = true;
             }
+            full_renders += 1;
+            rendered_ranges.push((info.node_start, info.node_end));
         }
 
-        rendered
+        (rendered, rendered_ranges)
     }
 
     /// Prepare UIRenderer and draw into the atlas. Returns true if content was drawn.

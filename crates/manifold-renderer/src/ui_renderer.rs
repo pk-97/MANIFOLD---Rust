@@ -297,6 +297,40 @@ impl UIRenderer {
         });
     }
 
+    /// Render a sub-region using flat sequential traversal.
+    /// Used for incremental inspector rendering — correctly handles reparented
+    /// nodes (where `traverse_range` would skip them).
+    ///
+    /// When `dirty_only` is true, only draws dirty nodes. The atlas already
+    /// contains previous content via LoadOp::Load, so non-dirty nodes are
+    /// preserved. Clip events are always processed for correctness.
+    pub fn render_sub_region(
+        &mut self,
+        tree: &UITree,
+        start: usize,
+        end: usize,
+        dirty_only: bool,
+    ) {
+        self.clip_stack.clear();
+
+        tree.traverse_flat_range(start, end, dirty_only, |event| match event {
+            TraversalEvent::Node(node) => {
+                self.draw_node(node);
+            }
+            TraversalEvent::PushClip(rect) => {
+                let clipped = if let Some(current) = self.clip_stack.last() {
+                    intersect_rects(*current, rect)
+                } else {
+                    rect
+                };
+                self.clip_stack.push(clipped);
+            }
+            TraversalEvent::PopClip => {
+                self.clip_stack.pop();
+            }
+        });
+    }
+
     /// Draw a single UI node — resolves effective colors and emits commands.
     fn draw_node(&mut self, node: &UINode) {
         let style = &node.style;

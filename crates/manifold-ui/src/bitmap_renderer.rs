@@ -255,7 +255,19 @@ impl LayerBitmapRenderer {
             return false;
         }
 
+        let ppb = state.pixels_per_beat;
+        let scaled_ppb = ppb * self.render_scale;
+
+        // Detect scroll-only change (no zoom, no height change, no non-viewport dirty).
+        let zoom_same = approx_eq(self.last_viewport_width, viewport_width_px)
+            && approx_eq(self.last_max_beat - self.last_min_beat,
+                         viewport_max_beat - viewport_min_beat);
+        let scroll_only = viewport_dirty && zoom_same
+            && !sel_dirty && !hover_dirty && !clip_data_dirty && !mute_dirty
+            && !self.force_dirty;
+
         // Update cached state
+        let old_min_beat = self.last_min_beat;
         self.last_min_beat = viewport_min_beat;
         self.last_max_beat = viewport_max_beat;
         self.last_viewport_width = viewport_width_px;
@@ -266,15 +278,60 @@ impl LayerBitmapRenderer {
         // Resize buffer if needed (Unity EnsureTexture, lines 427-444)
         self.ensure_buffer(tex_w, tex_h);
 
-        // Clear to transparent (Unity lines 191-193)
-        for p in self.pixel_buffer.iter_mut() {
-            *p = Color32::TRANSPARENT;
+        // ── Pixel-shift scroll optimization ──
+        // When only the scroll position changed (no zoom, selection, clips, etc.),
+        // shift the existing pixel data and only repaint the newly-exposed strip.
+        // Reduces bandwidth from ~7.5MB to ~2MB per layer on auto-scroll.
+        let mut strip_x: Option<(usize, usize)> = None; // (start_col, width) of dirty strip
+        if scroll_only && self.tex_w == tex_w && self.tex_h == tex_h {
+            let delta_beats = viewport_min_beat - old_min_beat;
+            let delta_px = (delta_beats * scaled_ppb).round() as i32;
+            let abs_delta = delta_px.unsigned_abs() as usize;
+
+            if abs_delta > 0 && abs_delta < tex_w {
+                // Shift rows in-place.
+                for y in 0..tex_h {
+                    let row = y * tex_w;
+                    if delta_px > 0 {
+                        // Scrolled right: shift left, expose right strip.
+                        self.pixel_buffer.copy_within(
+                            row + abs_delta..row + tex_w,
+                            row,
+                        );
+                        // Clear exposed strip at right.
+                        for x in (tex_w - abs_delta)..tex_w {
+                            self.pixel_buffer[row + x] = Color32::TRANSPARENT;
+                        }
+                    } else {
+                        // Scrolled left: shift right, expose left strip.
+                        self.pixel_buffer.copy_within(
+                            row..row + tex_w - abs_delta,
+                            row + abs_delta,
+                        );
+                        // Clear exposed strip at left.
+                        for x in 0..abs_delta {
+                            self.pixel_buffer[row + x] = Color32::TRANSPARENT;
+                        }
+                    }
+                }
+                if delta_px > 0 {
+                    strip_x = Some((tex_w - abs_delta, abs_delta));
+                } else {
+                    strip_x = Some((0, abs_delta));
+                }
+            }
         }
 
-        let ppb = state.pixels_per_beat;
-        let scaled_ppb = ppb * self.render_scale;
+        // Full clear if we didn't pixel-shift (or shift covered entire width).
+        if strip_x.is_none() {
+            for p in self.pixel_buffer.iter_mut() {
+                *p = Color32::TRANSPARENT;
+            }
+        }
 
         // Paint grid lines BEFORE clips (Unity line 201)
+        // Grid must be repainted across full width (even after shift) because
+        // grid lines don't align to pixel boundaries after arbitrary scroll.
         paint_grid_lines(
             &mut self.pixel_buffer,
             tex_w,

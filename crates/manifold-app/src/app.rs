@@ -302,6 +302,9 @@ pub struct Application {
     // the overlay can't depend on manifold-editing Command types.
     // Populated by split_clips_for_region_move, prepended on commit_command_batch.
     pub(crate) pre_drag_commands: Vec<Box<dyn manifold_editing::command::Command>>,
+    /// Per-layer bitmap invalidation targets from editing operations.
+    /// Drained in app_render.rs to call invalidate() on targeted layers only.
+    pub(crate) invalidate_layers: Vec<usize>,
 
     // Detected display resolutions: (width, height, label).
     // Populated from winit monitors at startup. Matches Unity Footer.CollectDisplayResolutions.
@@ -417,6 +420,7 @@ impl Application {
                 manifold_ui::color::CLIP_VERTICAL_PAD,
             ),
             pre_drag_commands: Vec::new(),
+            invalidate_layers: Vec::new(),
             display_resolutions: Vec::new(),
             initialized: false,
             shutting_down: false,
@@ -1524,6 +1528,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                                 &mut self.needs_rebuild,
                                 &mut self.needs_structural_sync,
                                 &mut self.needs_scroll_rebuild,
+                                &mut self.invalidate_layers,
                                 &mut self.pre_drag_commands,
                             );
                             self.overlay.on_pointer_move(
@@ -2177,21 +2182,43 @@ impl Application {
         }
 
         // Query headroom for output window → update presenter directly.
-        for (_, ws) in self.window_registry.iter() {
-            if matches!(ws.role, WindowRole::Output { .. }) {
-                let h = crate::edr_surface::query_window_headroom(&ws.window);
-                if (h - self.output_edr_headroom).abs() > 0.01 {
-                    log::debug!(
-                        "[EDR] Output: {:.2}x → {:.2}x (blit={})",
-                        self.output_edr_headroom, h,
-                        if h > 1.0 { "passthrough" } else { "ACES tonemap" },
-                    );
-                    self.output_edr_headroom = h;
-                    #[cfg(target_os = "macos")]
-                    if let Some(p) = &mut self.output_presenter {
-                        p.update_edr_headroom(h);
-                    }
+        // Collect output window Arc first to avoid borrow conflict with output_presenter.
+        let output_window: Option<Arc<winit::window::Window>> = self.window_registry.iter()
+            .find(|(_, ws)| matches!(ws.role, WindowRole::Output { .. }))
+            .map(|(_, ws)| Arc::clone(&ws.window));
+
+        if let Some(ref win) = output_window {
+            let h = crate::edr_surface::query_window_headroom(win);
+            if (h - self.output_edr_headroom).abs() > 0.01 {
+                log::debug!(
+                    "[EDR] Output: {:.2}x → {:.2}x (blit={})",
+                    self.output_edr_headroom, h,
+                    if h > 1.0 { "passthrough" } else { "ACES tonemap" },
+                );
+                self.output_edr_headroom = h;
+                #[cfg(target_os = "macos")]
+                if let Some(p) = &mut self.output_presenter {
+                    p.update_edr_headroom(h);
                 }
+            }
+        }
+
+        // Retarget CVDisplayLinks if windows moved to different displays.
+        // Same NSNotification triggers this (screen change = display change).
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(pid) = self.primary_window_id
+                && let Some(ws) = self.window_registry.get(&pid)
+            {
+                let win = &ws.window;
+                if let Some(dl) = &mut self.ui_display_link {
+                    dl.retarget_if_needed(win);
+                }
+            }
+            if let Some(ref win) = output_window
+                && let Some(p) = &mut self.output_presenter
+            {
+                p.retarget_if_needed(win);
             }
         }
     }

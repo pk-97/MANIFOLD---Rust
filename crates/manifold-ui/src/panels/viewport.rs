@@ -346,6 +346,14 @@ impl TimelineViewportPanel {
         self.clips = clips;
     }
 
+    /// Force a specific layer's bitmap to repaint on the next frame.
+    /// Used for per-layer invalidation from editing operations.
+    pub fn invalidate_layer_bitmap(&mut self, layer_index: usize) {
+        if let Some(Some(r)) = self.bitmap_renderers.get_mut(layer_index) {
+            r.invalidate();
+        }
+    }
+
     pub fn set_render_scale(&mut self, scale: f32) {
         self.render_scale = scale.max(1.0);
         for r in self.bitmap_renderers.iter_mut().flatten() {

@@ -232,6 +232,7 @@ impl Application {
                     &mut self.needs_rebuild,
                     &mut self.needs_structural_sync,
                     &mut self.needs_scroll_rebuild,
+                    &mut self.invalidate_layers,
                     &mut self.pre_drag_commands,
                 );
                 for event in &viewport_events {
@@ -557,6 +558,7 @@ impl Application {
                     &mut self.needs_rebuild,
                     &mut self.needs_structural_sync,
                     &mut self.needs_scroll_rebuild,
+                    &mut self.invalidate_layers,
                     &mut self.pre_drag_commands,
                 );
                 self.overlay.poll_move_drag(
@@ -644,6 +646,11 @@ impl Application {
         // cache is already current. Skipping saves 50+ string clones per frame.
         if self.mouse_pressed || needs_structural_sync {
             crate::ui_bridge::sync_clip_positions(&mut self.ui_root, &self.local_project);
+        }
+
+        // 4c. Apply per-layer bitmap invalidation from editing operations.
+        for layer_idx in self.invalidate_layers.drain(..) {
+            self.ui_root.viewport.invalidate_layer_bitmap(layer_idx);
         }
 
         // 5. Push performance metrics to HUD
@@ -866,8 +873,13 @@ impl Application {
             let logical_h = (surface_h as f64 / scale) as u32;
             cm.set_scale_factor(scale);
             cm.ensure_atlas(&gpu.device, logical_w, logical_h);
-            cm.render_dirty_panels(&gpu.device, ui, &self.ui_root.tree, &panel_infos);
-            self.ui_root.tree.clear_dirty();
+            let (_, rendered_ranges) =
+                cm.render_dirty_panels(&gpu.device, ui, &self.ui_root.tree, &panel_infos);
+            // Clear dirty flags only for ranges that were actually rendered.
+            // Deferred panels keep their dirty flags for the next frame.
+            for (start, end) in &rendered_ranges {
+                self.ui_root.tree.clear_dirty_range(*start, *end);
+            }
         }
 
         // ── Render target: offscreen texture ──

@@ -37,6 +37,8 @@ pub struct AppEditingHost<'a> {
     pub needs_rebuild: &'a mut bool,
     pub needs_structural_sync: &'a mut bool,
     pub needs_scroll_rebuild: &'a mut bool,
+    /// Per-layer bitmap invalidation targets. Drained in app_render.rs.
+    pub invalidate_layers: &'a mut Vec<usize>,
 
     // Command batch accumulator (for begin_command_batch / commit_command_batch)
     command_batch: Vec<Box<dyn Command>>,
@@ -61,6 +63,7 @@ impl<'a> AppEditingHost<'a> {
         needs_rebuild: &'a mut bool,
         needs_structural_sync: &'a mut bool,
         needs_scroll_rebuild: &'a mut bool,
+        invalidate_layers: &'a mut Vec<usize>,
         pre_drag_commands: &'a mut Vec<Box<dyn Command>>,
     ) -> Self {
         Self {
@@ -72,6 +75,7 @@ impl<'a> AppEditingHost<'a> {
             needs_rebuild,
             needs_structural_sync,
             needs_scroll_rebuild,
+            invalidate_layers,
             command_batch: Vec::new(),
             pre_drag_commands,
             pending_actions: Vec::new(),
@@ -326,9 +330,8 @@ impl TimelineEditingHost for AppEditingHost<'_> {
 
     // ── Bitmap invalidation ─────────────────────────────────────
 
-    fn invalidate_layer_bitmap(&mut self, _layer_index: usize) {
-        // TODO: wire to bitmap renderer force_dirty per layer
-        *self.needs_scroll_rebuild = true;
+    fn invalidate_layer_bitmap(&mut self, layer_index: usize) {
+        self.invalidate_layers.push(layer_index);
     }
 
     fn invalidate_all_layer_bitmaps(&mut self) {

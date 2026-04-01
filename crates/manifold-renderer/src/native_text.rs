@@ -549,7 +549,10 @@ fn dist_to_segment(px: f32, py: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
 struct TextCommand {
     x: f32,
     y: f32,
-    text: String,
+    /// Byte offset into `text_arena`.
+    text_offset: u32,
+    /// Byte length in `text_arena`.
+    text_len: u16,
     font_size: f32,
     color: [u8; 4],
     font_weight: FontWeight,
@@ -617,6 +620,9 @@ pub struct NativeTextRenderer {
     // Draw queues.
     commands: Vec<TextCommand>,
     icon_commands: Vec<IconCommand>,
+    /// Per-frame string arena for TextCommand text. Cleared (not deallocated)
+    /// each frame. TextCommands store (offset, len) into this buffer.
+    text_arena: String,
 
     // Fresh GpuBuffers created each prepare() call — avoids aliasing with in-flight GPU work.
     prepared_vertex_buf: Option<GpuBuffer>,
@@ -682,6 +688,7 @@ impl NativeTextRenderer {
             icon_infos,
             commands: Vec::new(),
             icon_commands: Vec::new(),
+            text_arena: String::with_capacity(4096),
             prepared_vertex_buf: None,
             prepared_index_buf: None,
             prepared_index_count: 0,
@@ -708,10 +715,14 @@ impl NativeTextRenderer {
         if text.is_empty() {
             return;
         }
+        let text_offset = self.text_arena.len() as u32;
+        let text_len = text.len().min(u16::MAX as usize) as u16;
+        self.text_arena.push_str(text);
         self.commands.push(TextCommand {
             x,
             y,
-            text: text.to_string(),
+            text_offset,
+            text_len,
             font_size,
             color,
             font_weight,
@@ -781,6 +792,7 @@ impl NativeTextRenderer {
     pub fn clear_commands(&mut self) {
         self.commands.clear();
         self.icon_commands.clear();
+        self.text_arena.clear(); // reuses capacity
     }
 
     /// Shape all queued text, ensure glyphs are in atlas, build vertex/index buffers.
@@ -806,13 +818,16 @@ impl NativeTextRenderer {
         let scale = scale_factor as f32;
 
         let commands: Vec<TextCommand> = std::mem::take(&mut self.commands);
+        let arena = std::mem::take(&mut self.text_arena);
 
         for cmd in &commands {
+            let text = &arena[cmd.text_offset as usize
+                ..(cmd.text_offset as usize + cmd.text_len as usize)];
             let physical_size = cmd.font_size * scale;
             let size_x10 = (physical_size * 10.0).round() as u16;
 
             let ct_font = self.font_manager.get_ct_font(physical_size, cmd.font_weight);
-            let glyphs_and_positions = shape_line(ct_font, &cmd.text);
+            let glyphs_and_positions = shape_line(ct_font, text);
             let Some((glyph_ids, positions_ct)) = glyphs_and_positions else {
                 continue;
             };
@@ -891,6 +906,9 @@ impl NativeTextRenderer {
                     .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
             }
         }
+
+        // Restore arena capacity for next frame (contents will be cleared in clear_commands).
+        self.text_arena = arena;
 
         // Emit quads for icon commands.
         let icon_cmds: Vec<IconCommand> = std::mem::take(&mut self.icon_commands);

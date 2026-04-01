@@ -414,6 +414,79 @@ impl UITree {
         }
     }
 
+    /// Flat sequential iteration over `[start, end)` — visits ALL visible nodes
+    /// regardless of parent_index. Nodes are stored in DFS pre-order (insertion
+    /// order), so sequential iteration produces correct draw order.
+    ///
+    /// Handles clip regions by tracking which CLIPS_CHILDREN ancestors are active.
+    /// Used for sub-region rendering where nodes have been reparented and
+    /// `traverse_range` (which requires parent == -1) would skip them.
+    ///
+    /// When `dirty_only` is true, only emits `Node` events for dirty nodes,
+    /// but always processes clip push/pop for correct clipping of dirty children.
+    pub fn traverse_flat_range<F>(
+        &self,
+        start: usize,
+        end: usize,
+        dirty_only: bool,
+        mut visitor: F,
+    )
+    where
+        F: FnMut(TraversalEvent),
+    {
+        let end = end.min(self.count);
+        // Stack of (node_index, bounds) for active CLIPS_CHILDREN ancestors.
+        let mut clip_stack: Vec<(usize, Rect)> = Vec::new();
+
+        for i in start..end {
+            let node = &self.nodes[i];
+            if !node.flags.contains(UIFlags::VISIBLE) {
+                continue;
+            }
+
+            // Pop clip regions for ancestors we've moved past.
+            // A clip owner at index `c` is still active if `i` is a descendant.
+            // Check by walking the parent chain of `i` — if no parent leads to
+            // `c`, we've left `c`'s subtree.
+            while let Some(&(clip_idx, _)) = clip_stack.last() {
+                if self.is_ancestor_of(clip_idx, i) {
+                    break;
+                }
+                clip_stack.pop();
+                visitor(TraversalEvent::PopClip);
+            }
+
+            // Emit the node (skip non-dirty in dirty_only mode).
+            if !dirty_only || node.flags.contains(UIFlags::DIRTY) {
+                visitor(TraversalEvent::Node(node));
+            }
+
+            // Push clip if this node clips children.
+            if node.flags.contains(UIFlags::CLIPS_CHILDREN) {
+                visitor(TraversalEvent::PushClip(node.bounds));
+                clip_stack.push((i, node.bounds));
+            }
+        }
+
+        // Pop remaining clip regions.
+        for _ in &clip_stack {
+            visitor(TraversalEvent::PopClip);
+        }
+    }
+
+    /// Check if `ancestor` is an ancestor of `descendant` by walking the parent chain.
+    /// Returns false if `ancestor == descendant`.
+    fn is_ancestor_of(&self, ancestor: usize, descendant: usize) -> bool {
+        let mut current = self.parent_index[descendant];
+        while current >= 0 {
+            if current as usize == ancestor {
+                return true;
+            }
+            current = self.parent_index[current as usize];
+        }
+        false
+    }
+
     fn traverse_subtree<F>(&self, index: usize, visitor: &mut F)
     where
         F: FnMut(TraversalEvent),
