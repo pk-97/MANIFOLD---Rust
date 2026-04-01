@@ -25,18 +25,21 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let src = textureSampleLevel(source_tex, tex_sampler, uv, 0.0);
     let c = src.rgb;
 
-    // Highlight selection: smoothstep from (threshold - knee) to (threshold + knee).
-    // Knee=0 gives a hard cutoff, knee=1 gives a wide gradual ramp.
+    // Only boost the luminance ABOVE threshold — base brightness is untouched.
+    // A pixel at lum 0.8 with threshold 0.5 only boosts the 0.3 excess.
     let lum = max(c.r, max(c.g, c.b));
     let half_knee = uniforms.knee * 0.5;
     let lo = uniforms.threshold - half_knee;
     let hi = uniforms.threshold + half_knee;
-    let response = smoothstep(lo, hi + 1e-5, lum);
 
-    // Gain in perceptual stops (EV): each +1 doubles brightness.
-    // pow(2, 0)=1x, pow(2, 1)=2x, pow(2, 3)=8x, pow(2, 5)=32x.
-    // Response modulates per-pixel so only selected highlights get boosted.
-    let boosted = c * pow(2.0, response * uniforms.gain);
+    // Soft selection + excess above threshold
+    let soft = smoothstep(lo, hi + 1e-5, lum);
+    let excess = soft * max(lum - uniforms.threshold, 0.0);
+
+    // Boost excess by gain (EV stops), add back preserving color ratios.
+    let boost = excess * (pow(2.0, uniforms.gain) - 1.0);
+    let scale = 1.0 + boost / max(lum, 1e-5);
+    let boosted = c * scale;
 
     let result = mix(c, boosted, uniforms.amount);
     textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(max(result, vec3<f32>(0.0)), src.a));
