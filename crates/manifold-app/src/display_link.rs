@@ -46,12 +46,6 @@ struct CVTimeStamp {
     reserved: u64,
 }
 
-#[repr(C)]
-struct MachTimebaseInfo {
-    numer: u32,
-    denom: u32,
-}
-
 type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
     display_link: CVDisplayLinkRef,
     in_now: *const CVTimeStamp,
@@ -78,19 +72,6 @@ unsafe extern "C" {
     fn CVDisplayLinkGetActualOutputVideoRefreshPeriod(link: CVDisplayLinkRef) -> f64;
 }
 
-unsafe extern "C" {
-    fn mach_absolute_time() -> u64;
-    fn mach_timebase_info(info: *mut MachTimebaseInfo) -> i32;
-}
-
-// ─── Mach time helpers ──────────────────────────────────────────────────
-
-/// Convert nanoseconds to mach_absolute_time ticks.
-fn ns_to_mach(ns: u64, numer: u32, denom: u32) -> u64 {
-    // mach_ticks = ns * denom / numer
-    // On Apple Silicon: numer=1, denom=1 (mach time is nanoseconds).
-    (ns as u128 * denom as u128 / numer as u128) as u64
-}
 
 // ─── Display ID extraction ──────────────────────────────────────────────
 
@@ -162,12 +143,6 @@ struct PresenterContext {
     stop: Arc<AtomicBool>,
     #[allow(dead_code)]
     edr_headroom: Arc<AtomicU64>,
-    /// Mach timebase for ns ↔ mach_absolute_time conversion.
-    timebase_numer: u32,
-    timebase_denom: u32,
-    /// Safety margin before vsync in nanoseconds.
-    /// GPU blit ~50μs + Core Animation + driver overhead.
-    safety_margin_ns: u64,
 }
 
 // SAFETY: PresenterContext is only accessed from the serial CVDisplayLink
@@ -186,36 +161,20 @@ impl PresenterContext {
         }
 
         // ── Submission timing ──
-        // Wait until the optimal submission window: outputTime - safety_margin.
-        // This ensures GPU work completes inside the compositor acceptance window
-        // AND latches the freshest content frame.
-        let target_host = output_time.host_time;
-        let margin_mach = ns_to_mach(
-            self.safety_margin_ns,
-            self.timebase_numer,
-            self.timebase_denom,
-        );
-        let submit_time = target_host.saturating_sub(margin_mach);
-
-        let now = unsafe { mach_absolute_time() };
-        if now < submit_time {
-            let wait_ns = (submit_time - now) as u128
-                * self.timebase_numer as u128
-                / self.timebase_denom as u128;
-
-            // Coarse sleep for most of the wait (leave 300μs for spin).
-            // Avoids burning CPU on the RT thread for the full interval.
-            const SPIN_MARGIN_NS: u128 = 300_000; // 300μs
-            if wait_ns > SPIN_MARGIN_NS {
-                let sleep_ns = wait_ns - SPIN_MARGIN_NS;
-                std::thread::sleep(std::time::Duration::from_nanos(sleep_ns as u64));
-            }
-
-            // Tight spin for the final approach.
-            while unsafe { mach_absolute_time() } < submit_time {
-                std::hint::spin_loop();
-            }
-        }
+        // Submit immediately — do NOT spin-wait.
+        //
+        // The blit is ~50μs. The callback fires ~1 frame before outputTime,
+        // giving the GPU ~8ms (at 120Hz) to schedule a 50μs blit. Even when
+        // the UI thread has heavy GPU frames, 8ms of headroom is enough.
+        //
+        // The earlier spin-wait approach (outputTime - 1.5ms) reduced GPU
+        // headroom to just 1.5ms, making the blit vulnerable to GPU contention
+        // from the UI thread — exactly the stutter pattern observed.
+        //
+        // Frame freshness loss is negligible: content publishes at 60fps
+        // (every 16.7ms), so within any 8ms callback window there's at most
+        // one new frame — and front_index is read right before encoding.
+        let _ = output_time; // outputTime available for future adaptive timing
 
         // ── Acquire drawable (late — just before encoding) ──
         // With displaySyncEnabled=true and 3 drawables, this should not block
@@ -359,10 +318,6 @@ impl DisplayLinkPresenter {
         let bridge_gen = bridge.generation();
         let native_textures = import_textures(&presenter_device, &bridge);
 
-        // Query mach timebase for ns ↔ tick conversion.
-        let mut timebase = MachTimebaseInfo { numer: 1, denom: 1 };
-        unsafe { mach_timebase_info(&mut timebase); }
-
         let stop = Arc::new(AtomicBool::new(false));
         let edr = Arc::new(AtomicU64::new(edr_headroom.to_bits()));
 
@@ -376,9 +331,6 @@ impl DisplayLinkPresenter {
             last_bridge_gen: bridge_gen,
             stop: Arc::clone(&stop),
             edr_headroom: Arc::clone(&edr),
-            timebase_numer: timebase.numer,
-            timebase_denom: timebase.denom,
-            safety_margin_ns: 1_500_000, // 1.5ms
         }));
 
         // Create CVDisplayLink targeting the window's current display.
