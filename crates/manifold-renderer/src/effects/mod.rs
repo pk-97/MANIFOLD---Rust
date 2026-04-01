@@ -2,8 +2,8 @@
 /// 4 = quarter-res, 2 = half-res. Tune this to trade quality vs GPU cost.
 pub const HDR_BUFFER_DIVISOR: u32 = 2;
 
+pub mod compute_blit_helper;
 pub mod compute_dual_blit_helper;
-pub mod fragment_blit_helper;
 pub mod invert_colors;
 pub mod color_grade;
 pub mod mirror;

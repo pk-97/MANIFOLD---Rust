@@ -10,21 +10,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var source_tex: texture_2d<f32>;
 @group(0) @binding(2) var tex_sampler: sampler;
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
-    let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-    let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-    var out: VertexOutput;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
+@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;
 
 // Bayer 8x8 ordered dither — explicit lookup table matching Unity DitherEffect.shader
 fn bayer_threshold(pixel_pos: vec2<f32>) -> f32 {
@@ -78,13 +64,19 @@ fn diamond_threshold(pixel_pos: vec2<f32>) -> f32 {
     return clamp((abs(p.x) + abs(p.y)) / 4.0, 0.0, 1.0);
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let src = textureSample(source_tex, tex_sampler, in.uv);
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(source_tex);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+
+    let src = textureSampleLevel(source_tex, tex_sampler, uv, 0.0);
     let original = src.rgb;
 
     // Pixel position in texels
-    let pixel_pos = in.uv * vec2<f32>(uniforms.resolution_x, uniforms.resolution_y);
+    let pixel_pos = uv * vec2<f32>(uniforms.resolution_x, uniforms.resolution_y);
 
     // Luminance (Rec.709)
     let lum = dot(original, vec3<f32>(0.2126, 0.7152, 0.0722));
@@ -124,5 +116,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Crossfade with original
     let result = mix(original, dithered_color, uniforms.amount);
-    return vec4<f32>(result, src.a);
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(result, src.a));
 }

@@ -2,7 +2,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::fragment_blit_helper::FragmentBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -16,13 +16,13 @@ struct EdgeStretchUniforms {
 /// EdgeStretch effect — clamps UVs to a center strip, stretching edge pixels.
 /// Uses fragment shader for TBDR tile memory on Apple Silicon.
 pub struct EdgeStretchFX {
-    helper: FragmentBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl EdgeStretchFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: FragmentBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/fx_edge_stretch.wgsl"),
                 "EdgeStretch",

@@ -17,7 +17,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::fragment_blit_helper::FragmentBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 const DEG2RAD: f32 = std::f32::consts::PI / 180.0;
 
@@ -47,13 +47,13 @@ struct TransformUniforms {
 /// Unity ref: TransformFX.cs
 /// Uses fragment shader for TBDR tile memory on Apple Silicon.
 pub struct TransformFX {
-    helper: FragmentBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl TransformFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: FragmentBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/fx_transform.wgsl"),
                 "Transform",

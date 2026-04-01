@@ -15,21 +15,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var source_tex: texture_2d<f32>;
 @group(0) @binding(2) var tex_sampler: sampler;
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
-    let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-    let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-    var out: VertexOutput;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
+@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;
 
 // Hash function for pseudo-random cell points.
 // Unity ref: VoronoiPrismEffect.shader hash2()
@@ -47,9 +33,15 @@ fn hash1(p: vec2<f32>) -> f32 {
     return fract(sin(dot(p, vec2<f32>(41.7, 289.3))) * 18743.291);
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let src = textureSample(source_tex, tex_sampler, in.uv);
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(source_tex);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+
+    let src = textureSampleLevel(source_tex, tex_sampler, uv, 0.0);
     let original = src.rgb;
 
     // Beat-derived values: changes every beat
@@ -57,7 +49,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let beat_frac = fract(uniforms.beat);
 
     // Scale UV to cell grid (aspect-corrected so cells are square)
-    let scaled_uv = in.uv * vec2<f32>(uniforms.cell_count * uniforms.aspect_ratio, uniforms.cell_count);
+    let scaled_uv = uv * vec2<f32>(uniforms.cell_count * uniforms.aspect_ratio, uniforms.cell_count);
     let cell_id = floor(scaled_uv);
     let cell_uv = fract(scaled_uv);
 
@@ -97,18 +89,18 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let content_right = 0.5 + half_w;
 
     // Remap base UV.x into content region (pixels in black bars -> nearest content edge)
-    let base_x = clamp(in.uv.x, content_left, content_right);
+    let base_x = clamp(uv.x, content_left, content_right);
 
     // Each cell offsets the UV — offset shifts each beat for reordering
     let beat_seed = vec2<f32>(beat_floor * 1.73, beat_floor * 2.91);
     let cell_hash = hash2(nearest_cell_id + beat_seed);
     let uv_offset = (cell_hash - 0.5) * 0.4;
-    var prism_uv = vec2<f32>(base_x, in.uv.y) + uv_offset;
+    var prism_uv = vec2<f32>(base_x, uv.y) + uv_offset;
     // Clamp to content band so no cell ever samples black bars
     prism_uv.x = clamp(prism_uv.x, content_left, content_right);
     prism_uv.y = clamp(prism_uv.y, 0.0, 1.0);
 
-    let prism_sample = textureSample(source_tex, tex_sampler, prism_uv);
+    let prism_sample = textureSampleLevel(source_tex, tex_sampler, prism_uv, 0.0);
     var prism = prism_sample.rgb;
 
     // Visibility: hard on/off per beat (inactive cells go black)
@@ -116,5 +108,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     prism = prism * visibility;
 
     let result = mix(original, prism, uniforms.amount);
-    return vec4<f32>(result, mix(src.a, prism_sample.a * visibility, uniforms.amount));
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(result, mix(src.a, prism_sample.a * visibility, uniforms.amount)));
 }

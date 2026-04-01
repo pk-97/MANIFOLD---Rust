@@ -43,7 +43,7 @@ The Rust codebase is the authoritative implementation. The Unity codebase at `/U
 - **Lock-free MIDI** — `AtomicClockState` packed `AtomicU64` CAS for real-time-safe MIDI clock callbacks
 - **Per-owner effect cleanup** — `TickResult::stopped_clips` → `ContentPipeline::cleanup_stopped_clips()` → `EffectRegistry` → stateful effects
 - **Native Metal GPU** — content thread uses `manifold-gpu` crate (`metal` crate directly, zero wgpu). UI thread uses wgpu on separate device.
-- **Hybrid render pipeline** — single-pass effects use fragment shaders (TBDR tile memory), multi-pass/stateful effects use compute dispatches
+- **All-compute effect pipeline** — all effects use compute dispatches via `ComputeBlitHelper` / `ComputeDualBlitHelper`, eliminating TBDR tile load/store overhead from render passes
 - **Async compute** — independent layers generate in parallel `MTLCommandBuffer`s, compositor waits via `MTLEvent`
 - **Texture pool** — frame-stamped recycling, zero per-frame allocations after 3-frame warmup
 - **Function constants** — specialized Metal pipelines per effect mode (bloom 4, compositor 13 blend modes, etc.)
@@ -124,10 +124,11 @@ The content thread uses `manifold-gpu` with the `metal` crate directly. **Zero w
 - **NEVER** use `wgpu::*` types on the content thread
 - UI thread files (`ui_renderer.rs`, `tonemap_blit.rs`, `layer_bitmap_gpu.rs`, `app_render.rs`) use wgpu — don't migrate these
 
-### Hybrid Render Pipeline
-- **Single-pass effects → fragment shaders** via `FragmentBlitHelper` — benefits from TBDR tile memory on Apple Silicon
-- **Multi-pass/stateful effects → compute dispatches** via `ComputeBlitHelper` — avoids per-pass tile load/store
-- **Rule:** If `num_passes == 1` AND effect is not stateful → use fragment shader. Otherwise → compute.
+### All-Compute Effect Pipeline
+- **All effects use compute dispatches** via `ComputeBlitHelper` (single source) or `ComputeDualBlitHelper` (dual source)
+- Compute writes directly to storage textures — no TBDR tile memory load/store overhead
+- The compute encoder stays alive across dispatches, eliminating per-pass encoder creation cost
+- Render passes (`draw_fullscreen`) are only used for non-effect paths: output presenter blit, UI atlas blit, line/dot rendering
 
 ### Metal Constraints
 - `max_compute_invocations_per_workgroup` = 256 → `@workgroup_size(16,16)` for 2D, `@workgroup_size(4,4,4)` for 3D
@@ -197,7 +198,7 @@ For features ported from Unity, the Unity source is the behavioral specification
 1. Read `SetUniforms()` / `Apply()` — exact param-to-shader mapping
 2. Read the HLSL shader — translate line by line to WGSL (same math, same names)
 3. Count passes: if Unity has 3, Rust has 3. NEVER approximate multi-pass as single-pass.
-4. Count textures: 2 = `DualTextureBlitHelper`, 1 = `SimpleBlitHelper`
+4. Count textures: 2 = `ComputeDualBlitHelper`, 1 = `ComputeBlitHelper`
 5. Texel sizes from SOURCE texture, not target
 6. Discrete params: `.round()` before `as u32`
 7. Stateful effects: per-owner `AHashMap<i64, T>`

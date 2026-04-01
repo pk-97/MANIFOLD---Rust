@@ -2,7 +2,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::fragment_blit_helper::FragmentBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -12,15 +12,14 @@ struct InvertUniforms {
 }
 
 /// InvertColors effect — `1.0 - rgb`. Simplest possible effect for smoke testing.
-/// Uses fragment shader for TBDR tile memory on Apple Silicon.
 pub struct InvertColorsFX {
-    helper: FragmentBlitHelper,
+    helper: ComputeBlitHelper,
 }
 
 impl InvertColorsFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         Self {
-            helper: FragmentBlitHelper::new(
+            helper: ComputeBlitHelper::new(
                 device,
                 include_str!("shaders/invert_colors.wgsl"),
                 "InvertColors",

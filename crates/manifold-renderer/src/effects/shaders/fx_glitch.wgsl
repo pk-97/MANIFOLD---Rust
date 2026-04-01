@@ -14,21 +14,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var source_tex: texture_2d<f32>;
 @group(0) @binding(2) var tex_sampler: sampler;
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
-    let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-    let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-    var out: VertexOutput;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
+@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;
 
 fn hash1(n: f32) -> f32 {
     return fract(sin(n) * 43758.5453123);
@@ -39,9 +25,15 @@ fn hash2(p: vec2<f32>) -> f32 {
     return fract(sin(h) * 43758.5453123);
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    var uv = in.uv;
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(source_tex);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let uv_orig = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+
+    var uv = uv_orig;
     let res = vec2<f32>(uniforms.resolution_x, uniforms.resolution_y);
     let t = floor(uniforms.time * uniforms.speed * 12.0);
 
@@ -69,10 +61,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let rgb_dir = vec2<f32>(cos(shift_angle), sin(shift_angle));
     let rgb_offset = rgb_dir * rgb_amount;
 
-    let r = textureSample(source_tex, tex_sampler, uv + rgb_offset).r;
-    let g = textureSample(source_tex, tex_sampler, uv).g;
-    let b = textureSample(source_tex, tex_sampler, uv - rgb_offset).b;
-    let a = textureSample(source_tex, tex_sampler, in.uv).a;
+    let r = textureSampleLevel(source_tex, tex_sampler, uv + rgb_offset, 0.0).r;
+    let g = textureSampleLevel(source_tex, tex_sampler, uv, 0.0).g;
+    let b = textureSampleLevel(source_tex, tex_sampler, uv - rgb_offset, 0.0).b;
+    let a = textureSampleLevel(source_tex, tex_sampler, uv_orig, 0.0).a;
 
     var effected = vec3<f32>(r, g, b);
 
@@ -80,7 +72,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let invert_mask = step(0.92, block_hash * uniforms.amount);
     effected = mix(effected, 1.0 - clamp(effected, vec3<f32>(0.0), vec3<f32>(1.0)), invert_mask);
 
-    let src = textureSample(source_tex, tex_sampler, in.uv).rgb;
+    let src = textureSampleLevel(source_tex, tex_sampler, uv_orig, 0.0).rgb;
     let result = mix(src, effected, uniforms.amount);
-    return vec4<f32>(result, a);
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(result, a));
 }

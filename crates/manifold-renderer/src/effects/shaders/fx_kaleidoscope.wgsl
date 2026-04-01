@@ -10,31 +10,23 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var source_tex: texture_2d<f32>;
 @group(0) @binding(2) var tex_sampler: sampler;
+@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;
 
 const TAU: f32 = 6.28318530718;
 
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(source_tex);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
 
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
-    let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-    let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-    var out: VertexOutput;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let src = textureSample(source_tex, tex_sampler, in.uv);
+    let src = textureSampleLevel(source_tex, tex_sampler, uv, 0.0);
     let original = src.rgb;
 
     // Center UV at origin
-    let centered = in.uv - 0.5;
+    let centered = uv - 0.5;
 
     // Convert to polar coordinates
     let angle = atan2(centered.y, centered.x);
@@ -58,7 +50,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Clamp to valid UV range
     kaleid_uv = clamp(kaleid_uv, vec2<f32>(0.0), vec2<f32>(1.0));
 
-    let kaleid_sample = textureSample(source_tex, tex_sampler, kaleid_uv);
+    let kaleid_sample = textureSampleLevel(source_tex, tex_sampler, kaleid_uv, 0.0);
     let result = mix(original, kaleid_sample.rgb, uniforms.amount);
-    return vec4<f32>(result, mix(src.a, kaleid_sample.a, uniforms.amount));
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(result, mix(src.a, kaleid_sample.a, uniforms.amount)));
 }

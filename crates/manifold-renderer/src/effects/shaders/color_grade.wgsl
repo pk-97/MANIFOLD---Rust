@@ -19,21 +19,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var source_tex: texture_2d<f32>;
 @group(0) @binding(2) var tex_sampler: sampler;
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
-    let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-    let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-    var out: VertexOutput;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
+@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;
 
 // ColorGradeEffect.shader lines 66-74 — RGB → HSV (K-matrix method)
 fn rgb_to_hsv(c: vec3<f32>) -> vec3<f32> {
@@ -52,10 +38,16 @@ fn hsv_to_rgb(c: vec3<f32>) -> vec3<f32> {
     return c.z * mix(K.xxx, clamp(p - K.xxx, vec3<f32>(0.0), vec3<f32>(1.0)), c.y);
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(source_tex);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
+
     // ColorGradeEffect.shader lines 86-87
-    let src = textureSample(source_tex, tex_sampler, in.uv);
+    let src = textureSampleLevel(source_tex, tex_sampler, uv, 0.0);
     var c = src.rgb;
 
     // line 90: Gain (exposure)
@@ -104,5 +96,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Clamp to non-negative: contrast pivot can produce negative values for dark
     // pixels (e.g. (0 - 0.5) * 1.35 + 0.5 = −0.18). ACES tonemap maps negatives
     // to bright gray (~0.65), causing white-flash on frames with sparse content.
-    return vec4<f32>(max(result, vec3<f32>(0.0)), src.a);
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(max(result, vec3<f32>(0.0)), src.a));
 }

@@ -2,7 +2,7 @@ use manifold_core::EffectTypeId;
 use manifold_core::effects::EffectInstance;
 use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
-use super::fragment_blit_helper::FragmentBlitHelper;
+use super::compute_blit_helper::ComputeBlitHelper;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -20,29 +20,27 @@ const EDGE_DETECT_WGSL: &str = include_str!("shaders/fx_edge_detect.wgsl");
 
 /// Edge detection effect — Sobel, Laplacian, or Frei-Chen edge detection.
 /// Pure edge detect without glow. Use Bloom or Halation after for glow.
-/// Stateless single-pass fragment shader.
+/// Stateless single-pass compute shader.
 pub struct EdgeDetectFX {
-    helper: FragmentBlitHelper,
-    /// Specialized render pipelines per edge detection mode: Sobel=0, Laplacian=1, Frei-Chen=2.
-    pipeline_sobel: manifold_gpu::GpuRenderPipeline,
-    pipeline_laplacian: manifold_gpu::GpuRenderPipeline,
-    pipeline_frei_chen: manifold_gpu::GpuRenderPipeline,
+    helper: ComputeBlitHelper,
+    /// Specialized compute pipelines per edge detection mode: Sobel=0, Laplacian=1, Frei-Chen=2.
+    pipeline_sobel: manifold_gpu::GpuComputePipeline,
+    pipeline_laplacian: manifold_gpu::GpuComputePipeline,
+    pipeline_frei_chen: manifold_gpu::GpuComputePipeline,
 }
 
 impl EdgeDetectFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         let spec = |mode: &str, label: &str| {
-            device.create_specialized_render_pipeline(
+            device.create_specialized_compute_pipeline(
                 EDGE_DETECT_WGSL,
-                "vs_main",
-                "fs_main",
+                "cs_main",
                 &[("uniforms.mode", mode)],
-                manifold_gpu::GpuTextureFormat::Rgba16Float,
                 label,
             )
         };
         Self {
-            helper: FragmentBlitHelper::new(device, EDGE_DETECT_WGSL, "EdgeDetect"),
+            helper: ComputeBlitHelper::new(device, EDGE_DETECT_WGSL, "EdgeDetect"),
             pipeline_sobel: spec("0u", "EdgeDetect Sobel"),
             pipeline_laplacian: spec("1u", "EdgeDetect Laplacian"),
             pipeline_frei_chen: spec("2u", "EdgeDetect Frei-Chen"),

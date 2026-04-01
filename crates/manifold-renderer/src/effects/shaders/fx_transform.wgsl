@@ -20,27 +20,18 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var source_tex: texture_2d<f32>;
 @group(0) @binding(2) var tex_sampler: sampler;
+@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;
 
-struct VertexOut {
-    @builtin(position) position: vec4<f32>,
-    @location(0)       uv:       vec2<f32>,
-}
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(source_tex);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let uv_orig = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
 
-// Fullscreen triangle — no vertex buffer needed.
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOut {
-    var out: VertexOut;
-    let x = f32((vi << 1u) & 2u) * 2.0 - 1.0;
-    let y = f32(vi & 2u) * 2.0 - 1.0;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>(x * 0.5 + 0.5, 1.0 - (y * 0.5 + 0.5));
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     // TransformEffect.shader frag — same math, same order
-    var uv = in.uv - vec2<f32>(0.5, 0.5);
+    var uv = uv_orig - vec2<f32>(0.5, 0.5);
 
     uv.x = uv.x * u.aspect_ratio;
 
@@ -59,8 +50,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
     // Out-of-bounds → transparent black
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(0.0, 0.0, 0.0, 0.0));
+        return;
     }
 
-    return textureSample(source_tex, tex_sampler, uv);
+    textureStore(output_tex, vec2<i32>(id.xy), textureSampleLevel(source_tex, tex_sampler, uv, 0.0));
 }

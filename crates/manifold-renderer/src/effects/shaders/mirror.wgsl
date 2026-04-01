@@ -11,41 +11,33 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var source_tex: texture_2d<f32>;
 @group(0) @binding(2) var tex_sampler: sampler;
+@group(0) @binding(3) var output_tex: texture_storage_2d<rgba16float, write>;
 
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(source_tex);
+    if id.x >= dims.x || id.y >= dims.y {
+        return;
+    }
+    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
 
-@vertex
-fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
-    let x = f32(i32(vi & 1u)) * 4.0 - 1.0;
-    let y = f32(i32(vi >> 1u)) * 4.0 - 1.0;
-    var out: VertexOutput;
-    out.position = vec4<f32>(x, y, 0.0, 1.0);
-    out.uv = vec2<f32>((x + 1.0) * 0.5, (1.0 - y) * 0.5);
-    return out;
-}
-
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // MirrorEffect.shader lines 53-66
-    let src = textureSample(source_tex, tex_sampler, in.uv);
+    let src = textureSampleLevel(source_tex, tex_sampler, uv, 0.0);
 
-    var mirror_uv = in.uv;
+    var mirror_uv = uv;
 
     // lines 59-60: if (mode == 0 || mode == 2) mirrorUv.x = 0.5 - abs(i.uv.x - 0.5);
     if uniforms.mode == 0u || uniforms.mode == 2u {
-        mirror_uv.x = 0.5 - abs(in.uv.x - 0.5);
+        mirror_uv.x = 0.5 - abs(uv.x - 0.5);
     }
     // lines 61-62: if (mode == 1 || mode == 2) mirrorUv.y = 0.5 - abs(i.uv.y - 0.5);
     if uniforms.mode == 1u || uniforms.mode == 2u {
-        mirror_uv.y = 0.5 - abs(in.uv.y - 0.5);
+        mirror_uv.y = 0.5 - abs(uv.y - 0.5);
     }
 
-    let mirrored = textureSample(source_tex, tex_sampler, mirror_uv);
+    let mirrored = textureSampleLevel(source_tex, tex_sampler, mirror_uv, 0.0);
 
     // lines 65-66: lerp(src, mirrored, _Amount)
     let result = mix(src.rgb, mirrored.rgb, uniforms.amount);
-    return vec4<f32>(result, mix(src.a, mirrored.a, uniforms.amount));
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(result, mix(src.a, mirrored.a, uniforms.amount)));
 }
