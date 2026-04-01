@@ -309,8 +309,8 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
         param_count: 3,
         param_defs: vec![
             pd("Amount", 0.0, 1.0, 0.0),
-            pd_whole_labels("Rate", 0.0, 8.0, 6.0,
-                &["1/1", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32"],
+            pd_whole_labels("Rate", 0.0, 9.0, 6.0,
+                &["1/1", "1/2", "1/4", "1/4T", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/64"],
                 "Rate"),
             pd_whole_labels("Mode", 0.0, 2.0, 0.0,
                 &["Opacity", "White", "Gain"],

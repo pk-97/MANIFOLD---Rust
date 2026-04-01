@@ -15,7 +15,7 @@ struct StrobeUniforms {
 
 /// NoteRates lookup table mapping param index to strobes-per-beat.
 /// Unity ref: StrobeFX.cs lines 12-27
-const NOTE_RATES: [f32; 9] = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
+const NOTE_RATES: [f32; 10] = [0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 16.0];
 
 /// Strobe effect — beat-synced square wave flash.
 /// Uses fragment shader for TBDR tile memory on Apple Silicon.
