@@ -202,6 +202,12 @@ pub enum PanelAction {
     /// Commit target drag (record undo command). Unity: onTargetCommit.
     GenTargetCommit(usize),
 
+    // Generator card actions
+    GenCollapseToggle,
+    GenCardRightClicked,
+    CopyGenerator,
+    PasteGenerator,
+
     // Inspector scroll
     InspectorScrolled(f32),
     InspectorSectionClicked(usize),

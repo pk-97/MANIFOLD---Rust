@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::generator_type_id::GeneratorTypeId;
-use crate::effects::{ParameterDriver, ParamEnvelope};
+use crate::effects::{ParamDef, ParamSource, ParameterDriver, ParamEnvelope};
+use crate::types::{BeatDivision, DriverWaveform};
 
 /// Per-layer generator parameter state.
 /// Port of Unity GeneratorParamState.cs.
@@ -253,6 +254,64 @@ impl GeneratorParamState {
         }
         if let Some(snapshot_envelopes) = envelopes {
             self.envelopes_mut().extend(snapshot_envelopes);
+        }
+    }
+}
+
+/// Unified parameter interface — mirrors `impl ParamSource for EffectInstance`.
+impl ParamSource for GeneratorParamState {
+    fn display_name(&self) -> &str {
+        use crate::generator_definition_registry;
+        generator_definition_registry::try_get(&self.generator_type)
+            .map(|d| d.display_name)
+            .unwrap_or("Generator")
+    }
+
+    fn param_count(&self) -> usize {
+        self.param_values.len()
+    }
+
+    fn get_param_def(&self, index: usize) -> ParamDef {
+        use crate::generator_definition_registry;
+        match generator_definition_registry::try_get(&self.generator_type) {
+            Some(def) if index < def.param_count => def.param_defs[index].clone(),
+            _ => ParamDef::default(),
+        }
+    }
+
+    fn get_param(&self, index: usize) -> f32 {
+        GeneratorParamState::get_param(self, index)
+    }
+
+    fn set_param(&mut self, index: usize, value: f32) {
+        GeneratorParamState::set_param(self, index, value);
+    }
+
+    fn get_base_param(&self, index: usize) -> f32 {
+        GeneratorParamState::get_param_base(self, index)
+    }
+
+    fn set_base_param(&mut self, index: usize, value: f32) {
+        GeneratorParamState::set_param_base(self, index, value);
+    }
+
+    fn find_driver(&self, param_index: i32) -> Option<&ParameterDriver> {
+        GeneratorParamState::find_driver(self, param_index)
+    }
+
+    fn get_drivers_list(&self) -> Option<&Vec<ParameterDriver>> {
+        self.drivers.as_ref()
+    }
+
+    fn create_driver(&mut self, param_index: i32) -> &ParameterDriver {
+        let driver = ParameterDriver::new(param_index, BeatDivision::Quarter, DriverWaveform::Sine);
+        self.drivers_mut().push(driver);
+        self.drivers.as_ref().unwrap().last().unwrap()
+    }
+
+    fn remove_driver(&mut self, param_index: i32) {
+        if let Some(drivers) = &mut self.drivers {
+            drivers.retain(|d| d.param_index != param_index);
         }
     }
 }

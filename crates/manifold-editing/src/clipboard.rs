@@ -43,3 +43,54 @@ impl Default for EffectClipboard {
         Self::new()
     }
 }
+
+// ─── Generator Clipboard ───
+
+use manifold_core::generator::GeneratorParamState;
+use manifold_core::generator_type_id::GeneratorTypeId;
+use manifold_core::effects::{ParameterDriver, ParamEnvelope};
+
+/// Snapshot of a generator's complete state for copy/paste.
+#[derive(Debug, Clone)]
+pub struct GeneratorSnapshot {
+    pub generator_type: GeneratorTypeId,
+    pub param_values: Vec<f32>,
+    pub base_param_values: Option<Vec<f32>>,
+    pub drivers: Option<Vec<ParameterDriver>>,
+    pub envelopes: Option<Vec<ParamEnvelope>>,
+}
+
+/// Generator clipboard — stores one generator setup for paste.
+pub struct GeneratorClipboard {
+    snapshot: Option<GeneratorSnapshot>,
+}
+
+impl GeneratorClipboard {
+    pub fn new() -> Self {
+        Self { snapshot: None }
+    }
+
+    pub fn has_content(&self) -> bool {
+        self.snapshot.is_some()
+    }
+
+    pub fn copy_from(&mut self, state: &GeneratorParamState) {
+        self.snapshot = Some(GeneratorSnapshot {
+            generator_type: state.generator_type().clone(),
+            param_values: state.param_values.clone(),
+            base_param_values: state.base_param_values.clone(),
+            drivers: state.drivers.clone(),
+            envelopes: state.envelopes.clone(),
+        });
+    }
+
+    pub fn get_paste_snapshot(&self) -> Option<GeneratorSnapshot> {
+        self.snapshot.clone()
+    }
+}
+
+impl Default for GeneratorClipboard {
+    fn default() -> Self {
+        Self::new()
+    }
+}

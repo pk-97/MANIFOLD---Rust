@@ -6,7 +6,7 @@ use crate::node::Color32;
 // (red, purple, blue) appear brighter than their luminance suggests.
 // Threshold 0.45 matches Ableton's aggressive "black unless very dark" style.
 pub const TEXT_ON_DARK: Color32 = Color32::new(230, 230, 230, 255);
-pub const TEXT_ON_BRIGHT: Color32 = Color32::new(28, 28, 28, 255);
+pub const TEXT_ON_BRIGHT: Color32 = Color32::new(0, 0, 0, 255);
 
 pub fn contrast_text_color(bg: Color32) -> Color32 {
     let r = bg.r as f32 / 255.0;
@@ -146,8 +146,8 @@ pub const DELETE_BTN_HIGHLIGHTED: Color32 = Color32::new(128, 61, 61, 255);
 pub const DELETE_BTN_PRESSED: Color32 = Color32::new(64, 31, 31, 255);
 
 // ── Mute / Solo ─────────────────────────────────────────────────────
-pub const MUTED_COLOR: Color32 = Color32::new(199, 97, 71, 255);
-pub const SOLO_COLOR: Color32 = Color32::new(209, 191, 64, 255);
+pub const MUTED_COLOR: Color32 = Color32::new(255, 0, 0, 255);
+pub const SOLO_COLOR: Color32 = Color32::new(3, 127, 252, 255);
 
 // ── Effect rack ─────────────────────────────────────────────────────
 pub const RACK_BORDER: Color32 = Color32::new(56, 56, 61, 255);
@@ -437,6 +437,13 @@ pub const CARD_BORDER_C32: Color32 = Color32::new(55, 55, 60, 255);
 pub const DRAG_HANDLE_BG_C32: Color32 = Color32::new(38, 38, 42, 255);
 pub const DRAG_HANDLE_HOVER_BG_C32: Color32 = Color32::new(52, 52, 56, 255);
 
+// ── Bitmap Generator Card (green-tinted to distinguish from effect cards) ───
+pub const GEN_CARD_BORDER_C32: Color32 = Color32::new(45, 65, 52, 255);
+pub const GEN_CARD_INNER_BG_C32: Color32 = Color32::new(18, 22, 19, 255);
+pub const GEN_CARD_HEADER_BG_C32: Color32 = Color32::new(32, 42, 36, 255);
+pub const GEN_CARD_HEADER_HOVER_C32: Color32 = Color32::new(42, 55, 46, 255);
+pub const GEN_CARD_HEADER_NAME_C32: Color32 = Color32::new(140, 210, 165, 255);
+
 // ── Panel-specific colors ────────────────────────────────────────────
 
 // Header panel
@@ -571,6 +578,8 @@ pub const FONT_LABEL: u16 = 11;        // layer names, footer, search, clip name
 pub const FONT_SUBHEADING: u16 = 12;   // chrome headings, transport buttons
 pub const FONT_HEADING: u16 = 14;      // section titles, drag handle
 pub const FONT_TITLE: u16 = 16;        // top-level headings
+
+pub const FONT_WEIGHT_DEFAULT: crate::node::FontWeight = crate::node::FontWeight::Medium;
 
 // ── Zoom levels (pixels per beat) ───────────────────────────────────
 pub const ZOOM_LEVELS: [f32; 10] = [1.0, 2.0, 5.0, 10.0, 20.0, 40.0, 80.0, 120.0, 200.0, 400.0];

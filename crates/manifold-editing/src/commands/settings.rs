@@ -386,6 +386,66 @@ impl Command for ChangeGeneratorTypeCommand {
     fn description(&self) -> &str { "Change Generator Type" }
 }
 
+/// Paste a generator setup onto a layer (replaces type + params + drivers + envelopes).
+#[derive(Debug)]
+pub struct PasteGeneratorCommand {
+    layer_id: LayerId,
+    old_type: GeneratorTypeId,
+    old_params: Vec<f32>,
+    old_drivers: Option<Vec<ParameterDriver>>,
+    old_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
+    new_type: GeneratorTypeId,
+    new_params: Vec<f32>,
+    new_drivers: Option<Vec<ParameterDriver>>,
+    new_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
+}
+
+impl PasteGeneratorCommand {
+    pub fn new(
+        layer_id: LayerId,
+        old_type: GeneratorTypeId,
+        old_params: Vec<f32>,
+        old_drivers: Option<Vec<ParameterDriver>>,
+        old_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
+        new_type: GeneratorTypeId,
+        new_params: Vec<f32>,
+        new_drivers: Option<Vec<ParameterDriver>>,
+        new_envelopes: Option<Vec<manifold_core::effects::ParamEnvelope>>,
+    ) -> Self {
+        Self {
+            layer_id,
+            old_type, old_params, old_drivers, old_envelopes,
+            new_type, new_params, new_drivers, new_envelopes,
+        }
+    }
+}
+
+impl Command for PasteGeneratorCommand {
+    fn execute(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            layer.restore_generator_state(
+                self.new_type.clone(),
+                self.new_params.clone(),
+                self.new_drivers.clone(),
+                self.new_envelopes.clone(),
+            );
+        }
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        if let Some((_, layer)) = project.timeline.find_layer_by_id_mut(&self.layer_id) {
+            layer.restore_generator_state(
+                self.old_type.clone(),
+                self.old_params.clone(),
+                self.old_drivers.clone(),
+                self.old_envelopes.clone(),
+            );
+        }
+    }
+
+    fn description(&self) -> &str { "Paste Generator" }
+}
+
 /// Change master opacity.
 #[derive(Debug)]
 pub struct ChangeMasterOpacityCommand {

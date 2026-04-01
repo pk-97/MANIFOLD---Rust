@@ -8,6 +8,7 @@ use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_editing::commands::settings::{
     ChangeMasterOpacityCommand, ChangeLedBrightnessCommand,
     ChangeLayerOpacityCommand, ChangeGeneratorParamsCommand,
+    PasteGeneratorCommand,
 };
 use manifold_editing::commands::effects::{
     ToggleEffectCommand, ChangeEffectParamCommand, RemoveEffectCommand, ReorderEffectCommand,
@@ -1069,6 +1070,55 @@ pub(super) fn dispatch_inspector(
                 ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
             }
             // Selection follows automatically (ID-based, no remapping needed)
+            DispatchResult::structural()
+        }
+
+        // ── Generator card actions ─────────────────────────────────
+        PanelAction::GenCollapseToggle => {
+            if let Some(gp) = ui.inspector.gen_params_mut() {
+                let new_val = !gp.is_collapsed();
+                gp.set_collapsed(new_val);
+            }
+            DispatchResult::structural()
+        }
+        PanelAction::GenCardRightClicked => {
+            // Handled by UIRoot::try_open_dropdown — should not reach dispatch
+            DispatchResult::handled()
+        }
+        PanelAction::CopyGenerator => {
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(layer_idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get(layer_idx)
+                && let Some(gp) = layer.gen_params()
+            {
+                ui.gen_clipboard.copy_from(gp);
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::PasteGenerator => {
+            if let Some(snapshot) = ui.gen_clipboard.get_paste_snapshot() {
+                let layer_idx = super::resolve_active_layer_index(active_layer, project);
+                if let Some(layer_idx) = layer_idx
+                    && let Some(layer) = project.timeline.layers.get(layer_idx)
+                    && let Some(gp) = layer.gen_params()
+                {
+                    let layer_id = layer.layer_id.clone();
+                    let old_type = gp.generator_type().clone();
+                    let old_params = gp.snapshot_params();
+                    let old_drivers = gp.snapshot_drivers();
+                    let old_envelopes = gp.snapshot_envelopes();
+
+                    let cmd = PasteGeneratorCommand::new(
+                        layer_id,
+                        old_type, old_params, old_drivers, old_envelopes,
+                        snapshot.generator_type, snapshot.param_values,
+                        snapshot.drivers, snapshot.envelopes,
+                    );
+                    let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                    boxed.execute(project);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(boxed));
+                }
+            }
             DispatchResult::structural()
         }
 

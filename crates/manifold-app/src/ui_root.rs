@@ -22,6 +22,7 @@ pub enum DropdownContext {
     LayerContext(usize),     // right-click on layer header: layer_index
     MasterExitPath,          // LED exit path dropdown
     ClkDevice,               // MIDI clock device selection
+    GenCardContext,           // right-click on generator card header
 }
 
 /// Owns all UI state for one window.
@@ -83,6 +84,9 @@ pub struct UIRoot {
     /// Effect clipboard count (set by app.rs, used by browser popup).
     pub effect_clipboard_count: usize,
 
+    /// Generator clipboard for copy/paste between generator layers.
+    pub gen_clipboard: manifold_editing::clipboard::GeneratorClipboard,
+
     /// Hover actions produced by continuous cursor movement, drained in process_events.
     cursor_hover_actions: Vec<PanelAction>,
 
@@ -140,6 +144,7 @@ impl UIRoot {
             inspector_drag_start_width: 0.0,
             overlay_dirty: false,
             effect_clipboard_count: 0,
+            gen_clipboard: manifold_editing::clipboard::GeneratorClipboard::new(),
             cursor_hover_actions: Vec::new(),
             viewport_events: Vec::new(),
             last_right_click_pos: Vec2::new(0.0, 0.0),
@@ -873,6 +878,17 @@ impl UIRoot {
                 );
                 true
             }
+            PanelAction::GenCardRightClicked => {
+                let mut items = vec![
+                    DropdownItem::new("Copy Generator"),
+                ];
+                if self.gen_clipboard.has_content() {
+                    items.push(DropdownItem::new("Paste Generator"));
+                }
+                self.dropdown_context = Some(DropdownContext::GenCardContext);
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
             _ => false,
         }
     }
@@ -940,6 +956,13 @@ impl UIRoot {
             }
             DropdownContext::ClkDevice => {
                 Some(PanelAction::SetMidiClockDevice(index as i32))
+            }
+            DropdownContext::GenCardContext => {
+                match index {
+                    0 => Some(PanelAction::CopyGenerator),
+                    1 => Some(PanelAction::PasteGenerator),
+                    _ => None,
+                }
             }
             DropdownContext::MasterExitPath => {
                 // 0 = "After All FX" → led_exit_index -1

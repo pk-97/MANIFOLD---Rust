@@ -183,6 +183,10 @@ pub fn dispatch(
         | PanelAction::GenTargetCommit(_)
         | PanelAction::GenEnvParamSnapshot(_)
         | PanelAction::GenEnvParamCommit(_)
+        | PanelAction::GenCollapseToggle
+        | PanelAction::GenCardRightClicked
+        | PanelAction::CopyGenerator
+        | PanelAction::PasteGenerator
         | PanelAction::AddEffect(..)
         | PanelAction::PasteEffects => {
             inspector::dispatch_inspector(action, project, content_tx, content_state, ui, selection, active_layer, drag_snapshot, trim_snapshot, adsr_snapshot, target_snapshot, active_inspector_drag)
