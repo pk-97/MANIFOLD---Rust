@@ -1035,14 +1035,26 @@ impl ApplicationHandler for Application {
         let gpu = {
             let native_device = manifold_gpu::GpuDevice::new();
 
-            // Create native Metal surface for the workspace window
+            // Create native Metal surface for the workspace window.
+            // displaySyncEnabled = false: the CVDisplayLink handles vsync
+            // pacing. With displaySync=true, nextDrawable() blocks until the
+            // NEXT hardware vsync — adding a full frame of latency on top of
+            // the CVDisplayLink's vsync signal. This doubles the effective
+            // frame time (~9ms at 120Hz) and causes hard locks during display
+            // transitions when vsync timing is disrupted.
             let surface = native_device.create_surface(
                 &*window,
                 size.width.max(1),
                 size.height.max(1),
                 manifold_gpu::GpuTextureFormat::Bgra8Unorm,
-                true, // vsync
+                false, // no display sync — CVDisplayLink is the pacer
             );
+            // 3 drawables: CVDisplayLink is the pacer so nextDrawable should
+            // not block. 3 ensures availability even with frame timing jitter.
+            surface.set_maximum_drawable_count(3);
+            // Don't batch presents into Core Animation transactions —
+            // preserves the timing guarantees of the display link.
+            surface.set_presents_with_transaction(false);
             // EDR: configure colorspace + query headroom
             surface.configure_edr();
             self.edr_headroom = crate::edr_surface::query_window_headroom(&window);
