@@ -32,12 +32,11 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     // above 1 extrapolate the palette instead of collapsing to hottest slot
     let lum = max(0.0, (lum_raw - 0.5) * uniforms.contrast + 0.5);
 
-    // Sample the pre-baked palette LUT (256×1 texture), clamped to [0,1] range.
-    // For HDR (lum > 1.0), scale the palette color by excess luminance —
-    // reproduces the original gradient extrapolation that blows out highlights.
-    let lut_coord = min(lum, 1.0);
-    var thermal = textureSampleLevel(lut_tex, tex_sampler, vec2<f32>(lut_coord, 0.5), 0.0).rgb;
-    thermal *= max(lum, 1.0);
+    // Sample the pre-baked palette LUT (512×1 covering [0, 2] range).
+    // HDR extrapolation is baked into the LUT — the palette functions naturally
+    // extend their gradient beyond t=1.0, producing gorgeous blown-out highlights.
+    let lut_coord = clamp(lum * 0.5, 0.0, 1.0);
+    let thermal = textureSampleLevel(lut_tex, tex_sampler, vec2<f32>(lut_coord, 0.5), 0.0).rgb;
 
     let result = mix(src.rgb, thermal, uniforms.amount);
     textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(result, src.a));

@@ -4,8 +4,13 @@ use crate::effect::{EffectContext, PostProcessEffect};
 use crate::gpu_encoder::GpuEncoder;
 use super::compute_dual_blit_helper::ComputeDualBlitHelper;
 
-/// LUT resolution — 256 entries covers 8-bit luminance quantization.
-const LUT_SIZE: u32 = 256;
+/// LUT resolution — 512 entries covering [0, 2] range.
+/// First 256 entries cover [0, 1] (normal palette), last 256 cover [1, 2]
+/// (HDR extrapolation using the palette functions' natural gradient extension).
+const LUT_SIZE: u32 = 512;
+
+/// Maximum luminance value baked into the LUT.
+const LUT_MAX_LUM: f32 = 2.0;
 
 /// Number of built-in palettes.
 const PALETTE_COUNT: usize = 10;
@@ -100,11 +105,13 @@ impl PostProcessEffect for InfraredFX {
 
 // ─── Palette baking ─────────────────────────────────────────────────
 
-/// Bake a palette into 256 RGBA pixels (f32).
+/// Bake a palette into 512 RGBA pixels (f32) covering [0, 2] luminance range.
+/// The palette functions naturally extrapolate beyond t=1.0 (gradient extension),
+/// producing the HDR blowout effect that makes Infrared look gorgeous on HDR content.
 fn bake_palette(palette_idx: usize) -> Vec<[f32; 4]> {
     (0..LUT_SIZE)
         .map(|i| {
-            let t = i as f32 / (LUT_SIZE - 1) as f32;
+            let t = i as f32 / (LUT_SIZE - 1) as f32 * LUT_MAX_LUM;
             let rgb = match palette_idx {
                 0 => palette_white_hot(t),
                 1 => palette_black_hot(t),
