@@ -392,7 +392,12 @@ impl DisplayLinkPresenter {
     }
 
     /// Retarget the display link if the window moved to a different display.
-    /// Safe to call from the main thread while the link is running.
+    ///
+    /// Sets the atomic stop flag before CVDisplayLinkStop to prevent the
+    /// callback from doing GPU work while we're blocked waiting for it.
+    /// The presenter callback acquires drawables and commits GPU work — if
+    /// it's mid-present when we stop, CVDisplayLinkStop waits for it. With
+    /// the flag set, the callback returns immediately.
     pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
         let new_id = display_id_for_window(window);
         if new_id == 0 || new_id == self.current_display_id {
@@ -401,9 +406,14 @@ impl DisplayLinkPresenter {
         let old_refresh = unsafe {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
         };
+        // Signal callback to no-op before stopping.
+        self.stop.store(true, Ordering::Release);
         unsafe {
             CVDisplayLinkStop(self.display_link);
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
+        }
+        self.stop.store(false, Ordering::Release);
+        unsafe {
             CVDisplayLinkStart(self.display_link);
         }
         let new_refresh = unsafe {
@@ -576,9 +586,14 @@ impl UiDisplayLink {
     }
 
     /// Retarget the display link if the window moved to a different display.
-    /// Stops the link first to avoid deadlock (callback calls request_redraw
-    /// which needs the main thread, but SetCurrentCGDisplay may synchronize
-    /// with the callback thread internally).
+    ///
+    /// Sets the atomic stop flag BEFORE calling CVDisplayLinkStop to prevent
+    /// deadlock: the callback calls `request_redraw()` which dispatches to the
+    /// main thread. If the main thread is blocked in CVDisplayLinkStop (which
+    /// waits for the in-flight callback), and the callback is waiting for the
+    /// main thread → deadlock. With the stop flag set, the callback returns
+    /// immediately without calling request_redraw, so CVDisplayLinkStop returns
+    /// quickly.
     pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
         let new_id = display_id_for_window(window);
         if new_id == 0 || new_id == self.current_display_id {
@@ -588,8 +603,12 @@ impl UiDisplayLink {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
         };
         unsafe {
+            // Signal callback to no-op before stopping — prevents deadlock.
+            let ctx = &*self.context;
+            ctx.stop.store(true, Ordering::Release);
             CVDisplayLinkStop(self.display_link);
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
+            ctx.stop.store(false, Ordering::Release);
             CVDisplayLinkStart(self.display_link);
         }
         let new_refresh = unsafe {

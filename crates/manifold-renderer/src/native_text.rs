@@ -874,8 +874,9 @@ impl NativeTextRenderer {
                 let y1 = y0 + bh;
 
                 // Clip: skip glyph if entirely outside clip rect.
-                if let Some([cx, cy, cw, ch]) = cmd.clip_bounds
-                    && (x1 < cx || y1 < cy || x0 > cx + cw || y0 > cy + ch)
+                // clip_bounds is [x_min, y_min, x_max, y_max] from UIRenderer.
+                if let Some([clip_x0, clip_y0, clip_x1, clip_y1]) = cmd.clip_bounds
+                    && (x1 < clip_x0 || y1 < clip_y0 || x0 > clip_x1 || y0 > clip_y1)
                 {
                     continue;
                 }
@@ -922,9 +923,9 @@ impl NativeTextRenderer {
             ];
             let (x0, y0, x1, y1) = (cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h);
 
-            // Clip check
-            if let Some([cx, cy, cw, ch]) = cmd.clip_bounds
-                && (x1 < cx || y1 < cy || x0 > cx + cw || y0 > cy + ch) {
+            // Clip check — clip_bounds is [x_min, y_min, x_max, y_max].
+            if let Some([clip_x0, clip_y0, clip_x1, clip_y1]) = cmd.clip_bounds
+                && (x1 < clip_x0 || y1 < clip_y0 || x0 > clip_x1 || y0 > clip_y1) {
                     continue;
             }
 
@@ -959,20 +960,15 @@ impl NativeTextRenderer {
 
         self.atlas.upload_if_dirty(device);
 
-        // Reuse existing GPU buffers when possible — only reallocate if the
-        // new frame's data exceeds the current buffer capacity.
+        // Create fresh GPU buffers each prepare() call. Shared buffers cannot
+        // be reused across encoder commits within the same frame — see
+        // UIRenderer::prepare_with_offset for details.
         let vdata = bytemuck::cast_slice::<TextVertex, u8>(&self.vertices);
-        let vbuf = match self.prepared_vertex_buf.take() {
-            Some(buf) if buf.size >= vdata.len() as u64 => buf,
-            _ => device.create_buffer_shared(vdata.len() as u64),
-        };
+        let vbuf = device.create_buffer_shared(vdata.len() as u64);
         unsafe { vbuf.write(0, vdata); }
 
         let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
-        let ibuf = match self.prepared_index_buf.take() {
-            Some(buf) if buf.size >= idata.len() as u64 => buf,
-            _ => device.create_buffer_shared(idata.len() as u64),
-        };
+        let ibuf = device.create_buffer_shared(idata.len() as u64);
         unsafe { ibuf.write(0, idata); }
 
         self.prepared_vertex_buf = Some(vbuf);

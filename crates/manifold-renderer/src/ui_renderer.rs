@@ -562,22 +562,19 @@ impl UIRenderer {
             ]);
         }
 
-        // Reuse existing GPU buffers when possible — only reallocate if the
-        // new frame's data exceeds the current buffer capacity. This eliminates
-        // per-frame Metal buffer allocations in the steady state.
+        // Create fresh GPU buffers each prepare() call. Shared (CPU-mapped)
+        // buffers CANNOT be reused across encoder commits within the same frame
+        // because the GPU may still be reading from the previous commit's buffer
+        // when we overwrite it (panel cache renders multiple panels per frame,
+        // each with its own commit). Metal allocates shared buffers from a pool,
+        // so creation cost is minimal.
         if !self.vertices.is_empty() {
             let vdata = bytemuck::cast_slice::<UIVertex, u8>(&self.vertices);
-            let vbuf = match self.prepared_vertex_buf.take() {
-                Some(buf) if buf.size >= vdata.len() as u64 => buf,
-                _ => device.create_buffer_shared(vdata.len() as u64),
-            };
+            let vbuf = device.create_buffer_shared(vdata.len() as u64);
             unsafe { vbuf.write(0, vdata); }
 
             let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
-            let ibuf = match self.prepared_index_buf.take() {
-                Some(buf) if buf.size >= idata.len() as u64 => buf,
-                _ => device.create_buffer_shared(idata.len() as u64),
-            };
+            let ibuf = device.create_buffer_shared(idata.len() as u64);
             unsafe { ibuf.write(0, idata); }
 
             self.prepared_vertex_buf = Some(vbuf);
