@@ -546,6 +546,19 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
         osc_prefix: Some("dof"),
     });
 
+    // HdrBoost
+    m.insert(EffectTypeId::HDR_BOOST, EffectDef {
+        display_name: "HDR Boost",
+        param_count: 4,
+        param_defs: vec![
+            pd("Amount", 0.0, 1.0, 0.0),
+            pd_osc("Gain", 0.0, 5.0, 1.5, "Gain"),
+            pd_osc("Thresh", 0.0, 1.0, 0.42, "Threshold"),
+            pd_osc("Knee", 0.0, 1.0, 0.24, "Knee"),
+        ],
+        osc_prefix: Some("hdrBoost"),
+    });
+
     // Corruption
     m.insert(EffectTypeId::CORRUPTION, EffectDef {
         display_name: "Corruption",
