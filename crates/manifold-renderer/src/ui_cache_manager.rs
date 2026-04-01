@@ -138,21 +138,14 @@ impl UICacheManager {
         self.atlas_texture.as_ref()
     }
 
-    /// Re-render dirty panels directly into the atlas texture.
+    /// Render dirty panels into the atlas. Returns `(panels_rendered, rendered_ranges)`.
     ///
     /// Each panel gets its own encoder + commit (to avoid shared buffer aliasing
     /// across panels with different viewport/offset). Panels render with
     /// LoadOp::Load to preserve other panels' content. On invalidate_all, the
-    /// atlas is cleared first.
-    /// Max full panel renders per frame. Sub-region incremental renders
-    /// (dirty-only, ~3 nodes) don't count against this budget.
-    const MAX_FULL_PANELS_PER_FRAME: usize = 3;
-
-    /// Render dirty panels into the atlas. Returns `(panels_rendered, rendered_ranges)`.
-    /// The caller must clear dirty flags for the returned ranges.
-    /// Incremental sub-region renders don't count against the per-frame budget.
-    /// Full panel renders are capped at MAX_FULL_PANELS_PER_FRAME — remaining
-    /// panels stay dirty for the next frame (atlas shows stale but valid content).
+    /// atlas is cleared first and ALL panels render in the same frame.
+    /// The clean-frame fast path in present_all_windows ensures full rebuilds
+    /// only happen on actual visual changes, not every idle frame.
     pub fn render_dirty_panels(
         &mut self,
         device: &GpuDevice,
@@ -175,7 +168,6 @@ impl UICacheManager {
         }
 
         let mut rendered = 0;
-        let mut full_renders = 0;
 
         for info in panels {
             let idx = info.slot as usize;
@@ -216,21 +208,7 @@ impl UICacheManager {
                 }
             }
 
-            // ── Full panel render (counts against budget) ──
-            // Scroll panels (LayerHeaders, Viewport) ALWAYS render when invalid.
-            // They must stay in sync with bitmap layers which render every frame
-            // at current positions. Deferring scroll panels creates visible
-            // misalignment between layer headers and track lanes.
-            let is_scroll_panel = matches!(
-                info.slot,
-                PanelSlot::LayerHeaders | PanelSlot::Viewport,
-            );
-            if !is_scroll_panel && full_renders >= Self::MAX_FULL_PANELS_PER_FRAME {
-                // Budget exhausted — leave this static panel dirty for next frame.
-                // Atlas retains stale but valid content from previous render.
-                continue;
-            }
-
+            // ── Full panel render ──
             ui_renderer.render_tree_range(tree, info.node_start, info.node_end);
             if self.prepare_and_draw(device, ui_renderer) {
                 self.panel_valid[idx] = true;
@@ -238,7 +216,6 @@ impl UICacheManager {
             } else {
                 self.panel_valid[idx] = true;
             }
-            full_renders += 1;
             rendered_ranges.push((info.node_start, info.node_end));
         }
 
