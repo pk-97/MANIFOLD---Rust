@@ -74,6 +74,9 @@ impl NativeOutputPresenter {
         surface.configure_edr();
         surface.set_contents_gravity_resize_aspect();
         surface.set_background_color(0.0, 0.0, 0.0, 1.0);
+        // 2 drawables = lowest latency: next_drawable blocks until the previous
+        // present hits the display. Eliminates queue-ahead for our trivial blit.
+        surface.set_maximum_drawable_count(2);
 
         let pipeline = presenter_device.create_render_pipeline(
             PRESENTER_WGSL,
@@ -184,18 +187,20 @@ impl PresenterThread {
                 self.sync_surface_to_bridge();
             }
 
-            // Use the latest available frame every presenter tick. Drawable
-            // acquisition is display-synchronized, so this thread stays aligned
-            // with the output monitor's real refresh cadence.
+            // Acquire drawable FIRST — this blocks on display vsync, giving the
+            // content thread maximum time to finish GPU work and publish new frames.
+            // Then read front_index to latch the latest available frame at the
+            // moment of presentation. Previous ordering (read → block → blit) would
+            // show stale frames when new content published during the vsync wait.
+            let Some(drawable) = self.surface.next_drawable() else {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                continue;
+            };
+
             let front = self.bridge.front_index() as usize;
             self.last_front = front;
 
             let Some(source) = self.native_textures[front].as_ref() else {
-                continue;
-            };
-
-            let Some(drawable) = self.surface.next_drawable() else {
-                std::thread::sleep(std::time::Duration::from_millis(1));
                 continue;
             };
 

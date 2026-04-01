@@ -115,6 +115,13 @@ impl GpuSurface {
         self.layer_ref().set_drawable_size(CGSize::new(width as f64, height as f64));
     }
 
+    /// Set the maximum number of drawables in the pool (2 or 3).
+    /// 2 = lowest latency (blocks until previous present hits display).
+    /// 3 = higher throughput, up to 2 frames queue-ahead.
+    pub fn set_maximum_drawable_count(&self, count: u32) {
+        self.layer_ref().set_maximum_drawable_count(count.clamp(2, 3) as u64);
+    }
+
     /// Acquire the next drawable from the surface.
     /// Returns `None` if no drawable is available (all in-flight).
     pub fn next_drawable(&self) -> Option<GpuDrawable> {
