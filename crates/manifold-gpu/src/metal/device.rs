@@ -29,6 +29,25 @@ pub struct GpuDevice {
     render_cache: std::sync::Mutex<std::collections::HashMap<u64, GpuRenderPipeline>>,
     /// On-disk MSL cache — skips WGSL→naga→SPIR-V→spirv-opt→SPIRV-Cross on hit.
     msl_cache: std::sync::Mutex<Option<msl_cache::MslCache>>,
+    /// Compiled Metal library cache — keyed by base WGSL hash (before specialization).
+    /// Enables function-constant specialization: one library, many PSO variants.
+    library_cache: std::sync::Mutex<std::collections::HashMap<u64, CachedComputeLibrary>>,
+    render_library_cache: std::sync::Mutex<std::collections::HashMap<u64, CachedRenderLibrary>>,
+}
+
+/// Cached compiled Metal library + metadata for compute pipelines.
+struct CachedComputeLibrary {
+    library: metal::Library,
+    slot_map: SlotMap,
+    workgroup_size: [u32; 3],
+    needs_sizes_buffer: bool,
+}
+
+/// Cached compiled Metal library pair + metadata for render pipelines.
+struct CachedRenderLibrary {
+    vs_library: metal::Library,
+    fs_library: metal::Library,
+    slot_map: SlotMap,
 }
 
 // Safety: metal::Device and metal::CommandQueue are thread-safe (Metal guarantee).
@@ -53,6 +72,8 @@ impl GpuDevice {
             compute_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             render_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             msl_cache: std::sync::Mutex::new(None),
+            library_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+            render_library_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -316,6 +337,302 @@ impl GpuDevice {
             source = source.replace(pattern, replacement);
         }
         self.create_render_pipeline(&source, vs_entry, fs_entry, color_format, None, label)
+    }
+
+    /// Create a compute pipeline with Metal function constants (`override` in WGSL).
+    ///
+    /// Unlike `create_specialized_compute_pipeline` (text replacement → N compilations),
+    /// this compiles the WGSL once into a Metal library and creates PSO variants via
+    /// `MTLFunctionConstantValues` — near-instant per variant.
+    ///
+    /// The WGSL shader must use `@id(N) override NAME: type = default;` for each
+    /// constant. The `overrides` slice maps `(id, value)` to those declarations.
+    pub fn create_compute_pipeline_with_overrides(
+        &self,
+        wgsl_source: &str,
+        entry_point: &str,
+        overrides: &[(u32, crate::GpuConstant)],
+        label: &str,
+    ) -> GpuComputePipeline {
+        // Full hash includes overrides for PSO dedup.
+        let base_hash = archive::pipeline_hash(wgsl_source, entry_point);
+        let full_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            base_hash.hash(&mut h);
+            for &(id, ref val) in overrides {
+                id.hash(&mut h);
+                match val {
+                    crate::GpuConstant::U32(v) => v.hash(&mut h),
+                    crate::GpuConstant::F32(v) => v.to_bits().hash(&mut h),
+                    crate::GpuConstant::Bool(v) => v.hash(&mut h),
+                }
+            }
+            h.finish()
+        };
+        if let Some(cached) = self.compute_cache.lock().unwrap().get(&full_hash) {
+            return cached.clone();
+        }
+
+        // Get or compile the base Metal library (shared across all override variants).
+        let lib_cache = self.library_cache.lock().unwrap();
+        let has_lib = lib_cache.contains_key(&base_hash);
+        drop(lib_cache);
+
+        if !has_lib {
+            // Compile WGSL → MSL (checking MSL cache first).
+            let (slot_map, msl_source, _msl_entry_name, workgroup_size) = {
+                let mut msl_guard = self.msl_cache.lock().unwrap();
+                if let Some(ref mut cache) = *msl_guard
+                    && let Some(entry) = cache.get_compute(base_hash)
+                {
+                    (entry.slot_map, entry.msl_source, entry.msl_entry_name, entry.workgroup_size)
+                } else {
+                    if let Some(ref mut cache) = *msl_guard {
+                        cache.record_miss();
+                    }
+                    drop(msl_guard);
+                    let result = compile_wgsl_to_msl(wgsl_source, entry_point, label);
+                    if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
+                        cache.put_compute(base_hash, &result.0, &result.1, &result.2, result.3);
+                    }
+                    result
+                }
+            };
+
+            let compile_opts = metal::CompileOptions::new();
+            compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
+            compile_opts.set_fast_math_enabled(true);
+            let library = self
+                .device
+                .new_library_with_source(&msl_source, &compile_opts)
+                .unwrap_or_else(|e| {
+                    panic!("{label}: MTL library compile error: {e}\nMSL:\n{msl_source}")
+                });
+
+            let needs_sizes_buffer = slot_map.get(SIZES_BUFFER_BINDING).is_some();
+            self.library_cache.lock().unwrap().insert(base_hash, CachedComputeLibrary {
+                library,
+                slot_map,
+                workgroup_size,
+                needs_sizes_buffer,
+            });
+        }
+
+        // Create PSO variant with function constant values.
+        let lib_cache = self.library_cache.lock().unwrap();
+        let cached_lib = lib_cache.get(&base_hash).unwrap();
+        let available = cached_lib.library.function_names();
+        let function = match cached_lib.library
+            .get_function(entry_point, Some(build_fcv(overrides)))
+        {
+            Ok(f) => f,
+            Err(_) => {
+                let mangled = format!("{entry_point}_");
+                cached_lib.library
+                    .get_function(&mangled, Some(build_fcv(overrides)))
+                    .unwrap_or_else(|e| {
+                        panic!("{label}: function '{entry_point}' not found: {e}. Available: {available:?}")
+                    })
+            }
+        };
+
+        // Create PSO (with binary archive if available).
+        let mut archive_guard = self.archive.lock().unwrap();
+        let state = if let Some(ref mut arch) = *archive_guard {
+            let desc = metal::ComputePipelineDescriptor::new();
+            desc.set_compute_function(Some(&function));
+            desc.set_label(label);
+            desc.set_binary_archives(&[arch.raw_archive()]);
+
+            let state = self
+                .device
+                .new_compute_pipeline_state(&desc)
+                .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {e}"));
+
+            if !arch.was_added(full_hash) {
+                if let Err(e) = arch
+                    .raw_archive()
+                    .add_compute_pipeline_functions_with_descriptor(&desc)
+                {
+                    log::warn!("{label}: failed to add to binary archive: {e}");
+                } else {
+                    arch.mark_added(full_hash);
+                }
+            }
+            state
+        } else {
+            self.device
+                .new_compute_pipeline_state_with_function(&function)
+                .unwrap_or_else(|e| panic!("{label}: MTL compute PSO error: {e}"))
+        };
+        drop(archive_guard);
+        drop(lib_cache);
+
+        let pipeline = GpuComputePipeline {
+            state,
+            slot_map: self.library_cache.lock().unwrap()
+                .get(&base_hash).unwrap().slot_map.clone(),
+            label: label.to_string(),
+            workgroup_size: self.library_cache.lock().unwrap()
+                .get(&base_hash).unwrap().workgroup_size,
+            needs_sizes_buffer: self.library_cache.lock().unwrap()
+                .get(&base_hash).unwrap().needs_sizes_buffer,
+        };
+        self.compute_cache.lock().unwrap().insert(full_hash, pipeline.clone());
+        pipeline
+    }
+
+    /// Create a render pipeline with Metal function constants (`override` in WGSL).
+    ///
+    /// Same principle as `create_compute_pipeline_with_overrides`: compiles WGSL
+    /// once, creates PSO variants via `MTLFunctionConstantValues`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_render_pipeline_with_overrides(
+        &self,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        overrides: &[(u32, crate::GpuConstant)],
+        color_format: GpuTextureFormat,
+        blend: Option<GpuBlendState>,
+        label: &str,
+    ) -> GpuRenderPipeline {
+        let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
+        let full_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            base_hash.hash(&mut h);
+            for &(id, ref val) in overrides {
+                id.hash(&mut h);
+                match val {
+                    crate::GpuConstant::U32(v) => v.hash(&mut h),
+                    crate::GpuConstant::F32(v) => v.to_bits().hash(&mut h),
+                    crate::GpuConstant::Bool(v) => v.hash(&mut h),
+                }
+            }
+            h.finish()
+        };
+        if let Some(cached) = self.render_cache.lock().unwrap().get(&full_hash) {
+            return cached.clone();
+        }
+
+        // Get or compile the base Metal libraries.
+        let rlib_cache = self.render_library_cache.lock().unwrap();
+        let has_lib = rlib_cache.contains_key(&base_hash);
+        drop(rlib_cache);
+
+        if !has_lib {
+            let (slot_map, vs_msl, fs_msl) = {
+                let mut msl_guard = self.msl_cache.lock().unwrap();
+                if let Some(ref mut cache) = *msl_guard
+                    && let Some(entry) = cache.get_render(base_hash)
+                {
+                    (entry.slot_map, entry.vs_msl, entry.fs_msl)
+                } else {
+                    if let Some(ref mut cache) = *msl_guard {
+                        cache.record_miss();
+                    }
+                    drop(msl_guard);
+                    let result =
+                        compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+                    if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
+                        cache.put_render(base_hash, &result.0, &result.1, &result.2);
+                    }
+                    result
+                }
+            };
+
+            let compile_opts = metal::CompileOptions::new();
+            compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
+            compile_opts.set_fast_math_enabled(true);
+            let vs_library = self
+                .device
+                .new_library_with_source(&vs_msl, &compile_opts)
+                .unwrap_or_else(|e| {
+                    panic!("{label}: MTL VS library compile error: {e}\nMSL:\n{vs_msl}")
+                });
+            let fs_library = self
+                .device
+                .new_library_with_source(&fs_msl, &compile_opts)
+                .unwrap_or_else(|e| {
+                    panic!("{label}: MTL FS library compile error: {e}\nMSL:\n{fs_msl}")
+                });
+
+            self.render_library_cache.lock().unwrap().insert(base_hash, CachedRenderLibrary {
+                vs_library,
+                fs_library,
+                slot_map,
+            });
+        }
+
+        let rlib_cache = self.render_library_cache.lock().unwrap();
+        let cached_lib = rlib_cache.get(&base_hash).unwrap();
+
+        let vs_func = match cached_lib.vs_library
+            .get_function(vs_entry, Some(build_fcv(overrides)))
+        {
+            Ok(f) => f,
+            Err(_) => cached_lib.vs_library
+                .get_function(&format!("{vs_entry}_"), Some(build_fcv(overrides)))
+                .unwrap_or_else(|e| panic!("{label}: VS '{vs_entry}' not found: {e}")),
+        };
+        let fs_func = match cached_lib.fs_library
+            .get_function(fs_entry, Some(build_fcv(overrides)))
+        {
+            Ok(f) => f,
+            Err(_) => cached_lib.fs_library
+                .get_function(&format!("{fs_entry}_"), Some(build_fcv(overrides)))
+                .unwrap_or_else(|e| panic!("{label}: FS '{fs_entry}' not found: {e}")),
+        };
+
+        let desc = metal::RenderPipelineDescriptor::new();
+        desc.set_vertex_function(Some(&vs_func));
+        desc.set_fragment_function(Some(&fs_func));
+        let color_attach = desc.color_attachments().object_at(0).expect("color attachment 0");
+        color_attach.set_pixel_format(to_mtl_pixel_format(color_format));
+        if let Some(blend) = blend {
+            color_attach.set_blending_enabled(true);
+            color_attach.set_rgb_blend_operation(to_mtl_blend_op(blend.operation));
+            color_attach.set_alpha_blend_operation(to_mtl_blend_op(blend.alpha_operation));
+            color_attach.set_source_rgb_blend_factor(to_mtl_blend_factor(blend.src_factor));
+            color_attach.set_destination_rgb_blend_factor(to_mtl_blend_factor(blend.dst_factor));
+            color_attach.set_source_alpha_blend_factor(to_mtl_blend_factor(blend.src_alpha_factor));
+            color_attach
+                .set_destination_alpha_blend_factor(to_mtl_blend_factor(blend.dst_alpha_factor));
+        }
+
+        let mut archive_guard = self.archive.lock().unwrap();
+        let state = if let Some(ref mut arch) = *archive_guard {
+            desc.set_binary_archives(&[arch.raw_archive()]);
+            let state = self
+                .device
+                .new_render_pipeline_state(&desc)
+                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"));
+            if !arch.was_added(full_hash) {
+                if let Err(e) = arch
+                    .raw_archive()
+                    .add_render_pipeline_functions_with_descriptor(&desc)
+                {
+                    log::warn!("{label}: failed to add render PSO to binary archive: {e}");
+                } else {
+                    arch.mark_added(full_hash);
+                }
+            }
+            state
+        } else {
+            self.device
+                .new_render_pipeline_state(&desc)
+                .unwrap_or_else(|e| panic!("{label}: MTL render PSO error: {e}"))
+        };
+        drop(archive_guard);
+
+        let slot_map = cached_lib.slot_map.clone();
+        drop(rlib_cache);
+
+        let pipeline = GpuRenderPipeline { state, slot_map, label: label.to_string() };
+        self.render_cache.lock().unwrap().insert(full_hash, pipeline.clone());
+        pipeline
     }
 
     /// Load or create a pipeline binary archive at the given path.
@@ -784,4 +1101,35 @@ impl GpuDevice {
         let mtl_texture = metal::Texture::from_ptr(raw_mtl_texture as *mut _);
         GpuTexture::from_raw(mtl_texture, width, height, 1, format)
     }}
+}
+
+/// Build `MTLFunctionConstantValues` from override slice.
+fn build_fcv(overrides: &[(u32, crate::GpuConstant)]) -> metal::FunctionConstantValues {
+    let fcv = metal::FunctionConstantValues::new();
+    for &(id, ref val) in overrides {
+        match val {
+            crate::GpuConstant::U32(v) => {
+                fcv.set_constant_value_at_index(
+                    v as *const u32 as *const std::ffi::c_void,
+                    metal::MTLDataType::UInt,
+                    id as u64,
+                );
+            }
+            crate::GpuConstant::F32(v) => {
+                fcv.set_constant_value_at_index(
+                    v as *const f32 as *const std::ffi::c_void,
+                    metal::MTLDataType::Float,
+                    id as u64,
+                );
+            }
+            crate::GpuConstant::Bool(v) => {
+                fcv.set_constant_value_at_index(
+                    v as *const bool as *const std::ffi::c_void,
+                    metal::MTLDataType::Bool,
+                    id as u64,
+                );
+            }
+        }
+    }
+    fcv
 }
