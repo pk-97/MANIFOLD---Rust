@@ -1,6 +1,6 @@
 // HDR Boost — sharp highlight extraction + gain, no blur.
-// Same soft-knee threshold as bloom's bright_prefilter, but applied per-pixel
-// without any blur passes. Pushes bright areas into HDR range cleanly.
+// Smoothstep threshold selects bright areas; knee controls transition width.
+// Pushes highlights into HDR range cleanly without halation.
 
 struct Uniforms {
     amount: f32,
@@ -25,17 +25,16 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let src = textureSampleLevel(source_tex, tex_sampler, uv, 0.0);
     let c = src.rgb;
 
-    // Soft-knee highlight extraction — identical math to bloom's bright_prefilter.
+    // Highlight selection: smoothstep from (threshold - knee) to (threshold + knee).
+    // Knee=0 gives a hard cutoff, knee=1 gives a wide gradual ramp.
     let lum = max(c.r, max(c.g, c.b));
-    let soft_start = uniforms.threshold - uniforms.knee;
-    var t = clamp((lum - soft_start) / max(2.0 * uniforms.knee, 1e-5), 0.0, 1.0);
-    t = t * t * (3.0 - 2.0 * t);  // smoothstep
-    let hard = clamp((lum - uniforms.threshold) / max(1.0 - uniforms.threshold, 1e-5), 0.0, 1.0);
-    let response = max(t * 0.78, hard);
+    let half_knee = uniforms.knee * 0.5;
+    let lo = uniforms.threshold - half_knee;
+    let hi = uniforms.threshold + half_knee;
+    let response = smoothstep(lo, hi + 1e-5, lum);
 
-    // Extract highlights, boost by gain, add back to source.
-    let highlights = c * response;
-    let boosted = c + highlights * uniforms.gain;
+    // Boost highlights and add back to source.
+    let boosted = c + c * response * uniforms.gain;
 
     let result = mix(c, boosted, uniforms.amount);
     textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(max(result, vec3<f32>(0.0)), src.a));
