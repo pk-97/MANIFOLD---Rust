@@ -393,10 +393,13 @@ impl DisplayLinkPresenter {
 
     /// Retarget the display link if the window moved to a different display.
     ///
-    /// NEVER calls CVDisplayLinkStop — that blocks waiting for the in-flight
-    /// callback, which can deadlock if the callback is mid-present (acquiring
-    /// a drawable can block on the CAMetalLayer). Instead: set the stop flag,
-    /// retarget in-place, clear the flag.
+    /// The presenter callback must NEVER skip a present — on Direct Display
+    /// surfaces, even one missed present causes WindowServer to drop Direct
+    /// Display mode, thrashing all displays. So we do NOT set the stop flag
+    /// here. CVDisplayLinkSetCurrentCGDisplay is safe to call while the
+    /// callback is running (Apple docs). The callback might present one frame
+    /// at the old display's timing — that's acceptable (single late present
+    /// is invisible, missed present is catastrophic).
     pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
         let new_id = display_id_for_window(window);
         if new_id == 0 || new_id == self.current_display_id {
@@ -405,12 +408,10 @@ impl DisplayLinkPresenter {
         let old_refresh = unsafe {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
         };
-        self.stop.store(true, Ordering::Release);
-        std::sync::atomic::fence(Ordering::SeqCst);
+        // Retarget while running — callback keeps presenting without interruption.
         unsafe {
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
         }
-        self.stop.store(false, Ordering::Release);
         let new_refresh = unsafe {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
         };
