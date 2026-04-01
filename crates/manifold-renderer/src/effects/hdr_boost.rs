@@ -62,8 +62,8 @@ impl PostProcessEffect for HdrBoostFX {
         let uniforms = HdrBoostUniforms {
             amount: p.first().copied().unwrap_or(0.0),
             gain: p.get(1).copied().unwrap_or(1.5),
-            threshold: p.get(2).copied().unwrap_or(0.42),
-            knee: p.get(3).copied().unwrap_or(0.24),
+            threshold: p.get(2).copied().unwrap_or(0.15),
+            knee: p.get(3).copied().unwrap_or(0.3),
         };
 
         self.helper.dispatch(

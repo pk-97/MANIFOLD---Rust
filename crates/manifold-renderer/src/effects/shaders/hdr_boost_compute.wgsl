@@ -33,8 +33,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let hi = uniforms.threshold + half_knee;
     let response = smoothstep(lo, hi + 1e-5, lum);
 
-    // Boost highlights and add back to source.
-    let boosted = c + c * response * uniforms.gain;
+    // Gain in perceptual stops (EV): each +1 doubles brightness.
+    // pow(2, 0)=1x, pow(2, 1)=2x, pow(2, 3)=8x, pow(2, 5)=32x.
+    // Response modulates per-pixel so only selected highlights get boosted.
+    let boosted = c * pow(2.0, response * uniforms.gain);
 
     let result = mix(c, boosted, uniforms.amount);
     textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(max(result, vec3<f32>(0.0)), src.a));

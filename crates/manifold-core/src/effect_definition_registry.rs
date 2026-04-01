@@ -553,8 +553,8 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
         param_defs: vec![
             pd("Amount", 0.0, 1.0, 0.0),
             pd_osc("Gain", 0.0, 5.0, 1.5, "Gain"),
-            pd_osc("Thresh", 0.0, 1.0, 0.42, "Threshold"),
-            pd_osc("Knee", 0.0, 1.0, 0.24, "Knee"),
+            pd_osc("Thresh", 0.0, 1.0, 0.15, "Threshold"),
+            pd_osc("Knee", 0.0, 1.0, 0.3, "Knee"),
         ],
         osc_prefix: Some("hdrBoost"),
     });
