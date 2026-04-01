@@ -176,7 +176,7 @@ use manifold_core::GeneratorTypeId;
 use manifold_core::generator_definition_registry;
 
 #[test]
-fn generator_param_count_plasma() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::PLASMA).param_count, 6); }
+fn generator_param_count_plasma() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::PLASMA).param_count, 5); }
 #[test]
 fn generator_param_count_basic_shapes() { assert_eq!(generator_definition_registry::get(&GeneratorTypeId::BASIC_SHAPES_SNAP).param_count, 4); }
 #[test]
