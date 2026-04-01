@@ -41,6 +41,7 @@ pub use types::{
 };
 pub use texture_pool::TexturePool;
 pub use encoder::GpuEncoder;
+use encoder::ComputeBindCache;
 pub use surface::{GpuSurface, GpuDrawable};
 
 // Raw ObjC retain/release — avoids dependency on objc::msg_send! macro.

@@ -656,6 +656,7 @@ impl GpuDevice {
         GpuEncoder {
             cmd_buf_ptr: ptr,
             state: EncoderState::None,
+            compute_cache: ComputeBindCache::new(),
         }
     }
 

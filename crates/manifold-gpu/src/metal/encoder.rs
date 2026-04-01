@@ -15,6 +15,36 @@ pub(crate) enum EncoderState {
     Blit(*const metal::BlitCommandEncoderRef),
 }
 
+/// Cached compute bind state — skips redundant Metal API calls when the same
+/// resource is already bound at a slot from a previous dispatch.
+/// Only valid while the compute encoder stays alive across dispatches.
+const CACHE_SLOTS: usize = 16;
+
+pub(super) struct ComputeBindCache {
+    /// Raw ObjC pointers for currently bound textures, indexed by Metal texture slot.
+    textures: [*const std::ffi::c_void; CACHE_SLOTS],
+    /// Raw ObjC pointers for currently bound samplers, indexed by Metal sampler slot.
+    samplers: [*const std::ffi::c_void; CACHE_SLOTS],
+    /// (Raw ObjC pointer, offset) for currently bound buffers, indexed by Metal buffer slot.
+    buffers: [(*const std::ffi::c_void, u64); CACHE_SLOTS],
+}
+
+impl ComputeBindCache {
+    pub(super) fn new() -> Self {
+        Self {
+            textures: [std::ptr::null(); CACHE_SLOTS],
+            samplers: [std::ptr::null(); CACHE_SLOTS],
+            buffers: [(std::ptr::null(), 0); CACHE_SLOTS],
+        }
+    }
+
+    fn clear(&mut self) {
+        self.textures = [std::ptr::null(); CACHE_SLOTS];
+        self.samplers = [std::ptr::null(); CACHE_SLOTS];
+        self.buffers = [(std::ptr::null(), 0); CACHE_SLOTS];
+    }
+}
+
 /// Per-frame GPU command encoder. Wraps a retained Metal command buffer.
 ///
 /// Automatically manages compute/render/blit encoder transitions.
@@ -24,9 +54,30 @@ pub struct GpuEncoder {
     /// Retained MTLCommandBuffer. Released on drop.
     pub(crate) cmd_buf_ptr: *mut std::ffi::c_void,
     pub(crate) state: EncoderState,
+    /// Bind cache for the active compute encoder — eliminates redundant
+    /// set_texture/set_sampler/set_buffer calls across consecutive dispatches.
+    pub(super) compute_cache: ComputeBindCache,
 }
 
 unsafe impl Send for GpuEncoder {}
+
+/// Extract the raw ObjC pointer from a Metal texture for bind cache comparison.
+#[inline]
+fn texture_identity(tex: &metal::Texture) -> *const std::ffi::c_void {
+    &**tex as *const metal::TextureRef as *const std::ffi::c_void
+}
+
+/// Extract the raw ObjC pointer from a Metal sampler for bind cache comparison.
+#[inline]
+fn sampler_identity(s: &metal::SamplerState) -> *const std::ffi::c_void {
+    &**s as *const metal::SamplerStateRef as *const std::ffi::c_void
+}
+
+/// Extract the raw ObjC pointer from a Metal buffer for bind cache comparison.
+#[inline]
+fn buffer_identity(buf: &metal::Buffer) -> *const std::ffi::c_void {
+    &**buf as *const metal::BufferRef as *const std::ffi::c_void
+}
 
 impl GpuEncoder {
     pub(super) fn cmd_buf(&self) -> &metal::CommandBufferRef {
@@ -63,6 +114,7 @@ impl GpuEncoder {
             EncoderState::Compute(ptr) => {
                 unsafe { &*ptr }.end_encoding();
                 unsafe { objc_release(ptr as *mut std::ffi::c_void); }
+                self.compute_cache.clear();
             }
             EncoderState::Render(ptr) => {
                 unsafe { &*ptr }.end_encoding();
@@ -110,14 +162,22 @@ impl GpuEncoder {
                     // shaders have per-entry slot maps that may exclude globals
                     // not referenced by the specific entry point.
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_buffer(
-                        slot.metal_index as _,
-                        Some(&buffer.raw),
-                        *offset as _,
-                    );
+                    let idx = slot.metal_index as usize;
+                    let id = buffer_identity(&buffer.raw);
+                    if idx >= CACHE_SLOTS
+                        || self.compute_cache.buffers[idx] != (id, *offset)
+                    {
+                        enc.set_buffer(
+                            slot.metal_index as _,
+                            Some(&buffer.raw),
+                            *offset as _,
+                        );
+                        if idx < CACHE_SLOTS {
+                            self.compute_cache.buffers[idx] = (id, *offset);
+                        }
+                    }
                     // Track buffer size for sizes buffer generation.
                     // Indexed by Metal buffer argument index.
-                    let idx = slot.metal_index as usize;
                     if idx < MAX_BUFFER_SLOTS {
                         buffer_sizes[idx] = buffer.size as u32;
                         if idx >= buffer_sizes_len {
@@ -127,13 +187,32 @@ impl GpuEncoder {
                 }
                 GpuBinding::Texture { binding: b, texture } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_texture(slot.metal_index as _, Some(&texture.raw));
+                    let idx = slot.metal_index as usize;
+                    let id = texture_identity(&texture.raw);
+                    if idx >= CACHE_SLOTS
+                        || self.compute_cache.textures[idx] != id
+                    {
+                        enc.set_texture(slot.metal_index as _, Some(&texture.raw));
+                        if idx < CACHE_SLOTS {
+                            self.compute_cache.textures[idx] = id;
+                        }
+                    }
                 }
                 GpuBinding::Sampler { binding: b, sampler } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                    let idx = slot.metal_index as usize;
+                    let id = sampler_identity(&sampler.raw);
+                    if idx >= CACHE_SLOTS
+                        || self.compute_cache.samplers[idx] != id
+                    {
+                        enc.set_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                        if idx < CACHE_SLOTS {
+                            self.compute_cache.samplers[idx] = id;
+                        }
+                    }
                 }
                 GpuBinding::Bytes { binding: b, data } => {
+                    // Always re-bind: inline bytes change every dispatch (uniforms).
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
                     enc.set_bytes(
                         slot.metal_index as _,
