@@ -38,7 +38,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     // 0.5->1.0: original fades out, mirrors stay at 100%
     let orig_alpha = clamp((1.0 - uniforms.amount) * 2.0, 0.0, 1.0);
     let mir_alpha = clamp(uniforms.amount * 2.0, 0.0, 1.0);
-    let result = clamp(original * orig_alpha + mirrored * mir_alpha, vec3<f32>(0.0), vec3<f32>(1.0));
+    let result = original * orig_alpha + mirrored * mir_alpha;
     let a = clamp(src.a * orig_alpha + mirror_sample.a * mir_alpha, 0.0, 1.0);
     textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(result, a));
 }
