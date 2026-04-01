@@ -3,6 +3,23 @@
 use crate::types::*;
 use super::*;
 use super::encoder::EncoderState;
+
+/// Compute shader that clears a texture to a solid color.
+/// Replaces render-pass-based clears to avoid creating render encoders
+/// (which incur TBDR tile memory load/store overhead).
+const CLEAR_TEXTURE_WGSL: &str = r#"
+struct ClearColor { r: f32, g: f32, b: f32, a: f32, }
+
+@group(0) @binding(0) var output_tex: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(1) var<uniform> color: ClearColor;
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+    let dims = textureDimensions(output_tex);
+    if id.x >= dims.x || id.y >= dims.y { return; }
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(color.r, color.g, color.b, color.a));
+}
+"#;
 use super::format::*;
 use super::shader_compiler::{compile_wgsl_to_msl, compile_wgsl_to_msl_render, find_entry_function};
 
@@ -29,6 +46,9 @@ pub struct GpuDevice {
     render_cache: std::sync::Mutex<std::collections::HashMap<u64, GpuRenderPipeline>>,
     /// On-disk MSL cache — skips WGSL→naga→SPIR-V→spirv-opt→SPIRV-Cross on hit.
     msl_cache: std::sync::Mutex<Option<msl_cache::MslCache>>,
+    /// Pre-compiled compute pipeline for clear_texture — avoids creating a
+    /// render pass (and render encoder) just to clear a texture to a color.
+    clear_pipeline: std::sync::OnceLock<GpuComputePipeline>,
 }
 
 // Safety: metal::Device and metal::CommandQueue are thread-safe (Metal guarantee).
@@ -53,6 +73,7 @@ impl GpuDevice {
             compute_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             render_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             msl_cache: std::sync::Mutex::new(None),
+            clear_pipeline: std::sync::OnceLock::new(),
         }
     }
 
@@ -642,6 +663,13 @@ impl GpuDevice {
     }
 
     /// Create a new command encoder for one frame's GPU work.
+    /// Get or lazily compile the compute clear pipeline.
+    fn clear_pipeline(&self) -> &GpuComputePipeline {
+        self.clear_pipeline.get_or_init(|| {
+            self.create_compute_pipeline(CLEAR_TEXTURE_WGSL, "cs_main", "Clear Texture")
+        })
+    }
+
     pub fn create_encoder(&self, label: &str) -> GpuEncoder {
         // Use retained references — Metal retains all resources set on encoders.
         // Slightly higher overhead than unretained, but guarantees resources
@@ -657,6 +685,7 @@ impl GpuDevice {
             cmd_buf_ptr: ptr,
             state: EncoderState::None,
             compute_cache: ComputeBindCache::new(),
+            clear_pipeline: self.clear_pipeline() as *const GpuComputePipeline,
         }
     }
 

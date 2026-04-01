@@ -57,6 +57,8 @@ pub struct GpuEncoder {
     /// Bind cache for the active compute encoder — eliminates redundant
     /// set_texture/set_sampler/set_buffer calls across consecutive dispatches.
     pub(super) compute_cache: ComputeBindCache,
+    /// Pre-compiled compute clear pipeline — avoids render encoder for clears.
+    pub(super) clear_pipeline: *const GpuComputePipeline,
 }
 
 unsafe impl Send for GpuEncoder {}
@@ -569,18 +571,33 @@ impl GpuEncoder {
         enc.end_encoding();
     }
 
-    /// Clear a texture to a solid color via a render pass with MTLLoadAction::Clear.
-    /// No draw call — just load-clear + store.
+    /// Clear a texture to a solid color via compute dispatch.
+    /// Uses the pre-compiled clear pipeline to avoid creating a render encoder
+    /// (which incurs TBDR tile load/store overhead).
     pub fn clear_texture(&mut self, texture: &GpuTexture, r: f64, g: f64, b: f64, a: f64) {
-        self.end_current();
-        let desc = metal::RenderPassDescriptor::new();
-        let color = desc.color_attachments().object_at(0).unwrap();
-        color.set_texture(Some(&texture.raw));
-        color.set_load_action(metal::MTLLoadAction::Clear);
-        color.set_store_action(metal::MTLStoreAction::Store);
-        color.set_clear_color(metal::MTLClearColor::new(r, g, b, a));
-        let enc = self.cmd_buf().new_render_command_encoder(desc);
-        enc.end_encoding();
+        #[repr(C)]
+        #[derive(Clone, Copy)]
+        struct ClearColor { r: f32, g: f32, b: f32, a: f32 }
+
+        let pipeline = unsafe { &*self.clear_pipeline };
+        let color = ClearColor {
+            r: r as f32, g: g as f32, b: b as f32, a: a as f32,
+        };
+        let color_bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                &color as *const ClearColor as *const u8,
+                std::mem::size_of::<ClearColor>(),
+            )
+        };
+        self.dispatch_compute(
+            pipeline,
+            &[
+                GpuBinding::Texture { binding: 0, texture },
+                GpuBinding::Bytes { binding: 1, data: color_bytes },
+            ],
+            [texture.width.div_ceil(16), texture.height.div_ceil(16), 1],
+            "Clear Texture",
+        );
     }
 
     /// Fill a buffer with zeros via blit encoder.
