@@ -269,6 +269,7 @@ impl DisplayLinkPresenter {
         window: &winit::window::Window,
         bridge: Arc<SharedTextureBridge>,
         edr_headroom: f64,
+        presentation: bool,
     ) -> Self {
         // Dedicated device (same physical GPU, separate command queue).
         let presenter_device = GpuDevice::new();
@@ -276,14 +277,18 @@ impl DisplayLinkPresenter {
         let proj_w = bridge.width();
         let proj_h = bridge.height();
 
-        // Create surface — displaySyncEnabled=true so presents align to vblank.
-        // CVDisplayLink handles callback pacing; CAMetalLayer handles present timing.
+        // Create surface. In presentation (fullscreen) mode, displaySyncEnabled=true
+        // so presents align to vblank — required to maintain Direct Display lock.
+        // In windowed mode, displaySyncEnabled=false because the CVDisplayLink
+        // already paces the callback and WindowServer composites on its own schedule;
+        // enabling display sync causes nextDrawable to block waiting for vblank,
+        // creating double-wait judder with the CVDisplayLink callback.
         let surface = presenter_device.create_surface(
             window,
             proj_w,
             proj_h,
             GpuTextureFormat::Rgba16Float,
-            true, // display-sync: presents aligned to vblank
+            presentation, // display-sync only in fullscreen/presentation mode
         );
         surface.configure_edr();
         surface.set_contents_gravity_resize_aspect();
@@ -371,11 +376,13 @@ impl DisplayLinkPresenter {
         };
         log::info!(
             "[DisplayLink] Started for display {display_id}, \
-             refresh={:.2}ms ({:.1}Hz), drawable={}x{} Rgba16Float",
+             refresh={:.2}ms ({:.1}Hz), drawable={}x{} Rgba16Float, \
+             displaySync={}",
             refresh * 1000.0,
             if refresh > 0.0 { 1.0 / refresh } else { 0.0 },
             proj_w,
             proj_h,
+            presentation,
         );
 
         Self {

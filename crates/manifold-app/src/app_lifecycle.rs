@@ -648,6 +648,7 @@ impl Application {
                 &window,
                 Arc::clone(bridge),
                 h,
+                presentation,
             );
             self.output_presenter = Some(presenter);
         }
