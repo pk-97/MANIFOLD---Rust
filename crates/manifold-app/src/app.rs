@@ -212,9 +212,9 @@ pub struct Application {
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) atlas_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) atlas_sampler: Option<manifold_gpu::GpuSampler>,
-    /// Dedicated presenter thread for presentation-mode output windows.
+    /// CVDisplayLink-driven output presenter for hardware-synchronized frame pacing.
     #[cfg(target_os = "macos")]
-    pub(crate) output_presenter: Option<crate::output_presenter::NativeOutputPresenter>,
+    pub(crate) output_presenter: Option<crate::display_link::DisplayLinkPresenter>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,

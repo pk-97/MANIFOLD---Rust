@@ -157,6 +157,16 @@ impl GpuSurface {
         }
     }
 
+    /// Control whether presents are synchronized with Core Animation transactions.
+    /// `false` (recommended for CVDisplayLink): presents are not batched into
+    /// CA transactions, preserving the timing guarantees of the display link.
+    pub fn set_presents_with_transaction(&self, enabled: bool) {
+        unsafe {
+            let layer = self.layer_ptr as *mut objc::runtime::Object;
+            let _: () = msg_send![layer, setPresentsWithTransaction: enabled];
+        }
+    }
+
     /// Set the layer's background color.
     pub fn set_background_color(&self, r: f64, g: f64, b: f64, a: f64) {
         unsafe {

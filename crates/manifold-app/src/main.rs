@@ -19,6 +19,8 @@ mod input_handler;
 mod shared_texture;
 #[cfg(target_os = "macos")]
 mod output_presenter;
+#[cfg(target_os = "macos")]
+mod display_link;
 mod input_host;
 mod project_io;
 mod text_input;

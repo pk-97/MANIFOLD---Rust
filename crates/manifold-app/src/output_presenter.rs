@@ -1,9 +1,14 @@
 //! Output presenter — dedicated thread with manifold-gpu blit pipeline.
 //!
+//! **SUPERSEDED by `display_link.rs`** — CVDisplayLink-driven presenter with
+//! hardware-synchronized frame pacing. This module is retained as a fallback
+//! reference for non-CVDisplayLink platforms.
+//!
 //! `NativeOutputPresenter` spawns a dedicated thread that owns a `GpuSurface`
 //! (CAMetalLayer) at project resolution and a WGSL fullscreen-triangle pipeline.
 //! The thread polls the IOSurface bridge for new frames and blits them to the
 //! output window's drawable, display-synchronized via the surface.
+#![allow(dead_code)]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

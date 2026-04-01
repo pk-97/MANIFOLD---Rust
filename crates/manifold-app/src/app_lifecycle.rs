@@ -643,7 +643,7 @@ impl Application {
         if let Some(gpu) = &self.gpu
             && let Some(bridge) = &self.shared_texture_bridge
         {
-            let presenter = crate::output_presenter::NativeOutputPresenter::new(
+            let presenter = crate::display_link::DisplayLinkPresenter::new(
                 &gpu.device,
                 &window,
                 Arc::clone(bridge),
