@@ -571,33 +571,47 @@ impl GpuEncoder {
         enc.end_encoding();
     }
 
-    /// Clear a texture to a solid color via compute dispatch.
-    /// Uses the pre-compiled clear pipeline to avoid creating a render encoder
-    /// (which incurs TBDR tile load/store overhead).
+    /// Clear a texture to a solid color.
+    /// Uses compute dispatch for Rgba16Float textures (avoids render encoder
+    /// creation and TBDR tile overhead). Falls back to render-pass clear for
+    /// other formats since the storage texture binding requires a matching format.
     pub fn clear_texture(&mut self, texture: &GpuTexture, r: f64, g: f64, b: f64, a: f64) {
-        #[repr(C)]
-        #[derive(Clone, Copy)]
-        struct ClearColor { r: f32, g: f32, b: f32, a: f32 }
+        if texture.format == crate::GpuTextureFormat::Rgba16Float {
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            struct ClearColor { r: f32, g: f32, b: f32, a: f32 }
 
-        let pipeline = unsafe { &*self.clear_pipeline };
-        let color = ClearColor {
-            r: r as f32, g: g as f32, b: b as f32, a: a as f32,
-        };
-        let color_bytes: &[u8] = unsafe {
-            std::slice::from_raw_parts(
-                &color as *const ClearColor as *const u8,
-                std::mem::size_of::<ClearColor>(),
-            )
-        };
-        self.dispatch_compute(
-            pipeline,
-            &[
-                GpuBinding::Texture { binding: 0, texture },
-                GpuBinding::Bytes { binding: 1, data: color_bytes },
-            ],
-            [texture.width.div_ceil(16), texture.height.div_ceil(16), 1],
-            "Clear Texture",
-        );
+            let pipeline = unsafe { &*self.clear_pipeline };
+            let color = ClearColor {
+                r: r as f32, g: g as f32, b: b as f32, a: a as f32,
+            };
+            let color_bytes: &[u8] = unsafe {
+                std::slice::from_raw_parts(
+                    &color as *const ClearColor as *const u8,
+                    std::mem::size_of::<ClearColor>(),
+                )
+            };
+            self.dispatch_compute(
+                pipeline,
+                &[
+                    GpuBinding::Texture { binding: 0, texture },
+                    GpuBinding::Bytes { binding: 1, data: color_bytes },
+                ],
+                [texture.width.div_ceil(16), texture.height.div_ceil(16), 1],
+                "Clear Texture",
+            );
+        } else {
+            // Non-Rgba16Float: use render-pass clear (rare — mostly display surfaces).
+            self.end_current();
+            let desc = metal::RenderPassDescriptor::new();
+            let color_att = desc.color_attachments().object_at(0).unwrap();
+            color_att.set_texture(Some(&texture.raw));
+            color_att.set_load_action(metal::MTLLoadAction::Clear);
+            color_att.set_store_action(metal::MTLStoreAction::Store);
+            color_att.set_clear_color(metal::MTLClearColor::new(r, g, b, a));
+            let enc = self.cmd_buf().new_render_command_encoder(desc);
+            enc.end_encoding();
+        }
     }
 
     /// Fill a buffer with zeros via blit encoder.
