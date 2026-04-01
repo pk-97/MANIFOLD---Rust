@@ -180,50 +180,62 @@ impl PresenterThread {
                 break;
             }
 
-            let bridge_gen = self.bridge.generation();
-            if bridge_gen != self.last_bridge_gen {
-                self.last_bridge_gen = bridge_gen;
-                self.reimport_textures();
-                self.sync_surface_to_bridge();
-            }
-
-            // Acquire drawable FIRST — this blocks on display vsync, giving the
-            // content thread maximum time to finish GPU work and publish new frames.
-            // Then read front_index to latch the latest available frame at the
-            // moment of presentation. Previous ordering (read → block → blit) would
-            // show stale frames when new content published during the vsync wait.
-            let Some(drawable) = self.surface.next_drawable() else {
-                std::thread::sleep(std::time::Duration::from_millis(1));
-                continue;
-            };
-
-            let front = self.bridge.front_index() as usize;
-            self.last_front = front;
-
-            let Some(source) = self.native_textures[front].as_ref() else {
-                continue;
-            };
-
-            let target = drawable.gpu_texture(GpuTextureFormat::Rgba16Float);
-
-            let w = self.surface.width as f32;
-            let h = self.surface.height as f32;
-
-            let mut encoder = self.device.create_encoder("Output Present");
-            encoder.draw_fullscreen_viewport(
-                &self.pipeline,
-                &target,
-                &[
-                    GpuBinding::Texture { binding: 0, texture: source },
-                    GpuBinding::Sampler { binding: 1, sampler: &self.sampler },
-                ],
-                (0.0, 0.0, w, h),
-                GpuLoadAction::DontCare,
-                "Presenter Blit",
-            );
-            encoder.present_drawable(&drawable);
-            encoder.commit();
+            // Drain autoreleased ObjC Metal objects every iteration.
+            // Without this, command buffers, drawables, and internal Metal
+            // allocations accumulate at 120Hz, causing irregular GC pauses.
+            objc::rc::autoreleasepool(|| {
+                self.present_one_frame();
+            });
         }
+    }
+
+    /// Execute one vsync-paced present cycle.
+    /// Separated from the main loop so the entire iteration runs inside
+    /// an autoreleasepool drain.
+    fn present_one_frame(&mut self) {
+        let bridge_gen = self.bridge.generation();
+        if bridge_gen != self.last_bridge_gen {
+            self.last_bridge_gen = bridge_gen;
+            self.reimport_textures();
+            self.sync_surface_to_bridge();
+        }
+
+        // Acquire drawable FIRST — this blocks on display vsync, giving the
+        // content thread maximum time to finish GPU work and publish new frames.
+        // Then read front_index to latch the latest available frame at the
+        // moment of presentation. Previous ordering (read → block → blit) would
+        // show stale frames when new content published during the vsync wait.
+        let Some(drawable) = self.surface.next_drawable() else {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            return;
+        };
+
+        let front = self.bridge.front_index() as usize;
+        self.last_front = front;
+
+        let Some(source) = self.native_textures[front].as_ref() else {
+            return;
+        };
+
+        let target = drawable.gpu_texture(GpuTextureFormat::Rgba16Float);
+
+        let w = self.surface.width as f32;
+        let h = self.surface.height as f32;
+
+        let mut encoder = self.device.create_encoder("Output Present");
+        encoder.draw_fullscreen_viewport(
+            &self.pipeline,
+            &target,
+            &[
+                GpuBinding::Texture { binding: 0, texture: source },
+                GpuBinding::Sampler { binding: 1, sampler: &self.sampler },
+            ],
+            (0.0, 0.0, w, h),
+            GpuLoadAction::DontCare,
+            "Presenter Blit",
+        );
+        encoder.present_drawable(&drawable);
+        encoder.commit();
     }
 
     fn reimport_textures(&mut self) {
