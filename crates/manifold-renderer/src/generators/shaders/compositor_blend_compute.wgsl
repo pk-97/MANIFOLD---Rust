@@ -1,24 +1,16 @@
 // Compute compositor blend — reads base + blend textures, writes to storage output.
 //
-// Two specialization axes (function constants via text replacement):
+// Specialization axis (function constant via text replacement):
 //   u.blend_mode  → 0u..12u  (dead-code eliminates inactive switch branches)
-//   u.has_transform → 0u/1u  (eliminates UV transform math when identity)
 //
-// When has_transform == 0, the Metal compiler removes all trig, aspect-ratio
-// division, and bounds checking — blend UV is just the pixel UV.
-//
-// Opaque (mode 6) with has_transform == 0 further eliminates the base texture
-// read since the result is just the blend RGB with alpha = 1.
+// Opaque (mode 6) eliminates the base texture read since the result is just
+// the blend RGB with alpha = 1.
 
 struct Uniforms {
     blend_mode: u32,
     opacity: f32,
-    translate_x: f32,
-    translate_y: f32,
-    scale_val: f32,
-    rotation: f32,
-    aspect_ratio: f32,
-    has_transform: u32,
+    _pad0: u32,
+    _pad1: u32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -26,51 +18,6 @@ struct Uniforms {
 @group(0) @binding(2) var t_blend: texture_2d<f32>;
 @group(0) @binding(3) var samp: sampler;
 @group(0) @binding(4) var t_output: texture_storage_2d<rgba16float, write>;
-
-// ── UV transform ──────────────────────────────────────────────────
-// Separated from blend logic so the compiler can eliminate it entirely
-// when has_transform is specialized to 0.
-
-fn compute_blend_uv(uv: vec2<f32>) -> vec2<f32> {
-    if u.has_transform == 0u {
-        return uv;
-    }
-
-    var blend_uv = uv - vec2<f32>(0.5);
-    blend_uv.x *= u.aspect_ratio;
-
-    let cos_r = cos(u.rotation);
-    let sin_r = sin(u.rotation);
-    blend_uv = vec2<f32>(
-        blend_uv.x * cos_r - blend_uv.y * sin_r,
-        blend_uv.x * sin_r + blend_uv.y * cos_r,
-    );
-
-    blend_uv.x /= u.aspect_ratio;
-
-    let s_val = max(u.scale_val, 0.01);
-    blend_uv /= s_val;
-
-    blend_uv -= vec2<f32>(u.translate_x, u.translate_y);
-    blend_uv += vec2<f32>(0.5);
-
-    return blend_uv;
-}
-
-fn sample_blend(uv: vec2<f32>) -> vec4<f32> {
-    let blend_uv = compute_blend_uv(uv);
-
-    if u.has_transform != 0u {
-        // Out-of-bounds check only needed when transform is active
-        if blend_uv.x < 0.0 || blend_uv.x > 1.0 || blend_uv.y < 0.0 || blend_uv.y > 1.0 {
-            return vec4<f32>(0.0);
-        }
-    }
-
-    return textureSampleLevel(t_blend, samp, blend_uv, 0.0);
-}
-
-// ── Main ──────────────────────────────────────────────────────────
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -81,7 +28,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
 
-    let blend = sample_blend(uv);
+    let blend = textureSampleLevel(t_blend, samp, uv, 0.0);
 
     // ── Opaque fast path ──────────────────────────────────────────
     // Opaque ignores base entirely — write blend RGB with alpha = 1.

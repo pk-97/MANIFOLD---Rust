@@ -499,10 +499,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     blend_mode: layer
                         .map_or(BlendMode::Normal, |l| l.default_blend_mode),
                     opacity: layer.map_or(1.0, |l| l.opacity),
-                    translate_x: clip.translate_x,
-                    translate_y: clip.translate_y,
-                    scale: clip.scale,
-                    rotation: clip.rotation,
                     effects: &[],
                     effect_groups: &[],
                 });

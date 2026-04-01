@@ -21,10 +21,6 @@ pub struct CompositeClipDescriptor<'a> {
     pub layer_index: i32,
     pub blend_mode: BlendMode,
     pub opacity: f32,
-    pub translate_x: f32,
-    pub translate_y: f32,
-    pub scale: f32,
-    pub rotation: f32,
     pub effects: &'a [EffectInstance],
     pub effect_groups: &'a [EffectGroup],
 }
@@ -34,17 +30,11 @@ pub struct CompositeClipDescriptor<'a> {
 struct BlendUniforms {
     blend_mode: u32,
     opacity: f32,
-    translate_x: f32,
-    translate_y: f32,
-    scale_val: f32,
-    rotation: f32,
-    aspect_ratio: f32,
-    /// 1 = apply UV transform, 0 = identity (skip trig/division).
-    /// Also used as a function-constant specialization axis.
-    has_transform: u32,
+    _pad0: u32,
+    _pad1: u32,
 }
 
-const _: () = assert!(std::mem::size_of::<BlendUniforms>() == 32);
+const _: () = assert!(std::mem::size_of::<BlendUniforms>() == 16);
 
 /// Blend WGSL source — shared across all specialized blend mode variants.
 const BLEND_WGSL: &str = include_str!("generators/shaders/compositor_blend_compute.wgsl");
@@ -52,22 +42,14 @@ const BLEND_WGSL: &str = include_str!("generators/shaders/compositor_blend_compu
 /// Number of blend modes (Normal=0 through Darken=12).
 const BLEND_MODE_COUNT: u32 = 13;
 
-/// Pipeline key: `(blend_mode, has_transform)`.
-/// Specializing both axes lets the Metal compiler eliminate dead code in each variant.
-/// 13 modes × 2 transform states = 26 pipelines, cached in MTLBinaryArchive.
-type BlendPipelineKey = (u32, bool);
-
 /// GPU resources for blend operations using native Metal compute.
 ///
-/// Two specialization axes produce a 2D pipeline matrix:
-/// - **blend_mode** (0..12): dead-code eliminates inactive switch branches
-/// - **has_transform** (true/false): eliminates UV transform math when identity
-///
-/// When has_transform == false AND blend_mode == Opaque, the compiler also
-/// eliminates the base texture read (opaque ignores base entirely when opacity == 1.0).
+/// One specialized pipeline per blend mode — the Metal compiler dead-code
+/// eliminates inactive switch branches in each variant.
+/// Opaque (mode 6) further eliminates the base texture read.
 struct BlendResources {
-    /// Specialized pipelines indexed by (blend_mode, has_transform).
-    pipelines: AHashMap<BlendPipelineKey, manifold_gpu::GpuComputePipeline>,
+    /// Specialized pipelines indexed by blend mode.
+    pipelines: AHashMap<u32, manifold_gpu::GpuComputePipeline>,
     sampler: manifold_gpu::GpuSampler,
     /// Compositor width/height — needed for dispatch_workgroups.
     width: u32,
@@ -76,26 +58,17 @@ struct BlendResources {
 
 impl BlendResources {
     fn new(device: &GpuDevice, width: u32, height: u32) -> Self {
-        let mut pipelines = AHashMap::with_capacity(BLEND_MODE_COUNT as usize * 2);
+        let mut pipelines = AHashMap::with_capacity(BLEND_MODE_COUNT as usize);
         for mode in 0..BLEND_MODE_COUNT {
-            for has_transform in [false, true] {
-                let transform_str = if has_transform { "1u" } else { "0u" };
-                let label = format!(
-                    "Blend Mode {mode}{}",
-                    if has_transform { " +Transform" } else { "" },
-                );
-                let mode_str = format!("{mode}u");
-                let pipeline = device.create_specialized_compute_pipeline(
-                    BLEND_WGSL,
-                    "cs_main",
-                    &[
-                        ("u.blend_mode", &mode_str),
-                        ("u.has_transform", transform_str),
-                    ],
-                    &label,
-                );
-                pipelines.insert((mode, has_transform), pipeline);
-            }
+            let label = format!("Blend Mode {mode}");
+            let mode_str = format!("{mode}u");
+            let pipeline = device.create_specialized_compute_pipeline(
+                BLEND_WGSL,
+                "cs_main",
+                &[("u.blend_mode", &mode_str)],
+                &label,
+            );
+            pipelines.insert(mode, pipeline);
         }
 
         let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc {
@@ -110,8 +83,7 @@ impl BlendResources {
         Self { pipelines, sampler, width, height }
     }
 
-    /// Execute a compute blend. Selects the specialized pipeline matching the
-    /// blend mode and transform state in the uniforms.
+    /// Execute a compute blend. Selects the specialized pipeline for the blend mode.
     fn blend_pass(
         &self,
         gpu: &mut GpuEncoder,
@@ -123,10 +95,8 @@ impl BlendResources {
     ) {
         let _offset = arena.push(uniforms);
 
-        let has_transform = uniforms.has_transform != 0;
-        let key = (uniforms.blend_mode, has_transform);
-        let pipeline = self.pipelines.get(&key)
-            .or_else(|| self.pipelines.get(&(0, has_transform)))
+        let pipeline = self.pipelines.get(&uniforms.blend_mode)
+            .or_else(|| self.pipelines.get(&0))
             .unwrap();
 
         gpu.native_enc.dispatch_compute(
@@ -306,8 +276,6 @@ pub(crate) struct LayerOutput {
     blend_mode: BlendMode,
     /// Layer opacity (includes per-clip opacity for single-clip layers).
     opacity: f32,
-    /// Aspect ratio at time of generation (width / height).
-    aspect: f32,
 }
 
 // Safety: LayerOutput is only used within the compositor on the content thread.
@@ -321,15 +289,6 @@ impl LayerOutput {
         // Safety: pointer is valid for the frame duration (see struct doc).
         unsafe { &*self.texture }
     }
-}
-
-/// Per-clip transform stored alongside LayerOutput for single-clip layers.
-/// Multi-clip layers have transforms baked into the layer scratch buffer.
-struct SingleClipTransform {
-    translate_x: f32,
-    translate_y: f32,
-    scale: f32,
-    rotation: f32,
 }
 
 /// Layer-aware compositor with per-layer ping-pong blending.
@@ -364,9 +323,6 @@ pub struct LayerCompositor {
     /// led_exit_index == 0. Avoids the main buffer being overwritten by tonemap
     /// and master effects before the LED pipeline reads it.
     led_tap: Option<RenderTarget>,
-    /// Per-layer transform data for the blend pass. Cleared each frame.
-    /// Parallel to `layer_outputs` returned by `generate_layers()`.
-    single_clip_transforms: Vec<SingleClipTransform>,
     /// Pre-allocated scratch buffer for per-layer output descriptors.
     /// Cleared and populated each frame by generate_layers / composite_parallel
     /// to avoid per-frame heap allocation.
@@ -399,7 +355,6 @@ impl LayerCompositor {
             wet_dry_lerp: WetDryLerpPipeline::new(device),
             tonemap: TonemapPipeline::new(device, width, height),
             led_tap: None,
-            single_clip_transforms: Vec::new(),
             layer_outputs_scratch: Vec::new(),
             #[cfg(target_os = "macos")]
             async_event: None,
@@ -500,7 +455,7 @@ impl LayerCompositor {
         let clips = frame.clips;
         let width = self.main.width();
         let height = self.main.height();
-        let aspect = width as f32 / height as f32;
+
 
         // Check for any solo layer
         let any_solo = frame.layers.iter().any(|l| l.is_solo);
@@ -596,13 +551,6 @@ impl LayerCompositor {
                     texture: clip.texture,
                     blend_mode: layer_blend,
                     opacity: layer_opacity * clip.opacity,
-                    aspect,
-                });
-                self.single_clip_transforms.push(SingleClipTransform {
-                    translate_x: clip.translate_x,
-                    translate_y: clip.translate_y,
-                    scale: clip.scale,
-                    rotation: clip.rotation,
                 });
             } else {
                 // Multi-clip or layer-effects: composite into layer buffer
@@ -616,20 +564,11 @@ impl LayerCompositor {
 
                 // Composite each clip into layer buffer with Normal blend
                 for clip in group {
-                    let clip_has_transform =
-                        clip.translate_x.abs() >= f32::EPSILON
-                            || clip.translate_y.abs() >= f32::EPSILON
-                            || (clip.scale - 1.0).abs() >= f32::EPSILON
-                            || clip.rotation.abs() >= f32::EPSILON;
                     let uniforms = BlendUniforms {
                         blend_mode: BlendMode::Normal as u32,
                         opacity: clip.opacity,
-                        translate_x: clip.translate_x,
-                        translate_y: clip.translate_y,
-                        scale_val: clip.scale,
-                        rotation: clip.rotation,
-                        aspect_ratio: aspect,
-                        has_transform: u32::from(clip_has_transform),
+                        _pad0: 0,
+                        _pad1: 0,
                     };
                     self.blend.blend_pass(
                         gpu,
@@ -681,13 +620,6 @@ impl LayerCompositor {
                     texture: effective_layer_tex,
                     blend_mode: layer_blend,
                     opacity: layer_opacity,
-                    aspect,
-                });
-                self.single_clip_transforms.push(SingleClipTransform {
-                    translate_x: 0.0,
-                    translate_y: 0.0,
-                    scale: 1.0,
-                    rotation: 0.0,
                 });
             }
         }
@@ -701,10 +633,6 @@ impl LayerCompositor {
     ///
     /// Layers are blended bottom-to-top (order preserved from generate_layers).
     /// This pass is always serial — each blend reads the previous blend's result.
-    /// Phase B: Blend all layer outputs into main in order.
-    ///
-    /// Layers are blended bottom-to-top (order preserved from generate_layers).
-    /// This pass is always serial — each blend reads the previous blend's result.
     fn blend_layers(
         &mut self,
         gpu: &mut GpuEncoder,
@@ -713,23 +641,12 @@ impl LayerCompositor {
         // Clear main to opaque black
         self.main.clear_source(gpu, true);
 
-        for (idx, output) in layer_outputs.iter().enumerate() {
-            let transform = &self.single_clip_transforms[idx];
-
-            let is_identity = transform.translate_x.abs() < f32::EPSILON
-                && transform.translate_y.abs() < f32::EPSILON
-                && (transform.scale - 1.0).abs() < f32::EPSILON
-                && transform.rotation.abs() < f32::EPSILON;
-
+        for output in layer_outputs {
             let uniforms = BlendUniforms {
                 blend_mode: output.blend_mode as u32,
                 opacity: output.opacity,
-                translate_x: transform.translate_x,
-                translate_y: transform.translate_y,
-                scale_val: transform.scale,
-                rotation: transform.rotation,
-                aspect_ratio: output.aspect,
-                has_transform: u32::from(!is_identity),
+                _pad0: 0,
+                _pad1: 0,
             };
             self.blend.blend_pass(
                 gpu,
@@ -751,7 +668,6 @@ impl LayerCompositor {
         frame: &CompositorFrame,
     ) {
         self.uniform_arena.reset();
-        self.single_clip_transforms.clear();
         self.generate_layers(gpu, frame);
         // Safety: layer_outputs_scratch contains raw pointers to textures owned
         // by effect chains, layer bufs, or clip render targets — all valid for
@@ -784,12 +700,11 @@ impl LayerCompositor {
         let clips = frame.clips;
         let width = self.main.width();
         let height = self.main.height();
-        let aspect = width as f32 / height as f32;
+
         let device = compositor_gpu.device;
         let pool = compositor_gpu.pool;
 
         self.uniform_arena.reset();
-        self.single_clip_transforms.clear();
 
         // Ensure async event exists
         if self.async_event.is_none() {
@@ -899,13 +814,6 @@ impl LayerCompositor {
                         texture: clip.texture,
                         blend_mode: layer_blend,
                         opacity: layer_opacity * clip.opacity,
-                        aspect,
-                    });
-                    self.single_clip_transforms.push(SingleClipTransform {
-                        translate_x: clip.translate_x,
-                        translate_y: clip.translate_y,
-                        scale: clip.scale,
-                        rotation: clip.rotation,
                     });
                 } else {
                     let lb_idx = layer_buf_idx;
@@ -916,20 +824,11 @@ impl LayerCompositor {
                     layer_buf.clear_source(&mut gpu, false);
 
                     for clip in group {
-                        let clip_has_transform =
-                            clip.translate_x.abs() >= f32::EPSILON
-                                || clip.translate_y.abs() >= f32::EPSILON
-                                || (clip.scale - 1.0).abs() >= f32::EPSILON
-                                || clip.rotation.abs() >= f32::EPSILON;
                         let uniforms = BlendUniforms {
                             blend_mode: BlendMode::Normal as u32,
                             opacity: clip.opacity,
-                            translate_x: clip.translate_x,
-                            translate_y: clip.translate_y,
-                            scale_val: clip.scale,
-                            rotation: clip.rotation,
-                            aspect_ratio: aspect,
-                            has_transform: u32::from(clip_has_transform),
+                            _pad0: 0,
+                            _pad1: 0,
                         };
                         self.blend.blend_pass(
                             &mut gpu,
@@ -982,16 +881,7 @@ impl LayerCompositor {
                         texture: effective_layer_tex,
                         blend_mode: layer_blend,
                         opacity: layer_opacity,
-                        aspect,
                     });
-                    self.single_clip_transforms.push(
-                        SingleClipTransform {
-                            translate_x: 0.0,
-                            translate_y: 0.0,
-                            scale: 1.0,
-                            rotation: 0.0,
-                        },
-                    );
                 }
             } // gpu wrapper drops here, releasing borrow on layer_enc
 

@@ -1,12 +1,11 @@
+// Fragment compositor blend — reads base + blend textures, outputs blended result.
+// Used as the non-specialized (fragment shader) path.
+
 struct Uniforms {
     blend_mode: u32,
     opacity: f32,
-    translate_x: f32,
-    translate_y: f32,
-    scale_val: f32,
-    rotation: f32,
-    aspect_ratio: f32,
-    _pad: f32, // keeps struct at 32 bytes — WGSL uniform structs must be multiples of 16 bytes
+    _pad0: u32,
+    _pad1: u32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -32,36 +31,7 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let base = textureSample(t_base, s, in.uv);
-
-    // Transform blend UVs (center → rotate → scale → translate → uncenter)
-    var blend_uv = in.uv - vec2<f32>(0.5);
-    blend_uv.x *= u.aspect_ratio;
-
-    // Rotate
-    let cos_r = cos(u.rotation);
-    let sin_r = sin(u.rotation);
-    blend_uv = vec2<f32>(
-        blend_uv.x * cos_r - blend_uv.y * sin_r,
-        blend_uv.x * sin_r + blend_uv.y * cos_r,
-    );
-
-    blend_uv.x /= u.aspect_ratio;
-
-    // Scale
-    let s_val = max(u.scale_val, 0.01);
-    blend_uv /= s_val;
-
-    // Translate
-    blend_uv -= vec2<f32>(u.translate_x, u.translate_y);
-    blend_uv += vec2<f32>(0.5);
-
-    // Bounds check — outside the source is transparent
-    var blend: vec4<f32>;
-    if blend_uv.x < 0.0 || blend_uv.x > 1.0 || blend_uv.y < 0.0 || blend_uv.y > 1.0 {
-        blend = vec4<f32>(0.0);
-    } else {
-        blend = textureSample(t_blend, s, blend_uv);
-    }
+    let blend = textureSample(t_blend, s, in.uv);
 
     let ba = base.a;
     let bl_a = blend.a;
