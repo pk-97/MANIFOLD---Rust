@@ -232,6 +232,10 @@ pub struct Application {
     /// Skip drawable acquisition this frame (surface just resized — drawable
     /// pool may be reconfiguring). Offscreen render still runs; blit skipped.
     pub(crate) surface_resized_this_frame: bool,
+    /// True when the offscreen texture needs a fresh render this frame.
+    /// Set by any visual state change (content frame, dirty panels, overlay).
+    /// When false, present_all_windows just re-blits the existing offscreen.
+    pub(crate) offscreen_dirty: bool,
     /// macOS EDR headroom for the primary window (1.0 = SDR, >1.0 = HDR capable).
     /// Drives compositor tonemap (passthrough if > 1.0, ACES if ≤ 1.0).
     pub(crate) edr_headroom: f64,
@@ -387,6 +391,7 @@ impl Application {
             layer_bitmap_gpu: None,
             scale_factor: 1.0,
             surface_resized_this_frame: false,
+            offscreen_dirty: true,
             edr_headroom: 1.0,
             output_edr_headroom: 1.0,
             ui_root: UIRoot::new(),
@@ -1473,6 +1478,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         // pool may be reconfiguring after set_drawable_size.
                         // nextDrawable can block up to 1s during reconfiguration.
                         self.surface_resized_this_frame = true;
+                        self.offscreen_dirty = true;
                     }
 
                     // Rebuild UI on primary window resize
@@ -1491,6 +1497,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                         surface.resize(size.width, size.height);
                         self.resize_ui_offscreen(size.width, size.height);
                         self.surface_resized_this_frame = true;
+                        self.offscreen_dirty = true;
                     }
                     // Output windows: drawable stays at project resolution.
                     // NativeOutputPresenter detects changes via bridge generation.
