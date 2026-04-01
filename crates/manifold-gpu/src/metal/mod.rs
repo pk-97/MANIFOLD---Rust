@@ -31,6 +31,7 @@ mod texture_pool;
 mod encoder;
 mod shader_compiler;
 mod format;
+mod msl_cache;
 pub mod surface;
 
 // Re-export all public types so external code paths remain identical.

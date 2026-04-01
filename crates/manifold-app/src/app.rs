@@ -1208,6 +1208,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 std::fs::create_dir_all(&cache_dir).ok();
                 native_device
                     .load_pipeline_archive(&cache_dir.join("pipeline_cache.metallib"));
+                native_device
+                    .load_msl_cache(&cache_dir.join("msl_cache"));
             }
             log::info!(
                 "[GPU] Content thread: native MTLCommandQueue (manifold-gpu)"
@@ -1243,6 +1245,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             content_pipeline.edr_headroom = self.edr_headroom;
             // Save pipeline archive after all pipelines have been created.
             native_device.save_pipeline_archive();
+            native_device.log_msl_cache_stats();
             // Transfer native device ownership to content pipeline.
             content_pipeline.set_native_gpu(native_device);
             // Give the content pipeline all IOSurface textures for triple-buffered async output.

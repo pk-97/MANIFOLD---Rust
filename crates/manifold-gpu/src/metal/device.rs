@@ -27,6 +27,8 @@ pub struct GpuDevice {
     /// Eliminates repeated WGSL→MSL→Metal compilation for the same shader.
     compute_cache: std::sync::Mutex<std::collections::HashMap<u64, GpuComputePipeline>>,
     render_cache: std::sync::Mutex<std::collections::HashMap<u64, GpuRenderPipeline>>,
+    /// On-disk MSL cache — skips WGSL→naga→SPIR-V→spirv-opt→SPIRV-Cross on hit.
+    msl_cache: std::sync::Mutex<Option<msl_cache::MslCache>>,
 }
 
 // Safety: metal::Device and metal::CommandQueue are thread-safe (Metal guarantee).
@@ -50,6 +52,7 @@ impl GpuDevice {
             archive: std::sync::Mutex::new(None),
             compute_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             render_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+            msl_cache: std::sync::Mutex::new(None),
         }
     }
 
@@ -189,8 +192,28 @@ impl GpuDevice {
             return cached.clone();
         }
 
-        let (slot_map, msl_source, msl_entry_name, workgroup_size) =
-            compile_wgsl_to_msl(wgsl_source, entry_point, label);
+        // Try MSL cache first (skips naga + spirv-opt + SPIRV-Cross)
+        let (slot_map, msl_source, msl_entry_name, workgroup_size) = {
+            let mut msl_guard = self.msl_cache.lock().unwrap();
+            if let Some(ref mut cache) = *msl_guard
+                && let Some(entry) = cache.get_compute(hash)
+            {
+                (entry.slot_map, entry.msl_source, entry.msl_entry_name, entry.workgroup_size)
+            } else {
+                if let Some(ref mut cache) = *msl_guard {
+                    cache.record_miss();
+                }
+                drop(msl_guard);
+
+                let result = compile_wgsl_to_msl(wgsl_source, entry_point, label);
+
+                // Store in MSL cache
+                if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
+                    cache.put_compute(hash, &result.0, &result.1, &result.2, result.3);
+                }
+                result
+            }
+        };
 
         let compile_opts = metal::CompileOptions::new();
         compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
@@ -313,6 +336,20 @@ impl GpuDevice {
         }
     }
 
+    /// Load or create an MSL shader cache at the given directory.
+    /// Caches intermediate MSL compilation results (WGSL→MSL) to skip
+    /// naga + spirv-opt + SPIRV-Cross on subsequent launches.
+    pub fn load_msl_cache(&self, cache_dir: &std::path::Path) {
+        *self.msl_cache.lock().unwrap() = Some(msl_cache::MslCache::new(cache_dir.to_path_buf()));
+    }
+
+    /// Log MSL cache hit/miss statistics.
+    pub fn log_msl_cache_stats(&self) {
+        if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
+            cache.log_stats();
+        }
+    }
+
     /// Create a render pipeline from WGSL source (fullscreen triangle pattern).
     ///
     /// Vertex shader generates a fullscreen triangle from vertex_index.
@@ -331,10 +368,29 @@ impl GpuDevice {
             return cached.clone();
         }
 
-        // Compile vertex and fragment entry points to separate MSL strings.
-        // SPIRV-Cross compiles one entry point at a time.
-        let (slot_map, vs_msl, fs_msl) =
-            compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+        // Try MSL cache first (skips naga + spirv-opt + SPIRV-Cross)
+        let (slot_map, vs_msl, fs_msl) = {
+            let mut msl_guard = self.msl_cache.lock().unwrap();
+            if let Some(ref mut cache) = *msl_guard
+                && let Some(entry) = cache.get_render(hash)
+            {
+                (entry.slot_map, entry.vs_msl, entry.fs_msl)
+            } else {
+                if let Some(ref mut cache) = *msl_guard {
+                    cache.record_miss();
+                }
+                drop(msl_guard);
+
+                let result =
+                    compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+
+                // Store in MSL cache
+                if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
+                    cache.put_render(hash, &result.0, &result.1, &result.2);
+                }
+                result
+            }
+        };
 
         let compile_opts = metal::CompileOptions::new();
         compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
@@ -454,8 +510,29 @@ impl GpuDevice {
             return cached.clone();
         }
 
-        let (slot_map, vs_msl, fs_msl) =
-            compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+        // MSL cache uses base_hash (same WGSL → same MSL, vertex layout only
+        // affects the PSO descriptor, not the compiled MSL).
+        let (slot_map, vs_msl, fs_msl) = {
+            let mut msl_guard = self.msl_cache.lock().unwrap();
+            if let Some(ref mut cache) = *msl_guard
+                && let Some(entry) = cache.get_render(base_hash)
+            {
+                (entry.slot_map, entry.vs_msl, entry.fs_msl)
+            } else {
+                if let Some(ref mut cache) = *msl_guard {
+                    cache.record_miss();
+                }
+                drop(msl_guard);
+
+                let result =
+                    compile_wgsl_to_msl_render(wgsl_source, vs_entry, fs_entry, label);
+
+                if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
+                    cache.put_render(base_hash, &result.0, &result.1, &result.2);
+                }
+                result
+            }
+        };
 
         let compile_opts = metal::CompileOptions::new();
         compile_opts.set_language_version(metal::MTLLanguageVersion::V2_4);
