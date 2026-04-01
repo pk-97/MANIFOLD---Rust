@@ -5,8 +5,9 @@
 // Mode 2: hi=source_a + lo=Blur13(source_b) * combine_weight
 // Mode 3: src=source_a + Blur13(source_b) * intensity
 
+@id(0) override MODE: u32 = 0u;
+
 struct Uniforms {
-    mode: u32,
     threshold: f32,
     knee: f32,
     intensity: f32,
@@ -18,6 +19,7 @@ struct Uniforms {
     bloom_texel_size_y: f32,
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -87,18 +89,18 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var color: vec4<f32>;
 
-    if uniforms.mode == 0u {
+    if MODE == 0u {
         // fragPrefilter: Blur9(source_a) -> BrightPrefilter
         let blurred = blur9(uv, main_ts, 0.9);
         let bright = bright_prefilter(blurred);
         color = vec4<f32>(bright, 1.0);
 
-    } else if uniforms.mode == 1u {
+    } else if MODE == 1u {
         // fragDownsample: Blur9(source_a)
         let blurred = blur9(uv, main_ts, 1.1);
         color = vec4<f32>(blurred, 1.0);
 
-    } else if uniforms.mode == 2u {
+    } else if MODE == 2u {
         // fragUpsample: hi=source_a + lo=Blur13(source_b) * combine_weight
         let hi = textureSampleLevel(source_tex_a, tex_sampler, uv, 0.0).rgb;
         let lo = blur13(uv, bloom_ts, 0.9);

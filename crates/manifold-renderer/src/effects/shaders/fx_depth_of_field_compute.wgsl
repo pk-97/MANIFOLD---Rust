@@ -8,9 +8,10 @@
 //                   Variable-width kernel driven by CoC alpha.
 // Pass 3 (mode 3): Composite — blend blurred with sharp original using CoC.
 
+@id(0) override MODE: u32 = 0u;
+@id(1) override FOCUS_MODE: u32 = 0u;
+
 struct Uniforms {
-    mode: u32,           // 0=CoC, 1=HBlur, 2=VBlur, 3=Composite
-    focus_mode: u32,     // 0=TiltShift, 1=Radial, 2=Depth
     amount: f32,         // overall effect intensity (dry/wet)
     focus_y: f32,        // focus Y position [0,1] (tilt-shift & depth)
     focus_x: f32,        // focus X position [0,1] (radial center)
@@ -20,7 +21,9 @@ struct Uniforms {
     quality: u32,        // 0=9tap, 1=17tap, 2=25tap
     texel_size_x: f32,   // 1.0 / source width
     texel_size_y: f32,   // 1.0 / source height
-    _pad: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -102,9 +105,9 @@ fn compute_coc_depth(uv: vec2<f32>) -> f32 {
 
 fn compute_coc(uv: vec2<f32>) -> f32 {
     var coc: f32;
-    if uniforms.focus_mode == 0u {
+    if FOCUS_MODE == 0u {
         coc = compute_coc_tilt_shift(uv);
-    } else if uniforms.focus_mode == 1u {
+    } else if FOCUS_MODE == 1u {
         coc = compute_coc_radial(uv);
     } else {
         coc = compute_coc_depth(uv);
@@ -252,19 +255,19 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var color: vec4<f32>;
 
-    if uniforms.mode == 0u {
+    if MODE == 0u {
         // ── Pass 0: CoC + bilinear downsample ──────────────────────
         // Sample source at full-res (bilinear downsample via textureSampleLevel)
         let src = textureSampleLevel(source_tex_a, tex_sampler, uv, 0.0);
         let coc = compute_coc(uv);
         color = vec4<f32>(src.rgb, coc);
 
-    } else if uniforms.mode == 1u {
+    } else if MODE == 1u {
         // ── Pass 1: Horizontal blur (half-res) ────────────────────
         let dx = vec2<f32>(uniforms.texel_size_x, 0.0);
         color = blur_pass(uv, dx);
 
-    } else if uniforms.mode == 2u {
+    } else if MODE == 2u {
         // ── Pass 2: Vertical blur (half-res) ──────────────────────
         let dy = vec2<f32>(0.0, uniforms.texel_size_y);
         color = blur_pass(uv, dy);

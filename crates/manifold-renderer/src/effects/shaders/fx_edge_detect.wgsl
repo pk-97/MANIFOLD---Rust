@@ -2,13 +2,14 @@
 // Modes: 0=Sobel, 1=Laplacian, 2=Frei-Chen.
 // Use Bloom or Halation after this effect if glow is desired.
 
+@id(0) override MODE: u32 = 0u;
+
 struct Uniforms {
     amount: f32,
     threshold: f32,
-    mode: u32,
     texel_size_x: f32,
     texel_size_y: f32,
-    _pad: vec3<f32>,
+    _pad: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -86,9 +87,9 @@ fn edge_frei_chen(uv: vec2<f32>) -> f32 {
 fn detect_edge(uv: vec2<f32>) -> f32 {
     // Normalize all modes to ~[0,1] so the threshold behaves consistently.
     // Sobel max ≈ 4.0, Laplacian max ≈ 4.0, Frei-Chen already ~1.0.
-    if uniforms.mode == 0u {
+    if MODE == 0u {
         return edge_sobel(uv) * 0.25;
-    } else if uniforms.mode == 1u {
+    } else if MODE == 1u {
         return edge_laplacian(uv) * 0.25;
     } else {
         return edge_frei_chen(uv);

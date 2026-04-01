@@ -23,7 +23,6 @@ const RADIUS_AT_ONE: f32 = 1.25;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BloomUniforms {
-    mode: u32,           // 0=prefilter, 1=downsample, 2=upsample, 3=composite
     threshold: f32,      // _Threshold
     knee: f32,           // _Knee
     intensity: f32,      // _Intensity
@@ -35,6 +34,7 @@ struct BloomUniforms {
     bloom_texel_size_y: f32, // _BloomTex_TexelSize.y
     _pad0: f32,
     _pad1: f32,
+    _pad2: f32,
 }
 
 // BloomFX.cs lines 27-32 — OwnerPyramid
@@ -63,20 +63,20 @@ pub struct BloomFX {
 
 impl BloomFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
-        let spec = |mode: &str, label: &str| {
-            device.create_specialized_compute_pipeline(
+        let spec = |mode: u32, label: &str| {
+            device.create_compute_pipeline_with_overrides(
                 BLOOM_WGSL,
                 "cs_main",
-                &[("uniforms.mode", mode)],
+                &[(0, manifold_gpu::GpuConstant::U32(mode))],
                 label,
             )
         };
         Self {
             helper: ComputeDualBlitHelper::new(device, BLOOM_WGSL, "Bloom Compute"),
-            pipeline_prefilter: spec("0u", "Bloom Prefilter"),
-            pipeline_downsample: spec("1u", "Bloom Downsample"),
-            pipeline_upsample: spec("2u", "Bloom Upsample"),
-            pipeline_composite: spec("3u", "Bloom Composite"),
+            pipeline_prefilter: spec(0, "Bloom Prefilter"),
+            pipeline_downsample: spec(1, "Bloom Downsample"),
+            pipeline_upsample: spec(2, "Bloom Upsample"),
+            pipeline_composite: spec(3, "Bloom Composite"),
             states: AHashMap::new(),
             width: 0,
             height: 0,
@@ -153,11 +153,11 @@ impl PostProcessEffect for BloomFX {
         let state = self.states.get(&ctx.owner_key).unwrap();
         if state.count == 0 {
             let skip_u = BloomUniforms {
-                mode: 3, threshold: 0.0, knee: 0.0, intensity: 0.0,
+                threshold: 0.0, knee: 0.0, intensity: 0.0,
                 radius_scale: 1.0, combine_weight: 0.0,
                 main_texel_size_x: 0.0, main_texel_size_y: 0.0,
                 bloom_texel_size_x: 0.0, bloom_texel_size_y: 0.0,
-                _pad0: 0.0, _pad1: 0.0,
+                _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
             };
             self.helper.dispatch_a_only_with(
                 &self.pipeline_composite, gpu, source, target,
@@ -174,7 +174,6 @@ impl PostProcessEffect for BloomFX {
         let radius_scale = RADIUS_AT_ZERO + (RADIUS_AT_ONE - RADIUS_AT_ZERO) * t_smooth;
 
         let base_uniforms = BloomUniforms {
-            mode: 0,
             threshold: PREFILTER_THRESHOLD,
             knee: PREFILTER_KNEE,
             intensity: amount,
@@ -182,12 +181,11 @@ impl PostProcessEffect for BloomFX {
             combine_weight: 1.0,
             main_texel_size_x: 0.0, main_texel_size_y: 0.0,
             bloom_texel_size_x: 0.0, bloom_texel_size_y: 0.0,
-            _pad0: 0.0, _pad1: 0.0,
+            _pad0: 0.0, _pad1: 0.0, _pad2: 0.0,
         };
 
         // Pass 0: Prefilter
         let prefilter_u = BloomUniforms {
-            mode: 0,
             main_texel_size_x: 1.0 / ctx.width as f32,
             main_texel_size_y: 1.0 / ctx.height as f32,
             ..base_uniforms
@@ -204,7 +202,6 @@ impl PostProcessEffect for BloomFX {
             let src_w = state.mips_a[i - 1].width;
             let src_h = state.mips_a[i - 1].height;
             let down_u = BloomUniforms {
-                mode: 1,
                 main_texel_size_x: 1.0 / src_w as f32,
                 main_texel_size_y: 1.0 / src_h as f32,
                 ..base_uniforms
@@ -228,7 +225,6 @@ impl PostProcessEffect for BloomFX {
             };
 
             let up_u = BloomUniforms {
-                mode: 2,
                 main_texel_size_x: 1.0 / hi_w as f32,
                 main_texel_size_y: 1.0 / hi_h as f32,
                 bloom_texel_size_x: 1.0 / lo_w as f32,
@@ -247,7 +243,6 @@ impl PostProcessEffect for BloomFX {
         let bloom_w = state.mips_b[0].width;
         let bloom_h = state.mips_b[0].height;
         let composite_u = BloomUniforms {
-            mode: 3,
             main_texel_size_x: 1.0 / ctx.width as f32,
             main_texel_size_y: 1.0 / ctx.height as f32,
             bloom_texel_size_x: 1.0 / bloom_w as f32,

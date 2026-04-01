@@ -1,16 +1,18 @@
+@id(0) override PATTERN_TYPE: f32 = 0.0;
+
 struct Uniforms {
     time_val: f32,
     beat: f32,
     aspect_ratio: f32,
     anim_speed: f32,
     uv_scale: f32,
-    pattern_type: f32,
     complexity: f32,
     contrast: f32,
     trigger_count: f32,
     _pad0: f32,
     _pad1: f32,
     _pad2: f32,
+    _pad3: f32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -86,7 +88,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     uv.x *= u.aspect_ratio;
     uv *= u.uv_scale;
     let t = u.time_val * u.anim_speed;
-    let pattern = i32(u.pattern_type);
+    let pattern = i32(PATTERN_TYPE);
     let cx = u.complexity;
 
     var plasma: f32;
