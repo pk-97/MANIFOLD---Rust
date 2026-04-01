@@ -97,7 +97,10 @@ impl GpuEncoder {
 
         // Collect buffer sizes for the sizes buffer (runtime-sized arrays).
         // naga's MSL backend reads arrayLength() from this auxiliary buffer.
-        let mut buffer_sizes: Vec<u32> = Vec::new();
+        // Fixed-size stack array — Metal argument indices are < 31 in practice.
+        const MAX_BUFFER_SLOTS: usize = 32;
+        let mut buffer_sizes = [0u32; MAX_BUFFER_SLOTS];
+        let mut buffer_sizes_len: usize = 0;
 
         for binding in bindings {
             match binding {
@@ -115,10 +118,12 @@ impl GpuEncoder {
                     // Track buffer size for sizes buffer generation.
                     // Indexed by Metal buffer argument index.
                     let idx = slot.metal_index as usize;
-                    if idx >= buffer_sizes.len() {
-                        buffer_sizes.resize(idx + 1, 0);
+                    if idx < MAX_BUFFER_SLOTS {
+                        buffer_sizes[idx] = buffer.size as u32;
+                        if idx >= buffer_sizes_len {
+                            buffer_sizes_len = idx + 1;
+                        }
                     }
-                    buffer_sizes[idx] = buffer.size as u32;
                 }
                 GpuBinding::Texture { binding: b, texture } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
@@ -145,7 +150,7 @@ impl GpuEncoder {
                 .expect("sizes buffer slot missing");
             enc.set_bytes(
                 slot.metal_index as _,
-                (buffer_sizes.len() * 4) as _,
+                (buffer_sizes_len * 4) as _,
                 buffer_sizes.as_ptr() as *const _,
             );
         }
