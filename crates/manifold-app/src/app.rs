@@ -1410,6 +1410,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 if is_primary {
                     self.shutting_down = true;
 
+                    // Stop UI display link FIRST — its callback calls
+                    // request_redraw() which sends to the main thread.
+                    // CVDisplayLinkStop blocks until the callback finishes,
+                    // so this must happen before we block on anything else.
+                    #[cfg(target_os = "macos")]
+                    { self.ui_display_link = None; }
+
                     // Shut down content thread
                     if let Some(tx) = self.content_tx.take() {
                         let _ = tx.send(ContentCommand::Shutdown);
@@ -2202,8 +2209,11 @@ impl Drop for Application {
             log::info!("[Application::Drop] content thread joined");
         }
 
+        // Stop display links before dropping windows — their callbacks
+        // call request_redraw() which deadlocks if the main thread is blocked.
         #[cfg(target_os = "macos")]
         {
+            self.ui_display_link = None;
             self.output_presenter = None;
         }
 
