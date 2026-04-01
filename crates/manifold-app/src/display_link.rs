@@ -393,11 +393,10 @@ impl DisplayLinkPresenter {
 
     /// Retarget the display link if the window moved to a different display.
     ///
-    /// Sets the atomic stop flag before CVDisplayLinkStop to prevent the
-    /// callback from doing GPU work while we're blocked waiting for it.
-    /// The presenter callback acquires drawables and commits GPU work — if
-    /// it's mid-present when we stop, CVDisplayLinkStop waits for it. With
-    /// the flag set, the callback returns immediately.
+    /// NEVER calls CVDisplayLinkStop — that blocks waiting for the in-flight
+    /// callback, which can deadlock if the callback is mid-present (acquiring
+    /// a drawable can block on the CAMetalLayer). Instead: set the stop flag,
+    /// retarget in-place, clear the flag.
     pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
         let new_id = display_id_for_window(window);
         if new_id == 0 || new_id == self.current_display_id {
@@ -406,16 +405,12 @@ impl DisplayLinkPresenter {
         let old_refresh = unsafe {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
         };
-        // Signal callback to no-op before stopping.
         self.stop.store(true, Ordering::Release);
+        std::sync::atomic::fence(Ordering::SeqCst);
         unsafe {
-            CVDisplayLinkStop(self.display_link);
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
         }
         self.stop.store(false, Ordering::Release);
-        unsafe {
-            CVDisplayLinkStart(self.display_link);
-        }
         let new_refresh = unsafe {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
         };
@@ -587,13 +582,13 @@ impl UiDisplayLink {
 
     /// Retarget the display link if the window moved to a different display.
     ///
-    /// Sets the atomic stop flag BEFORE calling CVDisplayLinkStop to prevent
-    /// deadlock: the callback calls `request_redraw()` which dispatches to the
-    /// main thread. If the main thread is blocked in CVDisplayLinkStop (which
-    /// waits for the in-flight callback), and the callback is waiting for the
-    /// main thread → deadlock. With the stop flag set, the callback returns
-    /// immediately without calling request_redraw, so CVDisplayLinkStop returns
-    /// quickly.
+    /// NEVER calls CVDisplayLinkStop — that blocks waiting for the in-flight
+    /// callback, which can deadlock during macOS modal drag loops (the callback's
+    /// request_redraw may need the main thread, which is blocked in Stop).
+    ///
+    /// Instead: set the stop flag (callback becomes a no-op), retarget in-place
+    /// with SetCurrentCGDisplay (safe to call while running per Apple docs),
+    /// then clear the flag. At most 1 vsync signal is missed.
     pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
         let new_id = display_id_for_window(window);
         if new_id == 0 || new_id == self.current_display_id {
@@ -603,13 +598,13 @@ impl UiDisplayLink {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
         };
         unsafe {
-            // Signal callback to no-op before stopping — prevents deadlock.
             let ctx = &*self.context;
             ctx.stop.store(true, Ordering::Release);
-            CVDisplayLinkStop(self.display_link);
+            // Fence ensures the stop flag is visible to the callback thread
+            // before we change the display target.
+            std::sync::atomic::fence(Ordering::SeqCst);
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
             ctx.stop.store(false, Ordering::Release);
-            CVDisplayLinkStart(self.display_link);
         }
         let new_refresh = unsafe {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)

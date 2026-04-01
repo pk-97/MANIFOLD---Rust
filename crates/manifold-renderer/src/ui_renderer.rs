@@ -116,6 +116,12 @@ struct RectCommand {
 const INITIAL_VERTEX_CAPACITY: usize = 1024;
 const INITIAL_INDEX_CAPACITY: usize = 1536;
 
+/// Ring buffer slots for GPU buffers. Each prepare() call uses the next slot.
+/// After RING_SIZE prepare() calls the ring wraps around. With ~10 prepare
+/// calls per frame (panel cache + sub-regions + overlay) and 3 frames in
+/// flight, 32 slots guarantees no aliasing with in-flight GPU work.
+const BUF_RING_SIZE: usize = 32;
+
 /// Simple batched 2D UI renderer using native Metal via manifold-gpu.
 pub struct UIRenderer {
     pipeline: GpuRenderPipeline,
@@ -131,9 +137,13 @@ pub struct UIRenderer {
     vertices: Vec<UIVertex>,
     indices: Vec<u32>,
 
-    // Fresh GpuBuffers created each prepare() call — avoids aliasing with in-flight GPU work.
-    prepared_vertex_buf: Option<GpuBuffer>,
-    prepared_index_buf: Option<GpuBuffer>,
+    // Ring-buffered GPU buffers — prevents aliasing between prepare/commit
+    // cycles within the same frame AND across frames in flight.
+    vbuf_ring: Vec<Option<GpuBuffer>>,
+    ibuf_ring: Vec<Option<GpuBuffer>>,
+    ring_idx: usize,
+    /// Which ring slot the current prepared data lives in.
+    prepared_slot: usize,
     prepared_index_count: u32,
     /// [viewport_w, viewport_h, offset_x, offset_y] — passed as inline uniform.
     prepared_globals: [f32; 4],
@@ -169,6 +179,9 @@ impl UIRenderer {
         #[cfg(target_os = "macos")]
         let text_renderer = NativeTextRenderer::new(device, format);
 
+        let vbuf_ring = (0..BUF_RING_SIZE).map(|_| None).collect();
+        let ibuf_ring = (0..BUF_RING_SIZE).map(|_| None).collect();
+
         Self {
             pipeline,
             #[cfg(target_os = "macos")]
@@ -176,8 +189,10 @@ impl UIRenderer {
             rect_commands: Vec::with_capacity(256),
             vertices: Vec::with_capacity(INITIAL_VERTEX_CAPACITY),
             indices: Vec::with_capacity(INITIAL_INDEX_CAPACITY),
-            prepared_vertex_buf: None,
-            prepared_index_buf: None,
+            vbuf_ring,
+            ibuf_ring,
+            ring_idx: 0,
+            prepared_slot: 0,
             prepared_index_count: 0,
             prepared_globals: [0.0; 4],
             clip_stack: Vec::with_capacity(8),
@@ -562,27 +577,33 @@ impl UIRenderer {
             ]);
         }
 
-        // Create fresh GPU buffers each prepare() call. Shared (CPU-mapped)
-        // buffers CANNOT be reused across encoder commits within the same frame
-        // because the GPU may still be reading from the previous commit's buffer
-        // when we overwrite it (panel cache renders multiple panels per frame,
-        // each with its own commit). Metal allocates shared buffers from a pool,
-        // so creation cost is minimal.
+        // Ring-buffered GPU buffers: each prepare() call advances to the next
+        // ring slot, preventing aliasing with in-flight GPU work from previous
+        // prepare/commit cycles (both within this frame and across frames).
+        // Buffers grow in-place when needed but are never freed.
         if !self.vertices.is_empty() {
+            let slot = self.ring_idx % BUF_RING_SIZE;
+            self.ring_idx += 1;
+
             let vdata = bytemuck::cast_slice::<UIVertex, u8>(&self.vertices);
-            let vbuf = device.create_buffer_shared(vdata.len() as u64);
+            let vbuf = match self.vbuf_ring[slot].take() {
+                Some(buf) if buf.size >= vdata.len() as u64 => buf,
+                _ => device.create_buffer_shared(vdata.len() as u64),
+            };
             unsafe { vbuf.write(0, vdata); }
 
             let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
-            let ibuf = device.create_buffer_shared(idata.len() as u64);
+            let ibuf = match self.ibuf_ring[slot].take() {
+                Some(buf) if buf.size >= idata.len() as u64 => buf,
+                _ => device.create_buffer_shared(idata.len() as u64),
+            };
             unsafe { ibuf.write(0, idata); }
 
-            self.prepared_vertex_buf = Some(vbuf);
-            self.prepared_index_buf = Some(ibuf);
+            self.vbuf_ring[slot] = Some(vbuf);
+            self.ibuf_ring[slot] = Some(ibuf);
+            self.prepared_slot = slot;
             self.prepared_index_count = self.indices.len() as u32;
         } else {
-            self.prepared_vertex_buf = None;
-            self.prepared_index_buf = None;
             self.prepared_index_count = 0;
         }
 
@@ -622,15 +643,17 @@ impl UIRenderer {
         encoder: &mut GpuEncoder,
     ) {
         if self.prepared_index_count > 0 {
+            let vbuf = self.vbuf_ring[self.prepared_slot].as_ref().unwrap();
+            let ibuf = self.ibuf_ring[self.prepared_slot].as_ref().unwrap();
             encoder.draw_in_render_pass(
                 &self.pipeline,
                 &[GpuBinding::Bytes {
                     binding: 0,
                     data: bytemuck::bytes_of(&self.prepared_globals),
                 }],
-                self.prepared_vertex_buf.as_ref().unwrap(),
+                vbuf,
                 0,
-                self.prepared_index_buf.as_ref().unwrap(),
+                ibuf,
                 self.prepared_index_count,
                 None,
                 "UI Rects",

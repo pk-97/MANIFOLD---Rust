@@ -624,9 +624,12 @@ pub struct NativeTextRenderer {
     /// each frame. TextCommands store (offset, len) into this buffer.
     text_arena: String,
 
-    // Fresh GpuBuffers created each prepare() call — avoids aliasing with in-flight GPU work.
-    prepared_vertex_buf: Option<GpuBuffer>,
-    prepared_index_buf: Option<GpuBuffer>,
+    // Ring-buffered GPU buffers — prevents aliasing between prepare/commit
+    // cycles within the same frame AND across frames in flight.
+    vbuf_ring: Vec<Option<GpuBuffer>>,
+    ibuf_ring: Vec<Option<GpuBuffer>>,
+    ring_idx: usize,
+    prepared_slot: usize,
     prepared_index_count: u32,
     prepared_globals: [f32; 4], // [viewport_w, viewport_h, offset_x, offset_y]
 
@@ -680,6 +683,10 @@ impl NativeTextRenderer {
         // Upload icons to GPU immediately.
         atlas.upload_if_dirty(device);
 
+        const TEXT_RING_SIZE: usize = 32;
+        let vbuf_ring = (0..TEXT_RING_SIZE).map(|_| None).collect();
+        let ibuf_ring = (0..TEXT_RING_SIZE).map(|_| None).collect();
+
         Self {
             font_manager,
             atlas,
@@ -689,8 +696,10 @@ impl NativeTextRenderer {
             commands: Vec::new(),
             icon_commands: Vec::new(),
             text_arena: String::with_capacity(4096),
-            prepared_vertex_buf: None,
-            prepared_index_buf: None,
+            vbuf_ring,
+            ibuf_ring,
+            ring_idx: 0,
+            prepared_slot: 0,
             prepared_index_count: 0,
             prepared_globals: [0.0; 4],
             vertices: Vec::new(),
@@ -960,19 +969,28 @@ impl NativeTextRenderer {
 
         self.atlas.upload_if_dirty(device);
 
-        // Create fresh GPU buffers each prepare() call. Shared buffers cannot
-        // be reused across encoder commits within the same frame — see
-        // UIRenderer::prepare_with_offset for details.
+        // Ring-buffered GPU buffers — see UIRenderer for details.
+        let ring_size = self.vbuf_ring.len();
+        let slot = self.ring_idx % ring_size;
+        self.ring_idx += 1;
+
         let vdata = bytemuck::cast_slice::<TextVertex, u8>(&self.vertices);
-        let vbuf = device.create_buffer_shared(vdata.len() as u64);
+        let vbuf = match self.vbuf_ring[slot].take() {
+            Some(buf) if buf.size >= vdata.len() as u64 => buf,
+            _ => device.create_buffer_shared(vdata.len() as u64),
+        };
         unsafe { vbuf.write(0, vdata); }
 
         let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
-        let ibuf = device.create_buffer_shared(idata.len() as u64);
+        let ibuf = match self.ibuf_ring[slot].take() {
+            Some(buf) if buf.size >= idata.len() as u64 => buf,
+            _ => device.create_buffer_shared(idata.len() as u64),
+        };
         unsafe { ibuf.write(0, idata); }
 
-        self.prepared_vertex_buf = Some(vbuf);
-        self.prepared_index_buf = Some(ibuf);
+        self.vbuf_ring[slot] = Some(vbuf);
+        self.ibuf_ring[slot] = Some(ibuf);
+        self.prepared_slot = slot;
         self.prepared_index_count = self.indices.len() as u32;
         true
     }
@@ -990,6 +1008,8 @@ impl NativeTextRenderer {
         let Some(ref atlas_texture) = self.atlas.texture else {
             return;
         };
+        let vbuf = self.vbuf_ring[self.prepared_slot].as_ref().unwrap();
+        let ibuf = self.ibuf_ring[self.prepared_slot].as_ref().unwrap();
 
         encoder.draw_indexed(
             &self.pipeline,
@@ -1008,9 +1028,9 @@ impl NativeTextRenderer {
                     sampler: &self.sampler,
                 },
             ],
-            self.prepared_vertex_buf.as_ref().unwrap(),
+            vbuf,
             0,
-            self.prepared_index_buf.as_ref().unwrap(),
+            ibuf,
             self.prepared_index_count,
             None,
             load_action,
@@ -1029,6 +1049,8 @@ impl NativeTextRenderer {
         let Some(ref atlas_texture) = self.atlas.texture else {
             return;
         };
+        let vbuf = self.vbuf_ring[self.prepared_slot].as_ref().unwrap();
+        let ibuf = self.ibuf_ring[self.prepared_slot].as_ref().unwrap();
 
         encoder.draw_in_render_pass(
             &self.pipeline,
@@ -1046,9 +1068,9 @@ impl NativeTextRenderer {
                     sampler: &self.sampler,
                 },
             ],
-            self.prepared_vertex_buf.as_ref().unwrap(),
+            vbuf,
             0,
-            self.prepared_index_buf.as_ref().unwrap(),
+            ibuf,
             self.prepared_index_count,
             None,
             "TextRenderer",

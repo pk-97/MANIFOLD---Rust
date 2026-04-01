@@ -213,8 +213,16 @@ impl UICacheManager {
             }
 
             // ── Full panel render (counts against budget) ──
-            if full_renders >= Self::MAX_FULL_PANELS_PER_FRAME {
-                // Budget exhausted — leave this panel dirty for next frame.
+            // Scroll panels (LayerHeaders, Viewport) ALWAYS render when invalid.
+            // They must stay in sync with bitmap layers which render every frame
+            // at current positions. Deferring scroll panels creates visible
+            // misalignment between layer headers and track lanes.
+            let is_scroll_panel = matches!(
+                info.slot,
+                PanelSlot::LayerHeaders | PanelSlot::Viewport,
+            );
+            if !is_scroll_panel && full_renders >= Self::MAX_FULL_PANELS_PER_FRAME {
+                // Budget exhausted — leave this static panel dirty for next frame.
                 // Atlas retains stale but valid content from previous render.
                 continue;
             }
