@@ -73,20 +73,7 @@ fn plasma_cells(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
     return (v1 * v2 + v3 + v4) / 3.0;
 }
 
-// ── Pattern 5: Spiral — logarithmic spiral arms ──
-// Uses integer arm count to avoid atan2 discontinuity seam at ±π.
-fn plasma_spiral(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
-    let arms = round(2.0 + cx * 3.0);
-    let r = length(uv);
-    let theta = atan2(uv.y, uv.x);
-    let spiral = log(r + 0.01) * 2.5;
-    let v1 = sin(theta * arms + spiral - t * 1.5);
-    let v2 = sin(theta * arms - spiral * 0.7 + t * 1.0);
-    let v3 = sin(r * (2.0 + cx * 2.0) - t * 0.8);
-    return (v1 + v2 + v3) / 3.0;
-}
-
-// ── Pattern 6: Noise — multi-octave sine noise ──
+// ── Pattern 5: Noise — multi-octave sine noise ──
 // Gentle frequency scaling (×1.8 per octave) keeps it smooth like other variants.
 fn plasma_noise(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
     let octaves = 3u + u32(cx * 2.0);
@@ -109,7 +96,7 @@ fn plasma_noise(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
     return val / total_amp;
 }
 
-// ── Pattern 7: Pulse — beat-reactive radial pulses ──
+// ── Pattern 6: Pulse — beat-reactive radial pulses ──
 // Slow radial expansion over 2 beats with gentle sine layering.
 fn plasma_pulse(uv: vec2<f32>, t: f32, cx: f32, beat: f32) -> f32 {
     let freq = 3.0 + cx * 4.0;
@@ -123,7 +110,7 @@ fn plasma_pulse(uv: vec2<f32>, t: f32, cx: f32, beat: f32) -> f32 {
     return (v1 + v2 + v3) / 3.0;
 }
 
-// ── Pattern 8: Fractal — self-similar sine stacks ──
+// ── Pattern 7: Fractal — self-similar sine stacks ──
 // Smooth sine folding instead of abs() — avoids hard edges.
 fn plasma_fractal(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
     var p = uv * (2.0 + cx * 2.0);
@@ -146,7 +133,7 @@ fn plasma_fractal(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
     return val / total_scale;
 }
 
-// ── Pattern 9: Lattice — grid interference ──
+// ── Pattern 8: Lattice — grid interference ──
 fn plasma_lattice(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
     let freq = 3.0 + cx * 5.0;
     let v1 = sin(uv.x * freq * 3.14159 + t * 0.8) + sin(uv.y * freq * 3.14159 + t * 0.6);
@@ -179,11 +166,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         case 2: { plasma = plasma_diamond(uv, t, cx); }
         case 3: { plasma = plasma_warp(uv, t, cx); }
         case 4: { plasma = plasma_cells(uv, t, cx); }
-        case 5: { plasma = plasma_spiral(uv, t, cx); }
-        case 6: { plasma = plasma_noise(uv, t, cx); }
-        case 7: { plasma = plasma_pulse(uv, t, cx, u.beat); }
-        case 8: { plasma = plasma_fractal(uv, t, cx); }
-        case 9: { plasma = plasma_lattice(uv, t, cx); }
+        case 5: { plasma = plasma_noise(uv, t, cx); }
+        case 6: { plasma = plasma_pulse(uv, t, cx, u.beat); }
+        case 7: { plasma = plasma_fractal(uv, t, cx); }
+        case 8: { plasma = plasma_lattice(uv, t, cx); }
         default: { plasma = plasma_classic(uv, t, cx); }
     }
 

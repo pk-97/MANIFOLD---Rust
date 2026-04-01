@@ -10,7 +10,7 @@ const CONTRAST: usize = 2;
 const SPEED: usize = 3;
 const SCALE: usize = 4;
 const SNAP: usize = 5;
-const PATTERN_COUNT: u32 = 10;
+const PATTERN_COUNT: u32 = 9;
 
 /// Plasma WGSL source — shared across all specialized pattern variants.
 const PLASMA_WGSL: &str = include_str!("shaders/plasma_compute.wgsl");
@@ -33,14 +33,14 @@ struct PlasmaUniforms {
 pub struct PlasmaGenerator {
     /// Specialized pipelines per pattern type. Metal compiler eliminates the
     /// switch in each variant via function constants.
-    pipelines: [manifold_gpu::GpuComputePipeline; 10],
+    pipelines: [manifold_gpu::GpuComputePipeline; 9],
 }
 
 impl PlasmaGenerator {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         let names = [
             "Classic", "Rings", "Diamond", "Warp", "Cells",
-            "Spiral", "Noise", "Pulse", "Fractal", "Lattice",
+            "Noise", "Pulse", "Fractal", "Lattice",
         ];
         let pipelines = std::array::from_fn(|i| {
             let val = format!("{}.0", i);

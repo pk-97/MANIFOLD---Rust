@@ -321,7 +321,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
 
     // ── Plasma ──
     let params = vec![
-        pd_whole_labels("Pattern", 0.0, 9.0, 0.0, &["Classic", "Rings", "Diamond", "Warp", "Cells", "Spiral", "Noise", "Pulse", "Fractal", "Lattice"], "pattern"),
+        pd_whole_labels("Pattern", 0.0, 8.0, 0.0, &["Classic", "Rings", "Diamond", "Warp", "Cells", "Noise", "Pulse", "Fractal", "Lattice"], "pattern"),
         pd("Complexity", 0.0, 1.0, 0.5, Some("F2"), "complexity"),
         pd("Contrast", 0.0, 1.0, 0.63, Some("F2"), "contrast"),
         pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
