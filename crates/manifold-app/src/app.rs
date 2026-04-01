@@ -212,6 +212,12 @@ pub struct Application {
     pub(crate) blit_sampler: Option<manifold_gpu::GpuSampler>,
     pub(crate) atlas_pipeline: Option<manifold_gpu::GpuRenderPipeline>,
     pub(crate) atlas_sampler: Option<manifold_gpu::GpuSampler>,
+    /// Offscreen render target for the UI frame. All render passes target this
+    /// texture instead of the drawable directly. The drawable is acquired late
+    /// (just before present) and receives a single blit from this texture.
+    /// This minimizes time spent holding the drawable / blocking on WindowServer
+    /// IPC during Direct Display synchronization on external monitors.
+    pub(crate) ui_offscreen: Option<manifold_gpu::GpuTexture>,
     /// CVDisplayLink-driven output presenter for hardware-synchronized frame pacing.
     #[cfg(target_os = "macos")]
     pub(crate) output_presenter: Option<crate::display_link::DisplayLinkPresenter>,
@@ -359,6 +365,7 @@ impl Application {
             blit_sampler: None,
             atlas_pipeline: None,
             atlas_sampler: None,
+            ui_offscreen: None,
             #[cfg(target_os = "macos")]
             output_presenter: None,
             ui_renderer: None,
@@ -1145,6 +1152,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             GpuContext { device: native_device }
         };
 
+        // Create initial offscreen UI render target.
+        self.resize_ui_offscreen(size.width.max(1), size.height.max(1));
+
         // Spawn content thread with its OWN GPU device (separate queue for isolation).
         // Compositor output is shared via IOSurface — zero copy, GPU-to-GPU.
         {
@@ -1410,6 +1420,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // Only resize workspace windows.
                     if is_primary && let Some(surface) = &mut ws.surface {
                         surface.resize(size.width, size.height);
+                        self.resize_ui_offscreen(size.width, size.height);
                     }
 
                     // Rebuild UI on primary window resize
@@ -1426,6 +1437,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     let size = ws.window.inner_size();
                     if let Some(surface) = &mut ws.surface {
                         surface.resize(size.width, size.height);
+                        self.resize_ui_offscreen(size.width, size.height);
                     }
                     // Output windows: drawable stays at project resolution.
                     // NativeOutputPresenter detects changes via bridge generation.
@@ -2179,5 +2191,26 @@ impl Drop for Application {
         self.blit_sampler = None;
         self.atlas_pipeline = None;
         self.atlas_sampler = None;
+        self.ui_offscreen = None;
+    }
+}
+
+impl Application {
+    /// (Re)create the offscreen UI render target at the given surface dimensions.
+    /// Called on surface resize / scale factor change.
+    pub(crate) fn resize_ui_offscreen(&mut self, width: u32, height: u32) {
+        let Some(gpu) = &self.gpu else { return };
+        if width == 0 || height == 0 { return; }
+        self.ui_offscreen = Some(gpu.device.create_texture(
+            &manifold_gpu::GpuTextureDesc {
+                width,
+                height,
+                depth: 1,
+                format: manifold_gpu::GpuTextureFormat::Bgra8Unorm,
+                dimension: manifold_gpu::GpuTextureDimension::D2,
+                usage: manifold_gpu::GpuTextureUsage::RENDER_TARGET_FULL,
+                label: "UI Offscreen",
+            },
+        ));
     }
 }

@@ -870,7 +870,10 @@ impl Application {
             self.ui_root.tree.clear_dirty();
         }
 
-        // ── Acquire drawable ──
+        // ── Render target: offscreen texture ──
+        // All passes render to an offscreen texture. The drawable is acquired
+        // late (just before present) to minimize time blocking on WindowServer
+        // IPC during Direct Display synchronization on external monitors.
         let Some(window_id) = self.primary_window_id else { return };
         let surface_dims = self.window_registry.get(&window_id)
             .and_then(|ws| ws.surface.as_ref())
@@ -878,25 +881,11 @@ impl Application {
             .unwrap_or((1, 1));
         let (surface_w, surface_h) = surface_dims;
 
-        let drawable = {
-            let ws = match self.window_registry.get_mut(&window_id) {
-                Some(ws) => ws,
-                None => return,
-            };
-            let surface = match ws.surface.as_ref() {
-                Some(s) => s,
-                None => return,
-            };
-            match surface.next_drawable() {
-                Some(d) => d,
-                None => {
-                    log::warn!("No drawable available — skipping frame");
-                    return;
-                }
-            }
-        };
-
-        let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
+        let Some(offscreen) = &self.ui_offscreen else { return };
+        // Ensure offscreen matches surface (may be stale after resize race).
+        if offscreen.width != surface_w || offscreen.height != surface_h {
+            return;
+        }
 
         let logical_w = (surface_w as f64 / scale) as u32;
         let logical_h = (surface_h as f64 / scale) as u32;
@@ -911,7 +900,7 @@ impl Application {
         let mut encoder = gpu.device.create_encoder("Frame");
 
         // Pass 1: Clear to black
-        encoder.clear_texture(&drawable_tex, 0.0, 0.0, 0.0, 1.0);
+        encoder.clear_texture(offscreen, 0.0, 0.0, 0.0, 1.0);
 
         // Pass 2: Atlas blit fullscreen (UI panels onto black)
         let atlas_opt = self.ui_cache_manager.as_ref().and_then(|cm| cm.atlas_texture());
@@ -922,7 +911,7 @@ impl Application {
         ) {
             encoder.draw_fullscreen(
                 atlas_pipeline,
-                &drawable_tex,
+                offscreen,
                 &[
                     manifold_gpu::GpuBinding::Texture { binding: 0, texture: atlas },
                     manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: atlas_sampler },
@@ -967,7 +956,7 @@ impl Application {
 
                 encoder.draw_fullscreen_viewport(
                     blit_pipeline,
-                    &drawable_tex,
+                    offscreen,
                     &[
                         manifold_gpu::GpuBinding::Texture {
                             binding: 0, texture: compositor_tex,
@@ -1000,7 +989,7 @@ impl Application {
             }
 
             if !rects.is_empty() {
-                bitmap_gpu.render_layers(&gpu.device, &mut encoder, &drawable_tex, logical_w, logical_h, &rects);
+                bitmap_gpu.render_layers(&gpu.device, &mut encoder, offscreen, logical_w, logical_h, &rects);
             }
         }
 
@@ -1068,13 +1057,60 @@ impl Application {
 
             // Flush all overlay commands
             if ui.prepare(&gpu.device, logical_w, logical_h, scale) {
-                ui.render(&mut encoder, &drawable_tex, manifold_gpu::GpuLoadAction::Load);
+                ui.render(&mut encoder, offscreen, manifold_gpu::GpuLoadAction::Load);
             }
         }
 
-        // ── Present + commit ──
-        encoder.present_drawable(&drawable);
+        // ── Commit offscreen render ──
         encoder.commit();
+
+        // ── Late drawable acquisition ──
+        // Acquire the drawable as late as possible to minimize time blocking on
+        // WindowServer IPC. All GPU work is already committed to the offscreen
+        // texture above — this is just a single fullscreen blit.
+        let drawable = {
+            let ws = match self.window_registry.get_mut(&window_id) {
+                Some(ws) => ws,
+                None => return,
+            };
+            let surface = match ws.surface.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            match surface.next_drawable() {
+                Some(d) => d,
+                None => {
+                    log::warn!("No drawable available — skipping frame");
+                    return;
+                }
+            }
+        };
+
+        // ── Blit offscreen → drawable + present ──
+        let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
+        let blit_pipeline = match &self.blit_pipeline {
+            Some(p) => p,
+            None => return,
+        };
+        let blit_sampler = match &self.blit_sampler {
+            Some(s) => s,
+            None => return,
+        };
+
+        let mut present_enc = gpu.device.create_encoder("Present");
+        present_enc.draw_fullscreen(
+            blit_pipeline,
+            &drawable_tex,
+            &[
+                manifold_gpu::GpuBinding::Texture { binding: 0, texture: offscreen },
+                manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: blit_sampler },
+            ],
+            false,
+            false,
+            "Offscreen → Drawable",
+        );
+        present_enc.present_drawable(&drawable);
+        present_enc.commit();
 
     }
 }
