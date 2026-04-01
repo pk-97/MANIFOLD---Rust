@@ -140,11 +140,6 @@ struct PresenterContext {
     bridge: Arc<SharedTextureBridge>,
     native_textures: [Option<GpuTexture>; SURFACE_COUNT],
     last_bridge_gen: u64,
-    /// Last front_index we actually presented. When the content thread hasn't
-    /// published a new frame, we skip the blit — the display holds the previous
-    /// drawable. This halves GPU submissions (120→60/s at 120Hz with 60fps content)
-    /// and eliminates contention with the UI thread's Metal work.
-    last_presented_front: usize,
     stop: Arc<AtomicBool>,
     #[allow(dead_code)]
     edr_headroom: Arc<AtomicU64>,
@@ -167,16 +162,15 @@ impl PresenterContext {
 
         let _ = output_time; // available for future adaptive timing
 
-        // ── Check for new content ──
-        // Only blit when the content thread has published a new frame.
-        // The display holds the previous drawable until we present a new one,
-        // so re-blitting the same IOSurface is pure waste. At 120Hz callback
-        // rate with 60fps content, this skips ~60 redundant GPU submissions/s
-        // that were contending with the UI thread's Metal command queue.
+        // ── Latch latest content frame ──
+        // Always present on every callback, even if front_index hasn't changed.
+        // In fullscreen presentation mode, macOS engages Direct Display
+        // (Direct-to-Screen), bypassing the WindowServer compositor. This
+        // optimization requires a present on every hardware vsync to maintain
+        // the lock. Skipping presents causes WindowServer to thrash between
+        // Direct Display and composited mode — and that thrashing propagates
+        // to ALL displays, causing UI drops on the MacBook.
         let front = self.bridge.front_index() as usize;
-        if front == self.last_presented_front {
-            return; // Display is already showing this frame
-        }
 
         let Some(source) = self.native_textures[front].as_ref() else {
             return;
@@ -208,8 +202,6 @@ impl PresenterContext {
         );
         encoder.present_drawable(&drawable);
         encoder.commit();
-
-        self.last_presented_front = front;
     }
 
     fn reimport_textures(&mut self) {
@@ -330,7 +322,6 @@ impl DisplayLinkPresenter {
             bridge,
             native_textures,
             last_bridge_gen: bridge_gen,
-            last_presented_front: usize::MAX, // force first frame to present
             stop: Arc::clone(&stop),
             edr_headroom: Arc::clone(&edr),
         }));
