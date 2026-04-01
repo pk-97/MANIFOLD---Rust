@@ -3,12 +3,13 @@ use crate::generator::Generator;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
 
-// Parameter indices — Pattern selector removed (Snap always controls pattern via triggers).
-const COMPLEXITY: usize = 0;
-const CONTRAST: usize = 1;
-const SPEED: usize = 2;
-const SCALE: usize = 3;
-const SNAP: usize = 4;
+// Parameter indices matching Unity's PlasmaGenerator.cs
+const PATTERN: usize = 0;
+const COMPLEXITY: usize = 1;
+const CONTRAST: usize = 2;
+const SPEED: usize = 3;
+const SCALE: usize = 4;
+const SNAP: usize = 5;
 const PATTERN_COUNT: u32 = 10;
 
 /// Plasma WGSL source — shared across all specialized pattern variants.
@@ -79,10 +80,12 @@ impl Generator for PlasmaGenerator {
         } else {
             1.0
         };
-        let snap = ctx.param_count <= SNAP as u32 || ctx.params[SNAP] > 0.5;
+        let snap = ctx.param_count > SNAP as u32 && ctx.params[SNAP] > 0.5;
 
         let pattern_type = if snap {
             (ctx.trigger_count % PATTERN_COUNT) as f32
+        } else if ctx.param_count > PATTERN as u32 {
+            ctx.params[PATTERN].round()
         } else {
             0.0
         };
