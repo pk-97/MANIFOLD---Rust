@@ -464,6 +464,85 @@ impl GpuEncoder {
         enc.end_encoding();
     }
 
+    /// Draw instanced with MSAA: render to a multisample target, resolve to
+    /// a single-sample texture. The MSAA target should be memoryless (tile
+    /// memory only on Apple Silicon — zero VRAM cost). The resolved result
+    /// is written to `resolve_target`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_instanced_msaa(
+        &mut self,
+        pipeline: &GpuRenderPipeline,
+        msaa_target: &GpuTexture,
+        resolve_target: &GpuTexture,
+        bindings: &[GpuBinding],
+        vertex_count: u32,
+        instance_count: u32,
+        load_action: crate::GpuLoadAction,
+        label: &str,
+    ) {
+        self.end_current();
+
+        let desc = metal::RenderPassDescriptor::new();
+        let color = desc.color_attachments().object_at(0).unwrap();
+        color.set_texture(Some(&msaa_target.raw));
+        color.set_resolve_texture(Some(&resolve_target.raw));
+        color.set_load_action(match load_action {
+            crate::GpuLoadAction::Clear => metal::MTLLoadAction::Clear,
+            crate::GpuLoadAction::Load => metal::MTLLoadAction::Load,
+            crate::GpuLoadAction::DontCare => metal::MTLLoadAction::DontCare,
+        });
+        color.set_store_action(metal::MTLStoreAction::MultisampleResolve);
+        color.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0));
+
+        let enc = self.cmd_buf().new_render_command_encoder(desc);
+        enc.push_debug_group(label);
+        enc.set_render_pipeline_state(&pipeline.state);
+
+        for binding in bindings {
+            match binding {
+                GpuBinding::Buffer { binding: b, buffer, offset } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    enc.set_vertex_buffer(
+                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
+                    );
+                    enc.set_fragment_buffer(
+                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
+                    );
+                }
+                GpuBinding::Texture { binding: b, texture } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
+                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
+                }
+                GpuBinding::Sampler { binding: b, sampler } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                    enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
+                }
+                GpuBinding::Bytes { binding: b, data } => {
+                    let Some(slot) = pipeline.slot_map.get(*b) else { continue };
+                    enc.set_vertex_bytes(
+                        slot.metal_index as _, data.len() as _,
+                        data.as_ptr() as *const _,
+                    );
+                    enc.set_fragment_bytes(
+                        slot.metal_index as _, data.len() as _,
+                        data.as_ptr() as *const _,
+                    );
+                }
+            }
+        }
+
+        if instance_count > 0 {
+            enc.draw_primitives_instanced(
+                metal::MTLPrimitiveType::Triangle,
+                0, vertex_count as u64, instance_count as u64,
+            );
+        }
+        enc.pop_debug_group();
+        enc.end_encoding();
+    }
+
     /// Draw indexed geometry with a render pipeline and vertex/index buffers.
     ///
     /// Sets bindings on BOTH vertex and fragment stages (same as `draw_instanced`).

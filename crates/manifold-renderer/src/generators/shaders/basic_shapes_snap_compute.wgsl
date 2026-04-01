@@ -41,6 +41,15 @@ fn sd_octagon(p_in: vec2<f32>, r: f32) -> f32 {
     return length(p) * sign(p.y);
 }
 
+// Evaluate the active SDF at point p for the given shape index.
+fn eval_sdf(p: vec2<f32>, shape: u32) -> f32 {
+    switch shape {
+        case 1u: { return sd_diamond(p, 1.0); }
+        case 2u: { return sd_octagon(p, 1.0); }
+        default: { return sd_square(p, 1.0); }
+    }
+}
+
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
@@ -87,24 +96,29 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     var p = p_uv / 0.315;
     p = rotate2d(p, rotation);
 
-    // Evaluate SDF
-    var d: f32;
-    switch shape_idx {
-        case 1u: { d = sd_diamond(p, 1.0); }
-        case 2u: { d = sd_octagon(p, 1.0); }
-        default: { d = sd_square(p, 1.0); }
-    }
+    // Evaluate SDF at center
+    let d = eval_sdf(p, shape_idx);
 
-    // Anti-aliased edge — compute shaders have no fwidth, use analytical estimate
-    let texel_size = 1.0 / vec2<f32>(dims);
-    let pw = length(texel_size) * u.uv_scale * (1.0 / 0.315);
+    // Approximate fwidth(d) via finite differences at one-pixel-right and
+    // one-pixel-down neighbors.  The pixel step must follow the full transform
+    // chain (aspect → scale → /0.315 → rotate) to land exactly one screen pixel
+    // away in SDF space.
+    let inv_scale = u.uv_scale / 0.315;
+    let step_x = rotate2d(vec2<f32>(inv_scale * u.aspect_ratio / f32(dims.x), 0.0), rotation);
+    let step_y = rotate2d(vec2<f32>(0.0, inv_scale / f32(dims.y)), rotation);
+    let d_dx = eval_sdf(p + step_x, shape_idx);
+    let d_dy = eval_sdf(p + step_y, shape_idx);
+    let fw = abs(d_dx - d) + abs(d_dy - d);
 
+    // Smoothstep AA centered at the edge, 1-pixel transition band.
+    let half_fw = fw * 0.5;
     var shape: f32;
     if is_wireframe {
         let thickness = u.line_thickness;
-        shape = 1.0 - smoothstep(thickness - pw, thickness + pw, abs(d));
+        let wd = abs(d) - thickness;
+        shape = 1.0 - smoothstep(-half_fw, half_fw, wd);
     } else {
-        shape = 1.0 - smoothstep(-pw, pw, d);
+        shape = 1.0 - smoothstep(-half_fw, half_fw, d);
     }
 
     let lum = saturate(shape);

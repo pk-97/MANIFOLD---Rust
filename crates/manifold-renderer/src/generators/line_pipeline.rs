@@ -19,6 +19,11 @@ const MAX_INSTANCES: u64 = 2048;
 const POSITION_STRIDE: u64 = 8; // vec2<f32>
 const INSTANCE_STRIDE: u64 = 16; // EdgeInstance
 
+/// 4x MSAA for line rendering. On Apple Silicon TBDR, MSAA samples live in
+/// tile memory and resolve on-chip — the multisample texture is memoryless
+/// (zero VRAM cost). This eliminates stair-stepping on diagonal line edges.
+const MSAA_SAMPLE_COUNT: u32 = 4;
+
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct LineUniforms {
@@ -31,11 +36,15 @@ struct LineUniforms {
     _pad: [f32; 2],
 }
 
-/// GPU pipeline for instanced anti-aliased line rendering with capsule SDF.
+/// GPU pipeline for instanced anti-aliased line rendering with capsule SDF
+/// and 4x MSAA. The MSAA texture is memoryless (Apple Silicon tile memory).
 pub struct LinePipeline {
     pipeline: manifold_gpu::GpuRenderPipeline,
     positions_buf: manifold_gpu::GpuBuffer,
     instances_buf: manifold_gpu::GpuBuffer,
+    msaa_texture: Option<manifold_gpu::GpuTexture>,
+    msaa_width: u32,
+    msaa_height: u32,
 }
 
 impl LinePipeline {
@@ -48,12 +57,13 @@ impl LinePipeline {
             dst_alpha_factor: manifold_gpu::GpuBlendFactor::One,
             alpha_operation: manifold_gpu::GpuBlendOp::Max,
         };
-        let pipeline = device.create_render_pipeline(
+        let pipeline = device.create_render_pipeline_msaa(
             include_str!("shaders/generator_lines.wgsl"),
             "vs_main",
             "fs_main",
             manifold_gpu::GpuTextureFormat::Rgba16Float,
             Some(blend),
+            MSAA_SAMPLE_COUNT,
             &format!("{label} Line"),
         );
         let positions_buf =
@@ -65,10 +75,36 @@ impl LinePipeline {
             pipeline,
             positions_buf,
             instances_buf,
+            msaa_texture: None,
+            msaa_width: 0,
+            msaa_height: 0,
         }
     }
 
-    /// Draw line edges and dots via instanced rendering.
+    /// Ensure the memoryless MSAA texture matches the target dimensions.
+    fn ensure_msaa_texture(
+        &mut self,
+        device: &manifold_gpu::GpuDevice,
+        width: u32,
+        height: u32,
+    ) {
+        if self.msaa_width == width && self.msaa_height == height
+            && self.msaa_texture.is_some()
+        {
+            return;
+        }
+        self.msaa_texture = Some(device.create_texture_msaa_memoryless(
+            width,
+            height,
+            manifold_gpu::GpuTextureFormat::Rgba16Float,
+            MSAA_SAMPLE_COUNT,
+            "Line MSAA",
+        ));
+        self.msaa_width = width;
+        self.msaa_height = height;
+    }
+
+    /// Draw line edges and dots via instanced 4x MSAA rendering.
     ///
     /// `positions`: screen-space [0,1] vertex positions (aspect-corrected).
     /// `instances`: edge + dot instance data (dots appended after edges).
@@ -76,7 +112,7 @@ impl LinePipeline {
     /// `edge_half_thick` / `dot_half_thick`: half-thickness in pixels.
     #[allow(clippy::too_many_arguments)]
     pub fn draw(
-        &self,
+        &mut self,
         gpu: &mut GpuEncoder,
         target: &manifold_gpu::GpuTexture,
         positions: &[[f32; 2]],
@@ -93,6 +129,10 @@ impl LinePipeline {
             gpu.native_enc.clear_texture(target, 0.0, 0.0, 0.0, 0.0);
             return;
         }
+
+        // Ensure MSAA texture matches target dimensions
+        self.ensure_msaa_texture(gpu.device, width, height);
+        let msaa_tex = self.msaa_texture.as_ref().unwrap();
 
         // Write data directly to shared-memory buffers
         let uniforms = LineUniforms {
@@ -120,8 +160,9 @@ impl LinePipeline {
         }
 
         let instance_count = (instances.len() as u64).min(MAX_INSTANCES) as u32;
-        gpu.native_enc.draw_instanced(
+        gpu.native_enc.draw_instanced_msaa(
             &self.pipeline,
+            msaa_tex,
             target,
             &[
                 manifold_gpu::GpuBinding::Bytes {

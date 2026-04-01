@@ -34,6 +34,18 @@ impl ComputeBlitHelper {
         Self { pipeline, sampler }
     }
 
+    /// Half-precision variant — converts all f32 ALU to f16 (`half`) in MSL.
+    /// 2× ALU throughput on Apple Silicon. Only use for non-accumulative shaders.
+    pub fn new_half(
+        device: &manifold_gpu::GpuDevice,
+        shader_source: &str,
+        label: &str,
+    ) -> Self {
+        let pipeline = device.create_compute_pipeline_half(shader_source, "cs_main", label);
+        let sampler = device.create_sampler(&manifold_gpu::GpuSamplerDesc::default());
+        Self { pipeline, sampler }
+    }
+
     /// Execute a compute dispatch with an externally-supplied specialized pipeline.
     /// Used for function-constant-specialized variants where the effect holds
     /// multiple pre-compiled pipelines and selects one per dispatch.

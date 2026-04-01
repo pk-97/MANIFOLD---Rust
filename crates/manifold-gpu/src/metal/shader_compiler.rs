@@ -11,10 +11,17 @@ use super::*;
 
 /// Parse WGSL, introspect bindings, compile to MSL for a compute entry point.
 /// Returns (slot_map, msl_source, msl_entry_name, workgroup_size).
+///
+/// When `use_half` is true, spirv-opt applies `RelaxFloatOps` +
+/// `ConvertRelaxedToHalf` passes, converting all f32 ALU to f16 (`half`)
+/// in the generated MSL. Apple Silicon executes 2× f16 ops per cycle.
+/// Only enable for shaders without temporal accumulation or UV-precision
+/// sensitivity (e.g. bloom, blend modes — NOT fluid sim, feedback).
 pub(super) fn compile_wgsl_to_msl(
     wgsl_source: &str,
     entry_point: &str,
     label: &str,
+    use_half: bool,
 ) -> (SlotMap, String, String, [u32; 3]) {
     // Step 1: Parse WGSL
     let module = naga::front::wgsl::parse_str(wgsl_source)
@@ -40,7 +47,7 @@ pub(super) fn compile_wgsl_to_msl(
     let workgroup_size = module.entry_points[entry_idx].workgroup_size;
 
     // Step 5: WGSL → SPIR-V → spirv-opt → SPIRV-Cross → MSL
-    let optimized_spirv = compile_to_optimized_spirv(&module, &info, label);
+    let optimized_spirv = compile_to_optimized_spirv(&module, &info, label, use_half);
     let msl_source = compile_spirv_entry_to_msl(
         &optimized_spirv,
         &module,
@@ -85,8 +92,8 @@ pub(super) fn compile_wgsl_to_msl_render(
     let (unified_slot_map, _resources_vs, _resources_fs) =
         build_slot_map_render(&module, vs_entry, fs_entry);
 
-    // WGSL → SPIR-V → spirv-opt (shared)
-    let optimized_spirv = compile_to_optimized_spirv(&module, &info, label);
+    // WGSL → SPIR-V → spirv-opt (shared) — render pipelines always use f32
+    let optimized_spirv = compile_to_optimized_spirv(&module, &info, label, false);
 
     // Compile vertex and fragment entry points to MSL separately.
     // SPIRV-Cross's MSL backend emits one entry point per compile() call.
@@ -398,10 +405,15 @@ fn build_slot_map_render(
 /// Generate optimized SPIR-V from a naga module:
 ///   1. naga Module → SPIR-V (via naga::back::spv)
 ///   2. SPIR-V → optimized SPIR-V (via spirv-tools optimizer)
+///
+/// When `use_half` is true, adds RelaxFloatOps + ConvertRelaxedToHalf passes
+/// that convert f32 ALU ops to f16 in the SPIR-V IR. SPIRV-Cross then emits
+/// MSL `half` types, giving 2× ALU throughput on Apple Silicon GPUs.
 fn compile_to_optimized_spirv(
     module: &naga::Module,
     info: &naga::valid::ModuleInfo,
     label: &str,
+    use_half: bool,
 ) -> Vec<u32> {
     let spv_options = naga::back::spv::Options {
         lang_version: (1, 3),
@@ -411,12 +423,19 @@ fn compile_to_optimized_spirv(
     let spv_words = naga::back::spv::write_vec(module, info, &spv_options, None)
         .unwrap_or_else(|e| panic!("{label}: naga SPIR-V output error: {e}"));
 
-    optimize_spirv(&spv_words, label)
+    optimize_spirv(&spv_words, label, use_half)
 }
 
 /// Run spirv-opt optimization passes on SPIR-V words.
 /// Falls back to unoptimized SPIR-V if optimization fails.
-fn optimize_spirv(spv_words: &[u32], label: &str) -> Vec<u32> {
+///
+/// When `use_half` is true, two additional passes are registered:
+///  - `RelaxFloatOps`: decorates all f32 results/operands with RelaxedPrecision
+///  - `ConvertRelaxedToHalf`: converts RelaxedPrecision f32 ops to f16
+///
+///   These run after standard optimization so constant folding and DCE have
+///   already simplified the IR. SPIRV-Cross translates f16 → MSL `half`.
+fn optimize_spirv(spv_words: &[u32], label: &str, use_half: bool) -> Vec<u32> {
     use spirv_tools::opt::{self, Optimizer};
 
     let mut optimizer = opt::create(None);
@@ -445,6 +464,15 @@ fn optimize_spirv(spv_words: &[u32], label: &str) -> Vec<u32> {
         .register_pass(opt::Passes::CombineAccessChains)
         .register_pass(opt::Passes::CodeSinking)
         .register_pass(opt::Passes::CompactIds);
+
+    // Half-precision passes: mark all f32 ops as relaxable, then convert to f16.
+    // SPIRV-Cross emits MSL `half`/`half4` for f16 types, giving 2× ALU
+    // throughput on Apple Silicon GPUs. Only safe for non-accumulative shaders.
+    if use_half {
+        optimizer
+            .register_pass(opt::Passes::RelaxFloatOps)
+            .register_pass(opt::Passes::ConvertRelaxedToHalf);
+    }
 
     match optimizer.optimize(spv_words, &mut |msg| {
         log::warn!("{label}: spirv-opt: {msg:?}");

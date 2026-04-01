@@ -111,9 +111,9 @@ const PASS_FLOW_HYGIENE: usize       = 14;
 
 // WireframeDepthFX.cs line 36-39
 const MAX_ANALYSIS_DIM: u32               = 360;
-const NATIVE_UPDATE_INTERVAL_DNN: i64     = 2;
-const NATIVE_UPDATE_INTERVAL_HEURISTIC: i64 = 4;
-const NATIVE_UPDATE_INTERVAL_SUBJECT: i64  = 4;
+const NATIVE_UPDATE_INTERVAL_DNN: i64     = 1;
+const NATIVE_UPDATE_INTERVAL_HEURISTIC: i64 = 1;
+const NATIVE_UPDATE_INTERVAL_SUBJECT: i64  = 1;
 
 // WireframeDepthFX.cs line 41-45
 #[derive(Clone, Copy, PartialEq, Eq)]

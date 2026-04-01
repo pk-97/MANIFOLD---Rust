@@ -119,31 +119,66 @@ fn cs_heuristic_depth(@builtin(global_invocation_id) id: vec3<u32>) {
 // ---------------------------------------------------------------------------
 // Pass 2: WireMask — compute dpdx/dpdy via finite differences
 // ---------------------------------------------------------------------------
-// Helper: compute warped_raw for a given uv (extracted for derivative approximation)
-fn compute_grid_coord_aa_x(
-    input_uv: vec2<f32>,
-    mesh_uv_raw: vec2<f32>,
-    depth_raw_val: f32,
-) -> f32 {
-    let p_raw = (mesh_uv_raw - vec2<f32>(0.5)) * 2.0;
-    let z_raw = depth_raw_val * u.depth_scale;
-    let persp_raw = 1.0 / (1.0 + z_raw * 1.6);
-    var warped_raw = p_raw * persp_raw;
-    warped_raw = warped_raw + vec2<f32>(z_raw * 0.12, z_raw * 0.08);
-    return (warped_raw * u.grid_density * 0.50).x;
+
+// Catmull-Rom bicubic sampling — C1-continuous interpolation from the low-res
+// analysis textures (360px).  Eliminates the slope discontinuities at texel
+// boundaries that cause visible stair-stepping in the grid lines at 4K.
+// 4 bilinear taps (hardware-filtered) per bicubic sample.
+fn bicubic_sample(tex: texture_2d<f32>, s: sampler, uv: vec2<f32>, tex_size: vec2<f32>) -> vec4<f32> {
+    let inv_size = 1.0 / tex_size;
+    let tc = uv * tex_size - 0.5;
+    let f = fract(tc);
+    let tc0 = (floor(tc) + 0.5) * inv_size;
+
+    // Catmull-Rom weights for x and y
+    let w0x = f.x * (-0.5 + f.x * (1.0 - 0.5 * f.x));
+    let w1x = 1.0 + f.x * f.x * (-2.5 + 1.5 * f.x);
+    let w2x = f.x * (0.5 + f.x * (2.0 - 1.5 * f.x));
+    let w3x = f.x * f.x * (-0.5 + 0.5 * f.x);
+
+    let w0y = f.y * (-0.5 + f.y * (1.0 - 0.5 * f.y));
+    let w1y = 1.0 + f.y * f.y * (-2.5 + 1.5 * f.y);
+    let w2y = f.y * (0.5 + f.y * (2.0 - 1.5 * f.y));
+    let w3y = f.y * f.y * (-0.5 + 0.5 * f.y);
+
+    // Collapse 4 taps per row into 2 via weight grouping (4×4 → 4 bilinear taps)
+    let s12x = w1x + w2x;
+    let s12y = w1y + w2y;
+    let ox = w2x / s12x;
+    let oy = w2y / s12y;
+
+    let tc12 = tc0 + vec2<f32>(ox, oy) * inv_size;
+    let tc0x = tc0.x - inv_size.x;
+    let tc3x = tc0.x + 2.0 * inv_size.x;
+    let tc0y = tc0.y - inv_size.y;
+    let tc3y = tc0.y + 2.0 * inv_size.y;
+
+    let row0 = w0x * textureSampleLevel(tex, s, vec2<f32>(tc0x, tc0y), 0.0)
+             + s12x * textureSampleLevel(tex, s, vec2<f32>(tc12.x, tc0y), 0.0)
+             + w3x * textureSampleLevel(tex, s, vec2<f32>(tc3x, tc0y), 0.0);
+    let row12 = w0x * textureSampleLevel(tex, s, vec2<f32>(tc0x, tc12.y), 0.0)
+              + s12x * textureSampleLevel(tex, s, vec2<f32>(tc12.x, tc12.y), 0.0)
+              + w3x * textureSampleLevel(tex, s, vec2<f32>(tc3x, tc12.y), 0.0);
+    let row3 = w0x * textureSampleLevel(tex, s, vec2<f32>(tc0x, tc3y), 0.0)
+             + s12x * textureSampleLevel(tex, s, vec2<f32>(tc12.x, tc3y), 0.0)
+             + w3x * textureSampleLevel(tex, s, vec2<f32>(tc3x, tc3y), 0.0);
+
+    return w0y * row0 + s12y * row12 + w3y * row3;
 }
 
-fn compute_grid_coord_aa_y(
-    input_uv: vec2<f32>,
+// Helper: compute grid_coord_aa (both components) for derivative approximation.
+// Returns warped_raw * density * 0.5 as vec2 — same math the main body uses for
+// grid_coord_aa, factored out so we can evaluate at neighbor pixels.
+fn compute_grid_coord_aa(
     mesh_uv_raw: vec2<f32>,
     depth_raw_val: f32,
-) -> f32 {
+) -> vec2<f32> {
     let p_raw = (mesh_uv_raw - vec2<f32>(0.5)) * 2.0;
     let z_raw = depth_raw_val * u.depth_scale;
     let persp_raw = 1.0 / (1.0 + z_raw * 1.6);
     var warped_raw = p_raw * persp_raw;
     warped_raw = warped_raw + vec2<f32>(z_raw * 0.12, z_raw * 0.08);
-    return (warped_raw * u.grid_density * 0.50).y;
+    return warped_raw * u.grid_density * 0.50;
 }
 
 @compute @workgroup_size(16, 16)
@@ -152,7 +187,10 @@ fn cs_wire_mask(@builtin(global_invocation_id) id: vec3<u32>) {
     if id.x >= u32(dims.x) || id.y >= u32(dims.y) { return; }
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(dims);
 
-    let depth_sample = textureSampleLevel(depth_tex, samp, uv, 0.0);
+    // Analysis texture size for bicubic sampling (derived from uniform texel sizes)
+    let atex_size = vec2<f32>(1.0 / u.depth_texel_x, 1.0 / u.depth_texel_y);
+
+    let depth_sample = bicubic_sample(depth_tex, samp, uv, atex_size);
     var depth = depth_sample.r;
     let confidence = depth_sample.a;
 
@@ -216,7 +254,7 @@ fn cs_wire_mask(@builtin(global_invocation_id) id: vec3<u32>) {
         object_mask = object_mask * mix(1.0, subject_gate, subject_dnn_avail * isolation);
     }
 
-    let mesh_data = textureSampleLevel(mesh_coord_tex, samp, uv, 0.0);
+    let mesh_data = bicubic_sample(mesh_coord_tex, samp, uv, atex_size);
     var mesh_uv = mesh_data.rg;
     let has_mesh = step(0.5, mesh_data.a);
     mesh_uv = mix(uv, mesh_uv, has_mesh);
@@ -231,7 +269,7 @@ fn cs_wire_mask(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let decimate_cells = clamp(density * mix(1.0, 0.38, local_decimate), 8.0, 320.0);
     let snapped_mesh_uv = (floor(mesh_uv * decimate_cells) + vec2<f32>(0.5)) / decimate_cells;
-    let snapped_depth = textureSampleLevel(depth_tex, samp, snapped_mesh_uv, 0.0).r;
+    let snapped_depth = bicubic_sample(depth_tex, samp, snapped_mesh_uv, atex_size).r;
 
     mesh_uv = mix(mesh_uv, snapped_mesh_uv, local_decimate);
     depth = mix(depth, snapped_depth, local_decimate * 0.92);
@@ -250,48 +288,52 @@ fn cs_wire_mask(@builtin(global_invocation_id) id: vec3<u32>) {
 
     let grid_coord = warped * density * 0.50;
     let grid_coord_aa = warped_raw * density * 0.50;
-    let quad_cell = abs(fract(grid_coord) - vec2<f32>(0.5));
 
     let width = (u.line_width * 0.020) + 0.004;
 
-    // Approximate dpdx/dpdy via finite differences at neighboring pixels.
-    // For grid_coord_aa.x: compute at (uv + (1/w, 0)) and take difference.
-    // For grid_coord_aa.y: compute at (uv + (0, 1/h)) and take difference.
+    // Compute signed screen-space derivatives of grid_coord_aa for sub-pixel
+    // interpolation.  We sample mesh_coord + depth at one-pixel-right and
+    // one-pixel-down neighbors (already needed for AA), then derive dg/dx, dg/dy.
     let pixel_step = vec2<f32>(u.texel_x, u.texel_y);
 
-    // Neighbor UV for X derivative
     let uv_dx = uv + vec2<f32>(pixel_step.x, 0.0);
-    let mesh_data_dx = textureSampleLevel(mesh_coord_tex, samp, uv_dx, 0.0);
+    let mesh_data_dx = bicubic_sample(mesh_coord_tex, samp, uv_dx, atex_size);
     var mesh_uv_dx = mesh_data_dx.rg;
     let has_mesh_dx = step(0.5, mesh_data_dx.a);
     mesh_uv_dx = mix(uv_dx, mesh_uv_dx, has_mesh_dx);
-    let depth_dx = textureSampleLevel(depth_tex, samp, uv_dx, 0.0).r;
-    let gcx_dx = compute_grid_coord_aa_x(uv_dx, mesh_uv_dx, depth_dx);
-    let gcx_c = grid_coord_aa.x;
-    let approx_dpdx = abs(gcx_dx - gcx_c);
+    let depth_dx = bicubic_sample(depth_tex, samp, uv_dx, atex_size).r;
+    let gc_at_dx = compute_grid_coord_aa(mesh_uv_dx, depth_dx);
 
-    // Neighbor UV for Y derivative
     let uv_dy = uv + vec2<f32>(0.0, pixel_step.y);
-    let mesh_data_dy = textureSampleLevel(mesh_coord_tex, samp, uv_dy, 0.0);
+    let mesh_data_dy = bicubic_sample(mesh_coord_tex, samp, uv_dy, atex_size);
     var mesh_uv_dy = mesh_data_dy.rg;
     let has_mesh_dy = step(0.5, mesh_data_dy.a);
     mesh_uv_dy = mix(uv_dy, mesh_uv_dy, has_mesh_dy);
-    let depth_dy = textureSampleLevel(depth_tex, samp, uv_dy, 0.0).r;
-    let gcy_dy = compute_grid_coord_aa_y(uv_dy, mesh_uv_dy, depth_dy);
-    let gcy_c = grid_coord_aa.y;
-    let approx_dpdy = abs(gcy_dy - gcy_c);
+    let depth_dy = bicubic_sample(depth_tex, samp, uv_dy, atex_size).r;
+    let gc_at_dy = compute_grid_coord_aa(mesh_uv_dy, depth_dy);
 
-    let aa_raw = approx_dpdx + approx_dpdy;
-    let aa = clamp(max(aa_raw, 1e-4), 0.0008, width * 2.2 + 0.015);
+    // Signed per-pixel derivatives of grid_coord_aa
+    let dg_dx = gc_at_dx - grid_coord_aa;
+    let dg_dy = gc_at_dy - grid_coord_aa;
 
-    let line_x = 1.0 - smoothstep(width, width + aa * 1.35, quad_cell.x);
-    let line_y = 1.0 - smoothstep(width, width + aa * 1.35, quad_cell.y);
-    let mesh_line = max(line_x, line_y);
+    // 4x MSAA with rotated grid pattern — hard step edges, coverage from averaging.
+    // Offsets in pixel units (standard 4xMSAA rotated grid).
+    let qc0 = abs(fract(grid_coord + vec2<f32>(-0.125) * dg_dx + vec2<f32>(-0.375) * dg_dy) - vec2<f32>(0.5));
+    let qc1 = abs(fract(grid_coord + vec2<f32>( 0.375) * dg_dx + vec2<f32>(-0.125) * dg_dy) - vec2<f32>(0.5));
+    let qc2 = abs(fract(grid_coord + vec2<f32>(-0.375) * dg_dx + vec2<f32>( 0.125) * dg_dy) - vec2<f32>(0.5));
+    let qc3 = abs(fract(grid_coord + vec2<f32>( 0.125) * dg_dx + vec2<f32>( 0.375) * dg_dy) - vec2<f32>(0.5));
 
-    let d_l = textureSampleLevel(depth_tex, samp, uv - vec2<f32>(u.depth_texel_x, 0.0), 0.0).r;
-    let d_r = textureSampleLevel(depth_tex, samp, uv + vec2<f32>(u.depth_texel_x, 0.0), 0.0).r;
-    let d_b = textureSampleLevel(depth_tex, samp, uv - vec2<f32>(0.0, u.depth_texel_y), 0.0).r;
-    let d_t = textureSampleLevel(depth_tex, samp, uv + vec2<f32>(0.0, u.depth_texel_y), 0.0).r;
+    let mesh_line = (
+        max(1.0 - step(width, qc0.x), 1.0 - step(width, qc0.y)) +
+        max(1.0 - step(width, qc1.x), 1.0 - step(width, qc1.y)) +
+        max(1.0 - step(width, qc2.x), 1.0 - step(width, qc2.y)) +
+        max(1.0 - step(width, qc3.x), 1.0 - step(width, qc3.y))
+    ) * 0.25;
+
+    let d_l = bicubic_sample(depth_tex, samp, uv - vec2<f32>(u.depth_texel_x, 0.0), atex_size).r;
+    let d_r = bicubic_sample(depth_tex, samp, uv + vec2<f32>(u.depth_texel_x, 0.0), atex_size).r;
+    let d_b = bicubic_sample(depth_tex, samp, uv - vec2<f32>(0.0, u.depth_texel_y), atex_size).r;
+    let d_t = bicubic_sample(depth_tex, samp, uv + vec2<f32>(0.0, u.depth_texel_y), atex_size).r;
     let curvature = abs(d_l + d_r + d_b + d_t - depth * 4.0);
     let curve_boost = 1.0 + smoothstep(0.012, 0.090, curvature) * 0.48;
 

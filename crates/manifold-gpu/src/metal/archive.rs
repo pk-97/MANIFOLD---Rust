@@ -144,12 +144,14 @@ impl GpuPipelineArchive {
     }
 }
 
-/// Compute a stable hash for a compute pipeline's identity (WGSL source + entry point).
+/// Compute a stable hash for a compute pipeline's identity
+/// (WGSL source + entry point + half-precision flag).
 /// Used for cache invalidation — if the hash changes, the pipeline is recompiled.
-pub fn pipeline_hash(wgsl_source: &str, entry_point: &str) -> u64 {
+pub fn pipeline_hash(wgsl_source: &str, entry_point: &str, use_half: bool) -> u64 {
     let mut hasher = DefaultHasher::new();
     wgsl_source.hash(&mut hasher);
     entry_point.hash(&mut hasher);
+    use_half.hash(&mut hasher);
     hasher.finish()
 }
 

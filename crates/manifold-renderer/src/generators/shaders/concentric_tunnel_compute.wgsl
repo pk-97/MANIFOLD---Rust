@@ -87,11 +87,18 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let pattern = r * ring_freq - expansion;
     let ring_dist = abs(fract(pattern) - 0.5) / ring_freq;
 
-    // Anti-aliased ring edges — compute shaders have no fwidth, use analytical estimate
-    let texel_size = 1.0 / vec2<f32>(dims);
-    let pw = length(texel_size) * u.uv_scale * ring_freq;
+    // Approximate fwidth(ring_dist) via finite differences.
+    let step_x = vec2<f32>(u.aspect_ratio * u.uv_scale / f32(dims.x), 0.0);
+    let step_y = vec2<f32>(0.0, u.uv_scale / f32(dims.y));
+    let r_dx = shape_dist(p_uv + step_x, shape);
+    let r_dy = shape_dist(p_uv + step_y, shape);
+    let rd_dx = abs(fract((r_dx * ring_freq - expansion)) - 0.5) / ring_freq;
+    let rd_dy = abs(fract((r_dy * ring_freq - expansion)) - 0.5) / ring_freq;
+    let fw = abs(rd_dx - ring_dist) + abs(rd_dy - ring_dist);
+    let half_fw = fw * 0.5;
+
     let half_thick = u.line_thickness * 0.5;
-    let ring = 1.0 - smoothstep(half_thick - pw, half_thick + pw, ring_dist);
+    let ring = 1.0 - smoothstep(half_thick - half_fw, half_thick + half_fw, ring_dist);
 
     let lum = clamp(ring, 0.0, 1.0);
     textureStore(output, vec2<i32>(id.xy), vec4<f32>(lum, lum, lum, lum));

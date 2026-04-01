@@ -192,7 +192,7 @@ impl GpuDevice {
         );
     }
 
-    /// Create a compute pipeline from WGSL source.
+    /// Create a compute pipeline from WGSL source (full f32 precision).
     ///
     /// 1. Parse WGSL → naga Module
     /// 2. Introspect bindings → build slot map
@@ -208,7 +208,37 @@ impl GpuDevice {
         entry_point: &str,
         label: &str,
     ) -> GpuComputePipeline {
-        let hash = archive::pipeline_hash(wgsl_source, entry_point);
+        self.create_compute_pipeline_inner(wgsl_source, entry_point, label, false)
+    }
+
+    /// Create a compute pipeline with half-precision (f16) ALU optimization.
+    ///
+    /// Same as `create_compute_pipeline` but applies spirv-opt
+    /// `RelaxFloatOps` + `ConvertRelaxedToHalf` passes, converting all f32
+    /// ALU ops to f16 (`half`) in the generated MSL. Apple Silicon GPUs
+    /// execute 2× f16 ops per cycle.
+    ///
+    /// **Only use for shaders without temporal accumulation or UV-precision
+    /// sensitivity** — e.g. bloom, blend modes, color grading. NOT for fluid
+    /// simulation, feedback effects, or displacement mapping.
+    pub fn create_compute_pipeline_half(
+        &self,
+        wgsl_source: &str,
+        entry_point: &str,
+        label: &str,
+    ) -> GpuComputePipeline {
+        self.create_compute_pipeline_inner(wgsl_source, entry_point, label, true)
+    }
+
+    /// Core compute pipeline creation with configurable half-precision.
+    fn create_compute_pipeline_inner(
+        &self,
+        wgsl_source: &str,
+        entry_point: &str,
+        label: &str,
+        use_half: bool,
+    ) -> GpuComputePipeline {
+        let hash = archive::pipeline_hash(wgsl_source, entry_point, use_half);
         if let Some(cached) = self.compute_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
@@ -226,7 +256,7 @@ impl GpuDevice {
                 }
                 drop(msl_guard);
 
-                let result = compile_wgsl_to_msl(wgsl_source, entry_point, label);
+                let result = compile_wgsl_to_msl(wgsl_source, entry_point, label, use_half);
 
                 // Store in MSL cache
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
@@ -319,6 +349,22 @@ impl GpuDevice {
         self.create_compute_pipeline(&source, entry_point, label)
     }
 
+    /// Half-precision variant of `create_specialized_compute_pipeline`.
+    /// See `create_compute_pipeline_half` for safety constraints.
+    pub fn create_specialized_compute_pipeline_half(
+        &self,
+        wgsl_source: &str,
+        entry_point: &str,
+        specializations: &[(&str, &str)],
+        label: &str,
+    ) -> GpuComputePipeline {
+        let mut source = wgsl_source.to_string();
+        for &(pattern, replacement) in specializations {
+            source = source.replace(pattern, replacement);
+        }
+        self.create_compute_pipeline_half(&source, entry_point, label)
+    }
+
     /// Create a specialized render pipeline by text-replacing patterns in WGSL
     /// source before compilation. Same approach as `create_specialized_compute_pipeline`:
     /// replaces occurrences of pattern strings (e.g. `uniforms.mode`) with literal
@@ -384,16 +430,64 @@ impl GpuDevice {
         blend: Option<GpuBlendState>,
         label: &str,
     ) -> GpuRenderPipeline {
-        let hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
+        self.create_render_pipeline_inner(
+            wgsl_source, vs_entry, fs_entry, color_format, blend, 1, label,
+        )
+    }
+
+    /// Create a render pipeline with MSAA (sample_count > 1).
+    ///
+    /// Same shader compilation as `create_render_pipeline`, but the pipeline
+    /// state object is configured for multisample rendering. Use with
+    /// `GpuNativeEncoder::draw_instanced_msaa` and a memoryless MSAA texture.
+    pub fn create_render_pipeline_msaa(
+        &self,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        color_format: GpuTextureFormat,
+        blend: Option<GpuBlendState>,
+        sample_count: u32,
+        label: &str,
+    ) -> GpuRenderPipeline {
+        self.create_render_pipeline_inner(
+            wgsl_source, vs_entry, fs_entry, color_format, blend, sample_count, label,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_render_pipeline_inner(
+        &self,
+        wgsl_source: &str,
+        vs_entry: &str,
+        fs_entry: &str,
+        color_format: GpuTextureFormat,
+        blend: Option<GpuBlendState>,
+        sample_count: u32,
+        label: &str,
+    ) -> GpuRenderPipeline {
+        // Include sample_count in cache key so MSAA and non-MSAA pipelines
+        // with the same shader are cached independently.
+        let base_hash = archive::render_pipeline_hash(wgsl_source, vs_entry, fs_entry);
+        let hash = if sample_count <= 1 {
+            base_hash
+        } else {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            base_hash.hash(&mut h);
+            sample_count.hash(&mut h);
+            h.finish()
+        };
         if let Some(cached) = self.render_cache.lock().unwrap().get(&hash) {
             return cached.clone();
         }
 
-        // Try MSL cache first (skips naga + spirv-opt + SPIRV-Cross)
+        // Try MSL cache first (skips naga + spirv-opt + SPIRV-Cross).
+        // MSL is the same regardless of sample_count, so use base_hash.
         let (slot_map, vs_msl, fs_msl) = {
             let mut msl_guard = self.msl_cache.lock().unwrap();
             if let Some(ref mut cache) = *msl_guard
-                && let Some(entry) = cache.get_render(hash)
+                && let Some(entry) = cache.get_render(base_hash)
             {
                 (entry.slot_map, entry.vs_msl, entry.fs_msl)
             } else {
@@ -407,7 +501,7 @@ impl GpuDevice {
 
                 // Store in MSL cache
                 if let Some(ref cache) = *self.msl_cache.lock().unwrap() {
-                    cache.put_render(hash, &result.0, &result.1, &result.2);
+                    cache.put_render(base_hash, &result.0, &result.1, &result.2);
                 }
                 result
             }
@@ -444,6 +538,9 @@ impl GpuDevice {
         let desc = metal::RenderPipelineDescriptor::new();
         desc.set_vertex_function(Some(&vs_func));
         desc.set_fragment_function(Some(&fs_func));
+        if sample_count > 1 {
+            desc.set_sample_count(sample_count as u64);
+        }
 
         let color_attach = desc
             .color_attachments()
@@ -763,6 +860,45 @@ impl GpuDevice {
             height: desc.height,
             depth: desc.depth,
             format: desc.format,
+        }
+    }
+
+    /// Create a memoryless multisample texture for MSAA render passes.
+    ///
+    /// On Apple Silicon's TBDR, MSAA samples live in tile memory and are
+    /// resolved on-chip — the multisample texture never touches VRAM.
+    /// Use with `draw_instanced_msaa` which resolves to a single-sample target.
+    pub fn create_texture_msaa_memoryless(
+        &self,
+        width: u32,
+        height: u32,
+        format: GpuTextureFormat,
+        sample_count: u32,
+        label: &str,
+    ) -> GpuTexture {
+        use metal::foreign_types::ForeignType;
+        let mtl_desc = metal::TextureDescriptor::new();
+        mtl_desc.set_pixel_format(to_mtl_pixel_format(format));
+        mtl_desc.set_width(width as u64);
+        mtl_desc.set_height(height as u64);
+        mtl_desc.set_depth(1);
+        mtl_desc.set_texture_type(metal::MTLTextureType::D2Multisample);
+        mtl_desc.set_sample_count(sample_count as u64);
+        mtl_desc.set_storage_mode(metal::MTLStorageMode::Memoryless);
+        mtl_desc.set_usage(metal::MTLTextureUsage::RenderTarget);
+        mtl_desc.set_mipmap_level_count(1);
+        let raw = self.device.new_texture(&mtl_desc);
+        assert!(
+            !raw.as_ptr().is_null(),
+            "{label}: MSAA memoryless texture allocation failed",
+        );
+        raw.set_label(label);
+        GpuTexture {
+            raw,
+            width,
+            height,
+            depth: 1,
+            format,
         }
     }
 
