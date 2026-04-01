@@ -140,6 +140,11 @@ struct PresenterContext {
     bridge: Arc<SharedTextureBridge>,
     native_textures: [Option<GpuTexture>; SURFACE_COUNT],
     last_bridge_gen: u64,
+    /// Last front_index we actually presented. When the content thread hasn't
+    /// published a new frame, we skip the blit — the display holds the previous
+    /// drawable. This halves GPU submissions (120→60/s at 120Hz with 60fps content)
+    /// and eliminates contention with the UI thread's Metal work.
+    last_presented_front: usize,
     stop: Arc<AtomicBool>,
     #[allow(dead_code)]
     edr_headroom: Arc<AtomicU64>,
@@ -160,34 +165,28 @@ impl PresenterContext {
             self.sync_surface_to_bridge();
         }
 
-        // ── Submission timing ──
-        // Submit immediately — do NOT spin-wait.
-        //
-        // The blit is ~50μs. The callback fires ~1 frame before outputTime,
-        // giving the GPU ~8ms (at 120Hz) to schedule a 50μs blit. Even when
-        // the UI thread has heavy GPU frames, 8ms of headroom is enough.
-        //
-        // The earlier spin-wait approach (outputTime - 1.5ms) reduced GPU
-        // headroom to just 1.5ms, making the blit vulnerable to GPU contention
-        // from the UI thread — exactly the stutter pattern observed.
-        //
-        // Frame freshness loss is negligible: content publishes at 60fps
-        // (every 16.7ms), so within any 8ms callback window there's at most
-        // one new frame — and front_index is read right before encoding.
-        let _ = output_time; // outputTime available for future adaptive timing
+        let _ = output_time; // available for future adaptive timing
 
-        // ── Acquire drawable (late — just before encoding) ──
+        // ── Check for new content ──
+        // Only blit when the content thread has published a new frame.
+        // The display holds the previous drawable until we present a new one,
+        // so re-blitting the same IOSurface is pure waste. At 120Hz callback
+        // rate with 60fps content, this skips ~60 redundant GPU submissions/s
+        // that were contending with the UI thread's Metal command queue.
+        let front = self.bridge.front_index() as usize;
+        if front == self.last_presented_front {
+            return; // Display is already showing this frame
+        }
+
+        let Some(source) = self.native_textures[front].as_ref() else {
+            return;
+        };
+
+        // ── Acquire drawable ──
         // With displaySyncEnabled=true and 3 drawables, this should not block
         // if we're keeping up. If it does, we've missed our window.
         let Some(drawable) = self.surface.next_drawable() else {
             return; // Skip frame — don't stall the callback
-        };
-
-        // ── Latch latest content frame ──
-        let front = self.bridge.front_index() as usize;
-
-        let Some(source) = self.native_textures[front].as_ref() else {
-            return;
         };
 
         // ── Blit + present ──
@@ -209,6 +208,8 @@ impl PresenterContext {
         );
         encoder.present_drawable(&drawable);
         encoder.commit();
+
+        self.last_presented_front = front;
     }
 
     fn reimport_textures(&mut self) {
@@ -329,6 +330,7 @@ impl DisplayLinkPresenter {
             bridge,
             native_textures,
             last_bridge_gen: bridge_gen,
+            last_presented_front: usize::MAX, // force first frame to present
             stop: Arc::clone(&stop),
             edr_headroom: Arc::clone(&edr),
         }));
