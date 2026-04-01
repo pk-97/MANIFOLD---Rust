@@ -2,13 +2,11 @@
 // Two source textures: source_tex_a (_MainTex = current frame),
 //                      source_tex_b (_PrevTex = previous frame state).
 
-@id(0) override MODE: f32 = 0.0;
-
 struct Uniforms {
     feedback_amount: f32,  // _FeedbackAmount — clamped to <=0.98 in Rust
     zoom:            f32,  // _Zoom
     rotation:        f32,  // _Rotation (radians)
-    _pad:            f32,
+    mode:            f32,  // _Mode — 0=Screen, 1=Additive, 2=Max (rounded in Rust)
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -58,10 +56,10 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     // StylizedFeedbackEffect.shader lines 88-104: Three blend modes
     var result: vec4<f32>;
-    if MODE < 0.5 {
+    if uniforms.mode < 0.5 {
         // Mode 0: Screen — HDR-safe, trails fade in bright areas
         result = current + prev * amt * clamp(vec4<f32>(1.0) - current, vec4<f32>(0.0), vec4<f32>(1.0));
-    } else if MODE < 1.5 {
+    } else if uniforms.mode < 1.5 {
         // Mode 1: Additive — unconditional accumulation
         result = current + prev * amt;
     } else {
@@ -72,9 +70,9 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // StylizedFeedbackEffect.shader lines 106-124: Alpha handling per mode
     let prev_alpha = prev.a * edge_mask;
 
-    if MODE < 0.5 {
+    if uniforms.mode < 0.5 {
         result.a = max(current.a, prev_alpha * amt);
-    } else if MODE < 1.5 {
+    } else if uniforms.mode < 1.5 {
         result.a = clamp(current.a + prev_alpha * amt, 0.0, 1.0);
     } else {
         result.a = max(current.a, prev_alpha * amt);

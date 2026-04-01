@@ -23,10 +23,11 @@ struct PlasmaUniforms {
     aspect_ratio: f32,
     anim_speed: f32,
     uv_scale: f32,
+    pattern_type: f32,
     complexity: f32,
     contrast: f32,
     trigger_count: f32,
-    _pad: [f32; 4],
+    _pad: [f32; 3],
 }
 
 pub struct PlasmaGenerator {
@@ -39,10 +40,11 @@ impl PlasmaGenerator {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
         let names = ["Classic", "Rings", "Diamond", "Warp", "Cells"];
         let pipelines = std::array::from_fn(|i| {
-            device.create_compute_pipeline_with_overrides(
+            let val = format!("{}.0", i);
+            device.create_specialized_compute_pipeline(
                 PLASMA_WGSL,
                 "cs_main",
-                &[(0, manifold_gpu::GpuConstant::F32(i as f32))],
+                &[("u.pattern_type", &val)],
                 &format!("Plasma {}", names[i]),
             )
         });
@@ -91,6 +93,7 @@ impl Generator for PlasmaGenerator {
             aspect_ratio: ctx.aspect,
             anim_speed: speed,
             uv_scale: if scale > 0.0 { 1.0 / scale } else { 1.0 },
+            pattern_type,
             complexity: if ctx.param_count > COMPLEXITY as u32 {
                 ctx.params[COMPLEXITY]
             } else {
@@ -102,7 +105,7 @@ impl Generator for PlasmaGenerator {
                 0.5
             },
             trigger_count: ctx.trigger_count as f32,
-            _pad: [0.0; 4],
+            _pad: [0.0; 3],
         };
 
         // Select specialized pipeline for this pattern type

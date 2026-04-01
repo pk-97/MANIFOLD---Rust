@@ -28,10 +28,10 @@ pub struct CompositeClipDescriptor<'a> {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlendUniforms {
+    blend_mode: u32,
     opacity: f32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 }
 
 const _: () = assert!(std::mem::size_of::<BlendUniforms>() == 16);
@@ -61,10 +61,11 @@ impl BlendResources {
         let mut pipelines = AHashMap::with_capacity(BLEND_MODE_COUNT as usize);
         for mode in 0..BLEND_MODE_COUNT {
             let label = format!("Blend Mode {mode}");
-            let pipeline = device.create_compute_pipeline_with_overrides(
+            let mode_str = format!("{mode}u");
+            let pipeline = device.create_specialized_compute_pipeline(
                 BLEND_WGSL,
                 "cs_main",
-                &[(0, manifold_gpu::GpuConstant::U32(mode))],
+                &[("u.blend_mode", &mode_str)],
                 &label,
             );
             pipelines.insert(mode, pipeline);
@@ -87,7 +88,6 @@ impl BlendResources {
         &self,
         gpu: &mut GpuEncoder,
         arena: &mut UniformArena,
-        blend_mode: u32,
         source_texture: &GpuTexture,
         blend_texture: &GpuTexture,
         target_texture: &GpuTexture,
@@ -95,7 +95,7 @@ impl BlendResources {
     ) {
         let _offset = arena.push(uniforms);
 
-        let pipeline = self.pipelines.get(&blend_mode)
+        let pipeline = self.pipelines.get(&uniforms.blend_mode)
             .or_else(|| self.pipelines.get(&0))
             .unwrap();
 
@@ -565,15 +565,14 @@ impl LayerCompositor {
                 // Composite each clip into layer buffer with Normal blend
                 for clip in group {
                     let uniforms = BlendUniforms {
+                        blend_mode: BlendMode::Normal as u32,
                         opacity: clip.opacity,
                         _pad0: 0,
                         _pad1: 0,
-                        _pad2: 0,
                     };
                     self.blend.blend_pass(
                         gpu,
                         &mut self.uniform_arena,
-                        BlendMode::Normal as u32,
                         layer_buf.source_texture(),
                         clip.texture,
                         layer_buf.target_texture(),
@@ -644,15 +643,14 @@ impl LayerCompositor {
 
         for output in layer_outputs {
             let uniforms = BlendUniforms {
+                blend_mode: output.blend_mode as u32,
                 opacity: output.opacity,
                 _pad0: 0,
                 _pad1: 0,
-                _pad2: 0,
             };
             self.blend.blend_pass(
                 gpu,
                 &mut self.uniform_arena,
-                output.blend_mode as u32,
                 self.main.source_texture(),
                 output.texture(),
                 self.main.target_texture(),
@@ -827,15 +825,14 @@ impl LayerCompositor {
 
                     for clip in group {
                         let uniforms = BlendUniforms {
+                            blend_mode: BlendMode::Normal as u32,
                             opacity: clip.opacity,
                             _pad0: 0,
                             _pad1: 0,
-                            _pad2: 0,
                         };
                         self.blend.blend_pass(
                             &mut gpu,
                             &mut self.uniform_arena,
-                            BlendMode::Normal as u32,
                             layer_buf.source_texture(),
                             clip.texture,
                             layer_buf.target_texture(),

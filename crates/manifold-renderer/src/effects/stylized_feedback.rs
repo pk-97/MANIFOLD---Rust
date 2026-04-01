@@ -22,7 +22,7 @@ struct StylizedFeedbackUniforms {
     feedback_amount: f32, // _FeedbackAmount
     zoom:            f32, // _Zoom
     rotation:        f32, // _Rotation (radians)
-    _pad:            f32,
+    mode:            f32, // _Mode (rounded)
 }
 
 /// Per-owner state: the previous frame's feedback buffer.
@@ -46,11 +46,11 @@ pub struct StylizedFeedbackFX {
 
 impl StylizedFeedbackFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
-        let spec = |mode: f32, label: &str| {
-            device.create_compute_pipeline_with_overrides(
+        let spec = |mode: &str, label: &str| {
+            device.create_specialized_compute_pipeline(
                 FEEDBACK_WGSL,
                 "cs_main",
-                &[(0, manifold_gpu::GpuConstant::F32(mode))],
+                &[("uniforms.mode", mode)],
                 label,
             )
         };
@@ -58,9 +58,9 @@ impl StylizedFeedbackFX {
             helper: ComputeDualBlitHelper::new(
                 device, FEEDBACK_WGSL, "StylizedFeedback Compute",
             ),
-            pipeline_screen: spec(0.0, "StylizedFeedback Screen"),
-            pipeline_additive: spec(1.0, "StylizedFeedback Additive"),
-            pipeline_max: spec(2.0, "StylizedFeedback Max"),
+            pipeline_screen: spec("0.0", "StylizedFeedback Screen"),
+            pipeline_additive: spec("1.0", "StylizedFeedback Additive"),
+            pipeline_max: spec("2.0", "StylizedFeedback Max"),
             states: AHashMap::new(),
             width: 0,
             height: 0,
@@ -121,7 +121,7 @@ impl PostProcessEffect for StylizedFeedbackFX {
             feedback_amount,
             zoom,
             rotation,
-            _pad: 0.0,
+            mode,
         };
 
         // Select specialized pipeline based on mode

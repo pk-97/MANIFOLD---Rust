@@ -59,6 +59,8 @@ const FOCUS_DEPTH: u32 = 2;
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct DofUniforms {
+    mode: u32,           // pass: 0=CoC+Down, 1=HBlur, 2=VBlur, 3=Composite
+    focus_mode: u32,     // 0=TiltShift, 1=Radial, 2=Depth
     amount: f32,
     focus_y: f32,
     focus_x: f32,
@@ -68,9 +70,7 @@ struct DofUniforms {
     quality: u32,        // 0=9tap, 1=17tap, 2=25tap
     texel_size_x: f32,
     texel_size_y: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    _pad: f32,
 }
 
 // ─── Per-owner state ──────────────────────────────────────────────────
@@ -119,25 +119,26 @@ pub struct DepthOfFieldFX {
 
 impl DepthOfFieldFX {
     pub fn new(device: &manifold_gpu::GpuDevice) -> Self {
-        use manifold_gpu::GpuConstant::U32;
-        let spec = |mode: u32, focus: Option<u32>, label: &str| {
-            let mut constants = vec![(0, U32(mode))];
+        // Specialize pass mode (uniforms.mode) for each pipeline variant.
+        // Focus mode (uniforms.focus_mode) is specialized only for CoC pass (mode=0).
+        let spec = |mode: &str, focus: Option<&str>, label: &str| {
+            let mut constants: Vec<(&str, &str)> = vec![("uniforms.mode", mode)];
             if let Some(f) = focus {
-                constants.push((1, U32(f)));
+                constants.push(("uniforms.focus_mode", f));
             }
-            device.create_compute_pipeline_with_overrides(
+            device.create_specialized_compute_pipeline(
                 DOF_WGSL, "cs_main", &constants, label,
             )
         };
 
         Self {
             helper: ComputeDualBlitHelper::new(device, DOF_WGSL, "DOF Compute"),
-            pipeline_coc_tilt_shift: spec(0, Some(0), "DOF CoC TiltShift"),
-            pipeline_coc_radial:     spec(0, Some(1), "DOF CoC Radial"),
-            pipeline_coc_depth:      spec(0, Some(2), "DOF CoC Depth"),
-            pipeline_blur_h:         spec(1, None, "DOF HBlur"),
-            pipeline_blur_v:         spec(2, None, "DOF VBlur"),
-            pipeline_composite:      spec(3, None, "DOF Composite"),
+            pipeline_coc_tilt_shift: spec("0u", Some("0u"), "DOF CoC TiltShift"),
+            pipeline_coc_radial:     spec("0u", Some("1u"), "DOF CoC Radial"),
+            pipeline_coc_depth:      spec("0u", Some("2u"), "DOF CoC Depth"),
+            pipeline_blur_h:         spec("1u", None, "DOF HBlur"),
+            pipeline_blur_v:         spec("2u", None, "DOF VBlur"),
+            pipeline_composite:      spec("3u", None, "DOF Composite"),
             states: AHashMap::new(),
             depth_worker: None,
             depth_states: AHashMap::new(),
@@ -427,6 +428,8 @@ impl PostProcessEffect for DepthOfFieldFX {
 
         // ── Base uniforms ─────────────────────────────────────────────
         let base = DofUniforms {
+            mode: 0,
+            focus_mode,
             amount,
             focus_y,
             focus_x,
@@ -436,15 +439,14 @@ impl PostProcessEffect for DepthOfFieldFX {
             quality,
             texel_size_x: 0.0,
             texel_size_y: 0.0,
-            _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            _pad: 0.0,
         };
 
         // ── Pass 0: CoC generation (full-res) ─────────────────────────
         let texel_x = 1.0 / w as f32;
         let texel_y = 1.0 / h as f32;
         let pass0_u = DofUniforms {
+            mode: 0,
             texel_size_x: texel_x,
             texel_size_y: texel_y,
             ..base
@@ -476,6 +478,7 @@ impl PostProcessEffect for DepthOfFieldFX {
 
         // ── Pass 1: Horizontal blur (full-res) ───────────────────────
         let pass1_u = DofUniforms {
+            mode: 1,
             texel_size_x: texel_x,
             texel_size_y: texel_y,
             ..base
@@ -489,6 +492,7 @@ impl PostProcessEffect for DepthOfFieldFX {
 
         // ── Pass 2: Vertical blur (full-res) ─────────────────────────
         let pass2_u = DofUniforms {
+            mode: 2,
             texel_size_x: texel_x,
             texel_size_y: texel_y,
             ..base
@@ -502,6 +506,7 @@ impl PostProcessEffect for DepthOfFieldFX {
 
         // ── Pass 3: Composite (full-res) ─────────────────────────────
         let pass3_u = DofUniforms {
+            mode: 3,
             texel_size_x: texel_x,
             texel_size_y: texel_y,
             ..base

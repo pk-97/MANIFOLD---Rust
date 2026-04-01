@@ -1,18 +1,16 @@
 // Compute compositor blend — reads base + blend textures, writes to storage output.
 //
-// Specialization via Metal function constant (WGSL override):
-//   BLEND_MODE (@id 0) → 0..12  (dead-code eliminates inactive switch branches)
+// Specialization axis (function constant via text replacement):
+//   u.blend_mode  → 0u..12u  (dead-code eliminates inactive switch branches)
 //
 // Opaque (mode 6) eliminates the base texture read since the result is just
 // the blend RGB with alpha = 1.
 
-@id(0) override BLEND_MODE: u32 = 0u;
-
 struct Uniforms {
+    blend_mode: u32,
     opacity: f32,
     _pad0: u32,
     _pad1: u32,
-    _pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -35,7 +33,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     // ── Opaque fast path ──────────────────────────────────────────
     // Opaque ignores base entirely — write blend RGB with alpha = 1.
     // When specialized, the compiler eliminates the base texture read below.
-    if BLEND_MODE == 6u {
+    if u.blend_mode == 6u {
         let b_rgb = blend.rgb;
         // Read base only if we need it for opacity mix
         if u.opacity < 1.0 {
@@ -59,7 +57,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     // Unpremultiply blend for modes that need straight-alpha blending
     var f_val = blend.rgb;
-    if BLEND_MODE != 0u && BLEND_MODE != 5u {
+    if u.blend_mode != 0u && u.blend_mode != 5u {
         if blend.a > 0.001 {
             f_val = blend.rgb / max(blend.a, 0.01);
         } else {
@@ -69,7 +67,7 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
 
     var blended: vec3<f32>;
 
-    switch BLEND_MODE {
+    switch u.blend_mode {
         case 0u: {
             // Normal — premultiplied alpha-over
             let out_a = bl_a + ba * (1.0 - bl_a);

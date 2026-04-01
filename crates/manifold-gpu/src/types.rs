@@ -214,17 +214,6 @@ pub struct GpuVertexLayout {
     pub attributes: Vec<GpuVertexAttribute>,
 }
 
-// ─── Function Constants (Pipeline Specialization) ───────────────────
-
-/// Value for a Metal function constant (pipeline specialization).
-/// Used with `@id(N) override` declarations in WGSL.
-#[derive(Clone, Copy, Debug)]
-pub enum GpuConstant {
-    U32(u32),
-    F32(f32),
-    Bool(bool),
-}
-
 // ─── Resource Bindings ───────────────────────────────────────────────
 
 /// Resource binding for dispatch/draw calls.
