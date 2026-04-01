@@ -84,11 +84,15 @@ impl UICacheManager {
     /// Invalidate all panel regions (full rebuild, resize).
     pub fn invalidate_all(&mut self) {
         self.panel_valid = [false; PANEL_SLOT_COUNT];
-        // NOTE: do NOT set needs_clear here. The atlas retains stale but valid
-        // content from the previous render. With amortized panel rebuilds
-        // (MAX_FULL_PANELS_PER_FRAME), clearing would show transparent gaps
-        // for panels that haven't been re-rendered yet. Atlas clear is only
-        // needed on resize/init (handled by ensure_atlas).
+        // Clear atlas: panel positions may have changed (split handle drag,
+        // inspector resize, window resize). Without clearing, old-position
+        // content persists and gets blitted alongside new-position content
+        // → visible ghosting. Scroll panels (LayerHeaders, Viewport) bypass
+        // the amortization cap so they always render immediately. Static
+        // panels (Transport, Header, Footer) are the first 3 rendered.
+        // Inspector/SplitHandles may be deferred 1 frame — the black
+        // background shows through briefly, imperceptible at 120Hz.
+        self.needs_clear = true;
     }
 
     /// Invalidate only scroll-panel regions.
