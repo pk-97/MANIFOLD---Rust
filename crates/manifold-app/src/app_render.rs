@@ -1080,6 +1080,15 @@ impl Application {
         // Acquire the drawable as late as possible to minimize time blocking on
         // WindowServer IPC. All GPU work is already committed to the offscreen
         // texture above — this is just a single fullscreen blit.
+        //
+        // Skip entirely on resize frames: set_drawable_size reconfigures the
+        // drawable pool, and nextDrawable can block up to 1s during the
+        // reconfiguration. The offscreen render is still committed above —
+        // it just won't be blitted to screen this frame.
+        if self.surface_resized_this_frame {
+            self.surface_resized_this_frame = false;
+            return;
+        }
         let drawable = {
             let ws = match self.window_registry.get_mut(&window_id) {
                 Some(ws) => ws,

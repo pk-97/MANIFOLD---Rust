@@ -229,6 +229,9 @@ pub struct Application {
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
     pub(crate) scale_factor: f64,
+    /// Skip drawable acquisition this frame (surface just resized — drawable
+    /// pool may be reconfiguring). Offscreen render still runs; blit skipped.
+    pub(crate) surface_resized_this_frame: bool,
     /// macOS EDR headroom for the primary window (1.0 = SDR, >1.0 = HDR capable).
     /// Drives compositor tonemap (passthrough if > 1.0, ACES if ≤ 1.0).
     pub(crate) edr_headroom: f64,
@@ -383,6 +386,7 @@ impl Application {
             ui_cache_manager: None,
             layer_bitmap_gpu: None,
             scale_factor: 1.0,
+            surface_resized_this_frame: false,
             edr_headroom: 1.0,
             output_edr_headroom: 1.0,
             ui_root: UIRoot::new(),
@@ -1465,6 +1469,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     if is_primary && let Some(surface) = &mut ws.surface {
                         surface.resize(size.width, size.height);
                         self.resize_ui_offscreen(size.width, size.height);
+                        // Skip drawable acquisition this frame — the drawable
+                        // pool may be reconfiguring after set_drawable_size.
+                        // nextDrawable can block up to 1s during reconfiguration.
+                        self.surface_resized_this_frame = true;
                     }
 
                     // Rebuild UI on primary window resize
@@ -1482,6 +1490,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     if let Some(surface) = &mut ws.surface {
                         surface.resize(size.width, size.height);
                         self.resize_ui_offscreen(size.width, size.height);
+                        self.surface_resized_this_frame = true;
                     }
                     // Output windows: drawable stays at project resolution.
                     // NativeOutputPresenter detects changes via bridge generation.
