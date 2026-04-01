@@ -221,7 +221,7 @@ impl Default for UIStyle {
             corner_radius: 0.0,
             border_width: 0.0,
             font_size: crate::color::FONT_HEADING,
-            font_weight: FontWeight::Bold,
+            font_weight: crate::color::FONT_WEIGHT_DEFAULT,
             text_align: TextAlign::Left,
         }
     }

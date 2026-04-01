@@ -5,7 +5,7 @@ use crate::tree::UITree;
 // ── Layout constants ────────────────────────────────────────────────
 
 pub const DEFAULT_LABEL_WIDTH: f32 = 60.0;
-pub const VALUE_WIDTH: f32 = 44.0;
+pub const VALUE_WIDTH: f32 = 60.0;
 pub const GAP: f32 = 4.0;
 pub const TRACK_RADIUS: f32 = 2.0;
 const FILL_INSET: f32 = 1.0;
@@ -42,6 +42,10 @@ pub struct SliderColors {
     pub fill: Color32,
     pub thumb: Color32,
     pub text: Color32,
+    /// Background for the value text label. Must be opaque to clear old text
+    /// during incremental atlas re-rendering (LoadAction::Load preserves the
+    /// previous frame's glyphs — a transparent bg leaves stale text visible).
+    pub value_bg: Color32,
 }
 
 impl SliderColors {
@@ -54,6 +58,7 @@ impl SliderColors {
             fill: color::SLIDER_FILL_C32,
             thumb: color::SLIDER_THUMB_C32,
             text: color::SLIDER_TEXT_C32,
+            value_bg: color::EFFECT_CARD_INNER_BG_C32,
         }
     }
 
@@ -66,6 +71,7 @@ impl SliderColors {
             fill: color::ENV_FILL_C32,
             thumb: color::ENV_THUMB_C32,
             text: color::SLIDER_TEXT_C32,
+            value_bg: color::EFFECT_CARD_INNER_BG_C32,
         }
     }
 }
@@ -123,7 +129,7 @@ impl BitmapSlider {
             value_x, y, VALUE_WIDTH, h,
             value_text,
             UIStyle {
-                bg_color: Color32::TRANSPARENT,
+                bg_color: colors.value_bg,
                 text_color: colors.text,
                 font_size,
                 text_align: TextAlign::Center,

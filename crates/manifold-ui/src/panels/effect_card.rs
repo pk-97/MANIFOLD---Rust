@@ -415,20 +415,30 @@ impl EffectCardPanel {
         let elem_y = y + (HEADER_HEIGHT - 16.0) * 0.5;
         let badge_y = y + (HEADER_HEIGHT - BADGE_H) * 0.5;
 
-        // Drag handle
+        // Drag handle (hamburger icon drawn as 3 horizontal bars)
+        let dh_x = x + PADDING;
+        let dh_h = 16.0_f32;
         self.drag_icon_id = tree.add_button(
-            self.header_bg_id, x + PADDING, elem_y, DRAG_HANDLE_W, 16.0,
+            self.header_bg_id, dh_x, elem_y, DRAG_HANDLE_W, dh_h,
             UIStyle {
                 bg_color: Color32::TRANSPARENT,
                 hover_bg_color: color::DRAG_HANDLE_HOVER_BG_C32,
                 pressed_bg_color: color::DRAG_HANDLE_BG_C32,
-                text_color: color::TEXT_DIMMED_C32,
-                font_size: FONT_SIZE,
-                text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-            "\u{2261}", // ≡
+            "",
         ) as i32;
+        {
+            let bar_w: f32 = 10.0;
+            let bar_h: f32 = 1.5;
+            let bar_x = dh_x + (DRAG_HANDLE_W - bar_w) * 0.5;
+            let bar_color = color::TEXT_DIMMED_C32;
+            let bar_style = UIStyle { bg_color: bar_color, ..UIStyle::default() };
+            for i in 0..3 {
+                let bar_y = elem_y + 3.5 + i as f32 * 3.5;
+                tree.add_panel(self.drag_icon_id, bar_x, bar_y, bar_w, bar_h, bar_style);
+            }
+        }
 
         // Name label
         self.name_label_id = tree.add_label(

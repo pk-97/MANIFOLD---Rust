@@ -380,6 +380,172 @@ fn rasterize_glyph_bitmap(
     Some(pixels)
 }
 
+// ─── Icon Atlas Support ──────────────────────────────────────────────────────
+
+/// UV rect for an icon injected into the glyph atlas.
+#[derive(Clone, Copy)]
+struct IconInfo {
+    uv_x: f32,
+    uv_y: f32,
+    uv_w: f32,
+    uv_h: f32,
+}
+
+impl GlyphAtlas {
+    /// Inject a pre-rendered alpha bitmap into the atlas. Returns its UV info.
+    fn inject_icon(&mut self, pixels: &[u8], w: u32, h: u32) -> IconInfo {
+        // Shelf packing (same as rasterize_glyph)
+        if self.shelf_x + w > ATLAS_SIZE {
+            self.shelf_y += self.shelf_height + GLYPH_PADDING;
+            self.shelf_x = 0;
+            self.shelf_height = 0;
+        }
+        if self.shelf_y + h > ATLAS_SIZE {
+            // Shouldn't happen with 5 small icons, but guard anyway
+            self.pixels.fill(0);
+            self.glyphs.clear();
+            self.shelf_x = 0;
+            self.shelf_y = 0;
+            self.shelf_height = 0;
+        }
+
+        let ax = self.shelf_x;
+        let ay = self.shelf_y;
+        for row in 0..h {
+            let src = (row * w) as usize;
+            let dst = ((ay + row) * ATLAS_SIZE + ax) as usize;
+            self.pixels[dst..dst + w as usize]
+                .copy_from_slice(&pixels[src..src + w as usize]);
+        }
+        self.shelf_x += w + GLYPH_PADDING;
+        self.shelf_height = self.shelf_height.max(h);
+        self.dirty = true;
+
+        IconInfo {
+            uv_x: ax as f32 / ATLAS_SIZE as f32,
+            uv_y: ay as f32 / ATLAS_SIZE as f32,
+            uv_w: w as f32 / ATLAS_SIZE as f32,
+            uv_h: h as f32 / ATLAS_SIZE as f32,
+        }
+    }
+}
+
+// ─── Waveform Icon Generation ───────────────────────────────────────────────
+
+/// Icon IDs for the 5 driver waveforms. Exported for use by UIRenderer.
+pub const ICON_WAVE_SINE: u8 = 0;
+pub const ICON_WAVE_TRIANGLE: u8 = 1;
+pub const ICON_WAVE_SAWTOOTH: u8 = 2;
+pub const ICON_WAVE_SQUARE: u8 = 3;
+pub const ICON_WAVE_RANDOM: u8 = 4;
+pub const ICON_COUNT: usize = 5;
+
+/// Size of generated waveform icon bitmaps (physical pixels).
+/// 64px covers 2x retina for ~22px logical buttons with clarity to spare.
+const ICON_SIZE: u32 = 64;
+const ICON_PADDING: f32 = 5.0;
+const ICON_LINE_THICKNESS: f32 = 2.8;
+const ICON_AA_WIDTH: f32 = 1.4;
+/// Vertical margin: waveform values are remapped from 0..1 to MARGIN..1-MARGIN
+/// so peaks don't touch the icon edge.
+const ICON_V_MARGIN: f32 = 0.1;
+
+/// Generate the 5 waveform SDF icons. Ported from Unity DriverWaveformIcons.cs.
+fn generate_waveform_icons() -> [Vec<u8>; ICON_COUNT] {
+    std::array::from_fn(generate_single_waveform)
+}
+
+fn generate_single_waveform(idx: usize) -> Vec<u8> {
+    // Remap helper: maps v from 0..1 into MARGIN..(1-MARGIN) for breathing room.
+    let remap = |v: f32| ICON_V_MARGIN + v * (1.0 - 2.0 * ICON_V_MARGIN);
+
+    let points: Vec<(f32, f32)> = match idx {
+        0 => {
+            // Sine — 128 samples for smooth curves
+            (0..128)
+                .map(|i| {
+                    let t = i as f32 / 127.0;
+                    let v = (t * std::f32::consts::TAU).sin() * 0.5 + 0.5;
+                    (t, remap(v))
+                })
+                .collect()
+        }
+        1 => vec![(0.0, remap(0.0)), (0.5, remap(1.0)), (1.0, remap(0.0))],
+        2 => vec![(0.0, remap(0.0)), (1.0, remap(1.0)), (1.0, remap(0.0))],
+        3 => vec![(0.0, remap(1.0)), (0.5, remap(1.0)), (0.5, remap(0.0)), (1.0, remap(0.0))],
+        4 => vec![
+            (0.0, remap(0.3)), (0.2, remap(0.3)),
+            (0.2, remap(0.85)), (0.4, remap(0.85)),
+            (0.4, remap(0.1)), (0.6, remap(0.1)),
+            (0.6, remap(0.65)), (0.8, remap(0.65)),
+            (0.8, remap(0.45)), (1.0, remap(0.45)),
+        ],
+        _ => vec![(0.0, 0.5), (1.0, 0.5)],
+    };
+
+    let size = ICON_SIZE as usize;
+    let draw_size = ICON_SIZE as f32 - ICON_PADDING * 2.0;
+    let half_thick = ICON_LINE_THICKNESS * 0.5;
+    let aa_outer = half_thick + ICON_AA_WIDTH * 0.5;
+    let aa_inner = half_thick - ICON_AA_WIDTH * 0.5;
+
+    let mut pixels = vec![0u8; size * size];
+
+    for py in 0..size {
+        // Flip Y: py=0 is top of bitmap, but waveform y=0 is bottom.
+        let ny = 1.0 - (py as f32 - ICON_PADDING) / draw_size;
+        for px in 0..size {
+            let nx = (px as f32 - ICON_PADDING) / draw_size;
+
+            // Min distance to polyline
+            let mut min_dist = f32::MAX;
+            for i in 0..points.len() - 1 {
+                let d = dist_to_segment(nx, ny, points[i], points[i + 1]);
+                if d < min_dist {
+                    min_dist = d;
+                }
+            }
+            let pixel_dist = min_dist * draw_size;
+
+            if pixel_dist > aa_outer {
+                continue;
+            }
+
+            let alpha = if pixel_dist <= aa_inner {
+                1.0
+            } else {
+                let t = (pixel_dist - aa_inner) / (aa_outer - aa_inner);
+                let t_smooth = t * t * (3.0 - 2.0 * t); // smoothstep
+                1.0 - t_smooth
+            };
+
+            pixels[py * size + px] = (alpha * 255.0 + 0.5) as u8;
+        }
+    }
+    pixels
+}
+
+/// Shortest distance from point to line segment in normalized space.
+/// Ported from Unity DriverWaveformIcons.DistToSegment.
+fn dist_to_segment(px: f32, py: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
+    let abx = b.0 - a.0;
+    let aby = b.1 - a.1;
+    let len_sq = abx * abx + aby * aby;
+
+    if len_sq < 0.000001 {
+        let dx = px - a.0;
+        let dy = py - a.1;
+        return (dx * dx + dy * dy).sqrt();
+    }
+
+    let t = ((px - a.0) * abx + (py - a.1) * aby) / len_sq;
+    let t = t.clamp(0.0, 1.0);
+
+    let cx = a.0 + abx * t - px;
+    let cy = a.1 + aby * t - py;
+    (cx * cx + cy * cy).sqrt()
+}
+
 // ─── TextCommand ─────────────────────────────────────────────────────────────
 
 struct TextCommand {
@@ -389,6 +555,17 @@ struct TextCommand {
     font_size: f32,
     color: [u8; 4],
     font_weight: FontWeight,
+    clip_bounds: Option<[f32; 4]>,
+}
+
+/// Command to draw an icon from the atlas.
+struct IconCommand {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    icon_id: u8,
+    color: [u8; 4],
     clip_bounds: Option<[f32; 4]>,
 }
 
@@ -436,9 +613,12 @@ pub struct NativeTextRenderer {
     atlas: GlyphAtlas,
     pipeline: GpuRenderPipeline,
     sampler: GpuSampler,
+    /// Pre-rendered waveform icons injected into the atlas at startup.
+    icon_infos: [Option<IconInfo>; ICON_COUNT],
 
-    // Draw queue.
+    // Draw queues.
     commands: Vec<TextCommand>,
+    icon_commands: Vec<IconCommand>,
 
     // Fresh GpuBuffers created each prepare() call — avoids aliasing with in-flight GPU work.
     prepared_vertex_buf: Option<GpuBuffer>,
@@ -460,7 +640,7 @@ impl NativeTextRenderer {
     /// Create the renderer. Call once at startup.
     pub fn new(device: &GpuDevice, format: GpuTextureFormat) -> Self {
         let font_manager = FontManager::new();
-        let atlas = GlyphAtlas::new(device);
+        let mut atlas = GlyphAtlas::new(device);
 
         let blend = GpuBlendState {
             src_factor: GpuBlendFactor::SrcAlpha,
@@ -487,12 +667,23 @@ impl NativeTextRenderer {
             ..Default::default()
         });
 
+        // Generate and inject waveform icons into the atlas.
+        let waveform_bitmaps = generate_waveform_icons();
+        let mut icon_infos = [None; ICON_COUNT];
+        for (i, bmp) in waveform_bitmaps.iter().enumerate() {
+            icon_infos[i] = Some(atlas.inject_icon(bmp, ICON_SIZE, ICON_SIZE));
+        }
+        // Upload icons to GPU immediately.
+        atlas.upload_if_dirty(device);
+
         Self {
             font_manager,
             atlas,
             pipeline,
             sampler,
+            icon_infos,
             commands: Vec::new(),
+            icon_commands: Vec::new(),
             prepared_vertex_buf: None,
             prepared_index_buf: None,
             prepared_index_count: 0,
@@ -566,9 +757,29 @@ impl NativeTextRenderer {
         }
     }
 
-    /// Clear the draw queue (call after render()).
+    /// Queue an icon draw command.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_icon(
+        &mut self,
+        icon_id: u8,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: [u8; 4],
+        clip_bounds: Option<[f32; 4]>,
+    ) {
+        if (icon_id as usize) < ICON_COUNT && self.icon_infos[icon_id as usize].is_some() {
+            self.icon_commands.push(IconCommand {
+                x, y, w, h, icon_id, color, clip_bounds,
+            });
+        }
+    }
+
+    /// Clear the draw queues (call after render()).
     pub fn clear_commands(&mut self) {
         self.commands.clear();
+        self.icon_commands.clear();
     }
 
     /// Shape all queued text, ensure glyphs are in atlas, build vertex/index buffers.
@@ -586,7 +797,7 @@ impl NativeTextRenderer {
         self.indices.clear();
         self.prepared_index_count = 0;
 
-        if self.commands.is_empty() {
+        if self.commands.is_empty() && self.icon_commands.is_empty() {
             return false;
         }
 
@@ -678,6 +889,49 @@ impl NativeTextRenderer {
                 self.indices
                     .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
             }
+        }
+
+        // Emit quads for icon commands.
+        let icon_cmds: Vec<IconCommand> = std::mem::take(&mut self.icon_commands);
+        for cmd in &icon_cmds {
+            let Some(info) = self.icon_infos[cmd.icon_id as usize] else { continue };
+            let color = [
+                cmd.color[0] as f32 / 255.0,
+                cmd.color[1] as f32 / 255.0,
+                cmd.color[2] as f32 / 255.0,
+                cmd.color[3] as f32 / 255.0,
+            ];
+            let (x0, y0, x1, y1) = (cmd.x, cmd.y, cmd.x + cmd.w, cmd.y + cmd.h);
+
+            // Clip check
+            if let Some([cx, cy, cw, ch]) = cmd.clip_bounds
+                && (x1 < cx || y1 < cy || x0 > cx + cw || y0 > cy + ch) {
+                    continue;
+            }
+
+            let base = self.vertices.len() as u32;
+            self.vertices.push(TextVertex {
+                position: [x0, y0],
+                uv: [info.uv_x, info.uv_y],
+                color,
+            });
+            self.vertices.push(TextVertex {
+                position: [x1, y0],
+                uv: [info.uv_x + info.uv_w, info.uv_y],
+                color,
+            });
+            self.vertices.push(TextVertex {
+                position: [x1, y1],
+                uv: [info.uv_x + info.uv_w, info.uv_y + info.uv_h],
+                color,
+            });
+            self.vertices.push(TextVertex {
+                position: [x0, y1],
+                uv: [info.uv_x, info.uv_y + info.uv_h],
+                color,
+            });
+            self.indices
+                .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
         }
 
         if self.vertices.is_empty() {

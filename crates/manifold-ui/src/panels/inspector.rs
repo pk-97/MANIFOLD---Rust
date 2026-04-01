@@ -465,15 +465,18 @@ impl InspectorCompositePanel {
     }
 
     /// Unity EffectSelectionManager.SelectCard (lines 89-100)
-    /// Select a single card, clearing all others in this tab.
+    /// Select a single card, clearing all others across ALL tabs.
     /// Note: does NOT update card visuals — call apply_selection_visuals() after.
     fn select_effect(&mut self, tab: InspectorTab, card_index: usize) {
         let cards = self.cards_for_tab(tab);
         if card_index >= cards.len() { return; }
         let id = cards[card_index].effect_id().clone();
 
+        // Clear all tabs so only one card is selected globally
+        self.selected_master_ids.clear();
+        self.selected_layer_ids.clear();
+
         let set = self.selection_set_mut(tab);
-        set.clear();
         set.insert(id.clone());
         self.set_last_clicked_for_tab(tab, Some(id));
     }

@@ -45,6 +45,8 @@ pub(crate) const BEAT_DIV_LABELS: [&str; BEAT_DIV_COUNT] = [
     "1/32", "1/16", "1/8", "1/4", "1/2", "1", "2", "4", "8", "16", "32",
 ];
 
+// Waveform text labels kept for accessibility / tooltips if needed later.
+#[allow(dead_code)]
 pub(crate) const WAVEFORM_LABELS: [&str; WAVEFORM_COUNT] = ["Sin", "Tri", "Saw", "Sqr", "Rnd"];
 
 // ── Shared node ID structs ──────────────────────────────────────
@@ -348,11 +350,16 @@ pub(crate) fn build_driver_config(
     cx += wave_btn_w + BEAT_DIV_SPACING;
 
     let mut wave_btn_ids = [-1i32; WAVEFORM_COUNT];
-    for j in 0..WAVEFORM_COUNT {
+    for (j, btn_id) in wave_btn_ids.iter_mut().enumerate() {
         let active = j as i32 == active_wave;
-        wave_btn_ids[j] = tree.add_button(
+        let style = config_btn_style(active, btn_font_size);
+        // PUA marker U+E000..U+E004 — UIRenderer draws the SDF waveform icon
+        let icon_char = char::from_u32(0xE000 + j as u32).unwrap();
+        let mut icon_text = String::new();
+        icon_text.push(icon_char);
+        *btn_id = tree.add_button(
             container_id, cx, row2_y, wave_btn_w, DRIVER_ROW_HEIGHT,
-            config_btn_style(active, btn_font_size), WAVEFORM_LABELS[j],
+            style, &icon_text,
         ) as i32;
         cx += wave_btn_w + BEAT_DIV_SPACING;
     }

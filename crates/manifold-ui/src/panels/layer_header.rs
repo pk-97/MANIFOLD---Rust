@@ -43,7 +43,6 @@ const INSERT_LINE_H: f32 = 2.0;
 
 const NAME_FONT: u16 = color::FONT_LABEL;
 const SMALL_FONT: u16 = color::FONT_SMALL;
-const HANDLE_FONT: u16 = color::FONT_HEADING;
 const BTN_FONT: u16 = color::FONT_BODY;
 const LH_BTN_RADIUS: f32 = 2.0;
 
@@ -811,7 +810,7 @@ impl LayerHeaderPanel {
             &layer.name,
         ) as i32;
 
-        // Drag handle
+        // Drag handle (hamburger icon drawn as 3 horizontal bars)
         let dr = s(row.drag_handle);
         ids.drag_handle = tree.add_button(
             clip_parent, dr.x, dr.y, dr.width, dr.height,
@@ -819,14 +818,21 @@ impl LayerHeaderPanel {
                 bg_color: color::HANDLE_BG,
                 hover_bg_color: color::BUTTON_HIGHLIGHTED,
                 pressed_bg_color: color::BUTTON_PRESSED,
-                text_color: color::TEXT_ON_DARK,
-                font_size: HANDLE_FONT,
                 corner_radius: LH_BTN_RADIUS,
-                text_align: TextAlign::Center,
                 ..UIStyle::default()
             },
-            "\u{2261}",
+            "",
         ) as i32;
+        // Three horizontal bars: 10×1.5 each, centered in 18×18 button
+        let bar_w: f32 = 10.0;
+        let bar_h: f32 = 1.5;
+        let bar_x = dr.x + (dr.width - bar_w) * 0.5;
+        let bar_color = color::TEXT_ON_DARK;
+        let bar_style = UIStyle { bg_color: bar_color, ..UIStyle::default() };
+        for i in 0..3 {
+            let bar_y = dr.y + 4.5 + i as f32 * 4.0;
+            tree.add_panel(ids.drag_handle, bar_x, bar_y, bar_w, bar_h, bar_style);
+        }
 
         // Generator type label
         if row.has_gen_type {

@@ -379,33 +379,62 @@ impl UIRenderer {
             });
         }
 
-        // Text
+        // Text (or icon if text starts with PUA marker U+E000..U+E004)
         #[cfg(target_os = "macos")]
         if let Some(text) = &node.text
             && !text.is_empty() {
-                let text_size = self.text_renderer.measure_text_cached(
-                    text, style.font_size, style.font_weight,
-                );
-                let text_y = bounds.y + (bounds.height - text_size.y) * 0.5;
-
-                let text_x = match style.text_align {
-                    TextAlign::Center => bounds.x + (bounds.width - text_size.x) * 0.5,
-                    TextAlign::Right => bounds.x + bounds.width - text_size.x,
-                    TextAlign::Left => bounds.x,
-                };
-
                 let clip_bounds = self.clip_stack.last().map(|c| [c.x, c.y, c.x_max(), c.y_max()]);
-
                 let text_color = if disabled {
                     [style.text_color.r, style.text_color.g, style.text_color.b, style.text_color.a / 3]
                 } else {
                     [style.text_color.r, style.text_color.g, style.text_color.b, style.text_color.a]
                 };
-                self.text_renderer.draw_text(
-                    text_x, text_y, text, style.font_size as f32,
-                    text_color, style.font_weight, clip_bounds,
-                );
+
+                let first_char = text.chars().next().unwrap();
+                if ('\u{E000}'..='\u{E004}').contains(&first_char) {
+                    // Icon: square aspect ratio, centered in bounds
+                    let icon_id = (first_char as u32 - 0xE000) as u8;
+                    let pad = 2.0_f32;
+                    let icon_size = (bounds.width.min(bounds.height) - pad * 2.0).max(4.0);
+                    let icon_w = icon_size;
+                    let icon_h = icon_size;
+                    let icon_x = bounds.x + (bounds.width - icon_size) * 0.5;
+                    let icon_y = bounds.y + (bounds.height - icon_size) * 0.5;
+                    self.text_renderer.draw_icon(
+                        icon_id, icon_x, icon_y, icon_w, icon_h,
+                        text_color, clip_bounds,
+                    );
+                } else {
+                    let text_size = self.text_renderer.measure_text_cached(
+                        text, style.font_size, style.font_weight,
+                    );
+                    let text_y = bounds.y + (bounds.height - text_size.y) * 0.5;
+
+                    let text_x = match style.text_align {
+                        TextAlign::Center => bounds.x + (bounds.width - text_size.x) * 0.5,
+                        TextAlign::Right => bounds.x + bounds.width - text_size.x,
+                        TextAlign::Left => bounds.x,
+                    };
+
+                    self.text_renderer.draw_text(
+                        text_x, text_y, text, style.font_size as f32,
+                        text_color, style.font_weight, clip_bounds,
+                    );
+                }
             }
+    }
+
+    /// Queue an icon draw. `icon_id` is one of the `ICON_WAVE_*` constants.
+    #[cfg(target_os = "macos")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_icon(
+        &mut self,
+        icon_id: u8,
+        x: f32, y: f32, w: f32, h: f32,
+        color: [u8; 4],
+        clip_bounds: Option<[f32; 4]>,
+    ) {
+        self.text_renderer.draw_icon(icon_id, x, y, w, h, color, clip_bounds);
     }
 
     /// Text measurement using NativeTextRenderer's cached measurement.
