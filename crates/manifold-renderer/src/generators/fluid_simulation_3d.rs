@@ -287,10 +287,7 @@ impl FluidSimulation3DGenerator {
 
     fn init_particles_gpu(&mut self, gpu: &mut GpuEncoder) {
         let particle_buf_size = MAX_PARTICLES as u64 * PARTICLE_SIZE_BYTES;
-        let particle_buffer = gpu.device.create_buffer(
-            particle_buf_size,
-            manifold_gpu::GpuBufferUsage::STORAGE,
-        );
+        let particle_buffer = gpu.device.create_buffer(particle_buf_size);
         self.particle_buffer = Some(particle_buffer);
         self.initialized = true;
         // pattern 255 = random fill, same as 2D
@@ -302,9 +299,7 @@ impl FluidSimulation3DGenerator {
         self.vol_res = vol_res;
 
         let accum_3d_size = (vol_res as u64).pow(3) * 4;
-        self.accum_3d = Some(device.create_buffer(
-            accum_3d_size, manifold_gpu::GpuBufferUsage::STORAGE,
-        ));
+        self.accum_3d = Some(device.create_buffer(accum_3d_size));
 
         let make_vol = |fmt, label| device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: vol_res, height: vol_res, depth: vol_res,
@@ -324,9 +319,7 @@ impl FluidSimulation3DGenerator {
         self.disp_h = dh;
 
         let display_accum_size = (dw as u64) * (dh as u64) * 4;
-        self.display_accum = Some(device.create_buffer(
-            display_accum_size, manifold_gpu::GpuBufferUsage::STORAGE,
-        ));
+        self.display_accum = Some(device.create_buffer(display_accum_size));
         self.display_density_tex = Some(device.create_texture(&manifold_gpu::GpuTextureDesc {
             width: dw, height: dh, depth: 1,
             format: DISPLAY_DENSITY_FORMAT,

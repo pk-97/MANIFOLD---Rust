@@ -173,7 +173,7 @@ impl MyceliumGenerator {
         // Accumulator buffer: tw * th * 4 bytes (atomic u32) — GPU-only
         let accum_size = (tw as u64) * (th as u64) * 4;
         let accum_buffer =
-            device.create_buffer(accum_size, manifold_gpu::GpuBufferUsage::STORAGE);
+            device.create_buffer(accum_size);
 
         // Trail textures (Rgba16Float, half-res)
         let trail_a = device.create_texture(&manifold_gpu::GpuTextureDesc {

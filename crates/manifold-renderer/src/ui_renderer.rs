@@ -551,6 +551,7 @@ impl UIRenderer {
                     data: bytemuck::bytes_of(&self.prepared_globals),
                 }],
                 self.prepared_vertex_buf.as_ref().unwrap(),
+                0,
                 self.prepared_index_buf.as_ref().unwrap(),
                 self.prepared_index_count,
                 None,

@@ -249,10 +249,7 @@ impl FluidSimulationGenerator {
     /// Unity ComputeParticleGeneratorBase.Initialize: create and seed particle buffer.
     fn init_particles_gpu(&mut self, gpu: &mut GpuEncoder) {
         let particle_buf_size = MAX_PARTICLES as u64 * PARTICLE_SIZE_BYTES;
-        let particle_buffer = gpu.device.create_buffer(
-            particle_buf_size,
-            manifold_gpu::GpuBufferUsage::STORAGE,
-        );
+        let particle_buffer = gpu.device.create_buffer(particle_buf_size);
         self.particle_buffer = Some(particle_buffer);
         self.initialized = true;
         self.dispatch_seed(gpu, 255, 42);
@@ -282,10 +279,7 @@ impl FluidSimulationGenerator {
 
         // Scatter accum: 1 atomic u32 per texel (mono density)
         let accum_size = (sw as u64) * (sh as u64) * 4;
-        let scatter_accum = device.create_buffer(
-            accum_size,
-            manifold_gpu::GpuBufferUsage::STORAGE,
-        );
+        let scatter_accum = device.create_buffer(accum_size);
 
         // Density texture: full scatter resolution
         let density_tex = device.create_texture(&manifold_gpu::GpuTextureDesc {

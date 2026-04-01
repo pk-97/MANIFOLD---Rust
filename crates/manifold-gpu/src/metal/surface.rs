@@ -349,6 +349,7 @@ mod tests {
             &target,
             &[],
             &vertex_buffer,
+            0,
             &index_buffer,
             6,
             None,

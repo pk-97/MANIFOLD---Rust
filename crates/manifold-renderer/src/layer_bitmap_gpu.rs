@@ -242,6 +242,7 @@ impl LayerBitmapGpu {
                     GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
                 ],
                 &vbuf,
+                0,
                 &self.index_buf,
                 6,
                 None,

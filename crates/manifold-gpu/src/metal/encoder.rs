@@ -389,6 +389,7 @@ impl GpuEncoder {
         target: &GpuTexture,
         bindings: &[GpuBinding],
         vertex_buffer: &GpuBuffer,
+        vertex_offset: u64,
         index_buffer: &GpuBuffer,
         index_count: u32,
         viewport: Option<(f32, f32, f32, f32)>,
@@ -435,7 +436,7 @@ impl GpuEncoder {
 
         // Bind vertex buffer at index 30 (same as vertex descriptor buffer index).
         const VERTEX_BUFFER_INDEX: u64 = 30;
-        enc.set_vertex_buffer(VERTEX_BUFFER_INDEX, Some(&vertex_buffer.raw), 0);
+        enc.set_vertex_buffer(VERTEX_BUFFER_INDEX, Some(&vertex_buffer.raw), vertex_offset as _);
 
         // Set all bindings on both vertex and fragment stages.
         for binding in bindings {

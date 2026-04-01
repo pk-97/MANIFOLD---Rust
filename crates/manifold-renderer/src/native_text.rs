@@ -733,6 +733,7 @@ impl NativeTextRenderer {
                 },
             ],
             self.prepared_vertex_buf.as_ref().unwrap(),
+            0,
             self.prepared_index_buf.as_ref().unwrap(),
             self.prepared_index_count,
             None,

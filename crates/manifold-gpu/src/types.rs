@@ -79,23 +79,6 @@ pub struct GpuTextureDesc<'a> {
     pub label: &'a str,
 }
 
-/// Buffer usage flags.
-#[derive(Clone, Copy, Debug)]
-pub struct GpuBufferUsage(u32);
-
-impl GpuBufferUsage {
-    pub const UNIFORM: Self = Self(1 << 0);
-    pub const STORAGE: Self = Self(1 << 1);
-    pub const COPY_DST: Self = Self(1 << 2);
-    pub const VERTEX: Self = Self(1 << 3);
-    pub const INDEX: Self = Self(1 << 4);
-}
-
-impl std::ops::BitOr for GpuBufferUsage {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self { Self(self.0 | rhs.0) }
-}
-
 /// Buffer storage mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GpuStorageMode {

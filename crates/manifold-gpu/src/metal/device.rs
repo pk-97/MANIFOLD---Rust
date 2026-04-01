@@ -97,7 +97,7 @@ impl GpuDevice {
     }
 
     /// Create a GPU buffer with private storage (GPU-only).
-    pub fn create_buffer(&self, size: u64, _usage: GpuBufferUsage) -> GpuBuffer {
+    pub fn create_buffer(&self, size: u64) -> GpuBuffer {
         use metal::foreign_types::ForeignType;
         let raw = self.device.new_buffer(
             size,
