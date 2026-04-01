@@ -206,6 +206,10 @@ impl LayerBitmapGpu {
         let globals: [f32; 2] = [screen_w as f32, screen_h as f32];
         let globals_bytes: &[u8] = bytemuck::bytes_of(&globals);
 
+        // Single render pass for all layer bitmap draws — avoids per-layer
+        // render encoder creation (each costs a TBDR tile load/store cycle).
+        encoder.begin_render_pass(target, GpuLoadAction::Load, "Layer Bitmaps");
+
         for &(layer_idx, rect) in layer_rects {
             if layer_idx >= self.textures.len() || self.textures[layer_idx].is_none() {
                 continue;
@@ -233,9 +237,8 @@ impl LayerBitmapGpu {
             }
 
             let lt = self.textures[layer_idx].as_ref().unwrap();
-            encoder.draw_indexed(
+            encoder.draw_in_render_pass(
                 &self.pipeline,
-                target,
                 &[
                     GpuBinding::Bytes { binding: 0, data: globals_bytes },
                     GpuBinding::Texture { binding: 1, texture: &lt.texture },
@@ -246,10 +249,11 @@ impl LayerBitmapGpu {
                 &self.index_buf,
                 6,
                 None,
-                GpuLoadAction::Load,
                 &format!("Bitmap Layer {layer_idx}"),
             );
         }
+
+        encoder.end_render_pass();
     }
 
     /// Remove textures for layers that no longer exist.

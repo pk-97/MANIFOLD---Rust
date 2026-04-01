@@ -542,10 +542,23 @@ impl UIRenderer {
         target: &GpuTexture,
         load_action: GpuLoadAction,
     ) {
+        encoder.begin_render_pass(target, load_action, "UI Overlay");
+
+        self.render_in_pass(encoder);
+
+        encoder.end_render_pass();
+    }
+
+    /// Draw UI rects + text into an already-active render pass.
+    /// Used when the caller manages the render pass lifetime (e.g. batching
+    /// UI draws with layer bitmap draws into a single pass).
+    pub fn render_in_pass(
+        &self,
+        encoder: &mut GpuEncoder,
+    ) {
         if self.prepared_index_count > 0 {
-            encoder.draw_indexed(
+            encoder.draw_in_render_pass(
                 &self.pipeline,
-                target,
                 &[GpuBinding::Bytes {
                     binding: 0,
                     data: bytemuck::bytes_of(&self.prepared_globals),
@@ -555,14 +568,12 @@ impl UIRenderer {
                 self.prepared_index_buf.as_ref().unwrap(),
                 self.prepared_index_count,
                 None,
-                load_action,
                 "UI Rects",
             );
         }
 
-        // Text always uses Load to preserve rects drawn above.
         #[cfg(target_os = "macos")]
-        self.text_renderer.render(encoder, target, GpuLoadAction::Load);
+        self.text_renderer.render_in_pass(encoder);
     }
 }
 

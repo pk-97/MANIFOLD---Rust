@@ -742,6 +742,43 @@ impl NativeTextRenderer {
         );
     }
 
+    /// Draw text into an already-active render pass.
+    pub fn render_in_pass(
+        &self,
+        encoder: &mut GpuEncoder,
+    ) {
+        if self.prepared_index_count == 0 {
+            return;
+        }
+        let Some(ref atlas_texture) = self.atlas.texture else {
+            return;
+        };
+
+        encoder.draw_in_render_pass(
+            &self.pipeline,
+            &[
+                GpuBinding::Bytes {
+                    binding: 0,
+                    data: bytemuck::cast_slice(&self.prepared_globals),
+                },
+                GpuBinding::Texture {
+                    binding: 1,
+                    texture: atlas_texture,
+                },
+                GpuBinding::Sampler {
+                    binding: 2,
+                    sampler: &self.sampler,
+                },
+            ],
+            self.prepared_vertex_buf.as_ref().unwrap(),
+            0,
+            self.prepared_index_buf.as_ref().unwrap(),
+            self.prepared_index_count,
+            None,
+            "TextRenderer",
+        );
+    }
+
     fn evict_oldest_measure(&mut self) {
         let oldest = self
             .measure_used
