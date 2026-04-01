@@ -153,6 +153,25 @@ unsafe impl Send for PresenterThread {}
 
 impl PresenterThread {
     fn run(mut self) {
+        // Elevate to real-time priority so macOS doesn't preempt us mid-vsync.
+        // Priority 45: below content thread (47) and audio (48), but above default.
+        #[cfg(target_os = "macos")]
+        {
+            let pthread = unsafe { libc::pthread_self() };
+            let mut param: libc::sched_param = unsafe { std::mem::zeroed() };
+            param.sched_priority = 45;
+            let ret = unsafe {
+                libc::pthread_setschedparam(pthread, libc::SCHED_RR, &param)
+            };
+            if ret != 0 {
+                log::warn!(
+                    "[OutputPresenter] Failed to set RT priority (err={}), \
+                     running at default priority",
+                    ret,
+                );
+            }
+        }
+
         loop {
             if self.stop.load(Ordering::Acquire) {
                 break;

@@ -269,32 +269,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     /// Wait for the surface we're about to write to, if it has pending GPU work.
     /// Called at the START of each frame before encoding new work.
-    /// Also publishes the most recently completed surface so the UI can read it.
+    ///
+    /// Note: `publish_front` is handled by GPU completion handlers registered in
+    /// `render_content()`, not here. This decouples frame publish timing from
+    /// the content thread's sleep/wake cycle, eliminating judder on displays
+    /// running at a higher refresh rate than the content FPS (e.g. 120Hz TV
+    /// consuming 60fps content).
     fn wait_for_surface(&mut self) {
-        // Publish the last completed frame (if any) so UI can read it.
-        if let Some(ref native_event) = self.native_event
-            && self.native_signal_value > 0
-        {
-            // Wait for the PREVIOUS frame to finish (the one we just submitted).
-            // Timeout after 5s — if GPU is hung, skip the frame rather than deadlock.
-            if !native_event.wait_until_done_timeout(self.native_signal_value, 5000)
-            {
-                log::error!(
-                    "[ContentPipeline] GPU timeout waiting for previous frame \
-                     (signal={}, signaled={})",
-                    self.native_signal_value,
-                    native_event.signaled_value(),
-                );
-                return;
-            }
-            if let Some(ref bridge) = self.shared_bridge {
-                bridge.publish_front(self.last_write_surface as u32);
-            }
-            if let Some(ref bridge) = self.preview_bridge {
-                bridge.publish_front(self.last_write_surface as u32);
-            }
-        }
-
         // Wait for the surface we're about to write to — it may still have
         // GPU work from 2 frames ago (triple buffering: surface reuse every 3 frames).
         #[cfg(target_os = "macos")]
@@ -652,6 +633,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     self.preview_sampler.as_ref(),
                 );
             }
+        }
+
+        // Register GPU completion handler to publish the front buffer the instant
+        // the GPU finishes — decoupled from the content thread's sleep/wake cycle.
+        // This eliminates 3-1 cadence judder on high-refresh displays (e.g. 120Hz).
+        if !export_mode {
+            let write_idx = self.write_surface_index as u32;
+            let bridge = self.shared_bridge.clone();
+            let preview = self.preview_bridge.clone();
+            native_enc.add_completed_handler(move || {
+                if let Some(ref b) = bridge { b.publish_front(write_idx); }
+                if let Some(ref b) = preview { b.publish_front(write_idx); }
+            });
         }
 
         // Signal frame completion + commit

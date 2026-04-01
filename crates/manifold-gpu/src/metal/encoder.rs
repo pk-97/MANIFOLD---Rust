@@ -893,6 +893,17 @@ impl GpuEncoder {
         scaler.encode(self.cmd_buf(), &src.raw, &dst.raw);
     }
 
+    /// Register a callback to run when the GPU finishes executing this command buffer.
+    /// Uses Metal's `addCompletedHandler` — fires immediately on GPU completion,
+    /// no polling or next-frame delay.
+    pub fn add_completed_handler<F: Fn() + Send + 'static>(&self, callback: F) {
+        let block = block::ConcreteBlock::new(
+            move |_: &metal::CommandBufferRef| { callback(); },
+        );
+        let block = block.copy();
+        self.cmd_buf().add_completed_handler(&block);
+    }
+
     /// Commit the command buffer to the GPU queue.
     /// Ends any active encoder and commits. Consumes the encoder.
     pub fn commit(mut self) {

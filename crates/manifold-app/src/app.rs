@@ -1611,17 +1611,35 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                     if is_double {
                         self.output_last_click = None;
-                        if let Some((name, display_index, presentation)) = self.window_registry
-                            .get(&window_id)
-                            .and_then(|ws| match &ws.role {
-                                WindowRole::Output { name, presentation } => Some((
-                                    name.clone(),
-                                    ws.display_index,
-                                    *presentation,
-                                )),
-                                _ => None,
-                            })
+                        if let Some((name, presentation, current_monitor)) =
+                            self.window_registry
+                                .get(&window_id)
+                                .and_then(|ws| match &ws.role {
+                                    WindowRole::Output { name, presentation } => {
+                                        Some((
+                                            name.clone(),
+                                            *presentation,
+                                            ws.window.current_monitor(),
+                                        ))
+                                    }
+                                    _ => None,
+                                })
                         {
+                            // Resolve display_index from the monitor the window
+                            // is actually on right now (not the stale stored
+                            // index) so fullscreen targets the correct display.
+                            let display_index = current_monitor.and_then(|cur| {
+                                event_loop.available_monitors().enumerate().find_map(
+                                    |(i, m)| {
+                                        if m.name() == cur.name() {
+                                            Some(i)
+                                        } else {
+                                            None
+                                        }
+                                    },
+                                )
+                            });
+
                             #[cfg(target_os = "macos")]
                             {
                                 self.output_presenter = None;
