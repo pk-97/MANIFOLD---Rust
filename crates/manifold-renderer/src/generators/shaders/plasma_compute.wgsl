@@ -73,6 +73,91 @@ fn plasma_cells(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
     return (v1 * v2 + v3 + v4) / 3.0;
 }
 
+// ── Pattern 5: Spiral — logarithmic spiral arms ──
+// Uses integer arm count to avoid atan2 discontinuity seam at ±π.
+fn plasma_spiral(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
+    let arms = round(2.0 + cx * 6.0);
+    let r = length(uv);
+    let theta = atan2(uv.y, uv.x);
+    let spiral = log(r + 0.01) * 4.0;
+    let v1 = sin(theta * arms + spiral - t * 1.5);
+    let v2 = sin(theta * arms - spiral * 0.7 + t * 1.0);
+    let v3 = sin(r * (3.0 + cx * 3.0) - t * 0.8);
+    let v4 = sin(theta * arms * 2.0 + spiral * 0.5 + t * 0.6);
+    return (v1 + v2 + v3 + v4) / 4.0;
+}
+
+// ── Pattern 6: Noise — multi-octave sine noise ──
+// Gentle frequency scaling (×1.8 per octave) keeps it smooth like other variants.
+fn plasma_noise(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
+    let octaves = 3u + u32(cx * 2.0);
+    var val = 0.0;
+    var amp = 1.0;
+    var freq = 2.5;
+    var p = uv;
+    for (var i = 0u; i < octaves; i++) {
+        val += amp * sin(p.x * freq + t * 0.6 + sin(p.y * freq * 0.7 + t * 0.4));
+        val += amp * sin(p.y * freq * 0.9 - t * 0.5 + cos(p.x * freq * 0.6 + t * 0.3));
+        amp *= 0.5;
+        freq *= 1.8;
+        let angle = 0.5 + t * 0.08;
+        let cs = cos(angle);
+        let sn = sin(angle);
+        p = vec2<f32>(p.x * cs - p.y * sn, p.x * sn + p.y * cs);
+    }
+    return val * 0.35;
+}
+
+// ── Pattern 7: Pulse — beat-reactive radial pulses ──
+// Slow radial expansion over 2 beats with gentle sine layering.
+fn plasma_pulse(uv: vec2<f32>, t: f32, cx: f32, beat: f32) -> f32 {
+    let freq = 3.0 + cx * 4.0;
+    let r = length(uv);
+    let phase = fract(beat * 0.5);
+    let ring_pos = phase * 1.5;
+    let v1 = sin(r * freq - phase * 6.2832);
+    let ring_width = 0.15 + (1.0 - cx) * 0.2;
+    let v2 = exp(-abs(r - ring_pos) / ring_width);
+    let v3 = sin(r * freq * 0.4 + t * 0.3);
+    return (v1 + v2 * 1.5 + v3) / 3.5;
+}
+
+// ── Pattern 8: Fractal — self-similar sine stacks ──
+// Smooth sine folding instead of abs() — avoids hard edges.
+fn plasma_fractal(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
+    var p = uv * (2.0 + cx * 2.0);
+    var val = 0.0;
+    var scale = 1.0;
+    for (var i = 0; i < 5; i++) {
+        let fi = f32(i);
+        let v = sin(p.x + t * (0.4 + fi * 0.08)) *
+                cos(p.y + t * (0.25 + fi * 0.1));
+        val += v * scale;
+        scale *= 0.55;
+        // Smooth sine fold instead of abs() — no hard edges
+        p = vec2<f32>(
+            sin(p.x * 1.8 + t * 0.15 + fi),
+            sin(p.y * 1.8 + t * 0.12 + fi * 0.7)
+        );
+    }
+    return val * 0.45;
+}
+
+// ── Pattern 9: Lattice — grid interference ──
+fn plasma_lattice(uv: vec2<f32>, t: f32, cx: f32) -> f32 {
+    let freq = 3.0 + cx * 5.0;
+    let gx = sin(uv.x * freq * 3.14159 + t * 0.8);
+    let gy = sin(uv.y * freq * 3.14159 + t * 0.6);
+    let grid = gx * gy;
+    let diag1 = sin((uv.x + uv.y) * freq * 2.22 + t * 1.1);
+    let diag2 = sin((uv.x - uv.y) * freq * 2.22 + t * 0.9);
+    let cross_val = diag1 * diag2;
+    let warp_x = uv.x + sin(uv.y * 2.0 + t) * cx * 0.3;
+    let warp_y = uv.y + cos(uv.x * 2.0 + t * 0.7) * cx * 0.3;
+    let v3 = sin(warp_x * freq * 3.14159) * sin(warp_y * freq * 3.14159);
+    return (grid + cross_val + v3) / 3.0;
+}
+
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let dims = textureDimensions(output);
@@ -95,6 +180,11 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         case 2: { plasma = plasma_diamond(uv, t, cx); }
         case 3: { plasma = plasma_warp(uv, t, cx); }
         case 4: { plasma = plasma_cells(uv, t, cx); }
+        case 5: { plasma = plasma_spiral(uv, t, cx); }
+        case 6: { plasma = plasma_noise(uv, t, cx); }
+        case 7: { plasma = plasma_pulse(uv, t, cx, u.beat); }
+        case 8: { plasma = plasma_fractal(uv, t, cx); }
+        case 9: { plasma = plasma_lattice(uv, t, cx); }
         default: { plasma = plasma_classic(uv, t, cx); }
     }
 

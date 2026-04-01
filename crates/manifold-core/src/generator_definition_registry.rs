@@ -321,7 +321,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
 
     // ── Plasma ──
     let params = vec![
-        pd_whole_labels("Pattern", 0.0, 4.0, 0.0, &["Classic", "Rings", "Diamond", "Warp", "Cells"], "pattern"),
+        pd_whole_labels("Pattern", 0.0, 9.0, 0.0, &["Classic", "Rings", "Diamond", "Warp", "Cells", "Spiral", "Noise", "Pulse", "Fractal", "Lattice"], "pattern"),
         pd("Complexity", 0.0, 1.0, 0.5, Some("F2"), "complexity"),
         pd("Contrast", 0.0, 1.0, 0.63, Some("F2"), "contrast"),
         pd("Speed", 0.1, 5.0, 1.0, Some("F1"), "speed"),
@@ -349,12 +349,12 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Speed", 0.1, 3.0, 1.0, Some("F1"), "speed"),
         pd("Contrast", 1.0, 8.0, 3.5, Some("F1"), "contrast"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
-        pd("Particles (M)", 0.1, 8.0, 2.0, Some("F1"), "particles"),
+        pd("Count (M)", 0.1, 8.0, 2.0, Some("F1"), "count"),
         pd_toggle("Snap", 0.0, 1.0, 0.0, "snap"),
         pd_whole_labels("Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),
-        pd("Particle Size", 1.0, 8.0, 3.0, Some("F1"), "particleSize"),
+        pd("Size", 1.0, 8.0, 3.0, Some("F1"), "size"),
         pd("Anti-Clump", 0.0, 60.0, 20.0, Some("F0"), "antiClump"),
-        pd("Inject Force", 0.0, 0.1, 0.005, Some("F3"), "injectForce"),
+        pd("Force", 0.0, 0.1, 0.005, Some("F3"), "force"),
     ];
     m.insert(GeneratorTypeId::FLUID_SIMULATION, create_def("Fluid Simulation", false, "fluidSimulation", params));
 
@@ -385,12 +385,12 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd("Speed", 0.1, 3.0, 1.0, Some("F1"), "speed"),
         pd("Contrast", 1.0, 8.0, 3.5, Some("F1"), "contrast"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
-        pd("Particles (M)", 0.1, 8.0, 2.0, Some("F1"), "particles"),
+        pd("Count (M)", 0.1, 8.0, 2.0, Some("F1"), "count"),
         pd_toggle("Snap", 0.0, 1.0, 0.0, "snap"),
         pd_whole_labels("Snap Mode", 0.0, 4.0, 0.0, &["Turbulence", "Rot Flip", "Flow Inv", "Pattern", "Inject"], "snapMode"),
-        pd("Particle Size", 1.0, 8.0, 3.0, Some("F1"), "particleSize"),
+        pd("Size", 1.0, 8.0, 3.0, Some("F1"), "size"),
         pd("Anti-Clump", 0.0, 60.0, 20.0, Some("F0"), "antiClump"),
-        pd("Inject Force", 0.0, 0.1, 0.005, Some("F3"), "injectForce"),
+        pd("Force", 0.0, 0.1, 0.005, Some("F3"), "force"),
         // 3D-specific params (indices 13-20)
         pd_whole_labels("Container", 0.0, 3.0, 0.0, &["None", "Cube", "Sphere", "Torus"], "container"),
         pd("Ctr Scale", 0.2, 1.0, 0.8, Some("F2"), "containerScale"),
@@ -407,8 +407,8 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
     let params = vec![
         pd_whole_labels("Slice Axis", 0.0, 2.0, 0.0, &["Axial", "Sagittal", "Coronal"], "sliceAxis"),
         pd("Slice Pos", 0.0, 1.0, 0.5, Some("F2"), "slicePos"),
-        pd("Window Center", 0.0, 1.0, 0.5, Some("F2"), "wCenter"),
-        pd("Window Width", 0.01, 1.0, 0.8, Some("F2"), "wWidth"),
+        pd("Center", 0.0, 1.0, 0.5, Some("F2"), "center"),
+        pd("Width", 0.01, 1.0, 0.8, Some("F2"), "width"),
         pd("Scale", 0.25, 3.0, 1.0, Some("F2"), "scale"),
         pd_toggle("Invert", 0.0, 1.0, 0.0, "invert"),
         pd("Sharpen", 0.0, 3.0, 1.0, Some("F1"), "sharpen"),
