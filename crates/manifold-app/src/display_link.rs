@@ -402,7 +402,9 @@ impl DisplayLinkPresenter {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
         };
         unsafe {
+            CVDisplayLinkStop(self.display_link);
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
+            CVDisplayLinkStart(self.display_link);
         }
         let new_refresh = unsafe {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
@@ -574,7 +576,9 @@ impl UiDisplayLink {
     }
 
     /// Retarget the display link if the window moved to a different display.
-    /// Safe to call from the main thread while the link is running.
+    /// Stops the link first to avoid deadlock (callback calls request_redraw
+    /// which needs the main thread, but SetCurrentCGDisplay may synchronize
+    /// with the callback thread internally).
     pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
         let new_id = display_id_for_window(window);
         if new_id == 0 || new_id == self.current_display_id {
@@ -584,7 +588,9 @@ impl UiDisplayLink {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
         };
         unsafe {
+            CVDisplayLinkStop(self.display_link);
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
+            CVDisplayLinkStart(self.display_link);
         }
         let new_refresh = unsafe {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)

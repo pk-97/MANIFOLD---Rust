@@ -194,7 +194,12 @@ impl UICacheManager {
 
                 if !dirty.is_empty() && dirty.len() <= INCREMENTAL_THRESHOLD {
                     for &(s, e) in &dirty {
-                        ui_renderer.render_sub_region(tree, *s, *e, true);
+                        // Render all visible nodes in the sub-region (not dirty-only).
+                        // dirty_only=true causes ghosting when slider backgrounds
+                        // need to be redrawn under moved fill/thumb elements.
+                        // The flat traversal fix already limits work to ~40 nodes
+                        // per card instead of the entire inspector.
+                        ui_renderer.render_sub_region(tree, *s, *e, false);
                     }
                     if self.prepare_and_draw(device, ui_renderer) {
                         rendered += 1;
