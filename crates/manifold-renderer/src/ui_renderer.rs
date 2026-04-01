@@ -274,17 +274,14 @@ impl UIRenderer {
     }
 
     /// Render nodes in range [start_node, end_node).
-    /// Used for rendering specific overlay sections (e.g. perf HUD between
-    /// bitmap textures and dropdown popups).
+    /// Uses `traverse_range` to only walk root nodes in the given range,
+    /// avoiding a full-tree traversal for each overlay section.
     pub fn render_overlay_range(&mut self, tree: &UITree, start_node: usize, end_node: usize) {
         self.clip_stack.clear();
 
-        tree.traverse(|event| match event {
+        tree.traverse_range(start_node, end_node, |event| match event {
             TraversalEvent::Node(node) => {
-                let id = node.id as usize;
-                if id >= start_node && id < end_node {
-                    self.draw_node(node);
-                }
+                self.draw_node(node);
             }
             TraversalEvent::PushClip(rect) => {
                 let clipped = if let Some(current) = self.clip_stack.last() {
@@ -531,14 +528,22 @@ impl UIRenderer {
             ]);
         }
 
-        // Create fresh GpuBuffers each prepare() — avoids aliasing with in-flight GPU work.
+        // Reuse existing GPU buffers when possible — only reallocate if the
+        // new frame's data exceeds the current buffer capacity. This eliminates
+        // per-frame Metal buffer allocations in the steady state.
         if !self.vertices.is_empty() {
             let vdata = bytemuck::cast_slice::<UIVertex, u8>(&self.vertices);
-            let vbuf = device.create_buffer_shared(vdata.len() as u64);
+            let vbuf = match self.prepared_vertex_buf.take() {
+                Some(buf) if buf.size >= vdata.len() as u64 => buf,
+                _ => device.create_buffer_shared(vdata.len() as u64),
+            };
             unsafe { vbuf.write(0, vdata); }
 
             let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
-            let ibuf = device.create_buffer_shared(idata.len() as u64);
+            let ibuf = match self.prepared_index_buf.take() {
+                Some(buf) if buf.size >= idata.len() as u64 => buf,
+                _ => device.create_buffer_shared(idata.len() as u64),
+            };
             unsafe { ibuf.write(0, idata); }
 
             self.prepared_vertex_buf = Some(vbuf);

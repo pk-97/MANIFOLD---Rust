@@ -69,6 +69,11 @@ struct LayerTexture {
     // No view or bind_group — manifold-gpu uses slot-based bindings
 }
 
+/// Number of ring-buffer slots (avoids aliasing with in-flight GPU work).
+const VBUF_RING_SIZE: usize = 3;
+/// Max layers per frame in the pre-allocated vertex buffer.
+const MAX_LAYER_QUADS: usize = 64;
+
 /// Manages GPU textures for all layer bitmaps and renders them as positioned quads.
 pub struct LayerBitmapGpu {
     textures: Vec<Option<LayerTexture>>,
@@ -76,6 +81,10 @@ pub struct LayerBitmapGpu {
     sampler: GpuSampler,
     /// Pre-allocated shared index buffer: [0u32, 1, 2, 0, 2, 3] — one quad.
     index_buf: GpuBuffer,
+    /// Ring-buffered vertex buffers to avoid per-frame Metal allocations.
+    /// Each buffer holds MAX_LAYER_QUADS * 4 vertices.
+    vbuf_ring: [GpuBuffer; VBUF_RING_SIZE],
+    vbuf_ring_idx: usize,
 }
 
 impl LayerBitmapGpu {
@@ -134,11 +143,17 @@ impl LayerBitmapGpu {
             );
         }
 
+        // Pre-allocate ring-buffered vertex buffers for layer quads.
+        let vbuf_size = (MAX_LAYER_QUADS * 4 * std::mem::size_of::<BitmapVertex>()) as u64;
+        let vbuf_ring = std::array::from_fn(|_| device.create_buffer_shared(vbuf_size));
+
         Self {
             textures: Vec::new(),
             pipeline,
             sampler,
             index_buf,
+            vbuf_ring,
+            vbuf_ring_idx: 0,
         }
     }
 
@@ -192,7 +207,7 @@ impl LayerBitmapGpu {
     /// `layer_rects`: slice of `(layer_index, rect)` in logical pixels.
     pub fn render_layers(
         &mut self,
-        device: &GpuDevice,
+        _device: &GpuDevice,
         encoder: &mut GpuEncoder,
         target: &GpuTexture,
         screen_w: u32,
@@ -206,16 +221,25 @@ impl LayerBitmapGpu {
         let globals: [f32; 2] = [screen_w as f32, screen_h as f32];
         let globals_bytes: &[u8] = bytemuck::bytes_of(&globals);
 
-        // Single render pass for all layer bitmap draws — avoids per-layer
-        // render encoder creation (each costs a TBDR tile load/store cycle).
-        encoder.begin_render_pass(target, GpuLoadAction::Load, "Layer Bitmaps");
+        // Rotate ring buffer — avoids aliasing with in-flight GPU work.
+        let vbuf = &self.vbuf_ring[self.vbuf_ring_idx];
+        self.vbuf_ring_idx = (self.vbuf_ring_idx + 1) % VBUF_RING_SIZE;
 
+        // Write all layer quad vertices into the ring buffer in one batch.
+        let ptr = vbuf.mapped_ptr().unwrap() as *mut BitmapVertex;
+        let mut quad_count = 0usize;
+
+        // Collect which layers are valid and write their vertices.
+        let mut draw_list: Vec<(usize, usize)> = Vec::new(); // (layer_idx, quad_offset)
         for &(layer_idx, rect) in layer_rects {
             if layer_idx >= self.textures.len() || self.textures[layer_idx].is_none() {
                 continue;
             }
             if rect.width <= 0.0 || rect.height <= 0.0 {
                 continue;
+            }
+            if quad_count >= MAX_LAYER_QUADS {
+                break;
             }
 
             let (x0, y0) = (rect.x, rect.y);
@@ -226,17 +250,28 @@ impl LayerBitmapGpu {
                 BitmapVertex { position: [x1, y1], uv: [1.0, 1.0] },
                 BitmapVertex { position: [x0, y1], uv: [0.0, 1.0] },
             ];
-            // Fresh buffer each frame — avoids aliasing with in-flight GPU work.
-            let vbuf = device.create_buffer_shared(std::mem::size_of::<BitmapVertex>() as u64 * 4);
             unsafe {
                 std::ptr::copy_nonoverlapping(
                     verts.as_ptr(),
-                    vbuf.mapped_ptr().unwrap() as *mut BitmapVertex,
+                    ptr.add(quad_count * 4),
                     4,
                 );
             }
+            draw_list.push((layer_idx, quad_count));
+            quad_count += 1;
+        }
 
+        if quad_count == 0 {
+            return;
+        }
+
+        // Single render pass for all layer bitmap draws — avoids per-layer
+        // render encoder creation (each costs a TBDR tile load/store cycle).
+        encoder.begin_render_pass(target, GpuLoadAction::Load, "Layer Bitmaps");
+
+        for &(layer_idx, quad_offset) in &draw_list {
             let lt = self.textures[layer_idx].as_ref().unwrap();
+            let vertex_offset = (quad_offset * 4 * std::mem::size_of::<BitmapVertex>()) as u64;
             encoder.draw_in_render_pass(
                 &self.pipeline,
                 &[
@@ -244,12 +279,12 @@ impl LayerBitmapGpu {
                     GpuBinding::Texture { binding: 1, texture: &lt.texture },
                     GpuBinding::Sampler { binding: 2, sampler: &self.sampler },
                 ],
-                &vbuf,
-                0,
+                vbuf,
+                vertex_offset,
                 &self.index_buf,
                 6,
                 None,
-                &format!("Bitmap Layer {layer_idx}"),
+                "Bitmap Layer",
             );
         }
 

@@ -635,16 +635,16 @@ impl Application {
             &self.selection,
             self.content_state.editing_is_dirty,
             self.current_project_path.as_deref(),
+            &mut self.transport_cache,
         );
 
-        // 4b. Sync clip positions from live project model every frame.
-        // During drag, the InteractionOverlay mutates clip data directly in the
-        // project model, but the viewport's clips_by_layer cache is only refreshed
-        // via sync_project_data() (structural sync). This per-frame sync ensures
-        // bitmap renderers see mutated clip positions and repaint during drag.
-        // Cost: iterates layers+clips, but the bitmap fingerprint skips repaint
-        // when nothing changed (cheap no-op outside of drag).
-        crate::ui_bridge::sync_clip_positions(&mut self.ui_root, &self.local_project);
+        // 4b. Sync clip positions — only during drag or structural change.
+        // During drag, InteractionOverlay mutates clip data directly in the
+        // project model. Outside of drag with no version change, the viewport
+        // cache is already current. Skipping saves 50+ string clones per frame.
+        if self.mouse_pressed || needs_structural_sync {
+            crate::ui_bridge::sync_clip_positions(&mut self.ui_root, &self.local_project);
+        }
 
         // 5. Push performance metrics to HUD
         if self.ui_root.perf_hud.is_visible() {

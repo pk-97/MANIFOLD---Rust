@@ -44,8 +44,6 @@ const ATLAS_SIZE: u32 = 1024;
 const GLYPH_PADDING: u32 = 1;
 /// Max cached measurement entries.
 const MAX_MEASURE_CACHE: usize = 512;
-/// Frames before an unused measurement entry is evicted.
-const MEASURE_EVICT_FRAMES: u64 = 120;
 
 // ─── WGSL Shader ─────────────────────────────────────────────────────────────
 
@@ -630,9 +628,9 @@ pub struct NativeTextRenderer {
     vertices: Vec<TextVertex>,
     indices: Vec<u32>,
 
-    // Measurement cache: (text, font_size_x10_logical, weight) → Vec2.
-    measure_cache: AHashMap<(String, u16, FontWeight), Vec2>,
-    measure_used: AHashMap<(String, u16, FontWeight), u64>,
+    /// Measurement cache: u64 hash of (text, font_size, weight) → Vec2.
+    /// Uses hash keys to avoid String allocations on cache hits.
+    measure_cache: AHashMap<u64, Vec2>,
     frame_generation: u64,
 }
 
@@ -691,7 +689,6 @@ impl NativeTextRenderer {
             vertices: Vec::new(),
             indices: Vec::new(),
             measure_cache: AHashMap::new(),
-            measure_used: AHashMap::new(),
             frame_generation: 0,
         }
     }
@@ -729,31 +726,35 @@ impl NativeTextRenderer {
         font_size: u16,
         font_weight: FontWeight,
     ) -> Vec2 {
-        let key = (text.to_string(), font_size, font_weight);
-        if let Some(&size) = self.measure_cache.get(&key) {
-            self.measure_used.insert(key, self.frame_generation);
+        // Use a u64 hash key to avoid allocating a String for cache lookups.
+        // Most frames hit the cache (labels don't change), so this eliminates
+        // 200-500 String allocations per frame on cache hits.
+        use std::hash::{Hash, Hasher};
+        let mut hasher = ahash::AHasher::default();
+        text.hash(&mut hasher);
+        font_size.hash(&mut hasher);
+        font_weight.hash(&mut hasher);
+        let hash = hasher.finish();
+
+        if let Some(&size) = self.measure_cache.get(&hash) {
             return size;
         }
 
         let size = measure_text_ct(&mut self.font_manager, text, font_size as f32, font_weight);
 
         if self.measure_cache.len() >= MAX_MEASURE_CACHE {
-            self.evict_oldest_measure();
+            self.measure_cache.clear();
         }
-        self.measure_cache.insert(key.clone(), size);
-        self.measure_used.insert(key, self.frame_generation);
+        self.measure_cache.insert(hash, size);
         size
     }
 
-    /// Advance the frame counter and evict stale measurement cache entries.
+    /// Advance the frame counter and cap measurement cache size.
     pub fn begin_frame(&mut self) {
         self.frame_generation += 1;
-        let frame_gen = self.frame_generation;
-        if frame_gen.is_multiple_of(60) {
-            self.measure_used
-                .retain(|_, &mut last| frame_gen.saturating_sub(last) <= MEASURE_EVICT_FRAMES);
-            self.measure_cache
-                .retain(|k, _| self.measure_used.contains_key(k));
+        // Cap cache size — clear when it gets too large (rare).
+        if self.measure_cache.len() > MAX_MEASURE_CACHE * 2 {
+            self.measure_cache.clear();
         }
     }
 
@@ -940,13 +941,20 @@ impl NativeTextRenderer {
 
         self.atlas.upload_if_dirty(device);
 
-        // Create fresh GpuBuffers each prepare() — avoids aliasing with in-flight GPU work.
+        // Reuse existing GPU buffers when possible — only reallocate if the
+        // new frame's data exceeds the current buffer capacity.
         let vdata = bytemuck::cast_slice::<TextVertex, u8>(&self.vertices);
-        let vbuf = device.create_buffer_shared(vdata.len() as u64);
+        let vbuf = match self.prepared_vertex_buf.take() {
+            Some(buf) if buf.size >= vdata.len() as u64 => buf,
+            _ => device.create_buffer_shared(vdata.len() as u64),
+        };
         unsafe { vbuf.write(0, vdata); }
 
         let idata = bytemuck::cast_slice::<u32, u8>(&self.indices);
-        let ibuf = device.create_buffer_shared(idata.len() as u64);
+        let ibuf = match self.prepared_index_buf.take() {
+            Some(buf) if buf.size >= idata.len() as u64 => buf,
+            _ => device.create_buffer_shared(idata.len() as u64),
+        };
         unsafe { ibuf.write(0, idata); }
 
         self.prepared_vertex_buf = Some(vbuf);
@@ -1033,17 +1041,6 @@ impl NativeTextRenderer {
         );
     }
 
-    fn evict_oldest_measure(&mut self) {
-        let oldest = self
-            .measure_used
-            .iter()
-            .min_by_key(|(_, v)| *v)
-            .map(|(k, _)| k.clone());
-        if let Some(key) = oldest {
-            self.measure_cache.remove(&key);
-            self.measure_used.remove(&key);
-        }
-    }
 }
 
 // ─── TextMeasure impl ────────────────────────────────────────────────────────

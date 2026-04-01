@@ -399,6 +399,21 @@ impl UITree {
         }
     }
 
+    /// Walk only root nodes in `[start, end)` and their subtrees.
+    /// Used for overlay rendering — avoids traversing the entire tree
+    /// when only a small range of nodes needs to be drawn.
+    pub fn traverse_range<F>(&self, start: usize, end: usize, mut visitor: F)
+    where
+        F: FnMut(TraversalEvent),
+    {
+        let end = end.min(self.count);
+        for i in start..end {
+            if self.parent_index[i] == -1 {
+                self.traverse_subtree(i, &mut visitor);
+            }
+        }
+    }
+
     fn traverse_subtree<F>(&self, index: usize, visitor: &mut F)
     where
         F: FnMut(TraversalEvent),

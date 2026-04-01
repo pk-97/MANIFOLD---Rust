@@ -242,6 +242,8 @@ pub struct Application {
     // Frame timing
     pub(crate) frame_timer: FrameTimer,
     pub(crate) frame_count: u64,
+    /// Cached transport display strings (avoids per-frame format! allocations).
+    pub(crate) transport_cache: crate::ui_bridge::TransportDisplayCache,
 
     // Input state for winit → UIInputSystem translation
     pub(crate) cursor_pos: Vec2,
@@ -385,6 +387,7 @@ impl Application {
             // Content thread has its own timer at project FPS — fully decoupled.
             frame_timer: FrameTimer::new(120.0),
             frame_count: 0,
+            transport_cache: crate::ui_bridge::TransportDisplayCache::new(),
             cursor_pos: Vec2::ZERO,
             mouse_pressed: false,
             modifiers: Modifiers {

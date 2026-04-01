@@ -20,6 +20,71 @@ const PLAY_GREEN: Color32 = Color32::new(56, 115, 66, 255);
 const PLAY_ACTIVE: Color32 = Color32::new(64, 184, 82, 255);
 const PAUSED_YELLOW: Color32 = Color32::new(209, 166, 38, 255);
 
+/// Cached transport display strings — avoids per-frame `format!` allocations
+/// when beat/time/bpm haven't changed (which is most frames when paused).
+pub struct TransportDisplayCache {
+    // Time display: "MM:SS.T  |  bar.beat.sixteenth"
+    prev_mins: i32,
+    prev_secs: i32,
+    prev_tenths: i32,
+    prev_bar: i32,
+    prev_beat_in_bar: i32,
+    prev_sixteenth: i32,
+    cached_display: String,
+    // BPM display: "120.0"
+    prev_bpm_tenths: i32, // bpm * 10, rounded
+    cached_bpm: String,
+}
+
+impl TransportDisplayCache {
+    pub fn new() -> Self {
+        Self {
+            prev_mins: -1,
+            prev_secs: -1,
+            prev_tenths: -1,
+            prev_bar: -1,
+            prev_beat_in_bar: -1,
+            prev_sixteenth: -1,
+            cached_display: String::new(),
+            prev_bpm_tenths: -1,
+            cached_bpm: String::new(),
+        }
+    }
+
+    /// Returns the formatted display string, only reformatting when values change.
+    fn time_display(
+        &mut self, mins: i32, secs: i32, tenths: i32,
+        bar: i32, beat_in_bar: i32, sixteenth: i32,
+    ) -> &str {
+        if mins != self.prev_mins || secs != self.prev_secs || tenths != self.prev_tenths
+            || bar != self.prev_bar || beat_in_bar != self.prev_beat_in_bar
+            || sixteenth != self.prev_sixteenth
+        {
+            self.prev_mins = mins;
+            self.prev_secs = secs;
+            self.prev_tenths = tenths;
+            self.prev_bar = bar;
+            self.prev_beat_in_bar = beat_in_bar;
+            self.prev_sixteenth = sixteenth;
+            self.cached_display = format!(
+                "{:02}:{:02}.{}  |  {}.{}.{}",
+                mins, secs, tenths, bar, beat_in_bar, sixteenth,
+            );
+        }
+        &self.cached_display
+    }
+
+    /// Returns the formatted BPM string, only reformatting when value changes.
+    fn bpm_display(&mut self, bpm: f32) -> &str {
+        let bpm_tenths = (bpm * 10.0).round() as i32;
+        if bpm_tenths != self.prev_bpm_tenths {
+            self.prev_bpm_tenths = bpm_tenths;
+            self.cached_bpm = format!("{:.1}", bpm);
+        }
+        &self.cached_bpm
+    }
+}
+
 /// Check auto-scroll during playback and return true if viewport scroll changed.
 /// Must run BEFORE build() so the rebuild includes the new scroll position.
 /// From Unity ViewportManager.UpdatePlayheadPosition (lines 327-357).
@@ -79,6 +144,7 @@ pub fn push_state(
     selection: &SelectionState,
     is_dirty: bool,
     project_path: Option<&std::path::Path>,
+    transport_cache: &mut TransportDisplayCache,
 ) {
     let tree = &mut ui.tree;
 
@@ -113,17 +179,18 @@ pub fn push_state(
         let mins = (t / 60.0).floor() as i32;
         let secs = (t % 60.0).floor() as i32;
         let tenths = ((t * 10.0) % 10.0).floor() as i32;
-        let time_str = format!("{:02}:{:02}.{}", mins, secs, tenths);
-
         // Beat display uses time_signature_numerator (not hardcoded 4)
         let bpb = (project.settings.time_signature_numerator.max(1)) as f32;
         let bar = (beat / bpb).floor() as i32 + 1;
         let beat_in_bar = (beat % bpb).floor() as i32 + 1;
         let sixteenth = ((beat % 1.0) * 4.0).floor() as i32 + 1;
-        let display = format!("{}  |  {}.{}.{}", time_str, bar, beat_in_bar, sixteenth);
 
-        ui.header.set_time_display(tree, &display);
-        ui.transport.set_bpm_text(tree, &format!("{:.1}", bpm));
+        let display = transport_cache.time_display(
+            mins, secs, tenths, bar, beat_in_bar, sixteenth,
+        );
+        ui.header.set_time_display(tree, display);
+        let bpm_str = transport_cache.bpm_display(bpm);
+        ui.transport.set_bpm_text(tree, bpm_str);
 
         // Clock authority display — "SRC:INT"/"SRC:LNK"/"SRC:CLK"/"SRC:OSC"
         // Use content_state (authoritative, auto-determined each content frame)
