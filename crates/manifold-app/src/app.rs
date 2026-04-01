@@ -218,6 +218,10 @@ pub struct Application {
     /// This minimizes time spent holding the drawable / blocking on WindowServer
     /// IPC during Direct Display synchronization on external monitors.
     pub(crate) ui_offscreen: Option<manifold_gpu::GpuTexture>,
+    /// CVDisplayLink-driven vsync signal for the UI thread.
+    /// Replaces FrameTimer polling — aligns render submission to MacBook vsync.
+    #[cfg(target_os = "macos")]
+    pub(crate) ui_display_link: Option<crate::display_link::UiDisplayLink>,
     /// CVDisplayLink-driven output presenter for hardware-synchronized frame pacing.
     #[cfg(target_os = "macos")]
     pub(crate) output_presenter: Option<crate::display_link::DisplayLinkPresenter>,
@@ -366,6 +370,8 @@ impl Application {
             atlas_pipeline: None,
             atlas_sampler: None,
             ui_offscreen: None,
+            #[cfg(target_os = "macos")]
+            ui_display_link: None,
             #[cfg(target_os = "macos")]
             output_presenter: None,
             ui_renderer: None,
@@ -1038,6 +1044,9 @@ impl ApplicationHandler for Application {
             // Register primary window
             let wid = window.id();
             self.primary_window_id = Some(wid);
+            // Clone Arc before moving into WindowState — needed for UiDisplayLink.
+            #[cfg(target_os = "macos")]
+            let window_arc = Arc::clone(&window);
             self.window_registry.add(
                 wid,
                 WindowState {
@@ -1047,6 +1056,15 @@ impl ApplicationHandler for Application {
                     display_index: None,
                 },
             );
+
+            // Start CVDisplayLink for the MacBook display — vsync-aligned
+            // render trigger replacing the free-running FrameTimer.
+            #[cfg(target_os = "macos")]
+            {
+                self.ui_display_link = Some(
+                    crate::display_link::UiDisplayLink::new(window_arc),
+                );
+            }
 
             // Blit pipeline (composite output → drawable with aspect-fit viewport)
             // Fullscreen triangle from vertex_index
@@ -2103,10 +2121,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             self.update_edr_headroom();
         }
 
-        if self.frame_timer.should_tick() {
+        // Render on CVDisplayLink vsync signal (macOS) or FrameTimer fallback.
+        // CVDisplayLink aligns submission to the MacBook's actual vsync cadence,
+        // eliminating event-loop jitter that caused near-miss frame drops.
+        #[cfg(target_os = "macos")]
+        let should_render = self.ui_display_link.as_ref()
+            .map_or(self.frame_timer.should_tick(), |dl| dl.vsync_ready());
+        #[cfg(not(target_os = "macos"))]
+        let should_render = self.frame_timer.should_tick();
+
+        if should_render {
             self.tick_and_render();
         }
 
+        // Keep the event loop alive. On macOS the CVDisplayLink callback
+        // calls request_redraw to wake us at each vsync. On other platforms
+        // (or if the display link isn't started yet) we self-wake.
+        #[cfg(not(target_os = "macos"))]
         for window in self
             .window_registry
             .window_arcs()

@@ -426,3 +426,131 @@ fn import_textures(
         })
     })
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// UiDisplayLink — vsync-aligned render trigger for the UI thread
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Context for the UI display link callback. Heap-allocated, accessed only
+/// from the serial CVDisplayLink callback thread.
+struct UiDisplayLinkContext {
+    vsync_ready: Arc<AtomicBool>,
+    window: Arc<winit::window::Window>,
+    stop: AtomicBool,
+}
+
+unsafe impl Send for UiDisplayLinkContext {}
+unsafe impl Sync for UiDisplayLinkContext {}
+
+/// CVDisplayLink callback for the UI thread.
+/// Sets the vsync flag and wakes the winit event loop via request_redraw.
+unsafe extern "C" fn ui_display_link_callback(
+    _display_link: CVDisplayLinkRef,
+    _in_now: *const CVTimeStamp,
+    _in_output_time: *const CVTimeStamp,
+    _flags_in: u64,
+    _flags_out: *mut u64,
+    context: *mut c_void,
+) -> i32 {
+    let ctx = unsafe { &*(context as *const UiDisplayLinkContext) };
+    if ctx.stop.load(Ordering::Acquire) {
+        return K_CV_RETURN_SUCCESS;
+    }
+    ctx.vsync_ready.store(true, Ordering::Release);
+    ctx.window.request_redraw();
+    K_CV_RETURN_SUCCESS
+}
+
+/// CVDisplayLink-driven vsync signal for the UI thread.
+///
+/// Fires at the MacBook display's exact refresh cadence and wakes the winit
+/// event loop via `request_redraw`. The event loop checks `vsync_ready()`
+/// to decide when to render, replacing the free-running `FrameTimer`.
+///
+/// This aligns UI submission to the MacBook's vsync, reducing near-miss
+/// frame drops caused by event loop scheduling jitter.
+pub struct UiDisplayLink {
+    display_link: CVDisplayLinkRef,
+    context: *mut UiDisplayLinkContext,
+    vsync_ready: Arc<AtomicBool>,
+}
+
+unsafe impl Send for UiDisplayLink {}
+
+impl UiDisplayLink {
+    /// Create a CVDisplayLink bound to the display the given window is on.
+    pub fn new(window: Arc<winit::window::Window>) -> Self {
+        let display_id = display_id_for_window(&window);
+        let vsync_ready = Arc::new(AtomicBool::new(false));
+
+        let context = Box::into_raw(Box::new(UiDisplayLinkContext {
+            vsync_ready: Arc::clone(&vsync_ready),
+            window,
+            stop: AtomicBool::new(false),
+        }));
+
+        let mut display_link: CVDisplayLinkRef = std::ptr::null_mut();
+        unsafe {
+            let ret = CVDisplayLinkCreateWithActiveCGDisplays(&mut display_link);
+            assert!(
+                ret == K_CV_RETURN_SUCCESS && !display_link.is_null(),
+                "CVDisplayLinkCreateWithActiveCGDisplays failed (ret={ret})"
+            );
+
+            if display_id != 0 {
+                let ret = CVDisplayLinkSetCurrentCGDisplay(display_link, display_id);
+                if ret != K_CV_RETURN_SUCCESS {
+                    log::warn!(
+                        "[UiDisplayLink] SetCurrentCGDisplay failed for display \
+                         {display_id} (ret={ret}), using default"
+                    );
+                }
+            }
+
+            let ret = CVDisplayLinkSetOutputCallback(
+                display_link,
+                ui_display_link_callback,
+                context as *mut c_void,
+            );
+            assert!(
+                ret == K_CV_RETURN_SUCCESS,
+                "CVDisplayLinkSetOutputCallback failed (ret={ret})"
+            );
+
+            let ret = CVDisplayLinkStart(display_link);
+            assert!(
+                ret == K_CV_RETURN_SUCCESS,
+                "CVDisplayLinkStart failed (ret={ret})"
+            );
+        }
+
+        let refresh = unsafe {
+            CVDisplayLinkGetActualOutputVideoRefreshPeriod(display_link)
+        };
+        log::info!(
+            "[UiDisplayLink] Started for display {display_id}, \
+             refresh={:.2}ms ({:.1}Hz)",
+            refresh * 1000.0,
+            if refresh > 0.0 { 1.0 / refresh } else { 0.0 },
+        );
+
+        Self { display_link, context, vsync_ready }
+    }
+
+    /// Check and consume the vsync signal. Returns true once per display vsync.
+    pub fn vsync_ready(&self) -> bool {
+        self.vsync_ready.swap(false, Ordering::AcqRel)
+    }
+}
+
+impl Drop for UiDisplayLink {
+    fn drop(&mut self) {
+        unsafe {
+            let ctx = &*self.context;
+            ctx.stop.store(true, Ordering::Release);
+            CVDisplayLinkStop(self.display_link);
+            CVDisplayLinkRelease(self.display_link);
+            drop(Box::from_raw(self.context));
+        }
+    }
+}
