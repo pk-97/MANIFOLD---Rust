@@ -1106,7 +1106,7 @@ impl Application {
                 manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: blit_sampler },
             ],
             false,
-            false,
+            true, // store: must write to drawable for present
             "Offscreen → Drawable",
         );
         present_enc.present_drawable(&drawable);
