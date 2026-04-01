@@ -84,7 +84,11 @@ impl UICacheManager {
     /// Invalidate all panel regions (full rebuild, resize).
     pub fn invalidate_all(&mut self) {
         self.panel_valid = [false; PANEL_SLOT_COUNT];
-        self.needs_clear = true;
+        // NOTE: do NOT set needs_clear here. The atlas retains stale but valid
+        // content from the previous render. With amortized panel rebuilds
+        // (MAX_FULL_PANELS_PER_FRAME), clearing would show transparent gaps
+        // for panels that haven't been re-rendered yet. Atlas clear is only
+        // needed on resize/init (handled by ensure_atlas).
     }
 
     /// Invalidate only scroll-panel regions.
@@ -121,6 +125,8 @@ impl UICacheManager {
         self.atlas_logical_w = logical_w;
         self.atlas_logical_h = logical_h;
         self.invalidate_all();
+        // New texture has undefined content — must clear.
+        self.needs_clear = true;
     }
 
     /// Atlas texture to blit to the surface.
