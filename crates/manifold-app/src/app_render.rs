@@ -457,6 +457,25 @@ impl Application {
                     }
                     continue;
                 }
+                PanelAction::GenStringParamClicked(sp_idx) => {
+                    // Open text input for a generator string param.
+                    if let Some(gp) = self.ui_root.inspector.gen_params()
+                        && let Some(sp) = gp.string_param(*sp_idx)
+                    {
+                        let current = sp.value.clone();
+                        if let Some(r) = gp.string_param_rect(&self.ui_root.tree, *sp_idx) {
+                            self.text_input.begin(
+                                crate::text_input::TextInputField::GenStringParam(*sp_idx),
+                                &current,
+                                crate::text_input::AnchorRect::new(
+                                    r.x, r.y, r.width, r.height,
+                                ),
+                                11.0,
+                            );
+                        }
+                    }
+                    continue;
+                }
                 PanelAction::NewProject => {
                     let action = self.project_io.new_project();
                     self.apply_project_io_action(action);

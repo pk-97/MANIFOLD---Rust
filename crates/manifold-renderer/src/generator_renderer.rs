@@ -393,6 +393,11 @@ impl GeneratorRenderer {
                     gpu.clear_texture(&active.render_target.texture, 0.0, 0.0, 0.0, 0.0);
                     active.needs_clear = false;
                 }
+                // Pass per-clip string params (e.g. text content) to the generator.
+                let string_params = layer.clips.iter()
+                    .find(|c| c.id.as_str() == id)
+                    .and_then(|c| c.string_params.as_ref());
+                layer_state.generator.set_string_params(string_params);
                 let new_progress = layer_state.generator.render(
                     gpu,
                     &active.render_target.texture,

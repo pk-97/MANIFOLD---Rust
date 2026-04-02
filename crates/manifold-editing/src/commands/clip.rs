@@ -507,3 +507,55 @@ impl Command for MuteClipCommand {
 
     fn description(&self) -> &str { "Mute Clip" }
 }
+
+/// Set a per-clip string parameter (e.g. text content for a text generator).
+#[derive(Debug)]
+pub struct SetClipStringParamCommand {
+    clip_id: ClipId,
+    key: String,
+    old_value: Option<String>,
+    new_value: Option<String>,
+}
+
+impl SetClipStringParamCommand {
+    pub fn new(
+        clip_id: ClipId,
+        key: String,
+        old_value: Option<String>,
+        new_value: Option<String>,
+    ) -> Self {
+        Self { clip_id, key, old_value, new_value }
+    }
+
+    fn apply(&self, project: &mut Project, value: &Option<String>) {
+        if let Some(clip) = project.timeline.find_clip_by_id_mut(&self.clip_id) {
+            match value {
+                Some(v) => {
+                    clip.string_params
+                        .get_or_insert_with(Default::default)
+                        .insert(self.key.clone(), v.clone());
+                }
+                None => {
+                    if let Some(map) = &mut clip.string_params {
+                        map.remove(&self.key);
+                        if map.is_empty() {
+                            clip.string_params = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl Command for SetClipStringParamCommand {
+    fn execute(&mut self, project: &mut Project) {
+        self.apply(project, &self.new_value.clone());
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        self.apply(project, &self.old_value.clone());
+    }
+
+    fn description(&self) -> &str { "Set String Param" }
+}

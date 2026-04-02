@@ -22,6 +22,8 @@ pub enum TextInputField {
     GroupRename(usize),
     /// Generator parameter: param_index.
     GenParam(usize),
+    /// Generator string parameter: (string_param_index).
+    GenStringParam(usize),
     /// Browser popup search filter — commit updates filter, no undo command.
     SearchFilter,
     /// Timeline marker rename. MarkerId stored in TextInputState::marker_id.

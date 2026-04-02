@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use crate::id::ClipId;
 use crate::effects::{EffectInstance, EffectGroup, ParamEnvelope};
@@ -46,6 +47,10 @@ pub struct TimelineClip {
     pub scale: f32,
     #[serde(default)]
     pub rotation: f32,
+
+    // ── String params (per-clip, for generators that need text/string data) ──
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub string_params: Option<BTreeMap<String, String>>,
 
     // ── Looping ──
     #[serde(default)]
@@ -218,6 +223,7 @@ impl Default for TimelineClip {
             translate_y: 0.0,
             scale: 1.0,
             rotation: 0.0,
+            string_params: None,
             is_looping: false,
             loop_duration_beats: Beats::ZERO,
             start_absolute_tick: 0,

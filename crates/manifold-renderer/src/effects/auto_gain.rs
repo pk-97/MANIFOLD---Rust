@@ -114,9 +114,9 @@ impl AutoGainOwnerState {
         let is_transient = deviation > 0.5; // ~0.5 stops = transient threshold
 
         // Base attack/release from Punch parameter (visual-rate timings).
-        // At 60fps, 100ms ≈ 6 frames, 1000ms ≈ 60 frames, 3000ms ≈ 180 frames.
-        let base_attack = lerp(0.100, 1.000, punch_param);
-        let base_release = lerp(3.000, 0.200, punch_param);
+        // At 60fps: 50ms ≈ 3 frames, 250ms ≈ 15 frames, 1000ms ≈ 60 frames.
+        let base_attack = lerp(0.050, 0.250, punch_param);
+        let base_release = lerp(1.000, 0.100, punch_param);
 
         // Program-dependent adjustment: widen attack on transients, tighten release.
         let attack = if is_transient { base_attack * 2.0 } else { base_attack };

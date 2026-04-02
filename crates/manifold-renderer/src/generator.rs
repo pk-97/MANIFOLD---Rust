@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use manifold_core::GeneratorTypeId;
 use crate::generator_context::GeneratorContext;
 use crate::gpu_encoder::GpuEncoder;
@@ -39,4 +40,9 @@ pub trait Generator: Send {
     /// Called after export warmup re-seek to avoid stale particle/density state.
     /// Default: no-op (stateless generators don't need this).
     fn reset_state(&mut self, _device: &manifold_gpu::GpuDevice) {}
+
+    /// Provide per-clip string parameters (e.g. text content for a text generator).
+    /// Called once per frame before `render()`. Only generators that need string
+    /// data override this; all others inherit the no-op default.
+    fn set_string_params(&mut self, _params: Option<&BTreeMap<String, String>>) {}
 }

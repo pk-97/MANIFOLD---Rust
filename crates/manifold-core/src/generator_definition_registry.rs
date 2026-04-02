@@ -6,12 +6,24 @@ use crate::effects::ParamDef;
 
 // ─── Generator Definition ───
 
+/// A string parameter definition for generators that accept text input.
+#[derive(Debug, Clone)]
+pub struct StringParamDef {
+    /// Display name shown in inspector.
+    pub name: &'static str,
+    /// Key used in `TimelineClip.string_params` map.
+    pub key: &'static str,
+    /// Default value for new clips.
+    pub default_value: &'static str,
+}
+
 #[derive(Debug, Clone)]
 pub struct GeneratorDef {
     pub display_name: &'static str,
     pub is_line_based: bool,
     pub param_count: usize,
     pub param_defs: Vec<ParamDef>,
+    pub string_param_defs: Vec<StringParamDef>,
     pub osc_prefix: Option<&'static str>,
 }
 
@@ -221,6 +233,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         is_line_based: false,
         param_count: 0,
         param_defs: Vec::new(),
+        string_param_defs: Vec::new(),
         osc_prefix: None,
     });
 
@@ -432,6 +445,7 @@ fn create_def(
         is_line_based,
         param_count,
         param_defs,
+        string_param_defs: Vec::new(),
         osc_prefix: Some(osc_prefix),
     }
 }
