@@ -45,6 +45,28 @@ impl ComputeBindCache {
     }
 }
 
+/// Cached render bind state for `draw_in_render_pass` — skips redundant
+/// fragment-stage texture/sampler bindings across consecutive draws within
+/// the same render pass.
+pub(super) struct RenderBindCache {
+    frag_textures: [*const std::ffi::c_void; CACHE_SLOTS],
+    frag_samplers: [*const std::ffi::c_void; CACHE_SLOTS],
+}
+
+impl RenderBindCache {
+    pub(super) fn new() -> Self {
+        Self {
+            frag_textures: [std::ptr::null(); CACHE_SLOTS],
+            frag_samplers: [std::ptr::null(); CACHE_SLOTS],
+        }
+    }
+
+    fn clear(&mut self) {
+        self.frag_textures = [std::ptr::null(); CACHE_SLOTS];
+        self.frag_samplers = [std::ptr::null(); CACHE_SLOTS];
+    }
+}
+
 /// Per-frame GPU command encoder. Wraps a retained Metal command buffer.
 ///
 /// Automatically manages compute/render/blit encoder transitions.
@@ -57,8 +79,11 @@ pub struct GpuEncoder {
     /// Bind cache for the active compute encoder — eliminates redundant
     /// set_texture/set_sampler/set_buffer calls across consecutive dispatches.
     pub(super) compute_cache: ComputeBindCache,
-    /// Pre-compiled compute clear pipeline — avoids render encoder for clears.
-    pub(super) clear_pipeline: *const GpuComputePipeline,
+    /// Bind cache for multi-draw render passes (`draw_in_render_pass`) —
+    /// eliminates redundant fragment texture/sampler bindings across draws.
+    pub(super) render_cache: RenderBindCache,
+    /// Pre-compiled compute clear pipelines per texture format.
+    pub(super) clear_pipelines: *const super::device::ClearPipelines,
 }
 
 unsafe impl Send for GpuEncoder {}
@@ -387,9 +412,9 @@ impl GpuEncoder {
 
     /// Draw instanced geometry with a render pipeline.
     ///
-    /// Unlike `draw_fullscreen()` which only sets fragment bindings,
-    /// this sets bindings on BOTH vertex and fragment stages.
-    /// Used by LinePipeline for instanced line/dot rendering.
+    /// Buffer/Bytes bindings are set on BOTH vertex and fragment stages.
+    /// Texture/Sampler bindings are fragment-only (no current vertex shader
+    /// samples textures — avoids redundant vertex-stage bindings).
     #[allow(clippy::too_many_arguments)]
     pub fn draw_instanced(
         &mut self,
@@ -422,7 +447,6 @@ impl GpuEncoder {
             match binding {
                 GpuBinding::Buffer { binding: b, buffer, offset } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    // Set on both vertex and fragment stages
                     enc.set_vertex_buffer(
                         slot.metal_index as _, Some(&buffer.raw), *offset as _,
                     );
@@ -432,12 +456,10 @@ impl GpuEncoder {
                 }
                 GpuBinding::Texture { binding: b, texture } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
                 GpuBinding::Sampler { binding: b, sampler } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
@@ -511,12 +533,10 @@ impl GpuEncoder {
                 }
                 GpuBinding::Texture { binding: b, texture } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
                 GpuBinding::Sampler { binding: b, sampler } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
@@ -545,7 +565,7 @@ impl GpuEncoder {
 
     /// Draw indexed geometry with a render pipeline and vertex/index buffers.
     ///
-    /// Sets bindings on BOTH vertex and fragment stages (same as `draw_instanced`).
+    /// Buffer/Bytes on both stages; Texture/Sampler fragment-only.
     /// Vertex buffer bound at index 30 (matching the vertex descriptor buffer index).
     #[allow(clippy::too_many_arguments)]
     pub fn draw_indexed(
@@ -603,7 +623,6 @@ impl GpuEncoder {
         const VERTEX_BUFFER_INDEX: u64 = 30;
         enc.set_vertex_buffer(VERTEX_BUFFER_INDEX, Some(&vertex_buffer.raw), vertex_offset as _);
 
-        // Set all bindings on both vertex and fragment stages.
         for binding in bindings {
             match binding {
                 GpuBinding::Buffer { binding: b, buffer, offset } => {
@@ -617,12 +636,10 @@ impl GpuEncoder {
                 }
                 GpuBinding::Texture { binding: b, texture } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
                     enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
                 }
                 GpuBinding::Sampler { binding: b, sampler } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                     enc.set_fragment_sampler_state(slot.metal_index as _, Some(&sampler.raw));
                 }
                 GpuBinding::Bytes { binding: b, data } => {
@@ -661,6 +678,7 @@ impl GpuEncoder {
         label: &str,
     ) {
         self.end_current();
+        self.render_cache.clear();
 
         let desc = metal::RenderPassDescriptor::new();
         let color = desc.color_attachments().object_at(0).unwrap();
@@ -743,17 +761,33 @@ impl GpuEncoder {
                 }
                 GpuBinding::Texture { binding: b, texture } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_texture(slot.metal_index as _, Some(&texture.raw));
-                    enc.set_fragment_texture(slot.metal_index as _, Some(&texture.raw));
+                    let idx = slot.metal_index as usize;
+                    let id = texture_identity(&texture.raw);
+                    if idx >= CACHE_SLOTS
+                        || self.render_cache.frag_textures[idx] != id
+                    {
+                        enc.set_fragment_texture(
+                            slot.metal_index as _, Some(&texture.raw),
+                        );
+                        if idx < CACHE_SLOTS {
+                            self.render_cache.frag_textures[idx] = id;
+                        }
+                    }
                 }
                 GpuBinding::Sampler { binding: b, sampler } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_sampler_state(
-                        slot.metal_index as _, Some(&sampler.raw),
-                    );
-                    enc.set_fragment_sampler_state(
-                        slot.metal_index as _, Some(&sampler.raw),
-                    );
+                    let idx = slot.metal_index as usize;
+                    let id = sampler_identity(&sampler.raw);
+                    if idx >= CACHE_SLOTS
+                        || self.render_cache.frag_samplers[idx] != id
+                    {
+                        enc.set_fragment_sampler_state(
+                            slot.metal_index as _, Some(&sampler.raw),
+                        );
+                        if idx < CACHE_SLOTS {
+                            self.render_cache.frag_samplers[idx] = id;
+                        }
+                    }
                 }
                 GpuBinding::Bytes { binding: b, data } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
@@ -792,16 +826,17 @@ impl GpuEncoder {
     }
 
     /// Clear a texture to a solid color.
-    /// Uses compute dispatch for Rgba16Float textures (avoids render encoder
-    /// creation and TBDR tile overhead). Falls back to render-pass clear for
-    /// other formats since the storage texture binding requires a matching format.
+    /// Uses compute dispatch for formats with storage write support (avoids
+    /// render encoder creation and TBDR tile overhead). Falls back to
+    /// render-pass clear for formats without storage support (R16Float, etc.).
     pub fn clear_texture(&mut self, texture: &GpuTexture, r: f64, g: f64, b: f64, a: f64) {
-        if texture.format == crate::GpuTextureFormat::Rgba16Float {
+        let pipelines = unsafe { &*self.clear_pipelines };
+        let has_write = texture.raw.usage().contains(metal::MTLTextureUsage::ShaderWrite);
+        if let Some(pipeline) = pipelines.get(texture.format).filter(|_| has_write) {
             #[repr(C)]
             #[derive(Clone, Copy)]
             struct ClearColor { r: f32, g: f32, b: f32, a: f32 }
 
-            let pipeline = unsafe { &*self.clear_pipeline };
             let color = ClearColor {
                 r: r as f32, g: g as f32, b: b as f32, a: a as f32,
             };
@@ -821,7 +856,7 @@ impl GpuEncoder {
                 "Clear Texture",
             );
         } else {
-            // Non-Rgba16Float: use render-pass clear (rare — mostly display surfaces).
+            // Formats without storage write support (R16Float, R8Unorm, etc.).
             self.end_current();
             let desc = metal::RenderPassDescriptor::new();
             let color_att = desc.color_attachments().object_at(0).unwrap();

@@ -2,24 +2,76 @@
 
 use crate::types::*;
 use super::*;
-use super::encoder::EncoderState;
+use super::encoder::{EncoderState, RenderBindCache};
 
-/// Compute shader that clears a texture to a solid color.
-/// Replaces render-pass-based clears to avoid creating render encoders
-/// (which incur TBDR tile memory load/store overhead).
-const CLEAR_TEXTURE_WGSL: &str = r#"
-struct ClearColor { r: f32, g: f32, b: f32, a: f32, }
+/// Generate a compute clear shader for a given WGSL storage texel format.
+fn clear_texture_wgsl(texel_format: &str) -> String {
+    format!(
+        r#"struct ClearColor {{ r: f32, g: f32, b: f32, a: f32, }}
 
-@group(0) @binding(0) var output_tex: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(0) var output_tex: texture_storage_2d<{texel_format}, write>;
 @group(0) @binding(1) var<uniform> color: ClearColor;
 
 @compute @workgroup_size(16, 16)
-fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {{
     let dims = textureDimensions(output_tex);
-    if id.x >= dims.x || id.y >= dims.y { return; }
+    if id.x >= dims.x || id.y >= dims.y {{ return; }}
     textureStore(output_tex, vec2<i32>(id.xy), vec4<f32>(color.r, color.g, color.b, color.a));
+}}"#
+    )
 }
-"#;
+
+/// Generate a compute clear shader for uint storage texel formats.
+fn clear_texture_uint_wgsl(texel_format: &str) -> String {
+    format!(
+        r#"struct ClearColor {{ r: f32, g: f32, b: f32, a: f32, }}
+
+@group(0) @binding(0) var output_tex: texture_storage_2d<{texel_format}, write>;
+@group(0) @binding(1) var<uniform> color: ClearColor;
+
+@compute @workgroup_size(16, 16)
+fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {{
+    let dims = textureDimensions(output_tex);
+    if id.x >= dims.x || id.y >= dims.y {{ return; }}
+    textureStore(output_tex, vec2<i32>(id.xy), vec4<u32>(
+        u32(color.r), u32(color.g), u32(color.b), u32(color.a)));
+}}"#
+    )
+}
+
+/// Pre-compiled compute clear pipelines for all storage-capable texture formats.
+/// Eliminates the empty render encoder that was previously used for non-Rgba16Float clears.
+pub(super) struct ClearPipelines {
+    rgba16float: GpuComputePipeline,
+    rgba8unorm: GpuComputePipeline,
+    bgra8unorm: GpuComputePipeline,
+    rgba32float: GpuComputePipeline,
+    r32float: GpuComputePipeline,
+    rg32float: GpuComputePipeline,
+    r32uint: GpuComputePipeline,
+}
+
+impl ClearPipelines {
+    /// Look up the clear pipeline for a texture format.
+    /// Returns None for formats without storage write support (R16Float, R8Unorm, etc.)
+    /// — caller falls back to render-pass clear.
+    pub(super) fn get(
+        &self, format: crate::GpuTextureFormat,
+    ) -> Option<&GpuComputePipeline> {
+        use crate::GpuTextureFormat::*;
+        match format {
+            Rgba16Float => Some(&self.rgba16float),
+            Rgba8Unorm => Some(&self.rgba8unorm),
+            Bgra8Unorm => Some(&self.bgra8unorm),
+            Rgba32Float => Some(&self.rgba32float),
+            R32Float => Some(&self.r32float),
+            Rg32Float => Some(&self.rg32float),
+            R32Uint => Some(&self.r32uint),
+            // No WGSL storage texture support for these formats.
+            R16Float | Rg16Float | R8Unorm | Rgba8UnormSrgb => None,
+        }
+    }
+}
 use super::format::*;
 use super::shader_compiler::{compile_wgsl_to_msl, compile_wgsl_to_msl_render, find_entry_function};
 
@@ -46,9 +98,8 @@ pub struct GpuDevice {
     render_cache: std::sync::Mutex<std::collections::HashMap<u64, GpuRenderPipeline>>,
     /// On-disk MSL cache — skips WGSL→naga→SPIR-V→spirv-opt→SPIRV-Cross on hit.
     msl_cache: std::sync::Mutex<Option<msl_cache::MslCache>>,
-    /// Pre-compiled compute pipeline for clear_texture — avoids creating a
-    /// render pass (and render encoder) just to clear a texture to a color.
-    clear_pipeline: std::sync::OnceLock<GpuComputePipeline>,
+    /// Pre-compiled compute clear pipelines per texture format.
+    clear_pipelines: std::sync::OnceLock<ClearPipelines>,
 }
 
 // Safety: metal::Device and metal::CommandQueue are thread-safe (Metal guarantee).
@@ -73,7 +124,7 @@ impl GpuDevice {
             compute_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             render_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             msl_cache: std::sync::Mutex::new(None),
-            clear_pipeline: std::sync::OnceLock::new(),
+            clear_pipelines: std::sync::OnceLock::new(),
         }
     }
 
@@ -759,14 +810,29 @@ impl GpuDevice {
         pipeline
     }
 
-    /// Create a new command encoder for one frame's GPU work.
-    /// Get or lazily compile the compute clear pipeline.
-    fn clear_pipeline(&self) -> &GpuComputePipeline {
-        self.clear_pipeline.get_or_init(|| {
-            self.create_compute_pipeline(CLEAR_TEXTURE_WGSL, "cs_main", "Clear Texture")
+    /// Get or lazily compile all compute clear pipelines.
+    fn clear_pipelines(&self) -> &ClearPipelines {
+        self.clear_pipelines.get_or_init(|| {
+            let make = |fmt: &str| {
+                let wgsl = clear_texture_wgsl(fmt);
+                self.create_compute_pipeline(&wgsl, "cs_main", &format!("Clear {fmt}"))
+            };
+            ClearPipelines {
+                rgba16float: make("rgba16float"),
+                rgba8unorm: make("rgba8unorm"),
+                bgra8unorm: make("bgra8unorm"),
+                rgba32float: make("rgba32float"),
+                r32float: make("r32float"),
+                rg32float: make("rg32float"),
+                r32uint: {
+                    let wgsl = clear_texture_uint_wgsl("r32uint");
+                    self.create_compute_pipeline(&wgsl, "cs_main", "Clear r32uint")
+                },
+            }
         })
     }
 
+    /// Create a new command encoder for one frame's GPU work.
     pub fn create_encoder(&self, label: &str) -> GpuEncoder {
         // Use retained references — Metal retains all resources set on encoders.
         // Slightly higher overhead than unretained, but guarantees resources
@@ -782,7 +848,8 @@ impl GpuDevice {
             cmd_buf_ptr: ptr,
             state: EncoderState::None,
             compute_cache: ComputeBindCache::new(),
-            clear_pipeline: self.clear_pipeline() as *const GpuComputePipeline,
+            render_cache: RenderBindCache::new(),
+            clear_pipelines: self.clear_pipelines() as *const ClearPipelines,
         }
     }
 
