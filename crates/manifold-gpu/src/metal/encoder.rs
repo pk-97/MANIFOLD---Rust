@@ -46,11 +46,14 @@ impl ComputeBindCache {
 }
 
 /// Cached render bind state for `draw_in_render_pass` — skips redundant
-/// fragment-stage texture/sampler bindings across consecutive draws within
-/// the same render pass.
+/// bindings across consecutive draws within the same render pass.
 pub(super) struct RenderBindCache {
     frag_textures: [*const std::ffi::c_void; CACHE_SLOTS],
     frag_samplers: [*const std::ffi::c_void; CACHE_SLOTS],
+    /// Buffers: (ObjC pointer, offset) per slot — same identity = skip both stages.
+    buffers: [(*const std::ffi::c_void, u64); CACHE_SLOTS],
+    /// Bytes: (data pointer, length) per slot — same slice = skip both stages.
+    bytes: [(*const u8, usize); CACHE_SLOTS],
 }
 
 impl RenderBindCache {
@@ -58,12 +61,16 @@ impl RenderBindCache {
         Self {
             frag_textures: [std::ptr::null(); CACHE_SLOTS],
             frag_samplers: [std::ptr::null(); CACHE_SLOTS],
+            buffers: [(std::ptr::null(), 0); CACHE_SLOTS],
+            bytes: [(std::ptr::null(), 0); CACHE_SLOTS],
         }
     }
 
     fn clear(&mut self) {
         self.frag_textures = [std::ptr::null(); CACHE_SLOTS];
         self.frag_samplers = [std::ptr::null(); CACHE_SLOTS];
+        self.buffers = [(std::ptr::null(), 0); CACHE_SLOTS];
+        self.bytes = [(std::ptr::null(), 0); CACHE_SLOTS];
     }
 }
 
@@ -752,12 +759,21 @@ impl GpuEncoder {
             match binding {
                 GpuBinding::Buffer { binding: b, buffer, offset } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_buffer(
-                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
-                    );
-                    enc.set_fragment_buffer(
-                        slot.metal_index as _, Some(&buffer.raw), *offset as _,
-                    );
+                    let idx = slot.metal_index as usize;
+                    let id = buffer_identity(&buffer.raw);
+                    if idx >= CACHE_SLOTS
+                        || self.render_cache.buffers[idx] != (id, *offset)
+                    {
+                        enc.set_vertex_buffer(
+                            slot.metal_index as _, Some(&buffer.raw), *offset as _,
+                        );
+                        enc.set_fragment_buffer(
+                            slot.metal_index as _, Some(&buffer.raw), *offset as _,
+                        );
+                        if idx < CACHE_SLOTS {
+                            self.render_cache.buffers[idx] = (id, *offset);
+                        }
+                    }
                 }
                 GpuBinding::Texture { binding: b, texture } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
@@ -791,14 +807,23 @@ impl GpuEncoder {
                 }
                 GpuBinding::Bytes { binding: b, data } => {
                     let Some(slot) = pipeline.slot_map.get(*b) else { continue };
-                    enc.set_vertex_bytes(
-                        slot.metal_index as _, data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
-                    enc.set_fragment_bytes(
-                        slot.metal_index as _, data.len() as _,
-                        data.as_ptr() as *const _,
-                    );
+                    let idx = slot.metal_index as usize;
+                    let id = (data.as_ptr(), data.len());
+                    if idx >= CACHE_SLOTS
+                        || self.render_cache.bytes[idx] != id
+                    {
+                        enc.set_vertex_bytes(
+                            slot.metal_index as _, data.len() as _,
+                            data.as_ptr() as *const _,
+                        );
+                        enc.set_fragment_bytes(
+                            slot.metal_index as _, data.len() as _,
+                            data.as_ptr() as *const _,
+                        );
+                        if idx < CACHE_SLOTS {
+                            self.render_cache.bytes[idx] = id;
+                        }
+                    }
                 }
             }
         }
