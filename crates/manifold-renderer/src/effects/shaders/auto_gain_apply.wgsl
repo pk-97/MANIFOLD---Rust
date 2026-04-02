@@ -89,9 +89,10 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     let drive = abs(uniforms.gain_delta);
 
     // Apply character-specific gain coloration
+    let clean = color.rgb * gain;
     var compressed: vec3<f32>;
     if uniforms.character == 0u {
-        compressed = apply_clean(color.rgb, gain);
+        compressed = clean;
     } else if uniforms.character == 1u {
         compressed = apply_warm(color.rgb, gain, drive);
     } else if uniforms.character == 2u {
@@ -100,6 +101,17 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
         compressed = apply_vivid(color.rgb, gain, drive);
     } else {
         compressed = apply_grit(color.rgb, gain, drive);
+    }
+
+    // Energy-preserve: character curves shape color/tone but must not
+    // change overall brightness. Rescale to match the clean gain path's
+    // luminance so the compressor stays in control of brightness.
+    if uniforms.character != 0u {
+        let clean_lum = dot(clean, LUMA);
+        let char_lum = dot(compressed, LUMA);
+        if char_lum > 0.001 {
+            compressed = compressed * (clean_lum / char_lum);
+        }
     }
 
     // HDR retention: preserve above-1.0 energy based on retention param.
