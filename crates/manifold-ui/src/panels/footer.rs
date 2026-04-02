@@ -183,7 +183,7 @@ impl FooterPanel {
             vsync_btn_id: -1,
             vsync_actual_id: -1,
             vsync_enabled: true,
-            vsync_actual_fps: 60.0,
+            vsync_actual_fps: 0.0,
             selection_info: String::new(),
             quantize_text: "Off".into(),
             resolution_text: "1080p".into(),
@@ -235,7 +235,7 @@ impl FooterPanel {
         if state_changed || fps_changed {
             self.vsync_actual_fps = actual_fps;
             if self.vsync_actual_id >= 0 {
-                let text = if enabled {
+                let text = if enabled && actual_fps > 0.0 {
                     format!("→{:.0}", actual_fps)
                 } else {
                     String::new()
