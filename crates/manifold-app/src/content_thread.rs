@@ -52,6 +52,16 @@ pub struct ContentThread {
     /// Content frame timer — target FPS synced from project settings.
     pub timer: FrameTimer,
 
+    /// VSync waiter from display (macOS CVDisplayLink via manifold-gpu).
+    /// When present and vsync mode is enabled, the content thread blocks on
+    /// this signal instead of using the sleep-based timer. The UI thread
+    /// owns the GpuVsyncSignal (for retargeting); we hold the waiter.
+    #[cfg(target_os = "macos")]
+    pub vsync_signal: Option<manifold_gpu::GpuVsyncWaiter>,
+    /// Last vsync count seen — used for frame divisor skip logic.
+    #[cfg(target_os = "macos")]
+    pub last_vsync_count: u64,
+
     // ── Sync infrastructure ──
     /// Authority gatekeeper — only the active ClockAuthority can issue transport commands.
     pub sync_arbiter: SyncArbiter,
@@ -192,6 +202,17 @@ impl ContentThread {
             }
         }
 
+        // Initialize vsync mode from project settings if signal is available.
+        #[cfg(target_os = "macos")]
+        if let Some(p) = self.engine.project()
+            && p.settings.vsync_enabled
+            && let Some(ref signal) = self.vsync_signal
+        {
+            let hz = signal.display_hz();
+            self.timer.set_vsync_mode(true, hz);
+            self.last_vsync_count = signal.vsync_count();
+        }
+
         loop {
             // 1. Drain ALL pending commands
             loop {
@@ -218,20 +239,37 @@ impl ContentThread {
                 std::thread::sleep(std::time::Duration::from_millis(16));
                 continue;
             }
-            if !self.timer.should_tick() {
-                // Precise sleep: compute exact time to next frame, sleep most of it,
-                // then spin-wait for the final stretch to avoid macOS sleep overshoot.
-                // macOS thread::sleep overshoots by 2-4ms under load. A 3ms spin margin
-                // keeps the content thread hitting its target FPS consistently.
-                let remaining = self.timer.time_until_next_tick();
-                if remaining > std::time::Duration::from_millis(4) {
-                    // Sleep for most of the remaining time, leaving 3ms margin for spin-wait
-                    std::thread::sleep(remaining - std::time::Duration::from_millis(3));
-                } else if remaining > std::time::Duration::from_micros(100) {
-                    // Close to deadline — yield to OS scheduler instead of sleeping
-                    std::thread::yield_now();
+
+            // ── VSync mode: block on display vsync signal ──
+            #[cfg(target_os = "macos")]
+            let should_render = if self.timer.is_vsync_mode() {
+                if let Some(ref signal) = self.vsync_signal {
+                    let result = signal.wait(self.last_vsync_count);
+                    if result.timed_out {
+                        // Display link stopped firing (display sleep, disconnect).
+                        // Fall through and render anyway to avoid stalling.
+                        true
+                    } else {
+                        self.last_vsync_count = result.count;
+                        // Update display Hz if it changed (window moved between monitors).
+                        if (result.display_hz - self.timer.display_hz()).abs() > 0.1 {
+                            self.timer.update_display_hz(result.display_hz);
+                        }
+                        // Only render on every Nth vsync (frame divisor).
+                        result.count % self.timer.frame_divisor() as u64 == 0
+                    }
+                } else {
+                    // VSync mode requested but no signal available — fall back to timer.
+                    self.wait_timer()
                 }
-                // Below 100μs: fall through to re-check should_tick() immediately
+            } else {
+                self.wait_timer()
+            };
+
+            #[cfg(not(target_os = "macos"))]
+            let should_render = self.wait_timer();
+
+            if !should_render {
                 continue;
             }
             // Drain autoreleased ObjC Metal objects at the end of each frame,
@@ -243,6 +281,21 @@ impl ContentThread {
             #[cfg(not(target_os = "macos"))]
             self.tick_frame(&state_tx);
         }
+    }
+
+    /// Timer-based frame wait. Returns true when the frame deadline has passed.
+    /// Uses sleep + spin-wait for precise pacing (avoids macOS 2-4ms sleep overshoot).
+    fn wait_timer(&self) -> bool {
+        if self.timer.should_tick() {
+            return true;
+        }
+        let remaining = self.timer.time_until_next_tick();
+        if remaining > std::time::Duration::from_millis(4) {
+            std::thread::sleep(remaining - std::time::Duration::from_millis(3));
+        } else if remaining > std::time::Duration::from_micros(100) {
+            std::thread::yield_now();
+        }
+        false
     }
 
     /// Execute one content frame: tick engine, render, send state to UI.
@@ -693,6 +746,8 @@ impl ContentThread {
                     #[cfg(not(feature = "profiling"))]
                     { 0 }
                 },
+                vsync_active: self.timer.is_vsync_mode(),
+                vsync_actual_fps: self.timer.actual_fps() as f32,
                 led_enabled: self.led_controller.as_ref().is_some_and(|c| c.is_enabled()),
                 led_initialized: self.led_controller.as_ref().is_some_and(|c| c.is_initialized()),
                 is_exporting: false,

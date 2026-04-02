@@ -13,6 +13,12 @@ pub struct ProjectSettings {
     pub output_height: i32,
     #[serde(default = "default_60")]
     pub frame_rate: f32,
+    /// VSync: lock content thread rendering to display refresh cadence.
+    /// When enabled, the content thread renders in sync with the display's vsync
+    /// signal via CVDisplayLink (macOS). frame_rate snaps to the nearest clean
+    /// display divisor. When disabled, timer-based pacing at frame_rate.
+    #[serde(default = "default_true")]
+    pub vsync_enabled: bool,
     #[serde(default)]
     pub export_hdr: bool,
 
@@ -129,6 +135,7 @@ impl Default for ProjectSettings {
             output_width: 1920,
             output_height: 1080,
             frame_rate: 60.0,
+            vsync_enabled: true,
             export_hdr: false,
             video_library_paths: Vec::new(),
             video_player_pool_size: 10,
@@ -308,3 +315,4 @@ fn default_ppb() -> f32 { 120.0 }
 fn default_9001() -> i32 { 9001 }
 fn default_neg_one_f() -> f32 { -1.0 }
 fn default_neg_one_i32() -> i32 { -1 }
+fn default_true() -> bool { true }

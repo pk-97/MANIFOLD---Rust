@@ -651,6 +651,11 @@ impl Application {
                 presentation,
             );
             self.output_presenter = Some(presenter);
+            // Retarget content vsync to the output window's display —
+            // the output is the performance display for live visuals.
+            if let Some(ref mut signal) = self.content_vsync_signal {
+                signal.retarget(&window);
+            }
         }
 
         let state = WindowState {

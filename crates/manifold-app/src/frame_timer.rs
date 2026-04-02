@@ -1,6 +1,11 @@
 use std::time::{Duration, Instant};
 
 /// Frame pacing and timing statistics.
+///
+/// Supports two modes:
+/// - **Timer mode** (default): sleep-based pacing at `target_fps`.
+/// - **VSync mode**: content thread is woken by an external display vsync signal.
+///   `target_fps` is snapped to the nearest clean display divisor.
 #[allow(dead_code)]
 pub struct FrameTimer {
     target_fps: f64,
@@ -16,6 +21,16 @@ pub struct FrameTimer {
 
     /// Number of ticks missed this frame (dt exceeded 2× target = frame drop).
     missed_ticks: u64,
+
+    // ── VSync mode ──
+    /// When true, pacing is driven by an external vsync signal, not sleep timer.
+    vsync_mode: bool,
+    /// Display refresh rate in Hz when in vsync mode.
+    display_hz: f64,
+    /// Render every Nth vsync (e.g., 2 = half refresh rate).
+    frame_divisor: u32,
+    /// Actual FPS when vsync-locked: display_hz / frame_divisor.
+    actual_fps: f64,
 }
 
 const FPS_SAMPLE_INTERVAL: f64 = 1.0;
@@ -34,6 +49,10 @@ impl FrameTimer {
             fps_frame_count: 0,
             current_fps: 0.0,
             missed_ticks: 0,
+            vsync_mode: false,
+            display_hz: 0.0,
+            frame_divisor: 1,
+            actual_fps: target_fps,
         }
     }
 
@@ -94,6 +113,72 @@ impl FrameTimer {
 
     pub fn target_fps(&self) -> f64 {
         self.target_fps
+    }
+
+    // ── VSync mode ──────────────────────────────────────────────────
+
+    /// Enable or disable vsync-driven pacing.
+    ///
+    /// When enabled with a valid `display_hz`, computes the frame divisor
+    /// so that `actual_fps = display_hz / divisor` is the closest achievable
+    /// rate to `target_fps`. When disabled or `display_hz` is invalid,
+    /// falls back to timer-based pacing.
+    pub fn set_vsync_mode(&mut self, enabled: bool, display_hz: f64) {
+        if enabled && display_hz > 0.0 {
+            self.vsync_mode = true;
+            self.display_hz = display_hz;
+            self.recompute_divisor();
+        } else {
+            self.vsync_mode = false;
+            self.display_hz = 0.0;
+            self.frame_divisor = 1;
+            self.actual_fps = self.target_fps;
+        }
+    }
+
+    /// Update display Hz (e.g., after window moved to a different monitor).
+    /// Recomputes the frame divisor if in vsync mode.
+    pub fn update_display_hz(&mut self, hz: f64) {
+        if self.vsync_mode && hz > 0.0 {
+            self.display_hz = hz;
+            self.recompute_divisor();
+        }
+    }
+
+    /// Whether pacing is currently driven by vsync signal.
+    pub fn is_vsync_mode(&self) -> bool {
+        self.vsync_mode
+    }
+
+    /// Display refresh rate in Hz (only meaningful in vsync mode).
+    pub fn display_hz(&self) -> f64 {
+        self.display_hz
+    }
+
+    /// Render every Nth vsync. Content thread skips wakeups where
+    /// `vsync_count % frame_divisor != 0`.
+    pub fn frame_divisor(&self) -> u32 {
+        self.frame_divisor
+    }
+
+    /// Actual locked FPS in vsync mode (display_hz / frame_divisor).
+    /// In timer mode, returns target_fps.
+    pub fn actual_fps(&self) -> f64 {
+        self.actual_fps
+    }
+
+    /// Recompute `frame_divisor` and `actual_fps` from current
+    /// `display_hz` and `target_fps`.
+    fn recompute_divisor(&mut self) {
+        // divisor = round(display_hz / target_fps), clamped to >= 1.
+        // If target_fps exceeds display_hz, divisor = 1 (render every vsync).
+        let raw = (self.display_hz / self.target_fps).round() as u32;
+        self.frame_divisor = raw.max(1);
+        self.actual_fps = self.display_hz / self.frame_divisor as f64;
+        log::info!(
+            "[FrameTimer] VSync divisor: {} (display={:.1}Hz, target={:.1}fps, actual={:.1}fps)",
+            self.frame_divisor, self.display_hz, self.target_fps, self.actual_fps,
+        );
     }
 
     fn update_fps_counter(&mut self, now: Instant) {

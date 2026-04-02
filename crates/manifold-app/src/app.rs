@@ -225,6 +225,10 @@ pub struct Application {
     /// CVDisplayLink-driven output presenter for hardware-synchronized frame pacing.
     #[cfg(target_os = "macos")]
     pub(crate) output_presenter: Option<crate::display_link::DisplayLinkPresenter>,
+    /// Content thread vsync signal — shared with ContentThread for display-synced pacing.
+    /// Retargeted when windows move between displays or output window opens/closes.
+    #[cfg(target_os = "macos")]
+    pub(crate) content_vsync_signal: Option<manifold_gpu::GpuVsyncSignal>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
@@ -386,6 +390,8 @@ impl Application {
             ui_display_link: None,
             #[cfg(target_os = "macos")]
             output_presenter: None,
+            #[cfg(target_os = "macos")]
+            content_vsync_signal: None,
             ui_renderer: None,
             ui_cache_manager: None,
             layer_bitmap_gpu: None,
@@ -1089,6 +1095,11 @@ impl ApplicationHandler for Application {
             // render trigger replacing the free-running FrameTimer.
             #[cfg(target_os = "macos")]
             {
+                // Create content thread vsync signal targeting the primary window's
+                // display. Retargeted to output window when it opens.
+                self.content_vsync_signal = Some(
+                    manifold_gpu::GpuVsyncSignal::new(window_arc.as_ref()),
+                );
                 self.ui_display_link = Some(
                     crate::display_link::UiDisplayLink::new(window_arc),
                 );
@@ -1365,6 +1376,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 timer: crate::frame_timer::FrameTimer::new(
                     self.local_project.settings.frame_rate as f64,
                 ),
+                #[cfg(target_os = "macos")]
+                vsync_signal: self.content_vsync_signal.as_ref()
+                    .map(|s| s.create_waiter()),
+                #[cfg(target_os = "macos")]
+                last_vsync_count: 0,
                 sync_arbiter: manifold_playback::sync::SyncArbiter::new(),
                 osc_receiver: manifold_playback::osc_receiver::OscReceiver::new(),
                 osc_sync: manifold_playback::osc_sync::OscSyncController::new(),
@@ -2137,6 +2153,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             {
                 self.output_presenter = None;
                 self.output_saved_frame = None;
+                // Retarget content vsync back to the primary window.
+                if let Some(ref mut signal) = self.content_vsync_signal
+                    && let Some(pid) = self.primary_window_id
+                    && let Some(ws) = self.window_registry.get(&pid)
+                {
+                    signal.retarget(&*ws.window);
+                }
             }
             let output_ids: Vec<_> = self.window_registry.iter()
                 .filter(|(_, ws)| matches!(ws.role, WindowRole::Output { .. }))
@@ -2251,6 +2274,17 @@ impl Application {
             {
                 p.retarget_if_needed(win);
             }
+            // Retarget content vsync signal: prefer output window's display
+            // (that's the performance display), fall back to primary window.
+            if let Some(ref mut signal) = self.content_vsync_signal {
+                if let Some(ref win) = output_window {
+                    signal.retarget(win.as_ref());
+                } else if let Some(pid) = self.primary_window_id
+                    && let Some(ws) = self.window_registry.get(&pid)
+                {
+                    signal.retarget(&*ws.window);
+                }
+            }
         }
     }
 }
@@ -2259,6 +2293,14 @@ impl Application {
 
 impl Drop for Application {
     fn drop(&mut self) {
+        // Shut down content vsync signal BEFORE sending Shutdown command.
+        // The content thread may be blocked in GpuVsyncWaiter::wait() —
+        // shutdown() unblocks the condvar so it can receive the Shutdown command.
+        #[cfg(target_os = "macos")]
+        if let Some(ref signal) = self.content_vsync_signal {
+            signal.shutdown();
+        }
+
         // Ensure the content thread is shut down even on abnormal exit (panic, etc.).
         // Normal exit already handles this in WindowEvent::CloseRequested, but if the
         // Application is dropped without that event, the content thread would leak.
