@@ -1438,12 +1438,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 if is_primary {
                     self.shutting_down = true;
 
-                    // Stop UI display link FIRST — its callback calls
-                    // request_redraw() which sends to the main thread.
-                    // CVDisplayLinkStop blocks until the callback finishes,
-                    // so this must happen before we block on anything else.
+                    // Stop display links FIRST — their callbacks may call
+                    // nextDrawable() or request_redraw(). CVDisplayLinkStop
+                    // blocks until the in-flight callback finishes, so this
+                    // must happen before we destroy windows or block on joins.
                     #[cfg(target_os = "macos")]
-                    { self.ui_display_link = None; }
+                    {
+                        self.ui_display_link = None;
+                        self.output_presenter = None;
+                    }
 
                     // Shut down content thread
                     if let Some(tx) = self.content_tx.take() {

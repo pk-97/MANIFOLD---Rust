@@ -912,11 +912,44 @@ impl Application {
         let logical_h = (surface_h as f64 / scale) as u32;
         let sf = scale as f32;
 
-        // ── Fast path: if nothing visual changed, skip present entirely.
-        // The last presented frame is still on screen — no need to acquire
-        // a drawable (which blocks 7-16ms waiting on WindowServer) just to
-        // re-blit the same offscreen texture.
+        // ── Fast path: nothing visual changed — re-blit cached offscreen.
+        // Must still present every callback to maintain consistent cadence.
+        // ProMotion adapts refresh rate based on observed frame delivery;
+        // skipping presents causes it to drop from 120Hz to 60Hz, producing
+        // an 8/16ms nextDrawable bounce when it oscillates back.
         if !self.offscreen_dirty {
+            if self.surface_resized_this_frame {
+                self.surface_resized_this_frame = false;
+                return;
+            }
+            let drawable = {
+                let ws = match self.window_registry.get_mut(&window_id) {
+                    Some(ws) => ws,
+                    None => return,
+                };
+                let surface = match ws.surface.as_ref() {
+                    Some(s) => s,
+                    None => return,
+                };
+                match surface.next_drawable() {
+                    Some(d) => d,
+                    None => return,
+                }
+            };
+            let drawable_tex = drawable.gpu_texture(manifold_gpu::GpuTextureFormat::Bgra8Unorm);
+            if let (Some(blit_p), Some(blit_s)) = (&self.blit_pipeline, &self.blit_sampler) {
+                let mut enc = gpu.device.create_encoder("Re-present");
+                enc.draw_fullscreen(
+                    blit_p, &drawable_tex,
+                    &[
+                        manifold_gpu::GpuBinding::Texture { binding: 0, texture: offscreen },
+                        manifold_gpu::GpuBinding::Sampler { binding: 1, sampler: blit_s },
+                    ],
+                    false, true, "Offscreen → Drawable",
+                );
+                enc.present_drawable(&drawable);
+                enc.commit();
+            }
             return;
         }
         self.offscreen_dirty = false;
