@@ -308,11 +308,11 @@ impl DisplayLinkPresenter {
         // 3 drawables: CVDisplayLink is the pacer, so nextDrawable should not
         // block. 3 ensures availability; if it still blocks, we skip the frame.
         surface.set_maximum_drawable_count(3);
-        // Windowed mode: batch presents into Core Animation transactions so
-        // WindowServer composites them cleanly (eliminates phase mismatch judder).
-        // Fullscreen/presentation mode: don't batch — Direct Display bypasses
-        // the compositor entirely, so the CVDisplayLink IS the pacer.
-        surface.set_presents_with_transaction(!presentation);
+        // Don't batch presents into Core Animation transactions —
+        // preserves the timing guarantees of the display link.
+        // presentsWithTransaction=true requires a different present path
+        // (waitUntilScheduled) that we don't use, and breaks windowed output.
+        surface.set_presents_with_transaction(false);
 
         let pipeline = presenter_device.create_render_pipeline(
             PRESENTER_WGSL,
