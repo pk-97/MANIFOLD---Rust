@@ -104,8 +104,8 @@ impl AutoGainOwnerState {
         }
         self.frame_count += 1;
 
-        // Long-term EMA (~2s time constant) for program-dependent detection.
-        let long_term_tc = 2.0_f32;
+        // Long-term EMA (~6s time constant) for program-dependent detection.
+        let long_term_tc = 6.0_f32;
         let long_term_alpha = 1.0 - (-dt / long_term_tc).exp();
         self.long_term_log += (log_lum - self.long_term_log) * long_term_alpha;
 
@@ -113,9 +113,10 @@ impl AutoGainOwnerState {
         let deviation = (log_lum - self.long_term_log).abs();
         let is_transient = deviation > 0.5; // ~0.5 stops = transient threshold
 
-        // Base attack/release from Punch parameter.
-        let base_attack = lerp(0.005, 0.200, punch_param);
-        let base_release = lerp(0.500, 0.050, punch_param);
+        // Base attack/release from Punch parameter (visual-rate timings).
+        // At 60fps, 100ms ≈ 6 frames, 1000ms ≈ 60 frames, 3000ms ≈ 180 frames.
+        let base_attack = lerp(0.100, 1.000, punch_param);
+        let base_release = lerp(3.000, 0.200, punch_param);
 
         // Program-dependent adjustment: widen attack on transients, tighten release.
         let attack = if is_transient { base_attack * 2.0 } else { base_attack };
