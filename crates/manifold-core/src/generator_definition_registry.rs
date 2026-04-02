@@ -413,7 +413,7 @@ fn build_definitions() -> HashMap<GeneratorTypeId, GeneratorDef> {
         pd_toggle("Invert", 0.0, 1.0, 0.0, "invert"),
         pd("Sharpen", 0.0, 3.0, 1.0, Some("F1"), "sharpen"),
         pd_whole_labels("Scan", 0.0, 2.0, 0.0, &["250μm 7T", "300μm HiRes", "Edlow 100μm"], "scan"),
-        pd("Snap", 0.0, 1.0, 0.0, None, "snap"),
+        pd_toggle("Snap", 0.0, 1.0, 0.0, "snap"),
     ];
     m.insert(GeneratorTypeId::MRI_VOLUME, create_def("MRI Volume", false, "mriVolume", params));
 
