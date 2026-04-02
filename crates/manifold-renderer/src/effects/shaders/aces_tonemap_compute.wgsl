@@ -208,11 +208,11 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let nits = clamp(mapped * u.paper_white, vec3<f32>(0.0), vec3<f32>(u.max_nits));
         result = nits / max(u.paper_white, 1.0);
     } else if (u.mode == 3u) {
-        // EDR: apply selected curve (unclamped), scale to fill EDR headroom,
-        // then soft-clip at display peak. Each curve shapes highlights differently.
+        // EDR passthrough — no curve compression, linear values directly to EDR.
+        // Native HDR displays don't need tonemapping; values > 1.0 display brighter.
+        // Soft-clip near display peak to prevent hard clipping.
         let peak = u.max_nits / max(u.paper_white, 1.0);
-        let mapped = tonemap_raw(hdr);
-        let edr = max(mapped * peak, vec3<f32>(0.0));
+        let edr = max(hdr, vec3<f32>(0.0));
         let knee = peak * 0.8;
         let compressed = knee + (peak - knee) * tanh((edr - knee) / (peak - knee));
         let below = vec3<f32>(f32(edr.r < knee), f32(edr.g < knee), f32(edr.b < knee));
