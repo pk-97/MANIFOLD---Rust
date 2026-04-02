@@ -62,8 +62,9 @@ fn apply_vivid(rgb: vec3<f32>, gain: f32, drive: f32) -> vec3<f32> {
         gain * (1.0 - 0.05 * drive),
     );
     let lum = dot(result, LUMA);
-    // Saturation boost proportional to compression activity
-    let sat_boost = abs(gain - 1.0) * drive * 0.5;
+    // Saturation boost proportional to compression activity.
+    // Capped at 0.3 to prevent minority channels going negative in HDR.
+    let sat_boost = min(abs(gain - 1.0) * drive * 0.5, 0.3);
     return mix(vec3<f32>(lum), result, 1.0 + sat_boost);
 }
 
@@ -102,6 +103,11 @@ fn cs_main(@builtin(global_invocation_id) id: vec3<u32>) {
     } else {
         compressed = apply_grit(color.rgb, gain, drive);
     }
+
+    // Clamp to non-negative — character curves can produce negative channels
+    // when saturation boost or per-channel divergence exceeds the minority
+    // channel's headroom (especially with HDR-range input).
+    compressed = max(compressed, vec3<f32>(0.0));
 
     // Energy-preserve: character curves shape color/tone but must not
     // change overall brightness. Rescale to match the clean gain path's
