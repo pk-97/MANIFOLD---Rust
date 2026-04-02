@@ -255,7 +255,6 @@ impl GpuVsyncSignal {
     /// Starts a CVDisplayLink that fires at the display's refresh rate
     /// and notifies waiting threads via condvar.
     pub fn new(window: &impl raw_window_handle::HasWindowHandle) -> Self {
-        eprintln!("[GpuVsyncSignal] Creating...");
         let display_id = display_id_for_window(window);
 
         let inner = Arc::new(VsyncInner {
@@ -318,14 +317,9 @@ impl GpuVsyncSignal {
             state.display_hz = hz;
         }
 
-        eprintln!(
-            "[GpuVsyncSignal] Started for display {display_id}, \
-             initial_hz={:.1} (0 = will detect from first callback)",
-            hz,
-        );
         log::info!(
             "[GpuVsyncSignal] Started for display {display_id}, \
-             initial_hz={:.1}", hz,
+             initial_hz={:.1} (callback will update)", hz,
         );
 
         Self {

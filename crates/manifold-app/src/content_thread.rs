@@ -216,11 +216,11 @@ impl ContentThread {
                 hz = result.display_hz;
             }
             if hz > 0.0 {
-                eprintln!("[ContentThread] VSync activated: display_hz={hz:.1}");
+                log::info!("[ContentThread] VSync activated: display_hz={hz:.1}");
                 self.timer.set_vsync_mode(true, hz);
                 self.last_vsync_count = signal.vsync_count();
             } else {
-                eprintln!("[ContentThread] VSync: display_hz still 0 after wait, using timer");
+                log::warn!("[ContentThread] VSync: display_hz=0 after wait, using timer fallback");
             }
         }
 
