@@ -15,6 +15,9 @@ const SCALE: usize = 4;
 const INVERT: usize = 5;
 const SHARPEN: usize = 6;
 const SCAN: usize = 7;
+const SNAP: usize = 8;
+
+const AXIS_COUNT: u32 = 3;
 
 fn param(ctx: &GeneratorContext, idx: usize, default: f32) -> f32 {
     if ctx.param_count > idx as u32 {
@@ -211,7 +214,12 @@ impl Generator for MriVolumeGenerator {
         // Scan selection
         let scan_index = (param(ctx, SCAN, 0.0).round() as i32)
             .clamp(0, self.scans.len() as i32 - 1);
-        let axis = (param(ctx, SLICE_AXIS, 0.0).round() as i32).clamp(0, 2);
+        let snap = param(ctx, SNAP, 0.0);
+        let axis = if snap > 0.5 {
+            (ctx.trigger_count % AXIS_COUNT) as i32
+        } else {
+            (param(ctx, SLICE_AXIS, 0.0).round() as i32).clamp(0, 2)
+        };
 
         let scan = &self.scans[scan_index as usize];
         let Some(axis_slices) = &scan.axes[axis as usize] else {
