@@ -23,6 +23,7 @@ use crate::effects::wireframe_depth::WireframeDepthFX;
 use crate::effects::blob_tracking::BlobTrackingFX;
 use crate::effects::depth_of_field::DepthOfFieldFX;
 use crate::effects::hdr_boost::HdrBoostFX;
+use crate::effects::auto_gain::AutoGainFX;
 
 /// Factory + singleton storage for all effect processors.
 /// One processor per EffectTypeId — per-owner state lives inside each processor.
@@ -96,6 +97,10 @@ impl EffectRegistry {
         processors.insert(
             EffectTypeId::HDR_BOOST,
             Box::new(HdrBoostFX::new(device)),
+        );
+        processors.insert(
+            EffectTypeId::AUTO_GAIN,
+            Box::new(AutoGainFX::new(device)),
         );
         Self { processors }
     }

@@ -559,6 +559,24 @@ fn build_definitions() -> HashMap<EffectTypeId, EffectDef> {
         osc_prefix: Some("hdrBoost"),
     });
 
+    // AutoGain — visual dynamics compressor
+    m.insert(EffectTypeId::AUTO_GAIN, EffectDef {
+        display_name: "Auto Gain",
+        param_count: 7,
+        param_defs: vec![
+            pd("Amount", 0.0, 1.0, 0.5),
+            pd_osc("Ratio", 0.0, 1.0, 0.5, "Ratio"),
+            pd_osc("Punch", 0.0, 1.0, 0.5, "Punch"),
+            pd_osc("Target", 0.0, 1.0, 0.5, "Target"),
+            pd_osc("HDR Ret", 0.0, 1.0, 0.5, "HdrRetention"),
+            pd_osc("Color", -1.0, 1.0, 0.0, "ColorPush"),
+            pd_whole_labels("Char", 0.0, 4.0, 0.0,
+                &["Clean", "Warm", "Film", "Vivid", "Grit"],
+                "Character"),
+        ],
+        osc_prefix: Some("autoGain"),
+    });
+
     // Corruption
     m.insert(EffectTypeId::CORRUPTION, EffectDef {
         display_name: "Corruption",

@@ -25,3 +25,4 @@ pub mod blob_tracking;
 pub mod wireframe_depth;
 pub mod depth_of_field;
 pub mod hdr_boost;
+pub mod auto_gain;
