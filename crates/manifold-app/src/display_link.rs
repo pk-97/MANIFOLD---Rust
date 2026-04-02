@@ -155,12 +155,6 @@ struct PresenterContext {
     stop: Arc<AtomicBool>,
     #[allow(dead_code)]
     edr_headroom: Arc<AtomicU64>,
-    /// Fullscreen (Direct Display) vs windowed presentation mode.
-    /// Windowed: uses presentsWithTransaction + waitUntilScheduled for
-    /// compositor-synchronized presents (eliminates phase judder).
-    /// Fullscreen: uses standard presentDrawable on the command buffer
-    /// (Direct Display bypasses the compositor entirely).
-    presentation: bool,
 }
 
 // SAFETY: PresenterContext is only accessed from the serial CVDisplayLink
@@ -219,18 +213,8 @@ impl PresenterContext {
             "Presenter Blit",
         );
 
-        if self.presentation {
-            // Fullscreen (Direct Display): standard present on the command buffer.
-            // Direct Display bypasses the compositor — no transaction needed.
-            encoder.present_drawable(&drawable);
-            encoder.commit();
-        } else {
-            // Windowed: commit, wait for GPU to schedule the blit, then present
-            // directly into the Core Animation transaction. This syncs the frame
-            // with WindowServer's compositor schedule, eliminating phase judder.
-            encoder.commit_and_wait_scheduled();
-            drawable.present_after_scheduled();
-        }
+        encoder.present_drawable(&drawable);
+        encoder.commit();
     }
 
     fn reimport_textures(&mut self) {
@@ -325,11 +309,11 @@ impl DisplayLinkPresenter {
         // 3 drawables: CVDisplayLink is the pacer, so nextDrawable should not
         // block. 3 ensures availability; if it still blocks, we skip the frame.
         surface.set_maximum_drawable_count(3);
-        // Windowed: presentsWithTransaction=true so presents sync with Core
-        // Animation's compositor schedule (waitUntilScheduled + manual present).
-        // Fullscreen: presentsWithTransaction=false — Direct Display bypasses
-        // the compositor, so the CVDisplayLink callback IS the pacer.
-        surface.set_presents_with_transaction(!presentation);
+        // presentsWithTransaction=false: the CVDisplayLink callback fires on a
+        // CoreVideo background thread where no Core Animation transaction context
+        // exists. presentsWithTransaction=true requires the present to happen on
+        // the main thread's run loop — incompatible with the CVDisplayLink model.
+        surface.set_presents_with_transaction(false);
 
         let pipeline = presenter_device.create_render_pipeline(
             PRESENTER_WGSL,
@@ -362,7 +346,6 @@ impl DisplayLinkPresenter {
             last_bridge_gen: bridge_gen,
             stop: Arc::clone(&stop),
             edr_headroom: Arc::clone(&edr),
-            presentation,
         }));
 
         // Create CVDisplayLink targeting the window's current display.
