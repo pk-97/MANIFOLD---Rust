@@ -1,3 +1,4 @@
+use manifold_core::TonemapCurve;
 use crate::color;
 use crate::input::UIEvent;
 use crate::layout::ScreenLayout;
@@ -18,6 +19,9 @@ const RESOLUTION_LABEL_W: f32 = 32.0;
 const RESOLUTION_BUTTON_W: f32 = 120.0;
 const SCALE_BUTTON_W: f32 = 28.0;
 const SCALE_BTN_GAP: f32 = 2.0;
+const TONEMAP_LABEL_W: f32 = 24.0;
+const TONEMAP_BUTTON_W: f32 = 36.0;
+const TONEMAP_BTN_GAP: f32 = 2.0;
 const FPS_LABEL_W: f32 = 32.0;
 const FPS_FIELD_W: f32 = 46.0;
 const RIGHT_GUTTER: f32 = 10.0;
@@ -42,6 +46,10 @@ struct FooterLayout {
     scale_100: Rect,
     scale_75: Rect,
     scale_50: Rect,
+    tonemap_label: Rect,
+    tonemap_aces: Rect,
+    tonemap_hill: Rect,
+    tonemap_agx: Rect,
     fps_label: Rect,
     fps_field: Rect,
 }
@@ -59,6 +67,18 @@ impl FooterLayout {
         rx -= LABEL_GAP;
         rx -= FPS_LABEL_W;
         self.fps_label = Rect::new(rx, y, FPS_LABEL_W, elem_h);
+        rx -= SECTION_SPACER;
+
+        // Tonemap curve buttons: [ACES] [Hill] [AgX]
+        rx -= TONEMAP_BUTTON_W;
+        self.tonemap_agx = Rect::new(rx, y, TONEMAP_BUTTON_W, elem_h);
+        rx -= TONEMAP_BTN_GAP + TONEMAP_BUTTON_W;
+        self.tonemap_hill = Rect::new(rx, y, TONEMAP_BUTTON_W, elem_h);
+        rx -= TONEMAP_BTN_GAP + TONEMAP_BUTTON_W;
+        self.tonemap_aces = Rect::new(rx, y, TONEMAP_BUTTON_W, elem_h);
+        rx -= LABEL_GAP;
+        rx -= TONEMAP_LABEL_W;
+        self.tonemap_label = Rect::new(rx, y, TONEMAP_LABEL_W, elem_h);
         rx -= SECTION_SPACER;
 
         // Render scale buttons: [1x] [75%] [50%]
@@ -105,6 +125,10 @@ pub struct FooterPanel {
     scale_100_id: i32,
     scale_75_id: i32,
     scale_50_id: i32,
+    tonemap_label_id: i32,
+    tonemap_aces_id: i32,
+    tonemap_hill_id: i32,
+    tonemap_agx_id: i32,
     fps_label_id: i32,
     fps_field_id: i32,
 
@@ -114,6 +138,7 @@ pub struct FooterPanel {
     resolution_text: String,
     fps_text: String,
     current_render_scale: f32,
+    current_tonemap_curve: TonemapCurve,
 
     // Cache tracking
     cache_first_node: usize,
@@ -132,6 +157,10 @@ impl FooterPanel {
             scale_100_id: -1,
             scale_75_id: -1,
             scale_50_id: -1,
+            tonemap_label_id: -1,
+            tonemap_aces_id: -1,
+            tonemap_hill_id: -1,
+            tonemap_agx_id: -1,
             fps_label_id: -1,
             fps_field_id: -1,
             selection_info: String::new(),
@@ -139,6 +168,7 @@ impl FooterPanel {
             resolution_text: "1080p".into(),
             fps_text: "60".into(),
             current_render_scale: 1.0,
+            current_tonemap_curve: TonemapCurve::AcesNarkowicz,
             cache_first_node: usize::MAX,
             cache_node_count: 0,
         }
@@ -176,6 +206,37 @@ impl FooterPanel {
         if (scale - self.current_render_scale).abs() < 0.01 { return; }
         self.current_render_scale = scale;
         self.refresh_scale_button_styles(tree);
+    }
+
+    /// Highlight the active tonemap curve button. No-op if curve unchanged.
+    pub fn set_tonemap_curve(&mut self, tree: &mut UITree, curve: TonemapCurve) {
+        if curve == self.current_tonemap_curve { return; }
+        self.current_tonemap_curve = curve;
+        self.refresh_tonemap_button_styles(tree);
+    }
+
+    fn refresh_tonemap_button_styles(&self, tree: &mut UITree) {
+        let ids = [
+            (self.tonemap_aces_id, TonemapCurve::AcesNarkowicz),
+            (self.tonemap_hill_id, TonemapCurve::AcesHill),
+            (self.tonemap_agx_id,  TonemapCurve::Agx),
+        ];
+        for (id, val) in ids {
+            if id < 0 { continue; }
+            let active = val == self.current_tonemap_curve;
+            tree.set_style(id as u32, UIStyle {
+                bg_color: if active { FOOTER_SCALE_ACTIVE } else { color::BUTTON_INACTIVE_C32 },
+                ..Self::footer_button_style()
+            });
+        }
+    }
+
+    fn tonemap_button_style_for(&self, curve: TonemapCurve) -> UIStyle {
+        let active = curve == self.current_tonemap_curve;
+        UIStyle {
+            bg_color: if active { FOOTER_SCALE_ACTIVE } else { color::BUTTON_INACTIVE_C32 },
+            ..Self::footer_button_style()
+        }
     }
 
     fn refresh_scale_button_styles(&self, tree: &mut UITree) {
@@ -223,6 +284,9 @@ impl FooterPanel {
         if id == self.scale_100_id         { return vec![PanelAction::SetRenderScale(1.0)]; }
         if id == self.scale_75_id          { return vec![PanelAction::SetRenderScale(0.75)]; }
         if id == self.scale_50_id          { return vec![PanelAction::SetRenderScale(0.5)]; }
+        if id == self.tonemap_aces_id      { return vec![PanelAction::SetTonemapCurve(TonemapCurve::AcesNarkowicz)]; }
+        if id == self.tonemap_hill_id      { return vec![PanelAction::SetTonemapCurve(TonemapCurve::AcesHill)]; }
+        if id == self.tonemap_agx_id       { return vec![PanelAction::SetTonemapCurve(TonemapCurve::Agx)]; }
         Vec::new()
     }
 }
@@ -318,6 +382,39 @@ impl Panel for FooterPanel {
             self.layout.scale_50.x, self.layout.scale_50.y,
             self.layout.scale_50.width, self.layout.scale_50.height,
             self.scale_button_style_for(0.5), "50%",
+        ) as i32;
+
+        // Tonemap curve
+        self.tonemap_label_id = tree.add_node(
+            bg, self.layout.tonemap_label, UINodeType::Label,
+            UIStyle {
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: FOOTER_FONT,
+                text_align: TextAlign::Right,
+                ..UIStyle::default()
+            },
+            Some("TM:"), UIFlags::empty(),
+        ) as i32;
+
+        self.tonemap_aces_id = tree.add_button(
+            bg,
+            self.layout.tonemap_aces.x, self.layout.tonemap_aces.y,
+            self.layout.tonemap_aces.width, self.layout.tonemap_aces.height,
+            self.tonemap_button_style_for(TonemapCurve::AcesNarkowicz), "ACE",
+        ) as i32;
+
+        self.tonemap_hill_id = tree.add_button(
+            bg,
+            self.layout.tonemap_hill.x, self.layout.tonemap_hill.y,
+            self.layout.tonemap_hill.width, self.layout.tonemap_hill.height,
+            self.tonemap_button_style_for(TonemapCurve::AcesHill), "Hill",
+        ) as i32;
+
+        self.tonemap_agx_id = tree.add_button(
+            bg,
+            self.layout.tonemap_agx.x, self.layout.tonemap_agx.y,
+            self.layout.tonemap_agx.width, self.layout.tonemap_agx.height,
+            self.tonemap_button_style_for(TonemapCurve::Agx), "AgX",
         ) as i32;
 
         // FPS

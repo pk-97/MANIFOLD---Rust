@@ -248,6 +248,7 @@ pub enum PanelAction {
     SetResolution(usize),          // preset index
     SetDisplayResolution(i32, i32), // direct width, height (no undo, matches Unity)
     SetRenderScale(f32),           // render scale: 1.0 (native), 0.75 (quality), 0.5 (performance)
+    SetTonemapCurve(manifold_core::TonemapCurve),
     AddEffect(InspectorTab, usize), // tab, effect_type index
     SetGenType(Option<LayerId>, usize),  // layer_id, gen_type index
     SetMidiClockDevice(i32),             // MIDI device index

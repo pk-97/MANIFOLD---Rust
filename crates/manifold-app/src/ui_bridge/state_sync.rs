@@ -346,6 +346,7 @@ pub fn push_state(
         ui.footer.set_resolution_text(tree, &res_label);
         ui.footer.set_fps_text(tree, &format!("{:.0} FPS", project.settings.frame_rate));
         ui.footer.set_render_scale(tree, project.settings.render_scale);
+        ui.footer.set_tonemap_curve(tree, project.settings.tonemap_curve);
     }
 
     // Footer stats

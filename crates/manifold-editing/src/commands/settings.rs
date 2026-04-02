@@ -604,6 +604,34 @@ impl Command for ChangeRenderScaleCommand {
     fn description(&self) -> &str { "Change Render Scale" }
 }
 
+/// Change the tonemapping curve (project setting, undoable).
+#[derive(Debug)]
+pub struct ChangeTonemapCurveCommand {
+    old_curve: manifold_core::TonemapCurve,
+    new_curve: manifold_core::TonemapCurve,
+}
+
+impl ChangeTonemapCurveCommand {
+    pub fn new(
+        old_curve: manifold_core::TonemapCurve,
+        new_curve: manifold_core::TonemapCurve,
+    ) -> Self {
+        Self { old_curve, new_curve }
+    }
+}
+
+impl Command for ChangeTonemapCurveCommand {
+    fn execute(&mut self, project: &mut Project) {
+        project.settings.tonemap_curve = self.new_curve;
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        project.settings.tonemap_curve = self.old_curve;
+    }
+
+    fn description(&self) -> &str { "Change Tonemap Curve" }
+}
+
 /// Clear percussion import state (remove audio + stems).
 #[derive(Debug)]
 pub struct ClearPercussionCommand {

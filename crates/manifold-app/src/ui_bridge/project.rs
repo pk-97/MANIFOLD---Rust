@@ -130,6 +130,16 @@ pub(super) fn dispatch_project(
             }
             DispatchResult::resolution()
         }
+        PanelAction::SetTonemapCurve(curve) => {
+            let old_curve = project.settings.tonemap_curve;
+            if *curve != old_curve {
+                let cmd = manifold_editing::commands::settings::ChangeTonemapCurveCommand::new(
+                    old_curve, *curve,
+                );
+                { let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd); boxed.execute(project); ContentCommand::send(content_tx, ContentCommand::Execute(boxed)); }
+            }
+            DispatchResult::handled()
+        }
         PanelAction::SetGenType(opt_layer_id, gen_type_idx) => {
             let resolved_idx = opt_layer_id.as_ref()
                 .and_then(|lid| project.timeline.find_layer_index_by_id(lid));

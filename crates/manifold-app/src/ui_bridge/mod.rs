@@ -243,6 +243,7 @@ pub fn dispatch(
         | PanelAction::SetResolution(_)
         | PanelAction::SetDisplayResolution(..)
         | PanelAction::SetRenderScale(_)
+        | PanelAction::SetTonemapCurve(_)
         | PanelAction::SetGenType(..)
         | PanelAction::ImportAudioClicked
         | PanelAction::RemoveAudioClicked
