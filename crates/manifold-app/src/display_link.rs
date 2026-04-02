@@ -176,13 +176,26 @@ unsafe extern "C" fn unified_vsync_callback(
 
     let hz = hz_from_timestamp(unsafe { &*in_output_time });
 
-    // 1. Notify content thread (fast: lock + increment + notify_one).
-    //    Wakes the content thread to start producing the next frame.
+    // ── Lightweight signals FIRST (nanoseconds) ──
+    // These must complete before the potentially-slow presenter work.
+    // If the presenter blocks (e.g. nextDrawable during fullscreen
+    // transition), both the content thread and UI thread still get
+    // their signals and can proceed normally.
+
+    // 1. Notify content thread (lock + increment + notify_one).
     ctx.content_signal.notify_vsync(hz);
 
-    // 2. Present output frame (if presenter is attached).
+    // 2. Signal UI thread redraw.
+    ctx.ui_vsync_ready.store(true, Ordering::Release);
+    ctx.ui_window.request_redraw();
+
+    // ── Heavy work LAST (may block on drawable acquisition) ──
+
+    // 3. Present output frame (if presenter is attached).
     //    Reads the current front_index and blits to CAMetalLayer.
     //    Always runs every vsync — required for Direct Display lock.
+    //    nextDrawable can block up to 1s during fullscreen transitions,
+    //    but content thread + UI already got their signals above.
     let presenter_ptr = ctx.presenter.load(Ordering::Acquire);
     if !presenter_ptr.is_null() {
         objc::rc::autoreleasepool(|| {
@@ -190,10 +203,6 @@ unsafe extern "C" fn unified_vsync_callback(
             presenter.present_for_vsync();
         });
     }
-
-    // 3. Signal UI thread redraw.
-    ctx.ui_vsync_ready.store(true, Ordering::Release);
-    ctx.ui_window.request_redraw();
 
     K_CV_RETURN_SUCCESS
 }

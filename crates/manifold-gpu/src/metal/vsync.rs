@@ -194,13 +194,15 @@ unsafe impl Sync for GpuVsyncWaiter {}
 impl GpuVsyncWaiter {
     /// Block until a new vsync arrives after `last_seen_count`.
     ///
-    /// Returns the new vsync count and display Hz. Includes a 100ms timeout
-    /// to prevent deadlocks if the display link stops firing (display sleep,
-    /// display disconnected, etc.).
+    /// Returns the new vsync count and display Hz. Includes a 32ms timeout
+    /// (~1 frame at 30Hz) to prevent deadlocks if the display link stops
+    /// firing (display sleep, fullscreen transition, disconnect, etc.).
+    /// The short timeout ensures the content thread degrades gracefully
+    /// to timer-based pacing during display transitions.
     ///
     /// The render thread should track `last_seen_count` and pass it each call.
     pub fn wait(&self, last_seen_count: u64) -> VsyncWaitResult {
-        let timeout = std::time::Duration::from_millis(100);
+        let timeout = std::time::Duration::from_millis(32);
         let guard = self.inner.state.lock().unwrap();
 
         let (guard, wait_result) = self.inner.condvar.wait_timeout_while(
