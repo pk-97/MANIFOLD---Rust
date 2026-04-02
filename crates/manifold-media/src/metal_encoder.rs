@@ -71,8 +71,8 @@ impl fmt::Display for EncoderError {
 /// Native Metal GPU video encoder.
 ///
 /// Wraps the Objective-C MetalEncoderPlugin for zero-copy GPU encoding.
-/// SDR mode: H.264 High Profile, 50 Mbps, BGRA8.
-/// HDR mode: HEVC Main10, 100 Mbps, RGBA16Float, BT.2020/PQ.
+/// SDR mode: H.264 High Profile, ~0.6 bpp dynamic bitrate, BGRA8.
+/// HDR mode: HEVC Main10, ~0.6 bpp dynamic bitrate, RGBA16Float, BT.2020/PQ.
 pub struct MetalEncoder {
     handle: *mut c_void,
     width: u32,

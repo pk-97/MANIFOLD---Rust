@@ -247,11 +247,13 @@ static MetalEncoderState* MetalEncoder_CreateInternal(int width, int height, flo
         OSType pixelFormatType;
 
         // Compute target bitrate from resolution and frame rate.
-        // 0.2 bits/pixel/frame = very high quality, decodable in real-time.
-        // Clamped to 8-200 Mbps to avoid absurd values at extreme resolutions.
-        int targetBps = (int)((double)width * height * state->fpsNum * 0.2);
-        if (targetBps < 8000000) targetBps = 8000000;      // 8 Mbps min
-        if (targetBps > 200000000) targetBps = 200000000;   // 200 Mbps max
+        // 0.6 bits/pixel/frame — generative content has high spatial frequency
+        // and constant motion across the full frame, requiring significantly
+        // more bits than natural video to avoid macroblocking.
+        // Clamped to 20-400 Mbps to avoid absurd values at extreme resolutions.
+        int targetBps = (int)((double)width * height * state->fpsNum * 0.6);
+        if (targetBps < 20000000) targetBps = 20000000;     // 20 Mbps min
+        if (targetBps > 400000000) targetBps = 400000000;   // 400 Mbps max
 
         NSLog(@"[MetalEncoder] Target bitrate: %d bps (%.1f Mbps) for %dx%d @ %d fps",
               targetBps, targetBps / 1000000.0, width, height, state->fpsNum);
