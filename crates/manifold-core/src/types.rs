@@ -907,3 +907,20 @@ pub enum UpscaleMode {
     #[default]
     Native = 2,
 }
+
+// ─── Tonemap Curve ───
+
+/// Tonemapping curve applied as the final step before display output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TonemapCurve {
+    /// ACES Narkowicz 2015 fit — simple, warm highlight rolloff. Unity parity.
+    #[default]
+    AcesNarkowicz = 0,
+    /// ACES Stephen Hill fit — proper AP1 color space, RRT+ODT desaturation.
+    /// More accurate than Narkowicz, better highlight hue preservation.
+    AcesHill = 1,
+    /// AgX (Troy Sobotka) — designed for saturated/generative content.
+    /// Minimal hue shift on neons, graceful highlight desaturation.
+    Agx = 2,
+}

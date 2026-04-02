@@ -7,6 +7,7 @@
 //! Uses a native Metal compute dispatch via manifold-gpu. This eliminates
 //! Metal TBDR tile alloc/load/store overhead (~290us at 4K per pass).
 
+use manifold_core::TonemapCurve;
 use manifold_gpu::{GpuDevice, GpuTexture};
 use crate::gpu_encoder::GpuEncoder;
 use crate::render_target::RenderTarget;
@@ -27,6 +28,8 @@ pub struct TonemapSettings {
     /// Display maximum luminance in nits. HDR TVs: 1000, LED walls: 5000+.
     /// Matches Unity CompositorStack.MaxDisplayNits.
     pub max_display_nits: f32,
+    /// Tonemapping curve selection.
+    pub curve: TonemapCurve,
 }
 
 impl Default for TonemapSettings {
@@ -36,19 +39,25 @@ impl Default for TonemapSettings {
             hdr_output_enabled: false,
             paper_white_nits: 200.0,
             max_display_nits: 1000.0,
+            curve: TonemapCurve::AcesNarkowicz,
         }
     }
 }
 
 /// Uniform buffer layout for the tonemap shader.
-/// 16 bytes, naturally aligned.
+/// Two u32 fields: mode (SDR/PQ/EDR) and curve (Narkowicz/Hill/AgX).
+/// 24 bytes total — padded to 32 bytes for 16-byte alignment.
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct TonemapUniforms {
     exposure: f32,
     paper_white: f32,
     max_nits: f32,
-    mode: u32, // 0 = SDR, 1 = PQ, 2 = EDR
+    mode: u32,  // 0 = SDR, 1 = PQ, 2 = EDR, 3 = EDR passthrough
+    curve: u32, // 0 = Narkowicz, 1 = Hill, 2 = AgX
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 /// GPU pipeline for ACES tonemapping.
@@ -101,6 +110,10 @@ impl TonemapPipeline {
             paper_white: settings.paper_white_nits,
             max_nits: settings.max_display_nits,
             mode,
+            curve: settings.curve as u32,
+            _pad0: 0.0,
+            _pad1: 0.0,
+            _pad2: 0.0,
         };
 
         gpu.native_enc.dispatch_compute(

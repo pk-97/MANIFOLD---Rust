@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::types::{ClockAuthority, QuantizeMode, ResolutionPreset, UpscaleMode};
+use crate::types::{ClockAuthority, QuantizeMode, ResolutionPreset, TonemapCurve, UpscaleMode};
 use crate::effects::{EffectInstance, EffectGroup};
 use crate::units::{Beats, Bpm};
 
@@ -45,6 +45,9 @@ pub struct ProjectSettings {
     /// Valid notched values: 1.0 (native), 0.75 (quality), 0.5 (performance).
     #[serde(default = "default_one")]
     pub render_scale: f32,
+    /// Tonemapping curve for display output.
+    #[serde(default)]
+    pub tonemap_curve: TonemapCurve,
 
     #[serde(default = "default_one")]
     pub master_opacity: f32,
@@ -138,6 +141,7 @@ impl Default for ProjectSettings {
             resolution_preset: ResolutionPreset::FHD1080p,
             upscale_mode: UpscaleMode::Native,
             render_scale: 1.0,
+            tonemap_curve: TonemapCurve::AcesNarkowicz,
             master_opacity: 1.0,
             master_effects: Vec::new(),
             master_effect_groups: None,

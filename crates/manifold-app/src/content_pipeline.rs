@@ -531,6 +531,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 hdr_output_enabled: self.edr_headroom > 1.0,
                 paper_white_nits: 200.0,
                 max_display_nits: (200.0 * self.edr_headroom as f32).min(10000.0),
+                curve: project
+                    .map_or(manifold_core::TonemapCurve::AcesNarkowicz, |p| {
+                        p.settings.tonemap_curve
+                    }),
             },
             output_width: self.output_w,
             output_height: self.output_h,
