@@ -103,6 +103,18 @@ fn display_id_for_window(window: &winit::window::Window) -> u32 {
     }
 }
 
+// ─── Send wrapper for raw pointers moved to cleanup threads ─────────────
+
+/// Wrapper to send raw pointers to the cleanup thread in Drop impls.
+/// SAFETY: CVDisplayLinkRef is a CoreFoundation object safe to stop/release
+/// from any thread. Context pointers are heap-allocated and exclusively
+/// owned by the cleanup thread after the stop flag is set.
+struct SendPtr<T>(*mut T);
+unsafe impl<T> Send for SendPtr<T> {}
+impl<T> SendPtr<T> {
+    fn get(self) -> *mut T { self.0 }
+}
+
 // ─── Presenter WGSL (same as NativeOutputPresenter) ─────────────────────
 
 const PRESENTER_WGSL: &str = r#"
@@ -435,16 +447,24 @@ impl DisplayLinkPresenter {
 
 impl Drop for DisplayLinkPresenter {
     fn drop(&mut self) {
-        // Signal the callback to stop, then stop the display link.
-        // CVDisplayLinkStop waits for any in-flight callback to finish,
-        // so the context is guaranteed not to be in use after this returns.
+        // Signal the callback to become a no-op IMMEDIATELY.
         self.stop.store(true, Ordering::Release);
-        unsafe {
-            CVDisplayLinkStop(self.display_link);
-            CVDisplayLinkRelease(self.display_link);
-            // Now safe to free the context — no callback can be running.
-            drop(Box::from_raw(self.context));
-        }
+
+        // Move blocking cleanup off the main thread. CVDisplayLinkStop blocks
+        // until the in-flight callback finishes, and the callback may touch
+        // main-thread resources (nextDrawable, WindowServer) — blocking the
+        // main thread here deadlocks. The detached thread can safely block:
+        // Stop guarantees no callback runs after it returns, so Release +
+        // context drop are safe.
+        let dl = SendPtr(self.display_link);
+        let ctx = SendPtr(self.context);
+        std::thread::spawn(move || unsafe {
+            let dl = dl.get();
+            let ctx = ctx.get();
+            CVDisplayLinkStop(dl);
+            CVDisplayLinkRelease(dl);
+            drop(Box::from_raw(ctx));
+        });
     }
 }
 
@@ -630,12 +650,21 @@ impl UiDisplayLink {
 
 impl Drop for UiDisplayLink {
     fn drop(&mut self) {
-        unsafe {
-            let ctx = &*self.context;
-            ctx.stop.store(true, Ordering::Release);
-            CVDisplayLinkStop(self.display_link);
-            CVDisplayLinkRelease(self.display_link);
-            drop(Box::from_raw(self.context));
-        }
+        // Signal the callback to become a no-op IMMEDIATELY.
+        unsafe { (*self.context).stop.store(true, Ordering::Release); }
+
+        // Move blocking cleanup off the main thread. CVDisplayLinkStop blocks
+        // until the in-flight callback finishes, and the callback calls
+        // request_redraw() which may need the main thread — blocking the
+        // main thread here deadlocks.
+        let dl = SendPtr(self.display_link);
+        let ctx = SendPtr(self.context);
+        std::thread::spawn(move || unsafe {
+            let dl = dl.get();
+            let ctx = ctx.get();
+            CVDisplayLinkStop(dl);
+            CVDisplayLinkRelease(dl);
+            drop(Box::from_raw(ctx));
+        });
     }
 }
