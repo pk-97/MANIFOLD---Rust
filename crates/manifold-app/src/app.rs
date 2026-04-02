@@ -236,6 +236,12 @@ pub struct Application {
     /// Skip drawable acquisition this frame (surface just resized — drawable
     /// pool may be reconfiguring). Offscreen render still runs; blit skipped.
     pub(crate) surface_resized_this_frame: bool,
+    /// Display transition cooldown — skip all potentially-blocking surface
+    /// operations (next_drawable, commit_and_wait_scheduled) until this
+    /// deadline passes. Set when a display change notification fires.
+    /// Prevents hard locks when macOS reconfigures displays (e.g., switching
+    /// from MacBook to 4K TV at 120Hz) while GPU surfaces target stale displays.
+    pub(crate) display_change_deadline: Option<std::time::Instant>,
     /// True when the offscreen texture needs a fresh render this frame.
     /// Set by any visual state change (content frame, dirty panels, overlay).
     /// When false, present_all_windows just re-blits the existing offscreen.
@@ -397,6 +403,7 @@ impl Application {
             layer_bitmap_gpu: None,
             scale_factor: 1.0,
             surface_resized_this_frame: false,
+            display_change_deadline: None,
             offscreen_dirty: true,
             edr_headroom: 1.0,
             output_edr_headroom: 1.0,
@@ -2187,19 +2194,45 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Check if a screen change notification fired — update EDR headroom
         // per-window and send to content thread if it changed.
         if crate::edr_surface::edr_screen_changed() {
+            // Start display transition cooldown: skip all potentially-blocking
+            // surface operations (next_drawable, commit_and_wait_scheduled) for
+            // 500ms. During display transitions (e.g., MacBook → 4K TV 120Hz),
+            // GPU surfaces may target stale displays — next_drawable and
+            // waitUntilScheduled can block the main thread indefinitely.
+            self.display_change_deadline =
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+            log::info!(
+                "[Display] Screen change detected — 500ms surface cooldown active"
+            );
             self.update_edr_headroom();
+        }
+
+        // Clear cooldown once deadline passes.
+        let in_display_transition = self.display_change_deadline
+            .is_some_and(|d| std::time::Instant::now() < d);
+        if !in_display_transition && self.display_change_deadline.is_some() {
+            log::info!("[Display] Surface cooldown expired — resuming normal operation");
+            self.display_change_deadline = None;
+            // Force a fresh render after cooldown so the UI isn't stale.
+            self.offscreen_dirty = true;
         }
 
         // Render on CVDisplayLink vsync signal (macOS) or FrameTimer fallback.
         // CVDisplayLink aligns submission to the MacBook's actual vsync cadence,
         // eliminating event-loop jitter that caused near-miss frame drops.
+        // During display transition: fall back to frame timer (display links
+        // may be targeting dead displays and not firing).
         #[cfg(target_os = "macos")]
-        let should_render = self.ui_display_link.as_ref()
-            .map_or(self.frame_timer.should_tick(), |dl| dl.vsync_ready());
+        let should_render = if in_display_transition {
+            self.frame_timer.should_tick()
+        } else {
+            self.ui_display_link.as_ref()
+                .map_or(self.frame_timer.should_tick(), |dl| dl.vsync_ready())
+        };
         #[cfg(not(target_os = "macos"))]
         let should_render = self.frame_timer.should_tick();
 
-        if should_render {
+        if should_render && !in_display_transition {
             self.tick_and_render();
         }
 
@@ -2208,8 +2241,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // blit + present here inside the winit event loop where Core Animation
         // transactions exist, enabling presentsWithTransaction for smooth
         // compositor-synchronized output.
+        // SKIP during display transitions — commit_and_wait_scheduled() can
+        // block indefinitely when the surface targets a stale display.
         #[cfg(target_os = "macos")]
-        if let Some(ref mut presenter) = self.output_presenter {
+        if !in_display_transition
+            && let Some(ref mut presenter) = self.output_presenter
+        {
             presenter.present_if_ready();
         }
 
