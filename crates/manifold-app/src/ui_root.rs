@@ -23,6 +23,9 @@ pub enum DropdownContext {
     MasterExitPath,          // LED exit path dropdown
     ClkDevice,               // MIDI clock device selection
     GenCardContext,           // right-click on generator card header
+    EffectParamContext(InspectorTab, usize, usize, f32), // tab, fx_idx, param_idx, default_val
+    GenParamContext(usize, f32),                          // param_idx, default_val
+    MacroSlotContext(usize),                              // macro_index (right-click on macro slider)
 }
 
 /// Owns all UI state for one window.
@@ -100,6 +103,11 @@ pub struct UIRoot {
     /// their dropdown menus after the main event loop returns.
     last_right_click_pos: Vec2,
 
+    /// Cached macro slot labels for context menu display.
+    pub macro_labels: [String; manifold_core::MACRO_COUNT],
+    /// Cached macro mapping counts for context menu display.
+    pub macro_mapping_counts: [usize; manifold_core::MACRO_COUNT],
+
     /// Node ID for the video/timeline split handle (color feedback on hover/drag).
     /// From Unity PanelResizeHandle.cs — idle/hover/drag color states.
     split_handle_id: i32,
@@ -148,6 +156,8 @@ impl UIRoot {
             cursor_hover_actions: Vec::new(),
             viewport_events: Vec::new(),
             last_right_click_pos: Vec2::new(0.0, 0.0),
+            macro_labels: std::array::from_fn(|_| String::new()),
+            macro_mapping_counts: [0; manifold_core::MACRO_COUNT],
             split_handle_id: -1,
             inspector_handle_id: -1,
             overlay_drag_active: false,
@@ -878,6 +888,59 @@ impl UIRoot {
                 );
                 true
             }
+            PanelAction::EffectParamLabelRightClick(fx_idx, param_idx) => {
+                let tab = self.inspector.last_effect_tab();
+                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT);
+                for i in 0..manifold_core::MACRO_COUNT {
+                    let label = {
+                        let slot = &self.macro_labels[i];
+                        if slot.is_empty() {
+                            format!("Map to Macro {}", i + 1)
+                        } else {
+                            format!("Map to Macro {} ({})", i + 1, slot)
+                        }
+                    };
+                    items.push(DropdownItem::new(&label));
+                }
+                self.dropdown_context = Some(DropdownContext::EffectParamContext(
+                    tab, *fx_idx, *param_idx, 0.0, // default_val unused for label right-click
+                ));
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
+            PanelAction::GenParamLabelRightClick(param_idx) => {
+                let mut items = Vec::with_capacity(manifold_core::MACRO_COUNT);
+                for i in 0..manifold_core::MACRO_COUNT {
+                    let label = {
+                        let slot = &self.macro_labels[i];
+                        if slot.is_empty() {
+                            format!("Map to Macro {}", i + 1)
+                        } else {
+                            format!("Map to Macro {} ({})", i + 1, slot)
+                        }
+                    };
+                    items.push(DropdownItem::new(&label));
+                }
+                self.dropdown_context = Some(DropdownContext::GenParamContext(
+                    *param_idx, 0.0, // default_val unused for label right-click
+                ));
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
+            PanelAction::MacroRightClick(macro_idx) => {
+                let mut items = vec![
+                    DropdownItem::new("Reset to 0"),
+                ];
+                // Check if macro has mappings
+                let has_mappings = self.macro_mapping_counts[*macro_idx] > 0;
+                if has_mappings {
+                    items[0].separator_after = true;
+                    items.push(DropdownItem::new("Clear All Mappings"));
+                }
+                self.dropdown_context = Some(DropdownContext::MacroSlotContext(*macro_idx));
+                self.dropdown.open_context(items, right_click_pos, &mut self.tree);
+                true
+            }
             PanelAction::GenCardRightClicked => {
                 let mut items = vec![
                     DropdownItem::new("Copy Generator"),
@@ -961,6 +1024,27 @@ impl UIRoot {
                 match index {
                     0 => Some(PanelAction::CopyGenerator),
                     1 => Some(PanelAction::PasteGenerator),
+                    _ => None,
+                }
+            }
+            DropdownContext::EffectParamContext(tab, fx_idx, param_idx, _default_val) => {
+                if index < manifold_core::MACRO_COUNT {
+                    Some(PanelAction::MapEffectParamToMacro(tab, fx_idx, param_idx, index))
+                } else {
+                    None
+                }
+            }
+            DropdownContext::GenParamContext(param_idx, _default_val) => {
+                if index < manifold_core::MACRO_COUNT {
+                    Some(PanelAction::MapGenParamToMacro(param_idx, index))
+                } else {
+                    None
+                }
+            }
+            DropdownContext::MacroSlotContext(macro_idx) => {
+                match index {
+                    0 => Some(PanelAction::MacroReset(macro_idx)),
+                    1 => Some(PanelAction::ClearMacroMappings(macro_idx)),
                     _ => None,
                 }
             }

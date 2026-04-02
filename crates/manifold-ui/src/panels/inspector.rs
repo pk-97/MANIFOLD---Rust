@@ -274,6 +274,7 @@ impl InspectorCompositePanel {
     pub fn layer_chrome_mut(&mut self) -> &mut LayerChromePanel { &mut self.layer_chrome }
     pub fn clip_chrome(&self) -> &ClipChromePanel { &self.clip_chrome }
     pub fn clip_chrome_mut(&mut self) -> &mut ClipChromePanel { &mut self.clip_chrome }
+    pub fn gen_params(&self) -> Option<&GenParamPanel> { self.gen_params.as_ref() }
     pub fn gen_params_mut(&mut self) -> Option<&mut GenParamPanel> { self.gen_params.as_mut() }
 
     pub fn master_effect_mut(&mut self, idx: usize) -> Option<&mut EffectCardPanel> {

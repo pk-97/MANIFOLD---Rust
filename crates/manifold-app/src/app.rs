@@ -834,6 +834,48 @@ impl Application {
                         }
                 self.needs_rebuild = true;
             }
+            TextInputField::GenStringParam(sp_idx) => {
+                // Commit a generator string param change (e.g. text content).
+                // Look up the string_param_def key from the active layer's generator def,
+                // then find the active clip to get the old value.
+                if let Some(layer_idx) = self.active_layer_id.as_ref()
+                    .and_then(|id| self.local_project.timeline.find_layer_index_by_id(id))
+                    && let Some(layer) = self.local_project.timeline.layers.get(layer_idx)
+                {
+                    let gen_type = layer.generator_type();
+                    if let Some(def) = manifold_core::generator_definition_registry::try_get(gen_type)
+                        && let Some(sp_def) = def.string_param_defs.get(sp_idx)
+                    {
+                        let key = sp_def.key.to_string();
+                        let new_value: Option<String> = if text.is_empty() {
+                            None
+                        } else {
+                            Some(text.to_string())
+                        };
+
+                        // Find clip: selected clip on this layer, or first clip
+                        let clip = self.selection.primary_selected_clip_id.as_ref()
+                            .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
+                            .or_else(|| layer.clips.first());
+                        let (clip_id, old_value) = clip.map(|c| {
+                            let old = c.string_params.as_ref()
+                                .and_then(|m| m.get(&key))
+                                .cloned();
+                            (c.id.clone(), old)
+                        }).unwrap_or_default();
+
+                        if old_value != new_value {
+                            let cmd = manifold_editing::commands::clip::SetClipStringParamCommand::new(
+                                clip_id, key, old_value, new_value,
+                            );
+                            let mut boxed: Box<dyn manifold_editing::command::Command + Send> = Box::new(cmd);
+                            boxed.execute(&mut self.local_project);
+                            self.send_content_cmd(ContentCommand::Execute(boxed));
+                        }
+                    }
+                }
+                self.needs_rebuild = true;
+            }
             TextInputField::GroupRename(group_idx) => {
                 let new_name = text.trim().to_string();
                 if !new_name.is_empty() {

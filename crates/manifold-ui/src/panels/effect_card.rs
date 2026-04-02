@@ -1014,11 +1014,17 @@ impl EffectCardPanel {
     pub fn handle_right_click(&self, node_id: u32) -> Vec<PanelAction> {
         let ei = self.effect_index;
         for (pi, slider) in self.slider_ids.iter().enumerate() {
-            if let Some(ids) = slider
-                && node_id == ids.track {
+            if let Some(ids) = slider {
+                // Right-click slider track → reset to default
+                if node_id == ids.track {
                     let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
                     return vec![PanelAction::EffectParamRightClick(ei, pi, default)];
                 }
+                // Right-click label → map to macro
+                if ids.label >= 0 && node_id == ids.label as u32 {
+                    return vec![PanelAction::EffectParamLabelRightClick(ei, pi)];
+                }
+            }
         }
         Vec::new()
     }

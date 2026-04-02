@@ -10,7 +10,7 @@ use manifold_ui::color;
 use manifold_ui::panels::layer_header::LayerInfo;
 use manifold_ui::panels::viewport::TrackInfo;
 use manifold_ui::panels::effect_card::{EffectCardConfig, EffectParamInfo};
-use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo};
+use manifold_ui::panels::gen_param::{GenParamConfig, GenParamInfo, GenStringParamInfo};
 
 use crate::app::SelectionState;
 use crate::ui_root::UIRoot;
@@ -447,10 +447,16 @@ pub fn push_state(
             ui.inspector.master_chrome_mut().sync_opacity(tree, project.settings.master_opacity);
             ui.inspector.master_chrome_mut().sync_led_brightness(tree, project.settings.led_brightness);
 
-            // Macro slider values
+            // Macro slider values + labels/mapping counts for context menus
             let macro_vals: Vec<f32> = project.settings.macro_bank.slots
                 .iter().map(|s| s.value).collect();
             ui.inspector.macros_panel_mut().sync_values(tree, &macro_vals);
+            for (i, slot) in project.settings.macro_bank.slots.iter().enumerate() {
+                if i < manifold_core::MACRO_COUNT {
+                    ui.macro_labels[i].clone_from(&slot.label);
+                    ui.macro_mapping_counts[i] = slot.mappings.len();
+                }
+            }
 
             // LED exit path label + cached effect names for dropdown
             let exit_label = super::led_exit_path_label(
@@ -763,10 +769,15 @@ pub fn sync_inspector_data(
                 .unwrap_or_default();
             ui.inspector.configure_layer_effects(&layer_effects);
 
-            // Generator params
+            // Generator params — find clip's string_params for text fields.
+            // Use selected clip if on this layer, otherwise first clip.
+            let clip_string_params = selection.primary_selected_clip_id.as_ref()
+                .and_then(|sel_id| layer.clips.iter().find(|c| c.id == *sel_id))
+                .or_else(|| layer.clips.first())
+                .and_then(|c| c.string_params.as_ref());
             let gen_config = layer.gen_params()
                 .filter(|gp| *gp.generator_type() != GeneratorTypeId::NONE)
-                .map(|gp| gen_params_to_config(gp, lid));
+                .map(|gp| gen_params_to_config(gp, lid, clip_string_params));
             let layer_id = layer.layer_id.clone();
             ui.inspector.configure_gen_params(gen_config.as_ref(), Some(layer_id));
         } else {
@@ -929,13 +940,18 @@ fn beat_div_to_button_index(div: BeatDivision) -> i32 {
 }
 
 /// Convert a `GeneratorParamState` into `GenParamConfig` for the UI.
-fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState, layer_id: &str) -> GenParamConfig {
+fn gen_params_to_config(
+    gp: &manifold_core::generator::GeneratorParamState,
+    layer_id: &str,
+    clip_string_params: Option<&std::collections::BTreeMap<String, String>>,
+) -> GenParamConfig {
     let reg_def = match manifold_core::generator_definition_registry::try_get(gp.generator_type()) {
         Some(d) => d,
         None => {
             return GenParamConfig {
                 gen_type_name: gp.generator_type().to_string(),
-                params: vec![], driver_active: vec![], envelope_active: vec![],
+                params: vec![], string_params: vec![],
+                driver_active: vec![], envelope_active: vec![],
                 trim_min: vec![], trim_max: vec![], target_norm: vec![],
                 env_attack: vec![], env_decay: vec![], env_sustain: vec![], env_release: vec![],
                 driver_beat_div_idx: vec![], driver_waveform_idx: vec![],
@@ -1010,9 +1026,23 @@ fn gen_params_to_config(gp: &manifold_core::generator::GeneratorParamState, laye
         }
     }
 
+    // String param defs → populate with current clip values
+    let string_params: Vec<GenStringParamInfo> = reg_def.string_param_defs.iter().map(|sp_def| {
+        let value = clip_string_params
+            .and_then(|m| m.get(sp_def.key))
+            .cloned()
+            .unwrap_or_else(|| sp_def.default_value.to_string());
+        GenStringParamInfo {
+            name: sp_def.name.to_string(),
+            key: sp_def.key.to_string(),
+            value,
+        }
+    }).collect();
+
     GenParamConfig {
         gen_type_name: manifold_core::generator_type_registry::display_name(gp.generator_type()).to_string(),
         params,
+        string_params,
         driver_active,
         envelope_active,
         trim_min,

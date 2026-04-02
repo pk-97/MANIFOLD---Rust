@@ -204,6 +204,9 @@ pub enum PanelAction {
     /// Commit target drag (record undo command). Unity: onTargetCommit.
     GenTargetCommit(usize),
 
+    // Generator string params (per-clip text, etc.)
+    GenStringParamClicked(usize),    // string_param_index — open text input
+
     // Generator card actions
     GenCollapseToggle,
     GenCardClicked,
@@ -216,6 +219,18 @@ pub enum PanelAction {
     MacroChanged(usize, f32),
     MacroCommit(usize),
     MacroRightClick(usize),
+
+    // Macro mapping (from context menu on param right-click)
+    MapEffectParamToMacro(InspectorTab, usize, usize, usize), // tab, fx_idx, param_idx, macro_idx
+    MapGenParamToMacro(usize, usize),                          // param_idx, macro_idx
+    ClearMacroMappings(usize),                                 // macro_idx
+
+    // Param label right-click → opens "Map to Macro" context menu
+    EffectParamLabelRightClick(usize, usize),  // fx_idx, param_idx
+    GenParamLabelRightClick(usize),             // param_idx
+
+    // Reset macro from context menu (distinct from MacroRightClick to avoid re-triggering dropdown)
+    MacroReset(usize),                     // macro_idx — reset to 0 from context menu
 
     // Inspector scroll
     InspectorScrolled(f32),

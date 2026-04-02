@@ -183,6 +183,7 @@ pub fn dispatch(
         | PanelAction::GenTargetCommit(_)
         | PanelAction::GenEnvParamSnapshot(_)
         | PanelAction::GenEnvParamCommit(_)
+        | PanelAction::GenStringParamClicked(_)
         | PanelAction::GenCollapseToggle
         | PanelAction::GenCardClicked
         | PanelAction::GenCardRightClicked
@@ -192,6 +193,12 @@ pub fn dispatch(
         | PanelAction::MacroChanged(..)
         | PanelAction::MacroCommit(_)
         | PanelAction::MacroRightClick(_)
+        | PanelAction::MacroReset(_)
+        | PanelAction::MapEffectParamToMacro(..)
+        | PanelAction::MapGenParamToMacro(..)
+        | PanelAction::ClearMacroMappings(_)
+        | PanelAction::EffectParamLabelRightClick(..)
+        | PanelAction::GenParamLabelRightClick(_)
         | PanelAction::AddEffect(..)
         | PanelAction::PasteEffects => {
             inspector::dispatch_inspector(action, project, content_tx, content_state, ui, selection, active_layer, drag_snapshot, trim_snapshot, adsr_snapshot, target_snapshot, active_inspector_drag)

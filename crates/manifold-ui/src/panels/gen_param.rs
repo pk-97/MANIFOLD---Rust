@@ -42,9 +42,17 @@ pub struct GenParamInfo {
 }
 
 #[derive(Debug, Clone)]
+pub struct GenStringParamInfo {
+    pub name: String,
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct GenParamConfig {
     pub gen_type_name: String,
     pub params: Vec<GenParamInfo>,
+    pub string_params: Vec<GenStringParamInfo>,
     pub driver_active: Vec<bool>,
     pub envelope_active: Vec<bool>,
     pub trim_min: Vec<f32>,
@@ -115,6 +123,10 @@ pub struct GenParamPanel {
     trim_ids: Vec<Option<TrimHandleIds>>,
     target_ids: Vec<Option<EnvelopeTargetIds>>,
 
+    // String params (text fields below sliders)
+    string_param_info: Vec<GenStringParamInfo>,
+    string_param_btn_ids: Vec<i32>,
+
     // Per-param OSC addresses (for click-to-copy)
     osc_addresses: Vec<Option<String>>,
 
@@ -156,6 +168,8 @@ impl GenParamPanel {
             envelope_config_ids: Vec::new(),
             trim_ids: Vec::new(),
             target_ids: Vec::new(),
+            string_param_info: Vec::new(),
+            string_param_btn_ids: Vec::new(),
             osc_addresses: Vec::new(),
             copied_flash: None,
             drag: ParamDragState::new(),
@@ -189,6 +203,8 @@ impl GenParamPanel {
             &config.driver_dotted,
             &config.driver_triplet,
         );
+        self.string_param_info = config.string_params.clone();
+        self.string_param_btn_ids = vec![-1; config.string_params.len()];
         self.osc_addresses = config.params.iter().map(|p| p.osc_address.clone()).collect();
         self.copied_flash = None;
         self.slider_ids = vec![None; n];
@@ -463,6 +479,28 @@ impl GenParamPanel {
             }
         }
 
+        // ── String param rows (clickable text fields) ──
+        for (si, sp) in self.string_param_info.iter().enumerate() {
+            let display = if sp.value.is_empty() {
+                format!("{}: (empty)", sp.name)
+            } else {
+                format!("{}: {}", sp.name, sp.value)
+            };
+            self.string_param_btn_ids[si] = tree.add_button(
+                -1, cx, cy, content_w, ROW_HEIGHT,
+                UIStyle {
+                    bg_color: color::INSPECTOR_BG,
+                    text_color: color::TEXT_WHITE_C32,
+                    font_size: FONT_SIZE,
+                    text_align: TextAlign::Left,
+                    corner_radius: 2.0,
+                    ..UIStyle::default()
+                },
+                &display,
+            ) as i32;
+            cy += ROW_HEIGHT + ROW_SPACING;
+        }
+
         } // end if !self.is_collapsed
 
         self.node_count = tree.count() - self.first_node;
@@ -540,6 +578,35 @@ impl GenParamPanel {
 
     pub fn set_layer_id(&mut self, id: Option<LayerId>) {
         self.layer_id = id;
+    }
+
+    /// Get string param info for text input anchoring.
+    pub fn string_param(&self, index: usize) -> Option<&GenStringParamInfo> {
+        self.string_param_info.get(index)
+    }
+
+    /// Get the screen-space rect of a string param button for text input anchoring.
+    pub fn string_param_rect(&self, tree: &UITree, index: usize) -> Option<Rect> {
+        self.string_param_btn_ids.get(index)
+            .filter(|&&id| id >= 0)
+            .map(|&id| tree.get_bounds(id as u32))
+    }
+
+    /// Update a string param value and its display text.
+    pub fn sync_string_param(&mut self, tree: &mut UITree, index: usize, value: &str) {
+        if let Some(sp) = self.string_param_info.get_mut(index) {
+            sp.value = value.to_string();
+            if let Some(&btn_id) = self.string_param_btn_ids.get(index)
+                && btn_id >= 0
+            {
+                let display = if value.is_empty() {
+                    format!("{}: (empty)", sp.name)
+                } else {
+                    format!("{}: {}", sp.name, value)
+                };
+                tree.set_text(btn_id as u32, &display);
+            }
+        }
     }
 
     pub fn sync_gen_type_name(&mut self, tree: &mut UITree, name: &str) {
@@ -623,6 +690,13 @@ impl GenParamPanel {
                 DriverClickResult::Reverse => DriverConfigAction::Reverse,
             };
             return vec![PanelAction::GenDriverConfig(pi, action)];
+        }
+
+        // String param buttons → open text input
+        for (si, &btn_id) in self.string_param_btn_ids.iter().enumerate() {
+            if id == btn_id {
+                return vec![PanelAction::GenStringParamClicked(si)];
+            }
         }
 
         Vec::new()
@@ -830,11 +904,17 @@ impl GenParamPanel {
 
         for (pi, slider) in self.slider_ids.iter().enumerate() {
             if self.param_info.get(pi).map(|i| i.is_toggle).unwrap_or(false) { continue; }
-            if let Some(ids) = slider
-                && node_id == ids.track {
+            if let Some(ids) = slider {
+                // Right-click slider track → reset to default
+                if node_id == ids.track {
                     let default = self.param_info.get(pi).map(|i| i.default).unwrap_or(0.0);
                     return vec![PanelAction::GenParamRightClick(pi, default)];
                 }
+                // Right-click label → map to macro
+                if ids.label >= 0 && node_id == ids.label as u32 {
+                    return vec![PanelAction::GenParamLabelRightClick(pi)];
+                }
+            }
         }
         Vec::new()
     }
@@ -857,6 +937,7 @@ mod tests {
                 GenParamInfo { name: "Invert".into(), min: 0.0, max: 1.0, default: 0.0, whole_numbers: false, is_toggle: true, value_labels: None, osc_address: None },
                 GenParamInfo { name: "Scale".into(), min: 0.1, max: 5.0, default: 1.0, whole_numbers: false, is_toggle: false, value_labels: None, osc_address: None },
             ],
+            string_params: vec![],
             driver_active: vec![false; 3],
             envelope_active: vec![false; 3],
             trim_min: vec![0.0; 3],

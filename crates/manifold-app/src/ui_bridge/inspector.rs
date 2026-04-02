@@ -95,6 +95,19 @@ pub(super) fn dispatch_inspector(
             DispatchResult::handled()
         }
 
+        PanelAction::MacroReset(idx) => {
+            let idx = *idx;
+            if idx < manifold_core::macro_bank::MACRO_COUNT {
+                let old = project.settings.macro_bank.slots[idx].value;
+                if old.abs() > f32::EPSILON {
+                    manifold_core::macro_bank::MacroBank::apply_macro(project, idx, 0.0);
+                    let cmd = ChangeMacroCommand::new(idx, old, 0.0);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            DispatchResult::handled()
+        }
+
         // ── Master chrome ──────────────────────────────────────────
         PanelAction::MasterOpacitySnapshot => {
             *drag_snapshot = Some(project.settings.master_opacity);
@@ -1123,6 +1136,10 @@ pub(super) fn dispatch_inspector(
         }
 
         // ── Generator card actions ─────────────────────────────────
+        PanelAction::GenStringParamClicked(_) => {
+            // Intercepted in app_render.rs to open text input.
+            DispatchResult::handled()
+        }
         PanelAction::GenCollapseToggle => {
             if let Some(gp) = ui.inspector.gen_params_mut() {
                 let new_val = !gp.is_collapsed();
@@ -1661,6 +1678,109 @@ pub(super) fn dispatch_inspector(
         }
 
         PanelAction::PasteEffects => {
+            DispatchResult::handled()
+        }
+
+        // Label right-clicks are consumed by try_open_dropdown — shouldn't reach here
+        PanelAction::EffectParamLabelRightClick(..)
+        | PanelAction::GenParamLabelRightClick(_) => DispatchResult::handled(),
+
+        // ── Macro mapping ─────────────────────────────────────────
+        PanelAction::MapEffectParamToMacro(tab, fx_idx, param_idx, macro_idx) => {
+            use manifold_core::{MacroMapping, MacroMappingTarget, MacroCurve};
+            let tab = *tab;
+            let fx_idx = *fx_idx;
+            let param_idx = *param_idx;
+            let macro_idx = *macro_idx;
+
+            // Resolve effect type and build mapping target
+            let (effects_ref, _target) = resolve_effects_read(tab, project, active_layer, selection);
+            if let Some(effects) = effects_ref
+                && let Some(fx) = effects.get(fx_idx) {
+                    let effect_type = fx.effect_type().clone();
+
+                    // Get param range from definition
+                    let (min, max) = manifold_core::effect_definition_registry::try_get(&effect_type)
+                        .and_then(|def| def.param_defs.get(param_idx))
+                        .map(|pd| (pd.min, pd.max))
+                        .unwrap_or((0.0, 1.0));
+
+                    let mapping_target = match tab {
+                        InspectorTab::Master => MacroMappingTarget::MasterEffect {
+                            effect_type,
+                            param_index: param_idx,
+                        },
+                        InspectorTab::Layer | InspectorTab::Clip => {
+                            let layer_id = active_layer.clone()
+                                .unwrap_or_else(|| project.timeline.layers.first()
+                                    .map(|l| l.layer_id.clone())
+                                    .unwrap_or_default());
+                            MacroMappingTarget::LayerEffect {
+                                layer_id,
+                                effect_type,
+                                param_index: param_idx,
+                            }
+                        }
+                    };
+
+                    let mapping = MacroMapping {
+                        target: mapping_target,
+                        range_min: min,
+                        range_max: max,
+                        curve: MacroCurve::Linear,
+                    };
+
+                    project.settings.macro_bank.slots[macro_idx].mappings.push(mapping.clone());
+                    let mi = macro_idx;
+                    ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                        p.settings.macro_bank.slots[mi].mappings.push(mapping);
+                    })));
+                }
+            DispatchResult::handled()
+        }
+        PanelAction::MapGenParamToMacro(param_idx, macro_idx) => {
+            use manifold_core::{MacroMapping, MacroMappingTarget, MacroCurve};
+            let param_idx = *param_idx;
+            let macro_idx = *macro_idx;
+
+            let layer_idx = super::resolve_active_layer_index(active_layer, project);
+            if let Some(layer_idx) = layer_idx
+                && let Some(layer) = project.timeline.layers.get(layer_idx)
+                && let Some(gp) = layer.gen_params() {
+                    let layer_id = layer.layer_id.clone();
+
+                    // Get param range from definition
+                    let (min, max) = manifold_core::generator_definition_registry::try_get(gp.generator_type())
+                        .and_then(|def| def.param_defs.get(param_idx))
+                        .map(|pd| (pd.min, pd.max))
+                        .unwrap_or((0.0, 1.0));
+
+                    let mapping = MacroMapping {
+                        target: MacroMappingTarget::GenParam {
+                            layer_id,
+                            param_index: param_idx,
+                        },
+                        range_min: min,
+                        range_max: max,
+                        curve: MacroCurve::Linear,
+                    };
+
+                    project.settings.macro_bank.slots[macro_idx].mappings.push(mapping.clone());
+                    let mi = macro_idx;
+                    ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                        p.settings.macro_bank.slots[mi].mappings.push(mapping);
+                    })));
+                }
+            DispatchResult::handled()
+        }
+        PanelAction::ClearMacroMappings(macro_idx) => {
+            let macro_idx = *macro_idx;
+            if macro_idx < manifold_core::MACRO_COUNT {
+                project.settings.macro_bank.slots[macro_idx].mappings.clear();
+                ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                    p.settings.macro_bank.slots[macro_idx].mappings.clear();
+                })));
+            }
             DispatchResult::handled()
         }
 

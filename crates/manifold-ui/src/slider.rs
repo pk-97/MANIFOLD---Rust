@@ -105,19 +105,21 @@ impl BitmapSlider {
         let y = rect.y;
         let h = rect.height;
 
-        // ── Label (fixed width, left) ──
+        // ── Label (fixed width, left, interactive for right-click mapping) ──
         if let Some(label_text) = label
             && !label_text.is_empty() {
-                ids.label = tree.add_label(
+                ids.label = tree.add_node(
                     parent_id,
-                    x, y, label_width, h,
-                    label_text,
+                    Rect::new(x, y, label_width, h),
+                    UINodeType::Label,
                     UIStyle {
                         text_color: colors.text,
                         font_size,
                         text_align: TextAlign::Right,
                         ..UIStyle::default()
                     },
+                    Some(label_text),
+                    UIFlags::VISIBLE | UIFlags::INTERACTIVE,
                 ) as i32;
                 x += label_width + GAP;
             }
