@@ -27,22 +27,28 @@ fn apply_clean(rgb: vec3<f32>, gain: f32) -> vec3<f32> {
 }
 
 fn apply_warm(rgb: vec3<f32>, gain: f32, drive: f32) -> vec3<f32> {
-    // Tube-style soft saturation
-    let saturated = tanh(rgb * gain * (1.0 + drive));
-    let lum = dot(saturated, LUMA);
-    // Warm shadows, cool highlights
-    let warm = vec3<f32>(0.02, 0.01, -0.02) * (1.0 - lum) * drive;
-    let cool = vec3<f32>(-0.01, 0.0, 0.02) * lum * drive;
-    return saturated + warm + cool;
+    // Tube-style soft saturation: blend linear→tanh by drive.
+    // tanh(x) ≈ x for small x, so dark values stay dark.
+    let gained = rgb * gain;
+    let saturated = tanh(gained);
+    let blended = mix(gained, saturated, drive);
+    // Multiplicative warm/cool tint — preserves black point
+    let lum = clamp(dot(blended, LUMA), 0.0, 1.0);
+    let warm_tint = vec3<f32>(1.0 + 0.04 * drive, 1.0 + 0.02 * drive, 1.0 - 0.04 * drive);
+    let cool_tint = vec3<f32>(1.0 - 0.02 * drive, 1.0, 1.0 + 0.04 * drive);
+    return blended * mix(warm_tint, cool_tint, lum);
 }
 
 fn apply_film(rgb: vec3<f32>, gain: f32, drive: f32) -> vec3<f32> {
-    var compressed = rgb * gain;
-    // Lifted blacks — never true zero
-    compressed = max(compressed, vec3<f32>(0.02 * drive));
-    // Highlight shoulder (log rolloff)
-    compressed = 1.0 - exp(-compressed * (1.0 + drive));
-    // Desaturate highlights (film stock characteristic)
+    let gained = rgb * gain;
+    // Reinhard filmic shoulder: f(0) = 0, f(x) ≈ x for small x,
+    // f(x) → white_point for large x. Preserves blacks exactly.
+    let white_point = 2.0 - drive; // more drive = earlier rolloff
+    let wp2 = white_point * white_point;
+    let shoulder = gained * (1.0 + gained / wp2) / (1.0 + gained);
+    // Blend linear→shoulder by drive
+    let compressed = mix(gained, shoulder, drive);
+    // Subtle highlight desaturation (film stock characteristic)
     let lum = dot(compressed, LUMA);
     let desat = smoothstep(0.7, 1.0, lum) * drive * 0.3;
     return mix(compressed, vec3<f32>(lum), desat);
@@ -62,9 +68,11 @@ fn apply_vivid(rgb: vec3<f32>, gain: f32, drive: f32) -> vec3<f32> {
 }
 
 fn apply_grit(rgb: vec3<f32>, gain: f32, drive: f32) -> vec3<f32> {
-    // FET/tape-style per-channel soft clipping
-    let driven = rgb * gain * (1.0 + drive * 2.0);
-    return sign(driven) * (1.0 - exp(-abs(driven)));
+    // FET/tape-style per-channel soft clipping.
+    // Blend linear→clipped by drive so blacks stay black.
+    let gained = rgb * gain;
+    let clipped = sign(gained) * (1.0 - exp(-abs(gained)));
+    return mix(gained, clipped, drive);
 }
 
 // ── Main ───────────────────────────────────────────────────────────────
