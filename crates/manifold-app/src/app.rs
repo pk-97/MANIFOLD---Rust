@@ -1782,8 +1782,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     } else if tracks_rect.contains(pos) {
                         if self.modifiers.alt {
                             // Alt + scroll Y → zoom (step through zoom levels)
-                            let anchor_beat = self.ui_root.viewport.pixel_to_beat(pos.x).as_f32();
+                            // Always anchor on the playhead, not the mouse cursor.
+                            let playhead_beat = self.content_state.current_beat.as_f32();
                             let current_ppb = self.ui_root.viewport.pixels_per_beat();
+                            let playhead_px = self.ui_root.viewport.beat_to_pixel(
+                                manifold_core::Beats::from_f32(playhead_beat),
+                            );
+                            let anchor_x = (playhead_px - tracks_rect.x)
+                                .clamp(0.0, tracks_rect.width);
                             let levels = &manifold_ui::color::ZOOM_LEVELS;
                             let current_idx = levels.iter()
                                 .position(|&l| (l - current_ppb).abs() < 0.01)
@@ -1802,10 +1808,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                             };
                             if new_idx != current_idx {
                                 let new_ppb = levels[new_idx];
-                                // Anchor: keep the beat under cursor at the same screen X
-                                let new_scroll = anchor_beat - (pos.x - tracks_rect.x) / new_ppb;
+                                // Anchor: keep the playhead at the same screen X
+                                let new_scroll = playhead_beat - anchor_x / new_ppb;
                                 self.ui_root.viewport.set_zoom(new_ppb);
-                                // Zoom always requires rebuild (ppb changed)
                                 self.ui_root.viewport.set_scroll(
                                     new_scroll.max(0.0),
                                     self.ui_root.viewport.scroll_y_px(),
