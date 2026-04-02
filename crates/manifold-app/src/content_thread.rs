@@ -208,9 +208,20 @@ impl ContentThread {
             && p.settings.vsync_enabled
             && let Some(ref signal) = self.vsync_signal
         {
-            let hz = signal.display_hz();
-            self.timer.set_vsync_mode(true, hz);
-            self.last_vsync_count = signal.vsync_count();
+            // The CVDisplayLink may not have fired yet (display_hz = 0).
+            // Wait for the first vsync callback to populate the Hz.
+            let mut hz = signal.display_hz();
+            if hz == 0.0 {
+                let result = signal.wait(0);
+                hz = result.display_hz;
+            }
+            if hz > 0.0 {
+                eprintln!("[ContentThread] VSync activated: display_hz={hz:.1}");
+                self.timer.set_vsync_mode(true, hz);
+                self.last_vsync_count = signal.vsync_count();
+            } else {
+                eprintln!("[ContentThread] VSync: display_hz still 0 after wait, using timer");
+            }
         }
 
         loop {

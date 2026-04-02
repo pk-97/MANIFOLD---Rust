@@ -137,15 +137,29 @@ pub struct VsyncWaitResult {
 unsafe extern "C" fn content_vsync_callback(
     _display_link: CVDisplayLinkRef,
     _in_now: *const CVTimeStamp,
-    _in_output_time: *const CVTimeStamp,
+    in_output_time: *const CVTimeStamp,
     _flags_in: u64,
     _flags_out: *mut u64,
     context: *mut c_void,
 ) -> i32 {
     let inner = unsafe { &*(context as *const VsyncInner) };
-    // Lock held for nanoseconds — just increment + notify.
+    // Derive display Hz from the CVTimeStamp's refresh period.
+    // This is always accurate — unlike CVDisplayLinkGetActualOutputVideoRefreshPeriod
+    // which returns 0 before the first callback fires.
+    let hz = unsafe {
+        let ts = &*in_output_time;
+        if ts.video_refresh_period > 0 && ts.video_time_scale > 0 {
+            ts.video_time_scale as f64 / ts.video_refresh_period as f64
+        } else {
+            0.0
+        }
+    };
+    // Lock held for nanoseconds — just increment + notify + update Hz.
     if let Ok(mut state) = inner.state.lock() {
         state.vsync_count += 1;
+        if hz > 0.0 {
+            state.display_hz = hz;
+        }
         inner.condvar.notify_one();
     }
     K_CV_RETURN_SUCCESS
@@ -241,6 +255,7 @@ impl GpuVsyncSignal {
     /// Starts a CVDisplayLink that fires at the display's refresh rate
     /// and notifies waiting threads via condvar.
     pub fn new(window: &impl raw_window_handle::HasWindowHandle) -> Self {
+        eprintln!("[GpuVsyncSignal] Creating...");
         let display_id = display_id_for_window(window);
 
         let inner = Arc::new(VsyncInner {
@@ -291,19 +306,26 @@ impl GpuVsyncSignal {
             );
         }
 
-        // Read initial display Hz.
+        // Try to read initial display Hz. May return 0 if the link hasn't
+        // fired yet — the callback will populate it from CVTimeStamp on first vsync.
         let refresh_period = unsafe {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(display_link)
         };
         let hz = if refresh_period > 0.0 { 1.0 / refresh_period } else { 0.0 };
-        if let Ok(mut state) = inner.state.lock() {
+        if hz > 0.0
+            && let Ok(mut state) = inner.state.lock()
+        {
             state.display_hz = hz;
         }
 
+        eprintln!(
+            "[GpuVsyncSignal] Started for display {display_id}, \
+             initial_hz={:.1} (0 = will detect from first callback)",
+            hz,
+        );
         log::info!(
             "[GpuVsyncSignal] Started for display {display_id}, \
-             refresh={:.2}ms ({:.1}Hz)",
-            refresh_period * 1000.0, hz,
+             initial_hz={:.1}", hz,
         );
 
         Self {

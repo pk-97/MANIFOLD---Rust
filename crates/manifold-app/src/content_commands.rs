@@ -229,8 +229,14 @@ impl ContentThread {
                 if let Some(p) = self.engine.project() {
                     if p.settings.vsync_enabled {
                         if let Some(ref signal) = self.vsync_signal {
-                            let hz = signal.display_hz();
-                            self.timer.set_vsync_mode(true, hz);
+                            let mut hz = signal.display_hz();
+                            if hz == 0.0 {
+                                let result = signal.wait(0);
+                                hz = result.display_hz;
+                            }
+                            if hz > 0.0 {
+                                self.timer.set_vsync_mode(true, hz);
+                            }
                         }
                     } else {
                         self.timer.set_vsync_mode(false, 0.0);
@@ -272,15 +278,19 @@ impl ContentThread {
                     p.settings.vsync_enabled = enabled;
                 }
                 #[cfg(target_os = "macos")]
-                {
-                    if enabled {
-                        if let Some(ref signal) = self.vsync_signal {
-                            let hz = signal.display_hz();
+                if enabled {
+                    if let Some(ref signal) = self.vsync_signal {
+                        let mut hz = signal.display_hz();
+                        if hz == 0.0 {
+                            let result = signal.wait(0);
+                            hz = result.display_hz;
+                        }
+                        if hz > 0.0 {
                             self.timer.set_vsync_mode(true, hz);
                         }
-                    } else {
-                        self.timer.set_vsync_mode(false, 0.0);
                     }
+                } else {
+                    self.timer.set_vsync_mode(false, 0.0);
                 }
             }
 
