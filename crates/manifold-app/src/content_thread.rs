@@ -883,7 +883,8 @@ impl ContentThread {
 
         match authority {
             ClockAuthority::Link => {
-                if let Some(ref link) = self.transport_controller.link_sync
+                if !self.sync_arbiter.manifold_owns_playback
+                    && let Some(ref link) = self.transport_controller.link_sync
                     && link.is_link_enabled()
                         && link.has_active_peers()
                         && !self.link_beat_offset.is_nan()
