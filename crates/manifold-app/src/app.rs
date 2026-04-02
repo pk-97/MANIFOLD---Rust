@@ -2203,6 +2203,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             self.tick_and_render();
         }
 
+        // Present output frame on the main thread (windowed mode only).
+        // The CVDisplayLink callback sets a vsync flag; we do the actual
+        // blit + present here inside the winit event loop where Core Animation
+        // transactions exist, enabling presentsWithTransaction for smooth
+        // compositor-synchronized output.
+        #[cfg(target_os = "macos")]
+        if let Some(ref mut presenter) = self.output_presenter {
+            presenter.present_if_ready();
+        }
+
         // Keep the event loop alive. On macOS the CVDisplayLink callback
         // calls request_redraw to wake us at each vsync. On other platforms
         // (or if the display link isn't started yet) we self-wake.

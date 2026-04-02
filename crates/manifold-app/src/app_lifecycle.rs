@@ -643,9 +643,15 @@ impl Application {
         if let Some(gpu) = &self.gpu
             && let Some(bridge) = &self.shared_texture_bridge
         {
+            let window_arc_for_presenter = if !presentation {
+                Some(Arc::clone(&window))
+            } else {
+                None
+            };
             let presenter = crate::display_link::DisplayLinkPresenter::new(
                 &gpu.device,
                 &window,
+                window_arc_for_presenter,
                 Arc::clone(bridge),
                 h,
                 presentation,

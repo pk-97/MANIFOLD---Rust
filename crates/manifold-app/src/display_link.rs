@@ -142,8 +142,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
-// ─── Presenter context (heap-allocated, accessed from callback) ─────────
+// ─── Presenter context ─────────────────────────────────────────────────
 
+/// GPU resources for blitting IOSurface content to the output window's
+/// CAMetalLayer. Shared between the main thread (windowed mode) and the
+/// CVDisplayLink callback (fullscreen/Direct Display mode).
 struct PresenterContext {
     device: GpuDevice,
     pipeline: GpuRenderPipeline,
@@ -152,50 +155,42 @@ struct PresenterContext {
     bridge: Arc<SharedTextureBridge>,
     native_textures: [Option<GpuTexture>; SURFACE_COUNT],
     last_bridge_gen: u64,
-    stop: Arc<AtomicBool>,
     #[allow(dead_code)]
     edr_headroom: Arc<AtomicU64>,
 }
 
-// SAFETY: PresenterContext is only accessed from the serial CVDisplayLink
-// callback thread. The fields it contains (GpuDevice, GpuSurface, etc.)
-// wrap ObjC/Metal objects that are safe to use from any single thread.
 unsafe impl Send for PresenterContext {}
 
 impl PresenterContext {
-    fn present_for_vsync(&mut self, output_time: &CVTimeStamp) {
+    /// Blit the latest IOSurface frame to the CAMetalLayer drawable.
+    ///
+    /// `use_transaction`: when true, uses commit_and_wait_scheduled + manual
+    /// present for Core Animation transaction sync (windowed mode, main thread).
+    /// When false, uses standard presentDrawable (fullscreen/Direct Display).
+    fn present_frame(&mut self, use_transaction: bool) {
         // ── Bridge resize check (rare) ──
         let bridge_gen = self.bridge.generation();
         if bridge_gen != self.last_bridge_gen {
             self.last_bridge_gen = bridge_gen;
-            self.reimport_textures();
-            self.sync_surface_to_bridge();
+            self.native_textures = import_textures(&self.device, &self.bridge);
+            let w = self.bridge.width();
+            let h = self.bridge.height();
+            if w != self.surface.width || h != self.surface.height {
+                self.surface.resize(w, h);
+            }
         }
 
-        let _ = output_time; // available for future adaptive timing
-
         // ── Latch latest content frame ──
-        // Always present on every callback, even if front_index hasn't changed.
-        // In fullscreen presentation mode, macOS engages Direct Display
-        // (Direct-to-Screen), bypassing the WindowServer compositor. This
-        // optimization requires a present on every hardware vsync to maintain
-        // the lock. Skipping presents causes WindowServer to thrash between
-        // Direct Display and composited mode — and that thrashing propagates
-        // to ALL displays, causing UI drops on the MacBook.
         let front = self.bridge.front_index() as usize;
-
         let Some(source) = self.native_textures[front].as_ref() else {
             return;
         };
 
-        // ── Acquire drawable ──
-        // With displaySyncEnabled=true and 3 drawables, this should not block
-        // if we're keeping up. If it does, we've missed our window.
         let Some(drawable) = self.surface.next_drawable() else {
-            return; // Skip frame — don't stall the callback
+            return;
         };
 
-        // ── Blit + present ──
+        // ── Blit ──
         let target = drawable.gpu_texture(GpuTextureFormat::Rgba16Float);
         let w = self.surface.width as f32;
         let h = self.surface.height as f32;
@@ -213,117 +208,149 @@ impl PresenterContext {
             "Presenter Blit",
         );
 
-        encoder.present_drawable(&drawable);
-        encoder.commit();
-    }
-
-    fn reimport_textures(&mut self) {
-        self.native_textures = import_textures(&self.device, &self.bridge);
-    }
-
-    fn sync_surface_to_bridge(&mut self) {
-        let w = self.bridge.width();
-        let h = self.bridge.height();
-        if w != self.surface.width || h != self.surface.height {
-            self.surface.resize(w, h);
+        // ── Present ──
+        if use_transaction {
+            // Windowed (main thread): commit, wait for GPU to schedule the
+            // blit, then present directly into the Core Animation transaction.
+            encoder.commit_and_wait_scheduled();
+            drawable.present_after_scheduled();
+        } else {
+            // Fullscreen (Direct Display): standard present on the command
+            // buffer. Direct Display bypasses the compositor.
+            encoder.present_drawable(&drawable);
+            encoder.commit();
         }
     }
 }
 
-// ─── CVDisplayLink callback ─────────────────────────────────────────────
+// ─── Fullscreen callback (Direct Display — presents every vsync) ───────
 
-unsafe extern "C" fn display_link_callback(
+/// Callback context for fullscreen presenter. Heap-allocated, accessed
+/// only from the serial CVDisplayLink callback thread.
+struct FullscreenCallbackContext {
+    presenter: PresenterContext,
+    stop: AtomicBool,
+}
+
+unsafe impl Send for FullscreenCallbackContext {}
+
+unsafe extern "C" fn fullscreen_present_callback(
     _display_link: CVDisplayLinkRef,
     _in_now: *const CVTimeStamp,
-    in_output_time: *const CVTimeStamp,
+    _in_output_time: *const CVTimeStamp,
     _flags_in: u64,
     _flags_out: *mut u64,
     context: *mut c_void,
 ) -> i32 {
-    let ctx = unsafe { &mut *(context as *mut PresenterContext) };
-
+    let ctx = unsafe { &mut *(context as *mut FullscreenCallbackContext) };
     if ctx.stop.load(Ordering::Acquire) {
         return K_CV_RETURN_SUCCESS;
     }
-
-    // Drain autoreleased ObjC Metal objects every callback.
+    // Must present every vsync to maintain Direct Display lock.
     objc::rc::autoreleasepool(|| {
-        let output_time = unsafe { &*in_output_time };
-        ctx.present_for_vsync(output_time);
+        ctx.presenter.present_frame(false);
     });
+    K_CV_RETURN_SUCCESS
+}
 
+// ─── Windowed callback (lightweight — just sets flag + request_redraw) ──
+
+/// Callback context for windowed presenter. The CVDisplayLink only sets
+/// a flag; the main thread does the actual blit + present.
+struct WindowedCallbackContext {
+    vsync_ready: Arc<AtomicBool>,
+    window: Arc<winit::window::Window>,
+    stop: AtomicBool,
+}
+
+unsafe impl Send for WindowedCallbackContext {}
+unsafe impl Sync for WindowedCallbackContext {}
+
+unsafe extern "C" fn windowed_vsync_callback(
+    _display_link: CVDisplayLinkRef,
+    _in_now: *const CVTimeStamp,
+    _in_output_time: *const CVTimeStamp,
+    _flags_in: u64,
+    _flags_out: *mut u64,
+    context: *mut c_void,
+) -> i32 {
+    let ctx = unsafe { &*(context as *const WindowedCallbackContext) };
+    if ctx.stop.load(Ordering::Acquire) {
+        return K_CV_RETURN_SUCCESS;
+    }
+    ctx.vsync_ready.store(true, Ordering::Release);
+    ctx.window.request_redraw();
     K_CV_RETURN_SUCCESS
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────
 
-/// CVDisplayLink-driven output presenter.
+/// Display-linked output presenter.
 ///
-/// Hardware-synchronized to the target display's refresh rate.
-/// Replaces `NativeOutputPresenter` for deterministic frame pacing.
+/// Two modes:
+/// - **Fullscreen (Direct Display)**: CVDisplayLink callback does the full
+///   blit + present every vsync. Required to maintain the Direct Display lock.
+/// - **Windowed**: CVDisplayLink callback just sets a flag. The main thread
+///   calls [`present_if_ready()`] to do the blit + present with
+///   `presentsWithTransaction`, syncing with the WindowServer compositor.
+enum PresenterMode {
+    /// Fullscreen: callback owns the presenter and does the blit.
+    Fullscreen {
+        context: *mut FullscreenCallbackContext,
+    },
+    /// Windowed: main thread owns the presenter, callback just signals.
+    Windowed {
+        presenter: Box<PresenterContext>,
+        vsync_ready: Arc<AtomicBool>,
+        /// Raw pointer to the callback context (freed in Drop).
+        callback_context: *mut WindowedCallbackContext,
+    },
+}
+
 pub struct DisplayLinkPresenter {
     display_link: CVDisplayLinkRef,
-    /// Heap-allocated context — freed in Drop after stopping the link.
-    context: *mut PresenterContext,
-    stop: Arc<AtomicBool>,
+    mode: PresenterMode,
     edr_headroom: Arc<AtomicU64>,
-    /// Current display ID — compared on screen change to detect retargeting.
     current_display_id: u32,
 }
 
 // SAFETY: CVDisplayLinkRef is a CoreFoundation object safe to stop/release
-// from any thread. The context pointer is only dereferenced from the
-// callback (which is stopped before Drop frees it).
+// from any thread. Presenter resources are only accessed from one thread
+// at a time (main thread for windowed, callback thread for fullscreen).
 unsafe impl Send for DisplayLinkPresenter {}
 
 impl DisplayLinkPresenter {
     pub fn new(
         _gpu_device: &GpuDevice,
         window: &winit::window::Window,
+        window_arc: Option<Arc<winit::window::Window>>,
         bridge: Arc<SharedTextureBridge>,
         edr_headroom: f64,
         presentation: bool,
     ) -> Self {
-        // Dedicated device (same physical GPU, separate command queue).
         let presenter_device = GpuDevice::new();
-
         let proj_w = bridge.width();
         let proj_h = bridge.height();
 
-        // Create surface. In presentation (fullscreen) mode, displaySyncEnabled=true
-        // so presents align to vblank — required to maintain Direct Display lock.
-        // In windowed mode, displaySyncEnabled=false because the CVDisplayLink
-        // already paces the callback and WindowServer composites on its own schedule;
-        // enabling display sync causes nextDrawable to block waiting for vblank,
-        // creating double-wait judder with the CVDisplayLink callback.
+        // displaySyncEnabled: true for fullscreen (Direct Display), false for windowed.
         let surface = presenter_device.create_surface(
-            window,
-            proj_w,
-            proj_h,
+            window, proj_w, proj_h,
             GpuTextureFormat::Rgba16Float,
-            presentation, // display-sync only in fullscreen/presentation mode
+            presentation,
         );
         surface.configure_edr();
         surface.set_contents_gravity_resize_aspect();
         surface.set_background_color(0.0, 0.0, 0.0, 1.0);
-        // 3 drawables: CVDisplayLink is the pacer, so nextDrawable should not
-        // block. 3 ensures availability; if it still blocks, we skip the frame.
         surface.set_maximum_drawable_count(3);
-        // presentsWithTransaction=false: the CVDisplayLink callback fires on a
-        // CoreVideo background thread where no Core Animation transaction context
-        // exists. presentsWithTransaction=true requires the present to happen on
-        // the main thread's run loop — incompatible with the CVDisplayLink model.
-        surface.set_presents_with_transaction(false);
+        // Windowed: presentsWithTransaction=true — the main thread does the
+        // present inside the winit event loop where CA transactions exist.
+        // Fullscreen: false — Direct Display bypasses the compositor.
+        surface.set_presents_with_transaction(!presentation);
 
         let pipeline = presenter_device.create_render_pipeline(
-            PRESENTER_WGSL,
-            "vs_main",
-            "fs_main",
-            GpuTextureFormat::Rgba16Float,
-            None,
-            "Presenter Blit",
+            PRESENTER_WGSL, "vs_main", "fs_main",
+            GpuTextureFormat::Rgba16Float, None, "Presenter Blit",
         );
-
         let sampler = presenter_device.create_sampler(&GpuSamplerDesc {
             min_filter: GpuFilterMode::Nearest,
             mag_filter: GpuFilterMode::Nearest,
@@ -332,11 +359,9 @@ impl DisplayLinkPresenter {
 
         let bridge_gen = bridge.generation();
         let native_textures = import_textures(&presenter_device, &bridge);
-
-        let stop = Arc::new(AtomicBool::new(false));
         let edr = Arc::new(AtomicU64::new(edr_headroom.to_bits()));
 
-        let context = Box::into_raw(Box::new(PresenterContext {
+        let presenter_ctx = PresenterContext {
             device: presenter_device,
             pipeline,
             sampler,
@@ -344,68 +369,82 @@ impl DisplayLinkPresenter {
             bridge,
             native_textures,
             last_bridge_gen: bridge_gen,
-            stop: Arc::clone(&stop),
             edr_headroom: Arc::clone(&edr),
-        }));
+        };
 
-        // Create CVDisplayLink targeting the window's current display.
+        // Create CVDisplayLink.
         let display_id = display_id_for_window(window);
         let mut display_link: CVDisplayLinkRef = std::ptr::null_mut();
-
         unsafe {
             let ret = CVDisplayLinkCreateWithActiveCGDisplays(&mut display_link);
-            assert!(
-                ret == K_CV_RETURN_SUCCESS && !display_link.is_null(),
-                "CVDisplayLinkCreateWithActiveCGDisplays failed (ret={ret})"
-            );
-
+            assert!(ret == K_CV_RETURN_SUCCESS && !display_link.is_null());
             if display_id != 0 {
-                let ret = CVDisplayLinkSetCurrentCGDisplay(display_link, display_id);
-                if ret != K_CV_RETURN_SUCCESS {
-                    log::warn!(
-                        "[DisplayLink] SetCurrentCGDisplay failed for display {display_id} \
-                         (ret={ret}), using default"
-                    );
-                }
+                CVDisplayLinkSetCurrentCGDisplay(display_link, display_id);
             }
-
-            let ret = CVDisplayLinkSetOutputCallback(
-                display_link,
-                display_link_callback,
-                context as *mut c_void,
-            );
-            assert!(
-                ret == K_CV_RETURN_SUCCESS,
-                "CVDisplayLinkSetOutputCallback failed (ret={ret})"
-            );
-
-            let ret = CVDisplayLinkStart(display_link);
-            assert!(
-                ret == K_CV_RETURN_SUCCESS,
-                "CVDisplayLinkStart failed (ret={ret})"
-            );
         }
 
-        let refresh = unsafe {
-            CVDisplayLinkGetActualOutputVideoRefreshPeriod(display_link)
+        let mode = if presentation {
+            // Fullscreen: callback owns the presenter and does the blit.
+            let ctx = Box::into_raw(Box::new(FullscreenCallbackContext {
+                presenter: presenter_ctx,
+                stop: AtomicBool::new(false),
+            }));
+            unsafe {
+                CVDisplayLinkSetOutputCallback(
+                    display_link, fullscreen_present_callback,
+                    ctx as *mut c_void,
+                );
+            }
+            PresenterMode::Fullscreen { context: ctx }
+        } else {
+            // Windowed: lightweight callback, main thread does the blit.
+            let vsync_ready = Arc::new(AtomicBool::new(false));
+            let win_arc = window_arc
+                .expect("window_arc required for windowed presenter");
+            let cb_ctx = Box::into_raw(Box::new(WindowedCallbackContext {
+                vsync_ready: Arc::clone(&vsync_ready),
+                window: win_arc,
+                stop: AtomicBool::new(false),
+            }));
+            unsafe {
+                CVDisplayLinkSetOutputCallback(
+                    display_link, windowed_vsync_callback,
+                    cb_ctx as *mut c_void,
+                );
+            }
+            PresenterMode::Windowed {
+                presenter: Box::new(presenter_ctx),
+                vsync_ready,
+                callback_context: cb_ctx,
+            }
         };
+
+        unsafe {
+            let ret = CVDisplayLinkStart(display_link);
+            assert!(ret == K_CV_RETURN_SUCCESS);
+        }
+
         log::info!(
             "[DisplayLink] Started for display {display_id}, \
-             refresh={:.2}ms ({:.1}Hz), drawable={}x{} Rgba16Float, \
-             displaySync={}",
-            refresh * 1000.0,
-            if refresh > 0.0 { 1.0 / refresh } else { 0.0 },
-            proj_w,
-            proj_h,
-            presentation,
+             mode={}, drawable={}x{} Rgba16Float",
+            if presentation { "fullscreen" } else { "windowed" },
+            proj_w, proj_h,
         );
 
-        Self {
-            display_link,
-            context,
-            stop,
-            edr_headroom: edr,
-            current_display_id: display_id,
+        Self { display_link, mode, edr_headroom: edr, current_display_id: display_id }
+    }
+
+    /// Present the latest content frame if a vsync signal is pending.
+    /// **Windowed mode only** — called from the main thread's event loop.
+    /// Uses presentsWithTransaction to sync with the WindowServer compositor.
+    /// In fullscreen mode this is a no-op (the callback does the present).
+    pub fn present_if_ready(&mut self) {
+        if let PresenterMode::Windowed { ref mut presenter, ref vsync_ready, .. } = self.mode
+            && vsync_ready.swap(false, Ordering::AcqRel)
+        {
+            objc::rc::autoreleasepool(|| {
+                presenter.present_frame(true);
+            });
         }
     }
 
@@ -413,36 +452,17 @@ impl DisplayLinkPresenter {
         self.edr_headroom.store(headroom.to_bits(), Ordering::Relaxed);
     }
 
-    /// Retarget the display link if the window moved to a different display.
-    ///
-    /// The presenter callback must NEVER skip a present — on Direct Display
-    /// surfaces, even one missed present causes WindowServer to drop Direct
-    /// Display mode, thrashing all displays. So we do NOT set the stop flag
-    /// here. CVDisplayLinkSetCurrentCGDisplay is safe to call while the
-    /// callback is running (Apple docs). The callback might present one frame
-    /// at the old display's timing — that's acceptable (single late present
-    /// is invisible, missed present is catastrophic).
     pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
         let new_id = display_id_for_window(window);
         if new_id == 0 || new_id == self.current_display_id {
             return;
         }
-        let old_refresh = unsafe {
-            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
-        };
-        // Retarget while running — callback keeps presenting without interruption.
         unsafe {
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
         }
-        let new_refresh = unsafe {
-            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
-        };
         log::info!(
-            "[DisplayLink] Retargeted: display {} → {}, \
-             refresh {:.1}Hz → {:.1}Hz",
+            "[DisplayLink] Retargeted: display {} → {}",
             self.current_display_id, new_id,
-            if old_refresh > 0.0 { 1.0 / old_refresh } else { 0.0 },
-            if new_refresh > 0.0 { 1.0 / new_refresh } else { 0.0 },
         );
         self.current_display_id = new_id;
     }
@@ -450,24 +470,40 @@ impl DisplayLinkPresenter {
 
 impl Drop for DisplayLinkPresenter {
     fn drop(&mut self) {
-        // Signal the callback to become a no-op IMMEDIATELY.
-        self.stop.store(true, Ordering::Release);
+        // Signal the callback to become a no-op.
+        match &self.mode {
+            PresenterMode::Fullscreen { context } => {
+                unsafe { &**context }.stop.store(true, Ordering::Release);
+            }
+            PresenterMode::Windowed { callback_context, .. } => {
+                unsafe { &**callback_context }.stop.store(true, Ordering::Release);
+            }
+        }
 
-        // Move blocking cleanup off the main thread. CVDisplayLinkStop blocks
-        // until the in-flight callback finishes, and the callback may touch
-        // main-thread resources (nextDrawable, WindowServer) — blocking the
-        // main thread here deadlocks. The detached thread can safely block:
-        // Stop guarantees no callback runs after it returns, so Release +
-        // context drop are safe.
+        // Move blocking cleanup off the main thread.
         let dl = SendPtr(self.display_link);
-        let ctx = SendPtr(self.context);
-        std::thread::spawn(move || unsafe {
-            let dl = dl.get();
-            let ctx = ctx.get();
-            CVDisplayLinkStop(dl);
-            CVDisplayLinkRelease(dl);
-            drop(Box::from_raw(ctx));
-        });
+        match &self.mode {
+            PresenterMode::Fullscreen { context } => {
+                let ctx = SendPtr(*context);
+                std::thread::spawn(move || unsafe {
+                    let dl = dl.get();
+                    CVDisplayLinkStop(dl);
+                    CVDisplayLinkRelease(dl);
+                    drop(Box::from_raw(ctx.get()));
+                });
+            }
+            PresenterMode::Windowed { callback_context, .. } => {
+                let ctx = SendPtr(*callback_context);
+                std::thread::spawn(move || unsafe {
+                    let dl = dl.get();
+                    CVDisplayLinkStop(dl);
+                    CVDisplayLinkRelease(dl);
+                    drop(Box::from_raw(ctx.get()));
+                });
+                // Note: PresenterContext (owned by the enum) is dropped
+                // normally when the DisplayLinkPresenter is dropped.
+            }
+        }
     }
 }
 
