@@ -218,10 +218,17 @@ pub struct Application {
     /// This minimizes time spent holding the drawable / blocking on WindowServer
     /// IPC during Direct Display synchronization on external monitors.
     pub(crate) ui_offscreen: Option<manifold_gpu::GpuTexture>,
-    /// Unified display link — one CVDisplayLink driving content thread,
-    /// output presenter, and UI thread from a single callback.
+    /// CVDisplayLink-driven vsync signal for the UI thread.
+    /// Replaces FrameTimer polling — aligns render submission to MacBook vsync.
     #[cfg(target_os = "macos")]
-    pub(crate) unified_display_link: Option<crate::display_link::UnifiedDisplayLink>,
+    pub(crate) ui_display_link: Option<crate::display_link::UiDisplayLink>,
+    /// CVDisplayLink-driven output presenter for hardware-synchronized frame pacing.
+    #[cfg(target_os = "macos")]
+    pub(crate) output_presenter: Option<crate::display_link::DisplayLinkPresenter>,
+    /// Content thread vsync signal — shared with ContentThread for display-synced pacing.
+    /// Retargeted when windows move between displays or output window opens/closes.
+    #[cfg(target_os = "macos")]
+    pub(crate) content_vsync_signal: Option<manifold_gpu::GpuVsyncSignal>,
     pub(crate) ui_renderer: Option<UIRenderer>,
     pub(crate) ui_cache_manager: Option<manifold_renderer::ui_cache_manager::UICacheManager>,
     pub(crate) layer_bitmap_gpu: Option<manifold_renderer::layer_bitmap_gpu::LayerBitmapGpu>,
@@ -380,7 +387,11 @@ impl Application {
             atlas_sampler: None,
             ui_offscreen: None,
             #[cfg(target_os = "macos")]
-            unified_display_link: None,
+            ui_display_link: None,
+            #[cfg(target_os = "macos")]
+            output_presenter: None,
+            #[cfg(target_os = "macos")]
+            content_vsync_signal: None,
             ui_renderer: None,
             ui_cache_manager: None,
             layer_bitmap_gpu: None,
@@ -1067,7 +1078,7 @@ impl ApplicationHandler for Application {
             // Register primary window
             let wid = window.id();
             self.primary_window_id = Some(wid);
-            // Clone Arc before moving into WindowState — needed for UnifiedDisplayLink.
+            // Clone Arc before moving into WindowState — needed for UiDisplayLink.
             #[cfg(target_os = "macos")]
             let window_arc = Arc::clone(&window);
             self.window_registry.add(
@@ -1080,15 +1091,17 @@ impl ApplicationHandler for Application {
                 },
             );
 
-            // Start unified display link — one CVDisplayLink driving content
-            // thread, output presenter, and UI thread from a single callback.
+            // Start CVDisplayLink for the MacBook display — vsync-aligned
+            // render trigger replacing the free-running FrameTimer.
             #[cfg(target_os = "macos")]
             {
-                let content_signal = manifold_gpu::GpuVsyncSignal::new_headless();
-                self.unified_display_link = Some(
-                    crate::display_link::UnifiedDisplayLink::new(
-                        window_arc, content_signal,
-                    ),
+                // Create content thread vsync signal targeting the primary window's
+                // display. Retargeted to output window when it opens.
+                self.content_vsync_signal = Some(
+                    manifold_gpu::GpuVsyncSignal::new(window_arc.as_ref()),
+                );
+                self.ui_display_link = Some(
+                    crate::display_link::UiDisplayLink::new(window_arc),
                 );
             }
 
@@ -1364,8 +1377,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     self.local_project.settings.frame_rate as f64,
                 ),
                 #[cfg(target_os = "macos")]
-                vsync_signal: self.unified_display_link.as_ref()
-                    .map(|dl| dl.create_content_waiter()),
+                vsync_signal: self.content_vsync_signal.as_ref()
+                    .map(|s| s.create_waiter()),
                 #[cfg(target_os = "macos")]
                 last_vsync_count: 0,
                 sync_arbiter: manifold_playback::sync::SyncArbiter::new(),
@@ -1447,7 +1460,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                     // must happen before we destroy windows or block on joins.
                     #[cfg(target_os = "macos")]
                     {
-                        self.unified_display_link = None;
+                        self.ui_display_link = None;
+                        self.output_presenter = None;
                     }
 
                     // Shut down content thread
@@ -1462,7 +1476,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 } else {
                     #[cfg(target_os = "macos")]
                     {
-                        if let Some(ref dl) = self.unified_display_link { dl.detach_presenter(); }
+                        self.output_presenter = None;
                         self.output_saved_frame = None;
                     }
                     self.window_registry.remove(&window_id);
@@ -1720,7 +1734,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
                             #[cfg(target_os = "macos")]
                             {
-                                if let Some(ref dl) = self.unified_display_link { dl.detach_presenter(); }
+                                self.output_presenter = None;
                                 self.output_saved_frame = None;
                             }
                             self.window_registry.remove(&window_id);
@@ -2137,14 +2151,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             self.pending_close_output = false;
             #[cfg(target_os = "macos")]
             {
-                if let Some(ref dl) = self.unified_display_link { dl.detach_presenter(); }
+                self.output_presenter = None;
                 self.output_saved_frame = None;
-                // Retarget unified link back to the primary window.
-                if let Some(ref mut dl) = self.unified_display_link
+                // Retarget content vsync back to the primary window.
+                if let Some(ref mut signal) = self.content_vsync_signal
                     && let Some(pid) = self.primary_window_id
                     && let Some(ws) = self.window_registry.get(&pid)
                 {
-                    dl.retarget_if_needed(&ws.window);
+                    signal.retarget(&*ws.window);
                 }
             }
             let output_ids: Vec<_> = self.window_registry.iter()
@@ -2180,7 +2194,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // CVDisplayLink aligns submission to the MacBook's actual vsync cadence,
         // eliminating event-loop jitter that caused near-miss frame drops.
         #[cfg(target_os = "macos")]
-        let should_render = self.unified_display_link.as_ref()
+        let should_render = self.ui_display_link.as_ref()
             .map_or(self.frame_timer.should_tick(), |dl| dl.vsync_ready());
         #[cfg(not(target_os = "macos"))]
         let should_render = self.frame_timer.should_tick();
@@ -2222,7 +2236,7 @@ impl Application {
         }
 
         // Query headroom for output window → update presenter directly.
-        // Collect output window Arc first to avoid borrow conflict with unified_display_link.
+        // Collect output window Arc first to avoid borrow conflict with output_presenter.
         let output_window: Option<Arc<winit::window::Window>> = self.window_registry.iter()
             .find(|(_, ws)| matches!(ws.role, WindowRole::Output { .. }))
             .map(|(_, ws)| Arc::clone(&ws.window));
@@ -2237,22 +2251,39 @@ impl Application {
                 );
                 self.output_edr_headroom = h;
                 #[cfg(target_os = "macos")]
-                if let Some(ref mut dl) = self.unified_display_link {
-                    dl.update_edr_headroom(h);
+                if let Some(p) = &mut self.output_presenter {
+                    p.update_edr_headroom(h);
                 }
             }
         }
 
-        // Retarget unified display link if windows moved to different displays.
-        // Prefer output window's display (performance display), fall back to primary.
+        // Retarget CVDisplayLinks if windows moved to different displays.
+        // Same NSNotification triggers this (screen change = display change).
         #[cfg(target_os = "macos")]
-        if let Some(ref mut dl) = self.unified_display_link {
-            if let Some(ref win) = output_window {
-                dl.retarget_if_needed(win.as_ref());
-            } else if let Some(pid) = self.primary_window_id
+        {
+            if let Some(pid) = self.primary_window_id
                 && let Some(ws) = self.window_registry.get(&pid)
             {
-                dl.retarget_if_needed(&ws.window);
+                let win = &ws.window;
+                if let Some(dl) = &mut self.ui_display_link {
+                    dl.retarget_if_needed(win);
+                }
+            }
+            if let Some(ref win) = output_window
+                && let Some(p) = &mut self.output_presenter
+            {
+                p.retarget_if_needed(win);
+            }
+            // Retarget content vsync signal: prefer output window's display
+            // (that's the performance display), fall back to primary window.
+            if let Some(ref mut signal) = self.content_vsync_signal {
+                if let Some(ref win) = output_window {
+                    signal.retarget(win.as_ref());
+                } else if let Some(pid) = self.primary_window_id
+                    && let Some(ws) = self.window_registry.get(&pid)
+                {
+                    signal.retarget(&*ws.window);
+                }
             }
         }
     }
@@ -2266,8 +2297,8 @@ impl Drop for Application {
         // The content thread may be blocked in GpuVsyncWaiter::wait() —
         // shutdown() unblocks the condvar so it can receive the Shutdown command.
         #[cfg(target_os = "macos")]
-        if let Some(ref dl) = self.unified_display_link {
-            dl.shutdown_content_signal();
+        if let Some(ref signal) = self.content_vsync_signal {
+            signal.shutdown();
         }
 
         // Ensure the content thread is shut down even on abnormal exit (panic, etc.).
@@ -2281,11 +2312,12 @@ impl Drop for Application {
             log::info!("[Application::Drop] content thread joined");
         }
 
-        // Stop unified display link before dropping windows — its callback
-        // calls request_redraw() which deadlocks if the main thread is blocked.
+        // Stop display links before dropping windows — their callbacks
+        // call request_redraw() which deadlocks if the main thread is blocked.
         #[cfg(target_os = "macos")]
         {
-            self.unified_display_link = None;
+            self.ui_display_link = None;
+            self.output_presenter = None;
         }
 
         // Drop GPU resources before the device and surfaces.

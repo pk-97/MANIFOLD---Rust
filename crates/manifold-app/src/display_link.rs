@@ -1,35 +1,121 @@
-//! Unified display link — one CVDisplayLink per physical display driving
-//! all consumers in a deterministic order:
+//! CVDisplayLink-driven output presenter.
 //!
-//!   1. Notify content thread condvar (wakes frame production)
-//!   2. Present output frame (blit latest IOSurface → CAMetalLayer)
-//!   3. Signal UI thread redraw (set flag + request_redraw)
+//! Replaces the manually-paced presenter thread with a hardware-synchronized
+//! callback from CoreVideo. The CVDisplayLink fires at the exact refresh cadence
+//! of the target display, providing:
+//!   - deterministic frame pacing (no sleep/spin jitter)
+//!   - precise vsync timing via `outputTime.hostTime`
+//!   - automatic cadence adaptation when the window moves between displays
+//!   - OS-managed real-time priority thread (no manual SCHED_RR)
 //!
-//! This eliminates the phase-race judder caused by three independent
-//! CVDisplayLinks firing at unpredictable offsets on the same display.
+//! Submission timing model (per review):
+//!   callback fires → coarse sleep → tight spin until outputTime - margin
+//!   → acquire drawable → read front_index → blit → present
 //!
-//! The presenter is attached/detached dynamically when the output window
-//! opens/closes. When no presenter is attached, steps 2 is skipped.
+//! This ensures GPU work completes inside the compositor acceptance window
+//! and latches the freshest content frame possible.
 
 use std::ffi::c_void;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use manifold_gpu::{
     GpuBinding, GpuDevice, GpuFilterMode, GpuLoadAction, GpuRenderPipeline, GpuSampler,
     GpuSamplerDesc, GpuSurface, GpuTexture, GpuTextureFormat, GpuTextureUsage,
-    // CVDisplayLink FFI (consolidated in manifold-gpu)
-    CVDisplayLinkRef, CVTimeStamp, K_CV_RETURN_SUCCESS, SendPtr,
-    CVDisplayLinkCreateWithActiveCGDisplays, CVDisplayLinkSetCurrentCGDisplay,
-    CVDisplayLinkSetOutputCallback, CVDisplayLinkStart, CVDisplayLinkStop,
-    CVDisplayLinkRelease, CVDisplayLinkGetActualOutputVideoRefreshPeriod,
-    display_id_for_window, hz_from_timestamp,
-    GpuVsyncSignal,
 };
 
 use crate::shared_texture::{SharedTextureBridge, SURFACE_COUNT};
 
-// ─── Presenter WGSL ────────────────────────────────────────────────────
+// ─── CVDisplayLink FFI ──────────────────────────────────────────────────
+
+type CVDisplayLinkRef = *mut c_void;
+
+/// CVTimeStamp — timing information from CoreVideo.
+/// `host_time` is in mach_absolute_time units.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CVTimeStamp {
+    version: u32,
+    video_time_scale: i32,
+    video_time: i64,
+    host_time: u64,
+    rate_scalar: f64,
+    video_refresh_period: i64,
+    smpte_time: [u8; 24], // CVSMPTETime — opaque, we only use host_time
+    flags: u64,
+    reserved: u64,
+}
+
+type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
+    display_link: CVDisplayLinkRef,
+    in_now: *const CVTimeStamp,
+    in_output_time: *const CVTimeStamp,
+    flags_in: u64,
+    flags_out: *mut u64,
+    context: *mut c_void,
+) -> i32;
+
+const K_CV_RETURN_SUCCESS: i32 = 0;
+
+#[link(name = "CoreVideo", kind = "framework")]
+unsafe extern "C" {
+    fn CVDisplayLinkCreateWithActiveCGDisplays(out: *mut CVDisplayLinkRef) -> i32;
+    fn CVDisplayLinkSetCurrentCGDisplay(link: CVDisplayLinkRef, display_id: u32) -> i32;
+    fn CVDisplayLinkSetOutputCallback(
+        link: CVDisplayLinkRef,
+        callback: CVDisplayLinkOutputCallback,
+        context: *mut c_void,
+    ) -> i32;
+    fn CVDisplayLinkStart(link: CVDisplayLinkRef) -> i32;
+    fn CVDisplayLinkStop(link: CVDisplayLinkRef) -> i32;
+    fn CVDisplayLinkRelease(link: CVDisplayLinkRef);
+    fn CVDisplayLinkGetActualOutputVideoRefreshPeriod(link: CVDisplayLinkRef) -> f64;
+}
+
+
+// ─── Display ID extraction ──────────────────────────────────────────────
+
+/// Get the CGDirectDisplayID for the monitor a window is currently on.
+fn display_id_for_window(window: &winit::window::Window) -> u32 {
+    use objc::{class, msg_send, sel, sel_impl};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let ns_view = match window.window_handle().unwrap().as_raw() {
+        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr() as *mut objc::runtime::Object,
+        _ => return 0,
+    };
+
+    unsafe {
+        let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
+        if ns_window.is_null() { return 0; }
+        let screen: *mut objc::runtime::Object = msg_send![ns_window, screen];
+        if screen.is_null() { return 0; }
+        let desc: *mut objc::runtime::Object = msg_send![screen, deviceDescription];
+        if desc.is_null() { return 0; }
+        let key: *mut objc::runtime::Object = msg_send![
+            class!(NSString),
+            stringWithUTF8String: c"NSScreenNumber".as_ptr()
+        ];
+        let display_id_obj: *mut objc::runtime::Object =
+            msg_send![desc, objectForKey: key];
+        if display_id_obj.is_null() { return 0; }
+        msg_send![display_id_obj, unsignedIntValue]
+    }
+}
+
+// ─── Send wrapper for raw pointers moved to cleanup threads ─────────────
+
+/// Wrapper to send raw pointers to the cleanup thread in Drop impls.
+/// SAFETY: CVDisplayLinkRef is a CoreFoundation object safe to stop/release
+/// from any thread. Context pointers are heap-allocated and exclusively
+/// owned by the cleanup thread after the stop flag is set.
+struct SendPtr<T>(*mut T);
+unsafe impl<T> Send for SendPtr<T> {}
+impl<T> SendPtr<T> {
+    fn get(self) -> *mut T { self.0 }
+}
+
+// ─── Presenter WGSL (same as NativeOutputPresenter) ─────────────────────
 
 const PRESENTER_WGSL: &str = r#"
 @group(0) @binding(0) var t_source: texture_2d<f32>;
@@ -66,6 +152,7 @@ struct PresenterContext {
     bridge: Arc<SharedTextureBridge>,
     native_textures: [Option<GpuTexture>; SURFACE_COUNT],
     last_bridge_gen: u64,
+    stop: Arc<AtomicBool>,
     #[allow(dead_code)]
     edr_headroom: Arc<AtomicU64>,
 }
@@ -76,7 +163,7 @@ struct PresenterContext {
 unsafe impl Send for PresenterContext {}
 
 impl PresenterContext {
-    fn present_for_vsync(&mut self) {
+    fn present_for_vsync(&mut self, output_time: &CVTimeStamp) {
         // ── Bridge resize check (rare) ──
         let bridge_gen = self.bridge.generation();
         if bridge_gen != self.last_bridge_gen {
@@ -84,6 +171,8 @@ impl PresenterContext {
             self.reimport_textures();
             self.sync_surface_to_bridge();
         }
+
+        let _ = output_time; // available for future adaptive timing
 
         // ── Latch latest content frame ──
         // Always present on every callback, even if front_index hasn't changed.
@@ -100,6 +189,8 @@ impl PresenterContext {
         };
 
         // ── Acquire drawable ──
+        // With displaySyncEnabled=true and 3 drawables, this should not block
+        // if we're keeping up. If it does, we've missed our window.
         let Some(drawable) = self.surface.next_drawable() else {
             return; // Skip frame — don't stall the callback
         };
@@ -138,30 +229,9 @@ impl PresenterContext {
     }
 }
 
-// ─── Unified callback context ──────────────────────────────────────────
+// ─── CVDisplayLink callback ─────────────────────────────────────────────
 
-struct UnifiedContext {
-    /// Content thread notification — shared with GpuVsyncWaiter.
-    content_signal: GpuVsyncSignal,
-
-    /// Presenter (null = no output window). Atomically attached/detached
-    /// from the UI thread while the callback is running.
-    presenter: AtomicPtr<PresenterContext>,
-
-    /// UI thread vsync signal.
-    ui_vsync_ready: Arc<AtomicBool>,
-    ui_window: Arc<winit::window::Window>,
-
-    /// Shutdown flag — callback becomes a no-op when set.
-    stop: AtomicBool,
-}
-
-unsafe impl Send for UnifiedContext {}
-unsafe impl Sync for UnifiedContext {}
-
-// ─── Unified CVDisplayLink callback ────────────────────────────────────
-
-unsafe extern "C" fn unified_vsync_callback(
+unsafe extern "C" fn display_link_callback(
     _display_link: CVDisplayLinkRef,
     _in_now: *const CVTimeStamp,
     in_output_time: *const CVTimeStamp,
@@ -169,157 +239,62 @@ unsafe extern "C" fn unified_vsync_callback(
     _flags_out: *mut u64,
     context: *mut c_void,
 ) -> i32 {
-    let ctx = unsafe { &*(context as *const UnifiedContext) };
+    let ctx = unsafe { &mut *(context as *mut PresenterContext) };
+
     if ctx.stop.load(Ordering::Acquire) {
         return K_CV_RETURN_SUCCESS;
     }
 
-    let hz = hz_from_timestamp(unsafe { &*in_output_time });
-
-    // ── Lightweight signals FIRST (nanoseconds) ──
-    // These must complete before the potentially-slow presenter work.
-    // If the presenter blocks (e.g. nextDrawable during fullscreen
-    // transition), both the content thread and UI thread still get
-    // their signals and can proceed normally.
-
-    // 1. Notify content thread (lock + increment + notify_one).
-    ctx.content_signal.notify_vsync(hz);
-
-    // 2. Signal UI thread redraw.
-    ctx.ui_vsync_ready.store(true, Ordering::Release);
-    ctx.ui_window.request_redraw();
-
-    // ── Heavy work LAST (may block on drawable acquisition) ──
-
-    // 3. Present output frame (if presenter is attached).
-    //    Reads the current front_index and blits to CAMetalLayer.
-    //    Always runs every vsync — required for Direct Display lock.
-    //    nextDrawable can block up to 1s during fullscreen transitions,
-    //    but content thread + UI already got their signals above.
-    let presenter_ptr = ctx.presenter.load(Ordering::Acquire);
-    if !presenter_ptr.is_null() {
-        objc::rc::autoreleasepool(|| {
-            let presenter = unsafe { &mut *presenter_ptr };
-            presenter.present_for_vsync();
-        });
-    }
+    // Drain autoreleased ObjC Metal objects every callback.
+    objc::rc::autoreleasepool(|| {
+        let output_time = unsafe { &*in_output_time };
+        ctx.present_for_vsync(output_time);
+    });
 
     K_CV_RETURN_SUCCESS
 }
 
-// ─── Public API ────────────────────────────────────────────────────────
+// ─── Public API ─────────────────────────────────────────────────────────
 
-/// Unified display link — one CVDisplayLink driving content thread,
-/// output presenter, and UI thread from a single callback.
+/// CVDisplayLink-driven output presenter.
 ///
-/// Eliminates phase-race judder between independent CVDisplayLinks
-/// on the same physical display.
-pub struct UnifiedDisplayLink {
+/// Hardware-synchronized to the target display's refresh rate.
+/// Replaces `NativeOutputPresenter` for deterministic frame pacing.
+pub struct DisplayLinkPresenter {
     display_link: CVDisplayLinkRef,
-    context: *mut UnifiedContext,
-    vsync_ready: Arc<AtomicBool>,
+    /// Heap-allocated context — freed in Drop after stopping the link.
+    context: *mut PresenterContext,
+    stop: Arc<AtomicBool>,
     edr_headroom: Arc<AtomicU64>,
+    /// Current display ID — compared on screen change to detect retargeting.
     current_display_id: u32,
 }
 
-unsafe impl Send for UnifiedDisplayLink {}
+// SAFETY: CVDisplayLinkRef is a CoreFoundation object safe to stop/release
+// from any thread. The context pointer is only dereferenced from the
+// callback (which is stopped before Drop frees it).
+unsafe impl Send for DisplayLinkPresenter {}
 
-impl UnifiedDisplayLink {
-    /// Create a unified display link targeting the given window's display.
-    ///
-    /// `content_signal` must be a headless `GpuVsyncSignal` — the unified
-    /// callback calls `notify_vsync()` on it to wake the content thread.
+impl DisplayLinkPresenter {
     pub fn new(
-        window: Arc<winit::window::Window>,
-        content_signal: GpuVsyncSignal,
-    ) -> Self {
-        let display_id = display_id_for_window(window.as_ref());
-        let vsync_ready = Arc::new(AtomicBool::new(false));
-        let edr_headroom = Arc::new(AtomicU64::new(1.0_f64.to_bits()));
-
-        let context = Box::into_raw(Box::new(UnifiedContext {
-            content_signal,
-            presenter: AtomicPtr::new(std::ptr::null_mut()),
-            ui_vsync_ready: Arc::clone(&vsync_ready),
-            ui_window: window,
-            stop: AtomicBool::new(false),
-        }));
-
-        let mut display_link: CVDisplayLinkRef = std::ptr::null_mut();
-        unsafe {
-            let ret = CVDisplayLinkCreateWithActiveCGDisplays(&mut display_link);
-            assert!(
-                ret == K_CV_RETURN_SUCCESS && !display_link.is_null(),
-                "CVDisplayLinkCreateWithActiveCGDisplays failed (ret={ret})"
-            );
-
-            if display_id != 0 {
-                let ret = CVDisplayLinkSetCurrentCGDisplay(display_link, display_id);
-                if ret != K_CV_RETURN_SUCCESS {
-                    log::warn!(
-                        "[UnifiedDisplayLink] SetCurrentCGDisplay failed for display \
-                         {display_id} (ret={ret}), using default"
-                    );
-                }
-            }
-
-            let ret = CVDisplayLinkSetOutputCallback(
-                display_link,
-                unified_vsync_callback,
-                context as *mut c_void,
-            );
-            assert!(
-                ret == K_CV_RETURN_SUCCESS,
-                "CVDisplayLinkSetOutputCallback failed (ret={ret})"
-            );
-
-            let ret = CVDisplayLinkStart(display_link);
-            assert!(
-                ret == K_CV_RETURN_SUCCESS,
-                "CVDisplayLinkStart failed (ret={ret})"
-            );
-        }
-
-        log::info!(
-            "[UnifiedDisplayLink] Started for display {display_id}"
-        );
-
-        Self {
-            display_link,
-            context,
-            vsync_ready,
-            edr_headroom,
-            current_display_id: display_id,
-        }
-    }
-
-    /// Create a waiter handle for the content thread.
-    /// The waiter blocks on the same condvar that the unified callback notifies.
-    pub fn create_content_waiter(&self) -> manifold_gpu::GpuVsyncWaiter {
-        unsafe { &*self.context }.content_signal.create_waiter()
-    }
-
-    /// Check and consume the vsync signal. Returns true once per display vsync.
-    pub fn vsync_ready(&self) -> bool {
-        self.vsync_ready.swap(false, Ordering::AcqRel)
-    }
-
-    /// Attach a presenter for the output window. The callback will start
-    /// presenting on the next vsync. Any previously attached presenter is dropped.
-    pub fn attach_presenter(
-        &self,
         _gpu_device: &GpuDevice,
         window: &winit::window::Window,
         bridge: Arc<SharedTextureBridge>,
         edr_headroom: f64,
         presentation: bool,
-    ) {
-        // Create presenter resources on a dedicated device (separate command queue).
+    ) -> Self {
+        // Dedicated device (same physical GPU, separate command queue).
         let presenter_device = GpuDevice::new();
 
         let proj_w = bridge.width();
         let proj_h = bridge.height();
 
+        // Create surface. In presentation (fullscreen) mode, displaySyncEnabled=true
+        // so presents align to vblank — required to maintain Direct Display lock.
+        // In windowed mode, displaySyncEnabled=false because the CVDisplayLink
+        // already paces the callback and WindowServer composites on its own schedule;
+        // enabling display sync causes nextDrawable to block waiting for vblank,
+        // creating double-wait judder with the CVDisplayLink callback.
         let surface = presenter_device.create_surface(
             window,
             proj_w,
@@ -330,7 +305,13 @@ impl UnifiedDisplayLink {
         surface.configure_edr();
         surface.set_contents_gravity_resize_aspect();
         surface.set_background_color(0.0, 0.0, 0.0, 1.0);
+        // 3 drawables: CVDisplayLink is the pacer, so nextDrawable should not
+        // block. 3 ensures availability; if it still blocks, we skip the frame.
         surface.set_maximum_drawable_count(3);
+        // Don't batch presents into Core Animation transactions —
+        // preserves the timing guarantees of the display link.
+        // presentsWithTransaction=true requires a different present path
+        // (waitUntilScheduled) that we don't use, and breaks windowed output.
         surface.set_presents_with_transaction(false);
 
         let pipeline = presenter_device.create_render_pipeline(
@@ -350,10 +331,11 @@ impl UnifiedDisplayLink {
 
         let bridge_gen = bridge.generation();
         let native_textures = import_textures(&presenter_device, &bridge);
-        let edr = Arc::clone(&self.edr_headroom);
-        edr.store(edr_headroom.to_bits(), Ordering::Relaxed);
 
-        let new_ctx = Box::into_raw(Box::new(PresenterContext {
+        let stop = Arc::new(AtomicBool::new(false));
+        let edr = Arc::new(AtomicU64::new(edr_headroom.to_bits()));
+
+        let context = Box::into_raw(Box::new(PresenterContext {
             device: presenter_device,
             pipeline,
             sampler,
@@ -361,41 +343,68 @@ impl UnifiedDisplayLink {
             bridge,
             native_textures,
             last_bridge_gen: bridge_gen,
-            edr_headroom: edr,
+            stop: Arc::clone(&stop),
+            edr_headroom: Arc::clone(&edr),
         }));
 
-        // Atomically swap in the new presenter.
-        let old = unsafe { &*self.context }
-            .presenter
-            .swap(new_ctx, Ordering::AcqRel);
+        // Create CVDisplayLink targeting the window's current display.
+        let display_id = display_id_for_window(window);
+        let mut display_link: CVDisplayLinkRef = std::ptr::null_mut();
 
+        unsafe {
+            let ret = CVDisplayLinkCreateWithActiveCGDisplays(&mut display_link);
+            assert!(
+                ret == K_CV_RETURN_SUCCESS && !display_link.is_null(),
+                "CVDisplayLinkCreateWithActiveCGDisplays failed (ret={ret})"
+            );
+
+            if display_id != 0 {
+                let ret = CVDisplayLinkSetCurrentCGDisplay(display_link, display_id);
+                if ret != K_CV_RETURN_SUCCESS {
+                    log::warn!(
+                        "[DisplayLink] SetCurrentCGDisplay failed for display {display_id} \
+                         (ret={ret}), using default"
+                    );
+                }
+            }
+
+            let ret = CVDisplayLinkSetOutputCallback(
+                display_link,
+                display_link_callback,
+                context as *mut c_void,
+            );
+            assert!(
+                ret == K_CV_RETURN_SUCCESS,
+                "CVDisplayLinkSetOutputCallback failed (ret={ret})"
+            );
+
+            let ret = CVDisplayLinkStart(display_link);
+            assert!(
+                ret == K_CV_RETURN_SUCCESS,
+                "CVDisplayLinkStart failed (ret={ret})"
+            );
+        }
+
+        let refresh = unsafe {
+            CVDisplayLinkGetActualOutputVideoRefreshPeriod(display_link)
+        };
         log::info!(
-            "[UnifiedDisplayLink] Presenter attached: {}x{} Rgba16Float, \
+            "[DisplayLink] Started for display {display_id}, \
+             refresh={:.2}ms ({:.1}Hz), drawable={}x{} Rgba16Float, \
              displaySync={}",
-            proj_w, proj_h, presentation,
+            refresh * 1000.0,
+            if refresh > 0.0 { 1.0 / refresh } else { 0.0 },
+            proj_w,
+            proj_h,
+            presentation,
         );
 
-        // Drop the old presenter if one was attached.
-        if !old.is_null() {
-            drop(unsafe { Box::from_raw(old) });
-        }
-    }
-
-    /// Detach the presenter. The callback will stop presenting on the next vsync.
-    pub fn detach_presenter(&self) {
-        let old = unsafe { &*self.context }
-            .presenter
-            .swap(std::ptr::null_mut(), Ordering::AcqRel);
-
-        if !old.is_null() {
-            log::info!("[UnifiedDisplayLink] Presenter detached");
-            // The callback might be mid-flight using the old pointer right now.
-            // The swap to null means the NEXT callback won't use it.
-            // Wait briefly to ensure the current callback (if any) finishes
-            // before dropping the PresenterContext. Called from the UI thread
-            // during output window close, so a brief delay is acceptable.
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            drop(unsafe { Box::from_raw(old) });
+        Self {
+            display_link,
+            context,
+            stop,
+            edr_headroom: edr,
+            current_display_id: display_id,
         }
     }
 
@@ -405,8 +414,13 @@ impl UnifiedDisplayLink {
 
     /// Retarget the display link if the window moved to a different display.
     ///
-    /// Safe to call while the callback is running (per Apple docs).
-    /// The callback might fire one frame at the old display's timing.
+    /// The presenter callback must NEVER skip a present — on Direct Display
+    /// surfaces, even one missed present causes WindowServer to drop Direct
+    /// Display mode, thrashing all displays. So we do NOT set the stop flag
+    /// here. CVDisplayLinkSetCurrentCGDisplay is safe to call while the
+    /// callback is running (Apple docs). The callback might present one frame
+    /// at the old display's timing — that's acceptable (single late present
+    /// is invisible, missed present is catastrophic).
     pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
         let new_id = display_id_for_window(window);
         if new_id == 0 || new_id == self.current_display_id {
@@ -415,6 +429,7 @@ impl UnifiedDisplayLink {
         let old_refresh = unsafe {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
         };
+        // Retarget while running — callback keeps presenting without interruption.
         unsafe {
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
         }
@@ -422,7 +437,7 @@ impl UnifiedDisplayLink {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
         };
         log::info!(
-            "[UnifiedDisplayLink] Retargeted: display {} → {}, \
+            "[DisplayLink] Retargeted: display {} → {}, \
              refresh {:.1}Hz → {:.1}Hz",
             self.current_display_id, new_id,
             if old_refresh > 0.0 { 1.0 / old_refresh } else { 0.0 },
@@ -430,29 +445,19 @@ impl UnifiedDisplayLink {
         );
         self.current_display_id = new_id;
     }
-
-    /// Shut down the content thread's vsync signal.
-    /// Must be called before joining the content thread.
-    pub fn shutdown_content_signal(&self) {
-        unsafe { &*self.context }.content_signal.shutdown();
-    }
-
-    /// Current display ID this link is targeting.
-    #[allow(dead_code)]
-    pub fn current_display_id(&self) -> u32 {
-        self.current_display_id
-    }
 }
 
-impl Drop for UnifiedDisplayLink {
+impl Drop for DisplayLinkPresenter {
     fn drop(&mut self) {
-        // Signal callback to become a no-op.
-        unsafe { &*self.context }.stop.store(true, Ordering::Release);
+        // Signal the callback to become a no-op IMMEDIATELY.
+        self.stop.store(true, Ordering::Release);
 
-        // Shut down the content signal so the content thread unblocks.
-        self.shutdown_content_signal();
-
-        // Move blocking cleanup off the main thread.
+        // Move blocking cleanup off the main thread. CVDisplayLinkStop blocks
+        // until the in-flight callback finishes, and the callback may touch
+        // main-thread resources (nextDrawable, WindowServer) — blocking the
+        // main thread here deadlocks. The detached thread can safely block:
+        // Stop guarantees no callback runs after it returns, so Release +
+        // context drop are safe.
         let dl = SendPtr(self.display_link);
         let ctx = SendPtr(self.context);
         std::thread::spawn(move || unsafe {
@@ -460,18 +465,12 @@ impl Drop for UnifiedDisplayLink {
             let ctx = ctx.get();
             CVDisplayLinkStop(dl);
             CVDisplayLinkRelease(dl);
-            // Drop presenter if still attached.
-            let ctx_ref = &*ctx;
-            let presenter = ctx_ref.presenter.load(Ordering::Acquire);
-            if !presenter.is_null() {
-                drop(Box::from_raw(presenter));
-            }
             drop(Box::from_raw(ctx));
         });
     }
 }
 
-// ─── Texture import ────────────────────────────────────────────────────
+// ─── Texture import (shared with NativeOutputPresenter) ─────────────────
 
 fn import_textures(
     device: &GpuDevice,
@@ -492,4 +491,182 @@ fn import_textures(
             )
         })
     })
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// UiDisplayLink — vsync-aligned render trigger for the UI thread
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Context for the UI display link callback. Heap-allocated, accessed only
+/// from the serial CVDisplayLink callback thread.
+struct UiDisplayLinkContext {
+    vsync_ready: Arc<AtomicBool>,
+    window: Arc<winit::window::Window>,
+    stop: AtomicBool,
+}
+
+unsafe impl Send for UiDisplayLinkContext {}
+unsafe impl Sync for UiDisplayLinkContext {}
+
+/// CVDisplayLink callback for the UI thread.
+/// Sets the vsync flag and wakes the winit event loop via request_redraw.
+unsafe extern "C" fn ui_display_link_callback(
+    _display_link: CVDisplayLinkRef,
+    _in_now: *const CVTimeStamp,
+    _in_output_time: *const CVTimeStamp,
+    _flags_in: u64,
+    _flags_out: *mut u64,
+    context: *mut c_void,
+) -> i32 {
+    let ctx = unsafe { &*(context as *const UiDisplayLinkContext) };
+    if ctx.stop.load(Ordering::Acquire) {
+        return K_CV_RETURN_SUCCESS;
+    }
+    ctx.vsync_ready.store(true, Ordering::Release);
+    ctx.window.request_redraw();
+    K_CV_RETURN_SUCCESS
+}
+
+/// CVDisplayLink-driven vsync signal for the UI thread.
+///
+/// Fires at the MacBook display's exact refresh cadence and wakes the winit
+/// event loop via `request_redraw`. The event loop checks `vsync_ready()`
+/// to decide when to render, replacing the free-running `FrameTimer`.
+///
+/// This aligns UI submission to the MacBook's vsync, reducing near-miss
+/// frame drops caused by event loop scheduling jitter.
+pub struct UiDisplayLink {
+    display_link: CVDisplayLinkRef,
+    context: *mut UiDisplayLinkContext,
+    vsync_ready: Arc<AtomicBool>,
+    /// Current display ID — compared on screen change to detect retargeting.
+    current_display_id: u32,
+}
+
+unsafe impl Send for UiDisplayLink {}
+
+impl UiDisplayLink {
+    /// Create a CVDisplayLink bound to the display the given window is on.
+    pub fn new(window: Arc<winit::window::Window>) -> Self {
+        let display_id = display_id_for_window(&window);
+        let vsync_ready = Arc::new(AtomicBool::new(false));
+
+        let context = Box::into_raw(Box::new(UiDisplayLinkContext {
+            vsync_ready: Arc::clone(&vsync_ready),
+            window,
+            stop: AtomicBool::new(false),
+        }));
+
+        let mut display_link: CVDisplayLinkRef = std::ptr::null_mut();
+        unsafe {
+            let ret = CVDisplayLinkCreateWithActiveCGDisplays(&mut display_link);
+            assert!(
+                ret == K_CV_RETURN_SUCCESS && !display_link.is_null(),
+                "CVDisplayLinkCreateWithActiveCGDisplays failed (ret={ret})"
+            );
+
+            if display_id != 0 {
+                let ret = CVDisplayLinkSetCurrentCGDisplay(display_link, display_id);
+                if ret != K_CV_RETURN_SUCCESS {
+                    log::warn!(
+                        "[UiDisplayLink] SetCurrentCGDisplay failed for display \
+                         {display_id} (ret={ret}), using default"
+                    );
+                }
+            }
+
+            let ret = CVDisplayLinkSetOutputCallback(
+                display_link,
+                ui_display_link_callback,
+                context as *mut c_void,
+            );
+            assert!(
+                ret == K_CV_RETURN_SUCCESS,
+                "CVDisplayLinkSetOutputCallback failed (ret={ret})"
+            );
+
+            let ret = CVDisplayLinkStart(display_link);
+            assert!(
+                ret == K_CV_RETURN_SUCCESS,
+                "CVDisplayLinkStart failed (ret={ret})"
+            );
+        }
+
+        let refresh = unsafe {
+            CVDisplayLinkGetActualOutputVideoRefreshPeriod(display_link)
+        };
+        log::info!(
+            "[UiDisplayLink] Started for display {display_id}, \
+             refresh={:.2}ms ({:.1}Hz)",
+            refresh * 1000.0,
+            if refresh > 0.0 { 1.0 / refresh } else { 0.0 },
+        );
+
+        Self { display_link, context, vsync_ready, current_display_id: display_id }
+    }
+
+    /// Check and consume the vsync signal. Returns true once per display vsync.
+    pub fn vsync_ready(&self) -> bool {
+        self.vsync_ready.swap(false, Ordering::AcqRel)
+    }
+
+    /// Retarget the display link if the window moved to a different display.
+    ///
+    /// NEVER calls CVDisplayLinkStop — that blocks waiting for the in-flight
+    /// callback, which can deadlock during macOS modal drag loops (the callback's
+    /// request_redraw may need the main thread, which is blocked in Stop).
+    ///
+    /// Instead: set the stop flag (callback becomes a no-op), retarget in-place
+    /// with SetCurrentCGDisplay (safe to call while running per Apple docs),
+    /// then clear the flag. At most 1 vsync signal is missed.
+    pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
+        let new_id = display_id_for_window(window);
+        if new_id == 0 || new_id == self.current_display_id {
+            return;
+        }
+        let old_refresh = unsafe {
+            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
+        };
+        unsafe {
+            let ctx = &*self.context;
+            ctx.stop.store(true, Ordering::Release);
+            // Fence ensures the stop flag is visible to the callback thread
+            // before we change the display target.
+            std::sync::atomic::fence(Ordering::SeqCst);
+            CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
+            ctx.stop.store(false, Ordering::Release);
+        }
+        let new_refresh = unsafe {
+            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
+        };
+        log::info!(
+            "[UiDisplayLink] Retargeted: display {} → {}, \
+             refresh {:.1}Hz → {:.1}Hz",
+            self.current_display_id, new_id,
+            if old_refresh > 0.0 { 1.0 / old_refresh } else { 0.0 },
+            if new_refresh > 0.0 { 1.0 / new_refresh } else { 0.0 },
+        );
+        self.current_display_id = new_id;
+    }
+}
+
+impl Drop for UiDisplayLink {
+    fn drop(&mut self) {
+        // Signal the callback to become a no-op IMMEDIATELY.
+        unsafe { (*self.context).stop.store(true, Ordering::Release); }
+
+        // Move blocking cleanup off the main thread. CVDisplayLinkStop blocks
+        // until the in-flight callback finishes, and the callback calls
+        // request_redraw() which may need the main thread — blocking the
+        // main thread here deadlocks.
+        let dl = SendPtr(self.display_link);
+        let ctx = SendPtr(self.context);
+        std::thread::spawn(move || unsafe {
+            let dl = dl.get();
+            let ctx = ctx.get();
+            CVDisplayLinkStop(dl);
+            CVDisplayLinkRelease(dl);
+            drop(Box::from_raw(ctx));
+        });
+    }
 }
