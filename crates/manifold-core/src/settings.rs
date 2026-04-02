@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::types::{ClockAuthority, QuantizeMode, ResolutionPreset, TonemapCurve, UpscaleMode};
 use crate::effects::{EffectInstance, EffectGroup};
+use crate::macro_bank::MacroBank;
 use crate::units::{Beats, Bpm};
 
 /// Project-wide settings.
@@ -72,6 +73,9 @@ pub struct ProjectSettings {
     pub clock_authority: ClockAuthority,
     #[serde(default = "default_9001")]
     pub osc_send_port: i32,
+
+    #[serde(default)]
+    pub macro_bank: MacroBank,
 
     #[serde(default = "default_neg_one_f")]
     pub inspector_width: f32,
@@ -157,6 +161,7 @@ impl Default for ProjectSettings {
             midi_clock_source_name: None,
             clock_authority: ClockAuthority::Internal,
             osc_send_port: 9001,
+            macro_bank: MacroBank::default(),
             inspector_width: -1.0,
             timeline_height_percent: -1.0,
             effect_browser_width: -1.0,

@@ -12,6 +12,7 @@ use super::layer_chrome::LayerChromePanel;
 use super::clip_chrome::ClipChromePanel;
 use super::effect_card::{EffectCardPanel, EffectCardConfig};
 use super::gen_param::{GenParamPanel, GenParamConfig};
+use super::macros_panel::MacrosPanel;
 
 // ── Layout constants ────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ const ADD_EFFECT_BTN_TEXT: Color32 = color::ADD_EFFECT_BTN_TEXT_C32;
 
 #[derive(Debug, Clone, Copy)]
 enum PressedTarget {
+    Macros,
     MasterChrome,
     LayerChrome,
     ClipChrome,
@@ -75,6 +77,7 @@ enum PressedTarget {
 /// events within the inspector viewport, then triggers a rebuild.
 pub struct InspectorCompositePanel {
     // Sub-panels
+    macros_panel: MacrosPanel,
     master_chrome: MasterChromePanel,
     layer_chrome: LayerChromePanel,
     clip_chrome: ClipChromePanel,
@@ -101,6 +104,10 @@ pub struct InspectorCompositePanel {
     viewport_rect: Rect,
     /// X boundary between master (left) and layer (right) columns.
     column_split_x: f32,
+    /// Y where columns start (below macros panel).
+    columns_y: f32,
+    /// Height available for columns (viewport height minus macros).
+    columns_height: f32,
 
     // Scrollbar node IDs — one per column
     master_scrollbar_track_id: i32,
@@ -144,6 +151,7 @@ pub struct InspectorCompositePanel {
 impl InspectorCompositePanel {
     pub fn new() -> Self {
         Self {
+            macros_panel: MacrosPanel::new(),
             master_chrome: MasterChromePanel::new(),
             layer_chrome: LayerChromePanel::new(),
             clip_chrome: ClipChromePanel::new(),
@@ -163,6 +171,8 @@ impl InspectorCompositePanel {
             layer_content_height: 0.0,
             viewport_rect: Rect::ZERO,
             column_split_x: 0.0,
+            columns_y: 0.0,
+            columns_height: 0.0,
             master_scrollbar_track_id: -1,
             master_scrollbar_thumb_id: -1,
             layer_scrollbar_track_id: -1,
@@ -279,9 +289,12 @@ impl InspectorCompositePanel {
     /// correct data location (master / layer / clip effects).
     pub fn last_effect_tab(&self) -> InspectorTab { self.last_effect_tab }
 
+    pub fn macros_panel_mut(&mut self) -> &mut MacrosPanel { &mut self.macros_panel }
+
     pub fn is_dragging(&self) -> bool {
         self.dragging_scrollbar
             || self.card_drag_active
+            || self.macros_panel.is_dragging()
             || self.master_chrome.is_dragging()
             || self.layer_chrome.is_dragging()
             || self.clip_chrome.is_dragging()
@@ -343,13 +356,13 @@ impl InspectorCompositePanel {
     }
 
     fn update_scroll_bounds(&mut self) {
-        let vp_h = self.viewport_rect.height;
+        let col_h = self.columns_height;
         self.master_content_height = self.master_column_height();
-        self.master_max_scroll = (self.master_content_height - vp_h).max(0.0);
+        self.master_max_scroll = (self.master_content_height - col_h).max(0.0);
         self.master_scroll_offset = self.master_scroll_offset.clamp(0.0, self.master_max_scroll);
 
         self.layer_content_height = self.layer_column_height();
-        self.layer_max_scroll = (self.layer_content_height - vp_h).max(0.0);
+        self.layer_max_scroll = (self.layer_content_height - col_h).max(0.0);
         self.layer_scroll_offset = self.layer_scroll_offset.clamp(0.0, self.layer_max_scroll);
     }
 
@@ -381,7 +394,7 @@ impl InspectorCompositePanel {
         is_master: bool,
     ) {
         if track_id < 0 { return; }
-        let vp_h = self.viewport_rect.height;
+        let vp_h = self.columns_height;
         if content_h <= vp_h || vp_h <= 0.0 {
             tree.set_visible(track_id as u32, false);
             tree.set_visible(thumb_id as u32, false);
@@ -397,7 +410,7 @@ impl InspectorCompositePanel {
 
         let col_right = if is_master { self.column_split_x } else { self.viewport_rect.x_max() };
         let thumb_x = col_right - SCROLLBAR_W;
-        let thumb_y = self.viewport_rect.y + scroll_frac * scroll_range;
+        let thumb_y = self.columns_y + scroll_frac * scroll_range;
         tree.set_bounds(thumb_id as u32, Rect::new(thumb_x, thumb_y, SCROLLBAR_W, thumb_h));
     }
 
@@ -414,7 +427,7 @@ impl InspectorCompositePanel {
             PressedTarget::ClipChrome | PressedTarget::GenParam => {
                 self.last_effect_tab = InspectorTab::Clip;
             }
-            PressedTarget::Scrollbar => {}
+            PressedTarget::Macros | PressedTarget::Scrollbar => {}
         }
     }
 
@@ -605,6 +618,11 @@ impl InspectorCompositePanel {
         let idx = node_id as usize;
         let id = node_id as i32;
 
+        // Macros panel (above both columns)
+        if self.macros_panel.owns_node(node_id) {
+            return Some(PressedTarget::Macros);
+        }
+
         // Scrollbars
         if id == self.master_scrollbar_track_id || id == self.master_scrollbar_thumb_id
             || id == self.layer_scrollbar_track_id || id == self.layer_scrollbar_thumb_id {
@@ -676,21 +694,22 @@ impl InspectorCompositePanel {
     /// because it needs &mut UITree for slider visual feedback.
     pub fn handle_drag(&mut self, pos: Vec2, tree: &mut UITree) -> Vec<PanelAction> {
         if self.dragging_scrollbar {
-            let vp = self.viewport_rect;
+            let col_h = self.columns_height;
+            let col_y = self.columns_y;
             if self.dragging_scrollbar_master {
-                let ratio = vp.height / self.master_content_height;
-                let thumb_h = (vp.height * ratio).max(SCROLLBAR_MIN_THUMB_H);
-                let scroll_range = vp.height - thumb_h;
+                let ratio = col_h / self.master_content_height;
+                let thumb_h = (col_h * ratio).max(SCROLLBAR_MIN_THUMB_H);
+                let scroll_range = col_h - thumb_h;
                 if scroll_range > 0.0 {
-                    let frac = ((pos.y - vp.y) / scroll_range).clamp(0.0, 1.0);
+                    let frac = ((pos.y - col_y) / scroll_range).clamp(0.0, 1.0);
                     self.master_scroll_offset = frac * self.master_max_scroll;
                 }
             } else {
-                let ratio = vp.height / self.layer_content_height;
-                let thumb_h = (vp.height * ratio).max(SCROLLBAR_MIN_THUMB_H);
-                let scroll_range = vp.height - thumb_h;
+                let ratio = col_h / self.layer_content_height;
+                let thumb_h = (col_h * ratio).max(SCROLLBAR_MIN_THUMB_H);
+                let scroll_range = col_h - thumb_h;
                 if scroll_range > 0.0 {
-                    let frac = ((pos.y - vp.y) / scroll_range).clamp(0.0, 1.0);
+                    let frac = ((pos.y - col_y) / scroll_range).clamp(0.0, 1.0);
                     self.layer_scroll_offset = frac * self.layer_max_scroll;
                 }
             }
@@ -700,6 +719,7 @@ impl InspectorCompositePanel {
 
         if let Some(target) = self.pressed_target {
             match target {
+                PressedTarget::Macros => self.macros_panel.handle_drag(pos.x, tree),
                 PressedTarget::MasterChrome => self.master_chrome.handle_drag(pos, tree),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_drag(pos, tree),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_drag(pos, tree),
@@ -736,6 +756,7 @@ impl InspectorCompositePanel {
 
         let actions = if let Some(target) = self.pressed_target {
             match target {
+                PressedTarget::Macros => self.macros_panel.handle_release(),
                 PressedTarget::MasterChrome => self.master_chrome.handle_drag_end(tree),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_drag_end(tree),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_drag_end(tree),
@@ -1049,6 +1070,7 @@ impl InspectorCompositePanel {
         if let Some(target) = self.find_target_for_node(node_id) {
             self.update_last_effect_tab(&target);
             match target {
+                PressedTarget::Macros => Vec::new(), // macros use PointerDown/Drag, not Click
                 PressedTarget::MasterChrome => self.master_chrome.handle_click(node_id),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_click(node_id),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_click(node_id),
@@ -1127,6 +1149,7 @@ impl InspectorCompositePanel {
             };
 
             let mut actions = match target {
+                PressedTarget::Macros => self.macros_panel.handle_press(node_id, pos.x),
                 PressedTarget::MasterChrome => self.master_chrome.handle_pointer_down(node_id, pos),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_pointer_down(node_id, pos),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_pointer_down(node_id, pos),
@@ -1167,6 +1190,7 @@ impl InspectorCompositePanel {
     fn route_right_click(&self, node_id: u32) -> Vec<PanelAction> {
         if let Some(target) = self.find_target_for_node(node_id) {
             match target {
+                PressedTarget::Macros => self.macros_panel.handle_right_click(node_id),
                 PressedTarget::MasterChrome => self.master_chrome.handle_right_click(node_id),
                 PressedTarget::LayerChrome => self.layer_chrome.handle_right_click(node_id),
                 PressedTarget::ClipChrome => self.clip_chrome.handle_right_click(node_id),
@@ -1218,8 +1242,20 @@ impl Panel for InspectorCompositePanel {
             UIStyle { bg_color: color::INSPECTOR_BG, ..UIStyle::default() },
         ) as i32;
 
+        // ── MACROS STRIP (full width, above columns) ────────────────
+        let macros_h = MacrosPanel::height();
+        let macros_rect = Rect::new(
+            left_x, rect.y,
+            rect.width - COLUMN_PAD * 2.0, macros_h,
+        );
+        self.macros_panel.build(tree, macros_rect);
+        let columns_y = rect.y + macros_h + 2.0; // 2px gap
+        let columns_h = rect.height - macros_h - 2.0;
+        self.columns_y = columns_y;
+        self.columns_height = columns_h;
+
         // ── LEFT COLUMN: Master FX ──────────────────────────────────
-        let left_clip_rect = Rect::new(left_x, rect.y, half_w, rect.height);
+        let left_clip_rect = Rect::new(left_x, columns_y, half_w, columns_h);
         let left_clip_id = tree.add_node(
             -1, left_clip_rect,
             crate::node::UINodeType::ClipRegion,
@@ -1229,7 +1265,7 @@ impl Panel for InspectorCompositePanel {
         let left_start = tree.count();
 
         {
-            let mut cy = rect.y - self.master_scroll_offset;
+            let mut cy = columns_y - self.master_scroll_offset;
             if self.master_visible {
                 // Section card: border + inner bg
                 let section_h = self.master_column_height();
@@ -1286,11 +1322,11 @@ impl Panel for InspectorCompositePanel {
         // Left scrollbar
         let left_sb_x = left_x + left_content_w;
         self.master_scrollbar_track_id = tree.add_button(
-            -1, left_sb_x, rect.y, SCROLLBAR_W, rect.height,
+            -1, left_sb_x, columns_y, SCROLLBAR_W, columns_h,
             UIStyle { bg_color: SCROLLBAR_TRACK_COLOR, ..UIStyle::default() }, "",
         ) as i32;
         self.master_scrollbar_thumb_id = tree.add_button(
-            -1, left_sb_x, rect.y, SCROLLBAR_W, SCROLLBAR_MIN_THUMB_H,
+            -1, left_sb_x, columns_y, SCROLLBAR_W, SCROLLBAR_MIN_THUMB_H,
             UIStyle {
                 bg_color: SCROLLBAR_THUMB_COLOR,
                 hover_bg_color: SCROLLBAR_THUMB_HOVER,
@@ -1300,7 +1336,7 @@ impl Panel for InspectorCompositePanel {
         ) as i32;
 
         // ── RIGHT COLUMN: Layer + Clip ──────────────────────────────
-        let right_clip_rect = Rect::new(right_x, rect.y, half_w, rect.height);
+        let right_clip_rect = Rect::new(right_x, columns_y, half_w, columns_h);
         let right_clip_id = tree.add_node(
             -1, right_clip_rect,
             crate::node::UINodeType::ClipRegion,
@@ -1310,7 +1346,7 @@ impl Panel for InspectorCompositePanel {
         let right_start = tree.count();
 
         {
-            let mut cy = rect.y - self.layer_scroll_offset;
+            let mut cy = columns_y - self.layer_scroll_offset;
 
             // Layer section — includes gen params above layer effects
             if self.layer_visible {
@@ -1375,11 +1411,11 @@ impl Panel for InspectorCompositePanel {
         // Right scrollbar
         let right_sb_x = right_x + right_content_w;
         self.layer_scrollbar_track_id = tree.add_button(
-            -1, right_sb_x, rect.y, SCROLLBAR_W, rect.height,
+            -1, right_sb_x, columns_y, SCROLLBAR_W, columns_h,
             UIStyle { bg_color: SCROLLBAR_TRACK_COLOR, ..UIStyle::default() }, "",
         ) as i32;
         self.layer_scrollbar_thumb_id = tree.add_button(
-            -1, right_sb_x, rect.y, SCROLLBAR_W, SCROLLBAR_MIN_THUMB_H,
+            -1, right_sb_x, columns_y, SCROLLBAR_W, SCROLLBAR_MIN_THUMB_H,
             UIStyle {
                 bg_color: SCROLLBAR_THUMB_COLOR,
                 hover_bg_color: SCROLLBAR_THUMB_HOVER,

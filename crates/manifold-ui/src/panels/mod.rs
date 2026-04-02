@@ -8,6 +8,7 @@ pub mod clip_chrome;
 pub mod param_slider_shared;
 pub mod effect_card;
 pub mod gen_param;
+pub mod macros_panel;
 pub mod inspector;
 pub mod viewport;
 pub mod dropdown;
@@ -209,6 +210,12 @@ pub enum PanelAction {
     GenCardRightClicked,
     CopyGenerator,
     PasteGenerator,
+
+    // Macro sliders (macro_index 0-7)
+    MacroSnapshot(usize),
+    MacroChanged(usize, f32),
+    MacroCommit(usize),
+    MacroRightClick(usize),
 
     // Inspector scroll
     InspectorScrolled(f32),

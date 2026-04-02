@@ -831,3 +831,33 @@ impl Command for SetAudioStartBeatCommand {
 
     fn description(&self) -> &str { "Drag audio start beat" }
 }
+
+/// Change a macro slot value. Applies the macro fan-out on execute/undo.
+#[derive(Debug)]
+pub struct ChangeMacroCommand {
+    index: usize,
+    old_value: f32,
+    new_value: f32,
+}
+
+impl ChangeMacroCommand {
+    pub fn new(index: usize, old_value: f32, new_value: f32) -> Self {
+        Self { index, old_value, new_value }
+    }
+}
+
+impl Command for ChangeMacroCommand {
+    fn execute(&mut self, project: &mut Project) {
+        manifold_core::macro_bank::MacroBank::apply_macro(
+            project, self.index, self.new_value,
+        );
+    }
+
+    fn undo(&mut self, project: &mut Project) {
+        manifold_core::macro_bank::MacroBank::apply_macro(
+            project, self.index, self.old_value,
+        );
+    }
+
+    fn description(&self) -> &str { "Change Macro" }
+}

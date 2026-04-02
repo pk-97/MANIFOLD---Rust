@@ -447,6 +447,11 @@ pub fn push_state(
             ui.inspector.master_chrome_mut().sync_opacity(tree, project.settings.master_opacity);
             ui.inspector.master_chrome_mut().sync_led_brightness(tree, project.settings.led_brightness);
 
+            // Macro slider values
+            let macro_vals: Vec<f32> = project.settings.macro_bank.slots
+                .iter().map(|s| s.value).collect();
+            ui.inspector.macros_panel_mut().sync_values(tree, &macro_vals);
+
             // LED exit path label + cached effect names for dropdown
             let exit_label = super::led_exit_path_label(
                 project.settings.led_exit_index,

@@ -8,7 +8,7 @@ use manifold_core::types::{BeatDivision, DriverWaveform};
 use manifold_editing::commands::settings::{
     ChangeMasterOpacityCommand, ChangeLedBrightnessCommand,
     ChangeLayerOpacityCommand, ChangeGeneratorParamsCommand,
-    PasteGeneratorCommand,
+    PasteGeneratorCommand, ChangeMacroCommand,
 };
 use manifold_editing::commands::effects::{
     ToggleEffectCommand, ChangeEffectParamCommand, RemoveEffectCommand, ReorderEffectCommand,
@@ -50,6 +50,51 @@ pub(super) fn dispatch_inspector(
 ) -> DispatchResult {
     use crate::content_command::ContentCommand;
     match action {
+        // ── Macro sliders ─────────────────────────────────────────
+        PanelAction::MacroSnapshot(idx) => {
+            let idx = *idx;
+            if idx < manifold_core::macro_bank::MACRO_COUNT {
+                *drag_snapshot = Some(project.settings.macro_bank.slots[idx].value);
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::MacroChanged(idx, val) => {
+            let idx = *idx;
+            let val = *val;
+            manifold_core::macro_bank::MacroBank::apply_macro(project, idx, val);
+            ContentCommand::send(content_tx, ContentCommand::MutateProject(Box::new(move |p| {
+                manifold_core::macro_bank::MacroBank::apply_macro(p, idx, val);
+            })));
+            DispatchResult::handled()
+        }
+        PanelAction::MacroCommit(idx) => {
+            if let Some(old_val) = drag_snapshot.take() {
+                let idx = *idx;
+                if idx < manifold_core::macro_bank::MACRO_COUNT {
+                    let new_val = project.settings.macro_bank.slots[idx].value;
+                    if (old_val - new_val).abs() > f32::EPSILON {
+                        let cmd = ChangeMacroCommand::new(
+                            idx, old_val, new_val,
+                        );
+                        ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                    }
+                }
+            }
+            DispatchResult::handled()
+        }
+        PanelAction::MacroRightClick(idx) => {
+            let idx = *idx;
+            if idx < manifold_core::macro_bank::MACRO_COUNT {
+                let old = project.settings.macro_bank.slots[idx].value;
+                if old.abs() > f32::EPSILON {
+                    manifold_core::macro_bank::MacroBank::apply_macro(project, idx, 0.0);
+                    let cmd = ChangeMacroCommand::new(idx, old, 0.0);
+                    ContentCommand::send(content_tx, ContentCommand::Execute(Box::new(cmd)));
+                }
+            }
+            DispatchResult::handled()
+        }
+
         // ── Master chrome ──────────────────────────────────────────
         PanelAction::MasterOpacitySnapshot => {
             *drag_snapshot = Some(project.settings.master_opacity);

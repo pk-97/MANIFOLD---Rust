@@ -188,6 +188,10 @@ pub fn dispatch(
         | PanelAction::GenCardRightClicked
         | PanelAction::CopyGenerator
         | PanelAction::PasteGenerator
+        | PanelAction::MacroSnapshot(_)
+        | PanelAction::MacroChanged(..)
+        | PanelAction::MacroCommit(_)
+        | PanelAction::MacroRightClick(_)
         | PanelAction::AddEffect(..)
         | PanelAction::PasteEffects => {
             inspector::dispatch_inspector(action, project, content_tx, content_state, ui, selection, active_layer, drag_snapshot, trim_snapshot, adsr_snapshot, target_snapshot, active_inspector_drag)

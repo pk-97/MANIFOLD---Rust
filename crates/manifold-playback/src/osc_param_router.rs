@@ -28,6 +28,7 @@ enum OscParamTarget {
     LayerOpacity { layer_id: LayerId },
     LayerEffect { layer_id: LayerId, effect_type: EffectTypeId, param_index: usize },
     GenParam { layer_id: LayerId, param_index: usize },
+    Macro { index: usize },
 }
 
 /// A pending parameter write from an OSC message.
@@ -78,6 +79,16 @@ impl OscParamRouter {
         self.registered_addresses.clear();
         if let Ok(mut p) = self.pending.lock() {
             p.clear();
+        }
+
+        // Macro sliders: /macro/1 through /macro/8
+        for i in 0..manifold_core::macro_bank::MACRO_COUNT {
+            let addr = format!("/macro/{}", i + 1);
+            self.subscribe(
+                receiver, &addr,
+                OscParamTarget::Macro { index: i },
+                0.0, 1.0,
+            );
         }
 
         // Master opacity
@@ -250,6 +261,11 @@ impl OscParamRouter {
                     ) && let Some(gp) = layer.gen_params_mut() {
                         gp.set_param_base(*param_index, write.value);
                     }
+                }
+                OscParamTarget::Macro { index } => {
+                    manifold_core::macro_bank::MacroBank::apply_macro(
+                        project, *index, write.value,
+                    );
                 }
             }
         }
