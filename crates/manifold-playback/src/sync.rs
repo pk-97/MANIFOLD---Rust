@@ -71,32 +71,26 @@ impl SyncTarget for SyncTargetSnapshot {
 pub struct SyncArbiter {
     pub suppress_next_transport: bool,
     pub manifold_owns_playback: bool,
-    /// Wall-clock time when `manifold_owns_playback` was last set.
-    /// Prevents premature clearing during the OSC→DAW→MIDI round trip.
-    owns_set_time: Seconds,
-    /// Wall-clock time of the last user-initiated seek (ruler scrub, click, etc.).
-    /// During the cooldown window, MIDI Clock position sync and beat derivation
-    /// are suppressed so Ableton has time to receive the OSC seek and update
-    /// its MIDI Clock output. Without this, MIDI Clock would drag the playhead
-    /// back to the pre-seek position during the round-trip latency.
-    last_user_seek_time: Seconds,
+    /// Whether a user-initiated seek is pending confirmation from MIDI Clock.
+    /// While true, MIDI Clock position sync and beat derivation are suppressed.
+    /// Cleared deterministically when MIDI Clock's position converges with the
+    /// engine's position (no timers — clears the instant MIDI Clock catches up).
+    pub pending_seek: bool,
 }
 
-/// Grace period (seconds) after setting manifold_owns before it can be cleared.
-/// Covers OSC send → Ableton processes → MIDI Clock reflects new state.
-const OWNERSHIP_GRACE_PERIOD: f32 = 0.5;
-
-/// Cooldown (seconds) after a user-initiated seek during which MIDI Clock
-/// position sync is suppressed. Covers the OSC → Ableton → MIDI Clock round trip.
-const SEEK_COOLDOWN: f64 = 0.3;
+/// Convergence threshold (seconds). When the delta between MIDI Clock's
+/// position and the engine's position falls below this, the pending seek
+/// is considered confirmed and MIDI Clock resumes driving position.
+/// ~6 MIDI Clock ticks at 120 BPM — tight enough to be musically meaningful,
+/// loose enough to account for MIDI Clock quantization (24 PPQN).
+const SEEK_CONVERGE_THRESHOLD: f64 = 0.1;
 
 impl SyncArbiter {
     pub fn new() -> Self {
         Self {
             suppress_next_transport: false,
             manifold_owns_playback: false,
-            owns_set_time: Seconds(-999.0),
-            last_user_seek_time: Seconds(-999.0),
+            pending_seek: false,
         }
     }
 
@@ -108,38 +102,36 @@ impl SyncArbiter {
 
     pub fn set_manifold_owns(&mut self) {
         self.manifold_owns_playback = true;
-        // Record wall-clock time so clear_ownership can enforce the grace period.
-        // Uses owns_set_time field; caller must have called update_time() this frame.
     }
 
-    /// Set manifold_owns with a wall-clock timestamp for grace period tracking.
-    pub fn set_manifold_owns_at(&mut self, now: Seconds) {
+    /// Set manifold_owns for transport echo suppression.
+    pub fn set_manifold_owns_at(&mut self, _now: Seconds) {
         self.manifold_owns_playback = true;
-        self.owns_set_time = now;
     }
 
-    /// Clear ownership only if the grace period has elapsed.
-    /// Prevents MIDI Clock from clearing manifold_owns before the
-    /// OSC→DAW→MIDI round trip completes.
-    pub fn clear_ownership_if_expired(&mut self, now: Seconds) {
-        if (now - self.owns_set_time).0 >= OWNERSHIP_GRACE_PERIOD as f64 {
-            self.manifold_owns_playback = false;
-        }
-    }
-
+    /// Clear ownership — called when MIDI Clock confirms the expected
+    /// transport state (deterministic, not timer-based).
     pub fn clear_ownership(&mut self) {
         self.manifold_owns_playback = false;
     }
 
-    /// Record that a user-initiated seek just happened. Starts a brief cooldown
-    /// during which MIDI Clock position sync is suppressed (ruler scrub, click-seek, etc.).
-    pub fn set_user_seek_time(&mut self, now: Seconds) {
-        self.last_user_seek_time = now;
+    /// Mark a user-initiated seek as pending. MIDI Clock position sync
+    /// is suppressed until `check_seek_convergence` clears it.
+    pub fn set_pending_seek(&mut self) {
+        self.pending_seek = true;
     }
 
-    /// Whether the seek cooldown is active (MIDI Clock position sync should be suppressed).
-    pub fn is_seek_cooldown_active(&self, now: Seconds) -> bool {
-        (now - self.last_user_seek_time).0 < SEEK_COOLDOWN
+    /// Check if MIDI Clock has converged to the engine's position after
+    /// a pending seek. Returns true if the seek was cleared (convergence
+    /// detected), meaning MIDI Clock can resume driving position.
+    pub fn check_seek_convergence(&mut self, delta: Seconds) -> bool {
+        if !self.pending_seek { return true; }
+        if delta.0.abs() < SEEK_CONVERGE_THRESHOLD {
+            self.pending_seek = false;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn play(&mut self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget) -> bool {

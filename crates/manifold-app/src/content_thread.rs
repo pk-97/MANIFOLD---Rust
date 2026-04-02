@@ -899,8 +899,8 @@ impl ContentThread {
             }
             ClockAuthority::MidiClock => {
                 // MIDI Clock always drives position when active — suppressed only
-                // during seek cooldown (user scrubbing, Ableton hasn't caught up).
-                if !self.sync_arbiter.is_seek_cooldown_active(self.time_since_start)
+                // during pending seek (user scrubbing, MIDI Clock hasn't converged).
+                if !self.sync_arbiter.pending_seek
                     && let Some(ref clk) = self.transport_controller.midi_clock_sync
                         && clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
                             self.engine.set_beat(Beats::from_f32(clk.current_clock_beat()));

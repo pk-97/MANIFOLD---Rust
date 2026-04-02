@@ -514,18 +514,16 @@ impl MidiClockSyncController {
         self.update_bpm_from_clock(now.as_f32(), pos_sixteenths, clock_tick, has_recent_clock_activity, is_playing);
 
         // Suppress local deltaTime when CLK is active authority and playing.
-        // Not gated on manifold_owns — MIDI Clock always drives timing when active.
-        // Gated on seek cooldown — during scrubs, engine advances internally until
-        // Ableton catches up to the new position.
+        // Suppressed during pending seek — engine advances internally until
+        // MIDI Clock converges to the new position.
         arbiter.set_external_time_sync(
             ClockAuthority::MidiClock,
             authority,
             arb_target,
-            has_recent_clock_activity && is_playing
-                && !arbiter.is_seek_cooldown_active(now),
+            has_recent_clock_activity && is_playing && !arbiter.pending_seek,
         );
 
-        // Transport sync — gated by arbiter authority check (port of C# lines 256-279).
+        // Transport sync — gated by manifold_owns (Manifold initiated transport).
         if !manifold_owns {
             let playing = has_recent_clock_activity && is_playing;
             if playing {
@@ -546,18 +544,18 @@ impl MidiClockSyncController {
             self.last_is_playing = playing;
         }
 
-        // Clear MANIFOLD ownership when CLK shows stopped (port of C# lines 283-287).
-        // Use grace-period-aware clear to avoid premature clearing during the
-        // OSC→DAW→MIDI round trip (Ableton needs time to process and reflect state).
+        // Clear MANIFOLD ownership deterministically: when MIDI Clock confirms
+        // the expected transport state (stopped/no activity), Manifold's
+        // transport echo is fully resolved — no timer needed.
         if manifold_owns && (!has_recent_clock_activity || !is_playing) {
-            arbiter.clear_ownership_if_expired(now);
+            arbiter.clear_ownership();
         }
 
         // Position sync — MIDI Clock always drives position when active.
-        // manifold_owns only gates transport (play/stop), not position.
-        // Suppressed during seek cooldown (user scrubbing the playhead — Ableton
-        // hasn't received the new position yet, so MIDI Clock is stale).
-        if has_recent_clock_activity && !arbiter.is_seek_cooldown_active(now) {
+        // During a pending seek, compute the delta and check convergence:
+        // once MIDI Clock's position is close to the engine's, the seek is
+        // confirmed and MIDI Clock resumes driving. No timers.
+        if has_recent_clock_activity {
             self.current_position_sixteenths = pos_sixteenths;
             self.update_position_display(pos_sixteenths);
             self.sync_position_to_playback(
@@ -655,6 +653,10 @@ impl MidiClockSyncController {
 
     /// Sync MANIFOLD playback position to MIDI clock position.
     /// Port of C# MidiClockSyncController.SyncPositionToPlayback (lines 368-436).
+    ///
+    /// When a seek is pending, checks convergence before applying position.
+    /// MIDI Clock position is only applied once the delta falls below the
+    /// convergence threshold — fully deterministic, no timing assumptions.
     fn sync_position_to_playback(
         &mut self,
         pos_sixteenths: i32,
@@ -695,6 +697,13 @@ impl MidiClockSyncController {
 
         let current_time = sync_target.current_time();
         let delta = (clock_time - current_time).abs();
+
+        // If a seek is pending, check convergence. If MIDI Clock hasn't
+        // caught up yet, skip position sync entirely — no partial application.
+        if !arbiter.check_seek_convergence(delta) {
+            self.last_position_sixteenths = current_sixteenths;
+            return;
+        }
 
         if sync_target.is_playing() {
             if !is_transport_jump && delta < Seconds(0.5) {
