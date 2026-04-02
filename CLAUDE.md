@@ -6,7 +6,7 @@ YOU MUST read this file completely before any action. Every rule is load-bearing
 
 A Visual DAW with live performance capabilities. Users create, arrange, and compose video and generative visual content in beats, bars, and arrangements, then perform live. It bridges the deliberate studio workflow of a DAW (Ableton) with the real-time visual performance of a VJ tool (Resolume). Both are equally important.
 
-The Rust codebase is the authoritative implementation. The Unity codebase at `/Users/peterkiemann/MANIFOLD - Render Engine/` serves as the behavioral specification for features originally ported from it. For remaining parity gaps, Unity source is the source of truth. For new features and improvements, Rust is the primary codebase.
+The Rust codebase is the complete, authoritative implementation. The Unity codebase at `/Users/peterkiemann/MANIFOLD - Render Engine/` is archived as historical reference only — do not consult it for new development.
 
 ## CRATE STRUCTURE
 
@@ -17,9 +17,12 @@ The Rust codebase is the authoritative implementation. The Unity codebase at `/U
 | `manifold-playback` | PlaybackEngine, scheduling, sync, MIDI/OSC | `PlaybackEngine`, `ClipScheduler`, `SyncArbiter`, `ClipRenderer` trait |
 | `manifold-gpu` | Native Metal GPU backend (`metal` crate). Zero wgpu. | `GpuDevice`, `GpuEncoder`, `GpuTexture`, `GpuBuffer`, `GpuComputePipeline`, `GpuRenderPipeline`, `TexturePool` |
 | `manifold-renderer` | Compositor, effects, generators (uses `manifold-gpu`) | `Compositor` trait, `PostProcessEffect` trait, `Generator` trait |
+| `manifold-media` | Audio/video decoding, Metal-accelerated encoding, export | `ExportSession`, `MetalEncoder`, `DecodeScheduler` |
 | `manifold-ui` | Custom bitmap UI: tree, panels, input | `UIState`, `CoordinateMapper`, `UITree`, 17 panel types |
 | `manifold-io` | Project serialization (V1 JSON + V2 ZIP) | `loader`, `saver`, `migrate` |
-| `manifold-native` | Native plugin FFI (depth estimation) | `DepthEstimator`, `BlobDetector` |
+| `manifold-native` | Native plugin FFI (depth estimation, blob detection) | `DepthEstimator`, `BlobDetector` |
+| `manifold-profiler` | Performance profiling and instrumentation | Frame timing, GPU timing |
+| `manifold-led` | DMX/Art-Net LED output | LED mapping, blit operations |
 | `manifold-app` | winit entry, Application, UIRoot, UIBridge | `Application`, `ContentThread`, `ContentPipeline` |
 
 **Dependency direction:** `core` ← `gpu` ← `editing`, `playback`, `renderer`, `ui`, `io` ← `app`. No backwards dependencies. Core is pure. GPU is Metal-only on content thread.
@@ -31,7 +34,20 @@ The Rust codebase is the authoritative implementation. The Unity codebase at `/U
 - **Content thread** (owns all mutable state): `PlaybackEngine`, `EditingService`, `ContentPipeline`. Runs at project FPS (default 60).
 - **UI thread** (winit event loop): Renders UI, handles input, presents GPU output.
 - Communication: `ContentCommand` (UI→Content) and `ContentState` (Content→UI) via crossbeam channels.
-- GPU output: macOS uses IOSurface zero-copy; other platforms use double-buffered texture swap.
+- GPU output: macOS uses IOSurface zero-copy triple-buffer with atomic front_index.
+
+### Thread Boundary
+
+| Direction | Type | Channel | Capacity | Notes |
+|---|---|---|---|---|
+| UI→Content | `ContentCommand` | crossbeam bounded | 64 | `try_send`, logs on full |
+| Content→UI | `ContentState` | crossbeam bounded | 4 | `try_send`, UI drains all + keeps latest |
+| GPU output | IOSurface | Triple-buffer | 3 | Atomic `front_index`, zero-copy kernel memory |
+| OSC background→Content | `PendingWrite` | `Arc<Mutex<Vec>>` | unbounded | Only shared mutable state in the system |
+
+- **Project is owned exclusively by the content thread.** UI gets `Arc<Project>` snapshots via `ContentState` only when `data_version` changes.
+- **All project mutations** go through `ContentCommand::Execute(Box<dyn Command>)` or `ContentCommand::MutateProject(Box<dyn FnOnce(&mut Project)>)`.
+- **NEVER** create new `Arc<Mutex<>>` or `Arc<RwLock<>>` shared state without explicit approval.
 
 ### Current Patterns
 
@@ -54,8 +70,25 @@ The Rust codebase is the authoritative implementation. The Unity codebase at `/U
 
 - `manifold-app/src/ui_bridge/` — 7 modules: mod, transport, editing, inspector, layer, project, state_sync
 - `manifold-app/src/` — `app.rs` + `app_render.rs` + `app_lifecycle.rs`
-- `manifold-renderer/src/effects/` — 26 effect impls + `fragment_blit_helper` (single-pass) + `compute_blit_helper` (multi-pass) + `compute_dual_blit_helper`
-- `manifold-renderer/src/generators/` — 20+ generator impls + shared infrastructure
+- `manifold-renderer/src/effects/` — 21 effect impls + `compute_blit_helper` + `compute_dual_blit_helper`
+- `manifold-renderer/src/generators/` — 13 generator impls + shared infrastructure (registry, line_pipeline, compute_common, stateful_base, generator_math)
+
+---
+
+## BEHAVIORAL INVARIANTS
+
+These invariants govern how the system works. Violating them causes subtle, hard-to-diagnose bugs.
+
+- Primary time model is **beats** (`start_beat`, `duration_beats` as `Beats`); `Seconds` only for `in_point`, player time, delta_time, OSC, export. `Bpm` for all tempo values. See **Typed time** in Current Patterns.
+- `sync_clips_to_time()` is the SOLE idempotent authority for playback state
+- `EditingService` is the SOLE mutation gateway — no direct model writes from UI
+- All mutations: `EditingService` → `UndoRedoManager` → `Command`. Undo stack capped at 200.
+- Overlap is a write-time invariant on Layer (`enforce_non_overlap()`)
+- Selection is region-based: `{ start_beat, end_beat, start_layer, end_layer }`
+- Phantom clips: created on NoteOn, committed on NoteOff only
+- NoteOn auto-commits existing phantom on same layer
+- Time guard: ignore NoteOff within 5ms of NoteOn
+- Channel filtering: only process NoteOff from same channel as NoteOn
 
 ---
 
@@ -80,10 +113,10 @@ The Rust codebase is the authoritative implementation. The Unity codebase at `/U
 
 ### Serialization Convention
 
-- `#[serde(rename_all = "camelCase")]` on all serialized structs (Unity JSON compatibility)
+- `#[serde(rename_all = "camelCase")]` on all serialized structs (project file compatibility)
 - `#[serde(transparent)]` on typed IDs (`ClipId`, `LayerId`, `EffectGroupId`)
 - `#[serde(skip)]` for runtime-only fields
-- Field names in JSON must match Unity's camelCase format — getting this wrong silently breaks project loading
+- Field names in JSON must match camelCase format — getting this wrong silently breaks project loading
 
 ### Uniform Struct Alignment
 
@@ -134,7 +167,6 @@ The content thread uses `manifold-gpu` with the `metal` crate directly. **Zero w
 - `max_compute_invocations_per_workgroup` = 256 → `@workgroup_size(16,16)` for 2D, `@workgroup_size(4,4,4)` for 3D
 - `R32Float` NOT filterable — use `Rgba16Float` if `textureSample` needed
 - `R16Float` does NOT support `STORAGE_BINDING`
-- Match Unity's texture formats first, substitute only when Metal requires it
 - Uniform structs: 16-byte aligned, `_pad` fields, `#[repr(C)]`, field order matches WGSL
 - `textureSampleLevel` required for 3D textures in fragment shaders
 - `textureSample` (implicit LOD) preferred in fragment shaders — more efficient than `textureSampleLevel`
@@ -159,64 +191,32 @@ The content thread uses `manifold-gpu` with the `metal` crate directly. **Zero w
 
 ---
 
-## UNITY PARITY (for remaining gaps)
+## HOW TO ADD A NEW EFFECT
 
-For features ported from Unity, the Unity source is the behavioral specification. When closing parity gaps, this workflow is mandatory.
+Touch exactly 7 locations:
 
-### Porting Workflow
+1. **`manifold-core/src/effect_type_id.rs`** — Add `pub const MY_EFFECT: Self = Self(Cow::Borrowed("MyEffect"));` + update `from_legacy_discriminant()` if needed
+2. **`manifold-core/src/effect_type_registry.rs`** — Add to `build_registry()` vec: `reg(E::MY_EFFECT, "My Effect", POST_PROCESS, true)`
+3. **`manifold-core/src/effect_definition_registry.rs`** — Add `EffectDef` in `build_definitions()` with param defs (use `pd()`, `pd_osc()`, `pd_whole()`, `pd_whole_labels()`, `pd_toggle()` helpers)
+4. **`manifold-core/src/effect_category_registry.rs`** — (Optional) Add category if not POST_PROCESS
+5. **`manifold-renderer/src/effects/my_effect.rs`** — NEW FILE: implement `PostProcessEffect` trait. Use `ComputeBlitHelper` (1 input) or `ComputeDualBlitHelper` (2 inputs). See `bloom.rs` as template.
+6. **`manifold-renderer/src/effects/mod.rs`** — Add `pub mod my_effect;`
+7. **`manifold-renderer/src/effect_registry.rs`** — Add `Box::new(MyEffectFX::new(device))` in `EffectRegistry::new()`
 
-1. **READ** the Unity .cs source completely — HALT if you haven't read it
-2. **MAP** every field → Rust type, method → signature, interface → trait, dependency → crate
-3. **TRANSLATE** line by line — same logic, same edge cases, same order, same constants
-4. **SELF-AUDIT** — did you skip methods? simplify logic? change signatures? add abstractions?
-5. **VERIFY** value-level parity — every constant, format, math op, param index matches exactly
-6. **UPDATE** `docs/parity_tracker.json` + `docs/PORT_STATUS.md`
+## HOW TO ADD A NEW GENERATOR
 
-### Failure Modes
+Touch exactly 6 locations:
 
-| ID | Name | Rule |
-|---|---|---|
-| FM-1 | Synthesizing from docs | ONLY translate from .cs source, never from descriptions |
-| FM-2 | Approximating | Line-by-line translation, not "roughly the same thing" |
-| FM-3 | Flattening architecture | If Unity keeps classes separate, Rust keeps them separate |
-| FM-4 | Rustifying semantics | Match Unity's mutation/ownership model, don't functionalize |
-| FM-5 | Over-engineering errors | If Unity crashes, use `unwrap()`. If null, use `Option`. |
-| FM-6 | Missing edge cases | Every `if`, early return, guard, bounds check → preserved |
-| FM-7 | Inventing state | Only add state Unity has. Document Rust-specific additions. |
-| FM-8 | Wrong abstraction level | Concrete impls, not generic frameworks |
-| FM-9 | Hallucinated constraints | NEVER invent platform limits. Use Unity's exact values. |
-| FM-10 | Texture format substitution | `RFloat`→`R32Float`, NOT `Rgba16Float` (see Metal exception) |
-| FM-11 | Changing constants | Every constant, limit, threshold must match Unity EXACTLY |
-| FM-12 | Math operation drift | `RoundToInt`→`.round()`, `Lerp` clamps t, `Repeat`≠modulo |
-| FM-13 | Param value drift | Match every param index, uniform name, default from registries |
-| FM-14 | Scattering services | Port services as WHOLE UNITS, not scattered inline |
-| FM-15 | Missing infrastructure | Port dependencies BEFORE features that use them |
-| FM-16 | Stale stubs | Remove "not yet wired" stubs when actions get wired |
+1. **`manifold-core/src/generator_type_id.rs`** — Add `pub const MY_GEN: Self = Self(Cow::Borrowed("MyGen"));` + update `from_legacy_discriminant()` if needed
+2. **`manifold-core/src/generator_type_registry.rs`** — Add to `build_registry()` vec: `reg(G::MY_GEN, "My Generator", true)`
+3. **`manifold-core/src/generator_definition_registry.rs`** — Add `GeneratorDef` in `build_definitions()` via `create_def("My Generator", is_line_based, "osc_prefix", params)`
+4. **`manifold-renderer/src/generators/my_gen.rs`** — NEW FILE: implement `Generator` trait. See `plasma.rs` (compute) or `lissajous.rs` (line-based) as template.
+5. **`manifold-renderer/src/generators/mod.rs`** — Add `pub mod my_gen;`
+6. **`manifold-renderer/src/generators/registry.rs`** — Add to `prewarm_all()` array AND `create()` if-else chain
 
-### Effect / Generator Porting (Highest Risk)
+---
 
-1. Read `SetUniforms()` / `Apply()` — exact param-to-shader mapping
-2. Read the HLSL shader — translate line by line to WGSL (same math, same names)
-3. Count passes: if Unity has 3, Rust has 3. NEVER approximate multi-pass as single-pass.
-4. Count textures: 2 = `ComputeDualBlitHelper`, 1 = `ComputeBlitHelper`
-5. Texel sizes from SOURCE texture, not target
-6. Discrete params: `.round()` before `as u32`
-7. Stateful effects: per-owner `AHashMap<i64, T>`
-8. Read the registry entry for param definitions (index, name, min, max, default, format)
-
-### Math Operation Reference
-
-| Unity | Rust | Notes |
-|---|---|---|
-| `Mathf.RoundToInt(x)` | `x.round() as i32` | NOT truncation |
-| `Mathf.FloorToInt(x)` | `x.floor() as i32` | |
-| `Mathf.CeilToInt(x)` | `x.ceil() as i32` | |
-| `Mathf.Clamp01(x)` | `x.clamp(0.0, 1.0)` | |
-| `Mathf.Lerp(a, b, t)` | `a + (b - a) * t.clamp(0.0, 1.0)` | Lerp CLAMPS t |
-| `Mathf.LerpUnclamped(a, b, t)` | `a + (b - a) * t` | |
-| `Mathf.InverseLerp(a, b, v)` | `((v - a) / (b - a)).clamp(0.0, 1.0)` | |
-| `Mathf.Repeat(t, len)` | `t - (t / len).floor() * len` | NOT `t % len` |
-| `Mathf.Sign(x)` | check Unity: returns 1 for 0 | NOT 0 for 0 |
+## REFERENCE
 
 ### Texture Format Mapping
 
@@ -228,61 +228,14 @@ For features ported from Unity, the Unity source is the behavioral specification
 | `ARGBHalf` | `Rgba16Float` | Always fine |
 | `RHalf` | `R16Float` | No STORAGE_BINDING on Metal |
 
-### Behavioral Invariants
+### Math Gotchas
 
-- Primary time model is **beats** (`start_beat`, `duration_beats` as `Beats`); `Seconds` only for `in_point`, player time, delta_time, OSC, export. `Bpm` for all tempo values. See **Typed time** in Current Patterns.
-- `sync_clips_to_time()` is the SOLE idempotent authority for playback state
-- `EditingService` is the SOLE mutation gateway — no direct model writes from UI
-- All mutations: `EditingService` → `UndoRedoManager` → `Command`. Undo stack capped at 200.
-- Overlap is a write-time invariant on Layer (`enforce_non_overlap()`)
-- Selection is region-based: `{ start_beat, end_beat, start_layer, end_layer }`
-- Phantom clips: created on NoteOn, committed on NoteOff only
-- NoteOn auto-commits existing phantom on same layer
-- Time guard: ignore NoteOff within 5ms of NoteOn
-- Channel filtering: only process NoteOff from same channel as NoteOn
-
-### Unity Source → Rust Crate Mapping
-
-Unity project: `/Users/peterkiemann/MANIFOLD - Render Engine/`
-
-| Unity Directory | Rust Crate |
-|---|---|
-| `Assets/Scripts/Data/` | `manifold-core` |
-| `Assets/Scripts/Editing/` + `EditingService.cs` | `manifold-editing` |
-| `Assets/Scripts/Playback/` + `Assets/Scripts/Sync/` | `manifold-playback` |
-| `Assets/Scripts/Compositing/` + `Effects/` | `manifold-renderer` |
-| `Assets/Scripts/Playback/Generators/` | `manifold-renderer` (generators/) |
-| `Assets/Shaders/` + `Assets/Resources/Compute/` | `manifold-renderer` (*.wgsl) |
-| `Assets/Scripts/UI/Timeline/` + `UI/Bitmap/` | `manifold-ui` |
-| `Assets/Scripts/Export/` | `manifold-io` |
-| `WorkspaceController.cs` + `PlaybackController.cs` | `manifold-app` |
-
-Full file-level mapping: `docs/PORT_STATUS.md`
-Interface→trait and base class→pattern tables: `docs/TRAIT_AND_PATTERN_MAP.md`
-
----
-
-## TRACKING
-
-| Doc | Purpose | Mutability |
+| Operation | Correct Rust | Trap |
 |---|---|---|
-| `docs/parity_tracker.json` | Live status of all 44 gaps (Tiers 0-5) | Update on gap completion |
-| `docs/PORT_STATUS.md` | File-level parity tracker | Update on port/verify |
-| `docs/KNOWN_DIVERGENCES.md` | Approved intentional divergences | Add when diverging |
-| `docs/DEFINITIVE_PARITY_AUDIT.md` | Canonical gap inventory (1310 lines) | FROZEN — DO NOT EDIT |
-
-**Parity gap workflow:** check tracker → read audit section → read Unity source → port → update tracker + PORT_STATUS
-
----
-
-## AVAILABLE SKILLS
-
-| Skill | Purpose |
-|---|---|
-| `/rust-port [file]` | Mechanical translation of a Unity file to Rust |
-| `/rust-verify [file]` | Compare Rust implementation against Unity source |
-| `/pre-port [file]` | Dependency analysis before porting |
-| `/audit-parity [files]` | Batch post-port verification |
+| Round to int | `x.round() as i32` | NOT truncation (`as i32` alone) |
+| Lerp | `a + (b - a) * t.clamp(0.0, 1.0)` | Lerp CLAMPS t |
+| Repeat(t, len) | `t - (t / len).floor() * len` | NOT `t % len` (negative values differ) |
+| Sign(0) | `1.0` (match Unity) | NOT `0.0` |
 
 ---
 
