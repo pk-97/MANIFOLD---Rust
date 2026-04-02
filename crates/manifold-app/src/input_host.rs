@@ -376,8 +376,7 @@ impl TimelineInputHost for AppInputHost<'_> {
         } else {
             // Unity: if paused and insert cursor exists, seek to cursor first (Ableton behavior)
             if let Some(beat) = insert_cursor_beat {
-                let time = Seconds(beat.0 * (60.0 / self.project.settings.bpm.0 as f64));
-                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(time));
+                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekToBeat(beat));
             }
             ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::Play);
         }
@@ -386,18 +385,14 @@ impl TimelineInputHost for AppInputHost<'_> {
     fn seek_to(&mut self, time: Seconds) {
         if time.0 == f64::MAX {
             // Sentinel for "seek to end" — Unity InputHandler line 380-390
-            // Uses beat_to_timeline_time for tempo map consistency (Step 8 fix)
-            if let Some(project) = Some(&*self.project) {
-                let mut max_beat = Beats::ZERO;
-                for layer in &project.timeline.layers {
-                    for clip in &layer.clips {
-                        let end = clip.start_beat + clip.duration_beats;
-                        if end > max_beat { max_beat = end; }
-                    }
+            let mut max_beat = Beats::ZERO;
+            for layer in &self.project.timeline.layers {
+                for clip in &layer.clips {
+                    let end = clip.start_beat + clip.duration_beats;
+                    if end > max_beat { max_beat = end; }
                 }
-                let end_time = Seconds(max_beat.0 * (60.0 / self.project.settings.bpm.0 as f64));
-                ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(end_time));
             }
+            ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekToBeat(max_beat));
         } else {
             ContentCommand::send(self.content_tx, crate::content_command::ContentCommand::SeekTo(time));
         }
