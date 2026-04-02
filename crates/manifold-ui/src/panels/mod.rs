@@ -83,6 +83,7 @@ pub enum PanelAction {
     CycleQuantize,
     ResolutionClicked,
     FpsFieldClicked,
+    ToggleVsync,
 
     // Inspector tab
     SelectInspectorTab(InspectorTab),

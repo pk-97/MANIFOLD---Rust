@@ -24,6 +24,8 @@ const TONEMAP_BUTTON_W: f32 = 36.0;
 const TONEMAP_BTN_GAP: f32 = 2.0;
 const FPS_LABEL_W: f32 = 32.0;
 const FPS_FIELD_W: f32 = 46.0;
+const VSYNC_BTN_W: f32 = 40.0;
+const VSYNC_ACTUAL_W: f32 = 42.0;
 const RIGHT_GUTTER: f32 = 10.0;
 
 // ── Panel-specific colors ──────────────────────────────────────────
@@ -52,6 +54,8 @@ struct FooterLayout {
     tonemap_agx: Rect,
     fps_label: Rect,
     fps_field: Rect,
+    vsync_btn: Rect,
+    vsync_actual: Rect,
 }
 
 impl FooterLayout {
@@ -61,6 +65,15 @@ impl FooterLayout {
 
         // Right-to-left
         let mut rx = bounds.x_max() - RIGHT_GUTTER;
+
+        // VSync actual FPS (rightmost)
+        rx -= VSYNC_ACTUAL_W;
+        self.vsync_actual = Rect::new(rx, y, VSYNC_ACTUAL_W, elem_h);
+        rx -= LABEL_GAP;
+        // VSync toggle button
+        rx -= VSYNC_BTN_W;
+        self.vsync_btn = Rect::new(rx, y, VSYNC_BTN_W, elem_h);
+        rx -= SECTION_SPACER;
 
         rx -= FPS_FIELD_W;
         self.fps_field = Rect::new(rx, y, FPS_FIELD_W, elem_h);
@@ -131,8 +144,12 @@ pub struct FooterPanel {
     tonemap_agx_id: i32,
     fps_label_id: i32,
     fps_field_id: i32,
+    vsync_btn_id: i32,
+    vsync_actual_id: i32,
 
     // State
+    vsync_enabled: bool,
+    vsync_actual_fps: f32,
     selection_info: String,
     quantize_text: String,
     resolution_text: String,
@@ -163,6 +180,10 @@ impl FooterPanel {
             tonemap_agx_id: -1,
             fps_label_id: -1,
             fps_field_id: -1,
+            vsync_btn_id: -1,
+            vsync_actual_id: -1,
+            vsync_enabled: true,
+            vsync_actual_fps: 60.0,
             selection_info: String::new(),
             quantize_text: "Off".into(),
             resolution_text: "1080p".into(),
@@ -199,6 +220,29 @@ impl FooterPanel {
     pub fn set_fps_text(&mut self, tree: &mut UITree, text: &str) {
         self.fps_text = text.into();
         if self.fps_field_id >= 0 { tree.set_text(self.fps_field_id as u32, text); }
+    }
+
+    /// Update VSync toggle state and actual resolved FPS display.
+    pub fn set_vsync_state(&mut self, tree: &mut UITree, enabled: bool, actual_fps: f32) {
+        let state_changed = enabled != self.vsync_enabled;
+        let fps_changed = (actual_fps - self.vsync_actual_fps).abs() > 0.1;
+        if state_changed {
+            self.vsync_enabled = enabled;
+            if self.vsync_btn_id >= 0 {
+                tree.set_style(self.vsync_btn_id as u32, self.vsync_btn_style());
+            }
+        }
+        if state_changed || fps_changed {
+            self.vsync_actual_fps = actual_fps;
+            if self.vsync_actual_id >= 0 {
+                let text = if enabled {
+                    format!("→{:.0}", actual_fps)
+                } else {
+                    String::new()
+                };
+                tree.set_text(self.vsync_actual_id as u32, &text);
+            }
+        }
     }
 
     /// Highlight the active render scale button. No-op if scale unchanged.
@@ -276,11 +320,29 @@ impl FooterPanel {
         }
     }
 
+    fn vsync_btn_style(&self) -> UIStyle {
+        if self.vsync_enabled {
+            UIStyle {
+                bg_color: FOOTER_SCALE_ACTIVE,
+                hover_bg_color: FOOTER_BTN_HOVER,
+                pressed_bg_color: FOOTER_BTN_PRESSED,
+                text_color: color::TEXT_WHITE_C32,
+                font_size: FOOTER_FONT,
+                corner_radius: color::SMALL_RADIUS,
+                text_align: TextAlign::Center,
+                ..UIStyle::default()
+            }
+        } else {
+            Self::footer_button_style()
+        }
+    }
+
     fn handle_click(&self, node_id: u32) -> Vec<PanelAction> {
         let id = node_id as i32;
         if id == self.quantize_button_id  { return vec![PanelAction::CycleQuantize]; }
         if id == self.resolution_button_id { return vec![PanelAction::ResolutionClicked]; }
         if id == self.fps_field_id         { return vec![PanelAction::FpsFieldClicked]; }
+        if id == self.vsync_btn_id         { return vec![PanelAction::ToggleVsync]; }
         if id == self.scale_100_id         { return vec![PanelAction::SetRenderScale(1.0)]; }
         if id == self.scale_75_id          { return vec![PanelAction::SetRenderScale(0.75)]; }
         if id == self.scale_50_id          { return vec![PanelAction::SetRenderScale(0.5)]; }
@@ -434,6 +496,31 @@ impl Panel for FooterPanel {
             self.layout.fps_field.x, self.layout.fps_field.y,
             self.layout.fps_field.width, self.layout.fps_field.height,
             Self::footer_button_style(), &fps_text,
+        ) as i32;
+
+        // VSync toggle button
+        self.vsync_btn_id = tree.add_button(
+            bg,
+            self.layout.vsync_btn.x, self.layout.vsync_btn.y,
+            self.layout.vsync_btn.width, self.layout.vsync_btn.height,
+            self.vsync_btn_style(), "VSYNC",
+        ) as i32;
+
+        // VSync actual FPS (shows resolved FPS when vsync is active)
+        let vsync_text = if self.vsync_enabled {
+            format!("→{:.0}", self.vsync_actual_fps)
+        } else {
+            String::new()
+        };
+        self.vsync_actual_id = tree.add_node(
+            bg, self.layout.vsync_actual, UINodeType::Label,
+            UIStyle {
+                text_color: color::TEXT_DIMMED_C32,
+                font_size: FOOTER_FONT,
+                text_align: TextAlign::Left,
+                ..UIStyle::default()
+            },
+            Some(&vsync_text), UIFlags::empty(),
         ) as i32;
 
         self.cache_node_count = tree.count() - self.cache_first_node;
