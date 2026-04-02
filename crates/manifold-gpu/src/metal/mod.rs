@@ -44,7 +44,14 @@ pub use texture_pool::TexturePool;
 pub use encoder::GpuEncoder;
 use encoder::ComputeBindCache;
 pub use surface::{GpuSurface, GpuDrawable};
-pub use vsync::{GpuVsyncSignal, GpuVsyncWaiter, VsyncWaitResult, display_id_for_window};
+pub use vsync::{
+    GpuVsyncSignal, GpuVsyncWaiter, VsyncWaitResult,
+    display_id_for_window, hz_from_timestamp, SendPtr,
+    CVDisplayLinkRef, CVTimeStamp, CVDisplayLinkOutputCallback, K_CV_RETURN_SUCCESS,
+    CVDisplayLinkCreateWithActiveCGDisplays, CVDisplayLinkSetCurrentCGDisplay,
+    CVDisplayLinkSetOutputCallback, CVDisplayLinkStart, CVDisplayLinkStop,
+    CVDisplayLinkRelease, CVDisplayLinkGetActualOutputVideoRefreshPeriod,
+};
 
 // Raw ObjC retain/release — avoids dependency on objc::msg_send! macro.
 // Used by both device (command buffer retain) and encoder (encoder retain/release).

@@ -642,20 +642,18 @@ impl Application {
         #[cfg(target_os = "macos")]
         if let Some(gpu) = &self.gpu
             && let Some(bridge) = &self.shared_texture_bridge
+            && let Some(ref mut dl) = self.unified_display_link
         {
-            let presenter = crate::display_link::DisplayLinkPresenter::new(
+            dl.attach_presenter(
                 &gpu.device,
                 &window,
                 Arc::clone(bridge),
                 h,
                 presentation,
             );
-            self.output_presenter = Some(presenter);
-            // Retarget content vsync to the output window's display —
+            // Retarget unified link to the output window's display —
             // the output is the performance display for live visuals.
-            if let Some(ref mut signal) = self.content_vsync_signal {
-                signal.retarget(&window);
-            }
+            dl.retarget_if_needed(&window);
         }
 
         let state = WindowState {

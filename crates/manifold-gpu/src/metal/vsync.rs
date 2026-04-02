@@ -4,8 +4,10 @@
 //! synchronize frame production to a display's refresh cadence.
 //!
 //! Two-part design:
-//! - [`GpuVsyncSignal`]: owned by the UI thread. Manages the CVDisplayLink
-//!   and handles retargeting when windows move between displays.
+//! - [`GpuVsyncSignal`]: creates the shared condvar infrastructure and
+//!   optionally owns a CVDisplayLink. In "headless" mode, external code
+//!   (e.g. a unified display link in manifold-app) calls [`notify_vsync()`]
+//!   to drive the signal.
 //! - [`GpuVsyncWaiter`]: cloned to the render thread. Provides blocking
 //!   `wait()` on the condvar — no CVDisplayLink access needed.
 //!
@@ -19,25 +21,27 @@
 use std::ffi::c_void;
 use std::sync::{Arc, Condvar, Mutex};
 
-// ─── CVDisplayLink FFI ──────────────────────────────────────────────────
+// ─── CVDisplayLink FFI (exported for manifold-app) ──────────────────────
 
-type CVDisplayLinkRef = *mut c_void;
+pub type CVDisplayLinkRef = *mut c_void;
 
+/// CVTimeStamp — timing information from CoreVideo.
+/// `host_time` is in mach_absolute_time units.
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct CVTimeStamp {
-    version: u32,
-    video_time_scale: i32,
-    video_time: i64,
-    host_time: u64,
-    rate_scalar: f64,
-    video_refresh_period: i64,
-    smpte_time: [u8; 24],
-    flags: u64,
-    reserved: u64,
+pub struct CVTimeStamp {
+    pub version: u32,
+    pub video_time_scale: i32,
+    pub video_time: i64,
+    pub host_time: u64,
+    pub rate_scalar: f64,
+    pub video_refresh_period: i64,
+    pub smpte_time: [u8; 24],
+    pub flags: u64,
+    pub reserved: u64,
 }
 
-type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
+pub type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
     display_link: CVDisplayLinkRef,
     in_now: *const CVTimeStamp,
     in_output_time: *const CVTimeStamp,
@@ -46,21 +50,21 @@ type CVDisplayLinkOutputCallback = unsafe extern "C" fn(
     context: *mut c_void,
 ) -> i32;
 
-const K_CV_RETURN_SUCCESS: i32 = 0;
+pub const K_CV_RETURN_SUCCESS: i32 = 0;
 
 #[link(name = "CoreVideo", kind = "framework")]
 unsafe extern "C" {
-    fn CVDisplayLinkCreateWithActiveCGDisplays(out: *mut CVDisplayLinkRef) -> i32;
-    fn CVDisplayLinkSetCurrentCGDisplay(link: CVDisplayLinkRef, display_id: u32) -> i32;
-    fn CVDisplayLinkSetOutputCallback(
+    pub fn CVDisplayLinkCreateWithActiveCGDisplays(out: *mut CVDisplayLinkRef) -> i32;
+    pub fn CVDisplayLinkSetCurrentCGDisplay(link: CVDisplayLinkRef, display_id: u32) -> i32;
+    pub fn CVDisplayLinkSetOutputCallback(
         link: CVDisplayLinkRef,
         callback: CVDisplayLinkOutputCallback,
         context: *mut c_void,
     ) -> i32;
-    fn CVDisplayLinkStart(link: CVDisplayLinkRef) -> i32;
-    fn CVDisplayLinkStop(link: CVDisplayLinkRef) -> i32;
-    fn CVDisplayLinkRelease(link: CVDisplayLinkRef);
-    fn CVDisplayLinkGetActualOutputVideoRefreshPeriod(link: CVDisplayLinkRef) -> f64;
+    pub fn CVDisplayLinkStart(link: CVDisplayLinkRef) -> i32;
+    pub fn CVDisplayLinkStop(link: CVDisplayLinkRef) -> i32;
+    pub fn CVDisplayLinkRelease(link: CVDisplayLinkRef);
+    pub fn CVDisplayLinkGetActualOutputVideoRefreshPeriod(link: CVDisplayLinkRef) -> f64;
 }
 
 // ─── Display ID extraction ──────────────────────────────────────────────
@@ -95,29 +99,44 @@ pub fn display_id_for_window(window: &impl raw_window_handle::HasWindowHandle) -
     }
 }
 
+/// Derive display Hz from a CVTimeStamp's refresh period fields.
+/// Returns 0 if the fields are invalid.
+pub fn hz_from_timestamp(ts: &CVTimeStamp) -> f64 {
+    if ts.video_refresh_period > 0 && ts.video_time_scale > 0 {
+        ts.video_time_scale as f64 / ts.video_refresh_period as f64
+    } else {
+        0.0
+    }
+}
+
+// ─── Send wrapper for raw pointer cleanup ───────────────────────────────
+
+pub struct SendPtr<T>(pub *mut T);
+unsafe impl<T> Send for SendPtr<T> {}
+impl<T> SendPtr<T> {
+    pub fn get(self) -> *mut T { self.0 }
+}
+
 // ─── VSync state (shared between callback thread and render thread) ─────
 
-struct VsyncState {
-    /// Incremented by the CVDisplayLink callback on each vsync.
-    vsync_count: u64,
-    /// Display refresh rate in Hz (updated on retarget).
-    display_hz: f64,
-    /// Set to true to release any waiting thread (for shutdown).
-    shutdown: bool,
+pub(crate) struct VsyncState {
+    pub(crate) vsync_count: u64,
+    pub(crate) display_hz: f64,
+    pub(crate) shutdown: bool,
 }
 
 /// Shared inner state for cross-thread vsync signaling.
 ///
-/// The CVDisplayLink callback thread locks the mutex, increments vsync_count,
-/// and calls condvar.notify_one(). The render thread blocks on the condvar
-/// until a new vsync arrives or timeout expires.
+/// The CVDisplayLink callback thread (or external caller via `notify_vsync`)
+/// locks the mutex, increments vsync_count, and calls condvar.notify_one().
+/// The render thread blocks on the condvar until a new vsync arrives.
 ///
 /// Using `std::sync::Mutex` (not parking_lot) because macOS pthread_mutex
 /// supports PTHREAD_PRIO_INHERIT for priority inheritance — important when
 /// the CVDisplayLink real-time thread contends with the SCHED_RR content thread.
-struct VsyncInner {
-    state: Mutex<VsyncState>,
-    condvar: Condvar,
+pub(crate) struct VsyncInner {
+    pub(crate) state: Mutex<VsyncState>,
+    pub(crate) condvar: Condvar,
 }
 
 // ─── Result type ────────────────────────────────────────────────────────
@@ -132,7 +151,7 @@ pub struct VsyncWaitResult {
     pub timed_out: bool,
 }
 
-// ─── CVDisplayLink callback ─────────────────────────────────────────────
+// ─── CVDisplayLink callback (used by standalone GpuVsyncSignal) ─────────
 
 unsafe extern "C" fn content_vsync_callback(
     _display_link: CVDisplayLinkRef,
@@ -143,18 +162,7 @@ unsafe extern "C" fn content_vsync_callback(
     context: *mut c_void,
 ) -> i32 {
     let inner = unsafe { &*(context as *const VsyncInner) };
-    // Derive display Hz from the CVTimeStamp's refresh period.
-    // This is always accurate — unlike CVDisplayLinkGetActualOutputVideoRefreshPeriod
-    // which returns 0 before the first callback fires.
-    let hz = unsafe {
-        let ts = &*in_output_time;
-        if ts.video_refresh_period > 0 && ts.video_time_scale > 0 {
-            ts.video_time_scale as f64 / ts.video_refresh_period as f64
-        } else {
-            0.0
-        }
-    };
-    // Lock held for nanoseconds — just increment + notify + update Hz.
+    let hz = hz_from_timestamp(unsafe { &*in_output_time });
     if let Ok(mut state) = inner.state.lock() {
         state.vsync_count += 1;
         if hz > 0.0 {
@@ -163,14 +171,6 @@ unsafe extern "C" fn content_vsync_callback(
         inner.condvar.notify_one();
     }
     K_CV_RETURN_SUCCESS
-}
-
-// ─── Send wrapper for raw pointer cleanup ───────────────────────────────
-
-struct SendPtr<T>(*mut T);
-unsafe impl<T> Send for SendPtr<T> {}
-impl<T> SendPtr<T> {
-    fn get(self) -> *mut T { self.0 }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -203,7 +203,6 @@ impl GpuVsyncWaiter {
         let timeout = std::time::Duration::from_millis(100);
         let guard = self.inner.state.lock().unwrap();
 
-        // Wait until vsync_count advances past last_seen, or shutdown, or timeout.
         let (guard, wait_result) = self.inner.condvar.wait_timeout_while(
             guard,
             timeout,
@@ -229,19 +228,23 @@ impl GpuVsyncWaiter {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// GpuVsyncSignal — UI thread side (owns CVDisplayLink, retargets)
+// GpuVsyncSignal — UI thread side
 // ═══════════════════════════════════════════════════════════════════════
 
 /// Platform-abstracted display vsync signal controller.
 ///
-/// Owned by the UI thread. Manages the CVDisplayLink lifecycle and
-/// retargeting when windows move between displays.
+/// Two modes:
+/// - **Standalone** (`new(window)`): owns a CVDisplayLink that fires the
+///   condvar automatically. Used when no unified display link exists.
+/// - **Headless** (`new_headless()`): no CVDisplayLink. External code calls
+///   `notify_vsync(hz)` to drive the signal. Used when a `UnifiedDisplayLink`
+///   in manifold-app drives all consumers from a single CVDisplayLink.
 ///
 /// Call [`create_waiter()`] to get a [`GpuVsyncWaiter`] for the render thread.
 pub struct GpuVsyncSignal {
     inner: Arc<VsyncInner>,
-    display_link: CVDisplayLinkRef,
-    /// Current display ID — compared on retarget to detect actual changes.
+    /// None in headless mode — the unified display link drives the condvar.
+    display_link: Option<CVDisplayLinkRef>,
     current_display_id: u32,
 }
 
@@ -250,10 +253,31 @@ pub struct GpuVsyncSignal {
 unsafe impl Send for GpuVsyncSignal {}
 
 impl GpuVsyncSignal {
-    /// Create a new vsync signal targeting the given window's display.
+    /// Create a headless vsync signal (no CVDisplayLink).
     ///
-    /// Starts a CVDisplayLink that fires at the display's refresh rate
-    /// and notifies waiting threads via condvar.
+    /// External code (e.g. `UnifiedDisplayLink`) calls `notify_vsync(hz)` to
+    /// increment the vsync counter and wake the content thread. This avoids
+    /// having a separate CVDisplayLink that races the unified one.
+    pub fn new_headless() -> Self {
+        let inner = Arc::new(VsyncInner {
+            state: Mutex::new(VsyncState {
+                vsync_count: 0,
+                display_hz: 0.0,
+                shutdown: false,
+            }),
+            condvar: Condvar::new(),
+        });
+        log::info!("[GpuVsyncSignal] Created in headless mode (external driver)");
+        Self {
+            inner,
+            display_link: None,
+            current_display_id: 0,
+        }
+    }
+
+    /// Create a standalone vsync signal with its own CVDisplayLink.
+    ///
+    /// Used as fallback when no unified display link is available.
     pub fn new(window: &impl raw_window_handle::HasWindowHandle) -> Self {
         let display_id = display_id_for_window(window);
 
@@ -284,9 +308,6 @@ impl GpuVsyncSignal {
                 }
             }
 
-            // Pass raw pointer to the Arc's inner data as callback context.
-            // The Arc is kept alive by GpuVsyncSignal — the pointer is valid
-            // until Drop stops the display link.
             let ctx_ptr = Arc::as_ptr(&inner) as *mut c_void;
             let ret = CVDisplayLinkSetOutputCallback(
                 display_link,
@@ -305,91 +326,64 @@ impl GpuVsyncSignal {
             );
         }
 
-        // Try to read initial display Hz. May return 0 if the link hasn't
-        // fired yet — the callback will populate it from CVTimeStamp on first vsync.
-        let refresh_period = unsafe {
-            CVDisplayLinkGetActualOutputVideoRefreshPeriod(display_link)
-        };
-        let hz = if refresh_period > 0.0 { 1.0 / refresh_period } else { 0.0 };
-        if hz > 0.0
-            && let Ok(mut state) = inner.state.lock()
-        {
-            state.display_hz = hz;
-        }
-
         log::info!(
-            "[GpuVsyncSignal] Started for display {display_id}, \
-             initial_hz={:.1} (callback will update)", hz,
+            "[GpuVsyncSignal] Started standalone for display {display_id}"
         );
 
         Self {
             inner,
-            display_link,
+            display_link: Some(display_link),
             current_display_id: display_id,
         }
     }
 
-    /// Create a waiter handle for the render thread.
+    /// Notify the condvar from external code (headless mode).
     ///
-    /// The waiter shares the inner Mutex+Condvar and can block on vsync
-    /// signals without accessing the CVDisplayLink.
+    /// Called by the unified display link callback to wake the content thread.
+    /// Increments vsync_count and updates display_hz atomically.
+    pub fn notify_vsync(&self, hz: f64) {
+        if let Ok(mut state) = self.inner.state.lock() {
+            state.vsync_count += 1;
+            if hz > 0.0 {
+                state.display_hz = hz;
+            }
+            self.inner.condvar.notify_one();
+        }
+    }
+
+    /// Create a waiter handle for the render thread.
     pub fn create_waiter(&self) -> GpuVsyncWaiter {
         GpuVsyncWaiter {
             inner: Arc::clone(&self.inner),
         }
     }
 
-    /// Retarget the vsync signal to a different window's display.
-    ///
-    /// Called when a window moves between monitors. Safe to call while the
-    /// CVDisplayLink is running (per Apple docs). The callback may fire one
-    /// frame at the old display's timing — acceptable (single late wakeup
-    /// is invisible, missed wakeup is handled by the 100ms timeout).
+    /// Retarget to a different window's display (standalone mode only).
     pub fn retarget(&mut self, window: &impl raw_window_handle::HasWindowHandle) {
         let new_id = display_id_for_window(window);
         self.retarget_to_display(new_id);
     }
 
-    /// Retarget to a specific display ID.
+    /// Retarget to a specific display ID (standalone mode only).
     pub fn retarget_to_display(&mut self, display_id: u32) {
+        let Some(dl) = self.display_link else { return };
         if display_id == 0 || display_id == self.current_display_id {
             return;
         }
 
-        let old_refresh = unsafe {
-            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
-        };
-
-        // Retarget while running — callback keeps firing without interruption.
         unsafe {
-            CVDisplayLinkSetCurrentCGDisplay(self.display_link, display_id);
-        }
-
-        let new_refresh = unsafe {
-            CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
-        };
-        let new_hz = if new_refresh > 0.0 { 1.0 / new_refresh } else { 0.0 };
-
-        // Update stored Hz so the next wait() returns the new rate.
-        if let Ok(mut state) = self.inner.state.lock() {
-            state.display_hz = new_hz;
+            CVDisplayLinkSetCurrentCGDisplay(dl, display_id);
         }
 
         log::info!(
-            "[GpuVsyncSignal] Retargeted: display {} → {}, \
-             refresh {:.1}Hz → {:.1}Hz",
+            "[GpuVsyncSignal] Retargeted: display {} → {}",
             self.current_display_id, display_id,
-            if old_refresh > 0.0 { 1.0 / old_refresh } else { 0.0 },
-            new_hz,
         );
 
         self.current_display_id = display_id;
     }
 
     /// Signal shutdown — unblocks any thread waiting on the condvar.
-    ///
-    /// Must be called before the render thread is joined, otherwise it may
-    /// block forever on the condvar.
     pub fn shutdown(&self) {
         if let Ok(mut state) = self.inner.state.lock() {
             state.shutdown = true;
@@ -402,7 +396,7 @@ impl GpuVsyncSignal {
         self.inner.state.lock().unwrap().display_hz
     }
 
-    /// Current display ID this signal is targeting.
+    /// Current display ID (standalone mode only, 0 in headless mode).
     pub fn current_display_id(&self) -> u32 {
         self.current_display_id
     }
@@ -410,21 +404,15 @@ impl GpuVsyncSignal {
 
 impl Drop for GpuVsyncSignal {
     fn drop(&mut self) {
-        // Signal shutdown so any waiting thread unblocks.
         self.shutdown();
 
-        // Move blocking cleanup off the current thread. CVDisplayLinkStop
-        // blocks until the in-flight callback finishes.
-        let dl = SendPtr(self.display_link);
-        std::thread::spawn(move || unsafe {
-            let dl = dl.get();
-            CVDisplayLinkStop(dl);
-            CVDisplayLinkRelease(dl);
-        });
-        // Note: the Arc<VsyncInner> is dropped here. The callback pointer
-        // becomes dangling, but CVDisplayLinkStop guarantees no callback
-        // runs after it returns. The spawned thread stops the link before
-        // the Arc's ref count can reach zero (this Drop holds one Arc ref,
-        // the spawned thread completes Stop, then this ref drops).
+        if let Some(dl) = self.display_link.take() {
+            let dl = SendPtr(dl);
+            std::thread::spawn(move || unsafe {
+                let dl = dl.get();
+                CVDisplayLinkStop(dl);
+                CVDisplayLinkRelease(dl);
+            });
+        }
     }
 }
