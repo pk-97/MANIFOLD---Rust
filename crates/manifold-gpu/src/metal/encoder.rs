@@ -52,6 +52,9 @@ pub(super) struct RenderBindCache {
     frag_samplers: [*const std::ffi::c_void; CACHE_SLOTS],
     /// Buffers: (ObjC pointer, offset) per slot — same identity = skip both stages.
     buffers: [(*const std::ffi::c_void, u64); CACHE_SLOTS],
+    /// Vertex buffer at index 30: ObjC pointer. When the same buffer is
+    /// re-bound at a different offset, use setVertexBufferOffset instead.
+    vertex_buf_30: *const std::ffi::c_void,
     /// Bytes: (data pointer, length) per slot — same slice = skip both stages.
     bytes: [(*const u8, usize); CACHE_SLOTS],
 }
@@ -62,6 +65,7 @@ impl RenderBindCache {
             frag_textures: [std::ptr::null(); CACHE_SLOTS],
             frag_samplers: [std::ptr::null(); CACHE_SLOTS],
             buffers: [(std::ptr::null(), 0); CACHE_SLOTS],
+            vertex_buf_30: std::ptr::null(),
             bytes: [(std::ptr::null(), 0); CACHE_SLOTS],
         }
     }
@@ -70,6 +74,7 @@ impl RenderBindCache {
         self.frag_textures = [std::ptr::null(); CACHE_SLOTS];
         self.frag_samplers = [std::ptr::null(); CACHE_SLOTS];
         self.buffers = [(std::ptr::null(), 0); CACHE_SLOTS];
+        self.vertex_buf_30 = std::ptr::null();
         self.bytes = [(std::ptr::null(), 0); CACHE_SLOTS];
     }
 }
@@ -751,9 +756,16 @@ impl GpuEncoder {
         }
 
         const VERTEX_BUFFER_INDEX: u64 = 30;
-        enc.set_vertex_buffer(
-            VERTEX_BUFFER_INDEX, Some(&vertex_buffer.raw), vertex_offset as _,
-        );
+        let vb_id = buffer_identity(&vertex_buffer.raw);
+        if self.render_cache.vertex_buf_30 == vb_id {
+            // Same buffer already bound — lightweight offset-only update.
+            enc.set_vertex_buffer_offset(VERTEX_BUFFER_INDEX, vertex_offset as _);
+        } else {
+            enc.set_vertex_buffer(
+                VERTEX_BUFFER_INDEX, Some(&vertex_buffer.raw), vertex_offset as _,
+            );
+            self.render_cache.vertex_buf_30 = vb_id;
+        }
 
         for binding in bindings {
             match binding {
