@@ -149,6 +149,7 @@ pub struct FooterPanel {
 
     // State
     vsync_enabled: bool,
+    vsync_active: bool,
     vsync_actual_fps: f32,
     selection_info: String,
     quantize_text: String,
@@ -183,6 +184,7 @@ impl FooterPanel {
             vsync_btn_id: -1,
             vsync_actual_id: -1,
             vsync_enabled: true,
+            vsync_active: false,
             vsync_actual_fps: 0.0,
             selection_info: String::new(),
             quantize_text: "Off".into(),
@@ -231,19 +233,19 @@ impl FooterPanel {
         &mut self, tree: &mut UITree,
         enabled: bool, active: bool, actual_fps: f32,
     ) {
-        let state_changed = enabled != self.vsync_enabled;
+        let enabled_changed = enabled != self.vsync_enabled;
+        let active_changed = active != self.vsync_active;
         let fps_changed = (actual_fps - self.vsync_actual_fps).abs() > 0.1;
-        if state_changed {
+        if enabled_changed {
             self.vsync_enabled = enabled;
             if self.vsync_btn_id >= 0 {
                 tree.set_style(self.vsync_btn_id as u32, self.vsync_btn_style());
             }
         }
-        if state_changed || fps_changed {
+        if enabled_changed || active_changed || fps_changed {
+            self.vsync_active = active;
             self.vsync_actual_fps = actual_fps;
             if self.vsync_actual_id >= 0 {
-                // Only show resolved FPS when vsync is actually active on the
-                // content thread (not just enabled in settings but waiting to activate).
                 let text = if active && actual_fps > 0.0 {
                     format!("→{:.0}", actual_fps)
                 } else {
