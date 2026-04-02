@@ -189,6 +189,17 @@ The content thread uses `manifold-gpu` with the `metal` crate directly. **Zero w
 - `MetalFxSpatial` / `MpsLanczos` → generators with `internal_resolution_scale() < 1.0` render at reduced resolution, upscaled via MetalFX Spatial or MPS Lanczos
 - Four generators have sub-1.0 overrides (only active in non-Native mode): `FluidSimulation` (0.5×), `FluidSimulation3D` (0.5×), `Mycelium` (0.5×), `ParametricSurface` (0.75×)
 
+### VSync & Frame Pacing
+
+See `docs/VSYNC_AND_FRAME_PACING.md` for full architecture and hard-won lessons.
+
+- **Three independent CVDisplayLinks** — content thread, output presenter, UI thread. Each callback is <1μs. **NEVER put heavy GPU work in a vsync callback that serves as a timing source for other consumers** — CVDisplayLink skips the next callback if the current one overruns the vsync interval.
+- **Content thread VSync** (`GpuVsyncSignal` in `manifold-gpu`): CVDisplayLink → condvar notify → content thread wakes. Frame divisor snaps project FPS to nearest clean display divisor.
+- **Output presenter** (`DisplayLinkPresenter`): fullscreen = callback does blit (Direct Display, must present every vsync). Windowed = callback sets flag, main thread does blit with `presentsWithTransaction` + `commit_and_wait_scheduled` for compositor sync.
+- **Hz from CVTimeStamp** — `CVDisplayLinkGetActualOutputVideoRefreshPeriod` returns 0 before the first callback. Always derive Hz from `video_time_scale / video_refresh_period` in the callback's CVTimeStamp.
+- **IOSurface triple buffer** — content thread renders to IOSurface, GPU completion handler publishes `front_index` asynchronously. Presenter reads current `front_index` — never waits for content thread.
+- **`presentsWithTransaction = true` only works on the main thread** — CA transactions don't exist on CVDisplayLink background threads. Presents from background threads are silently discarded.
+
 ---
 
 ## HOW TO ADD A NEW EFFECT
