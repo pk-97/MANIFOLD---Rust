@@ -223,7 +223,14 @@ impl FooterPanel {
     }
 
     /// Update VSync toggle state and actual resolved FPS display.
-    pub fn set_vsync_state(&mut self, tree: &mut UITree, enabled: bool, actual_fps: f32) {
+    ///
+    /// - `enabled`: from project settings (button highlight, instant on click)
+    /// - `active`: from content thread (whether vsync mode is actually running)
+    /// - `actual_fps`: from content thread (display_hz / divisor when active)
+    pub fn set_vsync_state(
+        &mut self, tree: &mut UITree,
+        enabled: bool, active: bool, actual_fps: f32,
+    ) {
         let state_changed = enabled != self.vsync_enabled;
         let fps_changed = (actual_fps - self.vsync_actual_fps).abs() > 0.1;
         if state_changed {
@@ -235,7 +242,9 @@ impl FooterPanel {
         if state_changed || fps_changed {
             self.vsync_actual_fps = actual_fps;
             if self.vsync_actual_id >= 0 {
-                let text = if enabled && actual_fps > 0.0 {
+                // Only show resolved FPS when vsync is actually active on the
+                // content thread (not just enabled in settings but waiting to activate).
+                let text = if active && actual_fps > 0.0 {
                     format!("→{:.0}", actual_fps)
                 } else {
                     String::new()
