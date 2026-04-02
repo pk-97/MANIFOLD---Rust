@@ -1063,6 +1063,19 @@ impl GpuEncoder {
         // Don't release in commit — Drop handles it
     }
 
+    /// Commit and block until the GPU has scheduled (not completed) the work.
+    ///
+    /// Used with `presentsWithTransaction = true` on CAMetalLayer: commit the
+    /// blit work, wait until the GPU has it queued, then call
+    /// `drawable.present_after_scheduled()` to sync with Core Animation.
+    /// Does NOT call `presentDrawable` — the caller presents manually.
+    pub fn commit_and_wait_scheduled(mut self) {
+        self.end_current();
+        let cb = self.cmd_buf();
+        cb.commit();
+        cb.wait_until_scheduled();
+    }
+
 }
 
 impl Drop for GpuEncoder {

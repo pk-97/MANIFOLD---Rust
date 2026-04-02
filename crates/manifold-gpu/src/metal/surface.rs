@@ -220,6 +220,19 @@ impl GpuDrawable {
         GpuTexture::from_raw(mtl_texture, w, h, 1, format)
     }
 
+    /// Present the drawable directly (for `presentsWithTransaction` mode).
+    ///
+    /// Call AFTER `GpuEncoder::commit_and_wait_scheduled()` to sync with
+    /// Core Animation transactions. The drawable is presented immediately
+    /// and will be composited on the next WindowServer cycle.
+    pub fn present_after_scheduled(&self) {
+        let drawable = unsafe {
+            &*(self.drawable_ptr as *const metal::MetalDrawableRef)
+        };
+        use std::ops::Deref;
+        drawable.deref().present();
+    }
+
     /// Present the drawable immediately.
     /// Consumes self — the drawable is scheduled for display at the next vsync.
     pub fn present(self) {
