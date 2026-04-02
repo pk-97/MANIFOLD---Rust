@@ -85,10 +85,12 @@ impl ContentThread {
                 }
             }
             ContentCommand::SeekTo(t) => {
+                self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 self.engine.seek_to(t);
                 self.cache_link_beat_offset();
             }
             ContentCommand::SeekToBeat(beat) => {
+                self.sync_arbiter.set_user_seek_time(self.time_since_start);
                 let time = self.engine.beat_to_timeline_time(beat);
                 self.engine.seek_to(time);
                 self.cache_link_beat_offset();

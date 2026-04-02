@@ -883,6 +883,9 @@ impl ContentThread {
 
         match authority {
             ClockAuthority::Link => {
+                // Link only provides BPM — block position override when Manifold
+                // owns transport (prevents brief authority-falls-to-Link glitches
+                // during MIDI Clock gaps).
                 if !self.sync_arbiter.manifold_owns_playback
                     && let Some(ref link) = self.transport_controller.link_sync
                     && link.is_link_enabled()
@@ -895,7 +898,9 @@ impl ContentThread {
                     }
             }
             ClockAuthority::MidiClock => {
-                if !self.sync_arbiter.manifold_owns_playback
+                // MIDI Clock always drives position when active — suppressed only
+                // during seek cooldown (user scrubbing, Ableton hasn't caught up).
+                if !self.sync_arbiter.is_seek_cooldown_active(self.time_since_start)
                     && let Some(ref clk) = self.transport_controller.midi_clock_sync
                         && clk.is_midi_clock_enabled() && clk.is_receiving_clock() {
                             self.engine.set_beat(Beats::from_f32(clk.current_clock_beat()));

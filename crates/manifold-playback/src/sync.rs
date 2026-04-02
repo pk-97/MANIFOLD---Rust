@@ -74,11 +74,21 @@ pub struct SyncArbiter {
     /// Wall-clock time when `manifold_owns_playback` was last set.
     /// Prevents premature clearing during the OSC→DAW→MIDI round trip.
     owns_set_time: Seconds,
+    /// Wall-clock time of the last user-initiated seek (ruler scrub, click, etc.).
+    /// During the cooldown window, MIDI Clock position sync and beat derivation
+    /// are suppressed so Ableton has time to receive the OSC seek and update
+    /// its MIDI Clock output. Without this, MIDI Clock would drag the playhead
+    /// back to the pre-seek position during the round-trip latency.
+    last_user_seek_time: Seconds,
 }
 
 /// Grace period (seconds) after setting manifold_owns before it can be cleared.
 /// Covers OSC send → Ableton processes → MIDI Clock reflects new state.
 const OWNERSHIP_GRACE_PERIOD: f32 = 0.5;
+
+/// Cooldown (seconds) after a user-initiated seek during which MIDI Clock
+/// position sync is suppressed. Covers the OSC → Ableton → MIDI Clock round trip.
+const SEEK_COOLDOWN: f64 = 0.3;
 
 impl SyncArbiter {
     pub fn new() -> Self {
@@ -86,6 +96,7 @@ impl SyncArbiter {
             suppress_next_transport: false,
             manifold_owns_playback: false,
             owns_set_time: Seconds(-999.0),
+            last_user_seek_time: Seconds(-999.0),
         }
     }
 
@@ -118,6 +129,17 @@ impl SyncArbiter {
 
     pub fn clear_ownership(&mut self) {
         self.manifold_owns_playback = false;
+    }
+
+    /// Record that a user-initiated seek just happened. Starts a brief cooldown
+    /// during which MIDI Clock position sync is suppressed (ruler scrub, click-seek, etc.).
+    pub fn set_user_seek_time(&mut self, now: Seconds) {
+        self.last_user_seek_time = now;
+    }
+
+    /// Whether the seek cooldown is active (MIDI Clock position sync should be suppressed).
+    pub fn is_seek_cooldown_active(&self, now: Seconds) -> bool {
+        (now - self.last_user_seek_time).0 < SEEK_COOLDOWN
     }
 
     pub fn play(&mut self, source: ClockAuthority, authority: ClockAuthority, target: &mut dyn SyncArbiterTarget) -> bool {

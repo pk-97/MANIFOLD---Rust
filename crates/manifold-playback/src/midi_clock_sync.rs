@@ -513,12 +513,16 @@ impl MidiClockSyncController {
         // BPM estimation from clock ticks (port of C# line 247).
         self.update_bpm_from_clock(now.as_f32(), pos_sixteenths, clock_tick, has_recent_clock_activity, is_playing);
 
-        // Suppress local deltaTime when CLK is active authority and playing (port of C# lines 251-253).
+        // Suppress local deltaTime when CLK is active authority and playing.
+        // Not gated on manifold_owns — MIDI Clock always drives timing when active.
+        // Gated on seek cooldown — during scrubs, engine advances internally until
+        // Ableton catches up to the new position.
         arbiter.set_external_time_sync(
             ClockAuthority::MidiClock,
             authority,
             arb_target,
-            has_recent_clock_activity && is_playing && !manifold_owns,
+            has_recent_clock_activity && is_playing
+                && !arbiter.is_seek_cooldown_active(now),
         );
 
         // Transport sync — gated by arbiter authority check (port of C# lines 256-279).
@@ -549,11 +553,11 @@ impl MidiClockSyncController {
             arbiter.clear_ownership_if_expired(now);
         }
 
-        // Position sync — gated by arbiter authority check (port of C# lines 290-295).
-        // When manifold_owns, still apply nudge (drift correction during tempo
-        // changes) but skip hard seeks (prevents round-trip echo after
-        // Manifold-initiated seeks where MIDI Clock briefly reflects the old position).
-        if has_recent_clock_activity {
+        // Position sync — MIDI Clock always drives position when active.
+        // manifold_owns only gates transport (play/stop), not position.
+        // Suppressed during seek cooldown (user scrubbing the playhead — Ableton
+        // hasn't received the new position yet, so MIDI Clock is stale).
+        if has_recent_clock_activity && !arbiter.is_seek_cooldown_active(now) {
             self.current_position_sixteenths = pos_sixteenths;
             self.update_position_display(pos_sixteenths);
             self.sync_position_to_playback(
@@ -563,7 +567,6 @@ impl MidiClockSyncController {
                 arb_target,
                 sync_target,
                 authority,
-                manifold_owns,
             );
         }
     }
@@ -652,12 +655,6 @@ impl MidiClockSyncController {
 
     /// Sync MANIFOLD playback position to MIDI clock position.
     /// Port of C# MidiClockSyncController.SyncPositionToPlayback (lines 368-436).
-    ///
-    /// `nudge_only`: when true, only apply small drift corrections (nudge_time)
-    /// and skip hard seeks. Used when manifold_owns_playback is active — Manifold
-    /// is the transport master but still needs drift correction from MIDI Clock
-    /// during tempo changes. Hard seeks are skipped to prevent round-trip echo
-    /// (Manifold seeks → OSC → Ableton → MIDI Clock reflects old position briefly).
     fn sync_position_to_playback(
         &mut self,
         pos_sixteenths: i32,
@@ -666,7 +663,6 @@ impl MidiClockSyncController {
         arb_target: &mut dyn SyncArbiterTarget,
         sync_target: &dyn SyncTarget,
         authority: ClockAuthority,
-        nudge_only: bool,
     ) {
         // Port of C# line 370: guard on project and arbiter.
         if sync_target.current_project().is_none() { return; }
@@ -704,16 +700,14 @@ impl MidiClockSyncController {
             if !is_transport_jump && delta < Seconds(0.5) {
                 // NudgeTime for smooth per-frame tracking (port of C# line 407).
                 arbiter.nudge_time(ClockAuthority::MidiClock, authority, arb_target, clock_time);
-            } else if !nudge_only {
+            } else {
                 // Large jump via full Seek (port of C# lines 412-419).
-                // Skipped when nudge_only (manifold_owns) to prevent round-trip echo.
                 self.hard_seek_count += 1;
                 self.last_hard_seek_delta_seconds = delta.as_f32();
                 arbiter.seek(ClockAuthority::MidiClock, authority, arb_target, clock_time);
             }
-        } else if !nudge_only {
+        } else {
             // Not playing: Seek on position change (port of C# lines 425-432).
-            // Skipped when nudge_only — Manifold owns the stopped position.
             if current_sixteenths != self.last_position_sixteenths {
                 self.hard_seek_count += 1;
                 self.last_hard_seek_delta_seconds = delta.as_f32();
