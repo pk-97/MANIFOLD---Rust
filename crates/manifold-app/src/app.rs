@@ -236,12 +236,16 @@ pub struct Application {
     /// Skip drawable acquisition this frame (surface just resized — drawable
     /// pool may be reconfiguring). Offscreen render still runs; blit skipped.
     pub(crate) surface_resized_this_frame: bool,
-    /// Display transition cooldown — skip all potentially-blocking surface
-    /// operations (next_drawable, commit_and_wait_scheduled) until this
-    /// deadline passes. Set when a display change notification fires.
-    /// Prevents hard locks when macOS reconfigures displays (e.g., switching
-    /// from MacBook to 4K TV at 120Hz) while GPU surfaces target stale displays.
-    pub(crate) display_change_deadline: Option<std::time::Instant>,
+    /// True while a display retarget is in flight — skip all potentially-
+    /// blocking surface operations (next_drawable, commit_and_wait_scheduled)
+    /// until the UiDisplayLink confirms it's alive on the new display.
+    /// Prevents hard locks when GPU surfaces target stale displays during
+    /// transitions (e.g., MacBook → 4K TV at 120Hz).
+    pub(crate) display_retarget_pending: bool,
+    /// Safety deadline: if the display link never fires after a retarget
+    /// (display disconnected entirely), clear the pending flag after 2s
+    /// so the app doesn't stay frozen forever.
+    pub(crate) display_retarget_deadline: Option<std::time::Instant>,
     /// True when the offscreen texture needs a fresh render this frame.
     /// Set by any visual state change (content frame, dirty panels, overlay).
     /// When false, present_all_windows just re-blits the existing offscreen.
@@ -403,7 +407,8 @@ impl Application {
             layer_bitmap_gpu: None,
             scale_factor: 1.0,
             surface_resized_this_frame: false,
-            display_change_deadline: None,
+            display_retarget_pending: false,
+            display_retarget_deadline: None,
             offscreen_dirty: true,
             edr_headroom: 1.0,
             output_edr_headroom: 1.0,
@@ -2197,30 +2202,47 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
 
         // Check if a screen change notification fired — update EDR headroom
-        // per-window and send to content thread if it changed.
+        // per-window and retarget CVDisplayLinks.
         if crate::edr_surface::edr_screen_changed() {
-            // Start display transition cooldown: skip all potentially-blocking
-            // surface operations (next_drawable, commit_and_wait_scheduled) for
-            // 500ms. During display transitions (e.g., MacBook → 4K TV 120Hz),
-            // GPU surfaces may target stale displays — next_drawable and
-            // waitUntilScheduled can block the main thread indefinitely.
-            self.display_change_deadline =
-                Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
-            log::info!(
-                "[Display] Screen change detected — 500ms surface cooldown active"
-            );
-            self.update_edr_headroom();
+            let any_display_changed = self.update_edr_headroom();
+            if any_display_changed {
+                // A display link was retargeted to a new display. Skip all
+                // potentially-blocking surface operations (next_drawable,
+                // commit_and_wait_scheduled) until the display link confirms
+                // it's alive on the new display. This prevents hard locks when
+                // GPU surfaces target stale displays (e.g., MacBook → 4K TV).
+                self.display_retarget_pending = true;
+                self.display_retarget_deadline = Some(
+                    std::time::Instant::now() + std::time::Duration::from_secs(2),
+                );
+                log::info!(
+                    "[Display] Retarget in flight — suspending surface ops \
+                     until display link confirms"
+                );
+            }
         }
 
-        // Clear cooldown once deadline passes.
-        let in_display_transition = self.display_change_deadline
-            .is_some_and(|d| std::time::Instant::now() < d);
-        if !in_display_transition && self.display_change_deadline.is_some() {
-            log::info!("[Display] Surface cooldown expired — resuming normal operation");
-            self.display_change_deadline = None;
-            // Force a fresh render after cooldown so the UI isn't stale.
-            self.offscreen_dirty = true;
+        // Event-driven transition exit: resume as soon as the UiDisplayLink
+        // callback fires on the (potentially new) display, confirming it's alive.
+        // Safety net: if the display link never fires (display disconnected
+        // entirely), the 2s deadline clears the flag so we don't freeze forever.
+        #[cfg(target_os = "macos")]
+        if self.display_retarget_pending {
+            let link_alive = self.ui_display_link.as_ref()
+                .is_some_and(|dl| dl.is_alive());
+            let deadline_expired = self.display_retarget_deadline
+                .is_some_and(|d| std::time::Instant::now() >= d);
+            if link_alive || deadline_expired {
+                log::info!(
+                    "[Display] Retarget confirmed (link_alive={link_alive}, \
+                     deadline_expired={deadline_expired}) — resuming surface ops"
+                );
+                self.display_retarget_pending = false;
+                self.display_retarget_deadline = None;
+                self.offscreen_dirty = true;
+            }
         }
+        let in_display_transition = self.display_retarget_pending;
 
         // Render on CVDisplayLink vsync signal (macOS) or FrameTimer fallback.
         // CVDisplayLink aligns submission to the MacBook's actual vsync cadence,
@@ -2274,7 +2296,8 @@ impl Application {
     /// Re-query EDR headroom for all windows' current screens.
     /// Called when NSNotification fires (window moved between displays
     /// or display parameters changed).
-    fn update_edr_headroom(&mut self) {
+    /// Returns `true` if any CVDisplayLink was retargeted to a new display.
+    fn update_edr_headroom(&mut self) -> bool {
         // Query headroom for primary window → drives compositor tonemap.
         if let Some(pid) = self.primary_window_id
             && let Some(ws) = self.window_registry.get(&pid)
@@ -2313,31 +2336,35 @@ impl Application {
         // Same NSNotification triggers this (screen change = display change).
         #[cfg(target_os = "macos")]
         {
+            let mut any_changed = false;
             if let Some(pid) = self.primary_window_id
                 && let Some(ws) = self.window_registry.get(&pid)
             {
                 let win = &ws.window;
                 if let Some(dl) = &mut self.ui_display_link {
-                    dl.retarget_if_needed(win);
+                    any_changed |= dl.retarget_if_needed(win);
                 }
             }
             if let Some(ref win) = output_window
                 && let Some(p) = &mut self.output_presenter
             {
-                p.retarget_if_needed(win);
+                any_changed |= p.retarget_if_needed(win);
             }
             // Retarget content vsync signal: prefer output window's display
             // (that's the performance display), fall back to primary window.
             if let Some(ref mut signal) = self.content_vsync_signal {
                 if let Some(ref win) = output_window {
-                    signal.retarget(win.as_ref());
+                    any_changed |= signal.retarget(win.as_ref());
                 } else if let Some(pid) = self.primary_window_id
                     && let Some(ws) = self.window_registry.get(&pid)
                 {
-                    signal.retarget(&*ws.window);
+                    any_changed |= signal.retarget(&*ws.window);
                 }
             }
+            any_changed
         }
+        #[cfg(not(target_os = "macos"))]
+        false
     }
 }
 

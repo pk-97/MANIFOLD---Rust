@@ -452,10 +452,12 @@ impl DisplayLinkPresenter {
         self.edr_headroom.store(headroom.to_bits(), Ordering::Relaxed);
     }
 
-    pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
+    /// Retarget the presenter if the window moved to a different display.
+    /// Returns `true` if the display actually changed (new display ID).
+    pub fn retarget_if_needed(&mut self, window: &winit::window::Window) -> bool {
         let new_id = display_id_for_window(window);
         if new_id == 0 || new_id == self.current_display_id {
-            return;
+            return false;
         }
         unsafe {
             CVDisplayLinkSetCurrentCGDisplay(self.display_link, new_id);
@@ -465,6 +467,7 @@ impl DisplayLinkPresenter {
             self.current_display_id, new_id,
         );
         self.current_display_id = new_id;
+        true
     }
 }
 
@@ -647,6 +650,13 @@ impl UiDisplayLink {
         self.vsync_ready.swap(false, Ordering::AcqRel)
     }
 
+    /// Non-destructive check: has the display link callback fired since last
+    /// consumed by `vsync_ready()`? Used to confirm the display link is alive
+    /// after a retarget without consuming the signal.
+    pub fn is_alive(&self) -> bool {
+        self.vsync_ready.load(Ordering::Acquire)
+    }
+
     /// Retarget the display link if the window moved to a different display.
     ///
     /// NEVER calls CVDisplayLinkStop — that blocks waiting for the in-flight
@@ -656,10 +666,12 @@ impl UiDisplayLink {
     /// Instead: set the stop flag (callback becomes a no-op), retarget in-place
     /// with SetCurrentCGDisplay (safe to call while running per Apple docs),
     /// then clear the flag. At most 1 vsync signal is missed.
-    pub fn retarget_if_needed(&mut self, window: &winit::window::Window) {
+    /// Retarget the display link if the window moved to a different display.
+    /// Returns `true` if the display actually changed (new display ID).
+    pub fn retarget_if_needed(&mut self, window: &winit::window::Window) -> bool {
         let new_id = display_id_for_window(window);
         if new_id == 0 || new_id == self.current_display_id {
-            return;
+            return false;
         }
         let old_refresh = unsafe {
             CVDisplayLinkGetActualOutputVideoRefreshPeriod(self.display_link)
@@ -684,6 +696,7 @@ impl UiDisplayLink {
             if new_refresh > 0.0 { 1.0 / new_refresh } else { 0.0 },
         );
         self.current_display_id = new_id;
+        true
     }
 }
 

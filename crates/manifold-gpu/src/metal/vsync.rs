@@ -345,15 +345,17 @@ impl GpuVsyncSignal {
     /// CVDisplayLink is running (per Apple docs). The callback may fire one
     /// frame at the old display's timing — acceptable (single late wakeup
     /// is invisible, missed wakeup is handled by the 100ms timeout).
-    pub fn retarget(&mut self, window: &impl raw_window_handle::HasWindowHandle) {
+    /// Returns `true` if the display actually changed.
+    pub fn retarget(&mut self, window: &impl raw_window_handle::HasWindowHandle) -> bool {
         let new_id = display_id_for_window(window);
-        self.retarget_to_display(new_id);
+        self.retarget_to_display(new_id)
     }
 
     /// Retarget to a specific display ID.
-    pub fn retarget_to_display(&mut self, display_id: u32) {
+    /// Returns `true` if the display actually changed.
+    pub fn retarget_to_display(&mut self, display_id: u32) -> bool {
         if display_id == 0 || display_id == self.current_display_id {
-            return;
+            return false;
         }
 
         let old_refresh = unsafe {
@@ -384,6 +386,7 @@ impl GpuVsyncSignal {
         );
 
         self.current_display_id = display_id;
+        true
     }
 
     /// Signal shutdown — unblocks any thread waiting on the condvar.
