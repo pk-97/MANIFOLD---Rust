@@ -1,18 +1,12 @@
-// Metallic Glass — Minimal HDR environment map.
+// Metallic Glass — HDR environment map (original procedural studio).
 //
-// Subtle ambient fill only — prevents pure black reflections on metallic
-// surfaces while letting the single point light dominate the look.
-// 512×256 equirectangular, generated once at init.
+// Bakes the original inline procedural environment into a 512×256
+// equirectangular texture. Same look that was working before.
 
 @group(0) @binding(0) var dst_tex: texture_storage_2d<rgba16float, write>;
 
 const PI: f32 = 3.14159265;
-
-fn hash21(p: vec2<f32>) -> f32 {
-    var p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-}
+const TAU: f32 = 6.28318530;
 
 @compute @workgroup_size(16, 16)
 fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -20,19 +14,33 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let height = 256u;
     if gid.x >= width || gid.y >= height { return; }
 
+    let u_coord = f32(gid.x) / f32(width);
     let v_coord = f32(gid.y) / f32(height);
+
+    let azimuth = u_coord * TAU - PI;
     let elevation = v_coord * PI - PI * 0.5;
-
-    // Simple vertical gradient: slightly brighter above, darker below.
-    // Mimics ambient sky/ceiling bounce without distinct light sources.
     let up = sin(elevation);
-    let ambient = 0.12 + up * 0.08;
 
-    // Subtle noise to break up perfect uniformity
-    let noise = hash21(vec2<f32>(f32(gid.x), f32(gid.y))) * 0.02;
+    // Studio ambient floor
+    var color = vec3<f32>(0.15, 0.15, 0.17);
 
-    let val = max(ambient + noise, 0.05);
-    let color = vec3<f32>(val, val, val * 1.05);  // very slight cool tint
+    // Large bright horizon band (studio windows / white cyclorama)
+    color += vec3(1.5, 1.45, 1.4) * exp(-15.0 * up * up);
+
+    // Overhead soft box
+    let overhead = smoothstep(0.35, 0.65, up) * smoothstep(0.95, 0.65, up);
+    color += vec3(2.5, 2.4, 2.3) * overhead;
+
+    // Floor fill (bounced light from below)
+    let floor_fill = smoothstep(-0.15, -0.45, up) * smoothstep(-0.85, -0.45, up);
+    color += vec3(0.4, 0.42, 0.45) * floor_fill;
+
+    // Two narrow strip lights (create chrome streaks)
+    color += vec3(3.5, 3.2, 2.8) * exp(-300.0 * pow(up - 0.12, 2.0));
+    color += vec3(1.5, 2.0, 3.0) * exp(-300.0 * pow(up + 0.08, 2.0));
+
+    // Azimuthal variation
+    color *= sin(azimuth * 2.0) * 0.12 + 1.0;
 
     textureStore(dst_tex, vec2<i32>(gid.xy), vec4<f32>(color, 1.0));
 }
