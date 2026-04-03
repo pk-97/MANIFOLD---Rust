@@ -12,10 +12,10 @@ use manifold_editing::service::EditingService;
 use manifold_playback::audio_decoder::DecodedAudio;
 
 use crate::app::{Application, PendingAudioLoadResult};
-use manifold_core::Seconds;
 use crate::content_command::ContentCommand;
 use crate::project_io::ProjectIOAction;
 use crate::window_registry::{WindowRole, WindowState};
+use manifold_core::Seconds;
 
 impl Application {
     // ── Project I/O — delegates to ProjectIOService ────────────────────
@@ -24,8 +24,7 @@ impl Application {
     fn save_viewport_state(&mut self) {
         self.local_project.settings.viewport_scroll_x_beats =
             self.ui_root.viewport.scroll_x_beats().as_f32();
-        self.local_project.settings.viewport_scroll_y_px =
-            self.ui_root.viewport.scroll_y_px();
+        self.local_project.settings.viewport_scroll_y_px = self.ui_root.viewport.scroll_y_px();
         self.local_project.settings.viewport_pixels_per_beat =
             self.ui_root.viewport.pixels_per_beat();
     }
@@ -56,7 +55,8 @@ impl Application {
         let current_time = self.content_state.current_time;
         self.local_project.saved_playhead_time = current_time.as_f32();
         self.save_viewport_state();
-        let parent_win = self.primary_window_id
+        let parent_win = self
+            .primary_window_id
             .and_then(|id| self.window_registry.get(&id))
             .map(|ws| ws.window.as_ref());
         let action = self.project_io.save_project_as(
@@ -86,7 +86,9 @@ impl Application {
             crate::dialog_path_memory::DialogContext::ExportMP4,
             &mut self.user_prefs,
         );
-        let saved_name = self.user_prefs.get_string("MANIFOLD_LastExportFileName", "");
+        let saved_name = self
+            .user_prefs
+            .get_string("MANIFOLD_LastExportFileName", "");
         log::debug!("[Export] Dialog prefs: dir={saved_dir:?} name={saved_name:?}");
 
         let default_name = if !saved_name.is_empty() {
@@ -138,10 +140,8 @@ impl Application {
             &mut self.user_prefs,
         );
         if let Some(name) = path.file_name() {
-            self.user_prefs.set_string(
-                "MANIFOLD_LastExportFileName",
-                &name.to_string_lossy(),
-            );
+            self.user_prefs
+                .set_string("MANIFOLD_LastExportFileName", &name.to_string_lossy());
             self.user_prefs.save();
         }
         self.last_export_path = Some(path.clone());
@@ -161,7 +161,12 @@ impl Application {
             audio_encoder_delay: 0.0,
         };
 
-        log::info!("[Application] Starting export: {}x{} -> {}", w, h, config.output_path);
+        log::info!(
+            "[Application] Starting export: {}x{} -> {}",
+            w,
+            h,
+            config.output_path
+        );
         self.send_content_cmd(ContentCommand::StartExport(Box::new(config)));
     }
 
@@ -211,14 +216,21 @@ impl Application {
 
         let bpm = self.local_project.settings.bpm.0;
         let insert_beat = self.content_state.current_beat.as_f32();
-        let layer_id = self.active_layer_id.as_ref()
+        let layer_id = self
+            .active_layer_id
+            .as_ref()
             .and_then(|lid| {
-                self.local_project.timeline.layer_index_for_id(lid)
+                self.local_project
+                    .timeline
+                    .layer_index_for_id(lid)
                     .and_then(|i| self.local_project.timeline.layers.get(i))
                     .map(|l| l.layer_id.clone())
             })
             .or_else(|| {
-                self.local_project.timeline.layers.first()
+                self.local_project
+                    .timeline
+                    .layers
+                    .first()
                     .map(|l| l.layer_id.clone())
             });
 
@@ -236,7 +248,8 @@ impl Application {
 
             for path in &paths {
                 let path_str = path.to_string_lossy().to_string();
-                let file_name = path.file_name()
+                let file_name = path
+                    .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
 
@@ -250,9 +263,7 @@ impl Application {
                 };
 
                 let video_clip_id = manifold_core::short_id();
-                let file_size = std::fs::metadata(path)
-                    .map(|m| m.len() as i64)
-                    .unwrap_or(0);
+                let file_size = std::fs::metadata(path).map(|m| m.len() as i64).unwrap_or(0);
 
                 video_clips.push(manifold_core::video::VideoClip {
                     id: video_clip_id.clone(),
@@ -276,9 +287,7 @@ impl Application {
                 );
 
                 commands.push(ContentCommand::Execute(Box::new(
-                    manifold_editing::commands::clip::AddClipCommand::new(
-                        clip, layer_id.clone(),
-                    ),
+                    manifold_editing::commands::clip::AddClipCommand::new(clip, layer_id.clone()),
                 )));
 
                 log::warn!(
@@ -311,10 +320,13 @@ impl Application {
     /// Open. Delegates to ProjectIOService.open_project.
     pub(crate) fn open_project(&mut self) {
         self.send_content_cmd(ContentCommand::PauseRendering);
-        let parent_win = self.primary_window_id
+        let parent_win = self
+            .primary_window_id
             .and_then(|id| self.window_registry.get(&id))
             .map(|ws| ws.window.as_ref());
-        let action = self.project_io.open_project(&mut self.user_prefs, parent_win);
+        let action = self
+            .project_io
+            .open_project(&mut self.user_prefs, parent_win);
         self.send_content_cmd(ContentCommand::ResumeRendering);
         self.apply_project_io_action(action);
     }
@@ -328,7 +340,9 @@ impl Application {
     /// Shared project-load logic — called by open, open recent, and file drop.
     /// Delegates load+persist to ProjectIOService, then handles GPU/audio side-effects.
     pub(crate) fn open_project_from_path(&mut self, path: std::path::PathBuf) {
-        let action = self.project_io.open_project_from_path(&path, &mut self.user_prefs);
+        let action = self
+            .project_io
+            .open_project_from_path(&path, &mut self.user_prefs);
         self.apply_project_io_action(action);
     }
 
@@ -377,7 +391,12 @@ impl Application {
                 let h = self.local_project.settings.output_height.max(1) as u32;
                 let rs = self.local_project.settings.render_scale;
                 self.send_content_cmd(ContentCommand::ResizeContent(w, h, rs));
-                log::info!("[ProjectIO] GPU resize sent: {}x{} @ {:.2}x render scale", w, h, rs);
+                log::info!(
+                    "[ProjectIO] GPU resize sent: {}x{} @ {:.2}x render scale",
+                    w,
+                    h,
+                    rs
+                );
             }
 
             // Spawn background audio loading (audio decode on background thread,
@@ -385,10 +404,11 @@ impl Application {
             let mut audio_path_for_load: Option<(String, f32)> = None;
             if let Some(ref perc) = self.local_project.percussion_import
                 && let Some(ref audio_path) = perc.audio_path
-                    && !audio_path.is_empty() {
-                        audio_path_for_load = Some((audio_path.clone(), perc.audio_start_beat.as_f32()));
-                        self.ui_root.layout.waveform_lane_visible = true;
-                    }
+                && !audio_path.is_empty()
+            {
+                audio_path_for_load = Some((audio_path.clone(), perc.audio_start_beat.as_f32()));
+                self.ui_root.layout.waveform_lane_visible = true;
+            }
 
             if let Some((audio_path, start_beat)) = audio_path_for_load {
                 self.loaded_audio_path = Some(audio_path.clone());
@@ -397,14 +417,21 @@ impl Application {
 
             self.send_content_cmd(ContentCommand::SetProject);
             self.selection.clear_selection();
-            self.active_layer_id = self.local_project.timeline.layers
-                .first().map(|l| l.layer_id.clone());
+            self.active_layer_id = self
+                .local_project
+                .timeline
+                .layers
+                .first()
+                .map(|l| l.layer_id.clone());
             self.needs_rebuild = true;
 
             // Content thread renders at project FPS; UI always runs at display rate.
             // Don't sync UI frame timer to project FPS — that couples UI to render cadence.
 
-            log::info!("[ProjectIO] load sync: {:.1}ms (audio continues in background)", t_total.elapsed().as_secs_f64() * 1000.0);
+            log::info!(
+                "[ProjectIO] load sync: {:.1}ms (audio continues in background)",
+                t_total.elapsed().as_secs_f64() * 1000.0
+            );
         }
 
         // Set project path
@@ -497,23 +524,27 @@ impl Application {
             .name("audio-load".into())
             .spawn(move || {
                 let t_audio = std::time::Instant::now();
-                let preloaded =
-                    match manifold_playback::audio_sync::preload_audio(&audio_path, manifold_core::Beats::from_f32(start_beat)) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            log::warn!("[Audio] Background audio load failed: {}", e);
-                            return;
-                        }
-                    };
+                let preloaded = match manifold_playback::audio_sync::preload_audio(
+                    &audio_path,
+                    manifold_core::Beats::from_f32(start_beat),
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        log::warn!("[Audio] Background audio load failed: {}", e);
+                        return;
+                    }
+                };
                 log::info!(
                     "[Audio] decode (background): {:.1}ms",
                     t_audio.elapsed().as_secs_f64() * 1000.0
                 );
 
-                let waveform =
-                    Some(DecodedAudio::from_static_sound_data(&preloaded.sound_data));
+                let waveform = Some(DecodedAudio::from_static_sound_data(&preloaded.sound_data));
 
-                let _ = tx.send(PendingAudioLoadResult { preloaded, waveform });
+                let _ = tx.send(PendingAudioLoadResult {
+                    preloaded,
+                    waveform,
+                });
             })
             .expect("Failed to spawn audio load thread");
     }
@@ -531,7 +562,9 @@ impl Application {
         presentation: bool,
     ) {
         // Guard: don't open output window if GPU isn't initialized.
-        if self.gpu.is_none() { return; }
+        if self.gpu.is_none() {
+            return;
+        }
 
         // Resolve target monitor.
         // If display_index is given, use that. Otherwise pick first non-primary monitor.
@@ -569,8 +602,15 @@ impl Application {
             let n = m.name().unwrap_or_else(|| "?".to_string());
             log::debug!(
                 "[OutputWindow] Monitor {}: '{}' physical={}x{} pos=({},{}) scale={:.2} logical={}x{}",
-                i, n, s.width, s.height, p.x, p.y, sf,
-                (s.width as f64 / sf) as u32, (s.height as f64 / sf) as u32
+                i,
+                n,
+                s.width,
+                s.height,
+                p.x,
+                p.y,
+                sf,
+                (s.width as f64 / sf) as u32,
+                (s.height as f64 / sf) as u32
             );
         }
 
@@ -583,8 +623,14 @@ impl Application {
 
         log::debug!(
             "[OutputWindow] Target '{}': logical={:.0}x{:.0} at ({:.0},{:.0}), physical={}x{}, scale={:.2}",
-            mon_name, logical_w, logical_h, logical_x, logical_y,
-            mon_phys_size.width, mon_phys_size.height, scale_factor
+            mon_name,
+            logical_w,
+            logical_h,
+            logical_x,
+            logical_y,
+            mon_phys_size.width,
+            mon_phys_size.height,
+            scale_factor
         );
 
         let (proj_w, proj_h) = (
@@ -626,9 +672,8 @@ impl Application {
         }
 
         let id = window.id();
-        let resolved_index = display_index.or({
-            if monitors.len() > 1 { Some(1) } else { Some(0) }
-        });
+        let resolved_index =
+            display_index.or(if monitors.len() > 1 { Some(1) } else { Some(0) });
 
         // Query headroom for the new output window immediately — don't wait
         // for an NSNotification. Without this, output_edr_headroom stays at 1.0
@@ -679,7 +724,12 @@ impl Application {
         let (proj_w_u32, proj_h_u32) = (proj_w as u32, proj_h as u32);
         log::info!(
             "[OutputWindow] Opened '{}' on '{}' (drawable={}x{}, Rgba16Float, EDR={:.2}x, pixel-perfect, presentation={})",
-            name, mon_name, proj_w_u32, proj_h_u32, h, presentation,
+            name,
+            mon_name,
+            proj_w_u32,
+            proj_h_u32,
+            h,
+            presentation,
         );
     }
 
