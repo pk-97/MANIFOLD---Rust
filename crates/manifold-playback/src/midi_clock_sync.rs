@@ -726,11 +726,14 @@ impl MidiClockSyncController {
         authority: ClockAuthority,
     ) {
         // Port of C# line 370: guard on project and arbiter.
-        // NOTE: When sync_target is a SyncTargetSnapshot (used for borrow-split),
-        // current_project() returns None — but timeline_beat_to_time() still works
-        // via the BPM fallback. Skip this guard when using snapshots.
-        // The guard only matters if the engine has no project loaded at all,
-        // which is handled by the caller's has_recent_clock_activity check.
+        // With the Rust borrow-split pattern, sync_target is a SyncTargetSnapshot
+        // whose current_project() returns None. This means this function returns
+        // early every frame — position is set exclusively by derive_external_beat()
+        // via set_beat() + sync_time_from_beat(). This is correct and intentional:
+        // having two paths set position causes per-frame oscillation.
+        if sync_target.current_project().is_none() {
+            return;
+        }
 
         let current_sixteenths = pos_sixteenths;
         let absolute_tick = pos_sixteenths * 6 + clock_tick;
